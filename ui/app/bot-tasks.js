@@ -69,7 +69,7 @@ function botChatTasksRender(slug, rows) {
   const ordered = rows.map(task => ({task, need: needById.get(String(task.id))})).sort((a, b) =>
     (needOrder.get(String(a.task.id)) ?? Infinity) - (needOrder.get(String(b.task.id)) ?? Infinity)
     || (a.task.rank == null ? Infinity : Number(a.task.rank)) - (b.task.rank == null ? Infinity : Number(b.task.rank))
-    || String(a.task.created || '').localeCompare(String(b.task.created || '')));
+    || String(a.task.created_at || '').localeCompare(String(b.task.created_at || '')));
   for (const {task} of ordered) BOT_CHAT_TASKS.set(String(task.id), task);
   // Just what needs you, about two lines, scrolling inside, and an X. No heading,
   // pill, age or "all tasks" link. Dismissed stays dismissed for this bot until the items change.
@@ -136,7 +136,7 @@ async function loadBotTasksV2(slug) {
   const byId = new Map();
   for (const t of [...(open?.tasks || []), ...(ended?.tasks || [])]) {
     const was = byId.get(t.id);
-    if (!was || String(t.updated || '') >= String(was.updated || '')) byId.set(t.id, t);
+    if (!was || String(t.updated_at || '') >= String(was.updated_at || '')) byId.set(t.id, t);
   }
   const owned = open && ended ? {tasks: [...byId.values()]} : null;
   if (!owned) {
@@ -359,7 +359,7 @@ function botNeedRow(it) {
       <span class="pill needs">${it.kind === 'approval' ? 'Approval' : 'Question'}</span>
       <a class="ttl" href="${esc(NEEDS_YOU)}" aria-haspopup="dialog" title="${esc(plainActors(title))}">${esc(plainActors(title))}</a>
       <span class="tags">${actorChip(from)}</span>
-      <span class="muted tnum" title="${esc(fmt(it.created))}">${esc(ageShort(it.created))}</span></div></div>`;
+      <span class="muted tnum" title="${esc(fmt(it.created_at))}">${esc(ageShort(it.created_at))}</span></div></div>`;
 }
 // Keep questions, approvals and matching tasks once each; one answered on a card leaves at once.
 function botNeedsPaint(slug) {
@@ -392,13 +392,13 @@ function botTasksRender(slug, owned) {
   if (!$('#t-open') || BOT?.slug !== slug) return;
   const needed = botNeedsPaint(slug);
   const mine = owned.tasks || [];
-  const newest = (a, b) => String(b.created || '').localeCompare(String(a.created || ''));
+  const newest = (a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''));
   // Fallback while filters load (and for non-Keeper bots); saved filters are painted from server results below.
   const active = mine.filter(t => ['open', 'doing'].includes(String(t.status))).sort(newest);
   const blocked = mine.filter(t => t.status === 'waiting' && t.waiting_on !== 'human:' + S.me?.id).sort(newest);
   // Done Recently: the bot's own work finished in the last two weeks, most recently done first. A schedule's runs (a
   // sweep every 30 minutes) are not work a person asked for; they live under Automations › Runs.
-  const doneAt = t => String(t.done_at || t.closed_at || t.updated || '');
+  const doneAt = t => String(t.done_at || t.closed_at || t.updated_at || '');
   const since = new Date(Date.now() - BOT_DONE_RECENT_DAYS * 86400000).toISOString();
   const finished = mine.filter(t => !V2_ACTIVE.includes(String(t.status)) && !isRecurringTask(t) && doneAt(t) >= since)
     .sort((a, b) => doneAt(b).localeCompare(doneAt(a)));

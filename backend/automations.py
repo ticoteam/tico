@@ -61,27 +61,27 @@ log = logging.getLogger(__name__)
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS automations(id TEXT PRIMARY KEY, name TEXT NOT NULL, owner TEXT NOT NULL, "
     "grp TEXT, trigger_type TEXT NOT NULL, enabled INTEGER NOT NULL, builtin INTEGER NOT NULL DEFAULT 0, "
-    "flow TEXT NOT NULL, version INTEGER NOT NULL, created TEXT NOT NULL, created_by TEXT NOT NULL, "
-    "updated TEXT NOT NULL, deleted_at TEXT, next_due TEXT, found_since TEXT)",
+    "flow TEXT NOT NULL, version INTEGER NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL, "
+    "updated_at TEXT NOT NULL, deleted_at TEXT, next_due TEXT, found_since TEXT)",
     "CREATE INDEX IF NOT EXISTS automations_trigger ON automations(trigger_type, enabled) WHERE deleted_at IS NULL",
     "CREATE TABLE IF NOT EXISTS automation_versions(automation_id TEXT NOT NULL, n INTEGER NOT NULL, actor TEXT NOT NULL, "
     "at TEXT NOT NULL, flow TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', summary TEXT, "
     "PRIMARY KEY(automation_id, n))",
     "CREATE TABLE IF NOT EXISTS automation_runs(id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, version INTEGER NOT NULL, "
-    "trigger_ref TEXT NOT NULL DEFAULT '', started TEXT NOT NULL, finished TEXT, status TEXT NOT NULL, "
+    "trigger_ref TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL, "
     "cost REAL NOT NULL DEFAULT 0, state TEXT, claimed_at TEXT, wake_at TEXT, chain TEXT NOT NULL DEFAULT '[]')",
-    "CREATE INDEX IF NOT EXISTS automation_runs_of ON automation_runs(automation_id, started)",
-    "CREATE INDEX IF NOT EXISTS automation_runs_queue ON automation_runs(status, started)",
+    "CREATE INDEX IF NOT EXISTS automation_runs_of ON automation_runs(automation_id, started_at)",
+    "CREATE INDEX IF NOT EXISTS automation_runs_queue ON automation_runs(status, started_at)",
     # The overview reads every visible automation's runs over a time range (backend/automation_overview.py).
-    "CREATE INDEX IF NOT EXISTS automation_runs_started ON automation_runs(started)",
+    "CREATE INDEX IF NOT EXISTS automation_runs_started ON automation_runs(started_at)",
     "CREATE TABLE IF NOT EXISTS automation_daily(automation_id TEXT NOT NULL, day TEXT NOT NULL, "
     "runs INTEGER NOT NULL DEFAULT 0, dropped INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(automation_id, day))",
     "CREATE TABLE IF NOT EXISTS automation_mail_actions(id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, run_id TEXT, "
     "mailbox TEXT NOT NULL, msg_id TEXT NOT NULL, action TEXT NOT NULL, args TEXT NOT NULL, state TEXT NOT NULL, "
-    "created TEXT NOT NULL, claimed_at TEXT, claimed_by TEXT, result TEXT, attempts INTEGER NOT NULL DEFAULT 0)",
-    "CREATE INDEX IF NOT EXISTS automation_mail_queue ON automation_mail_actions(mailbox, state, created)",
+    "created_at TEXT NOT NULL, claimed_at TEXT, claimed_by TEXT, result TEXT, attempts INTEGER NOT NULL DEFAULT 0)",
+    "CREATE INDEX IF NOT EXISTS automation_mail_queue ON automation_mail_actions(mailbox, state, created_at)",
     # An inbox's send switch (on unless a row says off): off, send_reply saves a draft instead.
-    "CREATE TABLE IF NOT EXISTS automation_inboxes(inbox TEXT PRIMARY KEY, send INTEGER NOT NULL, updated TEXT NOT NULL, "
+    "CREATE TABLE IF NOT EXISTS automation_inboxes(inbox TEXT PRIMARY KEY, send INTEGER NOT NULL, updated_at TEXT NOT NULL, "
     "updated_by TEXT NOT NULL)",
     # Each effect a run made, by `<run id>:<step record>`: doing it again answers this instead.
     "CREATE TABLE IF NOT EXISTS automation_effects(key TEXT PRIMARY KEY, run_id TEXT NOT NULL, at TEXT NOT NULL, "
@@ -155,11 +155,11 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None):
     flow = flow_of(row)
     if detail:
         flow["steps"] = _with_questions(flow["steps"])
-    last = c.execute("SELECT id, status, started, finished FROM automation_runs WHERE automation_id=? "
-                     "ORDER BY started DESC LIMIT 1", (row["id"],)).fetchone()
+    last = c.execute("SELECT id, status, started_at, finished_at FROM automation_runs WHERE automation_id=? "
+                     "ORDER BY started_at DESC LIMIT 1", (row["id"],)).fetchone()
     from . import redesign_migration
-    out = {"id": row["id"], **flow, "version": row["version"], "created": row["created"],
-           "created_by": row["created_by"], "updated": row["updated"], "last_run": dict(last) if last else None,
+    out = {"id": row["id"], **flow, "version": row["version"], "created_at": row["created_at"],
+           "created_by": row["created_by"], "updated_at": row["updated_at"], "last_run": dict(last) if last else None,
            "kind": AO.kind_of(flow),
            # Wake rules that name a step their type does not have: they never fire until one is changed.
            "problems": redesign_migration.wake_problems(c, row["id"], flow) if flow.get("wakes") else []}
@@ -174,7 +174,7 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None):
         # Paused, not just off: the run guard turned it off and nobody has changed it since.
         guard = c.execute("SELECT max(ts) FROM events WHERE target=? AND action='automation.run_guard'",
                           (row["id"],)).fetchone()[0]
-        out["paused"] = bool(guard and guard >= row["updated"])
+        out["paused"] = bool(guard and guard >= row["updated_at"])
     if hold := hold_of(c, row["id"]):
         out["hold"] = hold
     job = AO.system_key(flow)
@@ -265,13 +265,13 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
         # schedule, or one turned back on, starts from the next time after now.
         again = (before or {}).get("trigger") != flow["trigger"] or (flow["enabled"] and not (before or {}).get("enabled"))
         c.execute("UPDATE automations SET name=?,owner=?,grp=?,trigger_type=?,enabled=?,builtin=?,flow=?,version=?,"
-                  "updated=?,next_due=CASE WHEN ? THEN ? ELSE next_due END WHERE id=?", (*columns, int(again), due, aid))
+                  "updated_at=?,next_due=CASE WHEN ? THEN ? ELSE next_due END WHERE id=?", (*columns, int(again), due, aid))
     else:
         # A find starts at the automation's creation, so it does not act on what came before it. A stale-PR find is the
         # exception: its clock is each PR's own activity, so the PRs already idle when it is made are its first items.
         idle = any(step.get("type") == "find" and step.get("idle_hours") for step in flow.get("steps") or [])
-        c.execute("INSERT INTO automations(name,owner,grp,trigger_type,enabled,builtin,flow,version,updated,id,"
-                  "created,created_by,found_since,next_due) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO automations(name,owner,grp,trigger_type,enabled,builtin,flow,version,updated_at,id,"
+                  "created_at,created_by,found_since,next_due) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (*columns, aid, now, actor, "" if idle else now, due))
     if audit:
         audit_log.write(c, actor, "automation:" + aid, before, flow, via)
@@ -294,7 +294,7 @@ def remove(c, actor, row, via=None):
     for dropped in c.execute("SELECT id FROM automation_runs WHERE automation_id=? AND status IN "
                              "('queued','waiting','running')", (aid,)).fetchall():
         _cancel_mail(c, dropped["id"])
-    c.execute("UPDATE automation_runs SET status='skipped',finished=? WHERE automation_id=? "
+    c.execute("UPDATE automation_runs SET status='skipped',finished_at=? WHERE automation_id=? "
               "AND status IN ('queued','waiting','running')", (H.now(), aid))
     audit_log.write(c, actor, "automation:" + aid, flow_of(row), None, via)
 
@@ -892,10 +892,10 @@ def _guard(c, row):
     floor = (last and last["cleared"]) or ""
     flood_since = max(H.shift(now, minutes=-RUN_GUARD_MINUTES), floor)
     span_since = max(H.shift(now, minutes=-RUN_GUARD_SPAN), floor)
-    flood = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=? AND started>=? "
+    flood = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=? AND started_at>=? "
                       "AND trigger_ref<>'manual'", (row["id"], flood_since)).fetchone()[0]
-    span, minutes = c.execute("SELECT count(*), count(DISTINCT substr(started,1,16)) FROM automation_runs "
-                              "WHERE automation_id=? AND started>=? AND trigger_ref<>'manual'",
+    span, minutes = c.execute("SELECT count(*), count(DISTINCT substr(started_at,1,16)) FROM automation_runs "
+                              "WHERE automation_id=? AND started_at>=? AND trigger_ref<>'manual'",
                               (row["id"], span_since)).fetchone()
     rule = ("flood" if flood >= RUN_GUARD_BURST else
             "sustained" if span >= RUN_GUARD_SUSTAINED and minutes >= RUN_GUARD_SPREAD else "")
@@ -969,7 +969,7 @@ def _unhold(c, aid, actor, how, via=None):
         for run in c.execute("SELECT id FROM automation_runs WHERE automation_id=? AND status IN ('held','running')",
                              (aid,)).fetchall():
             _cancel_mail(c, run["id"])
-        n = c.execute("UPDATE automation_runs SET status='skipped',finished=? WHERE automation_id=? "
+        n = c.execute("UPDATE automation_runs SET status='skipped',finished_at=? WHERE automation_id=? "
                       "AND status IN ('held','running')", (now, aid)).rowcount
     c.execute("UPDATE automation_guard_holds SET cleared=? WHERE automation_id=?", (now, aid))
     task = H.task(c, hold["task_id"]) if hold["task_id"] else None
@@ -992,7 +992,7 @@ def _absorbed(c, row):
     if (flow.get("trigger") or {}).get("type") != "schedule" or _finds(flow["steps"]):
         return False
     last = c.execute("SELECT json_extract(refs,'$.task') AS task FROM messages "
-                     "WHERE json_extract(refs,'$.automation')=? ORDER BY created DESC LIMIT 1", (row["id"],)).fetchone()
+                     "WHERE json_extract(refs,'$.automation')=? ORDER BY created_at DESC LIMIT 1", (row["id"],)).fetchone()
     open_task = c.execute("SELECT id FROM tasks WHERE id=? AND status IN ('open','doing','waiting','review','ready')",
                           (last["task"],)).fetchone() if last and last["task"] else None
     if not open_task:
@@ -1073,7 +1073,7 @@ def queue(c, row, payload, ref="", *, manual=False, chain=()):
     else:
         rid = "run_" + H.new_id()
         state = E.start(payload, manual=manual)
-        c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started,status,state,chain) "
+        c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,status,state,chain) "
                   "VALUES(?,?,?,?,?,?,?,?)", (rid, row["id"], row["version"], str(ref or "")[:200], H.now(),
                                               "held" if on_hold else "queued", json.dumps(state, default=str),
                                               json.dumps(list(chain))))
@@ -1159,7 +1159,7 @@ def fire(c, kind, payload, ref="", match=None, access=None, only=None):
             return []
         queued = []
         for row in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL AND enabled=1 AND trigger_type=? "
-                             + ("AND id=? " if only else "") + "ORDER BY created",
+                             + ("AND id=? " if only else "") + "ORDER BY created_at",
                              (kind, *((only,) if only else ()))).fetchall():
             row = dict(row)
             if row["id"] in chain:
@@ -1359,7 +1359,7 @@ def _spent(c, aid, rid):
     """What the automation's other runs spent in the last 30 minutes, and what its turns not priced yet hold: a hold
     counts until its turn is priced or ends, however long that takes (the tick sweeps one lost for a day)."""
     since = H.shift(H.now(), minutes=-30)
-    ran = c.execute("SELECT coalesce(sum(cost),0) FROM automation_runs WHERE automation_id=? AND id<>? AND started>=?",
+    ran = c.execute("SELECT coalesce(sum(cost),0) FROM automation_runs WHERE automation_id=? AND id<>? AND started_at>=?",
                     (aid, rid, since)).fetchone()[0]
     held = c.execute("SELECT coalesce(sum(amount),0) FROM automation_holds WHERE automation_id=?", (aid,)).fetchone()[0]
     return float(ran or 0) + float(held or 0)
@@ -1368,7 +1368,7 @@ def _spent(c, aid, rid):
 def _usual_cost(c, bot):
     """What a turn of `bot` usually costs: its last TURN_COST_SAMPLE priced turns' average, else TURN_COST."""
     rows = [r[0] for r in c.execute("SELECT est_cost_usd FROM turns WHERE bot=? AND est_cost_usd IS NOT NULL "
-                                    "ORDER BY started DESC LIMIT ?", (bot, TURN_COST_SAMPLE))]
+                                    "ORDER BY started_at DESC LIMIT ?", (bot, TURN_COST_SAMPLE))]
     return round(sum(rows) / len(rows), 6) if rows else TURN_COST
 
 
@@ -1493,7 +1493,7 @@ def _reply_audience(c, auto, args, values):
         from . import rooms
         if rooms.thread_mode(c, bot) == rooms.SHARED:
             room = c.execute("SELECT id FROM conversations WHERE scope='shared' AND room_key=? AND closed_at IS NULL "
-                             "ORDER BY COALESCE(last_message_at,created) DESC LIMIT 1", (bot,)).fetchone()
+                             "ORDER BY COALESCE(last_message_at,created_at) DESC LIMIT 1", (bot,)).fetchone()
             out += (H.conversation(c, room["id"]) or {}).get("participants") or [] if room else []
         operator = c.execute("SELECT operator FROM bot_config WHERE bot=?", (bot,)).fetchone()
         if operator and operator["operator"]:
@@ -1857,7 +1857,7 @@ class Hub:
 
     def claim(self):
         with self.store.transaction() as c:
-            row = c.execute("SELECT id FROM automation_runs WHERE status='queued' ORDER BY started LIMIT 1").fetchone()
+            row = c.execute("SELECT id FROM automation_runs WHERE status='queued' ORDER BY started_at LIMIT 1").fetchone()
             if not row:
                 return None
             c.execute("UPDATE automation_runs SET status='running',claimed_at=? WHERE id=? AND status='queued'",
@@ -1911,7 +1911,7 @@ class Hub:
             waits = [t["wait"]["until"] for t in state.get("threads", []) if (t.get("wait") or {}).get("kind") == "batch"]
             if status == "waiting":
                 state["waiting_since"] = H.now()    # a turn's day to answer runs from here, not from the run's start
-            c.execute("UPDATE automation_runs SET status=?,cost=?,state=?,finished=?,wake_at=?,claimed_at=NULL "
+            c.execute("UPDATE automation_runs SET status=?,cost=?,state=?,finished_at=?,wake_at=?,claimed_at=NULL "
                       "WHERE id=?", (status, state.get("cost", 0), json.dumps(state, default=str),
                                      None if status in ("waiting", "queued", "held") else H.now(),
                                      min(waits) if waits and status == "waiting" else None, rid))
@@ -1981,7 +1981,7 @@ def _requeue(c, row):
 
 def _settle_run(c, run_id):
     """A mail action's result reached its run. A run being advanced settles as it is saved (Hub.go)."""
-    run = c.execute("SELECT status, state, finished FROM automation_runs WHERE id=?", (run_id,)).fetchone()
+    run = c.execute("SELECT status, state, finished_at FROM automation_runs WHERE id=?", (run_id,)).fetchone()
     if not run or not run["state"] or run["status"] in ("queued", "running", "held"):
         return   # a held run settles once it is released and runs
     state = json.loads(run["state"])
@@ -1994,9 +1994,9 @@ def _settle_run(c, run_id):
     status = "failed" if run["status"] == "failed" else status   # the tick gave up on it: it stays failed
     if status == "failed":
         _cancel_mail(c, run_id, state)
-    c.execute("UPDATE automation_runs SET status=?, state=?, finished=? WHERE id=?",
+    c.execute("UPDATE automation_runs SET status=?, state=?, finished_at=? WHERE id=?",
               (status, json.dumps(state, default=str),
-               run["finished"] or (None if status == "waiting" else H.now()), run_id))
+               run["finished_at"] or (None if status == "waiting" else H.now()), run_id))
     if status == "failed" and run["status"] != "failed":
         _due_failed(c, run_id, _run_error(state))
 
@@ -2084,10 +2084,10 @@ def tick(store, at=None):
                       (state.get("cost", 0), json.dumps(state, default=str), run["id"]))
         # A turn (or a mail computer) that never answered would hold the run waiting for ever.
         cutoff = H.shift(now, days=-TURN_WAIT_DAYS)
-        for run in c.execute("SELECT id, started, state FROM automation_runs WHERE status='waiting' "
-                             "AND wake_at IS NULL AND started<?", (cutoff,)).fetchall():
+        for run in c.execute("SELECT id, started_at, state FROM automation_runs WHERE status='waiting' "
+                             "AND wake_at IS NULL AND started_at<?", (cutoff,)).fetchall():
             state = json.loads(run["state"] or "{}")
-            if (state.get("waiting_since") or run["started"]) < cutoff:
+            if (state.get("waiting_since") or run["started_at"]) < cutoff:
                 _fail(c, run["id"], state, now, "nothing answered for a day")
         # A hold whose turn never ended (its job lost) stops counting after a day; the sweep is on record.
         for hold in c.execute("SELECT * FROM automation_holds WHERE at<?",
@@ -2144,12 +2144,12 @@ def _owed(c, row, trigger):
     settled = {r[0] for r in c.execute("SELECT DISTINCT trigger_ref FROM automation_runs WHERE automation_id=? "
                                        "AND trigger_ref LIKE 'due:%' AND status<>'failed'", (row["id"],))}
     seen = {}
-    for r in c.execute("SELECT trigger_ref, version, finished FROM automation_runs WHERE automation_id=? "
-                       "AND trigger_ref LIKE 'due:%' AND status='failed' ORDER BY started", (row["id"],)):
+    for r in c.execute("SELECT trigger_ref, version, finished_at FROM automation_runs WHERE automation_id=? "
+                       "AND trigger_ref LIKE 'due:%' AND status='failed' ORDER BY started_at", (row["id"],)):
         if r["trigger_ref"] in settled:
             continue
         count = seen.get(r["trigger_ref"], (0, "", 0))[0]
-        seen[r["trigger_ref"]] = (count + 1, r["finished"] or "", r["version"])
+        seen[r["trigger_ref"]] = (count + 1, r["finished_at"] or "", r["version"])
     return [(ref, last) for ref, (count, last, version) in sorted(seen.items())
             if count < DUE_TRIES and _same_trigger(c, row["id"], version, trigger)]
 
@@ -2205,7 +2205,7 @@ def _due_fire(c, row, trigger, day, ref):
                          "LIMIT 1", (row["id"], ref)).fetchone():
             state = {**E.start(due_input(trigger, day)), "status": "skipped"}
             now = H.now()
-            c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started,finished,status,"
+            c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,finished_at,status,"
                       "state,chain) VALUES(?,?,?,?,?,?,?,?,?)",
                       ("run_" + H.new_id(), row["id"], row["version"], ref, now, now, "skipped",
                        json.dumps(state, default=str), "[]"))
@@ -2270,7 +2270,7 @@ def _fail(c, rid, state, now, why):
     else:
         _cancel_mail(c, rid)
     was = c.execute("SELECT status FROM automation_runs WHERE id=?", (rid,)).fetchone()
-    c.execute("UPDATE automation_runs SET status='failed',finished=?,claimed_at=NULL,state=coalesce(?,state) "
+    c.execute("UPDATE automation_runs SET status='failed',finished_at=?,claimed_at=NULL,state=coalesce(?,state) "
               "WHERE id=?", (now, json.dumps(state, default=str) if state else None, rid))
     if was and was["status"] != "failed":
         _due_failed(c, rid, why)
@@ -2289,8 +2289,8 @@ def _iso(at):
 def prune(c, now):
     """Step detail keeps KEEP_DAYS: older finished runs keep their status, cost and times."""
     old = H.shift(now, days=-KEEP_DAYS)
-    c.execute("UPDATE automation_runs SET state=NULL WHERE state IS NOT NULL AND finished IS NOT NULL "
-              "AND finished<?", (old,))
+    c.execute("UPDATE automation_runs SET state=NULL WHERE state IS NOT NULL AND finished_at IS NOT NULL "
+              "AND finished_at<?", (old,))
     c.execute("DELETE FROM automation_effects WHERE at<?", (old,))
     c.execute("DELETE FROM automation_turn_answers WHERE at<?", (old,))
 
@@ -2366,7 +2366,7 @@ def _summary(state):
 def run_view(run, detail=True):
     state = json.loads(run["state"]) if run["state"] else None
     out = {"id": run["id"], "automation_id": run["automation_id"], "version": run["version"],
-           "trigger_ref": run["trigger_ref"], "started": run["started"], "finished": run["finished"],
+           "trigger_ref": run["trigger_ref"], "started_at": run["started_at"], "finished_at": run["finished_at"],
            "status": run["status"], "cost": run["cost"]}
     if state:
         out["summary"] = _summary(state)
@@ -2426,7 +2426,7 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             auth.domain(who)
             rows = c.execute("SELECT * FROM automations WHERE deleted_at IS NULL"
-                             + (" AND owner=?" if owner else "") + " ORDER BY created DESC",
+                             + (" AND owner=?" if owner else "") + " ORDER BY created_at DESC",
                              ((F.owner_ref(owner),) if owner else ())).fetchall()
             pending = {r[0]: r[1] for r in c.execute("SELECT automation_id, COUNT(*) FROM automation_versions "
                                                      "WHERE status='pending' GROUP BY automation_id")}
@@ -2656,14 +2656,14 @@ def install(app, store, auth, mutate):
                 rows, more = AO.system_runs_of(c, job, limit, before)
                 runs = [AO.system_run_view(r, aid) for r in rows]
                 return {"runs": runs, "next": runs[-1]["id"] if more and runs else None, "daily": []}
-            at = c.execute("SELECT started, id FROM automation_runs WHERE id=? AND automation_id=?",
+            at = c.execute("SELECT started_at, id FROM automation_runs WHERE id=? AND automation_id=?",
                            (before, aid)).fetchone() if before else None
             if before and not at:
                 raise Problem("not_found", "No such run", 404)
             rows = c.execute("SELECT * FROM automation_runs WHERE automation_id=?"
-                             + (" AND (started<? OR (started=? AND id<?))" if at else "")
-                             + " ORDER BY started DESC, id DESC LIMIT ?",
-                             (aid, *((at["started"], at["started"], at["id"]) if at else ()), limit + 1)).fetchall()
+                             + (" AND (started_at<? OR (started_at=? AND id<?))" if at else "")
+                             + " ORDER BY started_at DESC, id DESC LIMIT ?",
+                             (aid, *((at["started_at"], at["started_at"], at["id"]) if at else ()), limit + 1)).fetchall()
             days = [dict(r) for r in c.execute("SELECT day, runs, dropped FROM automation_daily WHERE automation_id=? "
                                                "ORDER BY day DESC LIMIT 30", (aid,))]
         runs, cut = page([run_view(r) for r in rows], limit, 0, RUN_BYTES)
@@ -2750,8 +2750,8 @@ def install(app, store, auth, mutate):
         def work(c):
             inbox_rights(c, who, inbox)
             before = {"inbox": inbox, "send": A.send_on(c, inbox)}
-            c.execute("INSERT INTO automation_inboxes(inbox,send,updated,updated_by) VALUES(?,?,?,?) "
-                      "ON CONFLICT(inbox) DO UPDATE SET send=excluded.send,updated=excluded.updated,"
+            c.execute("INSERT INTO automation_inboxes(inbox,send,updated_at,updated_by) VALUES(?,?,?,?) "
+                      "ON CONFLICT(inbox) DO UPDATE SET send=excluded.send,updated_at=excluded.updated_at,"
                       "updated_by=excluded.updated_by", (inbox, int(body.send), H.now(), who.actor))
             after = {"inbox": inbox, "send": body.send}
             if after != before:
@@ -2804,7 +2804,7 @@ def install(app, store, auth, mutate):
                     c.execute("UPDATE automation_mail_actions SET state=? WHERE id=?", (_requeue(c, row), row["id"]))
             rows, spent = [], 0
             for r in c.execute("SELECT * FROM automation_mail_actions WHERE state='queued' AND mailbox=? "
-                               "ORDER BY created LIMIT 20", (mailbox,)):
+                               "ORDER BY created_at LIMIT 20", (mailbox,)):
                 size = len(r["args"] or "") + len(r["result"] or "")
                 if rows and spent + size > LIST_BYTES:
                     break                  # the rest stay queued for the next claim

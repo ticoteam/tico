@@ -169,7 +169,7 @@ def test_botops_keeps_bot_rights_and_refuses_assistant_messages_and_task_comment
     old = call(api, "post", "bots/register", person_started["token"], {"slug": "later", "on_behalf_of": person_started["message"]["id"]})
     assert old.status_code == 200
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-8), person_started["message"]["id"]))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-8), person_started["message"]["id"]))
     assert call(api, "post", "bots/register", person_started["token"],
                 {"slug": "much-later", "on_behalf_of": person_started["message"]["id"]}).status_code == 403
 

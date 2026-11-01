@@ -35,14 +35,14 @@ def test_owner_put_back_requires_note_and_holds_queued_and_missing_starts_for_an
         H._wake(c, row, row['owner'], 'Start assigned task', {'auto_start': True})
     monkeypatch.setattr(H, 'now', lambda: H.shift(returned, minutes=59))
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET last_seen=?', (H.now(),))
+        c.execute('UPDATE runners SET last_seen_at=?', (H.now(),))
     assert take(api, machine) is None
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
     assert take(api, machine) is None
     monkeypatch.setattr(H, 'now', lambda: H.shift(returned, minutes=60))
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET last_seen=?', (H.now(),))
+        c.execute('UPDATE runners SET last_seen_at=?', (H.now(),))
     assert take(api, machine)['task']['id'] == task['id']
 
 
@@ -203,11 +203,11 @@ def test_put_back_from_blocked_keeps_queue_destination_and_hold(api, monkeypatch
     else:
         monkeypatch.setattr(H, 'now', lambda: H.shift(returned, minutes=59))
         with api.app.state.store.transaction() as c:
-            c.execute('UPDATE runners SET last_seen=?', (H.now(),))
+            c.execute('UPDATE runners SET last_seen_at=?', (H.now(),))
         assert take(api, machine) is None
         monkeypatch.setattr(H, 'now', lambda: H.shift(returned, minutes=60))
         with api.app.state.store.transaction() as c:
-            c.execute('UPDATE runners SET last_seen=?', (H.now(),))
+            c.execute('UPDATE runners SET last_seen_at=?', (H.now(),))
         assert take(api, machine)['task']['id'] == task['id']
 
 

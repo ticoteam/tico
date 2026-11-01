@@ -10,7 +10,7 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const now = new Date().toISOString();
-const msg = (id, from, body, refs = {}) => ({id, from_actor: from, body, refs, created: now, kind: 'say'});
+const msg = (id, from, body, refs = {}) => ({id, from_actor: from, body, refs, created_at: now, kind: 'say'});
 
 async function open(browser, viewport, state) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760});
@@ -50,7 +50,7 @@ async function open(browser, viewport, state) {
       state.decided.push([act[1], act[2]]); card.status = act[2] === 'confirm' ? 'done' : 'cancelled';
       if (act[1] === 'act2') card.result = {status_code: 200, error: '1 of 3 did not go through: Task not found'};
       // A new computer's code comes back to the person who tapped, in this answer only.
-      if (act[1] === 'act3') return json({action: card, shown_once: {code: 'ONE-TIME-CODE-1234', expires: new Date(Date.now() + 9e5).toISOString(), operator: 'ana'}});
+      if (act[1] === 'act3') return json({action: card, shown_once: {code: 'ONE-TIME-CODE-1234', expires_at: new Date(Date.now() + 9e5).toISOString(), operator: 'ana'}});
       return json({action: card});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});

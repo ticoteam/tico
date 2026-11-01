@@ -107,15 +107,15 @@ def test_a_result_still_waits_for_the_parents_other_waits(api, wait):
         elif wait == "waiting_on":
             c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (parent,))
         elif wait == "approval":
-            c.execute("INSERT INTO approvals(id,kind,task_id,requested_by,created) VALUES(?,'send',?,'bot:ops',?)",
+            c.execute("INSERT INTO approvals(id,kind,task_id,requested_by,created_at) VALUES(?,'send',?,'bot:ops',?)",
                       (H.new_id(), parent, H.now()))
         elif wait == "worktree":
             from backend.worktree_waits import ensure
             ensure(c)
-            c.execute("INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,created,updated) "
+            c.execute("INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,created_at,updated_at) "
                       "VALUES(?,?,'bot:ops','acme/app',0,'waiting',?,?)", (H.new_id(), parent, H.now(), H.now()))
         elif wait == "question":    # read past the skipped subtasks: wait_detail's own checks still hold it
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created) "
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at) "
                       "VALUES(?,?,'bot:ops','human:ana','ask','Which release?',?,?)",
                       (H.new_id(), H.task(c, parent)["conversation_id"], '{"task": "%s"}' % parent, H.now()))
         elif wait == "manual":

@@ -12,7 +12,7 @@ PR = {"number": 12, "head": HEAD, "merge_commit": "d" * 40, "merged_at": "2026-0
 
 
 def message(task, body, *, actor=None, ident="receipt", created="2026-01-02T00:00:00Z", **fields):
-    return {"id": ident, "body": body, "from_actor": actor or task["owner"], "created": created,
+    return {"id": ident, "body": body, "from_actor": actor or task["owner"], "created_at": created,
             "refs": {"task": task["id"]}, **fields}
 
 
@@ -177,7 +177,7 @@ def test_receipts_are_collected_from_real_ticket_sources(where):
     task['messages'] = []
     text = f'Tests: base {BASE} head {HEAD}: 356 pass / 0 fail'
     if where == 'note':
-        task.update(note=text, updated='2026-01-04')
+        task.update(note=text, updated_at='2026-01-04')
     elif where == 'keeper':
         task['messages'] = [message(task, 'Ready for review. ' + text, actor='keeper')]
     else:
@@ -210,7 +210,7 @@ def test_mixed_note_scopes_failures_and_pending_to_the_named_head_result():
             'Two original existing-fixture failures were corrected before final validation. '
             'Independent Review 1 and hosted checks pending. '
             'Full suite, browsers/native builds and installed behavior not run.')
-    task.update(note=text, updated='2026-01-04')
+    task.update(note=text, updated_at='2026-01-04')
     assert build(task)['gaps'] == 0
     task['note'] = text.replace('185 passed, 0 failed', '183 passed, 2 failing/errored')
     assert 'Tests: recorded failure' in '\n'.join(build(task)['prs'][0]['gaps'])

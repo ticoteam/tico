@@ -103,7 +103,7 @@ function assistantEarlier(earlier, load) {
   const line = m => {
     const mine = m.from_actor === 'human:' + (S.me?.id || '');
     return `<div class="asst-earlier-msg"><b>${esc(mine ? 'You' : earlier.name || 'Assistant')}</b>
-      <span class="muted" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</span><div class="md">${safeMd(m.body || '', {shortLinks: true})}</div></div>`;
+      <span class="muted" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</span><div class="md">${safeMd(m.body || '', {shortLinks: true})}</div></div>`;
   };
   const more = async () => {
     if (busy) return;
@@ -144,14 +144,14 @@ async function assistantRail(slug, load) {
     v2Get(`/v2/updates?bot=${encodeURIComponent(slug)}&limit=1`)]);
   if (load !== ASSISTANT_LOAD || S.route !== ASSISTANT || !rail.isConnected) return;
   const active = (owned?.tasks || []).filter(t => V2_ACTIVE.includes(String(t.status)))
-    .sort((a, b) => String(b.updated || b.created || '').localeCompare(String(a.updated || a.created || '')));
+    .sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
   const act = $('#asst-active');
   act.querySelector('.tpane').innerHTML = `<div class="bot-task-list">${active.map(t => v2TaskRow(t, slug)).join('')}</div>`;
   act.hidden = !active.length;
   const u = latest?.updates?.[0], up = $('#asst-latest');
   if (u) {
     up.innerHTML = `<header class="rail-head"><h2 class="rail-h">Updates</h2>
-        <span class="rail-age" title="${esc(fmt(u.updated || u.created))}">${esc(ago(u.updated || u.created))}</span>
+        <span class="rail-age" title="${esc(fmt(u.updated_at || u.created_at))}">${esc(ago(u.updated_at || u.created_at))}</span>
         <span class="spacer"></span><a class="rail-ico" href="${UPDATES}" aria-label="All updates" title="All updates"><span class="nav-icon" aria-hidden="true">dynamic_feed</span></a></header>
       <div class="upd-body md">${safeMd(u.body || '', {shortLinks: true})}</div>`;
     up.hidden = false;

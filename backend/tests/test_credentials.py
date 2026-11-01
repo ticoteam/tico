@@ -228,7 +228,7 @@ def test_a_reserved_variable_name_is_refused_and_an_old_one_is_named_in_health(a
     # A credential stored before the rule keeps its name, cannot be given to another bot, and Health names it.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE credentials SET env='TICO_UPDATE_KEY_ACME' WHERE id=?",(row['id'],))
-        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) VALUES('g-old',?,'bot:ops','human:ana','2026-01-01')",
+        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES('g-old',?,'bot:ops','human:ana','2026-01-01')",
                   (row['id'],))
     assert post(api,f"credentials/{row['id']}/grants",{'subject':'bot:cpo'},expected=422)['error']['code']=='env'
     rotate={'name':'Acme update key','secret':'k-synthetic-rotated','expected_revision':row['revision']}
@@ -244,14 +244,14 @@ def test_the_list_says_when_a_bot_last_used_a_credential_and_a_persons_reveal_is
     setup(api);cid=create(api)['id']
     assert {k:v for k,v in get(api,'credentials')['credentials'][0].items() if k.startswith('last_used')}=={'last_used':None,'last_used_by':''}
     post(api,f'credentials/{cid}/reveal',{})
-    assert get(api,'credentials')['credentials'][0]['last_used'] is None
+    assert get(api,'credentials')['credentials'][0]['last_used_at'] is None
     post(api,f'credentials/{cid}/grants',{'subject':'bot:finance'})
     machine=runner(api);assign(api,machine,'finance');ready(api,machine,['finance'])
     post(api,'chat/finance',{'text':'Use only the synthetic fixture'})
     attempt=claim(api,machine)
     assert get(api,'credential-runtime',attempt['token'])['credentials']
     row=get(api,'credentials')['credentials'][0]
-    assert row['last_used'] and row['last_used_by']=='finance'
+    assert row['last_used_at'] and row['last_used_by']=='finance'
     assert 'phx-synthetic' not in json.dumps(row)
 
 
@@ -287,7 +287,7 @@ def test_repeats_by_the_same_actor_and_bot_within_the_hour_write_no_row_and_last
         assert [(p['actor'],p['bot'],p['at']) for p in pairs]==[('bot:cpo','cpo','2026-10-29T10:12:00Z'),
                                                               ('bot:finance','finance','2026-10-29T11:30:00Z')]
     listed=get(api,'credentials')['credentials'][0]
-    assert (listed['last_used'],listed['last_used_by'])==('2026-10-29T11:30:00Z','finance')
+    assert (listed['last_used_at'],listed['last_used_by'])==('2026-10-29T11:30:00Z','finance')
 
 
 def test_a_pair_in_use_writes_one_row_an_hour_while_last_used_stays_exact(api, monkeypatch):
@@ -305,7 +305,7 @@ def test_a_pair_in_use_writes_one_row_an_hour_while_last_used_stays_exact(api, m
         rows=[r[0] for r in c.execute("SELECT ts FROM events WHERE target=? AND action='credential.sent_to_computer' ORDER BY ts",(cid,))]
         assert rows==['2026-10-29T10:00:00Z','2026-10-29T11:05:00Z','2026-10-29T12:10:00Z']
         assert c.execute('SELECT at FROM credential_uses WHERE credential_id=?',(cid,)).fetchone()[0]=='2026-10-29T12:30:00Z'
-    assert get(api,'credentials')['credentials'][0]['last_used']=='2026-10-29T12:30:00Z'
+    assert get(api,'credentials')['credentials'][0]['last_used_at']=='2026-10-29T12:30:00Z'
 
 
 def test_a_person_reveal_and_a_reveal_with_no_attempt_always_write_a_row(api, monkeypatch):
@@ -355,4 +355,4 @@ def test_a_run_that_reads_its_credentials_again_writes_one_reveal_row(api):
         rows=c.execute("SELECT count(*) FROM events WHERE target=? AND action='credential.revealed'",(cid,)).fetchone()[0]
         assert rows==1
     row=get(api,'credentials')['credentials'][0]
-    assert row['last_used'] and row['last_used_by']=='finance'
+    assert row['last_used_at'] and row['last_used_by']=='finance'

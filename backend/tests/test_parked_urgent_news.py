@@ -140,7 +140,7 @@ def test_parked_incident_keeps_silence_and_duplicate_controls(api, control):
         task, blocker = parked(c, incident=True)
         refs = {'news': 'step_entered', **({'quiet': True} if control == 'quiet' else {})}
         if control == 'ignore':
-            c.execute("INSERT INTO rules(id,scope_kind,event,then_outcome,created_by,created,updated) "
+            c.execute("INSERT INTO rules(id,scope_kind,event,then_outcome,created_by,created_at,updated_at) "
                       "VALUES('ignore-all','team','step_entered','ignore','human:ana',?,?)", (H.now(), H.now()))
         if control == 'snooze':
             H.TS.snooze(c, 'human:ana', task['id'], H.shift(H.now(), days=1))
@@ -205,7 +205,7 @@ def test_new_urgent_override_does_not_release_a_pull_request_notice_hold(api):
     with api.app.state.store.transaction() as c:
         task, _ = parked(c, incident=True)
         c.execute("DELETE FROM task_relations WHERE to_task=? AND kind='blocks'", (task['id'],))
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,detail) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,detail) "
                   "VALUES('pr-hold',?,'pr','https://github.com/acme/app/pull/1','PR','open','human:ana',?,?)",
                   (task['id'], H.now(), json.dumps({'wake_once': True})))
         assert wake_rules.parked(c, H.task(c, task['id'])) == 'wake_once'

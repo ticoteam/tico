@@ -129,7 +129,7 @@ def change(c, who, auth, bot, value, declared, operator):
         # The computer's runner takes the bot's jobs from its assignment, as any bot's (Execution.candidate).
         generation = (old["generation"] if old else 0) + 1
         c.execute("INSERT INTO assignments VALUES(?,?,?,?,?) ON CONFLICT(bot) DO UPDATE SET runner_id=excluded.runner_id,"
-                  "generation=excluded.generation,updated=excluded.updated,updated_by=excluded.updated_by",
+                  "generation=excluded.generation,updated_at=excluded.updated_at,updated_by=excluded.updated_by",
                   (bot, runner["id"], generation, H.now(), who.actor))
         H.event(c, who.actor, "bot.assigned", bot, {"runner": runner["id"], "generation": generation})
     H.event(c, who.actor, "bot.app_delivery_on", bot, {"runner": runner["id"], "app": value.app})
@@ -187,7 +187,7 @@ def said_at(value, fallback):
 
 
 # When a message was said: the app's own time for one the app reported, else when Tico wrote it.
-SAID_SQL = "COALESCE(json_extract(refs,'$.app.at'),created)"
+SAID_SQL = "COALESCE(json_extract(refs,'$.app.at'),created_at)"
 
 
 def echoes(c, room_id, sender, text, any_source=True, at=None):
@@ -234,7 +234,7 @@ def _ask(c, actor, person, room, text, refs):
             return False
     reply = next((row for row in c.execute(
         "SELECT id,body,refs FROM messages WHERE conversation_id=? AND from_actor=? AND to_actor=? AND kind='say' "
-        "AND deleted_at IS NULL AND json_extract(refs,'$.app') IS NULL AND created>=? ORDER BY created DESC",
+        "AND deleted_at IS NULL AND json_extract(refs,'$.app') IS NULL AND created_at>=? ORDER BY created_at DESC",
         (room["id"], actor, person, H.shift(H.now(), hours=-ECHO_HOURS))) if _norm(row["body"]) == _norm(text)), None)
     if reply:
         c.execute("UPDATE messages SET kind='ask',refs=? WHERE id=?",
@@ -333,7 +333,7 @@ def health_problems(c, who, auth, online_ids):
         state = app_report(runner, app)
         error = _errors(c, runner_id).get(app)
         cleared = (error and error.get("code") in APP_STATE_CODES and (state or {}).get("ready") is True
-                   and (runner["last_seen"] or "") > (error.get("at") or ""))
+                   and (runner["last_seen_at"] or "") > (error.get("at") or ""))
         if error and not cleared:
             why = WORDS.get(error.get("code"), WORDS["error"]) + (f" ({error['detail']})" if error.get("detail") else "")
         else:

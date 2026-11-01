@@ -26,7 +26,7 @@ def computer(api, machine, grok="ready"):
 def earlier_run(api, task_id, model, provider, runtime):
     """A finished run on the task by another model: the parent's work as a fallback wrote it."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES('earlier','ops','2026-01-01T00:00:00Z',"
+        c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES('earlier','ops','2026-01-01T00:00:00Z',"
                   "'2026-01-01T00:05:00Z',?)", (task_id,))
         c.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,output_tokens,model,provider,runtime,"
                   "harness) VALUES('earlier',0,10,10,?,?,?,?)", (model, provider, runtime, runtime))

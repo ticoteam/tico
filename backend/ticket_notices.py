@@ -34,7 +34,7 @@ def _step(conn, row):
 
 
 def _pr(conn, row):
-    found = conn.execute("SELECT url FROM task_links WHERE task_id=? AND kind='pr' ORDER BY created DESC,rowid DESC "
+    found = conn.execute("SELECT url FROM task_links WHERE task_id=? AND kind='pr' ORDER BY created_at DESC,rowid DESC "
                          'LIMIT 1', (row['id'],)).fetchone()
     return found[0] if found else 'none'
 

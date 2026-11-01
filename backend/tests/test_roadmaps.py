@@ -332,7 +332,7 @@ def test_the_ready_to_ship_step_is_added_once_right_after_building(api):
 def _notices(c, task_id):
     return [(m['from_actor'], m['to_actor'], m['body'], json.loads(m['refs'])) for m in c.execute(
         "SELECT * FROM messages WHERE json_extract(refs,'$.task_notice') IS NOT NULL "
-        "AND json_extract(refs,'$.task')=? ORDER BY created,rowid", (task_id,))]
+        "AND json_extract(refs,'$.task')=? ORDER BY created_at,rowid", (task_id,))]
 
 
 def test_started_blocked_and_done_notices_use_fixed_templates_and_wake_nobody(api):

@@ -103,7 +103,7 @@ EMPTY = (
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
                "automation_versions")
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
-HISTORY = {"attempts": "created", "jobs": "created", "messages": "created", "events": "ts", "deltas": "ts",
+HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_at", "events": "ts", "deltas": "ts",
            "bot_status_history": "since", "audit_log": "at", "browser_exit_usage": "day"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
@@ -317,7 +317,7 @@ def prune(c, days, keep_automations=False):
     if "jobs" in present:
         delete("jobs", "state IN (%s)" % ",".join("?" * len(OPEN_JOBS)), OPEN_JOBS)
     if "attempts" in present:
-        delete("attempts", "finished IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS)), OPEN_ATTEMPTS)
+        delete("attempts", "finished_at IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS)), OPEN_ATTEMPTS)
     stamp = now()
     if days:
         cutoff = shift(stamp, days=-days)
@@ -339,7 +339,7 @@ def prune(c, days, keep_automations=False):
     if "runners" in present:
         c.execute("UPDATE runners SET token_hash='devcopy-revoked:'||id, revoked_at=coalesce(revoked_at,?)", (stamp,))
     if "attempts" in present:
-        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished,created)")
+        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished_at,created_at)")
     # A row that points at one just removed goes too (attempt_events of an attempt, oauth_grants of a token):
     # repeated until no foreign key is broken by what this run removed.
     touched, frontier = set(removed), set(removed)
@@ -399,7 +399,7 @@ def build(source, dest, days=30, force=False, keep_automations=False):
         if left:
             raise SystemExit("devcopy: tables not empty after pruning: " + ", ".join(left))
         live = c.execute("SELECT count(*) FROM attempts WHERE token_hash NOT LIKE 'devcopy-revoked:%' "
-                         "OR finished IS NULL").fetchone()[0] if "attempts" in tables(c) else 0
+                         "OR finished_at IS NULL").fetchone()[0] if "attempts" in tables(c) else 0
         if live:
             raise SystemExit("devcopy: an unfinished or unrevoked attempt survived pruning")
         present = tables(c)

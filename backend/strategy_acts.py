@@ -452,12 +452,12 @@ def _propose(c, reason, left):
 
 def _log(c, *, kind, reason, state, done=(), left=(), goal_id=None, action_id=None):
     proposal, note = _propose(c, reason, list(left)) if left else (None, "")
-    row = {"id": action_id or H.new_id(), "created": H.now(), "actor": STRATEGY_BOT, "kind": kind,
+    row = {"id": action_id or H.new_id(), "created_at": H.now(), "actor": STRATEGY_BOT, "kind": kind,
            "reason": reason or "", "goal_id": goal_id or None, "state": state, "proposal_task": proposal,
            "note": note,
            "changes": H._dump({"done": [_logged(c, x) for x in done], "left": [_logged(c, x) for x in left]})}
-    c.execute("INSERT INTO strategy_actions (id, created, actor, kind, reason, goal_id, state, proposal_task, note, "
-              "changes) VALUES (:id, :created, :actor, :kind, :reason, :goal_id, :state, :proposal_task, :note, "
+    c.execute("INSERT INTO strategy_actions (id, created_at, actor, kind, reason, goal_id, state, proposal_task, note, "
+              "changes) VALUES (:id, :created_at, :actor, :kind, :reason, :goal_id, :state, :proposal_task, :note, "
               ":changes)", row)
     H.event(c, STRATEGY_BOT, "strategy_bot." + ("decided" if kind == "decision" else "proposed"), row["id"],
             {"kind": kind, "done": len(done), "left": len(left)})
@@ -543,13 +543,13 @@ def receipt(row):
 
 def log(c, visible, before=None, limit=LOG_PAGE):
     """The Strategy Bot log, newest first, as a reader sees it (`visible`, their auth.task_sql): {items, next_before}.
-    Paged by `created`, then id: `next_before` is "<created>|<id>" of the page's last entry, so entries made in the
+    Paged by `created_at`, then id: `next_before` is "<created>|<id>" of the page's last entry, so entries made in the
     same instant are never skipped between pages. A bare time is read as before that time."""
     limit = max(1, min(int(limit or LOG_PAGE), LOG_PAGE))
     at, _, after_id = str(before or "").partition("|")
-    rows = c.execute("SELECT id, created FROM strategy_actions WHERE (?='' OR created<? OR "
-                     "(?!='' AND created=? AND id<?)) "
-                     "ORDER BY created DESC, id DESC LIMIT ?",
+    rows = c.execute("SELECT id, created_at FROM strategy_actions WHERE (?='' OR created_at<? OR "
+                     "(?!='' AND created_at=? AND id<?)) "
+                     "ORDER BY created_at DESC, id DESC LIMIT ?",
                      (at, at, after_id, at, after_id, limit + 1)).fetchall()
     items = [entry(c, r[0], visible) for r in rows[:limit]]
     last = rows[limit - 1] if len(rows) > limit else None
@@ -585,7 +585,7 @@ def undo(c, actor, action_id):
                 continue
             c.execute("SAVEPOINT strategy_undo")
             try:
-                did = (_unmake if item.get("made") else _restore)(c, actor, task, item, row["created"], note)
+                did = (_unmake if item.get("made") else _restore)(c, actor, task, item, row["created_at"], note)
             except H.Refused as exc:
                 c.execute("ROLLBACK TO strategy_undo")
                 c.execute("RELEASE strategy_undo")

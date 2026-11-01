@@ -96,7 +96,7 @@ def as_bot(api, slug):
     with api.app.state.store.transaction() as c:
         bot_id = (H.resolve_bot(c, slug) or {}).get("id", slug)
         c.execute("UPDATE bots SET state='active' WHERE id=?", (bot_id,))
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) "
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
                   "VALUES(?,'hermes',?,?,'human:morgan')", (bot_id, "x-" + bot_id, H.now()))
     api.app.state.store.settings.test_identities[token] = Identity(H.bot_actor(bot_id), "bot", agent="hermes")
     return {"Authorization": "Bearer " + token, "Idempotency-Key": str(uuid.uuid4())}
@@ -349,7 +349,7 @@ def test_hiding_the_strategy_bot_is_a_persons_own_yes_or_no(environment):
     assert refused.status_code == 422, refused.text
     assert hide(api, True, as_bot(api, "botops")).status_code == 403
     with api.app.state.store.transaction() as c:          # even a row a bot left some other way hides nothing for it
-        c.execute("INSERT INTO preferences(actor,key,value,updated) VALUES('bot:botops',?,'true',?)",
+        c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES('bot:botops',?,'true',?)",
                   (strategy_bot.HIDE_PREF, H.now()))
     assert "goal-manager" in chart(api, as_bot(api, "botops"))
     assert hide(api, True, as_person(api, "riley")).status_code == 200
@@ -372,14 +372,14 @@ def test_the_settings_an_install_from_before_stored_under_old_keys_move_to_the_n
         c.execute("INSERT OR REPLACE INTO registry_metadata(key,value) VALUES(?,?)",
                   (strategy_bot.OLD_KEY, '{"migrated_at":"2026-01-01T00:00:00Z","on":true}'))
         for person in ("human:ana", "human:ben"):
-            c.execute("INSERT INTO preferences(actor,key,value,updated) VALUES(?,?,'true',?)",
+            c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,'true',?)",
                       (person, strategy_bot.OLD_HIDE_PREF, H.now()))
-        c.execute("INSERT INTO preferences(actor,key,value,updated) VALUES('human:ben',?,'false',?)",
+        c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES('human:ben',?,'false',?)",
                   (strategy_bot.HIDE_PREF, H.shift(H.now(), minutes=1)))
         # Cara chose under the new key, then an older release ran and she chose again under the old one.
-        c.execute("INSERT INTO preferences(actor,key,value,updated) VALUES('human:cara',?,'true',?)",
+        c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES('human:cara',?,'true',?)",
                   (strategy_bot.HIDE_PREF, H.shift(H.now(), minutes=-5)))
-        c.execute("INSERT INTO preferences(actor,key,value,updated) VALUES('human:cara',?,'false',?)",
+        c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES('human:cara',?,'false',?)",
                   (strategy_bot.OLD_HIDE_PREF, H.now()))
     with api.app.state.store.transaction() as c:
         assert strategy_bot.migrate(c) is False                      # the moved record says it has run

@@ -157,7 +157,7 @@ def test_nightly_learnings_has_an_off_switch_on_by_default_and_off_means_no_run_
     assert following > datetime.now(timezone.utc) + timedelta(minutes=1), "tonight has run: the next is tomorrow's"
     noon = datetime(2026, 1, 15, 12, 0, tzinfo=SR.zone())          # a night no other line claims
     with store.transaction() as c:
-        c.execute("INSERT INTO learning_runs(id,night,status,started) VALUES('u',?,'unconfigured',?)",
+        c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('u',?,'unconfigured',?)",
                   (L.night_of(noon), H.now()))
         assert SR.next_night(c, {"at": "04:00"}, noon) == noon.replace(hour=4) + timedelta(days=1), \
             "an unconfigured night is not tried again before tomorrow"
@@ -172,15 +172,15 @@ def test_run_now_on_stale_review_makes_at_most_30_decide_calls_and_the_row_shows
         for n in range(35):
             row = H.task_create(c, "human:ana", f"Old export task {n}", "x", "bot:ops")
             when = H.shift(H.now(), days=-10)
-            c.execute("UPDATE tasks SET status='open',updated=?,created=? WHERE id=?", (when, when, row["id"]))
+            c.execute("UPDATE tasks SET status='open',updated_at=?,created_at=? WHERE id=?", (when, when, row["id"]))
         stale_review._set_watermark(c, H.now())          # a pass just ran: Run now runs anyway
 
     def run_once():
-        before = (rows(api)["stale_review"]["last"] or {}).get("started")
+        before = (rows(api)["stale_review"]["last"] or {}).get("started_at")
         assert post(api, "system-routines/stale_review/run", {}, token="ben-test")["running"] is True
         for _ in range(200):
             last = rows(api)["stale_review"]["last"]
-            if not stale_review._RUNNING.locked() and last and last["started"] != before:
+            if not stale_review._RUNNING.locked() and last and last["started_at"] != before:
                 return last
             time.sleep(0.05)
         raise AssertionError("the run never finished")

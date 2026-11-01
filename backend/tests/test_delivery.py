@@ -25,7 +25,7 @@ def setup(api):
 def rows(api, **where):
     sql = " AND ".join(f"{k}=?" for k in where) or "1"
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute(f"SELECT * FROM deferrals WHERE {sql} ORDER BY created",
+        return [dict(r) for r in c.execute(f"SELECT * FROM deferrals WHERE {sql} ORDER BY created_at",
                                            tuple(where.values()))]
 
 

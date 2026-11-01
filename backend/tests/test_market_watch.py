@@ -151,7 +151,7 @@ def test_the_same_page_twice_and_the_cap_on_active_watches_are_409(seeded):
     store = seeded.app.state.store
     with store.transaction() as c:
         for n in range(W.MAX_ACTIVE - 1):
-            c.execute("INSERT INTO market_watches (id, entity_id, url, kind, active, created) VALUES (?,?,?,?,1,?)",
+            c.execute("INSERT INTO market_watches (id, entity_id, url, kind, active, created_at) VALUES (?,?,?,?,1,?)",
                       (f"w{n}", "company/northwind", f"https://northwind.example/p{n}", "other", H.now()))
     assert watch(seeded, url="https://northwind.example/over", expected=409)["error"]["code"] == "limit"
 

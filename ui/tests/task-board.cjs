@@ -28,7 +28,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
           cmo: {resolved_model: 'claude-opus-5-5', resolved_effort: '', model_source: 'company'}}[name]}));
     const now = new Date().toISOString();
     const task = (id, over) => ({id, title: id, body: 'Details.', owner: 'bot:cmo', requester: 'human:reviewer', status: 'open',
-      lane: 'company', rank: 1, labels: [], links: [], parts: {total: 0, done: 0}, version: 3, created: now, updated: now, ...over});
+      lane: 'company', rank: 1, labels: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
     let me = {id: 'reviewer', name: 'Test Reviewer', email: 'reviewer@example.test', role: 'owner', mover: true, cloud: true};
     const tags = [
       {id: 'tag-newsletter', key: 'newsletter', label: 'release', metadata: {date: '2026-10-02'},
@@ -49,7 +49,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
         links: [{id: 'l1', kind: 'pr', url: 'https://github.com/ticoteam/tico/pull/412', title: 'tico#412', state: 'open'}], parts: {total: 2, done: 1}}),
       task('Fix the checkout bug', {owner: 'bot:cpo', lane: 'product', status: 'open', rank: 2, labels: ['bug']}),
     ];
-    const comments = [{id: 'm1', kind: 'say', from_actor: 'human:ben', to_actor: 'bot:cmo', body: 'Use the September numbers.', created: now, edited_at: now, refs: {task: 'Draft the newsletter', comment: true, attachments: [{id: 'doc', name: 'review-packet.md'}]}}];
+    const comments = [{id: 'm1', kind: 'say', from_actor: 'human:ben', to_actor: 'bot:cmo', body: 'Use the September numbers.', created_at: now, edited_at: now, refs: {task: 'Draft the newsletter', comment: true, attachments: [{id: 'doc', name: 'review-packet.md'}]}}];
     const events = [{id: 'e1', task_id: 'Draft the newsletter', ts: now, actor: 'human:reviewer', field: 'status', old: null, new: 'open', note: ''},
                     {id: 'e2', task_id: 'Draft the newsletter', ts: now, actor: 'bot:cmo', field: 'status', old: 'open', new: 'doing', note: 'Drafting from the brief'},
                     {id: 'e3', task_id: 'Draft the newsletter', ts: now, actor: 'bot:cmo', field: 'note', old: '', new: 'Drafting from the brief', note: 'Drafting from the brief'},
@@ -81,10 +81,10 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
         flowAsked.push(Object.fromEntries(url.searchParams));
         const day = back => { const d = new Date(); d.setDate(d.getDate() - back);
           return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-        const days = Array.from({length: 20}, (_, i) => ({day: day(i), created: 3 + (i % 5), doing: 2 + (i % 3), done: 1 + (i * 7 % 6), closed: i % 4}));
+        const days = Array.from({length: 20}, (_, i) => ({day: day(i), created_at: 3 + (i % 5), doing: 2 + (i % 3), done: 1 + (i * 7 % 6), closed: i % 4}));
         const totals = {}; for (const d of days) for (const [k, v] of Object.entries(d)) if (k !== 'day') totals[k] = (totals[k] || 0) + v;
         return json({since: now, days, totals, steps: [], stages: {open: {n: 40, median_hours: 0.4, p90_hours: 9}, doing: {n: 38, median_hours: 2.5, p90_hours: 30},
-          done: {n: 20, median_hours: 52, p90_hours: 80}}, people: [{actor: 'bot:cmo', created: 30, done: 22, closed: 10}, {actor: 'human:reviewer', created: 8, done: 3}]});
+          done: {n: 20, median_hours: 52, p90_hours: 80}}, people: [{actor: 'bot:cmo', created_at: 30, done: 22, closed: 10}, {actor: 'human:reviewer', created_at: 8, done: 3}]});
       }
       if (p === '/api/v2/tasks/labels') return json({labels: ['newsletter', 'copy', 'bug', 'finance'], tags: [tags[0]]});
       if (p === '/api/v2/tags' && req.method() === 'GET') return json({tags});
@@ -148,7 +148,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
         if (lane) rows = rows.filter(task => (task.lane || 'company') === lane);
         const owner = url.searchParams.get('owner');
         if (owner) rows = rows.filter(task => task.owner === owner || task.owner === 'bot:' + owner);
-        if (url.searchParams.get('sort') === 'finished') rows.sort((a, b) => String(b.closed_at || b.updated).localeCompare(String(a.closed_at || a.updated)));
+        if (url.searchParams.get('sort') === 'finished') rows.sort((a, b) => String(b.closed_at || b.updated_at).localeCompare(String(a.closed_at || a.updated_at)));
         const offset = Number(url.searchParams.get('offset') || 0), limit = Number(url.searchParams.get('limit') || 500);
         return json({tasks: rows.slice(offset, offset + limit), next_offset: rows.length > offset + limit ? offset + limit : null});
       }
@@ -166,7 +166,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       const cm = p.match(/^\/api\/v2\/tasks\/([^/]+)\/comments$/);
       if (cm && req.method() === 'POST') {
         const body = req.postDataJSON(); posted.push({path: p, body});
-        comments.push({id: 'm' + comments.length, kind: 'say', from_actor: 'human:reviewer', to_actor: 'bot:cmo', body: body.text, created: new Date().toISOString(), refs: {task: decodeURIComponent(cm[1]), comment: true}});
+        comments.push({id: 'm' + comments.length, kind: 'say', from_actor: 'human:reviewer', to_actor: 'bot:cmo', body: body.text, created_at: new Date().toISOString(), refs: {task: decodeURIComponent(cm[1]), comment: true}});
         return json({comment: comments.at(-1), comments, woke: true});
       }
       if (p === '/api/v2/conversations') return json({conversations: []});

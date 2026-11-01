@@ -188,7 +188,7 @@ class Computer:
 
     def attempts(self):
         with self.api.app.state.store.read() as c:
-            rows = c.execute("SELECT id, state, result, final_text FROM attempts WHERE runner_id=? ORDER BY created",
+            rows = c.execute("SELECT id, state, result, final_text FROM attempts WHERE runner_id=? ORDER BY created_at",
                              (self.registration["runner_id"],)).fetchall()
         return [{"id": r[0], "state": r[1], "result": terminal_result(r[2]), "text": r[3]} for r in rows]
 
@@ -253,7 +253,7 @@ def terminal_result(raw):
 
 def bot_attempts(api, computer, bot):
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT id, result FROM attempts WHERE runner_id=? AND bot=? ORDER BY created",
+        rows = c.execute("SELECT id, result FROM attempts WHERE runner_id=? AND bot=? ORDER BY created_at",
                          (computer.registration["runner_id"], bot)).fetchall()
     return [{"id": r[0], "result": terminal_result(r[1])} for r in rows]
 
@@ -421,7 +421,7 @@ def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer)
 def started_threads(api, computer):
     """The provider thread each of this computer's turns reported when it started, oldest first."""
     with api.app.state.store.read() as c:
-        return [r[0] for r in c.execute("SELECT thread_id FROM attempts WHERE runner_id=? ORDER BY created",
+        return [r[0] for r in c.execute("SELECT thread_id FROM attempts WHERE runner_id=? ORDER BY created_at",
                                         (computer.registration["runner_id"],))]
 
 

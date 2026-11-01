@@ -103,7 +103,7 @@ def test_a_rename_lands_before_startup_code_that_uses_the_new_name(tmp_path):
         c.execute("DROP INDEX google_connects_oauth_state")
         c.execute("ALTER TABLE google_connects RENAME COLUMN oauth_state TO state")
         c.execute("CREATE UNIQUE INDEX google_connects_state ON google_connects(state) WHERE state IS NOT NULL")
-        c.execute("INSERT INTO google_connects(person_id,mailbox,status,state,created,updated) "
+        c.execute("INSERT INTO google_connects(person_id,mailbox,status,state,created_at,updated_at) "
                   "VALUES('p1','ana@acme.example','signing_in','nonce-1','t','t')")
         c.execute("DELETE FROM schema_migrations WHERE version>='0003' AND version NOT LIKE 'legacy_%'")
     boot(path)

@@ -18,7 +18,7 @@ def unexplained(conn):
     out = []
     for row in H._rows(conn.execute(
             "SELECT * FROM tasks t WHERE t.status='waiting' AND t.waiting_on LIKE 'human:%' AND t.owner LIKE 'bot:%' "
-            "AND NOT EXISTS (SELECT 1 FROM events e WHERE e.action=? AND e.target=t.id) ORDER BY t.created",
+            "AND NOT EXISTS (SELECT 1 FROM events e WHERE e.action=? AND e.target=t.id) ORDER BY t.created_at",
             (ACTION,))):
         if not H.lint_person_ask(row.get("note")):
             continue

@@ -20,7 +20,7 @@ def set_roster(api, doc):
 
 def as_bot(api, slug, token):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   (slug, "test", "x-" + slug, H.now(), "human:ana"))
     api.app.state.store.settings.test_identities[token] = Identity(f"bot:{slug}", "bot", agent="test")
 

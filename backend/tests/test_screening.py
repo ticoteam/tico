@@ -91,7 +91,7 @@ def notes(api, action="screening.held"):
 
 def owned(api, owner):
     with api.app.state.store.read() as c:
-        return [dict(t) for t in c.execute("SELECT id,title,body,owner,next_run FROM tasks WHERE owner=? ORDER BY created",
+        return [dict(t) for t in c.execute("SELECT id,title,body,owner,next_run FROM tasks WHERE owner=? ORDER BY created_at",
                                            (owner,))]
 
 

@@ -128,7 +128,7 @@ function taskPipelineBoard(items, state, head = '') {
   return boardColumnsHTML(columns, {head});
 }
 const taskByStepRank = (a, b) => (a.task.step_rank ?? Infinity) - (b.task.step_rank ?? Infinity)
-  || String(a.task.created).localeCompare(String(b.task.created)) || String(a.task.id).localeCompare(String(b.task.id));
+  || String(a.task.created_at).localeCompare(String(b.task.created_at)) || String(a.task.id).localeCompare(String(b.task.id));
 // A task's Type and Step are rows in its properties (ui/app/task-props.js).
 async function taskPipelineCreate(form, selected = '') {
   form.dataset.taskType = selected || 'general';

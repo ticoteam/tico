@@ -138,7 +138,7 @@ def on(state="on", key=KEY, token=TOKEN, expires=60, **extra):
     return {"state": hq, "writes": writes, "reason": reason, "access": access, "address": ADDRESS,
             "bucket": "tico-files-us", "region": "us-east-1", "prefix": "c/acme/",
             "credentials": {"access_key_id": key, "secret_access_key": SECRET, "session_token": token,
-                            "expires": stamp(expires)},
+                            "expires_at": stamp(expires)},
             "signing": {"key_id": "k1", "secret": SIGNING}, "keep_until": stamp(30 * 24 * 60) if hq == "stopped" else None,
             **extra}
 
@@ -389,7 +389,7 @@ def test_move_existing_files_copies_every_file_and_version_and_matches_the_estim
     # Another start that gets in after the running check is refused the same way, not with a server error.
     listed = tico_storage.pending
     def raced(c, *args):
-        c.execute("INSERT INTO storage_moves(id,target,state,started,started_by,estimate_files,estimate_bytes) "
+        c.execute("INSERT INTO storage_moves(id,target,state,started_at,started_by,estimate_files,estimate_bytes) "
                   "VALUES('other','x','running','2026-10-23T00:00:00Z','owner',0,0)")
         return listed(c, *args)
     tico_storage.pending = raced
@@ -579,7 +579,7 @@ def test_credits_out_existing_files_open_and_uploads_follow_the_rule(api, tico):
     # With the company's own bucket refusing writes, the upload is refused with a plain reason.
     from backend import company_storage
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO company_storage(id,bucket,prefix,region,access_key_id,secret,active,created,created_by) "
+        c.execute("INSERT INTO company_storage(id,bucket,prefix,region,access_key_id,secret,active,created_at,created_by) "
                   "VALUES('own','acme-files','','us-west-2','AKIAEXAMPLENOWR0001',?,1,'2026-10-23T00:00:00Z','human:ben')",
                   (api.app.state.vault.cipher.seal(c, 'company_storage:own', 'example-secret'),))
     company_storage.apply(api.app.state.store, api.app.state.vault, api.app.state.blobs, copy=False, checked=True)

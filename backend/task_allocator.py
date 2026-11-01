@@ -78,7 +78,7 @@ def allocate(c, at=None):
         owners = {"bot:" + s for s in rule["pool"]}
         waiting = c.execute(
             f"SELECT id, owner FROM tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
-            "ORDER BY created, id", (step["id"], *FINISHED)).fetchall()
+            "ORDER BY created_at, id", (step["id"], *FINISHED)).fetchall()
         for ticket_id, owner in waiting:
             if owner in owners:
                 continue

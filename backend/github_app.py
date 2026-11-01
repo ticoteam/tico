@@ -105,10 +105,10 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS github_app(
  id TEXT PRIMARY KEY, app_id INTEGER NOT NULL, slug TEXT NOT NULL, client_id TEXT NOT NULL, org TEXT NOT NULL,
  administration INTEGER NOT NULL, installation_id INTEGER, html_url TEXT NOT NULL DEFAULT '',
- ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, created TEXT NOT NULL, created_by TEXT NOT NULL);
+ ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS github_app_states(
  nonce TEXT PRIMARY KEY, actor TEXT NOT NULL, org TEXT NOT NULL, administration INTEGER NOT NULL,
- created REAL NOT NULL);
+ created_at REAL NOT NULL);
 -- Unlike the short-lived generic idempotency cache, these operation bindings are retained so an
 -- ambiguous external create can never be retried as a fresh repository write after a timeout/restart.
 CREATE TABLE IF NOT EXISTS github_product_repo_operations(
@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS github_product_repo_operations(
  request_hash TEXT NOT NULL, target_org TEXT NOT NULL, target_name TEXT NOT NULL,
  state TEXT NOT NULL CHECK(state IN ('pending','completed','rejected')),
  response TEXT, error_code TEXT, error_detail TEXT, error_status INTEGER,
- created TEXT NOT NULL, updated TEXT NOT NULL,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  PRIMARY KEY(actor,operation,key),
  CHECK(state!='completed' OR response IS NOT NULL),
  CHECK(state!='rejected' OR (error_code IS NOT NULL AND error_detail IS NOT NULL AND error_status IS NOT NULL)));
@@ -589,7 +589,7 @@ class GitHubApp:
                 confirmed.update({name.lower(): confirmed.get(name.lower(), time.time()) if name.lower() in missing else time.time() for name in absent})
                 save_metadata(c, 'repositories-confirmed-missing', confirmed)
                 for name in absent:
-                    c.execute('INSERT INTO repositories(id,full_name,reachable,updated) VALUES(?,?,0,?) '
+                    c.execute('INSERT INTO repositories(id,full_name,reachable,updated_at) VALUES(?,?,0,?) '
                               'ON CONFLICT(full_name) DO UPDATE SET reachable=0', (uuid.uuid4().hex, name, H.now()))
             from .repositories import repository_health
             repository_health(self)
@@ -1074,7 +1074,7 @@ def install_github_app(app, settings, store):
                 raise Problem("github_key_missing", LOST_KEY, 409)
         nonce = secrets.token_urlsafe(24)
         with store.transaction() as c:
-            c.execute("DELETE FROM github_app_states WHERE created<?", (time.time() - STATE_TTL,))
+            c.execute("DELETE FROM github_app_states WHERE created_at<?", (time.time() - STATE_TTL,))
             c.execute("INSERT INTO github_app_states VALUES(?,?,?,?,?)", (nonce, who.actor, org, int(administration), time.time()))
         body = manifest(settings, (name or f"{settings.company_name} Tico").strip(), administration)
         action = f"https://github.com/organizations/{org}/settings/apps/new?state={nonce}"
@@ -1102,7 +1102,7 @@ def install_github_app(app, settings, store):
             # Single use, and only in the session that started it.
             if row:
                 c.execute("DELETE FROM github_app_states WHERE nonce=?", (state,))
-        if (not row or row["actor"] != who.actor or time.time() - row["created"] > STATE_TTL
+        if (not row or row["actor"] != who.actor or time.time() - row["created_at"] > STATE_TTL
                 or not secrets.compare_digest(row["nonce"], state)):
             raise Problem("github_state", "This GitHub setup link is not valid or has expired; start again from Tools", 400)
         if not code:
@@ -1469,7 +1469,7 @@ def install_github_app(app, settings, store):
         c.execute("SAVEPOINT product_repo_grant")
         try:
             # Granting needs it on the team list; a bot set to every ticked repository then reaches it too.
-            c.execute("INSERT INTO repositories(id,full_name,enabled,added_by,updated) VALUES(?,?,1,?,?) "
+            c.execute("INSERT INTO repositories(id,full_name,enabled,added_by,updated_at) VALUES(?,?,1,?,?) "
                       "ON CONFLICT(full_name) DO UPDATE SET enabled=1", (uuid.uuid4().hex, repository, who.actor, H.now()))
             before = R.access(c, bot, org)
             if before["mode"] == "all" and before["all_access"] == "write":
@@ -1575,7 +1575,7 @@ def install_github_app(app, settings, store):
                     raise Problem("idempotency_conflict", "This key was used for different content", 409)
                 result = json.loads(legacy["response"])
                 c.execute("INSERT INTO github_product_repo_operations "
-                          "(actor,operation,key,request_hash,target_org,target_name,state,response,created,updated) "
+                          "(actor,operation,key,request_hash,target_org,target_name,state,response,created_at,updated_at) "
                           "VALUES(?,?,?,?,?,?,'completed',?,?,?)",
                           (who.actor, operation, key, request_hash, body.org, name,
                            encode(result), H.now(), H.now()))
@@ -1584,7 +1584,7 @@ def install_github_app(app, settings, store):
             if bind:
                 stamp = H.now()
                 c.execute("INSERT INTO github_product_repo_operations "
-                          "(actor,operation,key,request_hash,target_org,target_name,state,created,updated) "
+                          "(actor,operation,key,request_hash,target_org,target_name,state,created_at,updated_at) "
                           "VALUES(?,?,?,?,?,?,'pending',?,?)",
                           (who.actor, operation, key, request_hash, body.org, name, stamp, stamp))
             return None
@@ -1623,7 +1623,7 @@ def install_github_app(app, settings, store):
                     # remains pending and future requests fail closed instead of issuing another POST.
                     with store.transaction() as c:
                         c.execute("UPDATE github_product_repo_operations "
-                                  "SET state='rejected',error_code=?,error_detail=?,error_status=?,updated=? "
+                                  "SET state='rejected',error_code=?,error_detail=?,error_status=?,updated_at=? "
                                   "WHERE actor=? AND operation=? AND key=? AND request_hash=? AND state='pending'",
                                   (problem.code, problem.detail, problem.status, H.now(),
                                    who.actor, operation, key, request_hash))
@@ -1659,7 +1659,7 @@ def install_github_app(app, settings, store):
                         c.execute("INSERT INTO idempotency VALUES(?,?,?,?,?,?)",
                                   (who.actor, operation, key, request_hash, encode(result), H.now()))
                     c.execute("UPDATE github_product_repo_operations "
-                              "SET state='completed',response=?,updated=? "
+                              "SET state='completed',response=?,updated_at=? "
                               "WHERE actor=? AND operation=? AND key=? AND state='pending'",
                               (encode(result), H.now(), who.actor, operation, key))
             except Problem:

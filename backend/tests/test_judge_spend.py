@@ -170,7 +170,7 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
         assert B.spent_this_month(c) == pytest.approx(1.1)
 
     # Learnings: a night that reaches the cap sends nothing and keeps its cursors, so nothing read is lost.
-    items = [{"key": f"chat:{n}", "source": "chat", "created": H.now(), "audience": None, "label": "Chat",
+    items = [{"key": f"chat:{n}", "source": "chat", "created_at": H.now(), "audience": None, "label": "Chat",
               "text": f"Invoices go out on Friday {n}.", "author": "human:ana", "ref": {}} for n in range(3)]
     team = {"ops": {"profile": "Ops runs invoicing."}}
     spend(api, -0.6)                                   # back to $0.50, so the night starts

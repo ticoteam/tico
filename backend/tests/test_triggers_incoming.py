@@ -84,7 +84,7 @@ def as_bot(api, slug):
     from backend.store import H
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) "
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
                   "VALUES(?,'hermes',?,?,'human:ana')", (slug, "x-" + slug, H.now()))
     api.app.state.store.settings.test_identities[slug + "-test"] = Identity("bot:" + slug, "bot", agent="hermes")
 

@@ -18,7 +18,7 @@ const EVENTS = 50;
 const CEILING = 5;   // requests a page may make for the whole burst; reading lists per change makes 15 or more
 const now = new Date().toISOString();
 const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Details.', owner: 'bot:ops', requester: 'human:ana',
-  status: 'doing', lane: 'company', labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created: now, updated: now, ...over});
+  status: 'doing', lane: 'company', labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
 
 (async () => {
   const browser = await chromium.launch();
@@ -56,7 +56,7 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
     if (p === '/api/issues') return json([]);
     if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with')
       ? [{id: 'c-ops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:ops']}] : []});
-    if (p === '/api/v2/conversations/c-ops/snapshot') return json({messages: [{id: 'm1', from_actor: 'human:ana', body: 'Draft the release notes', created: now}], execution: null});
+    if (p === '/api/v2/conversations/c-ops/snapshot') return json({messages: [{id: 'm1', from_actor: 'human:ana', body: 'Draft the release notes', created_at: now}], execution: null});
     if (p === '/api/v2/tasks') return json({tasks: [task()], next_offset: null, cursor: '12.a'});
     if (p === '/api/v2/tasks/labels') return json({labels: [], tags: []});
     if (p === '/api/v2/needs-you') return json({items: [], version: 'v0'});

@@ -21,7 +21,7 @@ def jump(w, seconds):
     # Clock travel represents a reporting computer, without replaying thousands of identical heartbeats.
     w.clock.shift(seconds)
     with w.store.transaction() as c:
-        c.execute('UPDATE runners SET last_seen=?,awake_since=NULL', (w.H.now(),))
+        c.execute('UPDATE runners SET last_seen_at=?,awake_since=NULL', (w.H.now(),))
     w.heartbeat(w.bot_slugs)
 
 

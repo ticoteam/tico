@@ -20,7 +20,7 @@ def rule(api, by="human:ben", scope_kind="team", scope_id="", event="webhook.rec
     """A row in the rules table, as the engine reads it."""
     row = {"id": "rule_" + H.new_id()[:8], "scope_kind": scope_kind, "scope_id": scope_id, "event": event,
            "condition": json.dumps(when or {}), "then_outcome": then, "params": json.dumps(params or {}),
-           "created_by": by, "created": H.now(), "updated": H.now()}
+           "created_by": by, "created_at": H.now(), "updated_at": H.now()}
     with api.app.state.store.transaction() as c:
         c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
     return {"rule": {**row, "params": params or {}}}

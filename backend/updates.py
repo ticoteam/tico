@@ -88,9 +88,9 @@ TASK_ID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS updates(
  id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL,
- headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL,
+ headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  UNIQUE(bot, kind, day));
-CREATE INDEX IF NOT EXISTS updates_created ON updates(created);
+CREATE INDEX IF NOT EXISTS updates_created ON updates(created_at);
 CREATE TABLE IF NOT EXISTS update_reads(
  update_id TEXT NOT NULL, actor TEXT NOT NULL, read_at TEXT NOT NULL, PRIMARY KEY(update_id, actor));
 CREATE TABLE IF NOT EXISTS update_archive_overrides(
@@ -284,7 +284,7 @@ def build_queue(c, day, kind, assistant=None):
     if c.execute("SELECT 1 FROM update_queue WHERE day=? LIMIT 1", (day,)).fetchone():
         return 0
     rows = c.execute(
-        "SELECT b.id, b.slug, (SELECT max(u.created) FROM updates u WHERE u.bot=b.id) last_update, "
+        "SELECT b.id, b.slug, (SELECT max(u.created_at) FROM updates u WHERE u.bot=b.id) last_update, "
         "(SELECT last_turn_at FROM bot_status s WHERE s.bot=b.id) last_turn "
         "FROM bots b LEFT JOIN update_settings us ON us.bot=b.id "
         "WHERE b.state='active' AND coalesce(us." + ("daily" if kind == "daily" else "weekly") + ",1)=1").fetchall()
@@ -401,7 +401,7 @@ def _finish(c, row, state, reason=None):
 def settle_sent(c, row):
     """The request out now: posted, ended without a post, or still going. True while it is going."""
     redo = row["redo"] if "redo" in row.keys() else 0
-    if c.execute("SELECT 1 FROM updates WHERE bot=? AND kind=? AND day=?" + (" AND updated>=?" if redo else ""),
+    if c.execute("SELECT 1 FROM updates WHERE bot=? AND kind=? AND day=?" + (" AND updated_at>=?" if redo else ""),
                  (row["bot"], row["kind"], row["day"], *([row["sent_at"]] if redo else []))).fetchone():
         _finish(c, row, "posted")
         return False
@@ -442,14 +442,14 @@ def request_text(c, bot, kind, day, redo=False):
         utc = lambda at: at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         since, until = utc(start - timedelta(days=6 if week else 0)), utc(start + timedelta(days=1))
     else:
-        last = c.execute("SELECT max(created) FROM updates WHERE bot=?", (bot,)).fetchone()[0]
+        last = c.execute("SELECT max(created_at) FROM updates WHERE bot=?", (bot,)).fetchone()[0]
         since, until = last or H.shift(H.now(), days=-7 if week else -1), "9999"
-    done = c.execute("SELECT title FROM tasks WHERE owner=? AND status IN ('done','closed') AND updated>=? AND updated<? "
-                     "ORDER BY updated DESC LIMIT 12", (actor, since, until)).fetchall()
+    done = c.execute("SELECT title FROM tasks WHERE owner=? AND status IN ('done','closed') AND updated_at>=? AND updated_at<? "
+                     "ORDER BY updated_at DESC LIMIT 12", (actor, since, until)).fetchall()
     open_ = c.execute("SELECT title, status FROM tasks WHERE owner=? AND status IN ('open','doing','waiting','review','ready') "
-                      "ORDER BY updated DESC LIMIT 12", (actor,)).fetchall()
+                      "ORDER BY updated_at DESC LIMIT 12", (actor,)).fetchall()
     asked = c.execute("SELECT title, owner FROM tasks WHERE requester=? AND owner LIKE 'human:%' AND status IN "
-                      "('open','doing','waiting') ORDER BY updated DESC LIMIT 8", (actor,)).fetchall()
+                      "('open','doing','waiting') ORDER BY updated_at DESC LIMIT 8", (actor,)).fetchall()
     goals = c.execute("SELECT title FROM goals WHERE owner=? AND (status IS NULL OR status NOT IN ('done','dropped')) "
                       "ORDER BY rank LIMIT 5", (actor,)).fetchall()
     line = lambda rows, f: "\n".join("- " + f(r) for r in rows) or "- (none)"
@@ -576,12 +576,12 @@ def draft_facts(c, author, kind, day):
     since = H.shift(H.now(), days=-7 if week else -1)
     hidden = [H.bot_actor(slug) for slug in sorted(restricted_bots(c))]
     shared = shared_tasks_sql(hidden)
-    done = c.execute(f"SELECT title FROM tasks WHERE owner=? AND {shared} AND status IN ('done','closed') AND updated>=? "
-                     "ORDER BY updated DESC LIMIT 12", (author, since)).fetchall()
+    done = c.execute(f"SELECT title FROM tasks WHERE owner=? AND {shared} AND status IN ('done','closed') AND updated_at>=? "
+                     "ORDER BY updated_at DESC LIMIT 12", (author, since)).fetchall()
     open_ = c.execute(f"SELECT title, status FROM tasks WHERE owner=? AND {shared} AND status IN "
-                      "('open','doing','waiting','review','ready') ORDER BY updated DESC LIMIT 12", (author,)).fetchall()
+                      "('open','doing','waiting','review','ready') ORDER BY updated_at DESC LIMIT 12", (author,)).fetchall()
     asked = c.execute(f"SELECT title, owner FROM tasks WHERE requester=? AND {shared} AND owner<>? AND status IN "
-                      "('open','doing','waiting') ORDER BY updated DESC LIMIT 8", (author, author)).fetchall()
+                      "('open','doing','waiting') ORDER BY updated_at DESC LIMIT 8", (author, author)).fetchall()
     goals = c.execute("SELECT title FROM goals WHERE owner=? AND (status IS NULL OR status NOT IN "
                       "('done','dropped')) ORDER BY rank LIMIT 5", (author,)).fetchall()
     # Their decisions in Needs you: what they moved a shared task to (approved, declined, done, closed)...
@@ -590,8 +590,8 @@ def draft_facts(c, author, kind, day):
                         "ORDER BY e.ts DESC LIMIT ?", (author, since, DRAFT_LIST_MAX)).fetchall()
     # ...and their answers to asks, then their comments; a message counts only when every task it names is shared.
     said = lambda where: [(title, m["body"]) for m in c.execute(
-        "SELECT * FROM messages WHERE from_actor=? AND deleted_at IS NULL AND created>=? AND " + where
-        + " ORDER BY created DESC LIMIT ?", (author, since, DRAFT_SCAN_MAX)).fetchall()
+        "SELECT * FROM messages WHERE from_actor=? AND deleted_at IS NULL AND created_at>=? AND " + where
+        + " ORDER BY created_at DESC LIMIT ?", (author, since, DRAFT_SCAN_MAX)).fetchall()
         if (title := _shared_message(c, m, shared))][:DRAFT_LIST_MAX]
     answers = said("kind='answer'")
     comments = said("kind IN ('say','ask') AND json_extract(refs,'$.task') IS NOT NULL "
@@ -602,10 +602,10 @@ def draft_facts(c, author, kind, day):
     meetings = c.execute(
         "SELECT m.title, m.notes FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
         "WHERE m.review_state='live' AND mc.deleted_at IS NULL AND json_extract(m.metadata,'$.kind')='meeting' "
-        "AND coalesce(json_extract(m.metadata,'$.private'),0)=0 AND trim(m.notes)<>'' AND m.created>=? AND ("
+        "AND coalesce(json_extract(m.metadata,'$.private'),0)=0 AND trim(m.notes)<>'' AND m.created_at>=? AND ("
         "lower(m.owner)=? OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata,'$.calendar.attendees')) "
         "WHERE lower(trim(value))=?) OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata,'$.participants')) "
-        "WHERE lower(trim(json_extract(value,'$.email')))=?)) ORDER BY m.created DESC LIMIT ?",
+        "WHERE lower(trim(json_extract(value,'$.email')))=?)) ORDER BY m.created_at DESC LIMIT ?",
         (since, email, email, email, MEETINGS_MAX)).fetchall() if email else []
     line = lambda rows, f: "\n".join("- " + f(r) for r in rows) or "- (none)"
     facts = [f"{name}'s {'week in review' if week else 'daily update'} for {day}.", "",
@@ -1049,14 +1049,14 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
     else:
         draft, edited, flagged = None, None, 0
     if existing:
-        c.execute("UPDATE updates SET headline=?, body=?, slides=?, updated=?, drafted_by=?, edited_by=?, "
+        c.execute("UPDATE updates SET headline=?, body=?, slides=?, updated_at=?, drafted_by=?, edited_by=?, "
                   "inputs=?, meetings=?, source=? WHERE id=?",
                   (headline, body, stored, now, draft, edited, inputs_json, flagged, source_json, existing["id"]))
         c.execute("DELETE FROM update_reads WHERE update_id=?", (existing["id"],))   # changed: unread again
         uid = existing["id"]
     else:
         uid = H.new_id()
-        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,slides,created,updated,drafted_by,edited_by,"
+        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,slides,created_at,updated_at,drafted_by,edited_by,"
                   "inputs,meetings,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (uid, bot, kind, day, headline, body, stored, now, now, draft, edited, inputs_json, flagged,
                    source_json))
@@ -1147,7 +1147,7 @@ def inbox_ids(c, actor, readable, created_after=None, meetings=False):
     where = [clause, f"NOT {_is_archived_sql()}", _kept(meetings)]
     args = [actor, *values]
     if created_after:
-        where.append("u.created>=?"); args.append(created_after)
+        where.append("u.created_at>=?"); args.append(created_after)
     return [r["id"] for r in c.execute(
         "SELECT u.id FROM updates u LEFT JOIN update_archive_overrides ao ON ao.update_id=u.id AND ao.actor=? "
         "WHERE " + " AND ".join(where), args).fetchall()]
@@ -1156,13 +1156,13 @@ def inbox_ids(c, actor, readable, created_after=None, meetings=False):
 def thread(c, uid):
     """Replies to an update (messages carrying refs.update) and the bot's answers to them."""
     replies = [dict(r) for r in c.execute(
-        "SELECT id, from_actor, to_actor, body, created, conversation_id FROM messages "
-        "WHERE json_extract(refs,'$.update')=? ORDER BY created", (uid,))]
+        "SELECT id, from_actor, to_actor, body, created_at, conversation_id FROM messages "
+        "WHERE json_extract(refs,'$.update')=? ORDER BY created_at", (uid,))]
     ids = [r["id"] for r in replies]
     answers = [dict(r) for r in c.execute(
-        "SELECT id, from_actor, to_actor, body, created, conversation_id, in_reply_to FROM messages WHERE in_reply_to IN ("
-        + ",".join("?" * len(ids)) + ") ORDER BY created", ids)] if ids else []
-    return sorted(replies + answers, key=lambda m: m["created"])
+        "SELECT id, from_actor, to_actor, body, created_at, conversation_id, in_reply_to FROM messages WHERE in_reply_to IN ("
+        + ",".join("?" * len(ids)) + ") ORDER BY created_at", ids)] if ids else []
+    return sorted(replies + answers, key=lambda m: m["created_at"])
 
 
 def _only(bots, column="u.bot"):
@@ -1196,12 +1196,12 @@ def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, 
     if not include_archive:
         where.append(is_archived if archive else f"NOT {is_archived}")
     if before:
-        where.append("u.created<?"); args.append(before)
+        where.append("u.created_at<?"); args.append(before)
     rows = c.execute(
         f"SELECT u.*, r.read_at, CASE WHEN {is_archived} THEN 1 ELSE 0 END AS archived "
         "FROM updates u LEFT JOIN update_reads r ON r.update_id=u.id AND r.actor=? "
         "LEFT JOIN update_archive_overrides ao ON ao.update_id=u.id AND ao.actor=? "
-        "WHERE " + " AND ".join(where) + " ORDER BY u.created DESC LIMIT ?",
+        "WHERE " + " AND ".join(where) + " ORDER BY u.created_at DESC LIMIT ?",
         (actor, actor, *args, limit)).fetchall()
     items = []
     for row in rows:
@@ -1222,7 +1222,7 @@ def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, 
     unread_count = count_unread(c, actor, readable, kind, meetings)
     queue = c.execute("SELECT state, count(*) n FROM update_queue WHERE day=? GROUP BY state", (today(),)).fetchall()
     return {"updates": items, "missed": missed, "unread": unread_count,
-            "next_before": items[-1]["created"] if len(items) >= limit else None,
+            "next_before": items[-1]["created_at"] if len(items) >= limit else None,
             "today": {r["state"]: r["n"] for r in queue}}
 
 
@@ -1235,7 +1235,7 @@ def count_unread(c, actor, readable, kind=None, meetings=False):
     is_archived = _is_archived_sql()
     return c.execute("SELECT count(*) FROM updates u LEFT JOIN update_reads r ON r.update_id=u.id AND r.actor=? "
                      "LEFT JOIN update_archive_overrides ao ON ao.update_id=u.id AND ao.actor=? "
-                     f"WHERE r.read_at IS NULL AND u.created>=? AND {clause} "
+                     f"WHERE r.read_at IS NULL AND u.created_at>=? AND {clause} "
                      f"AND NOT {is_archived} AND {_kept(meetings)}"
                      + (" AND u.kind=?" if kind else ""),
                      (actor, actor, H.shift(H.now(), days=-14), *values, *([kind] if kind else []))).fetchone()[0]

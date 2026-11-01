@@ -501,7 +501,7 @@ def test_a_confirm_card_is_refused_at_the_tap_once_anything_it_was_bound_to_chan
         api.app.state.auth.bot_admins.discard("ben@acme.example")
     else:
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE assistant_actions SET created=? WHERE id=?", (H.shift(H.now(), hours=-25), card["action"]["id"]))
+            c.execute("UPDATE assistant_actions SET created_at=? WHERE id=?", (H.shift(H.now(), hours=-25), card["action"]["id"]))
     url_before = shown(api, made["id"])["url"]
     r = api.post(f"/api/v2/assistant/actions/{card['action']['id']}/confirm", json={}, headers=headers("ben-test"))
     status = r.json().get("action", {}).get("status") if r.status_code == 200 else None

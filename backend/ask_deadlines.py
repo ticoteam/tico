@@ -51,7 +51,7 @@ def open_asks(conn, at):
     rows = H._rows(conn.execute(
         "SELECT m.* FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE m.kind='ask' AND m.from_actor LIKE 'bot:%' AND m.to_actor LIKE 'human:%' AND m.deleted_at IS NULL "
-        f"AND {H.OPEN_ASK_SQL} AND (m.expires_at IS NULL OR m.expires_at>?) ORDER BY m.created", (at,)))
+        f"AND {H.OPEN_ASK_SQL} AND (m.expires_at IS NULL OR m.expires_at>?) ORDER BY m.created_at", (at,)))
     out = []
     for row in rows:
         asked = H.message(conn, row["id"])
@@ -66,7 +66,7 @@ def open_asks(conn, at):
 def last_word(conn, person, asked, task):
     """When `person` last said or did anything on this ask: asked it, wrote in its conversation, or changed its task."""
     clock = H.ask_clock(asked)
-    said = conn.execute("SELECT max(created) FROM messages WHERE conversation_id=? AND from_actor=? AND created>?",
+    said = conn.execute("SELECT max(created_at) FROM messages WHERE conversation_id=? AND from_actor=? AND created_at>?",
                         (asked["conversation_id"], person, clock)).fetchone()[0]
     did = conn.execute("SELECT max(ts) FROM task_events WHERE task_id=? AND actor=? AND ts>?",
                        (task["id"], person, clock)).fetchone()[0] if task else None
@@ -115,7 +115,7 @@ def settle(conn, asked, task, text, outcome, *, answers=None):
     H._write_message(conn, H.KEEPER, asked["from_actor"], text, conv, "answer", refs, asked["id"], None)
     person = asked["to_actor"]
     if task:
-        conn.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["id"]))
+        conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
         if task.get("waiting_on") == person:
             # The wait was for this answer: the next move is the bot's, and the task leaves the person's Needs you.
             conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task["id"],))
@@ -185,9 +185,9 @@ def handed_to_people(conn, expiry, at=None):
     marks = ",".join("?" * len(ASKED_STATUSES))
     rows = H._rows(conn.execute(
         f"SELECT t.* FROM tasks t LEFT JOIN task_types y ON y.id=t.type_id WHERE t.status IN ({marks}) "
-        "AND t.owner LIKE 'human:%' AND t.requester LIKE 'bot:%' AND t.created<? AND coalesce(y.numbered,0)=0 "
+        "AND t.owner LIKE 'human:%' AND t.requester LIKE 'bot:%' AND t.created_at<? AND coalesce(y.numbered,0)=0 "
         "AND t.occurrence IS NULL "
-        "ORDER BY t.created", (*ASKED_STATUSES, expiry)))
+        "ORDER BY t.created_at", (*ASKED_STATUSES, expiry)))
     out = []
     for row in rows:
         if (H.TS.snoozed(row, at or H.now()) or (row.get("due") and str(row["due"])[:10] >= (at or H.now())[:10])
@@ -196,7 +196,7 @@ def handed_to_people(conn, expiry, at=None):
         person = row["owner"]
         touched = conn.execute(
             "SELECT max(ts) FROM (SELECT max(ts) AS ts FROM task_events WHERE task_id=? AND actor=? "
-            "UNION ALL SELECT max(created) FROM messages WHERE conversation_id=? AND from_actor=?)",
+            "UNION ALL SELECT max(created_at) FROM messages WHERE conversation_id=? AND from_actor=?)",
             (row["id"], person, row["conversation_id"], person)).fetchone()[0]
         if not touched or touched < expiry:
             out.append(row)

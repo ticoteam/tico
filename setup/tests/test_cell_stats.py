@@ -263,7 +263,7 @@ def test_a_snapshot_from_proc_docker_and_the_volume(box):
     assert b["healthz"] == {"code": 200, "ms": 12}
     server = next(c for c in b["containers"] if c["role"] == "server")
     assert server == {"role": "server", "name": "tico-boatyard-server-1", "state": "running", "health": "healthy",
-                      "restarts": 2, "oom_killed": False, "started": "2026-10-30T08:08:00Z", "cpu_pct": 3.1,
+                      "restarts": 2, "oom_killed": False, "started_at": "2026-10-30T08:08:00Z", "cpu_pct": 3.1,
                       "mem_mb": 612, "mem_limit_mb": 4096, "pids": 41, "net_rx_mb": 120.1, "net_tx_mb": 88.0,
                       "blk_read_mb": 10.0, "blk_write_mb": 900.0}
     assert {c["role"] for c in b["containers"]} == {"server", "updater"}

@@ -40,7 +40,7 @@ def alerts(api, check):
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     with api.app.state.store.read() as c:
         return [row["id"] for row in c.execute(f"SELECT id FROM tasks WHERE title=? AND status IN ({marks}) "
-                                               "ORDER BY created", (title, *H.ACTIVE_STATUSES))]
+                                               "ORDER BY created_at", (title, *H.ACTIVE_STATUSES))]
 
 
 def flight_event(c, at, site="backend/app.py:4100 in mutate", route="PATCH /api/v2/tasks/{tid}", hold_s=6.5):
@@ -80,10 +80,10 @@ def test_a_bot_task_in_progress_with_no_run_for_an_hour_fires_and_one_with_a_que
     # One example at most, and the busy task is the older: it must not use up the limit ahead of the stuck one.
     monkeypatch.setattr(I, "LIMIT", 1)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET status='doing', updated=? WHERE id=?", (ago(hours=2), stuck))
-        c.execute("UPDATE tasks SET status='doing', updated=? WHERE id=?", (ago(hours=3), waiting))
+        c.execute("UPDATE tasks SET status='doing', updated_at=? WHERE id=?", (ago(hours=2), stuck))
+        c.execute("UPDATE tasks SET status='doing', updated_at=? WHERE id=?", (ago(hours=3), waiting))
         # Finish the first task's run and leave the second task's run queued.
-        c.execute("UPDATE jobs SET state='completed' WHERE id=(SELECT id FROM jobs ORDER BY created LIMIT 1)")
+        c.execute("UPDATE jobs SET state='completed' WHERE id=(SELECT id FROM jobs ORDER BY created_at LIMIT 1)")
     assert sweep(api)["task_stuck"] == 1
     assert stuck in examples(api, "task_stuck")
 
@@ -97,7 +97,7 @@ def test_a_question_to_a_person_who_has_since_left_fires_and_one_to_a_present_pe
         H.say(c, "bot:ops", "human:ana", "Which vendor?", kind="ask", conversation_id=task["conversation_id"],
               refs={"task": tid})
         left = c.execute("SELECT id FROM messages WHERE kind='ask' AND to_actor='human:ana' "
-                         "ORDER BY created DESC LIMIT 1").fetchone()[0]
+                         "ORDER BY created_at DESC LIMIT 1").fetchone()[0]
         # A second open question, on another task so it does not supersede the first, to a person still present.
         H.say(c, "bot:ops", "human:ana", "Which budget?", kind="ask",
               conversation_id=H.task(c, other)["conversation_id"], refs={"task": other})
@@ -140,7 +140,7 @@ def test_a_webhook_send_still_sending_long_after_its_claim_fires(api):
     with store.transaction() as c:
         for send, claimed, state in (("wh_stuck", ago(minutes=30), "sending"), ("wh_fresh", ago(seconds=20), "sending"),
                                      ("wh_done", ago(hours=5), "delivered")):
-            c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt,created,claimed_at) "
+            c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at,claimed_at) "
                       "VALUES(?,?,?,?,'{}',?,?,?,?)", (send, "we_" + send, "ep_1", "task.done", state, ago(hours=5),
                                                        ago(hours=5), claimed))
     assert sweep(api)["webhook_stuck"] == 1
@@ -152,8 +152,8 @@ def test_a_scheduled_automation_thirty_minutes_past_due_fires_and_a_paused_one_d
     with store.transaction() as c:
         for aid, enabled, due in (("au_late", 1, ago(hours=1)), ("au_paused", 0, ago(hours=1)),
                                   ("au_next", 1, stamp(NOW + timedelta(hours=1)))):
-            c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,flow,version,created,created_by,"
-                      "updated,next_due) VALUES(?,?,?,?,?,?,1,?,?,?,?)",
+            c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,flow,version,created_at,created_by,"
+                      "updated_at,next_due) VALUES(?,?,?,?,?,?,1,?,?,?,?)",
                       (aid, aid, "human:ana", "schedule", enabled, flow, ago(days=2), "human:ana", ago(days=2), due))
     assert sweep(api)["automation_overdue"] == 1
 
@@ -161,7 +161,7 @@ def test_a_scheduled_automation_thirty_minutes_past_due_fires_and_a_paused_one_d
 def test_a_relay_no_pull_has_reached_for_half_an_hour_fires_and_a_recent_pull_does_not(api):
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) "
+        c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) "
                   "VALUES('rl_1','trg_1','https://hooks.tico.dev/rl_1','human:ana',?)", (ago(hours=2),))
         c.execute("UPDATE hook_relay_state SET last_pull_at=NULL WHERE singleton=1")
     assert sweep(api)["relay_silent"] == 1

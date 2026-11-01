@@ -290,7 +290,7 @@ def test_a_hidden_bots_measure_suggested_for_her_goal_stays_hidden_however_it_is
     assert [a for a in asks(api) if a.get("owner") == "human:cara" and leaks(a)] == []
     # A link made before links were checked shows no line of the KPI to her either.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, created, created_by, updated, updated_by) "
+        c.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, created_at, created_by, updated_at, updated_by) "
                   "VALUES ('old-link', ?, ?, 'none', ?, 'human:ana', ?, 'human:ana')",
                   (hers["id"], secret["id"], today, today))
     [mine] = [g for g in get(api, "goals/tree", "cara-test")["goals"] if g["id"] == hers["id"]]
@@ -320,7 +320,7 @@ def old_link(api, goal_id, kpi_id, **target):
     import datetime
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, max, created, created_by, updated, updated_by) "
+        c.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, max, created_at, created_by, updated_at, updated_by) "
                   "VALUES (?, ?, ?, 'maintain', ?, ?, 'human:ana', ?, 'human:ana')",
                   ("old-" + goal_id, goal_id, kpi_id, target.get("max"), now, now))
 

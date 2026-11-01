@@ -149,7 +149,7 @@ def held(c):
     """The bots with runs held for this reason, one row each: how many, and since when the oldest waits. A run whose
     wait has ended stays listed until it starts, is dropped or is released."""
     return [dict(row) for row in c.execute(
-        "SELECT bot,count(*) AS jobs,min(created) AS since FROM jobs WHERE hold_reason=? AND state='queued' "
+        "SELECT bot,count(*) AS jobs,min(created_at) AS since FROM jobs WHERE hold_reason=? AND state='queued' "
         "GROUP BY bot ORDER BY bot", (REASON,))]
 
 
@@ -158,7 +158,7 @@ def check_failed(c, bot, exc):
     traceback is logged here, and Health names the bot and the error class until a run of the bot starts."""
     error = type(exc).__name__
     log.error("claim check failed for bot %s: %s", bot, error, exc_info=exc)
-    c.execute("INSERT INTO service_health(service,last_success,last_error,detail) VALUES(?,NULL,?,?) "
+    c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,NULL,?,?) "
               "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail=excluded.detail",
               (CHECK + bot, error, json.dumps({"bot": bot, "error": error, "failed_at": H.now()})))
 

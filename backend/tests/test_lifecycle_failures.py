@@ -165,7 +165,7 @@ def send(client, method, path, token, body=None):
 
 def db_attempts(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT id,job_id,state,last_seq FROM attempts ORDER BY created,id")]
+        return [dict(r) for r in c.execute("SELECT id,job_id,state,last_seq FROM attempts ORDER BY created_at,id")]
 
 
 def db_events(api, aid):

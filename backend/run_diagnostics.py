@@ -39,7 +39,7 @@ def touch(c, aid, kind=None, payload=None):
 
 def keep_stderr(c, row: AttemptRow, text):
     ensure(c, row['id'])
-    if (row['finished'] and row['finished'] < H.shift(H.now(), days=-7) or
+    if (row['finished_at'] and row['finished_at'] < H.shift(H.now(), days=-7) or
             c.execute('SELECT 1 FROM attempt_capture_drops WHERE attempt_id=?', (row['id'],)).fetchone()):
         return {'kept': False}
     value = tail(text)
@@ -51,10 +51,10 @@ def keep_stderr(c, row: AttemptRow, text):
 
 
 def reason(c, row: AttemptRow, outcome, summary=''):
-    if row['stop_requested'] and outcome != 'completed':
+    if row['stop_requested_at'] and outcome != 'completed':
         from .quarantine_stops import stopped_by
         # A quarantine's Stop reads as the quarantine, never as a lost computer or the keeper (Dev 573).
-        return stopped_by(c, row) or 'Cancelled by ' + row['stop_requested']
+        return stopped_by(c, row) or 'Cancelled by ' + row['stop_requested_at']
     if outcome in ('completed', 'ok'):
         return 'Finished'
     if row['state'] == 'expired':
@@ -99,7 +99,7 @@ def finish(c, aid, outcome, summary=''):
         return
     ensure(c, aid)
     c.execute('UPDATE attempt_diagnostics SET end_reason=?,ended_at=?,stalled_at=NULL WHERE attempt_id=?',
-              (reason(c, row, outcome, summary), row['finished'] or H.now(), aid))
+              (reason(c, row, outcome, summary), row['finished_at'] or H.now(), aid))
 
 
 def restored(c, aid):
@@ -127,8 +127,8 @@ def sweep(c, at=None):
               "WHERE state IN ('leased','running')")
     c.execute("UPDATE attempt_diagnostics SET stalled_at=coalesce(stalled_at,?) WHERE attempt_id IN "
               "(SELECT a.id FROM attempts a JOIN attempt_diagnostics d ON d.attempt_id=a.id "
-              "WHERE a.state IN ('leased','running') AND max(coalesce(d.heartbeat_at,a.created),"
-              "coalesce(d.last_event_at,a.created))<=?)", (at, cutoff))
+              "WHERE a.state IN ('leased','running') AND max(coalesce(d.heartbeat_at,a.created_at),"
+              "coalesce(d.last_event_at,a.created_at))<=?)", (at, cutoff))
     c.execute('UPDATE attempt_diagnostics SET stderr_tail=NULL,stderr_at=NULL WHERE stderr_at<?',
               (H.shift(at, days=-7),))
 

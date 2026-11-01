@@ -255,7 +255,7 @@ def task_row(org, task_id):
 
 
 def find_task(org, *titles):
-    return one(org, f"SELECT id FROM tasks WHERE title IN ({','.join('?' * len(titles))}) ORDER BY created DESC",
+    return one(org, f"SELECT id FROM tasks WHERE title IN ({','.join('?' * len(titles))}) ORDER BY created_at DESC",
                titles) or ""
 
 

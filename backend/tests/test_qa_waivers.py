@@ -63,7 +63,7 @@ def api(tmp_path, monkeypatch):
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({'completed': '2026-01-01T00:00:00Z'}),))
             H.type_create(c, H.KEEPER, 'Dev tickets', STEPS)
             # The bot signs in as an agent does (bot-test), so a refusal is the waiver's and not the credential's.
-            c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('cpo','hermes','x',?,'human:ana')",
+            c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('cpo','hermes','x',?,'human:ana')",
                       (H.now(),))
         yield client
 

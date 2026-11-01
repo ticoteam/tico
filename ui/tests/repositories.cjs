@@ -16,7 +16,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 const SHOTS = process.env.REPO_SHOTS || '';
 
 const repo = (full_name, extra = {}) => ({full_name, enabled: false, bot_repo: false, default_branch: 'main',
-  setup_command: '', setup_source: null, reachable: true, last_seen: '2026-10-01T09:00:00Z', ...extra});
+  setup_command: '', setup_source: null, reachable: true, last_seen_at: '2026-10-01T09:00:00Z', ...extra});
 function fixtures() {
   return {
     repositories: [

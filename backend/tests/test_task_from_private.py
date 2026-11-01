@@ -165,7 +165,7 @@ def test_a_file_or_link_from_the_private_task_is_a_correction_naming_that_check(
     url = "https://docs.acme.example/vendor-intake-review"
     with api.app.state.store.transaction() as c:
         blob = H.new_id()
-        c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) "
+        c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) "
                   "VALUES(?,'bot:ops','d',1,'intake.pdf','application/pdf','2026')", (blob,))
         c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (row["id"], blob))
         c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,locator,first_activity_at,last_activity_at,"

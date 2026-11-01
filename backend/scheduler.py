@@ -431,7 +431,7 @@ class Scheduler:
         longest = max(holds, default=(0, 0, None))
         with self.store.transaction() as c:
             c.execute("INSERT INTO service_health VALUES('scheduler',?,?,?) ON CONFLICT(service) DO UPDATE SET "
-                      "last_success=excluded.last_success,last_error=excluded.last_error,detail=excluded.detail",
+                      "last_succeeded_at=excluded.last_succeeded_at,last_error=excluded.last_error,detail=excluded.detail",
                       (stamp(at), "schedule errors" if failures else None,
                        # How long the 10-second pass took, the longest any one of its transactions held the write
                        # lock and which step that was, and the longest it waited for the lock behind other writers.

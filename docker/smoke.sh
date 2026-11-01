@@ -81,7 +81,7 @@ print(sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True).execute(
 last_seen() {
   dc exec -T server python -c 'import sqlite3
 print(sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True).execute(
-    "SELECT coalesce(max(last_seen), \"\") FROM runners WHERE revoked_at IS NULL").fetchone()[0])'
+    "SELECT coalesce(max(last_seen_at), \"\") FROM runners WHERE revoked_at IS NULL").fetchone()[0])'
 }
 reconnected() { [[ "$(last_seen)" > "$before" ]]; }
 online() {

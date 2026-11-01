@@ -138,7 +138,7 @@ def _event(c, rid, kind, payload):
         raise Problem("not_found", "Live meeting not found", 404)
     event_id = row[0] + 1
     created = H.now()
-    c.execute("UPDATE live_meetings SET next_event_id=?,updated=? WHERE id=?", (event_id, created, rid))
+    c.execute("UPDATE live_meetings SET next_event_id=?,updated_at=? WHERE id=?", (event_id, created, rid))
     c.execute("INSERT INTO live_meeting_events VALUES(?,?,?,?,?)",
               (rid, event_id, kind, encode(payload), created))
     return event_id
@@ -197,11 +197,11 @@ NOTICE_EVENTS = ("meeting.bot_turn_failed", "meeting.bot_turn_waiting", "meeting
 def _view(c, auth, who, rid):
     row = _require_read(c, auth, who, rid)
     chunks = [dict(r) for r in c.execute(
-        "SELECT seq,revision,speaker,start_ms,end_ms,text,created FROM live_meeting_chunks WHERE meeting_id=? "
+        "SELECT seq,revision,speaker,start_ms,end_ms,text,created_at FROM live_meeting_chunks WHERE meeting_id=? "
         "AND text<>'' ORDER BY seq",
         (rid,))]
     chat = [dict(r) for r in c.execute(
-        "SELECT id,actor,role,text,at_ms,transcript_seq,created FROM live_meeting_chat WHERE meeting_id=? ORDER BY created,id",
+        "SELECT id,actor,role,text,at_ms,transcript_seq,created_at FROM live_meeting_chat WHERE meeting_id=? ORDER BY created_at,id",
         (rid,))]
     bots = [dict(r) for r in c.execute("SELECT bot,joined_by,joined_at FROM live_meeting_bots WHERE meeting_id=? ORDER BY bot", (rid,))]
     humans = []
@@ -211,28 +211,28 @@ def _view(c, auth, who, rid):
         humans.append({"actor": r["actor"], "name": (person or {}).get("name") or H.actor_id(r["actor"]),
                        "email": email, "joined_at": r["joined_at"]})
     windows = [dict(r) for r in c.execute(
-        "SELECT window_index,start_ms,end_ms,status,outcome,trace,started,finished FROM live_meeting_windows "
+        "SELECT window_index,start_ms,end_ms,status,outcome,trace,started_at,finished_at FROM live_meeting_windows "
         "WHERE meeting_id=? ORDER BY window_index", (rid,))]
     for window in windows:
         window["trace"] = json.loads(window.pop("trace"))
     chat_routes = [dict(r) for r in c.execute(
-        "SELECT chat_id,status,outcome,trace,started,finished FROM live_meeting_chat_routes "
-        "WHERE meeting_id=? ORDER BY started,chat_id", (rid,))]
+        "SELECT chat_id,status,outcome,trace,started_at,finished_at FROM live_meeting_chat_routes "
+        "WHERE meeting_id=? ORDER BY started_at,chat_id", (rid,))]
     for route in chat_routes:
         route["trace"] = json.loads(route.pop("trace"))
     pending_turns = [dict(r) for r in c.execute(
-        "SELECT id,bot,window_index,source_key,transcript_seq,status,skip_reason,created FROM live_meeting_turns "
-        "WHERE meeting_id=? ORDER BY created,id", (rid,))]
+        "SELECT id,bot,window_index,source_key,transcript_seq,status,skip_reason,created_at FROM live_meeting_turns "
+        "WHERE meeting_id=? ORDER BY created_at,id", (rid,))]
     bypasses = []
-    for event in c.execute("SELECT event_id,created,payload FROM live_meeting_events "
+    for event in c.execute("SELECT event_id,created_at,payload FROM live_meeting_events "
                             "WHERE meeting_id=? AND type='meeting.router' ORDER BY event_id", (rid,)):
         payload = json.loads(event["payload"])
         if payload.get("bypass") == "named":
-            bypasses.append({"event_id": event["event_id"], "created": event["created"], **payload})
+            bypasses.append({"event_id": event["event_id"], "created_at": event["created_at"], **payload})
     # Why a bot has not answered yet, or did not: shown in the meeting's chat as quiet lines.
     notices = [{"event_id": event["event_id"], "kind": event["type"].removeprefix("meeting.bot_turn_"),
-                "created": event["created"], **json.loads(event["payload"])}
-               for event in c.execute("SELECT event_id,type,created,payload FROM live_meeting_events "
+                "created_at": event["created_at"], **json.loads(event["payload"])}
+               for event in c.execute("SELECT event_id,type,created_at,payload FROM live_meeting_events "
                                       "WHERE meeting_id=? AND type IN (?,?,?,?) ORDER BY event_id",
                                       (rid, *NOTICE_EVENTS))]
     access = []
@@ -248,7 +248,7 @@ def _view(c, auth, who, rid):
         # What the meeting's replies are set to run on now: its own model, else the company's (not computer-specific).
         "meeting_model_effective": (row["meeting_model"] if row["meeting_model"] is not None
                                     else providers.load(c, auth.settings)["meeting_model"]),
-        "created": row["created"], "started_at": row["started_at"], "ended_at": row["ended_at"],
+        "created_at": row["created_at"], "started_at": row["started_at"], "ended_at": row["ended_at"],
         "imported_meeting_id": row["imported_meeting_id"], "humans": humans, "bots": bots,
         "chunks": chunks, "chat": chat, "notices": notices,
         "router": {"windows": windows, "chat_routes": chat_routes,
@@ -284,14 +284,14 @@ def _decision_input(c, rid, *, source_key, source_kind, window_index, transcript
             "SELECT seq,speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? AND seq<? "
             "AND text<>'' ORDER BY seq DESC LIMIT 12", (rid, first_seq))]
         prior_transcript.reverse()
-    chat_before = c.execute("SELECT created FROM live_meeting_chat WHERE meeting_id=? AND id=?",
+    chat_before = c.execute("SELECT created_at FROM live_meeting_chat WHERE meeting_id=? AND id=?",
                             (rid, chat_id)).fetchone() if chat_id else None
     chat_sql = "SELECT id,actor,role,text,at_ms,transcript_seq FROM live_meeting_chat WHERE meeting_id=?"
     chat_values = [rid]
     if chat_before:
-        chat_sql += " AND (created<? OR (created=? AND id<=?))"
-        chat_values.extend((chat_before["created"], chat_before["created"], chat_id))
-    chat_sql += " ORDER BY created DESC,id DESC LIMIT 12"
+        chat_sql += " AND (created_at<? OR (created_at=? AND id<=?))"
+        chat_values.extend((chat_before["created_at"], chat_before["created_at"], chat_id))
+    chat_sql += " ORDER BY created_at DESC,id DESC LIMIT 12"
     recent_chat = [dict(row) for row in c.execute(chat_sql, chat_values)]
     recent_chat.reverse()
     for row in recent_chat:
@@ -312,8 +312,8 @@ def _decision_input(c, rid, *, source_key, source_kind, window_index, transcript
         slug = row["bot"]
         profile = H.bot(c, slug) or {}
         previous = [dict(message) for message in c.execute(
-            "SELECT id,text,created FROM live_meeting_chat WHERE meeting_id=? AND role='bot' AND actor=? "
-            "ORDER BY created DESC,id DESC LIMIT 2", (rid, "bot:" + slug))]
+            "SELECT id,text,created_at FROM live_meeting_chat WHERE meeting_id=? AND role='bot' AND actor=? "
+            "ORDER BY created_at DESC,id DESC LIMIT 2", (rid, "bot:" + slug))]
         previous.reverse()
         bot_context.append({"id": slug, "slug": profile.get("slug") or slug,
                             "name": profile.get("name") or profile.get("display_name") or profile.get("slug") or slug,
@@ -337,7 +337,7 @@ def _turn_prompt(c, rid, turn_id, slug):
                        "AND (? IS NULL OR seq<=?) AND text<>'' ORDER BY seq DESC LIMIT 20",
                        (rid, transcript_seq, transcript_seq)).fetchall()
     chat = c.execute("SELECT actor,role,text,at_ms,transcript_seq FROM live_meeting_chat WHERE meeting_id=? "
-                     "ORDER BY created DESC,id DESC LIMIT 12", (rid,)).fetchall()
+                     "ORDER BY created_at DESC,id DESC LIMIT 12", (rid,)).fetchall()
     def bounded(row):
         result = dict(row)
         if len(result.get("text", "")) > 800:
@@ -495,7 +495,7 @@ def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None
             continue
         replying = c.execute("SELECT t.id FROM live_meeting_turns t JOIN live_meetings m ON m.id=t.meeting_id "
                              "WHERE t.meeting_id=? AND t.bot=? AND t.status IN ('pending','claimed') "
-                             "AND m.state='live' ORDER BY t.created,t.id LIMIT 1", (rid, slug)).fetchone()
+                             "AND m.state='live' ORDER BY t.created_at,t.id LIMIT 1", (rid, slug)).fetchone()
         busy = None if replying else c.execute(
             "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
             f"WHERE j.bot=? AND j.state IN ('queued','leased','running','input') AND {H.unheld_sql()} "
@@ -512,7 +512,7 @@ def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None
             continue
         tid = str(uuid.uuid4())
         c.execute("INSERT OR IGNORE INTO live_meeting_turns "
-                  "(id,meeting_id,bot,window_index,source_key,transcript_seq,status,created) VALUES(?,?,?,?,?,?,?,?)",
+                  "(id,meeting_id,bot,window_index,source_key,transcript_seq,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
                   (tid, rid, slug, window_index, source_key, transcript_seq, "pending", H.now()))
         if c.execute("SELECT changes()").fetchone()[0]:
             selected.append({"id": tid, "bot": slug, "window_index": window_index,
@@ -691,7 +691,7 @@ def _retry_empty(c, rid, turn, bot):
 
 def _end_open_turns(c, rid):
     for turn in c.execute("SELECT * FROM live_meeting_turns WHERE meeting_id=? AND status IN ('pending','claimed') "
-                          "ORDER BY created,id", (rid,)).fetchall():
+                          "ORDER BY created_at,id", (rid,)).fetchall():
         _finish_pass(c, rid, turn, "meeting_ended_before_reply")
 
 
@@ -810,12 +810,12 @@ def _route_human_chat(app, rid, chat_id):
                           "AND json_extract(payload,'$.source_key')=? LIMIT 1", (rid, source_key)).fetchone()
         if named:
             return
-        previous = c.execute("SELECT status,started FROM live_meeting_chat_routes WHERE meeting_id=? AND chat_id=?",
+        previous = c.execute("SELECT status,started_at FROM live_meeting_chat_routes WHERE meeting_id=? AND chat_id=?",
                              (rid, chat_id)).fetchone()
         if previous:
             if previous["status"] == "complete":
                 return
-            elapsed = H.parse_ts(H.now()) - H.parse_ts(previous["started"])
+            elapsed = H.parse_ts(H.now()) - H.parse_ts(previous["started_at"])
             if elapsed.total_seconds() <= 60:
                 return
             reason = "interrupted chat decision; not retried"
@@ -823,7 +823,7 @@ def _route_human_chat(app, rid, chat_id):
                                          (rid, chat_id)).fetchone()[0])
             trace.update({"reason": reason, "selected": [], "skipped": []})
             stamp = H.now()
-            c.execute("UPDATE live_meeting_chat_routes SET status='complete',outcome='pass',trace=?,finished=? "
+            c.execute("UPDATE live_meeting_chat_routes SET status='complete',outcome='pass',trace=?,finished_at=? "
                       "WHERE meeting_id=? AND chat_id=?",
                       (encode(trace), stamp, rid, chat_id))
             _event(c, rid, "meeting.router", {"source_kind": "chat", "source_key": source_key,
@@ -833,7 +833,7 @@ def _route_human_chat(app, rid, chat_id):
             reason = "meeting_paused_before_chat_routing" if meeting["state"] == "paused" else "meeting_ended_before_chat_routing"
             trace = {"reason": reason, "decision_input": None, "selected": [], "skipped": []}
             stamp = H.now()
-            c.execute("INSERT INTO live_meeting_chat_routes(meeting_id,chat_id,status,outcome,trace,started,finished) "
+            c.execute("INSERT INTO live_meeting_chat_routes(meeting_id,chat_id,status,outcome,trace,started_at,finished_at) "
                       "VALUES(?,?,'complete','pass',?,?,?)",
                       (rid, chat_id, encode(trace), stamp, stamp))
             _event(c, rid, "meeting.router", {"source_kind": "chat", "source_key": source_key,
@@ -853,7 +853,7 @@ def _route_human_chat(app, rid, chat_id):
                                          window_index=None, transcript=transcript, bots=bots,
                                          chat_id=chat_id)
         stamp = H.now()
-        c.execute("INSERT INTO live_meeting_chat_routes(meeting_id,chat_id,status,outcome,trace,started) "
+        c.execute("INSERT INTO live_meeting_chat_routes(meeting_id,chat_id,status,outcome,trace,started_at) "
                   "VALUES(?,?,'deciding','',?,?)",
                   (rid, chat_id, encode({"decision_input": decision_input}), stamp))
         threshold, owner_actor = meeting["threshold"], meeting["owner_actor"]
@@ -882,7 +882,7 @@ def _route_human_chat(app, rid, chat_id):
                 **(outcome["trace"].get("audit") or {}),
                 "answers": outcome["trace"].get("answers", {})})
         stamp = H.now()
-        c.execute("UPDATE live_meeting_chat_routes SET status='complete',outcome=?,trace=?,finished=? "
+        c.execute("UPDATE live_meeting_chat_routes SET status='complete',outcome=?,trace=?,finished_at=? "
                   "WHERE meeting_id=? AND chat_id=?",
                   ("route" if selected else "pass", encode(trace), stamp, rid, chat_id))
         _event(c, rid, "meeting.router", {"source_kind": "chat", "source_key": source_key,
@@ -929,7 +929,7 @@ def _run_windows(app, rid, *, final=False):
         routed = _routed_through(c, rid)
         chunks = [dict(r) for r in c.execute(
         "SELECT seq,speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq", (rid,))]
-        received = c.execute("SELECT MAX(created) FROM live_meeting_chunks WHERE meeting_id=?", (rid,)).fetchone()[0]
+        received = c.execute("SELECT MAX(created_at) FROM live_meeting_chunks WHERE meeting_id=?", (rid,)).fetchone()[0]
         bots = []
         for r in c.execute("SELECT bm.bot,bc.description FROM live_meeting_bots bm "
                             "LEFT JOIN bot_config bc ON bc.bot=bm.bot WHERE bm.meeting_id=? ORDER BY bm.bot", (rid,)):
@@ -956,10 +956,10 @@ def _run_windows(app, rid, *, final=False):
             current_state = _meeting(c, rid)["state"]
             if current_state == "paused" or current_state == "ended" and not final:
                 return
-            current = c.execute("SELECT status,started FROM live_meeting_windows WHERE meeting_id=? AND window_index=?",
+            current = c.execute("SELECT status,started_at FROM live_meeting_windows WHERE meeting_id=? AND window_index=?",
                                 (rid, index)).fetchone()
             if current:
-                elapsed = H.parse_ts(H.now()) - H.parse_ts(current["started"]) if current["started"] else None
+                elapsed = H.parse_ts(H.now()) - H.parse_ts(current["started_at"]) if current["started_at"] else None
                 ended_while_deciding = current["status"] == "deciding" and current_state == "ended" and final
                 timed_out = current["status"] == "deciding" and elapsed and elapsed.total_seconds() > 60
                 if ended_while_deciding or timed_out:
@@ -967,7 +967,7 @@ def _run_windows(app, rid, *, final=False):
                     # Its words are passed here, so no later window routes them.
                     trace = {"reason": reason, "chunk_range": _chunk_range(included)}
                     c.execute("UPDATE live_meeting_windows SET status='interrupted',outcome='pass',"
-                              "trace=?,finished=? WHERE meeting_id=? AND window_index=?",
+                              "trace=?,finished_at=? WHERE meeting_id=? AND window_index=?",
                               (encode(trace), H.now(), rid, index))
                     _event(c, rid, "meeting.router", {"window_index": index, "outcome": "pass",
                                                        "trace": {"reason": reason}})
@@ -982,21 +982,21 @@ def _run_windows(app, rid, *, final=False):
                     trace = {"reason": "meeting_ended_final_window", "selected": [], "skipped": [],
                              "chunk_range": _chunk_range(included)}
                     c.execute("INSERT INTO live_meeting_windows(meeting_id,window_index,start_ms,end_ms,status,outcome,"
-                              "trace,started,finished) VALUES(?,?,?,?,?,?,?,?,?)",
+                              "trace,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
                               (rid, index, start_ms, end_ms, "complete", "pass", encode(trace), H.now(), H.now()))
                     _event(c, rid, "meeting.router", {"window_index": index, "start_ms": start_ms,
                                                        "end_ms": end_ms, "outcome": "pass", "decision_ms": None,
                                                        "trace": trace})
                     terminal_window = True
                 else:
-                    c.execute("INSERT INTO live_meeting_windows(meeting_id,window_index,start_ms,end_ms,status,started) "
+                    c.execute("INSERT INTO live_meeting_windows(meeting_id,window_index,start_ms,end_ms,status,started_at) "
                               "VALUES(?,?,?,?,?,?)", (rid, index, start_ms, end_ms, "deciding", H.now()))
             else:
                 # Every elapsed gap is a durable no-text PASS. It needs no model call, but keeping
                 # the trace makes replay and router freshness unambiguous across transcript gaps.
                 trace = {"reason": "no_transcript_text", "selected": [], "skipped": [], "chunk_range": []}
                 c.execute("INSERT INTO live_meeting_windows(meeting_id,window_index,start_ms,end_ms,status,outcome,"
-                          "trace,started,finished) VALUES(?,?,?,?,?,?,?,?,?)",
+                          "trace,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
                           (rid, index, start_ms, end_ms, "complete", "pass", encode(trace), H.now(), H.now()))
                 _event(c, rid, "meeting.router", {"window_index": index, "start_ms": start_ms,
                                                    "end_ms": end_ms, "outcome": "pass", "decision_ms": None,
@@ -1034,7 +1034,7 @@ def _run_windows(app, rid, *, final=False):
                     **(outcome["trace"].get("audit") or {}),
                 "answers": outcome["trace"].get("answers", {})})
             # PASS remains in Router trace only; only selected bot turns enter Chat.
-            c.execute("UPDATE live_meeting_windows SET status='complete',outcome=?,trace=?,finished=? "
+            c.execute("UPDATE live_meeting_windows SET status='complete',outcome=?,trace=?,finished_at=? "
                       "WHERE meeting_id=? AND window_index=?",
                       ("route" if selected else "pass", encode(trace), H.now(), rid, index))
             _event(c, rid, "meeting.router", {"window_index": index, "start_ms": start_ms,
@@ -1076,7 +1076,7 @@ def _reply(c, rid, who, turn_id, text, *, at_ms=None, transcript_seq=None):
     at_ms = max(at_ms, timeline_ms) if at_ms is not None else timeline_ms
     created = H.now()
     cid = str(uuid.uuid4())
-    c.execute("INSERT INTO live_meeting_chat(id,meeting_id,actor,role,text,at_ms,transcript_seq,turn_id,created) "
+    c.execute("INSERT INTO live_meeting_chat(id,meeting_id,actor,role,text,at_ms,transcript_seq,turn_id,created_at) "
               "VALUES(?,?,?,?,?,?,?,?,?)", (cid, rid, who.actor, "bot", text, at_ms, transcript_seq, turn_id, created))
     c.execute("UPDATE live_meeting_turns SET status='replied',replied_at=? WHERE id=?", (created, turn_id))
     _cancel_queued_turn_job(c, turn_id, "Live meeting turn was replied to directly")
@@ -1158,7 +1158,7 @@ class Routing:
         """Route each meeting live in the last two hours again (the scheduler's tick): a no-op where every elapsed window
         is routed. A meeting left live after its transcript stopped has nothing new to route."""
         with self.app.state.store.read() as c:
-            rows = c.execute("SELECT id FROM live_meetings WHERE state='live' AND updated>=?",
+            rows = c.execute("SELECT id FROM live_meetings WHERE state='live' AND updated_at>=?",
                              (H.shift(H.now(), seconds=-7200),)).fetchall()
         for row in rows:
             self.later(row["id"])
@@ -1211,7 +1211,7 @@ def install_live_meetings(app, store, auth, write):
             model = None if body.meeting_model is None else providers.meeting_choice(
                 {"enabled": providers.load(c, app.state.store.settings)["enabled"]}, body.meeting_model)
             c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,client_id,window_ms,cooldown_ms,"
-                      "reply_cap,threshold,created,updated,started_at,visibility,client,meeting_model) "
+                      "reply_cap,threshold,created_at,updated_at,started_at,visibility,client,meeting_model) "
                       "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (rid, who.actor, body.title, "live", body.client_id, window_ms,
                        body.cooldown_seconds * 1000, body.reply_cap, body.threshold, stamp, stamp, stamp,
@@ -1232,7 +1232,7 @@ def install_live_meetings(app, store, auth, write):
         with store.read() as c:
             from .task_privacy import snapshot
             snapshot(c)
-            rows = c.execute("SELECT * FROM live_meetings WHERE state!='ended' ORDER BY updated DESC,id").fetchall()
+            rows = c.execute("SELECT * FROM live_meetings WHERE state!='ended' ORDER BY updated_at DESC,id").fetchall()
             meetings = [_view(c, auth, who, row["id"]) for row in rows if _sees(c, who, row)]
             return {"meetings": meetings, "count": len(meetings)}
 
@@ -1300,7 +1300,7 @@ def install_live_meetings(app, store, auth, write):
                     removed.append(actor)
             visibility = body.visibility or row["visibility"]
             if visibility != row["visibility"]:
-                c.execute("UPDATE live_meetings SET visibility=?,updated=? WHERE id=?", (visibility, H.now(), rid))
+                c.execute("UPDATE live_meetings SET visibility=?,updated_at=? WHERE id=?", (visibility, H.now(), rid))
             if visibility == "private":
                 # Implicit team participation cannot expand the newly private audience.
                 c.execute("DELETE FROM live_meeting_humans WHERE meeting_id=? AND actor<>? AND actor NOT IN "
@@ -1345,13 +1345,13 @@ def install_live_meetings(app, store, auth, write):
                 if chunk.start_ms < previous_start:
                     raise Problem("sequence_order", "Transcript start times must not go backwards", 422)
                 stamp = H.now()
-                c.execute("INSERT INTO live_meeting_chunks(meeting_id,seq,revision,speaker,start_ms,end_ms,text,created) "
+                c.execute("INSERT INTO live_meeting_chunks(meeting_id,seq,revision,speaker,start_ms,end_ms,text,created_at) "
                           "VALUES(?,?,?,?,?,?,?,?)", (rid, chunk.seq, 1, chunk.speaker, chunk.start_ms,
                                                        chunk.end_ms, chunk.text, stamp))
                 c.execute("INSERT INTO live_meeting_chunk_versions VALUES(?,?,?,?,?,?,?,?,?)",
                           (rid, chunk.seq, 1, chunk.speaker, chunk.start_ms, chunk.end_ms, chunk.text,
                            who.actor, stamp))
-                c.execute("UPDATE live_meetings SET seq=?,updated=? WHERE id=?", (chunk.seq, stamp, rid))
+                c.execute("UPDATE live_meetings SET seq=?,updated_at=? WHERE id=?", (chunk.seq, stamp, rid))
                 _event(c, rid, "meeting.chunk", {"seq": chunk.seq, "speaker": chunk.speaker,
                                                   "start_ms": chunk.start_ms, "end_ms": chunk.end_ms,
                                                   "text": chunk.text, "revision": 1})
@@ -1395,7 +1395,7 @@ def install_live_meetings(app, store, auth, write):
             stamp = H.now()
             c.execute("INSERT INTO live_meeting_chunk_versions VALUES(?,?,?,?,?,?,?,?,?)",
                       (rid, seq, body.revision, body.speaker, body.start_ms, body.end_ms, body.text, who.actor, stamp))
-            c.execute("UPDATE live_meeting_chunks SET revision=?,speaker=?,start_ms=?,end_ms=?,text=?,created=? "
+            c.execute("UPDATE live_meeting_chunks SET revision=?,speaker=?,start_ms=?,end_ms=?,text=?,created_at=? "
                       "WHERE meeting_id=? AND seq=?",
                       (body.revision, body.speaker, body.start_ms, body.end_ms, body.text, stamp, rid, seq))
             _event(c, rid, "meeting.chunk_corrected", {"seq": seq, "revision": body.revision,
@@ -1464,7 +1464,7 @@ def install_live_meetings(app, store, auth, write):
                 return {"id": rid, "bot": bot_id, "removed": False, "cancelled_turns": [],
                         "event_id": _meeting(c, rid)["next_event_id"]}
             turns = c.execute("SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? "
-                              "AND status IN ('pending','claimed') ORDER BY created,id", (rid, bot_id)).fetchall()
+                              "AND status IN ('pending','claimed') ORDER BY created_at,id", (rid, bot_id)).fetchall()
             cancelled = []
             for turn in turns:
                 if _finish_pass(c, rid, turn, "bot_detached"):
@@ -1490,7 +1490,7 @@ def install_live_meetings(app, store, auth, write):
             if row["state"] not in allowed:
                 raise Problem("meeting_state", f"Cannot {body.action} a {row['state']} meeting", 409)
             ended = H.now() if body.action == "end" else row["ended_at"]
-            c.execute("UPDATE live_meetings SET state=?,ended_at=?,updated=? WHERE id=?",
+            c.execute("UPDATE live_meetings SET state=?,ended_at=?,updated_at=? WHERE id=?",
                       (target, ended, H.now(), rid))
             _event(c, rid, "meeting.state", {"state": target, "by": who.actor,
                                                "action": body.action})
@@ -1535,7 +1535,7 @@ def install_live_meetings(app, store, auth, write):
                 raise Problem("transcript_ref", "Unknown transcript sequence", 422)
             cid, stamp = str(uuid.uuid4()), H.now()
             at_ms = body.at_ms
-            c.execute("INSERT INTO live_meeting_chat(id,meeting_id,actor,role,text,at_ms,transcript_seq,created) "
+            c.execute("INSERT INTO live_meeting_chat(id,meeting_id,actor,role,text,at_ms,transcript_seq,created_at) "
                       "VALUES(?,?,?,?,?,?,?,?)", (cid, rid, who.actor, "human", body.text, at_ms,
                                                    body.transcript_seq, stamp))
             _event(c, rid, "meeting.chat", {"id": cid, "actor": who.actor, "role": "human", "text": body.text,
@@ -1558,7 +1558,7 @@ def install_live_meetings(app, store, auth, write):
         with store.read() as c:
             _require_read(c, auth, who, rid)
             rows = c.execute("SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? AND status='pending' "
-                             "ORDER BY created,id", (rid, H.actor_id(who.actor))).fetchall()
+                             "ORDER BY created_at,id", (rid, H.actor_id(who.actor))).fetchall()
             view = _view(c, auth, who, rid)
             return {"turns": [{"id": r["id"], "window_index": r["window_index"],
                                "transcript_seq": r["transcript_seq"], "source_key": r["source_key"],
@@ -1599,7 +1599,7 @@ def install_live_meetings(app, store, auth, write):
                                                     for chunk in chunks], review="pending")
             result = app.state.import_meeting(c, who, body_import, [], live_client=row["client"])
             imported_id = result["id"]
-            c.execute("UPDATE live_meetings SET imported_meeting_id=?,updated=? WHERE id=?",
+            c.execute("UPDATE live_meetings SET imported_meeting_id=?,updated_at=? WHERE id=?",
                       (imported_id, H.now(), rid))
             _event(c, rid, "meeting.finalized", {"id": rid, "meeting_id": imported_id,
                                                   "source": "tico-live", "external_id": rid})

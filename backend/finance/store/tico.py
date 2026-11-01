@@ -182,7 +182,7 @@ def gateway_run_costs(c: sqlite3.Connection, after: str, through: str,
     video, params = _video(video_models)
     rows = c.execute(f"SELECT bot, CASE WHEN {video} THEN 'video' ELSE 'ai' END, "
                      f"printf('%.9f', sum(coalesce(est_cost_usd, 0))) FROM {_runs()} WHERE {_GATEWAY} "
-                     "AND finished > ? AND finished <= ? GROUP BY 1, 2", (*params, after, through)).fetchall()
+                     "AND finished_at > ? AND finished_at <= ? GROUP BY 1, 2", (*params, after, through)).fetchall()
     return {(str(r[0] or ""), str(r[1])): str(r[2]) for r in rows}
 
 
@@ -202,15 +202,15 @@ def video_jobs(c: sqlite3.Connection, job_ids: Sequence[str], video_models: Sequ
 def run_holds_settled(c: sqlite3.Connection, month: str, through: str, page: int = 1000) -> list[tuple[str, str]]:
     """(hold id, source id) of every settled run hold no entry has taken in yet whose run finished in `month`
     (YYYY-MM, the month the Gateway bills it in) at or before `through`, read a page at a time. A run's finish is its
-    job's last turn's `finished`; a hold with no turn on record goes by when it settled."""
+    job's last turn's `finished_at`; a hold with no turn on record goes by when it settled."""
     out: list[tuple[str, str]] = []
     last = ""
     while True:
         rows = c.execute(
-            "SELECT id, source_id FROM (SELECT h.id, h.source_id, coalesce((SELECT max(t.finished) FROM attempts a "
-            "JOIN turns t ON t.id = a.id WHERE a.job_id = substr(h.source_id, 5)), h.settled_at) AS finished "
+            "SELECT id, source_id FROM (SELECT h.id, h.source_id, coalesce((SELECT max(t.finished_at) FROM attempts a "
+            "JOIN turns t ON t.id = a.id WHERE a.job_id = substr(h.source_id, 5)), h.settled_at) AS finished_at "
             "FROM fin_holds h WHERE h.source='run' AND h.status='settled' AND h.entry_id IS NULL AND h.id>?) "
-            "WHERE substr(finished, 1, 7)=? AND finished<=? ORDER BY id LIMIT ?", (last, month, through, page)).fetchall()
+            "WHERE substr(finished_at, 1, 7)=? AND finished_at<=? ORDER BY id LIMIT ?", (last, month, through, page)).fetchall()
         out += [(str(r[0]), str(r[1])) for r in rows]
         if len(rows) < page:
             return out
@@ -245,8 +245,8 @@ def run_gateway_cost(c: sqlite3.Connection, turn_id: str) -> str | None:
 def bot_average_run(c: sqlite3.Connection, bot: str, since: str, most: int) -> str | None:
     """A bot's average Gateway-billed cost per run over its last `most` such runs started since `since`, or None."""
     row = c.execute(f"SELECT count(*), printf('%.9f', avg(cost)) FROM (SELECT id, sum(coalesce(est_cost_usd, 0)) AS cost "
-                    f"FROM {_runs()} WHERE bot=? AND started >= ? AND finished IS NOT NULL AND {_GATEWAY} GROUP BY id "
-                    "ORDER BY max(started) DESC LIMIT ?)", (bot, since, most)).fetchone()
+                    f"FROM {_runs()} WHERE bot=? AND started_at >= ? AND finished_at IS NOT NULL AND {_GATEWAY} GROUP BY id "
+                    "ORDER BY max(started_at) DESC LIMIT ?)", (bot, since, most)).fetchone()
     return str(row[1]) if row and int(row[0]) else None
 
 
@@ -340,7 +340,7 @@ def seal_credential(c: sqlite3.Connection, name: str, value: str, preview: str, 
     cipher = _cipher()
     cid = new_id()
     ciphertext, nonce = cipher.encrypt(c, cid, value)
-    c.execute("INSERT INTO credentials(id,name,kind,preview,ciphertext,nonce,source,created,updated,updated_by,"
+    c.execute("INSERT INTO credentials(id,name,kind,preview,ciphertext,nonce,source,created_at,updated_at,updated_by,"
               "created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
               (cid, name[:150], SEALED_KIND, preview, ciphertext, nonce, SEALED_SOURCE, at, at, by, by))
     return cid

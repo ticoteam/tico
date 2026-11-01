@@ -39,7 +39,7 @@ def put_back_held(c, row):
                  "AND field IN ('link','related','blocked_by','blocks','parent_id','subtask','follow_up_of','follow_ups') "
                  "LIMIT 1", (row['id'], move['rowid'])).fetchone():
         return False
-    if c.execute("SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.created>=? "
+    if c.execute("SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.created_at>=? "
                  "AND json_extract(m.refs,'$.task')=? "
                  "AND m.from_actor<>? AND m.deleted_at IS NULL AND json_extract(m.refs,'$.comment')=1 "
                  "LIMIT 1", (row['conversation_id'], move['ts'], row['id'], H.KEEPER)).fetchone():
@@ -67,7 +67,7 @@ def back_off(c, row):
     if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND rowid>? AND field IN ('step','owner') "
                  "AND actor<>? LIMIT 1", (row['id'], move['rowid'], H.KEEPER)).fetchone():
         return False
-    if c.execute('SELECT 1 FROM turns WHERE task_id=? AND finished IS NOT NULL LIMIT 1', (row['id'],)).fetchone():
+    if c.execute('SELECT 1 FROM turns WHERE task_id=? AND finished_at IS NOT NULL LIMIT 1', (row['id'],)).fetchone():
         return False
     H._set_status(c, H.KEEPER, row, status='open', note='Automatic start returned to the queue: a blocker was linked',
                   skip_step_wake=(row['owner'],))
@@ -160,7 +160,7 @@ def prime_waits(c, rows):
     first = {}
     for row in batch("SELECT t.id,r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
                      "WHERE r.to_task IN ({m}) AND r.kind='blocks' AND t.status IN (" + _marks(H.ACTIVE_STATUSES) + ") "
-                     "ORDER BY r.created, r.rowid", H.ACTIVE_STATUSES):
+                     "ORDER BY r.created_at, r.rowid", H.ACTIVE_STATUSES):
         first.setdefault(row['to_task'], row)
     prime(c, live_blocker_sql(len(H.ACTIVE_STATUSES)),
           {(tid, *H.ACTIVE_STATUSES): first.get(tid) for tid in ids})
@@ -168,7 +168,7 @@ def prime_waits(c, rows):
     kids, other = {tid: [] for tid in ids}, set()
     owner_of = {r['id']: r['owner'] for r in rows}
     for row in batch("SELECT t.id,t.owner,t.title,t.status,r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
-                     "WHERE r.kind='parent' AND r.to_task IN ({m}) ORDER BY t.created,t.id"):
+                     "WHERE r.kind='parent' AND r.to_task IN ({m}) ORDER BY t.created_at,t.id"):
         if row['status'] is not None and row['status'] not in ('done', 'closed', 'declined'):
             kids[row['to_task']].append(row)
         if (row['status'] in H.ACTIVE_STATUSES and None not in (row['owner'], owner_of[row['to_task']])
@@ -315,9 +315,9 @@ def next_run_held(c, row, *, message=None):
                  (row['id'], H.KEEPER, move['rowid'])).fetchone():
         return True
     if row.get('carried_by') and H._has_table(c, 'attempts'):
-        carrier = c.execute("SELECT state,created FROM attempts WHERE id=?", (row['carried_by'],)).fetchone()
+        carrier = c.execute("SELECT state,created_at FROM attempts WHERE id=?", (row['carried_by'],)).fetchone()
         if carrier and (carrier['state'] in ('leased', 'running') or
-                        carrier['state'] == 'completed' and carrier['created'] >= move['ts']):
+                        carrier['state'] == 'completed' and carrier['created_at'] >= move['ts']):
             # Settlement clears untouched work's carrier. A completed carrier retained after this
             # reopen already worked it; only a later reopen makes that delivery obsolete.
             return True
@@ -454,7 +454,7 @@ def missing(c, settings, runner, body, failed=None, waiting=None):
         if failed is not None:
             failed.clean.add(slug)
         for row in H._rows(c.execute("SELECT * FROM tasks WHERE owner=? AND status='open' "
-                                     "ORDER BY (rank IS NULL),rank,created,id", ('bot:' + slug,))):
+                                     "ORDER BY (rank IS NULL),rank,created_at,id", ('bot:' + slug,))):
             try:
                 if found := _startable_task(c, row, slug, config, scope, runner, busy):
                     return found

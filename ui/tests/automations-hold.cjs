@@ -15,7 +15,7 @@ function held(fx) {
 const heldRuns = db => {
   const now = Date.now();
   db.runs.au_deploy = Array.from({length: 3}, (_, i) => ({id: 'run_h' + i, automation_id: 'au_deploy', version: 1,
-    trigger_ref: 'webhook:trg_1:d' + i, started: new Date(now - i * 60000).toISOString(), finished: null, status: 'held',
+    trigger_ref: 'webhook:trg_1:d' + i, started_at: new Date(now - i * 60000).toISOString(), finished_at: null, status: 'held',
     cost: 0, steps: []}));
 };
 

@@ -17,7 +17,7 @@ def repos(api):
     api.app.state.store.settings.github_owner = "Acme"
     with api.app.state.store.transaction() as c:
         for name in ("Acme/product", "Acme/docs"):
-            c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?)", (H.new_id(), name, H.now()))
+            c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)", (H.new_id(), name, H.now()))
         for bot, name, level in (("ops", "Acme/product", "write"), ("botops", "Acme/docs", "read")):
             config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0] or "{}")
             c.execute("UPDATE bot_config SET config=? WHERE bot=?",

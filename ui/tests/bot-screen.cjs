@@ -17,7 +17,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       page.on('pageerror', error => errors.push(error.message));
       const base = {host: 'keeper', status: 'active', state: 'active', can_chat: true, can_manage: true, operator: 'sam',
         my_access: {see: true, read: true, write: true}, schedules: [], revision: 1, thread_mode: 'personal', users: []};
-      const computer = (id, more) => ({runner_id: id, generation: 1, label: id, operator: 'sam', last_seen: new Date().toISOString(),
+      const computer = (id, more) => ({runner_id: id, generation: 1, label: id, operator: 'sam', last_seen_at: new Date().toISOString(),
         platform: 'linux', version: '0.3.52', screen: 'off', screen_available: false, ...more});
       const bot = (name, online, machine) => ({...base, name, slug: name, display_name: name, online, machine});
       const bots = [

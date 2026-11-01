@@ -27,7 +27,7 @@ def test_the_root_walks_up_same_owner_parents_and_stops_at_another_owner_or_a_lo
         assert H.session_root(c, "ops", under_person) == under_person
         assert H.session_root(c, "ops", own, {"subtask_session": "own"}) == own
         # A loop in the parent links ends the walk instead of spinning.
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'parent',?)",
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'parent',?)",
                   (top, own, H.now()))
         assert H.session_root(c, "ops", own) == top
 

@@ -169,11 +169,11 @@ def lend_lapsed(c, task):
     made = c.execute("SELECT actor,detail FROM events WHERE action='task.create' AND target=? ORDER BY ts,id LIMIT 1",
                      (task["id"],)).fetchone()
     if made and made["actor"] == requester and H._json(made["detail"], {}).get("via") != "assistant":
-        spoke.append(task["created"])
+        spoke.append(task["created_at"])
     origin = H.message(c, task["request_id"]) if task.get("request_id") else None
     if origin and origin["from_actor"] == requester:
-        spoke.append(origin["created"])
-    comment = c.execute("SELECT max(m.created) FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? "
+        spoke.append(origin["created_at"])
+    comment = c.execute("SELECT max(m.created_at) FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? "
                         "AND m.from_actor=? AND json_extract(m.refs,'$.comment') IS NOT NULL "
                         "AND json_extract(m.refs,'$.via') IS NULL AND json_extract(m.refs,'$.assistant') IS NULL",
                         (task["id"], requester)).fetchone()[0]

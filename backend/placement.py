@@ -35,7 +35,7 @@ def candidates(c, auth, bot):
     declared = H._json((c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone() or {"config": "{}"})["config"], {}) or {}
     home = c.execute("SELECT runner_id FROM assignments WHERE bot='botops'").fetchone()
     home = home["runner_id"] if home and not declared.get("materialize") and bot != "botops" else None
-    return sorted(rows, key=lambda r: (r["id"] not in online, r["id"] != home, load.get(r["id"], 0), r["created"], r["id"]))
+    return sorted(rows, key=lambda r: (r["id"] not in online, r["id"] != home, load.get(r["id"], 0), r["created_at"], r["id"]))
 
 
 def auto_place(c, execution, bot, by=""):

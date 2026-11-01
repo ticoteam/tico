@@ -75,7 +75,7 @@ CREATE INDEX IF NOT EXISTS feed_updates_feed_seq ON feed_updates(feed, seq);
 CREATE TABLE IF NOT EXISTS feed_sources(feed TEXT PRIMARY KEY, fetched TEXT NOT NULL, snapshot TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS feed_walks(
   feed TEXT PRIMARY KEY, next TEXT NOT NULL, snapshot TEXT NOT NULL DEFAULT '', pages INTEGER NOT NULL,
-  items TEXT NOT NULL, started TEXT NOT NULL);
+  items TEXT NOT NULL, started_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS feed_cursors(
   bot TEXT NOT NULL, category TEXT NOT NULL, feed TEXT NOT NULL DEFAULT '', since TEXT NOT NULL, cursor INTEGER,
   PRIMARY KEY(bot, category));
@@ -416,7 +416,7 @@ def store_items(c, feed, items, snapshot=""):
 def save_walk(c, feed, items, walk):
     """Keep a catch-up that ran out of pages, to go on from on the next pass; nothing is stored until it ends."""
     following, snapshot, pages = walk
-    c.execute("INSERT INTO feed_walks(feed,next,snapshot,pages,items,started) VALUES(?,?,?,?,?,?) ON CONFLICT(feed) "
+    c.execute("INSERT INTO feed_walks(feed,next,snapshot,pages,items,started_at) VALUES(?,?,?,?,?,?) ON CONFLICT(feed) "
               "DO UPDATE SET next=excluded.next,snapshot=excluded.snapshot,pages=excluded.pages,items=excluded.items",
               (feed, following, snapshot, pages, json.dumps(items), H.now()))
 
@@ -468,7 +468,7 @@ def deliver(c):
                          (feed, cursor["cursor"], bot, DELIVER_MAX)).fetchall()
         for row in rows:
             note_id = H.new_id()
-            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
                       (note_id, H.KEEPER, "bot:" + bot, note_text({**dict(row), "action": bool(row["action"])}, running),
                        H.now()))
             c.execute("INSERT INTO feed_deliveries(bot,update_id,category,note_id,delivered) VALUES(?,?,?,?,?)",

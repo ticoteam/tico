@@ -356,20 +356,20 @@ def import_messages(c, provider, person, slug, ext_id, messages, images=None, wh
             refs["attachments"] = attached
         cur = c.execute(
             "INSERT OR IGNORE INTO messages (id, conversation_id, from_actor, to_actor, kind, body, "
-            "refs, created, delivered_at, read_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "refs, created_at, delivered_at, read_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (mid, room["id"], sender, target, "say", text, encode(refs), created, now, now))
         added += cur.rowcount
         if cur.rowcount:
             for item in attached:
                 c.execute("INSERT INTO message_assets VALUES(?,?)", (mid, item["id"]))
     if added:
-        last = c.execute("SELECT max(created) FROM messages WHERE conversation_id=?", (room["id"],)).fetchone()[0]
+        last = c.execute("SELECT max(created_at) FROM messages WHERE conversation_id=?", (room["id"],)).fetchone()[0]
         c.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (last, room["id"]))
     return added, len(messages) - added
 
 
 def synced_through(c, provider, person, slug):
-    row = c.execute("SELECT max(m.created) FROM messages m JOIN conversations v ON v.id=m.conversation_id "
+    row = c.execute("SELECT max(m.created_at) FROM messages m JOIN conversations v ON v.id=m.conversation_id "
                     "WHERE v.scope='personal' AND v.owner_actor=? AND v.room_key=? AND m.id LIKE ?",
                     ("human:" + person, slug, provider.key + "-%")).fetchone()
     return row[0] if row else None
@@ -389,11 +389,11 @@ def take_inbox(c, provider, person, slug):
     config = H._json((c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
                       or {"config": "{}"})["config"], {}) or {}
     delivering = 1 if app_delivery.active(c, config) else 0
-    rows = c.execute("SELECT m.id,m.body,m.created FROM messages m WHERE m.conversation_id=? AND m.from_actor=? "
+    rows = c.execute("SELECT m.id,m.body,m.created_at FROM messages m WHERE m.conversation_id=? AND m.from_actor=? "
                      "AND m.to_actor=? AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND m.kind='say' "
                      "AND m.id NOT LIKE ? AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.message_id=m.id AND "
                      "(? OR j.state NOT IN ('queued','canceled') OR EXISTS (SELECT 1 FROM attempts a WHERE a.job_id=j.id))) "
-                     "ORDER BY m.created LIMIT ?",
+                     "ORDER BY m.created_at LIMIT ?",
                      (room["id"], "human:" + person, "bot:" + slug, provider.key + "-%", delivering,
                       INBOX_LIMIT)).fetchall()
     if rows:
@@ -402,7 +402,7 @@ def take_inbox(c, provider, person, slug):
                       [(now, row["id"]) for row in rows])
         c.executemany("UPDATE jobs SET state='canceled' WHERE message_id=? AND state='queued'",
                       [(row["id"],) for row in rows])
-    return [{"id": row["id"], "text": row["body"], "at": row["created"]} for row in rows]
+    return [{"id": row["id"], "text": row["body"], "at": row["created_at"]} for row in rows]
 
 
 def sync(c, auth, settings_admin, who, body, images=None):
@@ -466,7 +466,7 @@ def presence(c, bot, harness, config, now=None):
     last = record.get("last_sync")
     now = now or H.now()
     online = bool(last and last > H.shift(now, seconds=-PRESENCE_GAP))
-    agent = {"harness": provider.id, "credential": True, "last_seen": last, "revoked_at": None,
+    agent = {"harness": provider.id, "credential": True, "last_seen_at": last, "revoked_at": None,
              "version": "", "platform": provider.label.lower(), "model": "", "provider": provider.maker,
              "profile": record.get("name") or "", "detail": record.get("source") or "",
              "synced": True, "label": provider.label, "section": record.get("section") or "",

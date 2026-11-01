@@ -20,8 +20,8 @@ def test_store_replaces_legacy_queue_trigger_and_drains_queued_self_messages(tmp
         c.execute("DROP TRIGGER queue_bot_message")
         c.execute("CREATE TRIGGER queue_bot_message AFTER INSERT ON messages "
                   "WHEN NEW.to_actor LIKE 'bot:%' BEGIN "
-                  "INSERT INTO jobs(id,message_id,bot,created) "
-                  "VALUES(NEW.id,NEW.id,substr(NEW.to_actor,5),NEW.created); END")
+                  "INSERT INTO jobs(id,message_id,bot,created_at) "
+                  "VALUES(NEW.id,NEW.id,substr(NEW.to_actor,5),NEW.created_at); END")
         conversation = H.open_conversation(c, "bot:coo", ["bot:coo"], kind="chat")
         self_message = H._write_message(c, "bot:coo", "bot:coo", "legacy loop",
                                         conversation, "say", {}, None, None)

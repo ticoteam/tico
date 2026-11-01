@@ -98,7 +98,7 @@ def poll(api, times=1):
 
 def notes(api, slug="ops"):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM notes WHERE to_actor=? ORDER BY created,id", ("bot:" + slug,))]
+        return [dict(r) for r in c.execute("SELECT * FROM notes WHERE to_actor=? ORDER BY created_at,id", ("bot:" + slug,))]
 
 
 def jobs(api, slug="ops"):

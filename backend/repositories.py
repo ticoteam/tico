@@ -93,7 +93,7 @@ def migrate(c):
             config['repo_access_mode'] = 'chosen'
             c.execute('UPDATE bot_config SET config=? WHERE bot=?', (json.dumps(config), bot))
         for repo in repos:
-            c.execute('INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?) '
+            c.execute('INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) '
                       'ON CONFLICT(full_name) DO UPDATE SET enabled=1', (uuid.uuid4().hex, repo, H.now()))
             c.execute("INSERT INTO bot_repo_access VALUES(?,?,'write') ON CONFLICT(bot,full_name) DO UPDATE SET access='write'",
                       (bot, repo))
@@ -304,7 +304,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
         if (bot_repo or existing and existing['bot_repo']) and not team_list and (name.lower() not in previous or previous[name.lower()] == 'read' and grant.access == 'write'):
             raise Problem('forbidden', 'An Owner or admin chooses bot repositories', 403)
         if legacy and team_list:
-            c.execute('INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?) '
+            c.execute('INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) '
                       'ON CONFLICT(full_name) DO UPDATE SET enabled=1', (uuid.uuid4().hex, name, H.now()))
         elif not c.execute('SELECT 1 FROM repositories WHERE full_name=?', (name,)).fetchone():
             raise Problem('github_repo', 'Choose a repository from the team list', 422)
@@ -480,7 +480,7 @@ def preview_change(c, settings, actor, bot, body):
 
 def needs_card(result):
     """Whether a change BotOps makes for a person goes on their Confirm card (`bot_set`, and the settings catalogue's
-    class for it): it gives what only their own click may (`started`), or takes something away."""
+    class for it): it gives what only their own click may (`started_at`), or takes something away."""
     return bool(result.get('workflows_started') or result.get('workflow_edits_started')
                 or result.get('product_creation_started') or result.get('stopped') or result.get('creation_stopped')
                 or result.get('workflows_stopped') or result.get('workflow_edits_stopped')
@@ -489,7 +489,7 @@ def needs_card(result):
 
 def trial(c, bot, update, org, actor, owner=False):
     """The change made as the person's own click on its card would make it (`owner`: the Owner's), then rolled back:
-    `access()` before it and what it did (`set_access` and `started`), or the refusal that click would get."""
+    `access()` before it and what it did (`set_access` and `started_at`), or the refusal that click would get."""
     c.execute('SAVEPOINT repo_preview')
     try:
         before = access(c, bot, org)
@@ -673,9 +673,9 @@ def _sync(service):
         c.execute('UPDATE repositories SET reachable=0')
         for repo in repos:
             name = repo['full_name']
-            c.execute('INSERT INTO repositories(id,full_name,bot_repo,default_branch,setup_command,setup_source,reachable,last_seen,updated) '
+            c.execute('INSERT INTO repositories(id,full_name,bot_repo,default_branch,setup_command,setup_source,reachable,last_seen_at,updated_at) '
                       'VALUES(?,?,?,?,?,?,1,?,?) ON CONFLICT(full_name) DO UPDATE SET bot_repo=excluded.bot_repo,'
-                      'default_branch=excluded.default_branch,reachable=1,last_seen=excluded.last_seen,updated=excluded.updated,'
+                      'default_branch=excluded.default_branch,reachable=1,last_seen_at=excluded.last_seen_at,updated_at=excluded.updated_at,'
                       "setup_command=CASE WHEN repositories.setup_source='settings' THEN repositories.setup_command ELSE excluded.setup_command END,"
                       "setup_source=CASE WHEN repositories.setup_source='settings' THEN 'settings' ELSE excluded.setup_source END",
                       (uuid.uuid4().hex, name, int(name.split('/')[1].lower().startswith('bot-') or name.lower() in own),
@@ -883,7 +883,7 @@ def install(app, store, service):
 
     def listing():
         with store.read() as c:
-            repos = [dict(r) for r in c.execute('SELECT full_name,enabled,bot_repo,default_branch,setup_command,setup_source,reachable,last_seen FROM repositories ORDER BY full_name')]
+            repos = [dict(r) for r in c.execute('SELECT full_name,enabled,bot_repo,default_branch,setup_command,setup_source,reachable,last_seen_at FROM repositories ORDER BY full_name')]
             archived = metadata(c, 'repositories-archived')
             for r in repos:
                 r['archived'] = archived.get(r['full_name'].lower())
@@ -927,7 +927,7 @@ def install(app, store, service):
                 command = (body.setup_command or '').strip() or None
                 c.execute('UPDATE repositories SET setup_command=?,setup_source=? WHERE full_name=?',
                           (command, 'settings' if command else None, name))
-            c.execute('UPDATE repositories SET updated=? WHERE full_name=?', (H.now(), name))
+            c.execute('UPDATE repositories SET updated_at=? WHERE full_name=?', (H.now(), name))
             after = dict(c.execute('SELECT * FROM repositories WHERE full_name=?', (name,)).fetchone())
             H.event(c, who.actor, 'repositories.changed', name, {'before': dict(before), 'after': after})
         return after

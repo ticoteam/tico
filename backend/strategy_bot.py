@@ -92,7 +92,7 @@ def _rename(c, actor, display_name):
     if isinstance(declared, dict):
         declared["display_name"] = display_name
         c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), SLUG))
-    c.execute("UPDATE bot_config SET revision=revision+1,definition_updated=?,definition_updated_by=? WHERE bot=?",
+    c.execute("UPDATE bot_config SET revision=revision+1,definition_updated_at=?,definition_updated_by=? WHERE bot=?",
               (H.now(), actor, SLUG))
 
 
@@ -118,16 +118,16 @@ def migrate(c):
                       "FROM registry_metadata WHERE key=?", (KEY, OLD_KEY))
     elif new and not old:
         _save(c, _record(c))
-    c.execute("INSERT INTO preferences(actor,key,value,updated) SELECT actor, ?, value, updated "
+    c.execute("INSERT INTO preferences(actor,key,value,updated_at) SELECT actor, ?, value, updated_at "
               "FROM preferences AS o WHERE key=? AND NOT EXISTS (SELECT 1 FROM preferences AS p "
-              "WHERE p.actor=o.actor AND p.key=? AND p.updated>=o.updated) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+              "WHERE p.actor=o.actor AND p.key=? AND p.updated_at>=o.updated_at) "
+              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
               (HIDE_PREF, OLD_HIDE_PREF, HIDE_PREF))
     # Then each old key reads as its new one, for an older release to read after a rollback.
-    c.execute("INSERT INTO preferences(actor,key,value,updated) SELECT actor, ?, value, updated "
+    c.execute("INSERT INTO preferences(actor,key,value,updated_at) SELECT actor, ?, value, updated_at "
               "FROM preferences AS n WHERE key=? AND NOT EXISTS (SELECT 1 FROM preferences AS p "
-              "WHERE p.actor=n.actor AND p.key=? AND p.updated>=n.updated) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+              "WHERE p.actor=n.actor AND p.key=? AND p.updated_at>=n.updated_at) "
+              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
               (OLD_HIDE_PREF, HIDE_PREF, OLD_HIDE_PREF))
     from . import strategy_suggest
     # Decided by Tico, as `strategy_suggest.withdraw` records one now, so an older release after a rollback, which
@@ -413,8 +413,8 @@ def _save(c, record):
 
 def mirror_hide(c, actor, value_json, updated):
     """Write a person's "Hide from my chart" under its old key too (OLD_KEY)."""
-    c.execute("INSERT INTO preferences(actor,key,value,updated) VALUES(?,?,?,?) ON CONFLICT(actor,key) "
-              "DO UPDATE SET value=excluded.value, updated=excluded.updated",
+    c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) ON CONFLICT(actor,key) "
+              "DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
               (actor, OLD_HIDE_PREF, value_json, updated))
 
 
@@ -434,19 +434,19 @@ def day_start(at=None):
 def asked_today(c, person, at=None):
     """How many tasks the Strategy Bot filed for this person today (UTC), closed ones included, and merged items."""
     since = day_start(at)
-    return c.execute("SELECT COUNT(*) FROM tasks WHERE requester=? AND owner=? AND created>=?",
+    return c.execute("SELECT COUNT(*) FROM tasks WHERE requester=? AND owner=? AND created_at>=?",
                      ("bot:" + SLUG, person, since)).fetchone()[0] + c.execute(
         "SELECT COUNT(DISTINCT merged_into) FROM "
-        "strategy_merges WHERE person=? AND created>=?", (person, since)).fetchone()[0]
+        "strategy_merges WHERE person=? AND created_at>=?", (person, since)).fetchone()[0]
 
 
 def asked_today_all(c, at=None):
     """{person actor: tasks the Strategy Bot filed for them today}, for the people it filed any for."""
     since, out = day_start(at), {}
     for who, n in c.execute(
-            "SELECT owner, COUNT(*) FROM tasks WHERE requester=? AND owner LIKE 'human:%' AND created>=? GROUP BY owner "
+            "SELECT owner, COUNT(*) FROM tasks WHERE requester=? AND owner LIKE 'human:%' AND created_at>=? GROUP BY owner "
             "UNION ALL SELECT person, COUNT(DISTINCT merged_into) FROM strategy_merges "
-            "WHERE created>=? GROUP BY person",
+            "WHERE created_at>=? GROUP BY person",
             ("bot:" + SLUG, since, since)):
         out[who] = out.get(who, 0) + n
     return out

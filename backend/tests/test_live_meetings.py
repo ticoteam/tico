@@ -22,9 +22,9 @@ def live(api):
         "finance-live": Identity("bot:finance", "bot", agent="hermes"),
     })
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   ("ops", "hermes", digest("synthetic-ops-agent"), H.now(), "human:ana"))
-        c.execute("INSERT OR REPLACE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   ("finance", "hermes", digest("synthetic-finance-agent"), H.now(), "human:ana"))
     yield api
     assert settle(api)
@@ -662,7 +662,7 @@ def test_a_meeting_reply_runs_on_the_meeting_model_and_other_turns_keep_the_bots
            "task_model": {"model": "some-task-model"}}
     with live.app.state.store.transaction() as c:
         c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-                  "created,updated,started_at,visibility,client,meeting_model) "
+                  "created_at,updated_at,started_at,visibility,client,meeting_model) "
                   "VALUES('m-company','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
                   (H.now(), H.now(), H.now()))
         turn = live_meetings_module.turn_config(c, settings, own, "ops", "m-company", "")
@@ -696,7 +696,7 @@ def test_a_meeting_model_the_runner_cannot_run_falls_back_to_the_bots_model(live
     monkeypatch.setattr(task_models, "why_not", lambda *args, **kwargs: "pi is not installed on this computer")
     with live.app.state.store.transaction() as c:
         c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-                  "created,updated,started_at,visibility,client,meeting_model) "
+                  "created_at,updated_at,started_at,visibility,client,meeting_model) "
                   "VALUES('m-fallback','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
                   (H.now(), H.now(), H.now()))
         assert live_meetings_module.turn_config(c, settings, own, "ops", "m-fallback", "", turn_id="t-1") == {
@@ -718,7 +718,7 @@ def test_a_meeting_model_outside_the_catalog_falls_back_and_says_why(live, monke
     own = {"runtime": "hermes", "harness": "hermes", "model": "bots-own"}
     with live.app.state.store.transaction() as c:
         c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-                  "created,updated,started_at,visibility,client,meeting_model) "
+                  "created_at,updated_at,started_at,visibility,client,meeting_model) "
                   "VALUES('m-gone','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,'retired-model')",
                   (H.now(), H.now(), H.now()))
         assert live_meetings_module.turn_config(c, settings, own, "ops", "m-gone", "") == {**own, "session": "task"}
@@ -927,7 +927,7 @@ def test_a_chunk_is_acknowledged_before_its_window_decision_comes_back(live):
     assert [window["outcome"] for window in windows if window["trace"].get("chunk_range")] == ["route"]
     # A lost routing thread (a restart) is picked up by the scheduler's sweep.
     with live.app.state.store.transaction() as c:
-        c.execute("INSERT INTO live_meeting_chunks(meeting_id,seq,revision,speaker,start_ms,end_ms,text,created) "
+        c.execute("INSERT INTO live_meeting_chunks(meeting_id,seq,revision,speaker,start_ms,end_ms,text,created_at) "
                   "VALUES(?,3,1,'Ana',40000,61000,'Late words',?)", (mid, H.now()))
         c.execute("UPDATE live_meetings SET seq=3 WHERE id=?", (mid,))
     live.app.state.live_meeting_routing.sweep()
@@ -968,7 +968,7 @@ def test_a_gateway_meeting_model_a_computer_cannot_run_falls_back_to_mercury_on_
 
     def meeting(rid):
         c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-                  "created,updated,started_at,visibility,client,meeting_model) "
+                  "created_at,updated_at,started_at,visibility,client,meeting_model) "
                   "VALUES(?,'human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
                   (rid, H.now(), H.now(), H.now()))
 

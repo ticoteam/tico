@@ -84,7 +84,7 @@ def test_health_counts_no_queued_work_from_the_cancelled_job(api):
 
     def ops_rows():
         with store.transaction() as c:
-            c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
+            c.execute("UPDATE jobs SET created_at=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
             online = {r["id"] for r in health._online_runners(c)}
             waiting, slow, stuck = health._waiting(c, online, store.settings)
         return [r for r in waiting + slow + stuck if r["bot"] == "ops"]

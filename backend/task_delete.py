@@ -446,12 +446,12 @@ def restore_tasks(c, ids, actor=None):
         for column, (kind, inward) in LEGACY_LINKS.items():
             if task.get(column):
                 ends = (task[column], tid) if inward else (tid, task[column])
-                relations.append({"from_task": ends[0], "to_task": ends[1], "kind": kind, "created": task.get("updated") or H.now()})
+                relations.append({"from_task": ends[0], "to_task": ends[1], "kind": kind, "created_at": task.get("updated_at") or H.now()})
         for row in snap["rows"].get("task_relations", []):
             if "related_id" in row:     # draft #110's related-only rows
                 a, b = sorted((row["task_id"], row["related_id"]))
                 relations.append({"from_task": a, "to_task": b, "kind": "related", "created_by": row.get("added_by"),
-                                  "created": row["created"]})
+                                  "created_at": row["created_at"]})
         for row in relations:
             if TR.restore_row(c, row) is False:
                 unlinked.setdefault(tid, []).append(row["kind"])

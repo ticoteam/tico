@@ -117,8 +117,8 @@ const edgeServer = http.createServer(async (req, res) => {
            '--disable-features=BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessChecks,LocalNetworkAccessChecks,PrivateNetworkAccessSendPreflights']});
   const now = new Date().toISOString();
   const MESSAGES = [
-    {id: 'm1', from_actor: 'bot:designer', body: 'The funnel page and the logo.', created: now, refs: {attachments: [A('f-page', 'page'), A('f-svg', 'svg')]}},
-    {id: 'm2', from_actor: 'bot:designer', body: 'A page the company wrote, and a plain one.', created: now, refs: {attachments: [A('f-hostile', 'page'), A('f-plain', 'page')]}},
+    {id: 'm1', from_actor: 'bot:designer', body: 'The funnel page and the logo.', created_at: now, refs: {attachments: [A('f-page', 'page'), A('f-svg', 'svg')]}},
+    {id: 'm2', from_actor: 'bot:designer', body: 'A page the company wrote, and a plain one.', created_at: now, refs: {attachments: [A('f-hostile', 'page'), A('f-plain', 'page')]}},
   ];
   const run = async ({viewport, hasTouch = false, label}) => {
     const context = await browser.newContext({viewport, hasTouch, isMobile: hasTouch, serviceWorkers: 'block'});

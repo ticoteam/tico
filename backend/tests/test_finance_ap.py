@@ -244,7 +244,7 @@ def test_a_scheduled_payment_denied_withdrawn_or_expired_reopens_the_bill_and_sa
         reopened(c, bid, "withdrawn")
         reschedule(c, bid)
         third = asked(c, bid)
-        c.execute("UPDATE approvals SET created='2026-09-01T00:00:00.000000Z' WHERE id=?", (third.approval_id,))
+        c.execute("UPDATE approvals SET created_at='2026-09-01T00:00:00.000000Z' WHERE id=?", (third.approval_id,))
         H.approval_withdraw(c, str(third.approval_id), "No decision in 14 days.")
         assert [r.status for r in FA.approvals_sweep(c, AT)] == ["expired"]
         reopened(c, bid, "expired")

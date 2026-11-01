@@ -121,11 +121,11 @@ def qa_owner(c, ticket):
     team's one `issue-triage` bot. A bot slug or None."""
     from . import task_relations as TR
     kids = [H.task(c, i) for i in TR.child_ids(c, ticket["id"])]
-    for kid in sorted((k for k in kids if k and QA_CHILD.match(k["title"] or "")), key=lambda k: k["created"], reverse=True):
+    for kid in sorted((k for k in kids if k and QA_CHILD.match(k["title"] or "")), key=lambda k: k["created_at"], reverse=True):
         slug = H.actor_id(kid["owner"]) if H.is_bot(kid["owner"]) else None
         if slug and (H.bot(c, slug) or {}).get("state") == "active":
             return slug
-    for (actor,) in c.execute("SELECT actor FROM task_roles WHERE task_id=? AND lower(role)='qa' ORDER BY created",
+    for (actor,) in c.execute("SELECT actor FROM task_roles WHERE task_id=? AND lower(role)='qa' ORDER BY created_at",
                               (ticket["id"],)):
         if H.is_bot(actor) and (H.bot(c, H.actor_id(actor)) or {}).get("state") == "active":
             return H.actor_id(actor)
@@ -141,7 +141,7 @@ def _qa_room(c, ticket, qa):
     from . import task_relations as TR
     mine = [k for k in (H.task(c, i) for i in TR.child_ids(c, ticket["id"]))
             if k and QA_CHILD.match(k["title"] or "") and k["owner"] == H.bot_actor(qa)]
-    newest = max(mine, key=lambda k: k["created"], default=None)
+    newest = max(mine, key=lambda k: k["created_at"], default=None)
     return (newest, str(newest["title"]).strip()) if newest else (None, None)
 
 
@@ -153,7 +153,7 @@ def pending(c, reader=None):
     rows = [H.task(c, r[0]) for r in c.execute(
         "SELECT t.id FROM tasks t JOIN task_steps s ON s.id=t.step_id JOIN task_types y ON y.id=t.type_id "
         f"WHERE lower(s.name)=? AND (y.role=? OR y.name='Dev tickets') AND t.status IN "
-        f"({','.join('?' * len(H.ACTIVE_STATUSES))}) ORDER BY t.created, t.id",
+        f"({','.join('?' * len(H.ACTIVE_STATUSES))}) ORDER BY t.created_at, t.id",
         (PENDING, ENGINEERING, *H.ACTIVE_STATUSES))]
     return [{**r, "prs": [l for l in H.task_links(c, r["id"]) if l["kind"] == "pr"]} for r in rows
             if r and (reader is None or H.task_private_readable(c, reader, r))]
@@ -194,7 +194,7 @@ def _task_body(c, tickets, why):
 def _unfinished(c, owner):
     """The Release task `owner` has not finished, if any: a second is never filed beside it."""
     row = c.execute("SELECT id FROM tasks WHERE owner=? AND title LIKE ? ESCAPE '\\' AND status IN (" +
-                    ",".join("?" * len(H.ACTIVE_STATUSES)) + ") ORDER BY created DESC LIMIT 1",
+                    ",".join("?" * len(H.ACTIVE_STATUSES)) + ") ORDER BY created_at DESC LIMIT 1",
                     (owner, TITLE.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%",
                      *H.ACTIVE_STATUSES)).fetchone()
     return H.task(c, row[0]) if row else None

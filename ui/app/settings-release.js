@@ -138,7 +138,7 @@ let TASK_MANAGER_VIEW = null;
 function taskManagerHTML(v) {
   const owner = S.me?.role === 'owner';
   const state = v.on ? 'On' : v.state === 'paused' ? 'Paused' : 'Off';
-  const last = v.last_run && (v.last_run.finished || v.last_run.started);
+  const last = v.last_run && (v.last_run.finished_at || v.last_run.started_at);
   const toggle = owner ? `<button type="button" class="ghost" data-tm-toggle="${v.on ? 'off' : 'on'}">${v.on ? 'Pause' : 'Resume'}</button>` : '';
   const rows = (v.departments || []).map(d => `<div class="tm-row" data-tm-dept="${esc(d.department)}">
       <strong>${esc(d.name)}</strong>

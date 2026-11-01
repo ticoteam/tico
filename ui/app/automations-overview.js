@@ -55,7 +55,7 @@ function auAge(iso, ahead = false) {
   const s = Math.abs(ahead ? t - Date.now() : Date.now() - t) / 1000;
   return s < 60 ? 'now' : s < 3600 ? Math.round(s / 60) + 'm' : s < 86400 ? Math.round(s / 3600) + 'h' : Math.round(s / 86400) + 'd';
 }
-const auDur = r => { const s = r.finished ? (new Date(r.finished) - new Date(r.started)) / 1000 : NaN;
+const auDur = r => { const s = r.finished_at ? (new Date(r.finished_at) - new Date(r.started_at)) / 1000 : NaN;
   return isNaN(s) || s < 0 ? '' : s < 60 ? Math.round(s) + 's' : s < 3600 ? Math.round(s / 60) + 'm' : Math.round(s / 3600) + 'h'; };
 const auIcon = (name, cls = '') => `<span class="nav-icon${cls ? ' ' + cls : ''}" aria-hidden="true">${name}</span>`;
 
@@ -175,7 +175,7 @@ function auTableHTML() {
   const st = AU.stats, n = st?.n || 0, zero = Array.from({length: n || 12}, () => ({ok: 0, failed: 0}));
   const stat = a => st?.per.get(a.id) || {runs: 0, failed: 0, cost: 0, buckets: zero};
   const rows = auShown().map(a => ({a, s: stat(a)}));
-  const last = r => r.a.last_run?.started || '';
+  const last = r => r.a.last_run?.started_at || '';
   const sorters = {last: (x, y) => last(y).localeCompare(last(x)), fail: (x, y) => y.s.failed - x.s.failed || y.s.runs - x.s.runs,
     runs: (x, y) => y.s.runs - x.s.runs, cost: (x, y) => y.s.cost - x.s.cost, name: (x, y) => String(x.a.name).localeCompare(String(y.a.name))};
   rows.sort(sorters[AU.sort] || sorters.last);
@@ -195,7 +195,7 @@ function auTableHTML() {
     name: ['au-tn', 'Name', ({a}) => `<div><a href="${auHref(a.id)}">${auIcon(AU_KIND_ICONS[auKind(a)] || 'bolt')}<span class="au-nm">${esc(a.name || 'Untitled')}</span></a>${auPill(a)}</div>${auWarn(a)}`],
     trigger: ['au-tt', 'Trigger', ({a}) => esc(auTrigLine(a))],
     owner: ['au-to', 'Owner', ({a}) => `<span title="${esc(auActorName(a.owner))}" aria-label="${esc(auActorName(a.owner))}">${personCircle(auActorName(a.owner), 18)}</span>`],
-    last: ['au-cl', 'Last run', ({a}) => a.last_run ? `<span class="au-lr"><span class="au-dot ${AU_DOTS[a.last_run.status] || 'idle'}" role="img" aria-label="${esc(AU_RUN_STATUS[a.last_run.status] || a.last_run.status)}"></span>${esc(auAge(a.last_run.started))}</span>` : '<span class="muted">—</span>'],
+    last: ['au-cl', 'Last run', ({a}) => a.last_run ? `<span class="au-lr"><span class="au-dot ${AU_DOTS[a.last_run.status] || 'idle'}" role="img" aria-label="${esc(AU_RUN_STATUS[a.last_run.status] || a.last_run.status)}"></span>${esc(auAge(a.last_run.started_at))}</span>` : '<span class="muted">—</span>'],
     next: ['au-cx muted', 'Next', ({a}) => auNextHTML(a)],
     trend: ['au-cs', 'Last ' + AU.range, ({s}) => auSpark(s.buckets || zero)],
     runs: ['au-n au-cn', 'Runs', ({s}) => s.runs ? s.runs.toLocaleString() : '<span class="muted">0</span>'],
@@ -242,7 +242,7 @@ function auAllHTML() {
   const table = rows.length ? `<table class="au-tbl-t au-all"><thead><tr><th class="au-cw">When</th><th class="au-cst">Status</th><th>Automation</th><th class="au-why">Started by</th><th class="au-out">Outcome</th>
       <th class="au-n au-cx">Steps</th><th class="au-n au-cx">Time</th><th class="au-n au-cc">Cost</th></tr></thead><tbody>
       ${rows.map(x => `<tr class="au-arow" role="button" tabindex="0" data-arun="${esc(x.id)}" data-aid="${esc(x.automation_id)}">
-        <td class="muted" title="${esc(fmt(x.started))}">${esc(auAge(x.started) === 'now' ? 'now' : auAge(x.started) + ' ago')}</td>
+        <td class="muted" title="${esc(fmt(x.started_at))}">${esc(auAge(x.started_at) === 'now' ? 'now' : auAge(x.started_at) + ' ago')}</td>
         <td><span class="pill ${AU_RUN_PILLS[x.status] || ''}">${esc(AU_RUN_STATUS[x.status] || auCap(x.status))}</span></td>
         <td class="au-tn"><div>${auIcon(AU_KIND_ICONS[x.trigger || kindOf(x.automation_id)] || 'bolt')}<span class="au-nm">${esc(x.automation_name || '')}</span></div></td>
         <td class="au-why" title="${esc(x.started_by || '')}">${esc(x.started_by || '')}</td>

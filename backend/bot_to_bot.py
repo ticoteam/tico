@@ -75,9 +75,9 @@ def hold(conn, msg, task_row=None):
     body = (f"Message from {sender} {where}, which could wait for this run "
             f"(message {msg['id']}). Act on it if it asks for something.\n\n{text}")
     row = {"id": H.new_id(), "from_actor": msg["from_actor"], "to_actor": msg["to_actor"], "body": body,
-           "created": msg["created"], "message_id": msg["id"]}
-    conn.execute("INSERT INTO notes(id,from_actor,to_actor,body,created,message_id) VALUES "
-                 "(:id,:from_actor,:to_actor,:body,:created,:message_id)", row)
+           "created_at": msg["created_at"], "message_id": msg["id"]}
+    conn.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES "
+                 "(:id,:from_actor,:to_actor,:body,:created_at,:message_id)", row)
     H.event(conn, msg["from_actor"], "message.can_wait", msg["id"], {"to": msg["to_actor"], "note": row["id"]})
     return row
 

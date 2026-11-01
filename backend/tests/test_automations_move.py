@@ -40,7 +40,7 @@ def old_install(tmp_path, *, routines=True):
             c.execute("INSERT INTO schedules(id, bot, cron, title, playbook, next_due) VALUES(?,?,?,?,?,?)",
                       ("sch_notes", "coo", "0 9 * * *", "Morning notes", "Post yesterday's work.",
                        "2026-11-02T09:00:00Z"))
-            c.execute("INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, created_by, created, updated) "
+            c.execute("INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, created_by, created_at, updated_at) "
                       "VALUES('rule_comment','bot','coo','comment','wake','human:ana','2026-10-01','2026-10-01')")
             c.execute("INSERT INTO usage_limits(bot, hourly_usd) VALUES('coo', 0.35)")
         c.execute("DELETE FROM registry_metadata WHERE key=?", (M.CUTOVER,))
@@ -161,7 +161,7 @@ def test_pending_reads_a_database_an_older_release_wrote(tmp_path):
     c = sqlite3.connect(path)
     c.executescript("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT);"
                     "CREATE TABLE schedules(id TEXT PRIMARY KEY, bot TEXT, cron TEXT, title TEXT, playbook TEXT, "
-                    "last_fired TEXT, next_due TEXT);"
+                    "last_fired_at TEXT, next_due TEXT);"
                     "INSERT INTO schedules(id, bot) VALUES('s1', 'coo'), ('s2', 'coo');")
     c.commit()
     c.close()

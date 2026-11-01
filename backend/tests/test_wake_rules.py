@@ -41,7 +41,7 @@ def parked_task(c, title="Build 2/9"):
     """cpo's task, filed by ops, blocked by an open task of ops's."""
     blocker = H.task_create(c, "bot:ops", "Build 1/9", "First", "bot:ops")
     task = H.task_create(c, "bot:ops", title, "Second", "bot:cpo")
-    c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'blocks',?)",
+    c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
               (blocker["id"], task["id"], H.now()))
     c.execute("DELETE FROM jobs")
     return H.task(c, task["id"]), blocker
@@ -83,7 +83,7 @@ def test_a_task_parked_on_wake_once_sleeps_too(api):
     setup(api)
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,detail) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,detail) "
                   "VALUES('l1',?,'pr','https://github.com/o/r/pull/1','PR','open','bot:cpo',?,?)",
                   (task["id"], H.now(), json.dumps({"wake_once": {"by": "bot:cpo", "at": H.now()}})))
         c.execute("DELETE FROM jobs")
@@ -101,7 +101,7 @@ def test_t2_a_comment_on_a_related_task_does_not_wake_the_parked_tasks_bot(api):
     with api.app.state.store.transaction() as c:
         task, _ = parked_task(c)
         related = H.task_create(c, "bot:ops", "Docs for 2/9", "Write them", "bot:ops")
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'related',?)",
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'related',?)",
                   (*sorted((related["id"], task["id"])), H.now()))
         c.execute("DELETE FROM jobs")
         H.task_comment(c, "bot:ops", related["id"], "Docs drafted.")
@@ -155,7 +155,7 @@ def test_lead_case_a_held_bot_comment_then_a_persons_comment_the_run_shows_both_
     attempt = claim(api, r, "cpo")
     assert attempt["message"]["id"] == person["id"]
     notes = [n for n in attempt["notes"] if n.get("message")]
-    assert [n["message"] for n in notes] == [bot_comment["id"]] and notes[0]["sent"] <= person["created"]
+    assert [n["message"] for n in notes] == [bot_comment["id"]] and notes[0]["sent"] <= person["created_at"]
 
 
 def test_held_news_reaches_the_run_in_arrival_order_whoever_sent_it_across_the_batch_boundary(api):
@@ -167,7 +167,7 @@ def test_held_news_reaches_the_run_in_arrival_order_whoever_sent_it_across_the_b
             notices = [news(c, task, f"Relation added: Docs {i}") for i in range(50)]
         # Tico's own urgent note (a lifted quarantine's) still comes first, though it is the newest.
         urgent = H.new_id()
-        c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
                   (urgent, H.KEEPER, "bot:cpo", "Back from quarantine", H.now()))
         assert jobs(c, "cpo") == 0
         H.task_comment(c, "human:ana", task["id"], "Please start this today.")
@@ -315,7 +315,7 @@ def test_a_reply_the_parked_bot_waits_on_wakes_it(api, parked_on):
             task, _ = parked_task(c)
         else:
             task = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
-            c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,detail) "
+            c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,detail) "
                       "VALUES('l1',?,'pr','https://github.com/o/r/pull/1','PR','open','bot:cpo',?,?)",
                       (task["id"], H.now(), json.dumps({"wake_once": {"by": "bot:cpo", "at": H.now()}})))
             task = H.task(c, task["id"])

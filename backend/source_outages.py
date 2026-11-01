@@ -22,7 +22,7 @@ def observe(c, source, kind, *, waiting=0, until=None, active=True, since=None):
         return
     now = H.now()
     record = {'source': source, 'kind': kind, 'active': bool(active), 'since': old.get('since') if old.get('active') else since or now,
-              'waiting': int(waiting), 'until': until, 'updated': now}
+              'waiting': int(waiting), 'until': until, 'updated_at': now}
     c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
               (key, json.dumps(record)))
     if bool(old.get('active')) == bool(active):
@@ -101,7 +101,7 @@ def sync(c, settings):
             saved = c.execute('SELECT value FROM registry_metadata WHERE key=?',
                               (PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32],)).fetchone()
             proof = H._json(saved[0], {}) if saved else {}
-            if proof and not proof.get('active') and (detail.get('at') or '') <= proof.get('updated', ''):
+            if proof and not proof.get('active') and (detail.get('at') or '') <= proof.get('updated_at', ''):
                 continue  # A successful read supersedes this old refusal, even if the ticket has not moved.
             entry = github.setdefault(source, {'tasks': set(), 'since': detail.get('since')})
             entry['tasks'].add(row['id'])
@@ -141,7 +141,7 @@ def batch_waiters(c, bot):
                          "AND m.from_actor=? AND m.kind='notice' AND m.deleted_at IS NULL "
                          "AND coalesce(json_extract(m.refs,'$.quiet'),0)=0 "
                          "AND coalesce(json_extract(m.refs,'$.command'),0)=0 "
-                         "ORDER BY j.created,j.rowid", (bot, H.KEEPER)).fetchall():
+                         "ORDER BY j.created_at,j.rowid", (bot, H.KEEPER)).fetchall():
         refs = H._json(row['refs'], {}) or {}
         if refs.get('caused_by', '').startswith('human:') or refs.get('wake_digest'):
             continue

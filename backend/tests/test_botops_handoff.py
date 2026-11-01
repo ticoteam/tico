@@ -56,7 +56,7 @@ def test_a_bot_hands_botops_the_persons_own_request_and_botops_acts_as_them(api,
 
     # Once the message is more than a week old it lends nothing: BotOps has only Ops' rights again.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=?",
+        c.execute("UPDATE messages SET created_at=? WHERE id=?",
                   (H.shift(H.now(), days=-8), H._json(carried["detail"], {})["message_id"]))
     assert get(api, "qa-handoff-identity", attempt["token"]) == {"actor": "bot:ops", "role": "bot"}
 

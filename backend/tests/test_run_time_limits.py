@@ -21,7 +21,7 @@ def cut(api, machine, attempt, *, minutes='60', command='git push origin HEAD', 
     if approval:
         with api.app.state.store.transaction() as c:
             message = c.execute('SELECT message_id FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0]
-            c.execute('INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)',
+            c.execute('INSERT INTO approvals(id,kind,message_id,requested_by,created_at,consumed_at) VALUES(?,?,?,?,?,?)',
                       ('used-approval', 'publish', message, 'bot:ops', H.now(), H.now()))
     events = [
         ({'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': False}} if silent else

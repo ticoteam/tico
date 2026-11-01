@@ -38,7 +38,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         body: 'Please review the campaign.', owner: 'bot:ops', requester: 'human:ana',
         type_id: 'marketing', step_id: stepId, type: {id: 'marketing', name: 'Marketing'}, step,
         status: step?.status || 'doing', lane: 'company', version: 1, labels: [], links: [], parts: {total: 0, done: 0},
-        rank: index, created: '2026-10-01T12:00:00Z', updated: '2026-10-01T12:00:00Z'};
+        rank: index, created_at: '2026-10-01T12:00:00Z', updated_at: '2026-10-01T12:00:00Z'};
     });
     tasks.push({...tasks[0], id: 'general-task', title: 'General task', type_id: 'general', step_id: 'general-open',
       type: {id: 'general', name: 'General'}, step: types[0].steps[0]});
@@ -144,7 +144,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(await page.evaluate(() => TASKS_ST.view), 'board');
     await finishedCol('complete', ['Finished campaign']);
     await finishedCol('archive', ['Dropped campaign']);
-    tasks.push({...tasks[2], id: 'done-later', title: 'Finished later', updated: '2026-10-02T12:00:00Z'});
+    tasks.push({...tasks[2], id: 'done-later', title: 'Finished later', updated_at: '2026-10-02T12:00:00Z'});
     await page.evaluate(() => tasksLoad(TASKS_ST, {poll: true}));
     await finishedCol('complete', ['Finished campaign', 'Finished later']);
     tasks.pop();

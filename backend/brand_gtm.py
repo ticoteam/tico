@@ -172,7 +172,7 @@ def _north_star_line(c, hidden=None):
     if owner in (hidden or ()) or (hidden is None and owner.startswith("bot:")):
         return []
     newest = K.latest(K.readings(c, row["id"], effective=True))
-    link = H._one(c, "SELECT target FROM goal_kpis WHERE kpi_id=? AND target IS NOT NULL ORDER BY updated DESC LIMIT 1",
+    link = H._one(c, "SELECT target FROM goal_kpis WHERE kpi_id=? AND target IS NOT NULL ORDER BY updated_at DESC LIMIT 1",
                   (row["id"],))
     line = f"North Star: {row['name']}"
     if newest:

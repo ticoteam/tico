@@ -125,7 +125,7 @@ def derived(live):
     attempt = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
     with live.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET team='engineering' WHERE bot='ops'")
-        c.execute("INSERT INTO attempt_captures(attempt_id,bot,provider,frames,truncated,dropped_bytes,bytes,created) "
+        c.execute("INSERT INTO attempt_captures(attempt_id,bot,provider,frames,truncated,dropped_bytes,bytes,created_at) "
                   "VALUES(?,?,?,?,0,0,2,?)", (attempt["id"], "ops", "synthetic", "[]", H.now()))
     return mid, attempt
 
@@ -235,7 +235,7 @@ def test_room_provenance_is_reused_only_within_its_read_snapshot(live, derived):
     with live.app.state.store.transaction() as c:
         c.execute("UPDATE conversations SET room_key=NULL WHERE id=?", (cid,))
         for n in range(30):
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created) "
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at) "
                       "VALUES(?,?,'bot:ops','keeper','say','Synthetic retained response','{}',?)",
                       (f"synthetic-room-response-{n}", cid, H.now()))
     statements = []
@@ -508,10 +508,10 @@ def test_shared_message_provenance_stays_bounded_and_permissions_stay_current(li
     mid, attempt = derived
     cid = attempt["message"]["conversation_id"]
     with live.app.state.store.transaction() as c:
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created) "
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at) "
                   "VALUES('shared-common',?,'bot:ops','keeper','say','Synthetic shared parent','{}',?)", (cid, H.now()))
         for n in range(100):
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created,in_reply_to) "
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at,in_reply_to) "
                       "VALUES(?,?,'bot:ops','keeper','say','Synthetic shared chain',?,?,?)",
                       (f"shared-chain-{n}", cid, encode({"answers": ["shared-common"]}),
                        H.now(), f"shared-chain-{n-1}" if n else None))
@@ -669,7 +669,7 @@ def test_ordinary_api_reads_do_not_scan_unrelated_keeper_history(api, monkeypatc
         return result
     before = measure()
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created) "
+        c.executemany("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at) "
                       "VALUES(?,?,'keeper','bot:finance','say','Synthetic unrelated notice','{}',?)",
                       ((f"synthetic-history-{n}", unrelated, H.now()) for n in range(2000)))
     after = measure()
@@ -698,7 +698,7 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
                 {"message_id": moved["id"], "to_attempt": "synthetic-later-run", "tasks": [], "live_meetings": []})
         cites = H.say(c, "bot:ops", "human:ana", "Synthetic run reply", conversation_id=root_room["id"],
                       refs={"turn_id": aid})
-        c.execute("INSERT OR REPLACE INTO turns(id,bot,started,finished,trigger,message_id) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO turns(id,bot,started_at,finished_at,trigger,message_id) VALUES(?,?,?,?,?,?)",
                   (aid, "ops", H.now(), H.now(), "message", root["id"]))
         # Finance may read Ops' runs, so only the meeting decides what it reads below.
         c.execute("UPDATE bot_config SET team='engineering' WHERE bot='finance'")

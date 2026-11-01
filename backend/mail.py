@@ -129,7 +129,7 @@ def mailbox_view(c, address, people, who, auth):
     bot = (person or {}).get("inbox_bot") or ""
     bot_row = H.bot(c, bot) if bot else None
     bot = bot if bot_row and bot_row["state"] != "archived" and auth.bot_access(c, who, bot)["read"] else ""
-    instructions = c.execute("SELECT updated,length(content) AS size FROM mail_agent_instructions "
+    instructions = c.execute("SELECT updated_at,length(content) AS size FROM mail_agent_instructions "
                              "WHERE bot=?", (bot,)).fetchone() if bot else None
     return {
         "address": address,
@@ -142,7 +142,7 @@ def mailbox_view(c, address, people, who, auth):
         "error": row["error"] if row else None,
         "agent_bot": bot or None,
         "agent_instructions": bool(instructions and instructions["size"]),
-        "agent_updated": instructions["updated"] if instructions and instructions["size"] else None,
+        "agent_updated": instructions["updated_at"] if instructions and instructions["size"] else None,
     }
 
 
@@ -168,12 +168,12 @@ def install_mail(app, store, auth):
             bot_row = H.bot(c, bot) if bot else None
             if not bot_row or bot_row["state"] == "archived" or not auth.bot_access(c, who, bot)["read"]:
                 raise Problem("not_found", "This mailbox has no visible agent", 404)
-            row = c.execute("SELECT content,updated FROM mail_agent_instructions WHERE bot=?",
+            row = c.execute("SELECT content,updated_at FROM mail_agent_instructions WHERE bot=?",
                             (bot,)).fetchone()
             if not row or not row["content"].strip():
                 raise Problem("not_found", "Agent instructions are not available yet", 404)
             return {"mailbox": addr, "bot": bot, "instructions": row["content"],
-                    "updated": row["updated"]}
+                    "updated_at": row["updated_at"]}
 
     @app.get("/api/v2/mail/messages")
     def messages(request: Request, mailbox: str = "", q: str = "", label: str = "",

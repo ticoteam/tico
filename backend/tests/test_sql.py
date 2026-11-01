@@ -257,7 +257,7 @@ def test_a_bot_reads_ordinary_tasks_but_only_its_granted_rooms_and_no_private_da
     with api.app.state.store.transaction() as c:
         for task, by in ((world["finance_task"], "bot:finance"), (world["private"], "bot:inbox")):
             wake = c.execute("SELECT id FROM messages WHERE conversation_id=?", (task["conversation_id"],)).fetchone()[0]
-            c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
                       (task["id"], "bot:ops", by, wake, H.shift(H.now(), hours=1)))
     assert column(api, "SELECT id FROM tasks", token) == sorted([world["coo_task"]["id"], world["finance_task"]["id"]])
     # Another person's private room stays out of reach even when named directly.
@@ -537,7 +537,7 @@ def test_attempt_time_index_upgrades_existing_history_without_changing_rows(api,
         assert [dict(row) for row in c.execute('SELECT * FROM attempts ORDER BY id')] == before
         assert [row[2] for row in c.execute('PRAGMA index_info(attempts_created)')] == ['created']
         assert c.execute('SELECT count(*) FROM cloud_migrations WHERE version=62').fetchone()[0] == 1
-        plan = c.execute("EXPLAIN QUERY PLAN SELECT count(*) FROM attempts WHERE created>=?", (H.now(),))
+        plan = c.execute("EXPLAIN QUERY PLAN SELECT count(*) FROM attempts WHERE created_at>=?", (H.now(),))
         assert any('attempts_created (created>?)' in row[3] for row in plan)
 
 
@@ -766,12 +766,12 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
             ('bot:finance', 'human:cara', 1), ('bot:inbox', 'human:ana', 0),
             ('human:ben', 'human:ana', 1), ('bot:ops', 'human:cara', 0),
         ]):
-            c.execute('INSERT INTO tasks(id,title,owner,requester,private,status,created,updated) VALUES(?,?,?,?,?,?,?,?)',
+            c.execute('INSERT INTO tasks(id,title,owner,requester,private,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
                       (f'tree-{i}', 'Synthetic tree', owner, requester, private, 'open', H.now(), H.now()))
         for child, parent in [(1, 0), (2, 1), (3, 0), (4, 2), (0, 4)]:
-            c.execute("INSERT INTO task_relations(from_task,to_task,kind,created,created_by) VALUES(?,?,'parent',?,?)",
+            c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at,created_by) VALUES(?,?,'parent',?,?)",
                       (f'tree-{child}', f'tree-{parent}', H.now(), 'human:ana'))
-        c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
                   ('tree-1', 'human:cara', 'human:ana', c.execute('SELECT id FROM messages LIMIT 1').fetchone()[0],
                    H.shift(H.now(), seconds=3600)))
     callers = [Identity('human:ana', 'owner'), Identity('human:ben', 'human'),
@@ -873,11 +873,11 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     with api.app.state.store.transaction() as c:
         assistant.ensure_schema(c)
         for n, (status, proposer) in enumerate([("done", "assistant"), ("cancelled", "assistant"), ("done", "bot:botops")]):
-            c.execute("INSERT INTO assistant_actions(id,owner,summary,method,path,body,status,created,proposer) "
+            c.execute("INSERT INTO assistant_actions(id,owner,summary,method,path,body,status,created_at,proposer) "
                       "VALUES(?,?,?,?,?,?,?,?,?)", (f"a{n}", "human:ana", "Pay Dana's invoice", "POST",
                                                     "/api/v2/tasks/xyz/close", '{"note":"secret"}', status, H.now(), proposer))
         # The same status across owners/routes/methods must remain one approved-grain bucket.
-        c.execute("INSERT INTO assistant_actions(id,owner,summary,method,path,body,status,created,proposer) "
+        c.execute("INSERT INTO assistant_actions(id,owner,summary,method,path,body,status,created_at,proposer) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", ("a3", "human:dana", "Private category", "DELETE",
                                                 "/api/v2/meetings/xyz", '{}', "done", H.now(), "assistant"))
         H.event(c, "bot:ops", "mcp.call", "hub_task_show", {"tool": "hub_task_show", "ms": 40})
@@ -988,7 +988,7 @@ def test_private_task_parties_are_built_once_per_clock_not_once_per_request(api)
     store, auth = api.app.state.store, api.app.state.auth
     who = Identity("human:ben", "human")
     with store.transaction() as c:
-        c.execute("INSERT INTO tasks(id,title,owner,requester,private,status,created,updated) "
+        c.execute("INSERT INTO tasks(id,title,owner,requester,private,status,created_at,updated_at) "
                   "VALUES('priv-share','Private','bot:ops','human:ana',1,'open',?,?)", (H.now(), H.now()))
     builds = []
     original = row_clock._rows
@@ -1026,7 +1026,7 @@ def test_a_person_read_checks_the_org_chart_table_once_not_once_per_private_task
 
     def add(count, start):
         with store.transaction() as c:
-            c.executemany("INSERT INTO tasks(id,title,owner,requester,private,status,created,updated) "
+            c.executemany("INSERT INTO tasks(id,title,owner,requester,private,status,created_at,updated_at) "
                           "VALUES(?,?,?,?,?,?,?,?)",
                           [(f"priv-{i}", "Private", "bot:ops", "human:ana", 1, "open", H.now(), H.now())
                            for i in range(start, start + count)])

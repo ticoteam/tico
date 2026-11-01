@@ -129,7 +129,7 @@ def test_withdrawn_and_expired_approvals_end_the_action(books):
         gone = _coder_asks(c, parent, "k-gone")
         H.approval_withdraw(c, gone.approval_id, "No decision in 14 days.")
         old = _coder_asks(c, parent, "k-old", 4_000)
-        c.execute("UPDATE approvals SET created='2026-09-01T00:00:00.000000Z' WHERE id=?", (old.approval_id,))
+        c.execute("UPDATE approvals SET created_at='2026-09-01T00:00:00.000000Z' WHERE id=?", (old.approval_id,))
         H.approval_withdraw(c, old.approval_id, "No decision in 14 days.")
         done = {r.action_id: r.status for r in FA.approvals_sweep(c, AT)}
         assert done == {gone.action_id: "withdrawn", old.action_id: "expired"}

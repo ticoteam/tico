@@ -47,7 +47,7 @@ def built(environment):
 
 def as_monitor(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   (health_monitor.SLUG, "hermes", "hash-hm", "2026-01-01T00:00:00Z", "human:test"))
     api.app.state.store.settings.test_identities["bot-hm"] = Identity("bot:" + health_monitor.SLUG, "bot", agent="hermes")
     return signed_in("bot-hm")
@@ -65,7 +65,7 @@ def scan_with(api, settings):
 
 def monitor_tasks(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT id,title,body FROM tasks WHERE owner=? ORDER BY created",
+        return [dict(r) for r in c.execute("SELECT id,title,body FROM tasks WHERE owner=? ORDER BY created_at",
                                            ("bot:" + health_monitor.SLUG,))]
 
 
@@ -144,7 +144,7 @@ def test_a_finding_wakes_it_once_is_filed_once_without_task_text_and_a_repeat_go
     (ticket,) = hq.tickets.values()
     assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (3 times)"]
     with api.app.state.store.transaction() as c:          # a day since its last wake no longer wakes it again
-        c.execute("UPDATE health_findings SET last_woke=? WHERE key=?", (H.shift(H.now(), hours=-25), key))
+        c.execute("UPDATE health_findings SET last_woke_at=? WHERE key=?", (H.shift(H.now(), hours=-25), key))
     runner_errors(api, runner, [])
     scan(api)
     runner_errors(api, runner, STREAM)
@@ -162,10 +162,10 @@ def test_a_finding_seen_again_counts_and_starts_no_run(environment):
     first = finding(api, key)
     assert first["occurrences"] == 1 and first["severity"] == "warn"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE health_findings SET last_seen=? WHERE key=?", (H.shift(H.now(), hours=-1), key))
+        c.execute("UPDATE health_findings SET last_seen_at=? WHERE key=?", (H.shift(H.now(), hours=-1), key))
     assert scan(api) == []                                                # still there an hour later
     again = finding(api, key)
-    assert again["occurrences"] == 2 and again["last_seen"] > H.shift(H.now(), minutes=-1)
+    assert again["occurrences"] == 2 and again["last_seen_at"] > H.shift(H.now(), minutes=-1)
     runner_errors(api, runner, [])
     scan(api)                                                             # gone, its task still open
     assert finding(api, key)["present"] == 0
@@ -178,7 +178,7 @@ def test_a_finding_seen_again_counts_and_starts_no_run(environment):
     assert note["body"].startswith("Seen again (3 times, last ") and json.loads(note["refs"])["quiet"]
     shown = api.get("/api/v2/health-monitor", headers=signed_in()).json()["findings"]
     assert [(f["key"], f["occurrences"], f["severity"]) for f in shown] == [(key, 3, "warn")]
-    assert shown[0]["last_seen"] == finding(api, key)["last_seen"]
+    assert shown[0]["last_seen_at"] == finding(api, key)["last_seen_at"]
 
 
 def test_a_finding_back_after_its_task_was_finished_counts_as_new(environment):
@@ -273,7 +273,7 @@ def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment,
     monkeypatch.setenv("TICO_VERSION", "0.4.45")
     api, runner = built(environment)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=? WHERE id=?", (H.now(), runner["runner_id"]))
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.now(), runner["runner_id"]))
         c.execute("INSERT INTO runner_versions(runner_id,release,reported) VALUES(?,?,?) ON CONFLICT(runner_id) "
                   "DO UPDATE SET release=excluded.release,update_state='',update_error=''",
                   (runner["runner_id"], release, H.now()))
@@ -384,11 +384,11 @@ def test_a_setup_finding_naming_a_bot_is_never_reported_to_hq(environment, hq):
     # A computer silent 15 minutes with a request queued for its bot.
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {SECRET_BOT: {"name": SECRET_BOT, "status": "active"}}, None)
-        c.execute("INSERT OR REPLACE INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')",
+        c.execute("INSERT OR REPLACE INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
                   (SECRET_BOT, runner["runner_id"], H.now()))
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created) VALUES('m-silent','human:ana',?,'chat','hi',?)",
+        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created_at) VALUES('m-silent','human:ana',?,'chat','hi',?)",
                   ("bot:" + SECRET_BOT, H.now()))
-        c.execute("UPDATE runners SET last_seen=? WHERE id=?", (H.shift(H.now(), minutes=-15), runner["runner_id"]))
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-15), runner["runner_id"]))
     found = scan(api)
     silent = "computer_silent:" + runner["runner_id"]
     assert "limited_no_fallback:" + SECRET_BOT in found and "push_stuck:" + runner["runner_id"] in found and silent in found
@@ -502,13 +502,13 @@ def turn(api, runner_id, result, minutes_ago, bot="coo", state=None):
     with api.app.state.store.transaction() as c:
         at = H.shift(H.now(), minutes=-minutes_ago)
         mid = "m-" + H.new_id()
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created) VALUES(?,'human:ana',?,'chat','hi',?)",
+        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created_at) VALUES(?,'human:ana',?,'chat','hi',?)",
                   (mid, "bot:" + bot, at))
-        c.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot,state,created) VALUES(?,?,?,'completed',?)",
+        c.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot,state,created_at) VALUES(?,?,?,'completed',?)",
                   ("j-" + mid, mid, bot, at))
         job = c.execute("SELECT id FROM jobs WHERE message_id=?", (mid,)).fetchone()["id"]
         aid = "a-" + mid
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,finished,"
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,finished_at,"
                   "result) VALUES(?,?,?,?,1,?,?,?,?,?,?)",
                   (aid, job, bot, runner_id, "hash-" + aid, state or result["outcome"], at, at, at, json.dumps(result)))
 
@@ -625,7 +625,7 @@ def test_a_used_up_login_under_the_gateway_choice_is_one_plain_finding(environme
     gateway_choice(api, monkeypatch, rid, isolated)
     limited(api, config={"runtime": "claude"})
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')",
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
                   (SECRET_BOT, rid, H.now()))
     for ago in (30, 20):
         turn(api, rid, {**QUOTA, "usage": {"runtime": "claude"}}, ago, bot=SECRET_BOT)

@@ -38,8 +38,8 @@ LIMITS = {"owner": (5000, 20.0), "human": (500, 5.0), "bot": (500, 5.0)}
 OPEN = {"cloud_migrations", "rate_limits", "service_health", "learnings", "sqlite_master"}
 # Table-valued functions SQLite reports like tables of the main schema.
 TABLE_FUNCTIONS = {"json_each", "json_tree"}
-SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_attempt",
-                                "slack_ts", "created", "updated"}}
+SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_attempt_at",
+                                "slack_ts", "created_at", "updated_at"}}
 # Columns nobody reads through SQL. Tables not named in `guarded` (credentials, credential_keys,
 # credential_grants, credential_uses, idempotency, runners, enrollments, session_epochs, bot_session_epochs, settings_changes,
 # backup_verified_blobs, _litestream_*, sqlite_* except sqlite_master) are denied outright.
@@ -87,7 +87,7 @@ DERIVED = {
     # turn row (one that failed or expired before it started) is counted too, as `unknown`, with no tokens or outcome;
     # one whose turn the caller may not read is not turnless, and is not counted.
     "run_weekly": (("turns", "attempts"), """
-        SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
+        SELECT date(started_at, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
                coalesce(purpose, 'unknown') AS purpose,
                count(*) AS runs,
                sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)) AS input_tokens,
@@ -103,17 +103,17 @@ DERIVED = {
                round(100.0 * sum(coalesce(outcome, '') = 'no_change') / count(*), 1) AS no_change_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
                round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
-        FROM (SELECT started, bot, trigger_kind, purpose, input_tokens, cached_tokens, output_tokens,
+        FROM (SELECT started_at, bot, trigger_kind, purpose, input_tokens, cached_tokens, output_tokens,
                      outcome, did_nothing, rotated
-              FROM {turns} WHERE started IS NOT NULL
+              FROM {turns} WHERE started_at IS NOT NULL
               UNION ALL
-              SELECT coalesce(a.started, a.created), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+              SELECT coalesce(a.started_at, a.created_at), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
               FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {all_turns} t WHERE t.id = a.id))
         GROUP BY 1, 2, 3, 4"""),
     # Runs per week, bot and wake rule (backend/rules.py): the rule that woke the run, with its tokens and how many did
     # nothing. A run from before rules, or whose message carried none, reads `unknown`. Same token sums as run_weekly.
     "rule_weekly": (("turns",), """
-        SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(rule_id, 'unknown') AS rule,
+        SELECT date(started_at, '-6 days', 'weekday 1') AS week, bot, coalesce(rule_id, 'unknown') AS rule,
                count(*) AS runs,
                sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)) AS input_tokens,
                sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
@@ -121,7 +121,7 @@ DERIVED = {
                sum(coalesce(outcome, '') = 'acted') AS acted,
                sum(coalesce(did_nothing, 0) = 1) AS did_nothing,
                round(100.0 * sum(coalesce(did_nothing, 0) = 1) / count(*), 1) AS did_nothing_pct
-        FROM {turns} WHERE started IS NOT NULL
+        FROM {turns} WHERE started_at IS NOT NULL
         GROUP BY 1, 2, 3"""),
 }
 # Totals over rows the reader may not read one by one, built only for the owner and a bot the owner granted them
@@ -133,7 +133,7 @@ GRANTED = {
     "assistant_action_weekly": (("assistant_actions",), """
         SELECT week, proposer, status, actions,
                round(100.0 * actions / sum(actions) OVER (PARTITION BY week, proposer), 1) AS share_pct
-        FROM (SELECT date(created, '-6 days', 'weekday 1') AS week,
+        FROM (SELECT date(created_at, '-6 days', 'weekday 1') AS week,
                      coalesce(proposer, proposed_via, 'assistant') AS proposer,
                      status, count(status) AS actions
               FROM {all_assistant_actions} GROUP BY 1, 2, 3)"""),
@@ -153,7 +153,7 @@ GRANTED = {
         GROUP BY 1, 2, 3"""),
 }
 # Base tables only a GRANTED view reads, and the columns it may see of them.
-GRANTED_SOURCES = {"assistant_actions": ("created", "proposer", "proposed_via", "status")}
+GRANTED_SOURCES = {"assistant_actions": ("created_at", "proposer", "proposed_via", "status")}
 # FTS5 reads these as main.<virtual>_* with no view context; they are not a public API.
 FTS_SHADOWS = ("_data", "_idx", "_content", "_docsize", "_config")
 STATEMENT = re.compile(r"^\s*(?:(?:--[^\n]*\n?|/\*.*?\*/)\s*)*(select|with|explain\s+query\s+plan)\b", re.I | re.S)

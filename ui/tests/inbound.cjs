@@ -38,7 +38,7 @@ const {unrouted} = require('./support/routes.cjs');
           }
           return json(result);
         }
-        if(p.endsWith('/inboxes'))return json({inboxes:[inbox],configured:true,last_sync:1800000000,error:'',gaps:[]});
+        if(p.endsWith('/inboxes'))return json({inboxes:[inbox],configured:true,last_synced_at:1800000000,error:'',gaps:[]});
         if(p.endsWith('/messages'))return json({messages:[{seq:1,message_id:'ses:test:ibx_a',inbox_id:'ibx_a',kind:'email',received_at:1800000000,from:'Login service',subject:'Sign in',preview,has_code:true}],next:null,cursor:1});
         if(p.endsWith('/code'))return json({code:'123456',untrusted:true});
         if(p.includes('/messages/'))return json({message_id:'ses:test:ibx_a',text:'Your code is 123456. '+evil,next_offset:null,untrusted:true});

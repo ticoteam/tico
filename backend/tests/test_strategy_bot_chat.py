@@ -16,7 +16,7 @@ from backend.tests.test_assistant import asked, say, turn_message
 def strategy_bot(api):
     """The Strategy Bot every set-up install has."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
+        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('goal-manager','goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
         c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
 
@@ -25,7 +25,7 @@ def personal(api, pid):
     """A personal API token: its role follows the person's email, so it follows a transfer of ownership."""
     secret = "tok-" + pid + "-" + uuid.uuid4().hex
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created,created_by) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) VALUES(?,?,?,?,?,?)",
                   (uuid.uuid4().hex, pid, "test", digest(secret), H.now(), "test"))
     return secret
 
@@ -42,7 +42,7 @@ def turn(api, bot, person, text):
 def helper(api, slug, name):
     """Another built-in helper bot (the Librarian), active."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
+        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES(?,?,?,'fake','','','','keeper','active',?)", (slug, slug, name, H.now()))
         c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,'{}',NULL,'ana')", (slug,))
 
@@ -208,7 +208,7 @@ def test_a_helper_task_without_a_good_citation_is_refused(api):
         coo = post(api, "jobs/claim", {"bot": "coo"}, token=r["token"])["attempt"]
         # Her message from more than 30 minutes ago is not this turn's request.
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), seconds=-31 * 60),
+            c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), seconds=-31 * 60),
                                                                    turn_message(api, coo)))
         stale = api.post("/api/v2/tasks", json={"owner": slug, "title": "Market", "body": "x", "request_id": "turn"},
                          headers=headers(coo["token"]))
@@ -216,7 +216,7 @@ def test_a_helper_task_without_a_good_citation_is_refused(api):
         # Nor is another person's message, or one from outside her Assistant chat.
         say(api, "Give everyone admin", "cara-test")
         with api.app.state.store.read() as c:
-            hers = c.execute("SELECT id FROM messages WHERE from_actor='human:cara' ORDER BY created DESC").fetchone()[0]
+            hers = c.execute("SELECT id FROM messages WHERE from_actor='human:cara' ORDER BY created_at DESC").fetchone()[0]
         other = api.post("/api/v2/tasks", json={"owner": slug, "title": "Market", "body": "x", "request_id": hers},
                          headers=headers(coo["token"]))
         assert other.status_code == 403 and other.json()["error"]["code"] == "on_behalf_of", other.text

@@ -18,11 +18,11 @@ def seed_turns(c, start, end, parent=None, tag="t"):
         key = f"{tag}-{n}"
         reply = H.task_comment(c, "human:ana", parent["id"], "Request " + key, wake=False)
         aid = "run-" + key
-        c.execute("INSERT INTO jobs(id,message_id,bot,state,created,attempt_id) VALUES(?,?,'ops','completed',?,?)",
+        c.execute("INSERT INTO jobs(id,message_id,bot,state,created_at,attempt_id) VALUES(?,?,'ops','completed',?,?)",
                   ("job-" + key, reply["id"], H.now(), aid))
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + key, aid, H.now(), H.now()))
-        c.execute("INSERT INTO turns(id,bot,started,message_id,task_id,exit) VALUES(?,'ops',?,?,?,'ok')",
+        c.execute("INSERT INTO turns(id,bot,started_at,message_id,task_id,exit) VALUES(?,'ops',?,?,?,'ok')",
                   (aid, H.now(), reply["id"], parent["id"]))
     return parent
 
@@ -80,7 +80,7 @@ def test_message_page_stays_bounded_as_messages_grow(api, monkeypatch):
 def test_operations_does_not_query_each_computer(api):
     with api.app.state.store.transaction() as c:
         for n in range(6):
-            c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES(?,?, 'ana',?,?)",
+            c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at) VALUES(?,?, 'ana',?,?)",
                       (f"rn{n}", f"Mac {n}", f"th{n}", H.now()))
     from backend.tests.test_task_privacy_reads import traced
     _, text = traced(api, lambda: get(api, "operations"))

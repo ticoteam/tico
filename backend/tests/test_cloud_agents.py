@@ -407,7 +407,7 @@ def test_a_request_left_by_a_dead_process_is_recovered_by_the_next_guarded_actio
         for seat_id, created in ((filing["id"], stale), (fresh["id"], H.now())):
             c.execute("UPDATE seats SET request_state=?,agent='devin',agent_name='Devin' WHERE id=?",
                       (lifecycle.FILING, seat_id))
-            c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created,made) "
+            c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created_at,made) "
                       "VALUES(?,?,?,?,?,?,?,?)", (uuid.uuid4().hex, "dead-process", "key-" + seat_id, "x", seat_id,
                                                  "filing", created, 0))
     assert ask(api, f"seats/{fresh['id']}/request-agent", {"agent": "copilot"}, expected=409)["error"]["code"] == "filing"
@@ -416,13 +416,13 @@ def test_a_request_left_by_a_dead_process_is_recovered_by_the_next_guarded_actio
     cancelling = ask(api, "seats", {"title": "Analyst"})
     ask(api, f"seats/{cancelling['id']}/request-agent", {"agent": "copilot"})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE seats SET request_state=?,updated=? WHERE id=?", (lifecycle.CANCELLING, stale, cancelling["id"]))
+        c.execute("UPDATE seats SET request_state=?,updated_at=? WHERE id=?", (lifecycle.CANCELLING, stale, cancelling["id"]))
     assert ask(api, f"seats/{cancelling['id']}/cancel-request", {})["request_state"] == "cancelled"
     # A cancel that recovers a stale filing is then refused (there is no request left to cancel), and the recovery holds.
     orphan = ask(api, "seats", {"title": "Writer"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE seats SET request_state=?,agent='devin',agent_name='Devin' WHERE id=?", (lifecycle.FILING, orphan["id"]))
-        c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created,made) "
+        c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created_at,made) "
                   "VALUES(?,?,?,?,?,?,?,?)", (uuid.uuid4().hex, "dead-process", "key-o", "x", orphan["id"], "filing", stale, 0))
     ask(api, f"seats/{orphan['id']}/cancel-request", {}, expected=404)
     with api.app.state.store.read() as c:
@@ -588,7 +588,7 @@ def test_a_request_a_stopped_process_left_filing_is_released_when_the_store_star
     task = api.get(f"/api/v2/seats/{seat['id']}/request", headers=signed_in()).json()["tasks"][0]
     with api.app.state.store.transaction() as c:           # the process stopped before Tico answered
         c.execute("UPDATE seats SET request_state=?,request_ticket='' WHERE id=?", (lifecycle.FILING, seat["id"]))
-        c.execute("UPDATE seat_requests SET state='filing',ticket_id='',created=? WHERE seat_id=?",
+        c.execute("UPDATE seat_requests SET state='filing',ticket_id='',created_at=? WHERE seat_id=?",
                   ("2000-01-01T00:00:00+00:00", seat["id"]))
     cloud_agents.release_abandoned(api.app.state.store)
     assert seats(api) == []
@@ -653,7 +653,7 @@ def plant_stale_filing(api, seat_id, actor="dead-process", key=None, request_has
     stale = H.shift(H.now(), seconds=-(lifecycle.FILING_STALE_SECONDS + 1))
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE seats SET request_state=?,agent='devin',agent_name='Devin' WHERE id=?", (lifecycle.FILING, seat_id))
-        c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created,made) "
+        c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created_at,made) "
                   "VALUES(?,?,?,?,?,?,?,?)", (uuid.uuid4().hex, actor, key or "key-" + seat_id, request_hash, seat_id,
                                              "filing", stale, made))
 

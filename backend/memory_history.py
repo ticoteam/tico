@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS bot_memory_updates(
  reported TEXT NOT NULL, PRIMARY KEY(bot, sha));
 CREATE INDEX IF NOT EXISTS bot_memory_updates_by_time ON bot_memory_updates(bot, committed);
 CREATE TABLE IF NOT EXISTS bot_memory_documents(
- bot TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(bot, path));
+ bot TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(bot, path));
 CREATE TABLE IF NOT EXISTS bot_memory_oversized(
  bot TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(bot, path));
 CREATE TABLE IF NOT EXISTS bot_memory_seen(
@@ -119,8 +119,8 @@ def record(c, who, bot, report):
         if len(content.encode("utf-8")) > MAX_DOCUMENT_BYTES:
             oversized.add(path)
         elif path not in oversized:
-            c.execute("INSERT INTO bot_memory_documents(bot,path,content,updated) VALUES(?,?,?,?) "
-                      "ON CONFLICT(bot,path) DO UPDATE SET content=excluded.content,updated=excluded.updated "
+            c.execute("INSERT INTO bot_memory_documents(bot,path,content,updated_at) VALUES(?,?,?,?) "
+                      "ON CONFLICT(bot,path) DO UPDATE SET content=excluded.content,updated_at=excluded.updated_at "
                       "WHERE bot_memory_documents.content<>excluded.content", (bot, path, content, now))
             c.execute("DELETE FROM bot_memory_oversized WHERE bot=? AND path=?", (bot, path))
     for path in oversized:
@@ -143,8 +143,8 @@ def documents(c, bot):
 
 
 def document_status(c, bot):
-    saved = {r["path"]: r["updated"] for r in
-             c.execute("SELECT path,updated FROM bot_memory_documents WHERE bot=?", (bot,))}
+    saved = {r["path"]: r["updated_at"] for r in
+             c.execute("SELECT path,updated_at FROM bot_memory_documents WHERE bot=?", (bot,))}
     oversized = {r["path"] for r in c.execute("SELECT path FROM bot_memory_oversized WHERE bot=?", (bot,))}
     return {path: {"oversized": path in oversized, "updated": saved.get(path, "")}
             for path in DOCUMENTS if path in saved or path in oversized}

@@ -119,10 +119,10 @@ def unknown_holder(c, aid):
     if not payload or not payload.get("position"):
         return False
     run = payload.get("holder_attempt")
-    row = c.execute("SELECT state,finished FROM attempts WHERE id=?", (run,)).fetchone() if isinstance(run, str) and run else None
+    row = c.execute("SELECT state,finished_at FROM attempts WHERE id=?", (run,)).fetchone() if isinstance(run, str) and run else None
     if row and row["state"] in ("leased", "running"):
         return False
-    return not row or not row["finished"] or row["finished"] < H.shift(H.now(), seconds=-HOLDER_GONE_S)
+    return not row or not row["finished_at"] or row["finished_at"] < H.shift(H.now(), seconds=-HOLDER_GONE_S)
 
 
 def paused(c, aid, state, result_json):

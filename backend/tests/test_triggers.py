@@ -26,7 +26,7 @@ def rule_row(api, params, event="webhook.received", by="human:ana", scope_kind="
         row = {"id": "rule-" + H.new_id(), "scope_kind": scope_kind, "scope_id": scope_id, "event": event,
                "condition": json.dumps(when or {}, sort_keys=True), "then_outcome": then,
                "params": json.dumps(params, sort_keys=True), "enabled": 1, "position": position, "note": "",
-               "created_by": by, "action_by": by, "created": H.now(), "updated": H.now(), "revision": 1}
+               "created_by": by, "action_by": by, "created_at": H.now(), "updated_at": H.now(), "revision": 1}
         c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
     return row
 
@@ -34,7 +34,7 @@ def rule_row(api, params, event="webhook.received", by="human:ana", scope_kind="
 def turns(api, name="New order"):
     """The tasks an automation's Bot turns opened: each is titled with its automation's name."""
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE title=? ORDER BY created, id", (name,))]
+        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE title=? ORDER BY created_at, id", (name,))]
 
 
 def test_a_delivery_runs_each_listening_automation_once_and_only_with_the_secret(api):

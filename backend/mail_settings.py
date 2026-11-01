@@ -24,7 +24,7 @@ from .store import H, Problem, readiness_document
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_mail_settings(
  bot TEXT PRIMARY KEY, outbound_send INTEGER NOT NULL DEFAULT 0, forward_to TEXT NOT NULL DEFAULT '[]',
- updated TEXT NOT NULL, updated_by TEXT NOT NULL);
+ updated_at TEXT NOT NULL, updated_by TEXT NOT NULL);
 """
 ADDRESS = re.compile(r"^[^\s@<>\",;()\[\]\\]{1,64}@[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?\.[a-z]{2,24}$")
 MAX_TARGETS = 20
@@ -38,7 +38,7 @@ def _stored(row):
     if not row:
         return None
     return {"outbound_send": bool(row["outbound_send"]), "forward_to": json.loads(row["forward_to"] or "[]"),
-            "updated": row["updated"], "updated_by": row["updated_by"]}
+            "updated_at": row["updated_at"], "updated_by": row["updated_by"]}
 
 
 def _addresses(values):
@@ -80,7 +80,7 @@ def view(c, bot):
     return {"bot": bot, "set": setting is not None,
             "outbound_send": bool(setting and setting["outbound_send"]),
             "forward_to": (setting or {}).get("forward_to") or [],
-            "updated": (setting or {}).get("updated"), "updated_by": (setting or {}).get("updated_by"),
+            "updated_at": (setting or {}).get("updated_at"), "updated_by": (setting or {}).get("updated_by"),
             "requested": request, "unapproved": unapproved(setting, request)}
 
 
@@ -114,9 +114,9 @@ def update(c, auth, who, bot, body):
         raise Problem("forward_to", "Not an email address: " + ", ".join(bad[:3]), 422)
     if len(targets) > MAX_TARGETS:
         raise Problem("forward_to", f"At most {MAX_TARGETS} forward addresses", 422)
-    c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to,updated,updated_by) VALUES(?,?,?,?,?) "
+    c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to,updated_at,updated_by) VALUES(?,?,?,?,?) "
               "ON CONFLICT(bot) DO UPDATE SET outbound_send=excluded.outbound_send, "
-              "forward_to=excluded.forward_to, updated=excluded.updated, updated_by=excluded.updated_by",
+              "forward_to=excluded.forward_to, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
               (bot, int(bool(on)), json.dumps(targets), H.now(), who.actor))
     H.event(c, who.actor, "bot.mail_settings", bot, {"outbound_send": bool(on), "forward_to": targets})
     return view(c, bot)

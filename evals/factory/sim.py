@@ -194,7 +194,7 @@ class Run:
         queued = self.queued_now(w, pool)
         candidates = sorted(set(queued.values()) | set(started_bots))
         ready, blocked = self.readiness(w, candidates, started_bots)
-        mark = {"at": w.now(), "free": free, "held": held, "started": started, "fallback": fallback,
+        mark = {"at": w.now(), "free": free, "held": held, "started_at": started, "fallback": fallback,
                 "queued": len(candidates), "slugs": candidates, "ready": ready, "blocked": blocked}
         if free and ready and started < min(free, len(ready)) and self.short_rounds < SHORT_ROUNDS:
             self.short_rounds += 1
@@ -378,7 +378,7 @@ class Run:
             step = w.board.step(t["step"])
             if not step or not step.assign or str(t["owner"]).startswith("bot:") or t["status"] in B.FINISHED:
                 continue
-            if (w.now() - w.H.parse_ts(t["created"])).total_seconds() < 30 * 60:
+            if (w.now() - w.H.parse_ts(t["created_at"])).total_seconds() < 30 * 60:
                 continue
             pool = [b for b in team.all if b.role == step.assign and w.slots(b.slug) < b.slots]
             if not pool:
@@ -465,10 +465,10 @@ class Run:
             out.append(f"limit {win['bot']} since {win['since']} until {win['until']} ({win['source']}, "
                        f"streak {win['streak']})")
         for job in sorted(self.probe_seen):
-            for row in w.sql("SELECT id,state,created,started,finished,lease_until FROM attempts "
-                             "WHERE job_id=? ORDER BY created", (job,)):
-                out.append(f"probe {job[:6]} attempt {row['id'][:6]} {row['state']} created {row['created']} "
-                           f"started {row['started']} finished {row['finished']} "
+            for row in w.sql("SELECT id,state,created_at,started_at,finished_at,lease_until FROM attempts "
+                             "WHERE job_id=? ORDER BY created_at", (job,)):
+                out.append(f"probe {job[:6]} attempt {row['id'][:6]} {row['state']} created {row['created_at']} "
+                           f"started {row['started_at']} finished {row['finished_at']} "
                            f"lease {row['lease_until']}")
         return out
 
@@ -493,7 +493,7 @@ class Run:
 
     def lead_time(self):
         """Median hours from a ticket's creation to its merge."""
-        hours = sorted((when - self.w.H.parse_ts(t["created"])).total_seconds() / 3600
+        hours = sorted((when - self.w.H.parse_ts(t["created_at"])).total_seconds() / 3600
                        for t in self.final for tid, when in self.merged_at.items() if tid == t["id"])
         return round(hours[len(hours) // 2], 1) if hours else None
 

@@ -93,7 +93,7 @@ def test_runs_held_after_a_limit_resume_together_oldest_first_once_it_resets(api
     # A second request on the same task, held in the same turn (the runner folded it in).
     post(api, f"tasks/{task['id']}/comments", {"text": "Also check the tests."})
     with api.app.state.store.transaction() as c:
-        second = c.execute("SELECT id FROM jobs WHERE bot='ops' AND state='queued' ORDER BY created DESC").fetchone()[0]
+        second = c.execute("SELECT id FROM jobs WHERE bot='ops' AND state='queued' ORDER BY created_at DESC").fetchone()[0]
         c.execute("UPDATE jobs SET state='uncertain',attempt_id=? WHERE id=?", (first["id"], second))
     # Before the reset the limit names, nothing is resumed, and BotOps is not asked to review a run that did nothing.
     at(monkeypatch, "2026-10-21T20:30:00.000000Z", api)
@@ -152,7 +152,7 @@ def test_a_hop_that_used_an_approval_is_left_for_a_person(api, monkeypatch):
     first = claim(api, machine)
     with api.app.state.store.transaction() as c:
         message = c.execute("SELECT message_id FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0]
-        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
                   (H.new_id(), "spend", message, "bot:ops", H.now(), H.now()))
     hop_fails(api, machine, first)
     assert job_state(api, first["job_id"]) == "uncertain"
@@ -168,8 +168,8 @@ def test_a_run_held_after_a_limit_resumes_when_the_bot_moves_to_another_model(ap
     held_the_old_way(api, machine, first)
     at(monkeypatch, "2026-10-21T20:30:00.000000Z", api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created,"
-                  "updated,applied_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created_at,"
+                  "updated_at,applied_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (H.new_id(), "ops", "model", "{}", "human:ana", 0, "applied", H.now(), H.now(), H.now()))
     assert [d["state"] for d in sweep(api)] == ["queued"]
     with api.app.state.store.read() as c:

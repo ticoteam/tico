@@ -46,8 +46,8 @@ def load_state(c, who):
 
 
 def save_state(c, who, state):
-    c.execute("INSERT INTO preferences(actor,key,value,updated) VALUES(?,?,?,?) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+    c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) "
+              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
               (who.actor, PREFERENCE, encode(state), H.now()))
 
 
@@ -70,7 +70,7 @@ def change_state(c, who, body):
 def _online_runners(c):
     since = H.shift(H.now(), seconds=-ONLINE_SECONDS)
     return c.execute("SELECT id,label,readiness FROM runners WHERE revoked_at IS NULL "
-                     "AND last_seen>? ORDER BY last_seen DESC", (since,)).fetchall()
+                     "AND last_seen_at>? ORDER BY last_seen_at DESC", (since,)).fetchall()
 
 
 _wanted_runtimes = providers.wanted_runtimes
@@ -144,7 +144,7 @@ def checklist(c, who, settings, github):
     botops = H.bot(c, BOTOPS)
     mine = own_bots(c, settings)
     building = c.execute("SELECT id FROM tasks WHERE owner=? AND title LIKE 'Build a bot:%' "
-                         "AND status NOT IN ('done','closed','declined') ORDER BY created DESC LIMIT 1",
+                         "AND status NOT IN ('done','closed','declined') ORDER BY created_at DESC LIMIT 1",
                          ("bot:" + BOTOPS,)).fetchone()
     installed = bool(github and github["installation_id"])
     waiting = _next_bot(c, settings)

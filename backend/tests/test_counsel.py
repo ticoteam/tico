@@ -959,13 +959,13 @@ def test_the_cli_refuses_an_outward_command_for_counsel_only(monkeypatch):
 def test_a_from_matches_a_credential_by_whole_words_only(api):
     org(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO credentials(id,name,kind,created,updated,updated_by) "
+        c.execute("INSERT INTO credentials(id,name,kind,created_at,updated_at,updated_by) "
                   "VALUES('cred-metabase','Metabase','token','2026-10-30','2026-10-30','ana')")
-        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) "
+        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) "
                   "VALUES('grant-metabase','cred-metabase','bot:ops','ana','2026-10-30')")
-        c.execute("INSERT INTO credentials(id,name,kind,created,updated,updated_by) "
+        c.execute("INSERT INTO credentials(id,name,kind,created_at,updated_at,updated_by) "
                   "VALUES('cred-meta-ads','Meta Ads','token','2026-10-30','2026-10-30','ana')")
-        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) "
+        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) "
                   "VALUES('grant-meta-ads','cred-meta-ads','bot:finance','ana','2026-10-30')")
     with api.app.state.store.read() as c:
         assert counsel.suggested_who(c, "Meta")["bots"] == ["finance"]

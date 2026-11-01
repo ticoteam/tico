@@ -30,8 +30,8 @@ def wanted(config):
 
 
 def sweep(c):
-    c.execute("DELETE FROM attempt_captures WHERE created<?", (H.shift(H.now(), days=-KEEP_DAYS),))
-    c.execute("DELETE FROM attempt_capture_drops WHERE created<?", (H.shift(H.now(), days=-KEEP_DAYS),))
+    c.execute("DELETE FROM attempt_captures WHERE created_at<?", (H.shift(H.now(), days=-KEEP_DAYS),))
+    c.execute("DELETE FROM attempt_capture_drops WHERE created_at<?", (H.shift(H.now(), days=-KEEP_DAYS),))
 
 
 def forget_bot(c, bot):
@@ -54,7 +54,7 @@ def scrub_value(c, value, label, attempt_id="", conversation_id=""):
     # A run not yet settled hands its stream in later, holding the value: marked (no secret kept), it is not stored.
     # That includes a lapsed lease (`expired`), which the runner's next call restores before it uploads.
     for aid in ids:
-        c.execute("INSERT OR IGNORE INTO attempt_capture_drops(attempt_id,created) SELECT id,? FROM attempts "
+        c.execute("INSERT OR IGNORE INTO attempt_capture_drops(attempt_id,created_at) SELECT id,? FROM attempts "
                   "WHERE id=?", (H.now(), aid))
     for aid in ids:
         # A reason can quote the model error that contained the removed value too.
@@ -94,10 +94,10 @@ def keep(c, row, body):
         c.execute("DELETE FROM attempt_captures WHERE attempt_id=?", (row["id"],))
         return {"kept": False, "reason": "this run's reply was held by an org rule"}
     frames = mask(body.frames)
-    c.execute("INSERT INTO attempt_captures(attempt_id,bot,provider,frames,truncated,dropped_bytes,bytes,created) "
+    c.execute("INSERT INTO attempt_captures(attempt_id,bot,provider,frames,truncated,dropped_bytes,bytes,created_at) "
               "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(attempt_id) DO UPDATE SET provider=excluded.provider,"
               "frames=excluded.frames,truncated=excluded.truncated,dropped_bytes=excluded.dropped_bytes,"
-              "bytes=excluded.bytes,created=excluded.created",
+              "bytes=excluded.bytes,created_at=excluded.created_at",
               (row["id"], row["bot"], body.provider, frames, int(body.truncated), body.dropped_bytes,
                len(frames.encode()), H.now()))
     return {"kept": True, "bytes": len(frames.encode()), "truncated": body.truncated}
@@ -143,7 +143,7 @@ def export(c, who, auth, aid, full=True):
     if hides_run(c, attempt):
         # Its reply is not checked yet, or was held (backend/org_rule_check.py): the stream and events would show it.
         raise Problem("not_found", "This run's stream is held back until its reply is checked", 404)
-    cap = c.execute("SELECT * FROM attempt_captures WHERE attempt_id=? AND created>=?",
+    cap = c.execute("SELECT * FROM attempt_captures WHERE attempt_id=? AND created_at>=?",
                     (aid, H.shift(H.now(), days=-KEEP_DAYS))).fetchone()
     from . import run_diagnostics
     diagnostic = c.execute("SELECT stderr_tail,stderr_at FROM attempt_diagnostics WHERE attempt_id=? AND stderr_at>=?",
@@ -153,12 +153,12 @@ def export(c, who, auth, aid, full=True):
         raise Problem("not_found", "No stream or stderr was captured for this run, or it is over a week old", 404)
     stream_captured = bool(cap)
     cap = dict(cap) if cap else {"provider": "runner", "frames": "", "bytes": 0, "truncated": False,
-                                "dropped_bytes": 0, "created": diagnostic['stderr_at']}
+                                "dropped_bytes": 0, "created_at": diagnostic['stderr_at']}
     diagnostics = run_diagnostics.metadata(c, aid)
     if not full:
         return {"run": {"id": aid, "bot": attempt["bot"], "state": runs.state(attempt["state"])}, "provider": cap["provider"],
                 "bytes": cap["bytes"], "stderr_bytes": len((stderr or "").encode()), "stream_captured": stream_captured,
-                **diagnostics, "truncated": bool(cap["truncated"]), "captured": cap["created"],
+                **diagnostics, "truncated": bool(cap["truncated"]), "captured": cap["created_at"],
                 "fixture": f"hub run export {aid} --fixture"}
     # A deleted message's text is not served again; the stream may still hold it until the week is out.
     message = ({"kind": msg["kind"], "from": msg["from_actor"], "body": mask(msg["body"] or "")} if msg
@@ -170,14 +170,14 @@ def export(c, who, auth, aid, full=True):
                                  "LIMIT ?", (aid, MAX_EVENTS + 1))]
     result = json.loads(attempt["result"]) if attempt["result"] else {}
     return {
-        "run": {"id": aid, "bot": attempt["bot"], "state": runs.state(attempt["state"]), "created": attempt["created"],
-                "started": attempt["started"], "finished": attempt["finished"], **diagnostics},
+        "run": {"id": aid, "bot": attempt["bot"], "state": runs.state(attempt["state"]), "created_at": attempt["created_at"],
+                "started_at": attempt["started_at"], "finished_at": attempt["finished_at"], **diagnostics},
         "provider": cap["provider"],
         "stream_captured": stream_captured,
         "stderr_tail": stderr or "",
         "truncated": bool(cap["truncated"]),
         "dropped_bytes": cap["dropped_bytes"],
-        "captured": cap["created"],
+        "captured": cap["created_at"],
         "input": {"message": message,
                   "config": {k: declared.get(k) for k in ("runtime", "harness", "model", "reasoning_effort")
                              if declared.get(k) is not None}},

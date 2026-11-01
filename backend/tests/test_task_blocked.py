@@ -273,7 +273,7 @@ def test_worktree_hold_moved_to_general_resumes_once_after_linking_pushes(api, w
     with api.app.state.store.transaction() as c:
         branch = f"tico/{task['id'][:8]}-offsite-plan"
         tree = H.new_id()
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,repo,branch,detail) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,repo,branch,detail) "
                   "VALUES(?,?,'worktree',?,'present',?,?,'Acme/product',?,?)",
                   (tree, task['id'], 'worktree:' + tree, task['owner'], H.now(), branch,
                    json.dumps({'pushed': 'd' * 40, 'expected_head': 'b' * 40})))
@@ -409,7 +409,7 @@ def test_fresh_ci_refusal_cannot_be_cleared_by_older_cached_green(api):
         task_blocked.reconcile(c, task['id'])
         assert H.task(c, task['id'])['blocked_since']
         assert c.execute('SELECT count(*) FROM events').fetchone()[0] == event_count, 'probing never records another refusal'
-        c.execute('UPDATE task_links SET updated=?,detail=? WHERE id=?', (
+        c.execute('UPDATE task_links SET updated_at=?,detail=? WHERE id=?', (
             H.shift(H.now(), seconds=1), json.dumps({'head_sha': HEAD, 'checks': {'python': 'passing'}}), pr['id']))
         task_blocked.reconcile(c, task['id'])
         assert H.task(c, task['id'])['step_id'] == task['step_id']

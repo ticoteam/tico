@@ -6,11 +6,11 @@
    loaded in the order index.html lists them. */
 'use strict';
 
-const machineOnline = machine => !machine.revoked_at && !!machine.last_seen && (SETTINGS_PRESENCE.at || Date.now()) - new Date(machine.last_seen) < 60000;
+const machineOnline = machine => !machine.revoked_at && !!machine.last_seen_at && (SETTINGS_PRESENCE.at || Date.now()) - new Date(machine.last_seen_at) < 60000;
 const machinePresenceStale = () => SETTINGS_PRESENCE.checking || SETTINGS_PRESENCE.failed
   || !!SETTINGS_PRESENCE.at && Date.now() - SETTINGS_PRESENCE.at > SETTINGS_PRESENCE.interval;
 const machinePresenceWords = machine => machine.revoked_at ? 'revoked'
-  : `${machineOnline(machine) ? 'online' : `offline${machine.last_seen ? ` · last seen ${ago(machine.last_seen)}` : ''}`}${machinePresenceStale() ? ' · checking…' : ''}`;
+  : `${machineOnline(machine) ? 'online' : `offline${machine.last_seen_at ? ` · last seen ${ago(machine.last_seen_at)}` : ''}`}${machinePresenceStale() ? ' · checking…' : ''}`;
 // A presence paint can change the focused row too; restore its control by stable data attributes,
 // keeping positional selectors only for the unkeyed containers between them.
 function computerFocusRestore(root, active = document.activeElement) {

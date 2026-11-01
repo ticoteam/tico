@@ -296,7 +296,7 @@ def test_an_open_bet_task_from_an_earlier_trip_holds_the_trip_until_it_closes(ap
         c.execute("UPDATE tasks SET status='done' WHERE title='Bet 1: may be wrong'")
     log(api, kpi["id"], 15)
     with api.app.state.store.read() as c:
-        tasks = H._rows(c.execute("SELECT status FROM tasks WHERE title='Bet 1: may be wrong' ORDER BY created"))
+        tasks = H._rows(c.execute("SELECT status FROM tasks WHERE title='Bet 1: may be wrong' ORDER BY created_at"))
         assert [t["status"] for t in tasks][-1] != "done" and len(tasks) == 2
         assert c.execute("SELECT count(*) FROM strategy_events WHERE kind=?", (S.TRIPPED,)).fetchone()[0] == 1
 
@@ -343,7 +343,7 @@ def test_the_old_company_vision_moves_into_the_first_draft(api):
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM strategy_versions")
         c.execute("DELETE FROM strategy_events")
-        c.execute("INSERT INTO company_profile (id, vision, description, updated, updated_by) "
+        c.execute("INSERT INTO company_profile (id, vision, description, updated_at, updated_by) "
                   "VALUES ('company','Acme for every landlord.','Bots that run rentals.',?, 'human:ana')", (H.now(),))
         S.ensure(c)
     assert draft(api)["vision"] == "Acme for every landlord."

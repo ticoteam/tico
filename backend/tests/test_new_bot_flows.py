@@ -35,7 +35,7 @@ def bot_token(api, bot_id):
     """A test token that acts as the bot (an external agent's identity), as bot:<id>."""
     from backend.auth import Identity
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   (bot_id, "test", "x-" + bot_id, H.now(), "human:ana"))
     token = "bot-" + bot_id + "-test"
     api.app.state.auth.settings.test_identities[token] = Identity(H.bot_actor(bot_id), "bot", agent="test")

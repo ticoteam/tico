@@ -240,7 +240,7 @@ def test_five_days_of_failing_turn_an_endpoint_off_but_thirteen_hours_after_a_qu
         with api.app.state.store.transaction() as c:
             c.execute("DELETE FROM webhook_attempts")
             c.execute("UPDATE webhooks SET failing_since=? WHERE id=?", (since, hook_["id"]))
-            c.execute("UPDATE webhook_sends SET state='failed', next_attempt=? WHERE id=?", (since, send["id"]))
+            c.execute("UPDATE webhook_sends SET state='failed', next_attempt_at=? WHERE id=?", (since, send["id"]))
             c.execute("INSERT INTO webhook_attempts(send_id,webhook_id,n,at,timestamp_sent,status,ms) VALUES(?,?,1,?,0,500,0)",
                       (send["id"], hook_["id"], last))
             return W.auto_disable(c)
@@ -331,7 +331,7 @@ def test_recovering_a_relayed_call_keeps_the_gateways_delivery_id_so_its_retry_i
     aid = listener(api, "shop")
     post(api, "triggers/shop/signing", {"preset": "stripe", "secret": "t" * 20})
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) VALUES(?,?,?,?,?)",
                   ("hr_0123456789abcdef", "shop", "https://api.tico.dev/v1/hooks/hr_0123456789abcdef", "human:ana", H.now()))
     relay = hook_relay.HookRelay(api.app.state.store, api.app.state.store.settings, SimpleNamespace(state=api.app.state),
                                  api.app.state.auth)

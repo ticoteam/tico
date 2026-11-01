@@ -90,7 +90,7 @@ def sampled(c, rid):
     def at(seq):
         # The first event at or after `seq`: an old run's text pieces are swept (store.sweep_deltas), leaving gaps.
         if seq not in times:
-            row = c.execute("SELECT created FROM attempt_events WHERE attempt_id=? AND seq>=? ORDER BY seq LIMIT 1",
+            row = c.execute("SELECT created_at FROM attempt_events WHERE attempt_id=? AND seq>=? ORDER BY seq LIMIT 1",
                             (rid, seq)).fetchone()
             times[seq] = H.parse_ts(row[0]) if row else None
         return times[seq]
@@ -124,10 +124,10 @@ class Counter:
             known = dict(self.done)
         out, keep, wanted = {}, {}, {}
         for row in rows:
-            start, end = H.parse_ts(row["started"]), H.parse_ts(row["finished"]) if row["finished"] else None
+            start, end = H.parse_ts(row["started_at"]), H.parse_ts(row["finished_at"]) if row["finished_at"] else None
             if start is None:
                 continue
-            key = (row["started"], row["finished"])
+            key = (row["started_at"], row["finished_at"])
             held = known.get(row["id"])
             if end is not None and held and held[0] == key:
                 out[row["id"]], keep[row["id"]] = held[1], held
@@ -155,13 +155,13 @@ class Counter:
         for _ in range(WEEKS - 1):
             earliest = week_start(earliest - timedelta(days=1))
         lo = min(earliest, now - timedelta(days=7))
-        first = c.execute("SELECT MIN(started) FROM turns WHERE started IS NOT NULL").fetchone()[0]
+        first = c.execute("SELECT MIN(started_at) FROM turns WHERE started_at IS NOT NULL").fetchone()[0]
         people = len(P.visible_people(views.roster(c)))
         human = people * HOURS_PER_PERSON
         # Runs finished inside the window or still going, by the `turns_finished` index: a run that started weeks
         # before the window still counts for the time it worked inside it.
-        rows = c.execute("SELECT id, started, finished FROM turns WHERE finished > ? AND started < ? "
-                         "UNION ALL SELECT id, started, finished FROM turns WHERE finished IS NULL AND started < ?",
+        rows = c.execute("SELECT id, started_at, finished_at FROM turns WHERE finished_at > ? AND started_at < ? "
+                         "UNION ALL SELECT id, started_at, finished_at FROM turns WHERE finished_at IS NULL AND started_at < ?",
                          (stamp(lo), stamp(now), stamp(now))).fetchall()
         spans = [s for run in self.spans(c, rows, now).values() for s in run]
         week_from = max(earliest, week_start(H.parse_ts(first))) if first else None

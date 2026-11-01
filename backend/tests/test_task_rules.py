@@ -108,8 +108,8 @@ def test_activity_and_all_holds_protect_done_tasks(api, monkeypatch):
         if label in ('question', 'approval'):
             with api.app.state.store.transaction() as c:
                 old = R.SR._stamp(AT - timedelta(hours=25))
-                c.execute('UPDATE tasks SET updated=? WHERE id=?', (old, t['id']))
-                c.execute('UPDATE messages SET created=? WHERE conversation_id=?', (old, t['conversation_id']))
+                c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (old, t['id']))
+                c.execute('UPDATE messages SET created_at=? WHERE conversation_id=?', (old, t['conversation_id']))
     eligible = done(api, monkeypatch, 'Eligible export')
     assert not run(api)
     assert task(api, eligible['id'])['status'] == 'closed'
@@ -124,7 +124,7 @@ def test_cap_off_and_failure_receipt_are_durable(api, monkeypatch):
     put(api, 'task-rules/' + R.DEFAULT, {'on': False})
     with api.app.state.store.transaction() as c:
         c.execute("DROP INDEX tasks_rule_done_due")
-        c.execute("CREATE INDEX tasks_rule_due ON tasks(status,updated,id)")
+        c.execute("CREATE INDEX tasks_rule_due ON tasks(status,updated_at,id)")
     api.app.state.store.initialize()  # Upgrade the index without resetting the saved switch.
     with api.app.state.store.read() as c:
         indexes = {r[1] for r in c.execute("PRAGMA index_list(tasks)")}
@@ -180,15 +180,15 @@ def test_history_and_scoped_message_activity_with_old_task_timestamps(api, monke
         # A step-only history touch and imported message metadata must protect without tasks.updated.
         c.execute("INSERT INTO task_events(id,task_id,ts,actor,field,old,new,note) "
                   "VALUES(?,?,?,'human:ana','step','before','after','')", (H.new_id(), history['id'], recent))
-        for t, field in zip(scoped, ('created', 'edited_at', 'deleted_at')):
-            times = {'created': old, 'edited_at': None, 'deleted_at': None, field: recent}
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created,edited_at,deleted_at) "
+        for t, field in zip(scoped, ('created_at', 'edited_at', 'deleted_at')):
+            times = {'created_at': old, 'edited_at': None, 'deleted_at': None, field: recent}
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at,edited_at,deleted_at) "
                       "VALUES(?,?,'human:ana','human:ana','say','Fixture',?,?,?,?)",
-                      (H.new_id(), shared, json.dumps({'task': t['id']}), times['created'], times['edited_at'], times['deleted_at']))
+                      (H.new_id(), shared, json.dumps({'task': t['id']}), times['created_at'], times['edited_at'], times['deleted_at']))
         # None of the message fixtures gets a recent history row; all task timestamps stay aged.
         for t in [history, *scoped, unrelated]:
             row = dict(c.execute('SELECT * FROM tasks WHERE id=?', (t['id'],)).fetchone())
-            assert all(not row.get(k) or row[k] <= old for k in ('created', 'updated', 'done_at', 'checkpoint_at'))
+            assert all(not row.get(k) or row[k] <= old for k in ('created_at', 'updated_at', 'done_at', 'checkpoint_at'))
         for t in [*scoped, unrelated]:
             assert c.execute('SELECT max(ts) FROM task_events WHERE task_id=?', (t['id'],)).fetchone()[0] <= old
     assert not run(api)
@@ -201,8 +201,8 @@ def test_close_budget_is_shared_by_two_due_rules(api, monkeypatch):
     put(api, 'task-rules/' + R.DEFAULT, {'triggers': [{'key': 'done_untouched', 'hours': 48}]})
     second = post(api, 'task-rules', {'department': 'engineering', 'name': 'Close after one day'})['job']
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_rules SET created='2020-01-01T00:00:00.000000Z' WHERE id=?", (R.DEFAULT,))
-        c.execute("UPDATE task_rules SET created='2020-01-02T00:00:00.000000Z' WHERE id=?", (second['key'],))
+        c.execute("UPDATE task_rules SET created_at='2020-01-01T00:00:00.000000Z' WHERE id=?", (R.DEFAULT,))
+        c.execute("UPDATE task_rules SET created_at='2020-01-02T00:00:00.000000Z' WHERE id=?", (second['key'],))
     older = [done(api, monkeypatch, f'Older export {n}', hours=49) for n in range(20)]
     younger = [done(api, monkeypatch, f'Younger export {n}', hours=25) for n in range(31)]
     assert not run(api)

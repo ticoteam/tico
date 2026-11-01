@@ -30,10 +30,10 @@ def stamp_builds(c):
         # transaction that has already read, so a write statement, even one matching nothing, fails at once with
         # "database is locked" if another connection committed meanwhile: write only when a build needs it.
         unstamped = ("FROM tasks WHERE type_id=? AND status='doing' AND building_started_at IS NULL "
-                     "AND building_seconds=0 AND created LIKE '____-__-__T%'")
+                     "AND building_seconds=0 AND created_at LIKE '____-__-__T%'")
         if c.execute("SELECT 1 " + unstamped + " LIMIT 1", (typ[0],)).fetchone():
             c.execute("UPDATE tasks SET building_started_at=coalesce((SELECT max(ts) FROM task_events e WHERE "
-                      "e.task_id=tasks.id AND e.field='step' AND e.new=tasks.step_id),created) "
+                      "e.task_id=tasks.id AND e.field='step' AND e.new=tasks.step_id),created_at) "
                       "WHERE id IN (SELECT id " + unstamped + ")", (typ[0],))
 
 
@@ -193,7 +193,7 @@ def hold(c, task_id, reason, kind='dependency'):
         if (kind == 'gate' and row.get('blocked_kind') != 'manual'
                 or kind == 'check' and row.get('blocked_kind') in ('dependency', 'stranded', 'check')
                 and (row.get('blocked_kind'), row.get('blocked_reason')) != (kind, reason)):
-            c.execute('UPDATE tasks SET blocked_kind=?,blocked_reason=?,updated=? WHERE id=?', (kind, reason, H.now(), task_id))
+            c.execute('UPDATE tasks SET blocked_kind=?,blocked_reason=?,updated_at=? WHERE id=?', (kind, reason, H.now(), task_id))
             bump(c, row)
         return
     H._set_status(c, H.KEEPER, row, 'waiting', note=reason)
@@ -229,7 +229,7 @@ def reconciliation(c, row, snapshots=None):
                 seen = detail.get('at') or ''
             else:
                 detail = H._json(pr.get('detail'), {}) or {}
-                seen = pr.get('updated') or ''
+                seen = pr.get('updated_at') or ''
             if ((gate.get('kind') == 'ci' or detail.get('head_sha') != gate.get('head'))
                     and seen <= gate.get('at', '')):
                 return None
@@ -248,7 +248,7 @@ def reconcile(c, task_id, snapshots=None):
     action = reconciliation(c, row, snapshots)
     if action == 'dependency':
         from . import task_holds
-        c.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=?,updated=? WHERE id=?",
+        c.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=?,updated_at=? WHERE id=?",
                   (task_holds.words(c, task_holds.holds(c, row))[:1000], H.now(), task_id))
         bump(c, row)
     if action != 'resume':

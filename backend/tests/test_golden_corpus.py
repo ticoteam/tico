@@ -65,7 +65,7 @@ def _cases():
 
 
 def _librarian(c):
-    c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
+    c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
               "VALUES('librarian','librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
     c.execute("INSERT OR IGNORE INTO bot_config(bot,config,operator) VALUES('librarian','{}','ana')")
 

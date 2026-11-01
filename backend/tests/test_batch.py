@@ -135,7 +135,7 @@ def test_what_a_person_asked_for_leads_unless_a_bots_item_presses(api):
     overdue = post(api, "tasks", {"title": "Renew the domain", "body": "Lapsed", "owner": "human:ana",
                                   "due": H.shift(H.now(), days=-1)}, token=finance["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE approvals SET created=? WHERE id=?", (H.shift(H.now(), days=-2), approval["id"]))
+        c.execute("UPDATE approvals SET created_at=? WHERE id=?", (H.shift(H.now(), days=-2), approval["id"]))
     order = [i["id"] for i in get(api, "needs-you")["items"]]
     # Anything with a due date leads, then a pressing item.
     assert order[:2] == [overdue["id"], approval["id"]] and order.index(overdue["id"]) < order.index(chore["id"])

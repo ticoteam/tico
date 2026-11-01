@@ -32,18 +32,18 @@ def snapshot(meta, transcript='', notes='', conn=None, readable=None):
     ts = H.now()
     conn.execute('''INSERT INTO meetings
         (id,title,owner,recorded_by,uploaded_by,metadata,transcript_original,
-         transcript_readable,notes,content_hash,created,updated,review_state)
+         transcript_readable,notes,content_hash,created_at,updated_at,review_state)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET title=excluded.title, owner=excluded.owner,
         recorded_by=excluded.recorded_by, uploaded_by=excluded.uploaded_by,
         metadata=excluded.metadata, transcript_original=excluded.transcript_original,
         transcript_readable=excluded.transcript_readable, notes=excluded.notes,
-        content_hash=excluded.content_hash, updated=excluded.updated, review_state=excluded.review_state''',
+        content_hash=excluded.content_hash, updated_at=excluded.updated_at, review_state=excluded.review_state''',
         (rid, meta.get('title') or 'Meeting', meta.get('owner') or '', recorded, uploaded,
-         metadata, transcript, readable, notes, digest, old['created'] if old else ts, ts, meta['review_state']))
+         metadata, transcript, readable, notes, digest, old['created_at'] if old else ts, ts, meta['review_state']))
     if transcript or notes:
         conn.execute('''INSERT OR IGNORE INTO meeting_versions
-          (meeting_id,content_hash,metadata,transcript_original,transcript_readable,notes,created)
+          (meeting_id,content_hash,metadata,transcript_original,transcript_readable,notes,created_at)
           VALUES (?,?,?,?,?,?,?)''', (rid,digest,metadata,transcript,readable,notes,ts))
     return rid
 
@@ -178,5 +178,5 @@ def retire_capture(c):
         meta.update(status='done', ended=meta.get('ended') or H.now(), error=None,
                     warning=None if row['transcript_original'] else 'Tico no longer records; this meeting has no transcript')
         c.execute('UPDATE meetings SET metadata=? WHERE id=?', (json.dumps(meta, sort_keys=True), row['id']))
-    c.execute("UPDATE service_jobs SET state='cancelled',updated=? "
+    c.execute("UPDATE service_jobs SET state='cancelled',updated_at=? "
               "WHERE kind='recording.process' AND state IN ('queued','running')", (H.now(),))

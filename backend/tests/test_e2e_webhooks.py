@@ -62,7 +62,7 @@ def receiver():
 
 def messages_to(api, actor):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT body, refs FROM messages WHERE to_actor=? ORDER BY created", (actor,))]
+        return [dict(r) for r in c.execute("SELECT body, refs FROM messages WHERE to_actor=? ORDER BY created_at", (actor,))]
 
 
 @pytest.mark.slow

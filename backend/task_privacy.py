@@ -418,7 +418,7 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
         clauses.append("rowid<?")
         args.append(anchor["rowid"])
     if since:
-        clauses.append("created>?")
+        clauses.append("created_at>?")
         args.append(since)
     if task_id:
         # Only the messages that could be about the task are read (backend/message_links.py); each is still
@@ -1413,8 +1413,8 @@ def event_readable(c, actor, event):
             return False
     # Tool/audit events from a private execution often have no explicit task ref.
     if H.is_bot(event.get("actor")):
-        for row in c.execute("SELECT id FROM attempts WHERE bot=? AND created<=? "
-                             "AND coalesce(finished,?)>=?", (H.actor_id(event["actor"]),
+        for row in c.execute("SELECT id FROM attempts WHERE bot=? AND created_at<=? "
+                             "AND coalesce(finished_at,?)>=?", (H.actor_id(event["actor"]),
                                                             event["ts"], H.now(), event["ts"])):
             if not meetings.attempt_readable(actor, row[0]):
                 return False

@@ -17,9 +17,9 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_rules(
  id TEXT PRIMARY KEY, name TEXT NOT NULL, department TEXT NOT NULL,
  triggers TEXT NOT NULL, actions TEXT NOT NULL, enabled INTEGER NOT NULL,
- preset TEXT NOT NULL, at TEXT, created_by TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL);
+ preset TEXT NOT NULL, at TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 DROP INDEX IF EXISTS tasks_rule_due;
-CREATE INDEX IF NOT EXISTS tasks_rule_done_due ON tasks(updated,id) WHERE status='done' AND closed_at IS NULL;
+CREATE INDEX IF NOT EXISTS tasks_rule_done_due ON tasks(updated_at,id) WHERE status='done' AND closed_at IS NULL;
 INSERT OR IGNORE INTO task_rules VALUES(
  'task-rule-close-after-done','Close 24h after done','engineering',
  '[{"key":"done_untouched","hours":24}]','["close"]',1,'15m',NULL,'keeper',
@@ -106,9 +106,9 @@ def save(c, settings, auth, who, body, key=None):
     key, now = key or "task-rule-" + H.new_id(), H.now()
     c.execute("INSERT INTO task_rules VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
               "name=excluded.name,department=excluded.department,triggers=excluded.triggers,"
-              "actions=excluded.actions,enabled=excluded.enabled,preset=excluded.preset,at=excluded.at,updated=excluded.updated",
+              "actions=excluded.actions,enabled=excluded.enabled,preset=excluded.preset,at=excluded.at,updated_at=excluded.updated_at",
               (key, name, department, encode(triggers), encode(actions), int(on), preset, at,
-               before["created_by"] if before else who.actor, before["created"] if before else now, now))
+               before["created_by"] if before else who.actor, before["created_at"] if before else now, now))
     H.event(c, who.actor, "task_rule.updated" if before else "task_rule.created", key,
             {"before": before, "after": get(c, key)})
     return row(c, settings, get(c, key), who, auth)
@@ -127,10 +127,10 @@ def row(c, settings, rule, who=None, auth=None, now=None, last=None):
     when = [TRIGGERS[t["key"]][0](t) for t in triggers]
     then = [ACTIONS[a][0] for a in actions]
     if last is None:
-        found = c.execute("SELECT * FROM system_runs WHERE job=? ORDER BY started DESC LIMIT 1", (rule["id"],)).fetchone()
+        found = c.execute("SELECT * FROM system_runs WHERE job=? ORDER BY started_at DESC LIMIT 1", (rule["id"],)).fetchone()
         last = dict(found) if found else None
     cfg = config(rule)
-    following = SR.next_due(cfg, H.parse_ts(last["started"]) if last else None, now) if cfg["on"] else None
+    following = SR.next_due(cfg, H.parse_ts(last["started_at"]) if last else None, now) if cfg["on"] else None
     return {"key": rule["id"], "kind": "task_rule", "name": rule["name"],
             "what": "Closes eligible done tasks across the company. Reopen a task to undo.",
             "when": when, "then": then, "department": {"id": department, "name": chart.get(department, department), "in_chart": department in chart},
@@ -139,13 +139,13 @@ def row(c, settings, rule, who=None, auth=None, now=None, last=None):
             "switch": True, "on": cfg["on"], "preset": cfg["preset"], "at": cfg["at"], "owner_only": False,
             "presets": [{"key": p, "label": SR.PRESETS[p][0].format(at="a time")} for p in SR.EVERY_PRESET],
             "can_change": can_change(c, settings, auth, who, department),
-            "last": {k: bool(last[k]) if k == "ok" else last[k] for k in ("started", "finished", "ok", "result", "runs")} if last else None,
+            "last": {k: bool(last[k]) if k == "ok" else last[k] for k in ("started_at", "finished_at", "ok", "result", "runs")} if last else None,
             "next": SR._stamp(following) if following else None,
             "search": " ".join([rule["name"], *when, *then, chart.get(department, department), "done close tasks"]).lower()}
 
 
 def listing(c, settings, who=None, auth=None, now=None):
-    return [row(c, settings, dict(r), who, auth, now) for r in c.execute("SELECT * FROM task_rules ORDER BY created,id")]
+    return [row(c, settings, dict(r), who, auth, now) for r in c.execute("SELECT * FROM task_rules ORDER BY created_at,id")]
 
 
 HISTORY_ACTIVITY_SQL = "NOT (actor='keeper' AND field='github')"
@@ -155,10 +155,10 @@ MESSAGE_ACTIVITY_SQL = "m.from_actor<>'keeper'"
 def untouched(c, task, hours, now):
     # Task timestamps cover ordinary edits/comments. History also fences step-only changes and
     # scoped messages in shared conversations; unrelated chat must not restart a task's wait.
-    times = [task.get(k) for k in ("created", "updated", "done_at", "checkpoint_at")]
+    times = [task.get(k) for k in ("created_at", "updated_at", "done_at", "checkpoint_at")]
     # Observed GitHub facts have history, but viewing them and keeper notices are not work on the task.
     times += [r[0] for r in c.execute(f"SELECT max(ts) FROM task_events WHERE task_id=? AND {HISTORY_ACTIVITY_SQL}", (task["id"],))]
-    message = c.execute("SELECT max(max(m.created,coalesce(m.edited_at,m.created),coalesce(m.deleted_at,m.created))) "
+    message = c.execute("SELECT max(max(m.created_at,coalesce(m.edited_at,m.created_at),coalesce(m.deleted_at,m.created_at))) "
                         "FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
                         f"WHERE m.conversation_id=? AND {H.MESSAGE_TASK_SQL}=? AND {MESSAGE_ACTIVITY_SQL}",
                         (task["conversation_id"], task["id"])).fetchone()[0]
@@ -197,7 +197,7 @@ ACTIONS = {"close": ("close it", close)}
 # The partial index covers only finished tasks, so it cannot displace the active-task reminder index.
 DUE_SQL = (
     "SELECT t.* FROM tasks t WHERE t.status='done' AND t.closed_at IS NULL "
-    "AND t.updated<=? AND coalesce(t.done_at,t.updated)<=? AND coalesce(t.checkpoint_at,t.updated)<=? "
+    "AND t.updated_at<=? AND coalesce(t.done_at,t.updated_at)<=? AND coalesce(t.checkpoint_at,t.updated_at)<=? "
     "AND t.waiting_on IS NULL AND t.snoozed_until IS NULL "
     "AND NOT EXISTS (SELECT 1 FROM task_tags tt JOIN tags g ON g.id=tt.tag_id "
     "WHERE tt.task_id=t.id AND lower(g.key) IN ('pin','pinned')) "
@@ -207,15 +207,15 @@ DUE_SQL = (
     "AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
     f"WHERE m.conversation_id=t.conversation_id AND {H.MESSAGE_TASK_SQL}=t.id "
     f"AND ((m.kind='ask' AND {H.OPEN_ASK_SQL}) OR ({MESSAGE_ACTIVITY_SQL} AND "
-    "max(m.created,coalesce(m.edited_at,m.created),coalesce(m.deleted_at,m.created))>?))) "
-    "ORDER BY t.updated,t.id LIMIT ?")
+    "max(m.created_at,coalesce(m.edited_at,m.created_at),coalesce(m.deleted_at,m.created_at))>?))) "
+    "ORDER BY t.updated_at,t.id LIMIT ?")
 
 
 def tick(store, now, failures):
     remaining = CLOSE_LIMIT
     try:
         with store.read() as c:
-            keys = [r[0] for r in c.execute("SELECT id FROM task_rules WHERE enabled=1 ORDER BY created,id")]
+            keys = [r[0] for r in c.execute("SELECT id FROM task_rules WHERE enabled=1 ORDER BY created_at,id")]
     except Exception as exc:
         failures.append({"task_rules": type(exc).__name__})
         return
@@ -226,7 +226,7 @@ def tick(store, now, failures):
             # transaction. Turning off cannot race a later batch or a stale list of candidates.
             with store.transaction() as c:
                 rule = get(c, key)
-                last = c.execute("SELECT max(started) FROM system_runs WHERE job=?", (key,)).fetchone()[0]
+                last = c.execute("SELECT max(started_at) FROM system_runs WHERE job=?", (key,)).fetchone()[0]
                 if not rule["enabled"] or not SR.due(config(rule), now, H.parse_ts(last)):
                     continue
                 triggers, actions = json.loads(rule["triggers"]), json.loads(rule["actions"])

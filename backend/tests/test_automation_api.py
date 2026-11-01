@@ -48,9 +48,9 @@ def as_bot(api, slug):
         found = H.resolve_bot(c, slug)
         bot_id = found["id"] if found else slug
         if not found:
-            c.execute("INSERT INTO bots(id,slug,display_name,runtime,created) VALUES(?,?,?,'fake',?)",
+            c.execute("INSERT INTO bots(id,slug,display_name,runtime,created_at) VALUES(?,?,?,'fake',?)",
                       (bot_id, slug, slug, H.now()))
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   (bot_id, "test", "x-" + bot_id, H.now(), "human:ana"))
     api.app.state.auth.settings.test_identities[slug + "-test"] = Identity(H.bot_actor(bot_id), "bot", agent="test")
     return slug + "-test"
@@ -184,10 +184,10 @@ def test_what_wakes_bots_is_the_hubs_read_only_builtin_the_top_may_only_pause(ap
 def test_run_now_runs_the_flow_and_records_each_step(api):
     aid = make(api, steps=[NOTE_STEP, {"id": "off", "type": "action", "enabled": False, "do": "note", "args": {}}])["id"]
     run = post(api, f"automations/{aid}/run", {"input": {"task": {"title": "Sample"}}})["run"]
-    assert run["status"] == "ok" and run["version"] == 1 and run["finished"]
+    assert run["status"] == "ok" and run["version"] == 1 and run["finished_at"]
     assert [(s["id"], s["status"]) for s in run["steps"]] == [("tell", "ok"), ("off", "skipped")]
     with api.app.state.store.read() as c:
-        woke = c.execute("SELECT body, refs FROM messages WHERE to_actor='bot:ops' ORDER BY created DESC").fetchone()
+        woke = c.execute("SELECT body, refs FROM messages WHERE to_actor='bot:ops' ORDER BY created_at DESC").fetchone()
     assert woke["body"] == "Look" and json.loads(woke["refs"])["automation"] == aid
     runs = get(api, f"automations/{aid}/runs")
     assert runs["runs"][0]["id"] == run["id"] and runs["daily"][0]["runs"] == 1 and runs["next"] is None

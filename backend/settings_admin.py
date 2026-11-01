@@ -153,7 +153,7 @@ class SettingsAdmin:
 
     def _switch_setter(self, c, manager):
         """Who last set the manager bot's "manages its reports" switch, or None: the default, nobody set it."""
-        row = c.execute("SELECT actor FROM settings_changes WHERE bot=? AND field=? ORDER BY created DESC LIMIT 1",
+        row = c.execute("SELECT actor FROM settings_changes WHERE bot=? AND field=? ORDER BY created_at DESC LIMIT 1",
                         (manager, report_managers.KEY)).fetchone()
         return row["actor"] if row else None
 
@@ -496,13 +496,13 @@ class SettingsAdmin:
                 config.update(self.template_repo_defaults(body.template))
         team = self._team(c, bot_id, config)
         now = H.now()
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
+        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES(?,?,?,?,?,?,'','keeper',?,?)",
                   (bot_id, body.slug, body.display_name, runtime_of(harness) or choice["runtime"],
                    choice["id"], effort, body.status, now))
         c.execute(
             "INSERT INTO bot_config(bot,config,team,operator,owner_ids,description,reports_to,"
-            "repo,thread_mode,definition_updated,definition_updated_by,bot_owners,created_by) "
+            "repo,thread_mode,definition_updated_at,definition_updated_by,bot_owners,created_by) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (bot_id, encode(config), team, operator, encode(owners), body.description,
              body.reports_to, repo, body.thread_mode, now, who.actor, encode([pid]), who.actor))
@@ -830,7 +830,7 @@ class SettingsAdmin:
             H.event(c, who.actor, "bot.resume", bot, {"via": "definition"})
         c.execute(
             "UPDATE bot_config SET config=?,description=?,reports_to=?,repo=?,thread_mode=?,"
-            "definition_updated=?,definition_updated_by=?,revision=revision+1 WHERE bot=?",
+            "definition_updated_at=?,definition_updated_by=?,revision=revision+1 WHERE bot=?",
             (encode(declared), values["description"], values.get("reports_to"), values["repo"],
              values["thread_mode"], H.now(), who.actor, bot))
         entries = self._entries(c)
@@ -914,7 +914,7 @@ class SettingsAdmin:
             return None
         change_id = H.new_id()
         # `via` says who really made the change for `actor`: BotOps, on their request, or the Assistant.
-        c.execute("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created,via) "
+        c.execute("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,via) "
                   "VALUES(?,?,?,?,?,?,?,?,?)",
                   (change_id, bot, field, encode(before), encode(after), actor, transition_id, H.now(),
                    H.VIA.get() or None))
@@ -941,13 +941,13 @@ class SettingsAdmin:
                 raise Problem("runner_not_ready", can["problem"], 409, extra={"fix": can["fix"], "link": can["link"]})
             return {"model": choice["id"], "runtime": runtime_name, "harness": harness,
                     "effort": effort}
-        runner = c.execute("SELECT id,label,operator,revoked_at,last_seen,readiness FROM runners WHERE id=?",
+        runner = c.execute("SELECT id,label,operator,revoked_at,last_seen_at,readiness FROM runners WHERE id=?",
                            (body.runner_id,)).fetchone()
         if not runner or runner["revoked_at"]:
             raise Problem("not_found", "Computer is not registered", 404)
         if who.role != "owner" and runner["operator"] != H.actor_id(who.actor):
             raise Problem("forbidden", "Bot administrators may use only their own registered computers", 403)
-        if not runner["last_seen"] or runner["last_seen"] <= H.shift(H.now(), seconds=-60):
+        if not runner["last_seen_at"] or runner["last_seen_at"] <= H.shift(H.now(), seconds=-60):
             raise Problem("runner_not_ready", "The destination computer is offline", 409)
         # A runner reports only on bots already assigned to it, so a bot's first placement has
         # nothing to be ready yet: assigning it is what makes the runner set its repository up.
@@ -1019,14 +1019,14 @@ class SettingsAdmin:
 
         transition_id, now = H.new_id(), H.now()
         c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,"
-                  "expected_generation,state,undo_change_id,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                  "expected_generation,state,undo_change_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                   (transition_id, bot, body.kind, encode(target), who.actor, body.expected_revision,
                    body.expected_generation, "preparing", undo_change_id, now, now))
 
         # The change applies at once. The bot's session is the bot's runtime's business: the
         # hub asks for no checkpoint turn and rebuilds nothing; a bot that wants what was said
         # before reads it with `hub conversation show`.
-        c.execute("UPDATE bot_transitions SET state='prepared',updated=? WHERE id=?", (H.now(), transition_id))
+        c.execute("UPDATE bot_transitions SET state='prepared',updated_at=? WHERE id=?", (H.now(), transition_id))
         self._apply(c, who, c.execute("SELECT * FROM bot_transitions WHERE id=?", (transition_id,)).fetchone())
         return self.get(c, who, transition_id)
 
@@ -1086,7 +1086,7 @@ class SettingsAdmin:
                           (who.actor, H.now(), transition["undo_change_id"]))
             now = H.now()
             c.execute("UPDATE bot_transitions SET state='applied',error=NULL,without_checkpoint=?,"
-                      "updated=?,applied_at=? WHERE id=?",
+                      "updated_at=?,applied_at=? WHERE id=?",
                       (int(without_checkpoint), now, now, transition["id"]))
             H.event(c, who.actor, "bot.transition_applied", bot,
                     {"transition": transition["id"], "kind": transition["kind"],
@@ -1153,7 +1153,7 @@ class SettingsAdmin:
                   "(SELECT message_id FROM bot_transition_checkpoints WHERE transition_id=?) AND state='queued'", (transition_id,))
         c.execute("UPDATE bot_transition_checkpoints SET state='cancelled' WHERE transition_id=? AND state='queued'",
                   (transition_id,))
-        c.execute("UPDATE bot_transitions SET state='cancelled',updated=? WHERE id=?", (H.now(), transition_id))
+        c.execute("UPDATE bot_transitions SET state='cancelled',updated_at=? WHERE id=?", (H.now(), transition_id))
         H.event(c, who.actor, "bot.transition_cancelled", transition["bot"], {"transition": transition_id})
         return self.get(c, who, transition_id)
 
@@ -1186,7 +1186,7 @@ class SettingsAdmin:
         transitions, cut, used = [], False, 0
         if owner and not before:
             ids = c.execute("SELECT id FROM bot_transitions" + (" WHERE bot=?" if bot else "")
-                            + " ORDER BY created DESC LIMIT ?", ([bot] if bot else []) + [limit + 1]).fetchall()
+                            + " ORDER BY created_at DESC LIMIT ?", ([bot] if bot else []) + [limit + 1]).fetchall()
             transitions = [self.get(c, who, row[0]) for row in ids[:limit]]
             actor_names.annotate(c, transitions)
             # The first change keeps its room, so a page that has transitions still takes a change.
@@ -1250,11 +1250,11 @@ class SettingsAdmin:
                 where.append("bot=?")
                 args.append(slug)
             if before:
-                where.append("(created,id) < (SELECT created,id FROM settings_changes WHERE id=?)")
+                where.append("(created_at,id) < (SELECT created_at,id FROM settings_changes WHERE id=?)")
                 args.append(before)
             sql = "SELECT * FROM settings_changes" + (" WHERE " + " AND ".join(where) if where else "")
-            rows += c.execute(sql + " ORDER BY created DESC, id DESC LIMIT ?", (*args, limit + 1)).fetchall()
-        return sorted(rows, key=lambda row: (row["created"], row["id"]), reverse=True)[:limit + 1]
+            rows += c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, limit + 1)).fetchall()
+        return sorted(rows, key=lambda row: (row["created_at"], row["id"]), reverse=True)[:limit + 1]
 
     def _history_bots(self, c, who, bot):
         """The bots whose settings changes the caller may see, as a list that may be empty: the one named, else every
@@ -1685,7 +1685,7 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
     declared.pop("branch_previous_status", None)
     declared["status"] = "archived"
     c.execute("UPDATE bots SET state='archived' WHERE id=?", (bot,))
-    c.execute("UPDATE bot_config SET config=?,revision=revision+1,definition_updated=?,"
+    c.execute("UPDATE bot_config SET config=?,revision=revision+1,definition_updated_at=?,"
               "definition_updated_by=? WHERE bot=?", (encode(declared), ts, actor, bot))
     c.execute("DELETE FROM assignments WHERE bot=?", (bot,))
     c.execute("UPDATE jobs SET state='canceled' WHERE bot=? AND state='queued'", (bot,))
@@ -1723,7 +1723,7 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
         for task in c.execute(f"SELECT id FROM tasks WHERE {field}=? AND status IN ({marks})",
                               ("bot:" + bot, *H.ACTIVE_STATUSES)).fetchall():
             H._task_event(c, task["id"], actor, field, "bot:" + bot, heir, "Its bot was removed")
-            c.execute(f"UPDATE tasks SET {field}=?,updated=?,version=version+1 WHERE id=?",
+            c.execute(f"UPDATE tasks SET {field}=?,updated_at=?,version=version+1 WHERE id=?",
                       (heir, ts, task["id"]))
     H._recount(c, "bot:" + bot)
     H._recount(c, heir)
@@ -1765,5 +1765,5 @@ def _set_parent(c, actor, bot, parent, ts):
     from .report_order import arrive
     arrive(c, "bot:" + bot, parent)
     c.execute("UPDATE bot_config SET reports_to=?,config=?,revision=revision+1,"
-              "definition_updated=?,definition_updated_by=? WHERE bot=?",
+              "definition_updated_at=?,definition_updated_by=? WHERE bot=?",
               (parent, encode(declared), ts, actor, bot))

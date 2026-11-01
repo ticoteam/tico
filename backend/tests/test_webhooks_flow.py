@@ -54,7 +54,7 @@ def test_a_call_through_the_gateway_relay_runs_the_same_rule(api):
     wake_rule(api, trigger="shop")
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM jobs")
-        c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) VALUES(?,?,?,?,?)",
                   ("hr_0123456789abcdef", "shop", "https://api.tico.dev/v1/hooks/hr_0123456789abcdef", "human:ana",
                    H.now()))
     relay = hook_relay.HookRelay(api.app.state.store, api.app.state.store.settings,
@@ -116,7 +116,7 @@ def test_a_signed_call_through_the_gateway_relay_is_checked_accepted_and_judged_
     wake_rule(api, trigger="shop")
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM jobs")
-        c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) VALUES(?,?,?,?,?)",
                   ("hr_0123456789abcdef", "shop", "https://api.tico.dev/v1/hooks/hr_0123456789abcdef", "human:ana", H.now()))
     relay = hook_relay.HookRelay(api.app.state.store, api.app.state.store.settings, SimpleNamespace(state=api.app.state),
                                  api.app.state.auth)

@@ -18,7 +18,7 @@ def receipt(api, task, head=HEAD):
 
 def usage(c, task_id, bot, model="claude-sonnet-5-5", provider="anthropic"):
     turn = H.new_id()
-    c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES(?,?,?,?,?)",
+    c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES(?,?,?,?,?)",
               (turn, bot, H.now(), H.now(), task_id))
     c.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,output_tokens,model,provider,runtime,"
               "harness,effort) VALUES(?,0,20,20,?,?,? ,?,'high')",
@@ -57,7 +57,7 @@ def check(api, task, title="Review 1: PR #412", owner="bot:cmo"):
 def verdict(api, row, value, head=HEAD):
     with api.app.state.store.transaction() as c:
         H.task_update(c, row["owner"], row["id"], status="done", note="Reviewed.", verdict=value, verdict_head=head)
-        turn = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started DESC,id DESC LIMIT 1",
+        turn = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1",
                          (row["id"],)).fetchone()
         if turn:
             V.after_capture(c, row["id"], head, turn["id"])
@@ -540,7 +540,7 @@ def _github(api, monkeypatch, suites, runs, statuses=()):
     from backend import github as G
     service = api.app.state.github_app
     with service.store.transaction() as c:
-        c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated) VALUES(?,1,1,?,?)",
+        c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated_at) VALUES(?,1,1,?,?)",
                   ("ticoteam/tico", "human:ana", H.now()))
     monkeypatch.setattr(service, "row", lambda c=None: {"slug": "test-app", "org": "ticoteam"})
     monkeypatch.setattr(service, "mint", lambda *args, **kw: ("test-token", "later"))
@@ -568,7 +568,7 @@ def _suite_row(id, slug, status, conclusion=None, runs=0, minutes_ago=60):
 def _quiet(api, task, minutes=20):
     """No word from GitHub on the link for `minutes`."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET updated=? WHERE task_id=? AND kind='pr'", (H.shift(H.now(), minutes=-minutes),
+        c.execute("UPDATE task_links SET updated_at=? WHERE task_id=? AND kind='pr'", (H.shift(H.now(), minutes=-minutes),
                                                                                    task["id"]))
 
 

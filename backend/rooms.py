@@ -145,7 +145,7 @@ def room_bot(conversation):
 def personal_room(c, human_actor, bot="coo", subject="Private control room"):
     row = c.execute(
         "SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=? "
-        "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created) DESC LIMIT 1",
+        "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created_at) DESC LIMIT 1",
         (human_actor, bot)).fetchone()
     if row:
         return H.conversation(c, row["id"])
@@ -172,7 +172,7 @@ def sync_shared_room(c, auth, bot, actor=None, create=False):
     participants = ["bot:" + bot] + ["human:" + pid for pid in sorted(members)]
     row = c.execute(
         "SELECT id,participants FROM conversations WHERE scope='shared' AND room_key=? "
-        "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created) DESC LIMIT 1", (bot,)).fetchone()
+        "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created_at) DESC LIMIT 1", (bot,)).fetchone()
     if row:
         if json.loads(row["participants"] or "[]") != participants:
             c.execute("UPDATE conversations SET participants=? WHERE id=?", (encode(participants), row["id"]))
@@ -260,7 +260,7 @@ def task_conversation_id(c, auth, owner, requester):
 def archive_personal_room(c, actor, bot="coo"):
     row = c.execute(
         "SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=? "
-        "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created) DESC LIMIT 1",
+        "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created_at) DESC LIMIT 1",
         (actor, bot)).fetchone()
     if not row:
         return None

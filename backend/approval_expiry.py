@@ -25,8 +25,8 @@ def sweep(conn, at=None):
     stale, ended = [], []
     marks = ",".join("?" * len(ENDED))
     for row in H._rows(conn.execute(
-            "SELECT a.id, a.created, t.status FROM approvals a LEFT JOIN tasks t ON t.id=a.task_id "
-            f"WHERE a.decision IS NULL AND (a.created<? OR t.status IN ({marks})) ORDER BY a.created",
+            "SELECT a.id, a.created_at, t.status FROM approvals a LEFT JOIN tasks t ON t.id=a.task_id "
+            f"WHERE a.decision IS NULL AND (a.created_at<? OR t.status IN ({marks})) ORDER BY a.created_at",
             (cutoff, *ENDED))):
         with isolated(conn, "approval_expiry", row["id"]):
             if row["status"] in ENDED:

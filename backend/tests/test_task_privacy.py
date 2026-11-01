@@ -17,7 +17,7 @@ def test_private_two_party_matrix(api, requester, owner):
                             [{'name': 'Open', 'status': 'open'}], bots='work')
         task = H.task_create(c, requester, 'Review the sensitive packet', 'Sensitive packet.', owner,
                              private=True, type=typ['id'], lint=False)
-        c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) '
+        c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) '
                   'VALUES(?,?,?,?,?)', (task['id'], 'bot:cmo', requester, None, H.shift(H.now(), hours=24)))
     # Ana is the chart's root above cpo even when she is not a task party.
     readers = {requester, owner, 'human:ana'}
@@ -147,7 +147,7 @@ def test_private_dependency_and_refusal_audit_never_copy_sensitive_content(api):
     public = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review release timing', 'body': 'Review it.'})
     post(api, 'tasks/' + public['id'] + '/relations', {'task': private['id'], 'kind': 'blocked_by'}, expected=422)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,?,'now')", (private['id'], public['id'], 'blocks'))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,'now')", (private['id'], public['id'], 'blocks'))
         H._unblock(c, H.task(c, private['id']))
         assert TR.blocker_ids(c, public['id']) == [private['id']]
         with pytest.raises(H.Refused) as exc:

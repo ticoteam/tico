@@ -204,7 +204,7 @@ def _reserve_in(c, auth, who, agent, digested, key, seat_id, reports_to, team, f
     c.execute("UPDATE seats SET agent=?,agent_name=?,request_state=?,first_task=? WHERE id=?",
               (agent["id"], agent["name"], lifecycle.FILING, waiting, kept))
     reservation = uuid.uuid4().hex
-    c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created,made) "
+    c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created_at,made) "
               "VALUES(?,?,?,?,?,?,?,?)", (reservation, who.actor, key, digested, kept, "filing", H.now(), made))
     return reservation
 
@@ -222,7 +222,7 @@ def _reserve(store, auth, who, agent, key, digested, seat_id, reports_to, team, 
                 raise Problem("idempotency_conflict", "This key was used for different content", 409)
             if row and row["state"] == "filed":
                 return True, lifecycle.seat_record(c, row["seat_id"])
-            if row and row["created"] < H.shift(H.now(), seconds=-lifecycle.FILING_STALE_SECONDS):
+            if row and row["created_at"] < H.shift(H.now(), seconds=-lifecycle.FILING_STALE_SECONDS):
                 _release(c, who.actor, row)      # its first try never came back: this one takes the key
                 continue                         # committed on its own, so a refusal of the retry cannot undo it
             if not row:
@@ -254,11 +254,11 @@ def _recover_stale(c, seat_id=""):
     seat it touches without waiting for a restart."""
     stale = H.shift(H.now(), seconds=-lifecycle.FILING_STALE_SECONDS)
     scope = " AND seat_id=?" if seat_id else ""
-    for row in c.execute("SELECT * FROM seat_requests WHERE state='filing' AND created<?" + scope,
+    for row in c.execute("SELECT * FROM seat_requests WHERE state='filing' AND created_at<?" + scope,
                          (stale, seat_id) if seat_id else (stale,)).fetchall():
         _release(c, row["actor"], row)
     scope = " AND id=?" if seat_id else ""
-    c.execute("UPDATE seats SET request_state=? WHERE request_state=? AND updated<?" + scope,
+    c.execute("UPDATE seats SET request_state=? WHERE request_state=? AND updated_at<?" + scope,
               (lifecycle.REQUESTED, lifecycle.CANCELLING, stale) + ((seat_id,) if seat_id else ()))
 
 
@@ -375,7 +375,7 @@ def cancel_request(request, store, auth, settings, who, seat_id):
         ticket = (c.execute("SELECT * FROM support_tickets WHERE id=?", (row["request_ticket"],)).fetchone()
                   if row["request_ticket"] else None)
         name = _agent_of(row)["name"]
-        c.execute("UPDATE seats SET request_state=?,updated=? WHERE id=?", (lifecycle.CANCELLING, H.now(), seat_id))
+        c.execute("UPDATE seats SET request_state=?,updated_at=? WHERE id=?", (lifecycle.CANCELLING, H.now(), seat_id))
     try:
         if ticket is not None:
             request.app.state.support.note(ticket, f"Cancelled: the {name} request was withdrawn. Nothing more is needed.")

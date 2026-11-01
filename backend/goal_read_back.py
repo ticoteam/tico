@@ -123,12 +123,12 @@ def not_agreed(detail):
 
 def stored(c, message_id):
     """The read-back stored with this message: {id, created, changes}, or None."""
-    row = c.execute("SELECT m.id, m.created, m.from_actor, m.conversation_id, e.detail FROM messages m "
+    row = c.execute("SELECT m.id, m.created_at, m.from_actor, m.conversation_id, e.detail FROM messages m "
                     "JOIN events e ON e.target=m.id AND e.action=? WHERE m.id=? AND m.deleted_at IS NULL",
                     (EVENT, message_id)).fetchone()
     if not row:
         return None
-    return {"id": row["id"], "created": row["created"], "conversation_id": row["conversation_id"],
+    return {"id": row["id"], "created_at": row["created_at"], "conversation_id": row["conversation_id"],
             "changes": (H._json(row["detail"], {}) or {}).get("changes") or []}
 
 
@@ -146,18 +146,18 @@ def answered(c, who, cited):
     very next one in the chat after the read-back (nothing from anyone in between, nothing from them since), and the
     read-back no more than 30 minutes old."""
     msg = H.message(c, cited) or {}
-    room, at = msg.get("conversation_id"), str(msg.get("created") or "")
-    before = c.execute("SELECT id FROM messages WHERE conversation_id=? AND id<>? AND created<=? AND deleted_at IS NULL "
-                       "ORDER BY created DESC, rowid DESC LIMIT 1", (room, cited, at)).fetchone()
+    room, at = msg.get("conversation_id"), str(msg.get("created_at") or "")
+    before = c.execute("SELECT id FROM messages WHERE conversation_id=? AND id<>? AND created_at<=? AND deleted_at IS NULL "
+                       "ORDER BY created_at DESC, rowid DESC LIMIT 1", (room, cited, at)).fetchone()
     back = stored(c, before["id"]) if before else None
     if not back or H.message(c, back["id"])["from_actor"] != who.task_actor:
         raise not_agreed("The owner's message is not a reply to a goal read-back (anything said after the read-back "
                          "takes the yes back)")
-    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created>? AND id<>? "
+    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created_at>? AND id<>? "
                       "AND deleted_at IS NULL LIMIT 1", (room, who.actor, at, cited)).fetchone()
     if later:
         raise not_agreed("The owner wrote again after their yes")
-    if str(back["created"]) < H.shift(H.now(), seconds=-TTL_S):
+    if str(back["created_at"]) < H.shift(H.now(), seconds=-TTL_S):
         raise not_agreed(f"The read-back is more than {TTL_S // 60} minutes old")
     yes = agreed(msg.get("body"), len(back["changes"]))
     if yes is None:
@@ -234,7 +234,7 @@ def changed_since(c, back, change, done):
                         else f"the suggestion was {p['status']}")
     for gid in dict.fromkeys(goals):
         for r in c.execute("SELECT id, actor, field, old, new, status_source FROM goal_events WHERE goal_id=? AND ts>? "
-                           "ORDER BY ts", (gid, back["created"])):
+                           "ORDER BY ts", (gid, back["created_at"])):
             if r["id"] in mine or r["field"] in ("rank", "checkin", "status_source") or (
                     r["field"] == "status" and r["status_source"] == "auto") or r["field"] == "proposal":
                 continue

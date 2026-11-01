@@ -58,7 +58,7 @@ def world(api):
     tokens.update({slug: post(api, f"bots/{slug}/agent-credential", {})["token"] for slug in ("stranger", "analyst")})
     task = post(api, "tasks", {"owner": "counsel", "title": "Review the NDA", "body": "Redline it."})
     with store.transaction() as c:
-        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created,updated) VALUES(?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                   ("u1", H.resolve_bot(c, "counsel")["id"], "daily", "2026-09-29", "Two contracts reviewed",
                    "- Two contracts reviewed", H.now(), H.now()))
     made = api.post("/api/v2/files/uploads", json={"name": "memo.md", "text": "# Memo", "scope": "bot"},
@@ -136,7 +136,7 @@ def test_an_update_takes_its_bots_gate_and_a_persons_update_is_for_the_chart(wor
     set_access(api, see={"people": ["cara"]}, read={"people": ["cara"]}, write={"people": ["cara"]})
     assert reply("dee") == 404
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created,updated) VALUES(?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                   ("u2", "human:ben", "daily", "2026-09-29", "Hiring plan", "- Hiring plan", H.now(), H.now()))
     assert outcomes(api, tokens, "get", "updates/u2", callers=("ana", "cara", "dee", "stranger")) == {
         "ana": 200, "cara": 200, "dee": 200, "stranger": 404}

@@ -15,12 +15,12 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 const REVIEW = {id: 't-review', title: 'Review: Support Bot broke a rule', owner: 'human:ana', requester: 'tico', status: 'open',
   body: "Support Bot's output was held: it broke a rule. Keep it blocked, send it anyway, or edit the rule.\n\nHold: h-1",
   lane: 'company', rank: null, labels: ['rule-review'], tags: [], links: [], parts: {total: 0, done: 0}, version: 1,
-  created: ago(30), updated: ago(5)};
+  created_at: ago(30), updated_at: ago(5)};
 const HOLD = {id: 'h-1', operation: 'message', author: 'bot:support', author_name: 'Support Bot', state: 'held', outcome: 'escalated',
   rules: [{id: 'r-eu', kind: 'internal', text: "Acme data stays in the EU and only goes to vendors on Acme's list.", version: 2, status: 'active',
            if_broken: 'escalate'}],
   text: "Attached Acme's ticket export for the new transcription vendor to test with.", to: ['Ops'], reviewer: 'human:ana',
-  reviewer_name: 'Ana', task_id: 't-review', created: ago(30), decided_at: null, decided_by: null, can_send: true, nonce: 'n-1',
+  reviewer_name: 'Ana', task_id: 't-review', created_at: ago(30), decided_at: null, decided_by: null, can_send: true, nonce: 'n-1',
   why: 'The vendor signed the EU addendum last week.'};
 
 async function shot(page, name) {
@@ -30,7 +30,7 @@ async function shot(page, name) {
 }
 
 const SECOND = {...HOLD, id: 'h-2', outcome: 'blocked', text: 'Sent the Acme roster to a personal address.', why: null,
-  nonce: 'n-2', created: ago(20)};
+  nonce: 'n-2', created_at: ago(20)};
 const scope = (bots = []) => ({everyone: false, all_bots: false, groups: [], bots, people: []});
 const RULE = {id: 'r-eu', kind: 'internal', text: HOLD.rules[0].text, description: '', who: scope([{id: 'support', name: 'Support Bot'}]),
   with: {groups: [], bots: [], people: []}, source: null, if_broken: 'escalate', reviewer: null, status: 'active', version: 2,
@@ -130,7 +130,7 @@ async function review(browser, {viewport, theme, paged = false}) {
         await page.evaluate(() => {
           const host = document.createElement('div');
           host.id = 'rh-sample'; host.style.cssText = 'padding:24px;max-width:720px';
-          host.innerHTML = `<div class="conv-thread">${v2MessageHTML({id: 'm-1', kind: 'notice', from_actor: 'tico', to_actor: 'human:ana', created: new Date().toISOString(),
+          host.innerHTML = `<div class="conv-thread">${v2MessageHTML({id: 'm-1', kind: 'notice', from_actor: 'tico', to_actor: 'human:ana', created_at: new Date().toISOString(),
               body: "Support Bot's reply was held: it broke the rule 'Acme data stays in the EU.'", refs: {org_rule: {hold: 'h-2', bot: 'support'}}})}</div>`;
           document.querySelector('#main').replaceChildren(host);
         });

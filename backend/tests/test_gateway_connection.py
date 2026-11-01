@@ -761,7 +761,7 @@ def test_out_of_credit_is_the_gateways_wait_and_tico_models_are_back_within_a_mi
     at = H.shift(at, seconds=G.OUT_OF_CREDIT_WAIT + 2)
     with api.app.state.store.transaction() as c:
         # The computer has been reporting in all along, not waking from a silence.
-        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (at,))
+        c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (at,))
     ready(api, machine, ["ops"])
     retried = claim(api, machine, "ops")
     assert retried and retried["job_id"] == attempt["job_id"] and retried["config"]["model"] == "tico-mid-1.0"
@@ -787,7 +787,7 @@ def test_a_rate_limited_bot_its_fallback_finished_for_is_back_on_tico_models_aft
     assert holds and all(hold["until"] <= H.shift(at, seconds=G.GATEWAY_WAIT + 1) for hold in holds), holds
     at = H.shift(at, seconds=G.GATEWAY_WAIT + 2)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (at,))
+        c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (at,))
     post(api, "chat/ops", {"text": "Use only the synthetic fixture again"})
     ready(api, machine, ["ops"])
     again = claim(api, machine, "ops")
@@ -852,7 +852,7 @@ def test_a_tico_model_on_a_runner_that_runs_bots_as_itself_says_so_once_and_is_n
     monkeypatch.setattr(execution, "reports_tools", lambda *_: True)
     for _ in range(2):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE attempts SET finished=? WHERE id=?", (H.shift(H.now(), seconds=-STALL_MAX - 1),
+            c.execute("UPDATE attempts SET finished_at=? WHERE id=?", (H.shift(H.now(), seconds=-STALL_MAX - 1),
                                                                      attempt["id"]))
             assert api.app.state.execution.auto_reconcile(c) == []
         assert ended(api, attempt)[1] == "uncertain" and claim(api, machine, "ops") is None
@@ -969,7 +969,7 @@ def test_a_tico_fallback_the_gateway_refused_reads_as_the_gateway(api, monkeypat
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "gateway"}, machine["token"])
     if slow:
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE attempts SET started=? WHERE id=?", (H.shift(H.now(), seconds=-600), attempt["id"]))
+            c.execute("UPDATE attempts SET started_at=? WHERE id=?", (H.shift(H.now(), seconds=-600), attempt["id"]))
     events = [{"seq": 1, "kind": "tool", "payload": {"name": "read"}}] if acted else []
     events.append({"seq": len(events) + 1, "kind": "error", "payload": {"error": error}})
     post(api, f"attempts/{attempt['id']}/events", {"events": events}, machine["token"])

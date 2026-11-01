@@ -35,11 +35,11 @@ KEY_PREFIX = "hq:"
 WAIT_HOURS = 1
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS watcher_pending(
- bot TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, created TEXT NOT NULL,
+ bot TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL,
  later TEXT NOT NULL DEFAULT '[]', found TEXT, PRIMARY KEY(bot, key));
 CREATE TABLE IF NOT EXISTS watcher_triage(
  bot TEXT NOT NULL, key TEXT NOT NULL, label TEXT NOT NULL, held INTEGER NOT NULL, detail TEXT NOT NULL,
- created TEXT NOT NULL, PRIMARY KEY(bot, key));
+ created_at TEXT NOT NULL, PRIMARY KEY(bot, key));
 """
 
 def applies(name, event):
@@ -64,7 +64,7 @@ def engine_for(store, c, primary):
 
 def hold(c, bot, event):
     """Keep a new ticket's event until it is triaged. True when it waits (or already waits)."""
-    c.execute("INSERT INTO watcher_pending(bot,key,title,body,created) VALUES(?,?,?,?,?) ON CONFLICT(bot,key) DO NOTHING",
+    c.execute("INSERT INTO watcher_pending(bot,key,title,body,created_at) VALUES(?,?,?,?,?) ON CONFLICT(bot,key) DO NOTHING",
               (bot, event.key, event.title or event.key, event.body, H.now()))
     return True
 
@@ -218,7 +218,7 @@ def deliver_one(store, auth, row, found, why):
             H.task_comment(c, H.KEEPER, task["id"], defang(text, c), wake=False)
         c.execute("INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
                   (row["bot"], row["key"], task["id"], H.now()))
-        c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail,created) VALUES(?,?,?,?,?,?) "
+        c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail,created_at) VALUES(?,?,?,?,?,?) "
                   "ON CONFLICT(bot,key) DO NOTHING",
                   (row["bot"], row["key"], label, int(bool(person)),
                    json.dumps(found or {"skipped": why}, sort_keys=True), H.now()))
@@ -257,7 +257,7 @@ def hand_over(store, row):
             H.task_comment(c, H.KEEPER, task["id"], defang(text, c), wake=False)
         c.execute("INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
                   (row["bot"], row["key"], task["id"], H.now()))
-        c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail,created) VALUES(?,?,?,?,?,?) "
+        c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail,created_at) VALUES(?,?,?,?,?,?) "
                   "ON CONFLICT(bot,key) DO NOTHING", (row["bot"], row["key"], SET, 1,
                                                        json.dumps({"waited": True, **(found or {})}, sort_keys=True), H.now()))
         H.event(c, H.KEEPER, "support.handed", task["id"], {"bot": row["bot"], "key": row["key"], "to": person})
@@ -269,7 +269,7 @@ def sweep(store, at=None):
     to a person, so no copy of a customer's ticket is kept here indefinitely. Each on its own."""
     cutoff = H.shift(at or H.now(), hours=-WAIT_HOURS)
     with store.read() as c:
-        rows = [dict(r) for r in c.execute("SELECT * FROM watcher_pending WHERE created<? ORDER BY created", (cutoff,))]
+        rows = [dict(r) for r in c.execute("SELECT * FROM watcher_pending WHERE created_at<? ORDER BY created_at", (cutoff,))]
     for row in rows:
         try:
             hand_over(store, row)
@@ -282,7 +282,7 @@ def waiting(store, skip):
     it: its watcher reports again only once it is active, and that report starts the next pass."""
     with store.read() as c:
         for row in c.execute("SELECT p.* FROM watcher_pending p JOIN bots b ON b.id=p.bot AND b.state='active' "
-                             "ORDER BY p.created, p.bot, p.key"):
+                             "ORDER BY p.created_at, p.bot, p.key"):
             if (row["bot"], row["key"]) not in skip:
                 return dict(row)
     return None

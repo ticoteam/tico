@@ -72,7 +72,7 @@ def test_reopened_job_keeps_real_gates_and_health_reports_them(api, gate):
     assert reason(api, machine) == expected
     assert post(api, 'jobs/claim', {}, machine['token'])['attempt'] is None
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'",
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops' AND state='queued'",
                   (H.shift(H.now(), hours=-40),))
         rows = [r for r in health._waiting(c, {machine['runner_id']}, api.app.state.store.settings)[2]
                 if r['bot'] == 'ops']

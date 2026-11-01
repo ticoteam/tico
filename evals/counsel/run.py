@@ -171,7 +171,7 @@ def live(docs, url, token, only, wait=3600):
         got = call("GET", f"tasks/{task_id}")
         status = (got.get("task") or got).get("status")
         runs = got.get("runs") or []
-        finished = sum(1 for r in runs if r.get("finished"))
+        finished = sum(1 for r in runs if r.get("finished_at"))
         return status in FINISHED and runs and finished == len(runs), status, len(runs), finished
 
     me = call("GET", "me")["actor"]

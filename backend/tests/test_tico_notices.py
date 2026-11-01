@@ -31,7 +31,7 @@ def botops_messages(api):
 @pytest.fixture(autouse=True)
 def botops(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
+        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('botops','botops','BotOps','fake','','','','keeper','active',?)", (H.now(),))
         c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('botops','{}',NULL,'ana')")
 

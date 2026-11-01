@@ -341,7 +341,7 @@ def materialise(c, bot, source):
     at = H.now()
     for n, row in enumerate(found):
         c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,position,"
-                  "note,created_by,created,updated,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
+                  "note,created_by,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
                   ("rule-" + H.new_id(), "bot", bot, row["event"], row["condition"], row["then_outcome"],
                    row["params"], start + n, f"From the {SPEC[source]['label']} profile: {row['words']}"[:500],
                    MATERIALISED, at, at))
@@ -531,8 +531,8 @@ def mismatches(c):
                 out.append(("responder_has_tasks", bot, n))
         elif name == DOER:
             seen = c.execute("SELECT count(*) AS n, sum(coalesce(did_nothing,0)=1) AS idle FROM turns WHERE bot=? "
-                             "AND started>? AND finished IS NOT NULL", (bot, since)).fetchone()
-            created = c.execute("SELECT created FROM bots WHERE id=?", (bot,)).fetchone()
+                             "AND started_at>? AND finished_at IS NOT NULL", (bot, since)).fetchone()
+            created = c.execute("SELECT created_at FROM bots WHERE id=?", (bot,)).fetchone()
             if (seen["n"] >= IDLE_MIN_RUNS and seen["idle"] == seen["n"]
                     and not (created and created[0] and created[0] > since)):
                 out.append(("doer_idle", bot, seen["n"]))

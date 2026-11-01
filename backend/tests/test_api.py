@@ -324,7 +324,7 @@ def test_turn_output_and_completion_are_durable_and_idempotent(api):
 def slept(api, r, seconds=3600, awake_since=None):
     """Age a machine's last contact the way an hour of sleep does."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=?,awake_since=? WHERE id=?",
+        c.execute("UPDATE runners SET last_seen_at=?,awake_since=? WHERE id=?",
                   (H.shift(H.now(), seconds=-seconds), awake_since, r["runner_id"]))
 
 
@@ -358,7 +358,7 @@ def test_a_files_metadata_follows_the_same_access_as_the_file(api):
     """Name, size and type without the bytes, for the viewer's thumbnails."""
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) VALUES(?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
                   ("blob-meta-0001", "human:ana", "d" * 64, 2048, "storyboard.png", "image/png", H.now()))
     assert get(api, "files/blob-meta-0001/meta") == {"id": "blob-meta-0001", "name": "storyboard.png", "size": 2048,
                                                      "content_type": "image/png"}
@@ -369,7 +369,7 @@ def test_a_files_metadata_follows_the_same_access_as_the_file(api):
 def test_run_windows_include_failed_attempts_without_turns_and_hide_private_rooms(api):
     machine, message, attempt = setup_attempt(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (H.now(), attempt["id"]))
+        c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), attempt["id"]))
         c.execute("DELETE FROM turns WHERE id=?", (attempt["id"],))
         H.status_set(c, "bot:ops", "ops", "running")
         H.status_set(c, "bot:ops", "ops", "idle")

@@ -22,10 +22,10 @@ async function open(browser, viewport, colorScheme, bypass) {
   const now = new Date();
   await page.clock.install({time: new Date(now.getTime() - 3600000)});
   await page.clock.pauseAt(now);
-  const state = {tokens: [{id: 'old-grok', label: 'grok-bot', created: '2026-09-01T10:00:00Z', last_used: '2026-09-29T09:00:00Z',
+  const state = {tokens: [{id: 'old-grok', label: 'grok-bot', created_at: '2026-09-01T10:00:00Z', last_used_at: '2026-09-29T09:00:00Z',
     expires_at: '2026-12-01T10:00:00Z', revoked_at: null},
-  {id: 'ci', label: 'CI script', created: '2026-09-02T10:00:00Z', last_used: null, expires_at: '2026-12-01T10:00:00Z', revoked_at: null}],
-  created: [], revoked: [], urls: [], logs: []};
+  {id: 'ci', label: 'CI script', created_at: '2026-09-02T10:00:00Z', last_used_at: null, expires_at: '2026-12-01T10:00:00Z', revoked_at: null}],
+  created_at: [], revoked: [], urls: [], logs: []};
   page.on('pageerror', error => state.logs.push('pageerror ' + error.message));
   page.on('console', message => state.logs.push(message.text()));
   await page.route('**/*', route => {
@@ -47,8 +47,8 @@ async function open(browser, viewport, colorScheme, bypass) {
     if (p === '/api/v2/me/tokens' && request.method() === 'GET') return json({tokens: state.tokens});
     if (p === '/api/v2/me/tokens' && request.method() === 'POST') {
       const body = request.postDataJSON();
-      state.created.push(body);
-      const row = {id: 'new-' + state.created.length, label: body.label, created: new Date().toISOString(), last_used: null,
+      state.created_at.push(body);
+      const row = {id: 'new-' + state.created_at.length, label: body.label, created_at: new Date().toISOString(), last_used_at: null,
         expires_at: '2026-12-29T10:00:00Z', revoked_at: null};
       state.tokens.unshift(row);
       return json({id: row.id, token: SECRET, label: row.label, expires_at: row.expires_at});
@@ -123,7 +123,7 @@ const shot = (page, name) => shots ? page.screenshot({path: path.join(shots, `co
         // Create token: named for the agent and the day, shown once, in the snippet with the URL.
         await dialog.locator('[data-create]').click();
         await dialog.locator('[data-token]').waitFor();
-        assert.match(state.created[0].label, /^Grok · \d{4}-\d{2}-\d{2}$/);
+        assert.match(state.created_at[0].label, /^Grok · \d{4}-\d{2}-\d{2}$/);
         assert.equal(await dialog.locator('[data-token]').innerText(), SECRET);
         assert.match(await dialog.locator('[data-token-section] .ca-note').innerText(), /Shown once/);
         // Grok's two blocks, a Grok Bot's and Grok Build's, each with the URL and the token.
@@ -138,7 +138,7 @@ const shot = (page, name) => shots ? page.screenshot({path: path.join(shots, `co
         await shot(page, `grok-token-${tag}`);
 
         // The agent's first call lands: the next poll says Connected.
-        state.tokens[0].last_used = new Date().toISOString();
+        state.tokens[0].last_used_at = new Date().toISOString();
         const beforePoll = state.urls.filter(u => u.endsWith('/api/v2/me/tokens')).length;
         await page.clock.fastForward(2999);
         assert.equal(state.urls.filter(u => u.endsWith('/api/v2/me/tokens')).length, beforePoll, 'no poll before three seconds');

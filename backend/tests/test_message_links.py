@@ -21,7 +21,7 @@ def store(tmp_path):
     with s.transaction() as c:
         c.execute("INSERT OR IGNORE INTO humans(id,name) VALUES('ana','Ana'),('ben','Ben')")
         c.execute("INSERT OR IGNORE INTO bots(id,slug,state) VALUES('ops','ops','active')")
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES('r1','r','ana','h','t')")
+        c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at) VALUES('r1','r','ana','h','t')")
     return s
 
 
@@ -36,7 +36,7 @@ class World:
             for i in range(5):
                 tid = f"task-{seed}-{i}"
                 requester, owner = self.rng.choice(READERS), self.rng.choice(READERS + ("bot:ops",))
-                c.execute("INSERT INTO tasks(id,title,requester,owner,status,private,created,updated) "
+                c.execute("INSERT INTO tasks(id,title,requester,owner,status,private,created_at,updated_at) "
                           "VALUES(?,?,?,?,'doing',?,'t','t')", (tid, tid, requester, owner, self.rng.random() < 0.5))
                 self.tasks.append(tid)
             self.rooms = [self.room(c) for _ in range(3)]
@@ -52,13 +52,13 @@ class World:
 
     def room(self, c, task_id=None):
         cid = self.id("conv")
-        c.execute("INSERT INTO conversations(id,kind,task_id,participants,created,scope) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO conversations(id,kind,task_id,participants,created_at,scope) VALUES(?,?,?,?,?,?)",
                   (cid, "chat", task_id, json.dumps(["human:ana", "human:ben", "bot:ops"]), "t", "shared"))
         return cid
 
     def say(self, c, refs=None, reply=None, cid=None):
         mid = self.id("msg")
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,in_reply_to,created) "
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,in_reply_to,created_at) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", (mid, cid or self.rng.choice(self.rooms), "human:ana", "human:ben",
                                                 self.rng.choice(("chat", "say", "ask", "answer")),
                                                 "body " + mid, json.dumps(refs or {}), reply, f"2026-01-01T{self.n:08d}"))
@@ -67,8 +67,8 @@ class World:
 
     def run(self, c, message):
         jid, aid = self.id("job"), self.id("attempt")
-        c.execute("INSERT INTO jobs(id,message_id,bot,state,created) VALUES(?,?,'ops','completed','t')", (jid, message))
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+        c.execute("INSERT INTO jobs(id,message_id,bot,state,created_at) VALUES(?,?,'ops','completed','t')", (jid, message))
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES(?,?,'ops','r1',1,?,'completed','t','t')", (aid, jid, aid))
         self.attempts.append(aid)
         return aid
@@ -324,7 +324,7 @@ def test_backfill_is_batched_idempotent_and_catches_rows_an_older_server_wrote(t
     raw.execute("DELETE FROM messages WHERE id IN (%s)" % ",".join("?" * len(tail)), tail)
     tid, old = world.tasks[1], "msg-older"
     raw.execute("UPDATE tasks SET private=0 WHERE id=?", (tid,))
-    raw.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created) "
+    raw.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at) "
                 "VALUES(?,?,'human:ana','human:ben','chat','b',?,'z')", (old, world.rooms[0], json.dumps({"task": tid})))
     assert raw.execute("SELECT rowid FROM messages WHERE id=?", (old,)).fetchone()[0] < top
     raw.close()

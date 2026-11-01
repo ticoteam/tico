@@ -193,7 +193,7 @@ def test_archive_schema_is_created_for_fresh_and_existing_databases():
     # The prior schema has update content/read state but no slides or archive tables.
     c.executescript("""
       CREATE TABLE updates(id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL,
-        headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL,
+        headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
         UNIQUE(bot,kind,day));
       CREATE TABLE update_reads(update_id TEXT NOT NULL, actor TEXT NOT NULL, read_at TEXT NOT NULL,
         PRIMARY KEY(update_id,actor));

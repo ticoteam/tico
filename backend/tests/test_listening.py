@@ -25,7 +25,7 @@ def _bots(api):
     with api.app.state.store.transaction() as c:
         for slug in RECEIVERS:
             if not H.bot(c, slug):
-                c.execute("INSERT INTO bots (id, slug, display_name, runtime, model, effort, cwd, host, state, created) "
+                c.execute("INSERT INTO bots (id, slug, display_name, runtime, model, effort, cwd, host, state, created_at) "
                           "VALUES (?,?,?,?,?,?,?,?,?,?)", (slug, slug, slug, "fake", "fake", "low", "", "keeper", "active", H.now()))
             if not c.execute("SELECT 1 FROM bot_config WHERE bot=?", (slug,)).fetchone():
                 c.execute("INSERT INTO bot_config (bot, config, team, operator, description, reports_to, repo) "

@@ -286,7 +286,7 @@ def check_step(c, check, ticket=None):
     if not ticket_id:
         return None
     found = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='step' AND ts<=? "
-                      "ORDER BY ts DESC, rowid DESC LIMIT 1", (ticket_id, check.get("created") or "")).fetchone()
+                      "ORDER BY ts DESC, rowid DESC LIMIT 1", (ticket_id, check.get("created_at") or "")).fetchone()
     s = step(c, found[0]) if found else None
     if s is None:
         parent = H.task(c, ticket_id)

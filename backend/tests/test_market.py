@@ -19,7 +19,7 @@ def _seed(api, tmp_path):
     with store.transaction() as c:
         M.seed(c, {}, Blobs(store.settings), document=M.load_snapshot(FIXTURE_REGISTRY))
         if not H.bot(c, "listening"):
-            c.execute("INSERT INTO bots (id, slug, display_name, runtime, model, effort, cwd, host, state, created) "
+            c.execute("INSERT INTO bots (id, slug, display_name, runtime, model, effort, cwd, host, state, created_at) "
                       "VALUES (?,?,?,?,?,?,?,?,?,?)",
                       ("listening", "listening", "Listening", "grok", "grok-4.6", "high", "", "keeper", "active", H.now()))
         if not c.execute("SELECT 1 FROM bot_config WHERE bot='listening'").fetchone():
@@ -31,7 +31,7 @@ def _seed(api, tmp_path):
 def _librarian(api):
     with api.app.state.store.transaction() as c:
         if not H.bot(c, "librarian"):
-            c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
+            c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                       "VALUES('librarian','librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
             c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('librarian','{}',NULL,'ana')")
 
@@ -42,7 +42,7 @@ def test_the_librarian_gets_the_market_routines_and_the_old_market_analyst_is_re
     _librarian(api)
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
+        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('market-analyst','market-analyst','Market Analyst','fake','','','','keeper','active',?)", (H.now(),))
         c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('market-analyst','{}',NULL,'ana')")
         task = H.task_create(c, "human:ana", "Check Northwind pricing", "", "bot:market-analyst", lint=False)

@@ -40,7 +40,7 @@ def test_the_queue_page_and_the_status_rows_are_answered_from_covering_indexes(a
         visible = auth.task_sql(c, who)
         plan = " ".join(str(row[-1]) for row in c.execute(
             "EXPLAIN QUERY PLAN SELECT id FROM tasks WHERE " + visible
-            + " ORDER BY (rank IS NULL), rank, created, id LIMIT 501"))
+            + " ORDER BY (rank IS NULL), rank, created_at, id LIMIT 501"))
         status = " ".join(str(row[-1]) for row in c.execute(
             "EXPLAIN QUERY PLAN " + task_privacy.status_tasks_sql(" IN ('bot:ops')")))
     assert "COVERING INDEX tasks_queue_cover" in plan

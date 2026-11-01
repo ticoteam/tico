@@ -138,7 +138,7 @@ def test_a_receipt_in_a_keeper_notice_naming_a_renamed_review_step_counts(api):
     receipt as one about Review 1 was."""
     from backend import test_receipts
     sha = "d" * 40
-    notice = {"id": "m1", "from_actor": "keeper", "created": "2026-01-01", "body": f"First look asked.\nTests: head {sha}: 3 passed, 0 failed"}
+    notice = {"id": "m1", "from_actor": "keeper", "created_at": "2026-01-01", "body": f"First look asked.\nTests: head {sha}: 3 passed, 0 failed"}
     task = {"id": "t", "owner": "bot:cpo", "note": "", "messages": [notice], "children": []}
     assert test_receipts.at_head({**task, "review_steps": ["First look"]}, sha)[0] == "passed"
     assert test_receipts.at_head(task, sha)[0] != "passed", "a keeper line that names no review step is not evidence"
@@ -162,7 +162,7 @@ def test_renaming_a_step_keeps_the_boards_rules_on_it(api):
     task = pools.ticket(api, None)
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,position,"
-                  "note,created_by,created,updated,revision) VALUES('r-qa','type',?,'step_entered',?,'wake','{}',1,1,"
+                  "note,created_by,created_at,updated_at,revision) VALUES('r-qa','type',?,'step_entered',?,'wake','{}',1,1,"
                   "'QA',?,?,?,1)", (task["type_id"], json.dumps({"step": ["Review 2", "Done"], "role": "qa"}),
                                      H.KEEPER, H.now(), H.now()))
     _renamed(api, task, {"Review 2": "Second look"})

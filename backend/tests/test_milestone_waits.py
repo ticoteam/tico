@@ -226,7 +226,7 @@ def recover(app, monkeypatch, github):
     import threading
     service = app.state.github_app
     with service.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO repositories(full_name,reachable,enabled,added_by,updated,default_branch) "
+        c.execute("INSERT OR IGNORE INTO repositories(full_name,reachable,enabled,added_by,updated_at,default_branch) "
                   "VALUES('ticoteam/tico',1,1,'human:ana',?,'main')", (H.now(),))
     monkeypatch.setattr(service, "row", lambda c=None: {"slug": "test-app", "org": "ticoteam"})
     monkeypatch.setattr(service, "mint", lambda *a, **kw: ("test-token", "later"))

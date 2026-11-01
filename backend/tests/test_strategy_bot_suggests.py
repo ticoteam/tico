@@ -44,7 +44,7 @@ def recovery(api, goal_id, ops_task, token, expected=200):
 
 def tasks_of(api, owner):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE owner=? ORDER BY created", (owner,))]
+        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE owner=? ORDER BY created_at", (owner,))]
 
 
 def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api):
@@ -187,7 +187,7 @@ def test_three_bots_asking_the_same_thing_are_one_item_and_the_answer_reaches_ea
             assert reply and "The landlord page first." in reply["body"] and '"quiet"' not in reply["refs"]
             assert not H.open_task_asks(c, H.task(c, task_id))
         said = c.execute("SELECT body FROM messages WHERE from_actor=? AND to_actor='bot:finance' AND "
-                         "json_extract(refs,'$.task')=? ORDER BY created DESC", (STRATEGY_BOT, filed)).fetchone()
+                         "json_extract(refs,'$.task')=? ORDER BY created_at DESC", (STRATEGY_BOT, filed)).fetchone()
         assert said and "The landlord page first." in said[0]
         assert H.task(c, waiting)["waiting_on"] is None
         assert {r[0] for r in c.execute("SELECT state FROM "

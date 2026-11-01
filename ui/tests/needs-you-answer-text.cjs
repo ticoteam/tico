@@ -7,7 +7,7 @@ const {open} = require('./tasks-page.cjs');
   try {
     const {page, errors} = await open(browser, {hash: '#/tasks'});
     const ask = {id: 'text-question', kind: 'ask', title: 'Publish the draft?', body: 'Publish the draft?',
-      requester: 'bot:writer', created: new Date().toISOString(), need: 'decide'};
+      requester: 'bot:writer', created_at: new Date().toISOString(), need: 'decide'};
     let items = [ask], release, calls = 0;
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}));
     await page.route('**/api/v2/messages/text-question/answer', async route => {

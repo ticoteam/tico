@@ -38,7 +38,7 @@ def send(queue, sender='ops', text='A fixture message', expected=200, **fields):
 def pending(api):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute("SELECT * FROM messages WHERE to_actor='bot:finance' "
-                    "AND from_actor LIKE 'bot:%' AND delivered_at IS NULL AND deleted_at IS NULL ORDER BY created,id")]
+                    "AND from_actor LIKE 'bot:%' AND delivered_at IS NULL AND deleted_at IS NULL ORDER BY created_at,id")]
 
 
 def retained(rows):
@@ -184,7 +184,7 @@ def test_full_queue_keeps_work_and_human_system_and_recovery_controls_work(queue
         assert claim(api, machine, 'finance') is None, 'existing one-active-attempt limit still applies'
         with api.app.state.store.read() as c:
             ran += [r['message_id'] for r in c.execute('SELECT j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id '
-                                                      'WHERE j.attempt_id=? ORDER BY m.created,m.id', (work['id'],))
+                                                      'WHERE j.attempt_id=? ORDER BY m.created_at,m.id', (work['id'],))
                     if r['message_id'] in accepted]
         finish(api, machine, work)
     assert ran == accepted

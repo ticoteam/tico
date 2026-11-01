@@ -73,12 +73,12 @@ REPLAY = "replay"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ask_ingest_settings(
  person TEXT PRIMARY KEY, mode TEXT NOT NULL, budget INTEGER NOT NULL, chores_budget INTEGER NOT NULL,
- criteria TEXT NOT NULL, updated TEXT NOT NULL, updated_by TEXT NOT NULL);
+ criteria TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS ask_ingest_items(
  id TEXT PRIMARY KEY, person TEXT NOT NULL, asker TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
  message_id TEXT, mode TEXT NOT NULL, outcome TEXT NOT NULL, would TEXT NOT NULL, reason TEXT NOT NULL, load INTEGER NOT NULL,
- call_id TEXT, created TEXT NOT NULL, let_through_at TEXT, let_through_by TEXT, merged_into TEXT, passed_at TEXT);
-CREATE INDEX IF NOT EXISTS ask_ingest_items_person ON ask_ingest_items(person, created);
+ call_id TEXT, created_at TEXT NOT NULL, let_through_at TEXT, let_through_by TEXT, merged_into TEXT, passed_at TEXT);
+CREATE INDEX IF NOT EXISTS ask_ingest_items_person ON ask_ingest_items(person, created_at);
 CREATE INDEX IF NOT EXISTS ask_ingest_items_ref ON ask_ingest_items(ref);
 CREATE INDEX IF NOT EXISTS ask_ingest_items_merged ON ask_ingest_items(merged_into) WHERE merged_into IS NOT NULL;
 """
@@ -129,9 +129,9 @@ def clean(body):
 def save(c, actor, person, body):
     """Save a person's own settings (person = their actor) or the team default (person = TEAM)."""
     value = clean(body)
-    c.execute("INSERT INTO ask_ingest_settings(person,mode,budget,chores_budget,criteria,updated,updated_by) "
+    c.execute("INSERT INTO ask_ingest_settings(person,mode,budget,chores_budget,criteria,updated_at,updated_by) "
               "VALUES(?,?,?,?,?,?,?) ON CONFLICT(person) DO UPDATE SET mode=excluded.mode, budget=excluded.budget, "
-              "chores_budget=excluded.chores_budget, criteria=excluded.criteria, updated=excluded.updated, "
+              "chores_budget=excluded.chores_budget, criteria=excluded.criteria, updated_at=excluded.updated_at, "
               "updated_by=excluded.updated_by",
               (person, value["mode"], value["budget"], value["chores_budget"], json.dumps(value["criteria"]), H.now(),
                actor))
@@ -173,7 +173,7 @@ def load(c, person):
 def open_items(c, person):
     """{option name: (task id, title)} for the person's open items a new one may be the same as, newest first."""
     plate = H.needs_you(c, person)
-    rows = sorted(plate["tasks"] + plate["waiting"], key=lambda t: t.get("created") or "", reverse=True)[:MAX_ITEMS]
+    rows = sorted(plate["tasks"] + plate["waiting"], key=lambda t: t.get("created_at") or "", reverse=True)[:MAX_ITEMS]
     return {f"item-{n}": (t["id"], t.get("title") or "") for n, t in enumerate(rows, 1)}
 
 
@@ -473,7 +473,7 @@ def record(c, verdict, decided, ref, message_id=None):
     the call's `decision.outcome`."""
     merged_into = decided.get("merged_into") if decided["outcome"] == MERGED else None
     c.execute("INSERT INTO ask_ingest_items(id,person,asker,kind,ref,message_id,mode,outcome,would,reason,load,call_id,"
-              "created,merged_into) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+              "created_at,merged_into) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
               (H.new_id(), verdict["person"], verdict["asker"], verdict["kind"], ref, message_id, decided["mode"],
                decided["outcome"], decided["would"], decided["reason"], decided["load"], verdict.get("call"), H.now(),
                merged_into))
@@ -540,7 +540,7 @@ def reconcile(c, start, end):
             except (TypeError, ValueError, AttributeError):
                 why.setdefault(r[0], "unknown")
     out = {"calls": len(modes), "landed": 0, "reasons": {}, "unexplained": 0, "no_call": c.execute(
-        "SELECT COUNT(*) FROM ask_ingest_items WHERE created>=? AND created<? AND call_id IS NULL",
+        "SELECT COUNT(*) FROM ask_ingest_items WHERE created_at>=? AND created_at<? AND call_id IS NULL",
         (start, end)).fetchone()[0]}
     for call_id, mode in modes.items():
         if call_id in rows:
@@ -611,8 +611,8 @@ def filtered(c, person, since):
     the asking bot, the outcome and reason, and the item's title when the person may read it."""
     out = []
     for row in H._rows(c.execute(
-            "SELECT * FROM ask_ingest_items WHERE person=? AND created>=? AND would IN (?,?,?) "
-            "ORDER BY created DESC LIMIT 200", (person, since, *OFF_PLATE))):
+            "SELECT * FROM ask_ingest_items WHERE person=? AND created_at>=? AND would IN (?,?,?) "
+            "ORDER BY created_at DESC LIMIT 200", (person, since, *OFF_PLATE))):
         if row["kind"] == "loose":
             said = H.message(c, row["ref"])
             if not said or said.get("to_actor") != person or said.get("deleted_at"):
@@ -626,7 +626,7 @@ def filtered(c, person, since):
         out.append({"id": row["id"], "kind": row["kind"], "task": task["id"] if task else None,
                     "message": row["message_id"], "title": title, "asker": row["asker"],
                     "asker_name": _bot_line(c, row["asker"]), "outcome": row["outcome"], "would": row["would"],
-                    "reason": row["reason"], "mode": row["mode"], "created": row["created"],
+                    "reason": row["reason"], "mode": row["mode"], "created_at": row["created_at"],
                     "let_through_at": row["let_through_at"]})
     return out
 
@@ -675,8 +675,8 @@ def outcome_counts(c, start, end):
     """For the decisions readout (backend/decide_readout.py): the gated items in the window by what the gate decided
     ({outcome: n}, Rehearsal's would-have counted under its own key), and how many people let through."""
     outcomes, rehearsal, let = {}, {}, 0
-    for row in c.execute("SELECT mode, outcome, would, let_through_at FROM ask_ingest_items WHERE created>=? AND "
-                         "created<?", (start, end)):
+    for row in c.execute("SELECT mode, outcome, would, let_through_at FROM ask_ingest_items WHERE created_at>=? AND "
+                         "created_at<?", (start, end)):
         if row["mode"] == ON or row["would"] == FAILED_OPEN:
             outcomes[row["outcome"]] = outcomes.get(row["outcome"], 0) + 1
         else:
@@ -692,7 +692,7 @@ REPLAY_PAGE = 25
 def _next_day(day):
     import datetime as dt
     return (dt.date.fromisoformat(day) + dt.timedelta(days=1)).isoformat() + "T00:00:00"
-_ACTIVE_AT = ("owner=? AND created<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
+_ACTIVE_AT = ("owner=? AND created_at<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
               "AND COALESCE(snoozed_until,'')<=?")
 
 
@@ -701,18 +701,18 @@ def replay_items(c, person, start, end, assistant_bot=None):
     filed for them and questions asked of them (on a task or loose). Today's owner stands in for the owner then."""
     skip = H.bot_actor(assistant_bot) if assistant_bot else ""
     out = [{"kind": "task", "ref": r["id"], "asker": r["requester"], "title": r["title"] or "", "text": r["body"] or "",
-            "created": r["created"]}
-           for r in c.execute("SELECT id,title,body,requester,created FROM tasks WHERE owner=? AND created>=? AND "
-                              "created<? AND requester LIKE 'bot:%' AND requester<>?", (person, start, end, skip))]
-    for m in H._rows(c.execute("SELECT * FROM messages WHERE to_actor=? AND kind='ask' AND created>=? AND created<? "
+            "created_at": r["created_at"]}
+           for r in c.execute("SELECT id,title,body,requester,created_at FROM tasks WHERE owner=? AND created_at>=? AND "
+                              "created_at<? AND requester LIKE 'bot:%' AND requester<>?", (person, start, end, skip))]
+    for m in H._rows(c.execute("SELECT * FROM messages WHERE to_actor=? AND kind='ask' AND created_at>=? AND created_at<? "
                                "AND from_actor LIKE 'bot:%' AND from_actor<>?", (person, start, end, skip))):
         msg = H.message(c, m["id"]) or m
         tid = H.message_task_id(msg)
         title = (H.task(c, tid) or {}).get("title", "") if tid else ""
         body = str(m.get("body") or "")
         out.append({"kind": "question" if tid else "loose", "ref": tid or m["id"], "asker": m["from_actor"],
-                    "title": title or body.strip().split("\n")[0][:300], "text": body, "created": m["created"]})
-    return sorted(out, key=lambda it: it["created"])
+                    "title": title or body.strip().split("\n")[0][:300], "text": body, "created_at": m["created_at"]})
+    return sorted(out, key=lambda it: it["created_at"])
 
 
 def load_at(c, person, at):
@@ -723,7 +723,7 @@ def load_at(c, person, at):
 def open_items_at(c, person, at, leave_out=""):
     """The person's items open just before `at`, as the gate would have offered them as `covered`, the replayed
     item itself left out."""
-    rows = c.execute(f"SELECT id,title FROM tasks WHERE {_ACTIVE_AT} AND id<>? ORDER BY created DESC LIMIT ?",
+    rows = c.execute(f"SELECT id,title FROM tasks WHERE {_ACTIVE_AT} AND id<>? ORDER BY created_at DESC LIMIT ?",
                      (person, at, at, at, at, leave_out, MAX_ITEMS)).fetchall()
     return {f"item-{n}": (r["id"], r["title"] or "") for n, r in enumerate(rows, 1)}
 
@@ -755,7 +755,7 @@ def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, view
         if used_today(c, H.KEEPER) + len(page) > daily_cap(store.settings, "bot"):
             raise LookupError("today's decision calls would pass the daily cap")
         person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
-        prepared = [(it, load_at(c, person, it["created"]), open_items_at(c, person, it["created"], it["ref"]),
+        prepared = [(it, load_at(c, person, it["created_at"]), open_items_at(c, person, it["created_at"], it["ref"]),
                      _bot_line(c, it["asker"]), _shown(c, viewer, person, it)) for it in page]
     out = []
     for it, plate, items, asker, shown in prepared:
@@ -763,7 +763,7 @@ def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, view
                                    it["kind"], replay=True)
         would, reason = (FAILED_OPEN, error) if error else decide(answers, own["budget"], own["chores_budget"], plate, 0)
         out.append({"kind": it["kind"], "ref": it["ref"] if shown else None, "title": it["title"] if shown else "",
-                    "private": not shown, "asker": it["asker"], "asker_name": asker, "created": it["created"],
+                    "private": not shown, "asker": it["asker"], "asker_name": asker, "created_at": it["created_at"],
                     "load": plate, "would": would, "reason": reason})
     nxt = offset + len(page)
     return {"items": out, "total": len(everything), "next_offset": nxt if nxt < len(everything) else None}

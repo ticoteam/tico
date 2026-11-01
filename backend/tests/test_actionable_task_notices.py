@@ -35,7 +35,7 @@ def finish_carrier(api, machine, task, run):
     post(api, f"attempts/{run['id']}/complete", {'outcome': 'completed', 'last_seq': 0}, machine['token'])
     with api.app.state.store.transaction() as c:
         # The later notice is new work, after this completed delivery.
-        c.execute('UPDATE attempts SET created=?,finished=? WHERE id=?',
+        c.execute('UPDATE attempts SET created_at=?,finished_at=? WHERE id=?',
                   (H.shift(H.now(), days=-8), H.shift(H.now(), days=-7), run['id']))
         assert H.task(c, task['id'])['carried_by'] == run['id']
 
@@ -146,7 +146,7 @@ def test_health_groups_only_jobs_with_the_same_actual_reason(api, ready):
                       (json.dumps({'kind': 'time', 'until': H.shift(H.now(), days=1)}), tasks[0]['id']))
         for task in tasks[1:]:
             c.execute("UPDATE tasks SET next_run=0,waiting_on='human:ben' WHERE id=?", (task['id'],))
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), hours=-3),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), hours=-3),))
         rows = [r for r in health._waiting(c, {machine['runner_id']}, api.app.state.store.settings)[2] if r['bot'] == 'ops']
         assert len(rows) == 1
         expected = {'slow' if ready else 'task_next_run': 1, 'task_wait': 2}

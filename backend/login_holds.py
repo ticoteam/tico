@@ -412,7 +412,7 @@ _FALLBACK_RESET_RE = re.compile(r"\bresets ([0-9]{1,2}:[0-9]{2}[ap]m) \(UTC\)")
 
 def fallback_reset_notice(c, attempt_id):
     """The fallback's original limit notice and named UTC reset, pinned to when this run ended."""
-    row = c.execute("SELECT result,handed_runtime,finished FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    row = c.execute("SELECT result,handed_runtime,finished_at FROM attempts WHERE id=?", (attempt_id,)).fetchone()
     result = json.loads(row['result'] or '{}') if row else {}
     if not row or not result.get('fallback'):
         return None
@@ -422,7 +422,7 @@ def fallback_reset_notice(c, attempt_id):
     match = _FALLBACK_RESET_RE.search(notice)
     if not limited or not match:
         return None
-    reset = believable(reset_from_text(match[0], row['finished']), row['finished'])
+    reset = believable(reset_from_text(match[0], row['finished_at']), row['finished_at'])
     return {'notice': notice, 'reset': _iso(reset)} if reset else None
 
 
@@ -560,7 +560,7 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hoppe
     if body.profile_used is not None:
         profile = body.profile_used
     hop_profile = body.profile_used if body.fallback and body.profile_used is not None else profile
-    claimed = (c.execute("SELECT created FROM attempts WHERE id=?", (attempt_id,)).fetchone() or [""])[0] or ""
+    claimed = (c.execute("SELECT created_at FROM attempts WHERE id=?", (attempt_id,)).fetchone() or [""])[0] or ""
     kept = {}
     from .model_subscriptions import handed
     for n, (rt, notice, limited) in enumerate(steps):

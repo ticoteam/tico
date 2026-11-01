@@ -76,7 +76,7 @@ def file(api, token, title="Pick the launch date", body="Two dates: Nov 3 or Nov
 
 def items(api):
     with api.app.state.store.read() as c:
-        return H._rows(c.execute("SELECT * FROM ask_ingest_items ORDER BY created"))
+        return H._rows(c.execute("SELECT * FROM ask_ingest_items ORDER BY created_at"))
 
 
 def calls(api):

@@ -43,7 +43,7 @@ def test_a_captured_stream_is_kept_masked_and_read_only_by_owners_and_engineerin
     get(api, f"attempts/{a['id']}/capture", "ben-test", expected=403)
     # Kept a week, then gone.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempt_captures SET created='2000-01-01T00:00:00Z'")
+        c.execute("UPDATE attempt_captures SET created_at='2000-01-01T00:00:00Z'")
     get(api, f"attempts/{a['id']}/capture", expected=404)
 
 

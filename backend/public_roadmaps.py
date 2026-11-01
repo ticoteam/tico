@@ -232,12 +232,12 @@ def output(c, row):
 
 
 def comments(c, row, limit=100, offset=0):
-    rows = c.execute('SELECT id,body,from_actor,created FROM messages WHERE conversation_id=? '
+    rows = c.execute('SELECT id,body,from_actor,created_at FROM messages WHERE conversation_id=? '
                      "AND json_extract(refs,'$.task')=? AND json_extract(refs,'$.comment')=1 "
-                     'AND public=1 AND hidden_at IS NULL AND deleted_at IS NULL ORDER BY created,id LIMIT ? OFFSET ?',
+                     'AND public=1 AND hidden_at IS NULL AND deleted_at IS NULL ORDER BY created_at,id LIMIT ? OFFSET ?',
                      (row['conversation_id'], row['id'], limit + 1, offset))
     items = ({'id': r['id'], 'text': r['body'], 'author': 'Team' if H.is_human(r['from_actor']) or
-               H.is_bot(r['from_actor']) else 'Visitor', 'created': r['created']} for r in rows)
+               H.is_bot(r['from_actor']) else 'Visitor', 'created_at': r['created_at']} for r in rows)
     items, after = R.page(items, limit, offset, max_bytes=196608)
     return {'comments': items, 'next_offset': after}
 
@@ -301,7 +301,7 @@ def install(app, store, auth, mutate):
             rows = c.execute('SELECT t.* FROM task_tags tt JOIN tasks t ON t.id=tt.task_id '
                              "WHERE tt.tag_id=? AND t.visibility='public' AND t.private=0 "
                              "AND NOT EXISTS(SELECT 1 FROM task_relations r WHERE r.from_task=t.id AND r.kind='parent') "
-                             'ORDER BY t.created,t.id LIMIT ? OFFSET ?', (tag['id'], limit + 1, offset))
+                             'ORDER BY t.created_at,t.id LIMIT ? OFFSET ?', (tag['id'], limit + 1, offset))
             items, after = R.page((output(c, dict(r)) for r in rows), limit, offset)
             return {'tasks': items, 'next_offset': after}
 
@@ -418,5 +418,5 @@ def install(app, store, auth, mutate):
             msg = H._write_message(c, 'external:roadmap', H.KEEPER, body.text, conv, 'say',
                                    {'task': row['id'], 'comment': True, 'quiet': True, 'untrusted': True, 'source': 'public_roadmap'}, None, None)
             c.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
-            c.execute('UPDATE tasks SET updated=? WHERE id=?', (H.now(), row['id']))
-            return {'comment': {'id': msg['id'], 'text': body.text, 'author': 'Visitor', 'created': msg['created']}}
+            c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (H.now(), row['id']))
+            return {'comment': {'id': msg['id'], 'text': body.text, 'author': 'Visitor', 'created_at': msg['created_at']}}

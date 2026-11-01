@@ -25,7 +25,7 @@ def relay(api, monkeypatch):
     """The install has a Gateway key; HQ's calls go to `calls` through `answers`, which a test sets."""
     with api.app.state.store.transaction() as c:
         c.execute(
-            "INSERT OR REPLACE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+            "INSERT OR REPLACE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
             ("ops", "hermes", digest(BOT), H.now(), "human:ana"),
         )
     settings = api.app.state.store.settings

@@ -53,7 +53,7 @@ def _hub(tmp_path):
 
 def test_wont_do_steps_are_retired_once_and_a_teams_waiting_step_keeps_its_tasks(tmp_path):
     c = _hub(tmp_path)
-    c.execute("INSERT INTO task_types(id,name,created,updated) VALUES('dev','Dev tickets','x','x')")
+    c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev tickets','x','x')")
     for position, (ident, status) in enumerate([('deck', 'open'), ('progress', 'doing'), ('review', 'review'),
                                                 ('closed', 'closed'), ('waiting', 'waiting'), ('wont', 'declined')]):
         c.execute('INSERT INTO task_steps(id,type_id,name,position,status) VALUES(?,?,?,?,?)',

@@ -354,7 +354,7 @@ def test_a_cheaper_task_model_on_a_bot_that_sends_warns_in_plain_words_and_still
     assert set_task_model(api, HAIKU)["warning"] == ""
     set_task_model(api, None)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO approvals(id,kind,requested_by,created) VALUES('ap-1','send','bot:ops',?)", (H.now(),))
+        c.execute("INSERT INTO approvals(id,kind,requested_by,created_at) VALUES('ap-1','send','bot:ops',?)", (H.now(),))
     saved = set_task_model(api, HAIKU)
     assert saved["task_model"]["model"] == "claude-haiku-5-5", "it still saves"
     assert saved["warning"] == ("This bot sends messages for you. Haiku 5.5 is a cheaper model than its own Sonnet 5.5, "

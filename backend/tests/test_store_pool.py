@@ -278,10 +278,10 @@ def test_sweep_deltas_drops_a_finished_runs_text_pieces_after_a_day_only(tmp_pat
         "f-final-text": (day(4), day(3), "Hello", False, None), # no message, but attempts.final_text holds the reply
     }
     with s.transaction() as c:
-        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created TEXT, finished TEXT, final_text TEXT)")
+        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created_at TEXT, finished_at TEXT, final_text TEXT)")
         c.execute("CREATE TABLE jobs(id TEXT PRIMARY KEY, attempt_id TEXT, state TEXT)")
         c.execute("CREATE TABLE attempt_events(id INTEGER PRIMARY KEY, attempt_id TEXT, seq INTEGER, kind TEXT, "
-                  "payload TEXT, created TEXT, UNIQUE(attempt_id,seq))")
+                  "payload TEXT, created_at TEXT, UNIQUE(attempt_id,seq))")
         c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         for aid, (created, finished, final_text, final_msg, job) in runs.items():
             c.execute("INSERT INTO attempts VALUES(?,?,?,?)", (aid, created, finished, final_text))
@@ -292,7 +292,7 @@ def test_sweep_deltas_drops_a_finished_runs_text_pieces_after_a_day_only(tmp_pat
                       (4, "message", '{"text":"Hello","final":true}' if final_msg else '{"text":"Hel"}'),
                       (5, "tool", '{"tool":"x"}')]
             for seq, kind, payload in events:
-                c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created) VALUES(?,?,?,?,?)",
+                c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)",
                           (aid, seq, kind, payload, created))
     assert sweep_deltas(s, now, batch=1) == 4          # batch=1: one row per transaction, the pass still drains
     with s.read() as c:
@@ -361,11 +361,11 @@ def test_sweep_tokens_drops_a_finished_runs_token_rows_after_a_week_only(tmp_pat
         "g-turn-open": (day(10), day(9), (None, None, None), None),     # the turn was never finished
     }
     with s.transaction() as c:
-        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created TEXT, finished TEXT)")
+        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created_at TEXT, finished_at TEXT)")
         c.execute("CREATE TABLE jobs(id TEXT PRIMARY KEY, attempt_id TEXT, state TEXT)")
-        c.execute("CREATE TABLE turns(id TEXT PRIMARY KEY, finished TEXT, input_tokens INTEGER, usage_reason TEXT)")
+        c.execute("CREATE TABLE turns(id TEXT PRIMARY KEY, finished_at TEXT, input_tokens INTEGER, usage_reason TEXT)")
         c.execute("CREATE TABLE attempt_events(id INTEGER PRIMARY KEY, attempt_id TEXT, seq INTEGER, kind TEXT, "
-                  "payload TEXT, created TEXT, UNIQUE(attempt_id,seq))")
+                  "payload TEXT, created_at TEXT, UNIQUE(attempt_id,seq))")
         c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         for aid, (created, finished, turn, job) in runs.items():
             c.execute("INSERT INTO attempts VALUES(?,?,?)", (aid, created, finished))
@@ -376,14 +376,14 @@ def test_sweep_tokens_drops_a_finished_runs_token_rows_after_a_week_only(tmp_pat
             events = [(1, "delta", '{"text":"Hel"}'), (2, "tokens", '{"input":900,"output":12}'),
                       (3, "message", '{"text":"Hello","final":true}'), (4, "tokens", '{"input":40,"output":0}')]
             for seq, kind, payload in events:
-                c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created) VALUES(?,?,?,?,?)",
+                c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)",
                           (aid, seq, kind, payload, created))
     with s.read() as c:
-        totals = c.execute("SELECT id,finished,input_tokens,usage_reason FROM turns ORDER BY id").fetchall()
+        totals = c.execute("SELECT id,finished_at,input_tokens,usage_reason FROM turns ORDER BY id").fetchall()
     assert sweep_tokens(s, now, batch=1) == 4          # a-old and e-no-usage lose their two token rows each
     with s.read() as c:
         left = {(r[0], r[1]) for r in c.execute("SELECT attempt_id,seq FROM attempt_events")}
-        assert c.execute("SELECT id,finished,input_tokens,usage_reason FROM turns ORDER BY id").fetchall() == totals
+        assert c.execute("SELECT id,finished_at,input_tokens,usage_reason FROM turns ORDER BY id").fetchall() == totals
     everything = {(a, n) for a in runs for n in range(1, 5)}
     assert left == everything - {("a-old", 2), ("a-old", 4), ("e-no-usage", 2), ("e-no-usage", 4)}
     assert sweep_tokens(s, now) == 0, "the mark moved past what was swept"

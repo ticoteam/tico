@@ -130,7 +130,7 @@ def test_a_folded_question_gives_the_person_the_teams_days_from_the_latest_wordi
     quiet = _ask(api, attempt["token"], "Archive the spring drafts?", topic="spring", if_no_answer=default)
     with api.app.state.store.transaction() as c:
         old = H.shift(H.now(), days=-(ask_deadlines.EXPIRE_DAYS + 1))
-        c.execute("UPDATE messages SET created=? WHERE id IN (?,?)", (old, first["question"]["id"], quiet["question"]["id"]))
+        c.execute("UPDATE messages SET created_at=? WHERE id IN (?,?)", (old, first["question"]["id"], quiet["question"]["id"]))
     again = _ask(api, attempt["token"], "Archive the September and October drafts?", topic="drafts",
                  if_no_answer=default)
     spring = _ask(api, attempt["token"], "Archive the spring and summer drafts?", topic="spring", if_no_answer=default)
@@ -141,7 +141,7 @@ def test_a_folded_question_gives_the_person_the_teams_days_from_the_latest_wordi
         done = ask_deadlines.sweep(c)
         assert not ids & set(done["went_ahead"] + done["expired"]), "15 days after the first wording, 0 after the latest"
         asked = H.message(c, first["question"]["id"])
-        assert H.ask_clock(asked) == asked["refs"]["asked_again_at"] > asked["created"]
+        assert H.ask_clock(asked) == asked["refs"]["asked_again_at"] > asked["created_at"]
         assert not H.ask_older(asked)
         later = H.shift(H.now(), days=team_rules.load(c)["go_ahead_days"], hours=1)
         done = ask_deadlines.sweep(c, at=later)

@@ -353,7 +353,7 @@ async function mountBlank(shell) {
     if (setup) setup = {...setup, answers: {...setup.answers}};
     // Filed from another browser and still being worked on: the notice, not the questions. Its thirty minutes
     // count from when the task was filed, so a reload never starts them again.
-    const filed = Date.parse(setup?.task?.created || '');
+    const filed = Date.parse(setup?.task?.created_at || '');
     if (setup?.task && !['done', 'closed', 'declined'].includes(setup.task.status) && !marketResearchGet()
         && Date.now() - filed < MARKET_RESEARCH_MAX)
       marketResearchSet({at: filed, task: setup.task.id, base: null});

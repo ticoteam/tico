@@ -31,14 +31,14 @@ def reply(api, r, attempt, words):
 def room_messages(api):
     room = get(api, "assistant")["room_id"]
     with api.app.state.store.read() as c:
-        return [dict(m) for m in c.execute("SELECT id, from_actor, body, created FROM messages WHERE conversation_id=? "
-                                           "ORDER BY created, rowid", (room,))]
+        return [dict(m) for m in c.execute("SELECT id, from_actor, body, created_at FROM messages WHERE conversation_id=? "
+                                           "ORDER BY created_at, rowid", (room,))]
 
 
 def backdate(api, minutes, *ids):
     with api.app.state.store.transaction() as c:
         for i, mid in enumerate(ids):
-            c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), seconds=-minutes * 60 - len(ids) + i),
+            c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), seconds=-minutes * 60 - len(ids) + i),
                                                                     mid))
 
 

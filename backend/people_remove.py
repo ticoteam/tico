@@ -40,7 +40,7 @@ def recent_history(c, pid):
               "SELECT 1 FROM messages WHERE to_actor IN (?,?)")
     if any(c.execute(sql + " LIMIT 1", ids).fetchone() for sql in checks):
         return True
-    return bool(c.execute("SELECT 1 FROM human_tokens WHERE human=? AND last_used IS NOT NULL", (pid,)).fetchone()
+    return bool(c.execute("SELECT 1 FROM human_tokens WHERE human=? AND last_used_at IS NOT NULL", (pid,)).fetchone()
                 or c.execute("SELECT 1 FROM oidc_sessions WHERE human=?", (pid,)).fetchone())
 
 
@@ -50,8 +50,8 @@ def history(c, pid):
     from .devcopy import data_tables, quote
     ids = _ids(pid)
     quoted = '"' + ids[1] + '"'
-    if c.execute("SELECT 1 FROM human_tokens WHERE human=? AND last_used IS NOT NULL", (pid,)).fetchone():
-        return "human_tokens.last_used"
+    if c.execute("SELECT 1 FROM human_tokens WHERE human=? AND last_used_at IS NOT NULL", (pid,)).fetchone():
+        return "human_tokens.last_used_at"
     for table in sorted(set(data_tables(c)) - set(SKIP_TABLES)):
         columns = [row[1] for row in c.execute(f"PRAGMA table_info({quote(table)})")
                    if (table, row[1]) not in OWN_COLUMNS]
@@ -113,6 +113,6 @@ def remove(c, actor, roster, person):
         # A removed address no longer signs in on its own; the revision moves so an open People tab reloads first.
         Access._store(c, Access.ACCESS, {**stored, "allowed": [e for e in Access.emails(stored.get("allowed")) if e != email],
                                          "admins": [e for e in Access.emails(stored.get("admins")) if e != email],
-                                         "revision": int(stored.get("revision") or 0) + 1, "updated": H.now(),
+                                         "revision": int(stored.get("revision") or 0) + 1, "updated_at": H.now(),
                                          "updated_by": str(actor)})
     H.event(c, actor, "person.removed", pid, {"name": person.get("name") or "", "email": email})

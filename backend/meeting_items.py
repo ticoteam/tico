@@ -72,7 +72,7 @@ def comments(c, rid, people=None):
     """The thread on one meeting, oldest first, with the author's roster name."""
     people = people if people is not None else roster(c)
     out = []
-    for row in c.execute("SELECT * FROM meeting_comments WHERE meeting_id=? ORDER BY created, id", (rid,)):
+    for row in c.execute("SELECT * FROM meeting_comments WHERE meeting_id=? ORDER BY created_at, id", (rid,)):
         person = P.person(H.actor_id(row["author"]), people) if str(row["author"]).startswith("human:") else None
         out.append({**dict(row), "author_name": (person or {}).get("name") or row["author"]})
     return out
@@ -81,7 +81,7 @@ def comments(c, rid, people=None):
 def comment(c, record, who, body):
     """Anyone who can open the meeting can add to its thread; the recorder's own note is separate."""
     ts, cid = H.now(), H.new_id()
-    c.execute("INSERT INTO meeting_comments(id,meeting_id,author,text,at_ms,created) VALUES(?,?,?,?,?,?)",
+    c.execute("INSERT INTO meeting_comments(id,meeting_id,author,text,at_ms,created_at) VALUES(?,?,?,?,?,?)",
               (cid, record["id"], who.actor, body.text.strip(), body.at_ms, ts))
     H.event(c, who.actor, "meeting.comment_added", record["id"], {"comment": cid})
     return comments(c, record["id"])[-1]
@@ -131,7 +131,7 @@ def listing(c, who, rid):
     """Every item on this meeting, grouped by section, plus whether this person may push."""
     record = media.authorized(c, who, rid)
     rows = [view(r) for r in c.execute(
-        "SELECT * FROM meeting_items WHERE meeting_id=? ORDER BY created, id", (rid,))]
+        "SELECT * FROM meeting_items WHERE meeting_id=? ORDER BY created_at, id", (rid,))]
     return {"id": rid, "can_push": media.may_write(who, record),
             "sections": {section: [r for r in rows if r["section"] == section] for section in SECTIONS},
             "counts": {"proposed": sum(1 for r in rows if r["status"] == "proposed" and r["section"] in PUSHABLE)}}
@@ -144,7 +144,7 @@ def add(c, record, author, body):
     detail = detail_of(section, body.detail)
     ts, iid = H.now(), H.new_id()
     c.execute("INSERT INTO meeting_items(id,meeting_id,section,text,detail,quote,at_ms,status,"
-              "created_by,updated_by,pushed_at,result_ref,created,updated) "
+              "created_by,updated_by,pushed_at,result_ref,created_at,updated_at) "
               "VALUES(?,?,?,?,?,?,?,'proposed',?,NULL,NULL,NULL,?,?)",
               (iid, record["id"], section, body.text.strip(), json.dumps(detail, sort_keys=True),
                body.quote.strip(), body.at_ms, author, ts, ts))
@@ -158,7 +158,7 @@ def edit(c, rid, author, iid, body):
         raise Problem("validation", "Change the text, the detail, or delete the item", 422)
     if body.status == "dismissed" and row["status"] != "proposed":
         raise Problem("status", "Only a proposed item can be deleted", 409)
-    sets, args = ["updated_by=?", "updated=?"], [author, H.now()]
+    sets, args = ["updated_by=?", "updated_at=?"], [author, H.now()]
     if body.text is not None:
         sets.append("text=?"); args.append(body.text.strip())
     if body.detail is not None:
@@ -174,7 +174,7 @@ def edit(c, rid, author, iid, body):
 # ----------------------------------------------------------------------------- what Push makes
 def source(settings, record, row, name):
     """The footer every pushed item carries: which meeting it came from, and the words it quotes."""
-    started = str(record["metadata"].get("started") or record["created"])[:10]
+    started = str(record["metadata"].get("started") or record["created_at"])[:10]
     lines = [f"From meeting: {record['title']}, {started} — {name}"]
     if row["quote"]:
         lines.append("> " + row["quote"].replace("\n", " "))
@@ -303,7 +303,7 @@ def record_push(c, who, rid, iid, ref):
     if row["status"] == "pushed":                 # a second click, or a concurrent one: one result
         return view(row)
     ts = H.now()
-    c.execute("UPDATE meeting_items SET status='pushed',result_ref=?,pushed_at=?,updated_by=?,updated=? "
+    c.execute("UPDATE meeting_items SET status='pushed',result_ref=?,pushed_at=?,updated_by=?,updated_at=? "
               "WHERE id=? AND meeting_id=?", (ref, ts, who.actor, ts, iid, rid))
     H.event(c, who.actor, "meeting.item_pushed", rid,
             {"item": iid, "section": row["section"], "result": ref})

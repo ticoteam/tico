@@ -24,7 +24,7 @@ const SHOTS = process.env.TASK_CODE_SHOTS || '';
 const now = new Date().toISOString();
 const worktreeError = 'This bot needs write access to the attached repository. Literal <b>diagnostic</b>: /workspace/' + 'nested-directory-'.repeat(24) + '/checkout';
 const task = (id, over = {}) => ({id, title: id, body: 'Details.', owner: 'bot:eng', requester: 'human:ana', status: 'doing',
-  lane: 'company', rank: 1, labels: [], links: [], parts: {total: 0, done: 0}, version: 2, created: now, updated: now, ...over});
+  lane: 'company', rank: 1, labels: [], links: [], parts: {total: 0, done: 0}, version: 2, created_at: now, updated_at: now, ...over});
 const pr = (id, number, title, over = {}) => ({id, kind: 'pr', repo: 'acme/web', number, url: `https://github.com/acme/web/pull/${number}`,
   title, state: 'open', checks: 'passing', mergeable: 'clean', review_state: null, pending_comments: 0, ...over});
 function fixtures() {
@@ -67,23 +67,23 @@ function fixtures() {
   const ago = s => new Date(Date.now() - s * 1000).toISOString();
   const runView = {task_id: 't-checkout', checkpoint: {text: 'Summary step built; receipts next.', at: ago(300), by: 'bot:eng'},
     runs: [
-      {id: 'a2', bot: 'eng', job: 'j1', try: 2, tries: 2, state: 'running', outcome: null, created: ago(120), started: ago(118), finished: null,
+      {id: 'a2', bot: 'eng', job: 'j1', try: 2, tries: 2, state: 'running', outcome: null, created_at: ago(120), started_at: ago(118), finished_at: null,
        took_s: null, ran_on: {segments: [{model: 'claude-opus-5-5', effort: 'high'}],
          task_model: {source: 'fallback', note: "Ran on the bot's model claude-opus-5-5 (high): task model grok-4.6 (low) could not run (grok is not signed in on this bot's computer)"}},
        lease: [], reason: null, next: null,
        wake: {class: 'batched', reason: 'Review comments', preset: 'token_saver', preset_label: 'Token saver', held_until: ago(125)},
        subagents: [{id: 'g1', parent_id: null, type: 'general-purpose', model: null, status: 'completed', background: true, tool_uses: 3, duration_ms: 42000, running: false},
          {id: 'g2', parent_id: 'g1', type: 'Explore', model: 'claude-haiku-5-5', status: null, background: false, tool_uses: null, duration_ms: null, running: true}],
-       background: [{id: 'b1', tool: 'Bash', summary: 'npm', status: null, started: ago(60), ended: null, running: true},
-         {id: 'b2', tool: 'Monitor', summary: 'tail', status: 'completed', started: ago(90), ended: ago(80), running: false}]},
-      {id: 'a1', bot: 'eng', job: 'j1', try: 1, tries: 2, state: 'expired', outcome: 'interrupted', created: ago(900), started: ago(898), finished: ago(600),
+       background: [{id: 'b1', tool: 'Bash', summary: 'npm', status: null, started_at: ago(60), ended: null, running: true},
+         {id: 'b2', tool: 'Monitor', summary: 'tail', status: 'completed', started_at: ago(90), ended: ago(80), running: false}]},
+      {id: 'a1', bot: 'eng', job: 'j1', try: 1, tries: 2, state: 'expired', outcome: 'interrupted', created_at: ago(900), started_at: ago(898), finished_at: ago(600),
        took_s: 298, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [{kind: 'grace', at: ago(610)}],
        reason: 'Lease expired before completion', next: {kind: 'resumed', by: 'keeper', at: ago(130), note: 'Resumed automatically: it recorded no tool call.'},
        // Resumed by Tico, then the job ran try 2: the decision is history, with no state of the later try.
        job_state: 'running', decision: {decision: 'resume', run_id: 'a1', current: false, state: null, by: 'keeper', by_kind: 'tico',
          at: '2026-10-26T07:05:00Z', note: 'Resumed automatically: it recorded no tool call.'}, subagents: [], background: []},
       // The Dev 563 shape: cut at its time limit, then dismissed by BotOps with a note (job_recovery).
-      {id: 'a0', bot: 'eng', job: 'j0', try: 1, tries: 1, state: 'interrupted', outcome: 'interrupted', created: ago(5400), started: ago(5398), finished: ago(1800),
+      {id: 'a0', bot: 'eng', job: 'j0', try: 1, tries: 1, state: 'interrupted', outcome: 'interrupted', created_at: ago(5400), started_at: ago(5398), finished_at: ago(1800),
        took_s: 3598, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [], reason: 'Timeout: max_run_minutes (60 minutes)',
        next: {kind: 'dismissed', by: 'bot:botops', at: '2026-10-26T09:50:45.103088Z', note: 'Finished before the 60-min limit. Nothing to redo.'},
        job_state: 'canceled', decision: {decision: 'dismiss', run_id: 'a0', current: true, state: 'canceled', by: 'bot:botops', by_kind: 'botops',
@@ -99,12 +99,12 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     data.tasks.push(task('t-outward', {title: 'Choose the rollout day', owner: 'human:ben', requester: 'bot:eng', status: 'open'}),
       task('t-finished', {title: 'Check the receipt wording', status: 'closed', requester: 'bot:eng', done_at: now, closed_at: now}),
       ...data.tree.map(({children, ...t}) => task(t.id, {...t, relations: {parent: [{id: 't-checkout', title: 'Ship the checkout redesign', status: 'doing', owner: 'bot:eng', direction: 'out'}]}})));
-    data.comments = [{id: 'm1', kind: 'say', from_actor: 'bot:eng', body: 'The draft is checked.', created: now, refs: {task: 't-checkout', note: true}},
-      {id: 'm2', kind: 'ask', from_actor: 'bot:eng', body: 'Which rollout day?', created: now, answers: [], refs: {task: 't-checkout',
+    data.comments = [{id: 'm1', kind: 'say', from_actor: 'bot:eng', body: 'The draft is checked.', created_at: now, refs: {task: 't-checkout', note: true}},
+      {id: 'm2', kind: 'ask', from_actor: 'bot:eng', body: 'Which rollout day?', created_at: now, answers: [], refs: {task: 't-checkout',
         questions: [{id: 'day', question: 'Which rollout day?', options: [{label: 'Tuesday'}, {label: 'Thursday'}], multi: true, other: true}]}}];
     data.events = [{id: 'e1', ts: now, actor: 'bot:eng', field: 'status', old: 'open', new: 'doing', note: 'The draft is checked.'}];
     data.files = [{id: 'f-notes', name: 'review.md', mime: 'text/markdown', current_version: 2, archived: false,
-      versions: [2, 1].map(n => ({n, size: 48, mime: 'text/markdown', created: now, by: 'bot:eng',
+      versions: [2, 1].map(n => ({n, size: 48, mime: 'text/markdown', created_at: now, by: 'bot:eng',
         url: `/api/v2/files/f-notes?v=${n}`, answers: []}))}];
   }
   const page = await browser.newPage({viewport, hasTouch: viewport.width <= 390, serviceWorkers: 'block'});
@@ -192,7 +192,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (rich && p === '/api/v2/files/f-notes') return route.fulfill({contentType: 'text/markdown', body: '# Review\n\nReceipt check version ' + url.searchParams.get('v') + '.'});
     if (rich && p.endsWith('/comments') && method === 'POST') {
       const body = req.postDataJSON(); writes.push({method, p, body});
-      data.comments.push({id: 'm3', kind: 'say', from_actor: 'human:ana', body: body.text, created: now, refs: {task: 't-checkout'}});
+      data.comments.push({id: 'm3', kind: 'say', from_actor: 'human:ana', body: body.text, created_at: now, refs: {task: 't-checkout'}});
       return json({woke: true});
     }
     return json(unrouted(p));
@@ -593,7 +593,7 @@ async function botDetail(browser) {
     const historyNotes = await manager.page.evaluate(() => {
       const ts = new Date().toISOString(), note = 'Receipt check complete.';
       const events = ['done', 'closed'].map((status, i) => ({kind: 'event', ts, actor: 'bot:eng', field: 'status', old: i ? 'done' : 'doing', new: status, note}));
-      const comment = {kind: 'comment', ts, message: {from_actor: 'bot:eng', body: note, kind: 'say', created: ts, refs: {}}};
+      const comment = {kind: 'comment', ts, message: {from_actor: 'bot:eng', body: note, kind: 'say', created_at: ts, refs: {}}};
       const all = [...events, comment];
       return {html: all.map((x, i) => commentLineHTML(x, i, all)).join(''),
         otherActor: commentLineHTML(events[0], 0, [events[0], {...comment, message: {...comment.message, from_actor: 'human:ana'}}]),

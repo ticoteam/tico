@@ -1050,7 +1050,7 @@ def test_a_review_tasks_holds_page_by_cursor_within_a_byte_budget(ruled, monkeyp
         row = dict(hold_row(api, first["id"]))
         for n in range(60):
             c.execute("INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
-                      "reviewer, task_id, state, nonce, verdict, created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                      "reviewer, task_id, state, nonce, verdict, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                       (f"h-{n:03d}", "message", json.dumps({"text": big, "replay": {}}), row["author"],
                        row["destinations"], row["rule_ids"], row["reviewer"], task_id, "held", f"n{n}",
                        row["verdict"], f"2026-01-01T00:00:{n:02d}Z"))
@@ -1247,7 +1247,7 @@ def test_a_rule_added_since_an_approval_is_checked_on_the_mails_addresses_and_ho
     assert outcomes == ["held"] * 3
     assert "vendor@outside.example" in judge.calls[-1]["state"]["context"]["to"]
     rows = sql(api, "SELECT id, state, json_extract(verdict,'$.used') AS used FROM org_rule_holds "
-                    "WHERE operation='mail' ORDER BY created")
+                    "WHERE operation='mail' ORDER BY created_at")
     assert [(r["state"], r["used"]) for r in rows] == [("sent", "superseded"), ("held", None)]
     assert len({r["task_id"] for r in sql(api, "SELECT task_id FROM org_rule_holds WHERE task_id IS NOT NULL")}) == 2
     send_anyway(api, rows[1]["id"])
@@ -1520,7 +1520,7 @@ def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled):
     assert sql(api, "SELECT id FROM messages WHERE from_actor='bot:ops'") == []
     assert sql(api, "SELECT id FROM updates WHERE bot='ops'") == []
     assert sql(api, "SELECT id FROM tasks WHERE title='Palette' OR owner='bot:ops'") == []
-    held = sql(api, "SELECT operation FROM org_rule_holds ORDER BY created")
+    held = sql(api, "SELECT operation FROM org_rule_holds ORDER BY created_at")
     assert [h["operation"] for h in held] == ["message", "update", "update", "task_question"]
     # An update is judged for the whole company, which reads it; a question for the person asked.
     assert "Cara" in judge.calls[1]["state"]["to"] and judge.calls[3]["state"]["to"] == ["Ana"]

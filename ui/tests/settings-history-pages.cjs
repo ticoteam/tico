@@ -19,7 +19,7 @@ const {unrouted} = require('./support/routes.cjs');
     const CHANGES = ['h1', 'o1', 'h2', 'h3', 'o2', 'h4', 'h5'].map((id, i) => ({
       id, bot: id.startsWith('h') ? 'helper' : 'ops', field: 'identity',
       before: {display_name: `Name ${i + 1}`, description: ''}, after: {display_name: `Name ${i + 2}`, description: ''},
-      actor: 'ana', via: '', transition_id: null, created: at(i * 10), undone_at: null, can_undo: true}));
+      actor: 'ana', via: '', transition_id: null, created_at: at(i * 10), undone_at: null, can_undo: true}));
     // A change still in progress: the owner's first page carries it, and no later page does.
     const PENDING = {id: 'tr1', bot: 'ops', kind: 'model', state: 'prepared', progress: {prepared: 0, total: 1},
       checkpoints: []};

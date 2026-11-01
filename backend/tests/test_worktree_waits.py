@@ -28,8 +28,8 @@ def setup_wait(api, tid, readiness=READY):
         links = []
         for i in range(W.LIMIT):
             link = uuid.uuid4().hex
-            c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,computer_id,"
-                      "path,detail,updated) VALUES(?,?,'worktree',?,'w','present','bot:cmo',?,'Acme/product',?,"
+            c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,repo,branch,computer_id,"
+                      "path,detail,updated_at) VALUES(?,?,'worktree',?,'w','present','bot:cmo',?,'Acme/product',?,"
                       "'r1',?,?,?)", (link, filler['id'], 'worktree:' + link, H.now(), f'tico/f{i}',
                                       f'tasks/{filler["id"][:8]}/f{i}',
                                       json.dumps({'owner': 'bot:cmo', 'checkout_state': 'ready'}), H.now()))
@@ -346,7 +346,7 @@ def test_a_wait_whose_task_got_blocked_is_cancelled_not_served(prepared):
     with api.app_state.store.transaction() as c:
         blocker = H.task_create(c, 'human:ana', 'Blocker', 'First this', 'bot:cpo')['id']
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (blocker,))
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'blocks',?)",
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
                   (blocker, tid, H.now()))
     free(api, filler, links[0])
     wait = rows(api, 'SELECT * FROM worktree_waits WHERE task_id=?', (tid,))[0]
@@ -396,12 +396,12 @@ def test_served_wait_reuses_removed_link_without_old_cleanup_intent(prepared):
                  held='held: live turn',
                  cleanup_attempts=W.CLEANUP_TRIES, cleanup_gave_up=True, cleanup_retry_at=H.now())
     with api.app_state.store.transaction() as c:
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,computer_id,"
-                  "path,detail,updated) VALUES(?,?,'worktree',?,'w','removed','bot:cmo',?,'Acme/product',"
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,repo,branch,computer_id,"
+                  "path,detail,updated_at) VALUES(?,?,'worktree',?,'w','removed','bot:cmo',?,'Acme/product',"
                   "'tico/retired','r1',?,?,?)",
                   (retired, tid, 'worktree:' + retired, old, f'tasks/{tid[:8]}/Acme__product', json.dumps(stale), old))
         pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/7')
-        c.execute("UPDATE task_links SET state='merged',created=?,branch='tico/retired',detail=? WHERE id=?",
+        c.execute("UPDATE task_links SET state='merged',created_at=?,branch='tico/retired',detail=? WHERE id=?",
                   (old, json.dumps({'head_sha': 'a' * 40}), pr['id']))
     assert post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').status_code == 409
     with api.app_state.store.transaction() as c:

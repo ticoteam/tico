@@ -386,7 +386,7 @@ class Vault:
 
     @staticmethod
     def brief(row):
-        return {k: row[k] for k in ('id', 'name', 'username', 'kind', 'env', 'preview', 'source', 'revision', 'created', 'updated')} | {
+        return {k: row[k] for k in ('id', 'name', 'username', 'kind', 'env', 'preview', 'source', 'revision', 'created_at', 'updated_at')} | {
             'stored': row['ciphertext'] is not None, 'env': model_env(row['name'], row['kind'], row['env'])}
 
     def member_stores(self, c, who, bot):
@@ -424,10 +424,10 @@ class Vault:
             raise Problem('credential', 'Enter a credential name', 422)
         refuse_reserved(model_env(name, body.kind, body.env), old['env'] if old else '')
         # `member_stored` is set once, on insert: only a credential a member stored for their bot is ever theirs (`owned`).
-        c.execute('INSERT INTO credentials(id,name,username,kind,env,preview,ciphertext,nonce,source,created,updated,updated_by,'
+        c.execute('INSERT INTO credentials(id,name,username,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,updated_by,'
                   'created_by,member_stored) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,username=excluded.username,'
                   'kind=excluded.kind,env=excluded.env,preview=excluded.preview,ciphertext=excluded.ciphertext,nonce=excluded.nonce,'
-                  'source=excluded.source,revision=credentials.revision+1,updated=excluded.updated,updated_by=excluded.updated_by',
+                  'source=excluded.source,revision=credentials.revision+1,updated_at=excluded.updated_at,updated_by=excluded.updated_by',
                   (cid,name,body.username,body.kind,model_env(name,body.kind,body.env),preview,ciphertext,nonce,body.source,now,now,who.actor,who.actor,
                    int(member)))
         H.event(c,who.actor,'credential.updated' if old else 'credential.created',cid,{'secret_changed':secret is not None})
@@ -482,7 +482,7 @@ class Vault:
         inferred = model_env(row['name'], row['kind'], row['env'])
         if inferred and not row['env']:
             # Older name-only model keys gain a variable only when someone grants them.
-            c.execute('UPDATE credentials SET env=?,revision=revision+1,updated=?,updated_by=? WHERE id=?',
+            c.execute('UPDATE credentials SET env=?,revision=revision+1,updated_at=?,updated_by=? WHERE id=?',
                       (inferred,H.now(),who.actor,cid))
             row=self.row(c,cid)
         if subject == COMPUTERS:
@@ -518,7 +518,7 @@ class Vault:
         c.execute('UPDATE credential_grants SET revoked=?,revoked_by=? WHERE credential_id=? AND subject=? AND revoked IS NULL',
                   (H.now(),who.actor,cid,subject))
         gid=H.new_id()
-        c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,parent_id,created) VALUES(?,?,?,?,?,?)',
+        c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,parent_id,created_at) VALUES(?,?,?,?,?,?)',
                   (gid,cid,subject,who.actor,parent,H.now()))
         H.event(c,who.actor,'credential.granted',cid,{'grant':gid,'subject':subject,'parent':parent})
         if subject.startswith('bot:') and row['env']:
@@ -566,7 +566,7 @@ def record_use(c,actor,action,cid,detail,windowed):
 
 
 def last_used(c,cid):
-    """`last_used` (when) and `last_used_by` (the bot's slug; empty when a computer took it for no one bot, a model
+    """`last_used_at` (when) and `last_used_by` (the bot's slug; empty when a computer took it for no one bot, a model
     key) for Library › Tools: the newest use of the credential, from credential_uses."""
     row=c.execute('SELECT at,bot FROM credential_uses WHERE credential_id=? ORDER BY at DESC LIMIT 1',(cid,)).fetchone()
     if not row:
@@ -640,10 +640,10 @@ def install_credentials(app,store,delegate=None,propose=None):
                     continue
                 cid,gid,now=H.new_id(),H.new_id(),H.now()
                 ciphertext,nonce=vault.cipher.encrypt(c,cid,item.value.get_secret_value())
-                c.execute('INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created,updated,updated_by) '
+                c.execute('INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,updated_by) '
                           'VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                           (cid,f'{item.env} ({label})',item.kind,item.env,'••••••',ciphertext,nonce,'Computer migration',now,now,who.actor))
-                c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) VALUES(?,?,?,?,?)',
+                c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)',
                           (gid,cid,subject,who.actor,now))
                 H.event(c,who.actor,'credential.migrated',cid,{'env':item.env,'bot':bot,'grant':gid})
             if first:
@@ -687,7 +687,7 @@ def install_credentials(app,store,delegate=None,propose=None):
                 added|=mine
                 item=vault.brief(row)|{'can_reveal':revealable}|last_used(c,row['id'])
                 item['grants']=[dict(g)|{'can_revoke':admin or ((mine or g['granted_by']==who.actor) and bool(vault.manages_bot(c,who,g['subject'])))}
-                                for g in c.execute('SELECT id,subject,granted_by,parent_id,created FROM credential_grants WHERE credential_id=? AND revoked IS NULL',(row['id'],))
+                                for g in c.execute('SELECT id,subject,granted_by,parent_id,created_at FROM credential_grants WHERE credential_id=? AND revoked IS NULL',(row['id'],))
                                 if effective_grant(c,row['id'],g['subject']) and (admin or mine or g['subject']==who.actor or g['granted_by']==who.actor)]
                 rows.append(item)
             people=[dict(r) for r in c.execute('SELECT id,name,email FROM humans ORDER BY name')] if admin else []

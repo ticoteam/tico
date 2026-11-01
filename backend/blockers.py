@@ -28,7 +28,7 @@ def devops(c):
 def ticket_of_pr(c, repository, number):
     """The open task a pull request is linked on, or None: whose type manager hears when there is no DevOps."""
     url = f"https://github.com/{repository}/pull/{int(number)}".lower()
-    for (task_id,) in c.execute("SELECT task_id FROM task_links WHERE kind='pr' AND lower(url)=? ORDER BY created DESC",
+    for (task_id,) in c.execute("SELECT task_id FROM task_links WHERE kind='pr' AND lower(url)=? ORDER BY created_at DESC",
                                 (url,)):
         row = H.task(c, task_id)
         if row and row["status"] in H.ACTIVE_STATUSES:

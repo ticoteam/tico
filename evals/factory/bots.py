@@ -244,7 +244,7 @@ class Bot:
             pr = self.world.pr_of(task["id"])
             return bool(pr) and self.world.prs[pr]["head"] != head
         moved = self.world.step_entered_at(task["id"], claimed_by="bot:" + self.slug)
-        return bool(moved and message.get("created") and message["created"] < moved)
+        return bool(moved and message.get("created_at") and message["created_at"] < moved)
 
     # ------------------------------------------------------------------ role behaviour
     def act(self, task, message):

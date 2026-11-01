@@ -87,7 +87,7 @@ _DUPLICATE = " OR ".join(
    AND (o.state<>'canceled' OR o.wake_carrier IS NOT NULL)
    LEFT JOIN jobs cj ON cj.id=o.wake_carrier LEFT JOIN attempts a ON a.id=coalesce(cj.attempt_id,o.attempt_id)
    WHERE m.id=NEW.message_id AND {_SAME_EVENT} AND (coalesce(cj.state,o.state) IN ('queued','leased','running','input')
-   OR a.finished>=strftime('%Y-%m-%dT%H:%M:%fZ',m.created,'-{DUPLICATE_SECONDS} seconds')))""" for earlier in _EARLIER)
+   OR a.finished_at>=strftime('%Y-%m-%dT%H:%M:%fZ',m.created_at,'-{DUPLICATE_SECONDS} seconds')))""" for earlier in _EARLIER)
 HOLD_TRIGGER = f"""CREATE TRIGGER wake_preset_hold AFTER INSERT ON jobs WHEN NEW.state='queued' BEGIN
  UPDATE jobs SET wake_preset=CASE WHEN (SELECT json_extract(config,'$.wake_preset') FROM bot_config
    WHERE bot=NEW.bot)='{TOKEN_SAVER}' THEN '{TOKEN_SAVER}' ELSE '{PERFORMANCE}' END WHERE id=NEW.id;
@@ -118,7 +118,7 @@ def ensure(c):
     H.add_column(c, "attempts", "wake", "TEXT")
     c.execute("CREATE INDEX IF NOT EXISTS jobs_held ON jobs(bot,hold_until) WHERE held=1")
     # The few held jobs still queued, in claim order: what tick reads every pass under the write lock (HELD_*_SQL).
-    c.execute("CREATE INDEX IF NOT EXISTS jobs_held_queued ON jobs(created, id) WHERE held=1 AND state='queued'")
+    c.execute("CREATE INDEX IF NOT EXISTS jobs_held_queued ON jobs(created_at, id) WHERE held=1 AND state='queued'")
     # The duplicate check seeks a room's messages before the new one by rowid (the index's implicit suffix), not a walk
     # through every earlier message from the same sender in every room.
     c.execute("CREATE INDEX IF NOT EXISTS messages_room_rowid ON messages(conversation_id)")
@@ -214,14 +214,14 @@ def release_quota_resets(c, at=None):
 # Read on every scheduler tick under the write lock. INDEXED BY jobs_held_queued: the planner otherwise scans
 # messages and seeks each job, because the stale sqlite_stat1 row for messages (16k rows when analysed, 72k
 # now) makes that look cheapest. 40-44 ms a tick on TIDY v0.5.1, 480 ticks an hour.
-HELD_NEW_SQL = ("SELECT j.id,j.bot,j.wake_preset,j.wake_class,j.created,m.conversation_id,m.refs "
+HELD_NEW_SQL = ("SELECT j.id,j.bot,j.wake_preset,j.wake_class,j.created_at,m.conversation_id,m.refs "
                 "FROM jobs j INDEXED BY jobs_held_queued JOIN messages m ON m.id=j.message_id "
                 "WHERE j.held=1 AND j.hold_until IS NULL AND j.hold_reason IS NULL AND j.state='queued' "
-                "ORDER BY j.created,j.id")
+                "ORDER BY j.created_at,j.id")
 HELD_DUE_SQL = ("SELECT j.id,j.bot,j.wake_preset,j.wake_class,j.message_id,m.conversation_id,m.refs "
                 "FROM jobs j INDEXED BY jobs_held_queued JOIN messages m ON m.id=j.message_id "
                 "WHERE j.held=1 AND j.state='queued' AND j.hold_until IS NOT NULL AND j.hold_until<=? "
-                "AND j.hold_reason IS NULL ORDER BY j.created,j.id")
+                "AND j.hold_reason IS NULL ORDER BY j.created_at,j.id")
 
 
 def tick(c, at=None):
@@ -260,21 +260,21 @@ def _sweep_slot(c, job, gap):
     """When this run of a sweep may start: now, or `gap` after the same sweep's last run started (its first claim,
     which a busy computer can put well after its planned release). None when the same sweep is still queued, held or
     let go, since this run adds nothing that one will not do."""
-    key, since = sweep_key(H._json(job["refs"], {}) or {}), H.shift(job["created"], seconds=-gap)
+    key, since = sweep_key(H._json(job["refs"], {}) or {}), H.shift(job["created_at"], seconds=-gap)
     last = None
     for row in c.execute("SELECT j.state,j.hold_until,m.refs,"
-                         "(SELECT min(a.created) FROM attempts a WHERE a.job_id=j.id) AS started "
+                         "(SELECT min(a.created_at) FROM attempts a WHERE a.job_id=j.id) AS started_at "
                          "FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE j.bot=? AND j.wake_class='sweep' AND j.id<>? AND j.state<>'canceled' "
                          "AND (j.state IN ('queued','leased','running','input') OR j.hold_until>? "
-                         "OR EXISTS(SELECT 1 FROM attempts a WHERE a.job_id=j.id AND a.created>?))",
+                         "OR EXISTS(SELECT 1 FROM attempts a WHERE a.job_id=j.id AND a.created_at>?))",
                          (job["bot"], job["id"], since, since)):
         if sweep_key(H._json(row["refs"], {}) or {}) != key:
             continue
         if row["state"] == "queued":
             return None
-        last = max(last or "", row["started"] or row["hold_until"])
-    return max(job["created"], H.shift(last, seconds=gap)) if last else job["created"]
+        last = max(last or "", row["started_at"] or row["hold_until"])
+    return max(job["created_at"], H.shift(last, seconds=gap)) if last else job["created_at"]
 
 
 def _batch_slot(c, job, values_of):
@@ -291,19 +291,19 @@ def _batch_slot(c, job, values_of):
     if waiting:
         return waiting
     if hour is not None:
-        return digest_time(job["created"], hour)
-    due = H.shift(job["created"], seconds=gap)
+        return digest_time(job["created_at"], hour)
+    due = H.shift(job["created_at"], seconds=gap)
     if per_bot:
         last = c.execute(f"SELECT max(hold_until) FROM jobs WHERE bot=? AND wake_class IN ({kinds},'digest') "
                          "AND held=0 AND hold_until>? AND hold_reason IS NULL",
-                         (job["bot"], H.shift(job["created"], seconds=-gap))).fetchone()[0]
+                         (job["bot"], H.shift(job["created_at"], seconds=-gap))).fetchone()[0]
         if last:
             due = max(due, H.shift(last, seconds=gap))
     return due
 
 
 def digest_time(created, hour):
-    """The next `hour`:00 in the team's time zone after `created` (a Lead's daily digest), as a UTC timestamp."""
+    """The next `hour`:00 in the team's time zone after `created_at` (a Lead's daily digest), as a UTC timestamp."""
     from datetime import timedelta, timezone
     from .updates import ZONE
     at = (H.parse_ts(created) or H.parse_ts(H.now())).astimezone(ZONE)
@@ -341,7 +341,7 @@ def _release(c, bot, jobs):
                  else f"{task['title']} ({task['id']})" if task
                  else str(newest.get("body") or "").splitlines()[0][:200] if newest.get("body") else "a notice")
         lines.append(f"- {what}: {where}; read them with `hub conversation show {conversation}`"
-                     + (f" (the oldest is from {first.get('created')}: page back with --before to reach it)"
+                     + (f" (the oldest is from {first.get('created_at')}: page back with --before to reach it)"
                         if len(held) > 1 else ""))
     if len(rooms) > DIGEST_ROOMS:
         lines.append(f"- and updates in {len(rooms) - DIGEST_ROOMS} more rooms; your open tasks list them")
@@ -367,9 +367,9 @@ def _on_one_page(c, jobs):
     """Whether the room page of the batch's newest turn still shows its oldest notice: at most half a page of
     messages from it on, and none of it before the room's session epoch (which the page starts from)."""
     from .execution import HISTORY_PAGE
-    oldest = c.execute("SELECT rowid,conversation_id,created FROM messages WHERE id=?", (jobs[0]["message_id"],)).fetchone()
-    epoch = c.execute("SELECT updated FROM session_epochs WHERE conversation_id=?", (oldest["conversation_id"],)).fetchone()
-    if epoch and epoch["updated"] and oldest["created"] < epoch["updated"]:
+    oldest = c.execute("SELECT rowid,conversation_id,created_at FROM messages WHERE id=?", (jobs[0]["message_id"],)).fetchone()
+    epoch = c.execute("SELECT updated_at FROM session_epochs WHERE conversation_id=?", (oldest["conversation_id"],)).fetchone()
+    if epoch and epoch["updated_at"] and oldest["created_at"] < epoch["updated_at"]:
         return False
     after = c.execute("SELECT count(*) FROM messages WHERE conversation_id=? AND rowid>=?",
                       (oldest["conversation_id"], oldest["rowid"])).fetchone()[0]
@@ -430,7 +430,7 @@ def record(c, job, message, bot=None):
         words = "A scheduled sweep" if cls == "sweep" and words == "A Tico notice" else words
     name = job["wake_preset"] or CURRENT
     out = {"class": cls, "reason": words, "preset": name, "preset_label": LABELS.get(name, LABELS[CURRENT]),
-           "event_at": message.get("created")}
+           "event_at": message.get("created_at")}
     if bot:
         from . import profiles
         out["profile"] = profiles.of_bot(c, bot)
@@ -462,9 +462,9 @@ def measures(c, since, until=None, limit=20000):
     and tokens are split evenly over the tickets it carried, so each is counted once."""
     until = until or H.now()
     rows = c.execute(
-        "SELECT j.id,j.state,j.wake_preset,j.wake_class,j.wake_carrier,m.created AS event_at,m.refs FROM jobs j "
+        "SELECT j.id,j.state,j.wake_preset,j.wake_class,j.wake_carrier,m.created_at AS event_at,m.refs FROM jobs j "
         "JOIN messages m ON m.id=j.message_id "
-        "WHERE j.created>=? AND j.created<? AND j.wake_preset IS NOT NULL ORDER BY j.created LIMIT ?",
+        "WHERE j.created_at>=? AND j.created_at<? AND j.wake_preset IS NOT NULL ORDER BY j.created_at LIMIT ?",
         (since, until, limit)).fetchall()
     runs = _runs(c, {r["id"] for r in rows} | {r["wake_carrier"] for r in rows if r["wake_carrier"]})
     carried = {}
@@ -527,7 +527,7 @@ def _runs(c, job_ids):
     out, ids = {}, sorted(i for i in job_ids if i)
     for n in range(0, len(ids), 500):
         part = ids[n:n + 500]
-        for row in c.execute("SELECT a.job_id,min(a.created) AS claimed,count(t.id) AS turns,"
+        for row in c.execute("SELECT a.job_id,min(a.created_at) AS claimed,count(t.id) AS turns,"
                              f"coalesce(sum({RUN_TOKENS}),0) AS tokens,"
                              "max(t.task_id) AS task FROM attempts a LEFT JOIN turns t ON t.id=a.id "
                              f"WHERE a.job_id IN ({','.join('?' * len(part))}) GROUP BY a.job_id", part):

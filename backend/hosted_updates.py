@@ -14,7 +14,7 @@ system.update events). Computers follow their server as always. An update alread
 finish. The outcome (updated, failed, rolled_back, or timed_out after SETTLE_S with no final state from the updater) is
 told to HQ at the next check-in, a minute later, and HQ clears the target. Each target staff set has its own
 `request_id`, and one request is acted on once: a failed or rolled-back update is never tried again until staff set
-the target again. A target the server is already on (or past) is reported `updated` without an update.
+the target again. A target the server is already on (or past) is reported `updated_at` without an update.
 
 The owner stays in control: their Update now still works, and while a target waits Health's Version line and the New
 version popover say "Tico will update this server to vX when idle" (`notice`).

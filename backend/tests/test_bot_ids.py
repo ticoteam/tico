@@ -30,11 +30,11 @@ ANA = H.human_actor("ana")
 OLD_BOTS_DDL = """CREATE TABLE IF NOT EXISTS bots (
   slug TEXT PRIMARY KEY, display_name TEXT, runtime TEXT, model TEXT, effort TEXT,
   cwd TEXT, host TEXT DEFAULT 'dispatcher', thread_id TEXT, token_hash TEXT,
-  state TEXT DEFAULT 'active', created TEXT, last_turn_at TEXT);"""
+  state TEXT DEFAULT 'active', created_at TEXT, last_turn_at TEXT);"""
 NEW_BOTS_DDL = """CREATE TABLE IF NOT EXISTS bots (
   id TEXT PRIMARY KEY NOT NULL, slug TEXT NOT NULL UNIQUE, display_name TEXT, runtime TEXT, model TEXT, effort TEXT,
   cwd TEXT, host TEXT DEFAULT 'dispatcher', thread_id TEXT, token_hash TEXT,
-  state TEXT DEFAULT 'active', created TEXT, last_turn_at TEXT);"""
+  state TEXT DEFAULT 'active', created_at TEXT, last_turn_at TEXT);"""
 
 # The 14 foreign keys into bots: 11 in store.SCHEMA, bot_tool_requests, bot_files and chat_goals.
 CHILD_TABLES = ("bot_config", "bot_control", "bot_transitions", "settings_changes", "bot_session_epochs",
@@ -122,7 +122,7 @@ class _Case(unittest.TestCase):
     def make_bot(self, slug, bot_id=None):
         """A bot made the way the app makes one: its id from H.new_bot_id unless given."""
         bot_id = bot_id or H.new_bot_id(slug)
-        self.conn.execute("INSERT INTO bots (id, slug, display_name, state, created) VALUES (?, ?, ?, 'active', ?)",
+        self.conn.execute("INSERT INTO bots (id, slug, display_name, state, created_at) VALUES (?, ?, ?, 'active', ?)",
                           (bot_id, slug, slug.title(), H.now()))
         return bot_id
 
@@ -136,7 +136,7 @@ class Upgrade(unittest.TestCase):
         self.addCleanup(self.conn.close)
         self.conn.execute("INSERT INTO humans (id, name, email) VALUES ('ana', 'Ana', 'ana@acme.example')")
         for slug in ("coo", "cmo", "ops-lead"):
-            self.conn.execute("INSERT INTO bots (slug, display_name, state, created) VALUES (?, ?, 'active', ?)",
+            self.conn.execute("INSERT INTO bots (slug, display_name, state, created_at) VALUES (?, ?, 'active', ?)",
                               (slug, slug.upper(), H.now()))
         for table in CHILD_TABLES:
             _insert_child_row(self.conn, table, "ops-lead")
@@ -241,7 +241,7 @@ class UpgradeBoot(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "hub.db"
             conn = _old_shape_database(path)
-            conn.execute("INSERT INTO bots (slug, display_name, state, created) VALUES ('ops-lead', 'Ops', 'paused', ?)",
+            conn.execute("INSERT INTO bots (slug, display_name, state, created_at) VALUES ('ops-lead', 'Ops', 'paused', ?)",
                          (H.now(),))
             conn.commit()
             conn.close()

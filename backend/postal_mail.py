@@ -422,7 +422,7 @@ class PostalMail:
         with self.store.read() as c:
             return [r["id"] for r in c.execute(
                 "SELECT id FROM mail_items WHERE status IN ('new','failed') AND attempts<? "
-                "AND (next_try IS NULL OR next_try<=?) ORDER BY received_at, id LIMIT ?",
+                "AND (next_try_at IS NULL OR next_try_at<=?) ORDER BY received_at, id LIMIT ?",
                 (MAX_ATTEMPTS, H.now(), BATCH)).fetchall()]
 
     def drain(self):
@@ -500,7 +500,7 @@ class PostalMail:
             c.execute("DELETE FROM mail_reads WHERE at<=?", (since,))
             read = c.execute("SELECT count(*) FROM mail_reads WHERE at>?", (since,)).fetchone()[0]
             if read >= READS_PER_DAY:
-                c.execute("UPDATE mail_items SET next_try=?,error='daily_cap',updated_at=? WHERE id=?",
+                c.execute("UPDATE mail_items SET next_try_at=?,error='daily_cap',updated_at=? WHERE id=?",
                           (H.shift(now, hours=1), now, row["id"]))
                 return True
             c.execute("INSERT INTO mail_reads VALUES(?,?)", (row["id"], now))
@@ -543,7 +543,7 @@ class PostalMail:
         attempts = row["attempts"] + 1
         wait = BACKOFF[min(attempts - 1, len(BACKOFF) - 1)]
         with self.store.transaction() as c:
-            c.execute("UPDATE mail_items SET status='failed',attempts=?,next_try=?,error=?,updated_at=? "
+            c.execute("UPDATE mail_items SET status='failed',attempts=?,next_try_at=?,error=?,updated_at=? "
                       "WHERE id=? AND status IN ('new','failed')",
                       (attempts, H.shift(H.now(), seconds=wait), str(code)[:80], H.now(), row["id"]))
             H.event(c, H.KEEPER, "mail.failed", row["id"], {"error": str(code)[:80], "attempts": attempts})
@@ -658,7 +658,7 @@ class PostalMail:
             file_added(c, KEEPER, task_id, item, number)
         status = "filed" if task_id else "archived"
         c.execute("UPDATE mail_items SET status=?,kind=?,summary=?,sender=?,deadline=?,task_id=?,file_id=?,blob_id=?,"
-                  "error='',next_try=NULL,updated_at=? WHERE id=?",
+                  "error='',next_try_at=NULL,updated_at=? WHERE id=?",
                   (status, kind or "other", reading["summary"], reading["sender"], reading["deadline"], task_id,
                    file_id, item["id"], H.now(), ident))
         H.event(c, H.KEEPER, "mail." + status, ident, {"kind": kind or "unread", "task": task_id})
@@ -682,7 +682,7 @@ class PostalMail:
 
     def retry(self, ident):
         with self.store.transaction() as c:
-            n = c.execute("UPDATE mail_items SET attempts=0,next_try=NULL,updated_at=? WHERE id=? AND status='failed'",
+            n = c.execute("UPDATE mail_items SET attempts=0,next_try_at=NULL,updated_at=? WHERE id=? AND status='failed'",
                           (H.now(), ident)).rowcount
         if n:
             self.kick()

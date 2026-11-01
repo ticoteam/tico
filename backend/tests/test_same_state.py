@@ -105,7 +105,7 @@ def changes(c, tid):
         c.execute("UPDATE tasks SET step_id=(SELECT id FROM task_steps LIMIT 1) WHERE id=?", (tid,))
 
     def relation():
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'related',?)",
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'related',?)",
                   (*sorted((other["id"], tid)), H.now()))
 
     def relation_state():
@@ -115,7 +115,7 @@ def changes(c, tid):
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (other["id"],))
 
     def pr_head():
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,pr_sha,checks) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,pr_sha,checks) "
                   "VALUES(?,?,'pr','https://github.com/o/r/pull/9','PR','open','bot:cpo',?,'abc','pending')",
                   ("lk" + tid[:8], tid, H.now()))
 

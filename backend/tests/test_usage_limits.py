@@ -151,7 +151,7 @@ def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_set
     with api.app.state.store.transaction() as c:                                  # an hour limit set before the half hour
         c.execute("INSERT INTO usage_limits(bot, hourly_usd) VALUES('ops', 1)")
     with api.app.state.store.read() as c:
-        started = c.execute("SELECT min(started) FROM turns WHERE bot='ops'").fetchone()[0]
+        started = c.execute("SELECT min(started_at) FROM turns WHERE bot='ops'").fetchone()[0]
         at = datetime.fromisoformat(started[:19]).replace(tzinfo=usage_limits.timezone.utc)
         assert usage_limits.blocked(c, "ops", at=at) == "hourly"                  # the run's own hour
         assert usage_limits.blocked(c, "ops", at=at + usage_limits.timedelta(hours=1)) is None

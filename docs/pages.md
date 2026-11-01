@@ -85,7 +85,7 @@ Stable v2 (`docs/openapi/v2.json`, tag **Pages**):
 | Call | What it does |
 |---|---|
 | `POST /api/v2/pages` | Publish: raw HTML with the fields in the query, or JSON with `name` and `text` or `content_base64` |
-| `GET /api/v2/pages/{file_id}` | `page`: `file_id, title, bot, bot_name, version, updated, updated_by, cadence, as_of, stale_days, replaced_by, archived, task_id, src`; `pinned`: where it is pinned |
+| `GET /api/v2/pages/{file_id}` | `page`: `file_id, title, bot, bot_name, version, updated_at, updated_by, cadence, as_of, stale_days, replaced_by, archived, task_id, src`; `pinned`: where it is pinned |
 | `GET /api/v2/pages?ids=a,b` | Up to 50 pages in that order, leaving out any the caller may not read |
 | `GET /api/v2/pages?bot=&task=` | Pages newest first, paged with `limit` and `cursor` |
 | `PATCH /api/v2/pages/{file_id}` | `cadence`, `as_of`, `replaced_by`, `archived` |

@@ -219,7 +219,7 @@ Values (`RUN_STATUSES`):
 - `ok`: finished successfully.
 - `failed`: finished with an error.
 - `empty`: finished with nothing to do.
-- `skipped`: not run, because the automation was paused or a newer run replaced it. `finished` is set.
+- `skipped`: not run, because the automation was paused or a newer run replaced it. `finished_at` is set.
 
 Transitions (`backend/automations.py`):
 
@@ -239,7 +239,7 @@ One delivery of one event to one endpoint.
 
 Values (`WEBHOOK_SEND_STATES`):
 
-- `ready`: waiting to be sent, or a retry is scheduled (`next_attempt`).
+- `ready`: waiting to be sent, or a retry is scheduled (`next_attempt_at`).
 - `sending`: claimed by a delivery worker.
 - `delivered`: the endpoint answered with a 2xx.
 - `failed`: retries are used up, or the endpoint refused it for good.

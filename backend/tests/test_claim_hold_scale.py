@@ -47,14 +47,14 @@ def seed(api):
         # Work for every bot: a chat each and three tasks each, as a busy install's queue holds.
         for s in slugs:
             room = f"chat-{s}"
-            c.execute("INSERT INTO conversations(id,kind,participants,created) VALUES(?,'chat',?,?)",
+            c.execute("INSERT INTO conversations(id,kind,participants,created_at) VALUES(?,'chat',?,?)",
                       (room, encode(["human:ana", "bot:" + s]), now))
             for k in range(3):
-                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs) "
+                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at,refs) "
                           "VALUES(?,?,'human:ana',?,'say','Synthetic work',?,'{}')",
                           (f"work-{s}-{k}", room, "bot:" + s, now))
         # Room for many turns on each computer, and up long enough to be trusted with a lease.
-        c.execute("UPDATE runners SET capacity=40,awake_since=?,last_seen=?", (H.shift(now, minutes=-10), now))
+        c.execute("UPDATE runners SET capacity=40,awake_since=?,last_seen_at=?", (H.shift(now, minutes=-10), now))
     return computers, places
 
 

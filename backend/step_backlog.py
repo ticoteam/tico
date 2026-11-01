@@ -104,7 +104,7 @@ def sweep(c, at=None):
             continue
         rows = H._rows(c.execute(
             f"SELECT * FROM tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
-            "ORDER BY created, id", (step["id"], *FINISHED)))
+            "ORDER BY created_at, id", (step["id"], *FINISHED)))
         rows = [row for row in rows if not H.task_private(c, row) and not {row["owner"], row["requester"]} & hidden]
         groups = {}
         for row in rows:

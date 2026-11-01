@@ -44,7 +44,7 @@ def at(monkeypatch, when, api=None):
     monkeypatch.setattr(H, "now", lambda: when)
     if api is not None:
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (when,))
+            c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (when,))
 
 
 def test_thirteen_queued_jobs_after_a_limit_start_one_probe_at_the_reset_not_thirteen_turns(api, monkeypatch):

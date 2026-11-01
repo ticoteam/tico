@@ -300,7 +300,7 @@ def test_meetings_and_a_granola_link_filed_under_the_old_address_follow_the_owne
     api = environment()
     with api.app.state.store.transaction() as c:
         for mid, owner, review in (("m-mine", "Morgan@acme.example", "pending"), ("m-riley", "riley@acme.example", "live")):
-            c.execute("INSERT INTO meetings(id,title,owner,metadata,created,updated,review_state) VALUES(?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at,review_state) VALUES(?,?,?,?,?,?,?)",
                       (mid, "Sync", owner, json.dumps({"owner": owner, "title": "Sync"}), H.now(), H.now(), review))
         c.execute("INSERT INTO meeting_deliveries(meeting_id,requested_by,sender_name,destination,instructions,requested_at) "
                   "VALUES('m-mine',?,'Morgan','bot:support','',?)", (OWNER_EMAIL, H.now()))

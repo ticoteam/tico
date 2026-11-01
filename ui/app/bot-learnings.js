@@ -15,7 +15,7 @@ async function botLearningsLoad(slug) {
   if (BOT?.slug !== slug || !button.isConnected) return;
   const docs = data.documents || {};
   if (!(data.updates || []).length && !Object.values(docs).some(t => String(t).trim()) &&
-      !Object.values(data.document_status || {}).some(s => s.oversized || s.updated)) return;
+      !Object.values(data.document_status || {}).some(s => s.oversized || s.updated_at)) return;
   learnBadge(button, data.unseen);
   button.hidden = false;
   button.onclick = async () => {
@@ -136,8 +136,8 @@ function learnOpen(slug, data) {
     d.querySelectorAll('[data-learn-view]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.learnView === view)));
     if (view !== 'updates') {
       const status = statuses[view];
-      const banner = status?.oversized ? `<div class="learn-warning" role="status">${status.updated
-        ? `File too large, showing the copy from ${esc(new Date(status.updated).toLocaleString())}.`
+      const banner = status?.oversized ? `<div class="learn-warning" role="status">${status.updated_at
+        ? `File too large, showing the copy from ${esc(new Date(status.updated_at).toLocaleString())}.`
         : 'File too large. No saved copy is available.'}</div>` : '';
       body.innerHTML = `${banner}<div class="md">${md(learnNewestFirst(docs[view]))}</div>`;
       return;

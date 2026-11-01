@@ -465,10 +465,10 @@ class Oidc:
         now = H.now()
         if previous:
             c.execute("DELETE FROM oidc_sessions WHERE id_hash=?", (digest(previous),))
-        c.execute("DELETE FROM oidc_sessions WHERE expires_at<=? OR last_seen<?",
+        c.execute("DELETE FROM oidc_sessions WHERE expires_at<=? OR last_seen_at<?",
                   (now, H.shift(now, seconds=-self.settings.session_idle_seconds)))
         sid = secrets.token_urlsafe(32)
-        c.execute("INSERT INTO oidc_sessions(id_hash,human,email,created,last_seen,expires_at) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO oidc_sessions(id_hash,human,email,created_at,last_seen_at,expires_at) VALUES(?,?,?,?,?,?)",
                   (digest(sid), human, email, now, now, H.shift(now, seconds=self.settings.session_absolute_seconds)))
         return sid
 
@@ -555,18 +555,18 @@ class Oidc:
         """The email behind a session id, from the cookie or from a bearer session."""
         if not raw:
             return None
-        row = c.execute("SELECT s.id_hash,s.last_seen,s.expires_at,h.email FROM oidc_sessions s "
+        row = c.execute("SELECT s.id_hash,s.last_seen_at,s.expires_at,h.email FROM oidc_sessions s "
                         "JOIN humans h ON h.id=s.human WHERE s.id_hash=?", (digest(raw),)).fetchone()
         if not row:
             return None
         now = H.now()
-        if row["expires_at"] <= now or row["last_seen"] < H.shift(now, seconds=-self.settings.session_idle_seconds):
+        if row["expires_at"] <= now or row["last_seen_at"] < H.shift(now, seconds=-self.settings.session_idle_seconds):
             return None
-        if row["last_seen"] < H.shift(now, seconds=-TOUCH_EVERY):
+        if row["last_seen_at"] < H.shift(now, seconds=-TOUCH_EVERY):
             # A hint for the idle clock, written only if the database is free right now (auth.touch): a sign-in never
             # queues behind writers for it, and a skipped one is retried by the next request a minute on.
             from .auth import touch
-            touch(c, "UPDATE oidc_sessions SET last_seen=? WHERE id_hash=?", (now, row["id_hash"]))
+            touch(c, "UPDATE oidc_sessions SET last_seen_at=? WHERE id_hash=?", (now, row["id_hash"]))
         return str(row["email"] or "").lower()
 
     def logout(self, headers):

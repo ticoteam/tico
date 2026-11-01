@@ -33,27 +33,27 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     let me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', cloud: true, bot_admin: true};
     const docs = new Map(), versions = new Map(), linked = [], requests = [];
     const stamp = (doc, actor, note, minutes) => {
-      versions.get(doc.id).unshift({version: doc.version, title: doc.title, path: doc.path, body: doc.body, actor, created: ago(minutes), note});
+      versions.get(doc.id).unshift({version: doc.version, title: doc.title, path: doc.path, body: doc.body, actor, created_at: ago(minutes), note});
     };
     const add = (id, docPath, title, body, {locked = false, history = []} = {}) => {
-      const doc = {id, path: docPath, title, body, locked, version: 1, created_by: 'human:ben', created: ago(600), updated_by: 'human:ben', updated: ago(600), archived: false};
+      const doc = {id, path: docPath, title, body, locked, version: 1, created_by: 'human:ben', created_at: ago(600), updated_by: 'human:ben', updated_at: ago(600), archived: false};
       docs.set(id, doc); versions.set(id, []); stamp(doc, 'human:ben', 'Created', 600);
-      for (const [text, actor, note] of history) { doc.version += 1; doc.body = text; doc.updated_by = actor; doc.updated = ago(90); stamp(doc, actor, note, 90); }
+      for (const [text, actor, note] of history) { doc.version += 1; doc.body = text; doc.updated_by = actor; doc.updated_at = ago(90); stamp(doc, actor, note, 90); }
       return doc;
     };
     add('doc-000000000001', 'support/refund-policy.md', 'Refund policy', 'Refund within 14 days.', {history: [['# Refund policy\n\nRefund within **30 days**.', 'bot:ops', 'Longer window']]});
     add('doc-000000000002', 'pricing.md', 'Pricing and plans', '# Pricing and plans\n\n| Plan | Price |\n|---|---|\n| Starter | $35 |\n\nSee [refunds](support/refund-policy.md).');
     const addLinked = (raw, title, kind, description, by = 'human:ana') => {
       const url = /^https?:\/\//.test(raw) ? raw : 'https://' + raw;
-      const row = {id: 'link-' + (++seq), title, url, kind, host: new URL(url).hostname.replace(/^www\./, ''), description, added_by: by, created: ago(300), updated: ago(300)};
+      const row = {id: 'link-' + (++seq), title, url, kind, host: new URL(url).hostname.replace(/^www\./, ''), description, added_by: by, created_at: ago(300), updated_at: ago(300)};
       linked.push(row); return row;
     };
     addLinked('https://help.acme.example/refunds', 'Help centre', 'website', 'What customers read');
     addLinked('https://drive.google.com/drive/folders/brand', 'Brand assets', 'google_drive', 'Logos and the tone guide', 'human:ben');
     const view = doc => ({...doc, updated_by_name: NAMES[doc.updated_by] || doc.updated_by, created_by_name: NAMES[doc.created_by] || doc.created_by});
-    const row = doc => ({id: doc.id, path: doc.path, title: doc.title, updated: doc.updated, updated_by: doc.updated_by, updated_by_name: NAMES[doc.updated_by], locked: doc.locked, version: doc.version});
+    const row = doc => ({id: doc.id, path: doc.path, title: doc.title, updated_at: doc.updated_at, updated_by: doc.updated_by, updated_by_name: NAMES[doc.updated_by], locked: doc.locked, version: doc.version});
     const linkView = l => ({...l, added_by_name: NAMES[l.added_by]});
-    const sourceView = l => ({...linkView(l), provider: l.kind, repo: '', reference: '', reference_override: '', path: '', status: 'link_only', last_checked: null, doc_count: 0, skipped: 0, error_code: ''});
+    const sourceView = l => ({...linkView(l), provider: l.kind, repo: '', reference: '', reference_override: '', path: '', status: 'link_only', last_checked_at: null, doc_count: 0, skipped: 0, error_code: ''});
     const kindOf = raw => { const host = new URL(/^https?:\/\//.test(raw) ? raw : 'https://' + raw).hostname; return /notion\.so$/.test(host) ? 'notion' : /github\.com$/.test(host) ? 'github' : 'website'; };
     const titleOf = raw => { const u = new URL(/^https?:\/\//.test(raw) ? raw : 'https://' + raw); return u.hostname.replace(/^www\./, '') + u.pathname.replace(/\/$/, ''); };
     let started = {empty: {docs: false}, cards: []};
@@ -61,8 +61,8 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     const docsSetupSkipped = new Set();   // whose Skip for now is saved: each person's own
     let chatSequence = 0, reopenBlocked = false;
     const chats = [
-      {id: 'docs-earlier', title: 'Who helps new hires?', created: ago(90), closed_at: ago(60)},
-      {id: 'docs-archived', title: 'How do refunds work?', created: ago(300), closed_at: ago(200)},
+      {id: 'docs-earlier', title: 'Who helps new hires?', created_at: ago(90), closed_at: ago(60)},
+      {id: 'docs-archived', title: 'How do refunds work?', created_at: ago(300), closed_at: ago(200)},
     ];
     const externalCitation = 'https://github.com/acme/handbook/blob/' + 'a'.repeat(40) + '/docs/refunds.md?plain=1#L3-L4';
     const answer = 'See [Internal doc · Refund policy](doc:doc-000000000001). [External · Refunds — Policy](' + externalCitation + ')';
@@ -72,7 +72,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
         {id: 'old-answer', in_reply_to: 'old-question', from_actor: 'bot:librarian', body: 'Refunds take 30 days. ' + answer + '<script>window.docsUnsafe = true</script>'}]],
     ]);
     const outside = (id, body, actor = 'human:ben') => {       // someone else saves while this person is editing
-      const doc = docs.get(id); doc.version += 1; doc.body = body; doc.updated_by = actor; doc.updated = ago(0); stamp(doc, actor, 'Their edit', 0);
+      const doc = docs.get(id); doc.version += 1; doc.body = body; doc.updated_by = actor; doc.updated_at = ago(0); stamp(doc, actor, 'Their edit', 0);
     };
 
     await context.route('**/*', async route => {
@@ -123,7 +123,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
         const id = body.conversation_id || 'librarian-chat-' + (++chatSequence);
         if (body.new_conversation) {
           chats.forEach(chat => { chat.closed_at ||= ago(0); });
-          chats.unshift({id, title: body.question, created: ago(0), closed_at: null});
+          chats.unshift({id, title: body.question, created_at: ago(0), closed_at: null});
         }
         const messageId = 'ask-docs-' + requests.length;
         chatMessages.set(id, [...(chatMessages.get(id) || []), {id: messageId, from_actor: 'human:ana', body: body.question},
@@ -151,7 +151,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
       if (api === 'docs' && method === 'POST') {
         const id = 'doc-' + String(++seq).padStart(12, '0');
         const doc = add(id, body.path || body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.md', body.title, body.body);
-        Object.assign(doc, {created_by: 'human:ana', updated_by: 'human:ana', updated: ago(0)}); versions.get(id)[0].actor = 'human:ana';
+        Object.assign(doc, {created_by: 'human:ana', updated_by: 'human:ana', updated_at: ago(0)}); versions.get(id)[0].actor = 'human:ana';
         return json({doc: view(doc)});
       }
       if (api === 'docs/import') {
@@ -180,7 +180,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
         if (one[2] === 'versions') return json({doc: doc.id, versions: versions.get(doc.id).map(v => ({...v, body: undefined, current: v.version === doc.version, actor_name: NAMES[v.actor]}))});
         if (one[2] === 'restore') {
           const old = versions.get(doc.id).find(v => v.version === body.version);
-          doc.archived = false; doc.version += 1; doc.body = old.body; doc.title = old.title; doc.updated_by = 'human:ana'; doc.updated = ago(0); stamp(doc, 'human:ana', `Restored version ${body.version}`, 0);
+          doc.archived = false; doc.version += 1; doc.body = old.body; doc.title = old.title; doc.updated_by = 'human:ana'; doc.updated_at = ago(0); stamp(doc, 'human:ana', `Restored version ${body.version}`, 0);
           return json({doc: view(doc)});
         }
         if (method === 'PATCH') {
@@ -190,7 +190,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
           if (body.archived) doc.archived = true;
           if (['title', 'body', 'path'].some(k => body[k] !== undefined && body[k] !== doc[k])) {
             Object.assign(doc, Object.fromEntries(['title', 'body', 'path'].filter(k => body[k] !== undefined).map(k => [k, body[k]])));
-            doc.version += 1; doc.updated_by = 'human:ana'; doc.updated = ago(0); stamp(doc, 'human:ana', body.note || '', 0);
+            doc.version += 1; doc.updated_by = 'human:ana'; doc.updated_at = ago(0); stamp(doc, 'human:ana', body.note || '', 0);
           }
           return json({doc: view(doc)});
         }

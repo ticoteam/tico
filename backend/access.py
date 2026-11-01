@@ -80,9 +80,9 @@ def load_owner(c, settings):
     stored = _load_json(c, OWNER)
     if stored is None:
         return {"email": str(settings.owner_email or "").strip().lower(), "revision": 0,
-                "updated": "", "updated_by": "", "source": "environment"}
+                "updated_at": "", "updated_by": "", "source": "environment"}
     return {"email": str(stored.get("email") or "").strip().lower(),
-            "revision": int(stored.get("revision") or 0), "updated": str(stored.get("updated") or ""),
+            "revision": int(stored.get("revision") or 0), "updated_at": str(stored.get("updated_at") or ""),
             "updated_by": str(stored.get("updated_by") or ""), "source": str(stored.get("source") or "")}
 
 
@@ -105,7 +105,7 @@ def load_access(c, settings):
             "admins": admins, "bot_admins": admins,
             "member_bot_limit": max(0, int(stored.get("member_bot_limit", MEMBER_BOT_LIMIT))),
             "revision": int(stored.get("revision") or 0),
-            "updated": str(stored.get("updated") or ""), "updated_by": str(stored.get("updated_by") or ""),
+            "updated_at": str(stored.get("updated_at") or ""), "updated_by": str(stored.get("updated_by") or ""),
             "source": str(stored.get("source") or source)}
 
 
@@ -145,7 +145,7 @@ def retire_bot_lists(c, settings, now):
     _store(c, BOT_ACCESS, {"migrated": now, "retired": present})
     if present:
         logging.getLogger("tico.access").warning("%s (found: %s)", RETIRED_NOTICE, ", ".join(present))
-        _store(c, BOT_ACCESS_NOTICE, {"message": RETIRED_NOTICE, "lists": present, "created": now})
+        _store(c, BOT_ACCESS_NOTICE, {"message": RETIRED_NOTICE, "lists": present, "created_at": now})
     return present
 
 
@@ -516,7 +516,7 @@ def save_access(c, actor, body, now, *, bot_admins=None, settings=None):
     after = {"allowed": people, "allowed_domains": found,
              "admins": before["admins"] if bot_admins is None else emails(bot_admins),
              "member_bot_limit": before["member_bot_limit"],
-             "revision": before["revision"] + 1, "updated": now, "updated_by": actor, "source": "owner"}
+             "revision": before["revision"] + 1, "updated_at": now, "updated_by": actor, "source": "owner"}
     _store(c, ACCESS, after)
     return before, after
 
@@ -537,8 +537,8 @@ def transfer(c, actor, roster, owner, target_id, *, expected_revision, previous_
         raise Problem("conflict", "That person is already the owner", 409)
     previous = P.person_by_email(owner["email"], roster)
     stored = _load_json(c, OWNER) or {}
-    history = [*(stored.get("history") or []), {k: owner[k] for k in ("email", "revision", "updated", "updated_by", "source")}]
-    after = {"email": target["email"], "revision": owner["revision"] + 1, "updated": now,
+    history = [*(stored.get("history") or []), {k: owner[k] for k in ("email", "revision", "updated_at", "updated_by", "source")}]
+    after = {"email": target["email"], "revision": owner["revision"] + 1, "updated_at": now,
              "updated_by": actor, "source": "transfer", "previous": owner["email"], "history": history[-OWNER_HISTORY:],
              "retired": emails(stored.get("retired"))}
     _store(c, OWNER, after)
@@ -549,7 +549,7 @@ def transfer(c, actor, roster, owner, target_id, *, expected_revision, previous_
     access = load_access(c, settings)
     if previous_bot_admin and owner["email"]:
         _store(c, ACCESS, {**access, "admins": emails([*access["admins"], owner["email"]]),
-                           "revision": access["revision"] + 1, "updated": now, "updated_by": actor,
+                           "revision": access["revision"] + 1, "updated_at": now, "updated_by": actor,
                            "source": "owner"})
     H.event(c, actor, "owner.transferred", target["id"],
             {"from": owner["email"], "from_person": (previous or {}).get("id", ""),
@@ -614,7 +614,7 @@ def change_email(c, actor, roster, pid, new_email, *, now, settings, via="app"):
         allowed, admins = swap(before["allowed"]), swap(before["admins"])
         if allowed != before["allowed"] or admins != before["admins"]:
             _store(c, ACCESS, {**access, "allowed": allowed, "admins": admins,
-                               "revision": before["revision"] + 1, "updated": now, "updated_by": actor, "source": "sign_in"})
+                               "revision": before["revision"] + 1, "updated_at": now, "updated_by": actor, "source": "sign_in"})
     if old:
         _follow_address(c, pid, old, new)
     H.event(c, actor, "person.email_changed", pid, {"from": old, "to": new, "via": via})
@@ -648,8 +648,8 @@ def change_owner_email(c, actor, roster, owner, new_email, *, expected_revision,
     _save_roster(c, {**roster, "people": [row if p["id"] == person["id"] else p for p in roster["people"]]})
     _sync_human(c, row)
     stored = _load_json(c, OWNER) or {}
-    history = [*(stored.get("history") or []), {k: owner[k] for k in ("email", "revision", "updated", "updated_by", "source")}]
-    after = {"email": new, "revision": owner["revision"] + 1, "updated": now, "updated_by": actor,
+    history = [*(stored.get("history") or []), {k: owner[k] for k in ("email", "revision", "updated_at", "updated_by", "source")}]
+    after = {"email": new, "revision": owner["revision"] + 1, "updated_at": now, "updated_by": actor,
              "source": "email_change", "previous": old, "history": history[-OWNER_HISTORY:],
              "retired": [e for e in emails([*(stored.get("retired") or []), old]) if e != new]}
     _store(c, OWNER, after)
@@ -664,7 +664,7 @@ def change_owner_email(c, actor, roster, owner, new_email, *, expected_revision,
         allowed, admins = swap(before["allowed"]), swap(before["admins"])
         if allowed != before["allowed"] or admins != before["admins"]:
             _store(c, ACCESS, {**access, "allowed": allowed, "admins": admins,
-                               "revision": before["revision"] + 1, "updated": now, "updated_by": actor, "source": "owner"})
+                               "revision": before["revision"] + 1, "updated_at": now, "updated_by": actor, "source": "owner"})
     _follow_address(c, person["id"], old, new)
     H.event(c, actor, "owner.email_changed", person["id"],
             {"from": old, "to": new, "revision": after["revision"], "via": via})

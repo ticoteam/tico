@@ -289,7 +289,7 @@ class Builder:
             c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('market-context',?)", (encode({
                 "sells": D.ANSWERS["what_we_do"], "customers": "Small studios with a few client projects",
                 "competitors": "Northwind, Brightline, Pricewise, Harborly, Fernwood, Doorlark",
-                "channels": "r/projectmanagement", "updated": H.now(), "updated_by": "human:ana"}),))
+                "channels": "r/projectmanagement", "updated_at": H.now(), "updated_by": "human:ana"}),))
         self.write(work)
 
     def routines(self):
@@ -446,9 +446,9 @@ class Builder:
                 if task:
                     hubdb.task_update(c, "bot:" + bot, task["id"], status="done", note=summary)
                     c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,'completed')",
-                              (routine["id"], turn["started"], task["id"]))
-                    c.execute("UPDATE schedules SET last_fired=max(coalesce(last_fired,''),?) WHERE id=?",
-                              (turn["started"], routine["id"]))
+                              (routine["id"], turn["started_at"], task["id"]))
+                    c.execute("UPDATE schedules SET last_fired_at=max(coalesce(last_fired_at,''),?) WHERE id=?",
+                              (turn["started_at"], routine["id"]))
                 hubdb.status_result(c, hubdb.KEEPER, bot, last_result=summary, last_turn_at=H.now())
             # A change's reason is written on the row it closes, so each step's why goes in with the next one.
             why = ""
@@ -486,14 +486,14 @@ class Builder:
             timestamp = str(int(self.ago(hours=1).timestamp())) + ".000001"
             for index, text in enumerate(["A customer needs the CSV export steps.", "Draft reply: Open Projects > Export > CSV."]):
                 ts = str(int(self.ago(hours=1 - index / 4).timestamp())) + ".000001"
-                c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,ts,user_id,event_type,text,received,state,author,author_name,updated) "
+                c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,ts,user_id,event_type,text,received,state,author,author_name,updated_at) "
                           "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                           (f"demo-slack-{index}", "TDEMOTEAM1", "CDEMOTEAM1", "channel", timestamp, ts,
                            "UDEMOTEAM1", "message", text, H.now(), "stored", "human" if index == 0 else "bot", "Sam" if index == 0 else "Support", H.now()))
             conv = H.open_conversation(c, H.KEEPER, [H.KEEPER, "bot:support"], kind="chat", subject="Slack support", scope="direct")
             message = H.feed(c, "bot:support", "Review the support channel's CSV export thread.", conv)
             c.execute("INSERT INTO slack_threads VALUES(?,?,?,?,?,?)", ("CDEMOTEAM1", timestamp, "support", conv["id"], H.now(), H.now()))
-            c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated) VALUES(?,?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                       (message["id"], "CDEMOTEAM1", timestamp, "support", "Draft: Open Projects > Export > CSV.", "ready", H.now(), H.now()))
             c.execute("INSERT INTO slack_reads VALUES(?,?,?,?,?)", ("CDEMOTEAM1", "support", timestamp, H.now(), 1))
         self.write(work)
@@ -522,7 +522,7 @@ class Builder:
     def finish(self):
         """Nothing is left waiting for a bot: every message reads as delivered and no job is queued."""
         def work(c):
-            c.execute("UPDATE messages SET delivered_at=created WHERE delivered_at IS NULL AND to_actor LIKE 'bot:%'")
+            c.execute("UPDATE messages SET delivered_at=created_at WHERE delivered_at IS NULL AND to_actor LIKE 'bot:%'")
             c.execute("UPDATE jobs SET state='completed' WHERE state IN ('queued','leased','running','input')")
             c.execute("DELETE FROM update_queue")
         self.write(work)

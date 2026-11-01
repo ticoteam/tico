@@ -53,7 +53,7 @@ class HQ:
         if path == "relays" and request.method == "GET":
             return httpx.Response(200, json={"items": [
                 {"relay_id": r["id"], "trigger_id": r["trigger_id"], "name": "", "address_prefix": "", "wake": r.get("wake", False),
-                 "system": bool(r.get("system")), "created": "2026-10-25T09:00:00Z"} for r in self.relays.values()]})
+                 "system": bool(r.get("system")), "created_at": "2026-10-25T09:00:00Z"} for r in self.relays.values()]})
         if path == "relays":
             if "idempotency-key" not in request.headers:
                 return httpx.Response(400, json={"error": "idempotency_key"})
@@ -213,7 +213,7 @@ def test_a_concurrent_create_that_gets_the_same_hq_relay_keeps_it_instead_of_del
         answer = real(link, method, path, body, idempotency, quiet)
         if path == "relays" and method == "POST":
             with api.app.state.store.transaction() as c:
-                c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?)",
+                c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) VALUES(?,?,?,?,?)",
                           (answer["relay_id"], "shop", f"{BASE}/v1/hooks/{answer['relay_id']}", "human:ana", H.now()))
         return answer
     svc.ask = ask_then_other_request_saves_first

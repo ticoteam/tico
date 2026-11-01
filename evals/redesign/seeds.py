@@ -211,7 +211,7 @@ def counsel(world):
         c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES(?, ?, 'Counsel', 'active')", (H.COUNSEL, H.COUNSEL))
         c.execute("INSERT OR REPLACE INTO bot_config(bot, config, team, operator) VALUES(?, '{}', '', ?)",
                   (H.COUNSEL, DANA_ID))
-        c.execute("INSERT OR REPLACE INTO agents(bot, harness, token_hash, created, created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO agents(bot, harness, token_hash, created_at, created_by) VALUES(?,?,?,?,?)",
                   (H.COUNSEL, "test", "x-counsel", H.now(), "human:" + DANA_ID))
         data = VENDOR_TERMS.encode("utf-8")
         digest = world.app.state.blobs.put(data, "text/plain")

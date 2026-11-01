@@ -434,7 +434,7 @@ def test_idle_and_absolute_lifetimes(signin):
     signin.login()
     assert me(signin.api).status_code == 200
     with signin.auth.store.transaction() as c:
-        c.execute("UPDATE oidc_sessions SET last_seen=?", ("2000-01-01T00:00:00.000000Z",))
+        c.execute("UPDATE oidc_sessions SET last_seen_at=?", ("2000-01-01T00:00:00.000000Z",))
     assert me(signin.api).status_code == 401
     signin.login()
     assert me(signin.api).status_code == 200

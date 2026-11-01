@@ -350,12 +350,12 @@ def test_a_private_meetings_turn_gets_a_read_only_token_and_a_team_meetings_a_wr
     runner_token(api, "cmo")
     with api.app_state.store.transaction() as c:
         for rid, visibility in (("m-private", "private"), ("m-team", "team")):
-            c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,created,updated,started_at,visibility) "
+            c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,created_at,updated_at,started_at,visibility) "
                       "VALUES(?,'human:ana','Plan','live',30000,?,?,?,?)", (rid, H.now(), H.now(), H.now(), visibility))
         conv = H.open_conversation(c, H.KEEPER, ["bot:cmo"], room_key="live-meeting:m-private")
         H.feed(c, "bot:cmo", "A meeting turn", conv, refs={"live_meeting": {"meeting_id": "m-private", "turn_id": "t1"}})
         job = c.execute("SELECT id FROM jobs WHERE bot='cmo'").fetchone()["id"]
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'cmo','r1',1,'x','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
     r = api.post("/api/v2/github/token", json={"bot": "cmo"}, headers=auth("bot-test"))
     assert r.status_code == 200, r.text
@@ -407,8 +407,8 @@ def runner_token(api, bot):
     with api.app_state.store.transaction() as c:
         if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
             cols = [r[1] for r in c.execute("PRAGMA table_info(runners)")]
-            values = {"id": "r1", "operator": "ana", "label": "mac", "token_hash": "x", "created": H.now(), "created_by": "ana",
-                      "last_seen": H.now(), "hostname": "h", "version": "1", "state": "active"}
+            values = {"id": "r1", "operator": "ana", "label": "mac", "token_hash": "x", "created_at": H.now(), "created_by": "ana",
+                      "last_seen_at": H.now(), "hostname": "h", "version": "1", "state": "active"}
             use = {k: v for k, v in values.items() if k in cols}
             c.execute(f"INSERT INTO runners({','.join(use)}) VALUES({','.join('?' * len(use))})", tuple(use.values()))
         c.execute("INSERT OR REPLACE INTO assignments VALUES(?,?,?,?,?)", (bot, "r1", 1, H.now(), "ana"))
@@ -586,10 +586,10 @@ def botops_turn(api):
     """An unattended BotOps turn: the runner, its assignment, and a leased attempt for `botops-test`."""
     runner_token(api, "botops")
     with api.app_state.store.transaction() as c:
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created) VALUES('m-botops','keeper','bot:botops','request','hi',?)",
+        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created_at) VALUES('m-botops','keeper','bot:botops','request','hi',?)",
                   (H.now(),))
         job = c.execute("SELECT id FROM jobs WHERE bot='botops'").fetchone()["id"]
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a2',?,'botops','r1',1,'x','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
 
 
@@ -772,9 +772,9 @@ def test_selected_bot_repository_creation_grant_and_revocation(api, gh):
     connect(api, administration='true')
     runner_token(api, 'cmo')
     with api.app_state.store.transaction() as c:
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created) VALUES('m-cmo','keeper','bot:cmo','request','Prepare the repository',?)", (H.now(),))
+        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created_at) VALUES('m-cmo','keeper','bot:cmo','request','Prepare the repository',?)", (H.now(),))
         job = c.execute("SELECT id FROM jobs WHERE bot='cmo'").fetchone()['id']
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'cmo','r1',1,'x','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
     path = '/api/v2/bots/cmo/repositories'
     create = lambda body: api.post('/api/v2/github/repos', json=body, headers=auth('bot-test'))
@@ -978,8 +978,8 @@ def _box(api):
     """A second computer, "box", that never held newbie."""
     with api.app_state.store.transaction() as c:
         cols = [r[1] for r in c.execute("PRAGMA table_info(runners)")]
-        values = {"id": "r2", "operator": "ana", "label": "box", "token_hash": "y", "created": H.now(), "created_by": "ana",
-                  "last_seen": H.now(), "hostname": "box", "version": "1", "state": "active"}
+        values = {"id": "r2", "operator": "ana", "label": "box", "token_hash": "y", "created_at": H.now(), "created_by": "ana",
+                  "last_seen_at": H.now(), "hostname": "box", "version": "1", "state": "active"}
         use = {k: v for k, v in values.items() if k in cols}
         c.execute(f"INSERT INTO runners({','.join(use)}) VALUES({','.join('?' * len(use))})", tuple(use.values()))
 
@@ -1048,9 +1048,9 @@ def test_only_botops_records_where_a_bot_was_built_and_never_over_another_record
     runner_token(api, "cmo")
     with api.app_state.store.transaction() as c:
         save_metadata(c, "repository-creation-grants", {"cmo": True})
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created) VALUES('m-cmo','keeper','bot:cmo','request','hi',?)", (H.now(),))
+        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created_at) VALUES('m-cmo','keeper','bot:cmo','request','hi',?)", (H.now(),))
         job = c.execute("SELECT id FROM jobs WHERE bot='cmo'").fetchone()["id"]
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'cmo','r1',1,'cmo-turn','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
     made = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("bot-test"))
     assert made.status_code == 200, made.text

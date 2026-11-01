@@ -354,7 +354,7 @@ def install_imports(app, store, auth, execution, mutate):
                             (body.source, len(who.actor) + 1, who.actor + ":", body.media_url)).fetchone()
         existing = bool(ref)
         if fill_empty and ref and key:
-            c.execute("INSERT INTO recording_source_refs(source,resource_type,external_id,meeting_id,created) "
+            c.execute("INSERT INTO recording_source_refs(source,resource_type,external_id,meeting_id,created_at) "
                       "VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING", (*key, ref[0], H.now()))
         if ref and deleted(c, ref[0]):
             # Somebody threw this meeting away. Say so, so an importer stops offering it
@@ -399,7 +399,7 @@ def install_imports(app, store, auth, execution, mutate):
         started = body.started_at or meta.get("started") or H.now()
         duration_ms = (int(body.duration_seconds * 1000) if body.duration_seconds is not None
                        else TF.duration_ms(turns) if turns else meta.get("duration_ms") or 0)
-        meta.update(kind="meeting", status="done", started=started, ended=end_of(started, duration_ms, meta.get("ended")),
+        meta.update(kind="meeting", status="done", started_at=started, ended=end_of(started, duration_ms, meta.get("ended")),
                     duration_ms=duration_ms, source=body.source, source_type="meeting",
                     source_context=body.context, transcript_provider=body.source, import_hash=fingerprint,
                     recorded_by=who.email, uploaded_by=runner["id"] if runner else who.email,
@@ -436,7 +436,7 @@ def install_imports(app, store, auth, execution, mutate):
              stored["transcript_readable"] if fill_empty and existing else None,
              notes=body.notes or None)
         if key and not existing:
-            c.execute("INSERT INTO recording_source_refs(source,resource_type,external_id,meeting_id,created) "
+            c.execute("INSERT INTO recording_source_refs(source,resource_type,external_id,meeting_id,created_at) "
                       "VALUES(?,?,?,?,?)", (*key, rid, H.now()))
         H.event(c, machine.actor, "meeting.imported", rid,
                 {"source": body.source, "owner": who.email, "turns": len(turns), "notes": bool(body.notes),
@@ -508,21 +508,21 @@ def install_imports(app, store, auth, execution, mutate):
                 meta = new_note(c, owner, Note(text=body.title or "Close call"), [])
                 rid = meta["id"]
                 meta.update(kind="meeting", title=body.title or "Close call", note="", preview="",
-                            status="done", started=body.started, ended=body.ended,
+                            status="done", started_at=body.started, ended=body.ended,
                             duration_ms=body.duration_ms,
                             recorded_by=person["email"], uploaded_by=runner["id"], private=False,
                             review_state=initial_review(c, owner) if body.owner_email else "live",
                             source=body.source, source_type=body.resource_type,
                             source_context=body.context, warning=None, error=None)
             if not ref:
-                c.execute("INSERT INTO recording_source_refs(source,resource_type,external_id,meeting_id,created) "
+                c.execute("INSERT INTO recording_source_refs(source,resource_type,external_id,meeting_id,created_at) "
                           "VALUES(?,?,?,?,?)", (*key, rid, H.now()))
             if body.resource_type == "meeting":
                 # Close explicitly associates these call activities with this meeting. Reserve
                 # their references now, so a call transcript arriving later joins this record.
                 for call_id in body.attached_call_ids:
                     c.execute("INSERT OR IGNORE INTO recording_source_refs"
-                              "(source,resource_type,external_id,meeting_id,created) "
+                              "(source,resource_type,external_id,meeting_id,created_at) "
                               "VALUES('close','call',?,?,?)", (call_id, rid, H.now()))
             turns = [t.model_dump() for t in body.turns]
             transcript = raw_transcript(turns)
@@ -576,13 +576,13 @@ def install_imports(app, store, auth, execution, mutate):
                 detail["last_import"] = H.now()
             if body.state == "ok":
                 detail["error_code"] = ""
-                c.execute("INSERT INTO service_health(service,last_success,last_error,detail) "
+                c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) "
                           "VALUES('recording:close',?,NULL,?) ON CONFLICT(service) DO UPDATE SET "
-                          "last_success=excluded.last_success,last_error=NULL,detail=excluded.detail",
+                          "last_succeeded_at=excluded.last_succeeded_at,last_error=NULL,detail=excluded.detail",
                           (H.now(), encode(detail)))
             else:
                 detail["error_code"] = body.error_code or "sync_error"
-                c.execute("INSERT INTO service_health(service,last_success,last_error,detail) "
+                c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) "
                           "VALUES('recording:close',NULL,?,?) ON CONFLICT(service) DO UPDATE SET "
                           "last_error=excluded.last_error,detail=excluded.detail",
                           (H.now(), encode(detail)))

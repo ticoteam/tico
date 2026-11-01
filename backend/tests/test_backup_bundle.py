@@ -121,7 +121,7 @@ def test_incomplete_source_never_publishes_manifest_or_advances_backup_health(ap
     assert not any(key.endswith(".manifest.json") for _, key in s3.objects)
     with api.app.state.store.read() as c:
         row = c.execute("SELECT * FROM service_health WHERE service='backup'").fetchone()
-        assert row["last_success"] is None and row["last_error"]
+        assert row["last_succeeded_at"] is None and row["last_error"]
     assert metrics.put_metric_data.call_args.kwargs["MetricData"][0]["Value"] == 0
 
 

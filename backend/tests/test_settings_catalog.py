@@ -193,7 +193,7 @@ def test_catalogue_resolves_the_bot_for_id_addressed_transitions(api, botops):
     now = H.now()
     with api.app.state.store.transaction() as c:
         owner_id = H.resolve_bot(c, "routine-owner")["id"]
-        c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created,updated) "
+        c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created_at,updated_at) "
                   "VALUES('tr-owner',?,'model','{}','human:cara',1,'prepared',?,?)", (owner_id, now, now))
     err, shown = mcp(api, "hub_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "cara-test")
     assert not err and shown["you_may"] is True, shown

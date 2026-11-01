@@ -19,7 +19,7 @@ def labels(machine_or_info):
 def by_name(api, cid, machine):
     """Share credential `cid` with `machine` by name, as Add connection does."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)",
                   (H.new_id(), cid, "computer:" + machine["runner_id"], "human:ana", H.now()))
 
 
@@ -198,7 +198,7 @@ def test_a_cleared_computer_given_a_shared_key_is_told_to_take_it_again(environm
     job = call(api, "POST", f"computers/{one['runner_id']}/keys/clear", {"runtime": "codex"})["computers"][0]["login"]
     report(api, one, job["id"], "signed_out")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=? WHERE id=?", (H.shift(H.now(), seconds=-3600), one["runner_id"]))
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), seconds=-3600), one["runner_id"]))
     refused = call(api, "POST", f"computers/{two['runner_id']}/keys",
                    {"runtime": "codex", "secret": "sk-proj-second-key-0123456789", "share": [one["runner_id"]]},
                    expected=409)

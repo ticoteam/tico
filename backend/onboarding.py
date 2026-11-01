@@ -269,7 +269,7 @@ def load(c):
             "company_import": stored.get("company_import") or None,
             # {pick: seat id}: the roles setup laid out as Recruiting seats (`Onboarding.complete`).
             "seats": dict(stored.get("seats") or {}),
-            "updated": stored.get("updated") or "", "updated_by": stored.get("updated_by") or ""}
+            "updated_at": stored.get("updated_at") or "", "updated_by": stored.get("updated_by") or ""}
 
 
 def display_names(settings, record):
@@ -533,9 +533,9 @@ class Onboarding:
     def _machine(c):
         recent = H.shift(H.now(), seconds=-60)
         runners = [{"id": row["id"], "label": row["label"],
-                    "online": bool(row["last_seen"] and row["last_seen"] > recent)}
-                   for row in c.execute("SELECT id,label,last_seen FROM runners "
-                                        "WHERE revoked_at IS NULL ORDER BY created")]
+                    "online": bool(row["last_seen_at"] and row["last_seen_at"] > recent)}
+                   for row in c.execute("SELECT id,label,last_seen_at FROM runners "
+                                        "WHERE revoked_at IS NULL ORDER BY created_at")]
         return {"runners": runners, "enrolled": bool(runners)}
 
     # ------------------------------------------------------------------ writes
@@ -977,7 +977,7 @@ class Onboarding:
             # BotOps' computer first, then the oldest; one an inbox bot keeps to itself, or one that may not
             # host this bot (another member's), is skipped.
             botops = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (BOTOPS,)).fetchone()
-            machines = [r["id"] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL ORDER BY created")]
+            machines = [r["id"] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL ORDER BY created_at")]
             if botops and botops["runner_id"] in machines:
                 machines.remove(botops["runner_id"])
                 machines.insert(0, botops["runner_id"])
@@ -1097,11 +1097,11 @@ class Onboarding:
                             (runner_id,)).fetchone()
         else:
             row = c.execute("SELECT id,label FROM runners WHERE operator=? AND revoked_at IS NULL "
-                            "ORDER BY created DESC, rowid DESC LIMIT 1", (self.auth.owner_id(c),)).fetchone()
+                            "ORDER BY created_at DESC, rowid DESC LIMIT 1", (self.auth.owner_id(c),)).fetchone()
             if not row:
                 # The owner changed after the machine enrolled; a lone online machine is still
                 # the one this company's bots belong on.
-                online = c.execute("SELECT id,label FROM runners WHERE revoked_at IS NULL AND last_seen>?",
+                online = c.execute("SELECT id,label FROM runners WHERE revoked_at IS NULL AND last_seen_at>?",
                                    (H.shift(H.now(), seconds=-60),)).fetchall()
                 row = online[0] if len(online) == 1 else None
                 if row:
@@ -1160,7 +1160,7 @@ class Onboarding:
     # ------------------------------------------------------------------ internals
     @staticmethod
     def _store(c, record, actor):
-        record = {**record, "updated": H.now(), "updated_by": actor}
+        record = {**record, "updated_at": H.now(), "updated_by": actor}
         c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
                   "value=excluded.value", (KEY, encode(record)))
         return record

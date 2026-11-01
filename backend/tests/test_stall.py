@@ -11,7 +11,7 @@ from backend.tests.test_api import api  # noqa: F401
 
 
 def aged(c, task_id, minutes):
-    c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), seconds=-minutes * 60), task_id))
+    c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), seconds=-minutes * 60), task_id))
 
 
 def wakes(c, task_id):
@@ -114,7 +114,7 @@ def test_a_task_with_a_recorded_wait_or_a_profile_without_sweeps_is_never_swept_
         task = lambda: H.task(c, row["id"])
         assert H.stall_skip(c, task()) is None
         # A pending approval, a milestone wait and an open subtask are each a wait the sweep respects.
-        c.execute("INSERT INTO approvals(id,kind,task_id,payload,requested_by,created) VALUES('ap1','send',?,'{}','bot:finance',?)",
+        c.execute("INSERT INTO approvals(id,kind,task_id,payload,requested_by,created_at) VALUES('ap1','send',?,'{}','bot:finance',?)",
                   (row["id"], H.now()))
         assert H.stall_skip(c, task()) == "approval"
         c.execute("DELETE FROM approvals")
@@ -139,21 +139,21 @@ def test_a_chat_task_gets_its_own_room_reports_once_and_a_quiet_session_is_check
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
         lines = lambda: [(r[0], json.loads(r[1])) for r in c.execute(
-            "SELECT body,refs FROM messages WHERE conversation_id=? AND from_actor=? ORDER BY created", (room, H.KEEPER))]
+            "SELECT body,refs FROM messages WHERE conversation_id=? AND from_actor=? ORDER BY created_at", (room, H.KEEPER))]
         task = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:finance",
                              conversation_id=room)
         assert task["conversation_id"] != room and H.conversation(c, task["conversation_id"])["kind"] == "task"
         assert [(b, r.get("task_started")) for b, r in lines()] == [("Started task: Recheck the cash warning", True)]
         # Its session ran 40 minutes ago and nothing moved since: one status check, no stall wake (it is busy).
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES('r1','r','ana','h','t')")
-        job = c.execute("SELECT id FROM jobs WHERE bot='finance' ORDER BY created DESC LIMIT 1").fetchone()[0]
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,lane) "
+        c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at) VALUES('r1','r','ana','h','t')")
+        job = c.execute("SELECT id FROM jobs WHERE bot='finance' ORDER BY created_at DESC LIMIT 1").fetchone()[0]
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
                   "VALUES('a1',?,'finance','r1',1,'a1','running',?,?,?)",
                   (job, H.shift(H.now(), seconds=600), H.shift(H.now(), seconds=-2400), "task:" + task["id"]))
         aged(c, task["id"], 40)
         assert H.wake_stalled(c) == {k: [] for k in ("woke", "escalated", "checked", "stuck", "held", "retried")}, \
             "a live session on the task is never checked"
-        c.execute("UPDATE attempts SET state='completed', finished=? WHERE id='a1'", (H.shift(H.now(), seconds=-2400),))
+        c.execute("UPDATE attempts SET state='completed', finished_at=? WHERE id='a1'", (H.shift(H.now(), seconds=-2400),))
         out = H.wake_stalled(c)
         assert out["checked"] == [task["id"]] and out["woke"] == [] and out["stuck"] == []
         assert H.wake_stalled(c)["checked"] == []                       # once per quiet stretch
@@ -384,7 +384,7 @@ def test_a_queued_child_job_held_by_the_claim_fence_does_not_silence_its_parent(
         window, hold = held_window(c)
         if reason == "uncertain":
             c.execute("UPDATE jobs SET state='uncertain' WHERE bot='finance'")
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created) "
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at) "
                       "VALUES(?,?,'bot:ops','bot:finance','notice','Continue the hold',?,?)",
                       (H.new_id(), hold["conversation_id"], json.dumps({"task": hold["id"]}), H.now()))
         else:
@@ -447,9 +447,9 @@ def test_between_the_retry_and_the_stuck_report_no_stall_wake_and_the_report_cou
         c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
         task = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:finance",
                              conversation_id=room)
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES('r1','r','ana','h','t')")
-        job = c.execute("SELECT id FROM jobs WHERE bot='finance' ORDER BY created DESC LIMIT 1").fetchone()[0]
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,lane,finished) "
+        c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at) VALUES('r1','r','ana','h','t')")
+        job = c.execute("SELECT id FROM jobs WHERE bot='finance' ORDER BY created_at DESC LIMIT 1").fetchone()[0]
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,lane,finished_at) "
                   "VALUES('a1',?,'finance','r1',1,'a1','completed',?,?,?,?)",
                   (job, H.shift(H.now(), seconds=600), H.shift(H.now(), seconds=-2400), "task:" + task["id"],
                    H.shift(H.now(), seconds=-2300)))
@@ -503,11 +503,11 @@ def test_stall_checks_back_off_while_a_task_stands_unchanged_and_start_over_when
         c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
         assert H.wake_stalled(c)["woke"] == []
         # The bot saying "still waiting" is not a change; a person's comment is, and the gap starts over.
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created) "
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at) "
                   "VALUES(lower(hex(randomblob(8))),?,'bot:finance','human:ana','comment','Still waiting.',?)",
                   (H.task(c, tid)["conversation_id"], H.now()))
         assert gap() == H.STALL_BACKOFF_CAP_MINUTES
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created) "
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at) "
                   "VALUES(lower(hex(randomblob(8))),?,'human:ana','bot:finance','comment','Any news?',?)",
                   (H.task(c, tid)["conversation_id"], H.now()))
         assert gap() == H.STALL_REPEAT_MINUTES

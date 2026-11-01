@@ -45,7 +45,7 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
         add_bot(c, "pr-reviewer-2")
         kind = c.execute("SELECT id FROM task_types WHERE name='Dev tickets'").fetchone()
         if kind is None:
-            c.execute("INSERT INTO task_types(id,name,created,updated) VALUES('dev','Dev tickets',?,?)", (H.now(), H.now()))
+            c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev tickets',?,?)", (H.now(), H.now()))
         H.task_create(c, "human:ana", "Fix login", "x", "bot:pr-reviewer", type="Dev tickets")
         c.execute("UPDATE bot_config SET config=json_set(config,'$.profile','doer') WHERE bot='cpo'")
         told = P.migrate(c)
@@ -127,7 +127,7 @@ def test_a_reviewer_takes_review_children_only_and_wakes_for_its_request_and_peo
         other = dict(mine, id="x", title="Something else")
         assert P.pull_refusal(c, other, profile_of(c, "checker")) == "auto_start_off"
         assert P.mismatches(c) == []
-        c.execute("INSERT INTO tasks(id,title,body,owner,requester,status,created,updated) "
+        c.execute("INSERT INTO tasks(id,title,body,owner,requester,status,created_at,updated_at) "
                   "VALUES('t-odd','Odd job','x','bot:checker','human:ana','open',?,?)", (H.now(), H.now()))
         assert P.mismatches(c) == [("reviewer_holds_tasks", "checker", 1)]
 
@@ -243,11 +243,11 @@ def test_a_lead_is_woken_by_people_and_hears_the_rest_once_a_day(api):
         # News about its task is held for the digest: the job waits, then a tick plans it for the next 09:00.
         held = news(c, H.task(c, mine["id"]) | {"owner": "bot:boss"}, "Step moved: Open -> Doing")
         assert held["refs"]["rule"] == "profile_lead_digest" and held["refs"]["wake_batch"] == "rule"
-        job = c.execute("SELECT id,held,created FROM jobs WHERE bot='boss'").fetchone()
+        job = c.execute("SELECT id,held,created_at FROM jobs WHERE bot='boss'").fetchone()
         assert job["held"] == 1
-        W.tick(c, job["created"])
+        W.tick(c, job["created_at"])
         due = c.execute("SELECT hold_until FROM jobs WHERE id=?", (job["id"],)).fetchone()[0]
-        assert due == W.digest_time(job["created"], 9) and due > job["created"]
+        assert due == W.digest_time(job["created_at"], 9) and due > job["created_at"]
         W.tick(c, due)
         assert c.execute("SELECT held FROM jobs WHERE id=?", (job["id"],)).fetchone()[0] == 0
         # A person's message, and a declined ticket it asked for, wake it at once.
@@ -339,7 +339,7 @@ def test_the_profiles_catch_all_never_beats_a_team_or_type_rule_and_a_leads_own_
         add_bot(c, "boss")
         put(c, "boss", P.LEAD)
         c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,position,"
-                  "created_by,created,updated,revision) VALUES('team-wake','team','','status_or_relation','{}','wake','{}',"
+                  "created_by,created_at,updated_at,revision) VALUES('team-wake','team','','status_or_relation','{}','wake','{}',"
                   "1,1,'human:ana',?,?,1)", (H.now(), H.now()))
         parent = H.task_create(c, "bot:ops", "Build 1/9", "x", "bot:cpo")
         review = H.task_create(c, "bot:ops", "QA: check it", "x", "bot:checker", parent_id=parent["id"])

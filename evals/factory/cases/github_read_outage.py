@@ -28,7 +28,7 @@ def during(run, w, team, i):
     w.github_fault = FAULTS[int(since / at(1))] if at(0) <= since < at(OUTAGE_HOURS) else None
     if w.github_fault and run.child is None:
         # A person files a task under the first ticket the outage holds: a question for them to answer.
-        held = w.sql("SELECT id FROM tasks WHERE type_id=? AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=tasks.id AND e.field='move_retry') ORDER BY created, id LIMIT 1",
+        held = w.sql("SELECT id FROM tasks WHERE type_id=? AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=tasks.id AND e.field='move_retry') ORDER BY created_at, id LIMIT 1",
                      (w.dev["id"],))
         if held:
             child = w.post("tasks", {"owner": "ana", "title": "Confirm the wording with support",
@@ -92,15 +92,15 @@ def told_once_per_move(run):
     w, hold = run.w, run.w.board.hold_step
     bad = []
     notices = w.sql("SELECT json_extract(refs,'$.task') task, json_extract(refs,'$.review_gate') gate, "
-                    "json_extract(refs,'$.move_retry') moved, created FROM messages WHERE from_actor='keeper' AND "
+                    "json_extract(refs,'$.move_retry') moved, created_at FROM messages WHERE from_actor='keeper' AND "
                     "(json_extract(refs,'$.review_gate') IS NOT NULL OR json_extract(refs,'$.move_retry'))")
     gates = [(n["task"], n["gate"]) for n in notices if n["gate"]]
     bad += [f"{w.title(t)} refusal told {gates.count((t, g))}x" for t, g in sorted(set(gates)) if gates.count((t, g)) > 1]
     for n in (n for n in notices if n["moved"]):
         real = w.sql("SELECT 1 FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? AND e.field='step' "
-                     "AND e.ts=? AND s.name<>?", (n["task"], n["created"], hold))
+                     "AND e.ts=? AND s.name<>?", (n["task"], n["created_at"], hold))
         if not real:
-            bad.append(f"{w.title(n['task'])} told of a move at {n['created'][11:16]} that was not made")
+            bad.append(f"{w.title(n['task'])} told of a move at {n['created_at'][11:16]} that was not made")
     return not bad, ", ".join(bad[:4]) + (f" (+{len(bad) - 4})" if len(bad) > 4 else "")
 
 

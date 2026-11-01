@@ -23,7 +23,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     let owner = 'ana@acme.example', revision = 3, limit = 25, rules = {};
     let allowedPeople = ['ana@acme.example', 'old@partner.example'], allowedDomains = [];
     let directory = {source: '', filter: {groups: [], org_units: [], domains: []}, interval_minutes: 360, mass_leave_limit: 10,
-      revision: 2, last: {}, credentials: {google: {configured: false}, entra: {configured: false}}, scim: {url: 'https://initech.test/scim/v2', enabled: true, created: '2026-09-01T00:00:00Z'}};
+      revision: 2, last: {}, credentials: {google: {configured: false}, entra: {configured: false}}, scim: {url: 'https://initech.test/scim/v2', enabled: true, created_at: '2026-09-01T00:00:00Z'}};
     let people = [
       {id: 'ana', name: 'Ana Rivera', email: 'ana@acme.example', title: 'CEO', team: 'leadership'},
       {id: 'ben', name: 'Ben Cole', email: 'ben@acme.example', title: 'Ops', team: 'leadership'}];

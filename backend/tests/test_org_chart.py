@@ -90,5 +90,5 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
     other = post(api, "chat/cpo", {"text": "Move ops under Cara"})
     post(api, "bots/ops/definition", body("ops", on_behalf_of=other.get("message", other)["id"]), token=botops["token"], expected=403)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-8), mid))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-8), mid))
     post(api, "bots/ops/definition", body("ops", reports_to="coo", on_behalf_of=mid), token=botops["token"], expected=403)

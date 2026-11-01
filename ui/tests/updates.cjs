@@ -24,29 +24,29 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
   let updates = [
     {id: 'u-seo', bot: 'seo', kind: 'daily', day: day(0), headline: 'Published the vacation rental checklist page',
      body: '- Published the vacation rental checklist page, 1,240 words\n- Linked it from six older posts\n- Pitching it to three host newsletters next',
-     created: iso(-2 * hour), updated: iso(-2 * hour), read: false, replies: 0},
+     created_at: iso(-2 * hour), updated_at: iso(-2 * hour), read: false, replies: 0},
     {id: 'u-fin', bot: 'finance', kind: 'daily', day: day(0), headline: 'Brex balance is fine; Canva retry scheduled',
-     body: '- Brex has $13,000 available, so no cash warning\n- Rechecking the Canva payment on Oct 16', created: iso(-3 * hour),
-     updated: iso(-3 * hour), read: false, replies: 1},
-    {id: 'u-game', bot: 'game', kind: 'daily', day: day(0), headline: 'x', body: '- Ben\'s bot shipped a [level](https://game.example/level)', created: iso(-hour), updated: iso(-hour), read: true, replies: 0},
+     body: '- Brex has $13,000 available, so no cash warning\n- Rechecking the Canva payment on Oct 16', created_at: iso(-3 * hour),
+     updated_at: iso(-3 * hour), read: false, replies: 1},
+    {id: 'u-game', bot: 'game', kind: 'daily', day: day(0), headline: 'x', body: '- Ben\'s bot shipped a [level](https://game.example/level)', created_at: iso(-hour), updated_at: iso(-hour), read: true, replies: 0},
     {id: 'u-cmo', bot: 'cmo', kind: 'daily', day: day(-86400e3), headline: 'Drafted October content plan',
-     body: '- Drafted the October content plan', created: iso(-26 * hour), updated: iso(-26 * hour), read: true, replies: 0},
+     body: '- Drafted the October content plan', created_at: iso(-26 * hour), updated_at: iso(-26 * hour), read: true, replies: 0},
   ];
   const weekly = [{id: 'w-seo', bot: 'seo', kind: 'weekly', day: day(0), headline: 'Week: 4 pages shipped, rankings up on 2 of 3 goals',
-    body: '- Shipped four pages this week\n- Organic signups are on track', created: iso(-hour), updated: iso(-hour), read: false, replies: 0,
+    body: '- Shipped four pages this week\n- Organic signups are on track', created_at: iso(-hour), updated_at: iso(-hour), read: false, replies: 0,
     slides: {goal: 'Grow organic signups to 400 a month; at 310 and on pace.',
              tracked: [{name: 'Organic signups', unit: 'signups', value: 310, spark: [240, 262, 281, 310], status: 'green', target_label: '400 by Dec 31', fresh: true}],
              kpis: [{name: 'Pages shipped', value: '4', series: [1, 2, 2, 4]}],
              done: ['Shipped four landing pages', 'Linked them from six older posts'], focus: ['Pitch the checklist to three newsletters'], blockers: []}},
     {id: 'w-cmo', bot: 'cmo', kind: 'weekly', day: day(-7 * 86400e3), headline: 'Old bullets', body: '- An older week, posted as bullets',
-     created: iso(-170 * hour), updated: iso(-170 * hour), read: true, replies: 0}];
-  const threads = {'u-fin': [{id: 'm1', from_actor: 'human:ana', body: 'Re your update "Brex balance is fine": Thanks, flag anything under $10k', created: iso(-2 * hour)},
-                             {id: 'm2', from_actor: 'bot:finance', body: 'Will do.', created: iso(-hour)}]};
+     created_at: iso(-170 * hour), updated_at: iso(-170 * hour), read: true, replies: 0}];
+  const threads = {'u-fin': [{id: 'm1', from_actor: 'human:ana', body: 'Re your update "Brex balance is fine": Thanks, flag anything under $10k', created_at: iso(-2 * hour)},
+                             {id: 'm2', from_actor: 'bot:finance', body: 'Will do.', created_at: iso(-hour)}]};
   // Older updates past the feed's page: only the one-update route has them (a From: link on an older card).
   const older = {'u-seo-old': {id: 'u-seo-old', bot: 'seo', kind: 'daily', day: day(-86400e3), headline: 'Outlined the checklist page',
-                               body: '- Outlined the checklist page', created: iso(-27 * hour), updated: iso(-27 * hour), read: true, replies: 0},
+                               body: '- Outlined the checklist page', created_at: iso(-27 * hour), updated_at: iso(-27 * hour), read: true, replies: 0},
                  'u-game-old': {id: 'u-game-old', bot: 'game', kind: 'daily', day: day(-86400e3), headline: 'Sketched a level',
-                                body: '- Sketched the first level', created: iso(-28 * hour), updated: iso(-28 * hour), read: true, replies: 0}};
+                                body: '- Sketched the first level', created_at: iso(-28 * hour), updated_at: iso(-28 * hour), read: true, replies: 0}};
   const oneAsked = [];
   let pageTwo = null, holdOne = null;               // a second daily page for Load older; a held one-update reply
   const archivedIds = new Set(), archiveRequests = [];
@@ -91,7 +91,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
         const body = req.postDataJSON(); archiveRequests.push(body);
         if (archiveFails) return json({error: {code: 'storage_unavailable', detail: 'Synthetic archive failure'}}, 500);
         for (const id of body.ids) { if (body.archived) archivedIds.add(id); else archivedIds.delete(id); }
-        return json({updated: body.ids.length, archived: body.archived, unread: updates.filter(u => !isArchived(u) && !u.read).length});
+        return json({updated_at: body.ids.length, archived: body.archived, unread: updates.filter(u => !isArchived(u) && !u.read).length});
       }
       if (p === '/api/v2/updates' && req.method() === 'GET' && url.searchParams.get('before') === 'p2') {
         return json({updates: pageTwo, missed: [], unread: 0, next_before: null});
@@ -112,7 +112,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
       if (reply) {
         const body = req.postDataJSON(); posted.push({path: p, body});
         if (holdReply) await holdReply;                 // held until the test has seen the pending reply
-        const msg = {id: 'm-new', from_actor: 'human:ana', body: `Re your update "x": ${body.text}`, created: new Date().toISOString(), conversation_id: 'c-seo'};
+        const msg = {id: 'm-new', from_actor: 'human:ana', body: `Re your update "x": ${body.text}`, created_at: new Date().toISOString(), conversation_id: 'c-seo'};
         threads[reply[1]] = [...(threads[reply[1]] || []), msg];
         return json({message: msg, thread: threads[reply[1]]});
       }
@@ -320,12 +320,12 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     // On a repeat visit the cached cards paint first; a first page that lands after the link opened its update keeps
     // that update under its card and selected. Load older then brings it again with an older one: each shows once.
     pageTwo = [older['u-seo-old'], {id: 'u-fin-old', bot: 'finance', kind: 'daily', day: day(-2 * 86400e3), headline: 'Paid the rent',
-      body: '- Paid the October rent', created: iso(-50 * hour), updated: iso(-50 * hour), read: true, replies: 0}];
+      body: '- Paid the October rent', created_at: iso(-50 * hour), updated_at: iso(-50 * hour), read: true, replies: 0}];
     await lp.evaluate(() => { location.hash = '#/updates?view=archive'; });
     await lp.waitForFunction(() => UPD?.view === 'archive' && !UPD.loading);
     let releaseFirst; holdList = new Promise(r => { releaseFirst = r; });
     const fresh = {id: 'u-seo-new', bot: 'seo', kind: 'daily', day: day(0), headline: 'New', body: '- Posted while you read',
-                   created: iso(0), updated: iso(0), read: false, replies: 0};
+                   created_at: iso(0), updated_at: iso(0), read: false, replies: 0};
     updates.push(fresh);                                      // the held first page brings a newer card that sorts first
     await lp.evaluate(() => { location.hash = '#/updates'; });
     await cmoFrom.waitFor();                                  // painted from the cache while the first page is held

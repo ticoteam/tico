@@ -18,7 +18,7 @@ async function detail(page) {
       open: !!m?.open,
       title: m?.querySelector('.tmodal-title')?.textContent.trim() || '',
       status: m?.querySelector('.tstatus')?.textContent.trim() || '',
-      created: m?.querySelector('.tmodal-age')?.getAttribute('title') || '',
+      created_at: m?.querySelector('.tmodal-age')?.getAttribute('title') || '',
       owner: row('Owner'),
       asked: row('Asked by'),
       history: m?.querySelector('.task-comments')?.innerText.replace(/\s+/g, ' ').trim() || '',
@@ -75,7 +75,7 @@ journey('e2e-tasks', async ({hub, browser, phone}) => {
   let d = await sheet(page, TITLE);
   assert.match(d.owner, /engineering-lead/, `${where}: owner row names the bot`);
   assert.match(d.asked, /You/, `${where}: asked-by row names the requester`);
-  assert.match(d.created, CREATED, `${where}: created time is drawn`);
+  assert.match(d.created_at, CREATED, `${where}: created time is drawn`);
   assert.match(d.status, /Plan/, `${where}: a typed task shows its first step`);
   assert.ok(d.canClose, `${where}: the requester can close`);
   assert.ok(!d.canDone, `${where}: the requester cannot mark it done`);

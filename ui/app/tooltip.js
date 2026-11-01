@@ -31,13 +31,13 @@ function tipHTML(slug) {
   if (S.me?.cloud && e && e.agent) {
     rows.push(['Run by', esc(`${agentKind(e.agent)}${e.agent.profile ? ` · ${e.agent.profile}` : ''}`)]);
     rows.push(['Status', agentPresenceLabel(e.agent, e.online)]);
-    if (e.agent.last_seen) rows.push([e.agent.synced ? 'Last sync' : 'Last seen', esc(ago(e.agent.last_seen))]);
+    if (e.agent.last_seen_at) rows.push([e.agent.synced ? 'Last sync' : 'Last seen', esc(ago(e.agent.last_seen_at))]);
   } else if (S.me?.cloud && e) {
     rows.push(['Computer', esc(e.machine?.label || 'Not registered')]);
     rows.push(['Status', e.online ? (e.ready ? 'Online · ready' : 'Online · setup needed') : 'Offline']);
     // Its turns run on the Tico AI Gateway until its subscription is signed in (backend/models_preset.py as_served).
     if (e.online && e.readiness?.gateway) rows.push(['Model', esc(e.readiness.gateway)]);
-    if (e.machine?.last_seen) rows.push(['Last seen', esc(ago(e.machine.last_seen))]);
+    if (e.machine?.last_seen_at) rows.push(['Last seen', esc(ago(e.machine.last_seen_at))]);
   }
   return `<div class="tip-head">${avatar(slug, 18, stateOf(slug))}<strong>${empName(slug)}</strong></div>
     ${e?.description ? `<div class="tip-sub">${esc(e.description)}</div>` : ''}

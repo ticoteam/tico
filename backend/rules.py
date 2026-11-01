@@ -367,7 +367,7 @@ CREATE TABLE IF NOT EXISTS rules(
  id TEXT PRIMARY KEY, scope_kind TEXT NOT NULL, scope_id TEXT NOT NULL DEFAULT '', event TEXT NOT NULL,
  condition TEXT NOT NULL DEFAULT '{}', then_outcome TEXT NOT NULL, params TEXT NOT NULL DEFAULT '{}',
  enabled INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT '',
- created_by TEXT NOT NULL, action_by TEXT, created TEXT NOT NULL, updated TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
+ created_by TEXT NOT NULL, action_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
 CREATE INDEX IF NOT EXISTS rules_event ON rules(event, enabled);
 CREATE INDEX IF NOT EXISTS rules_scope ON rules(scope_kind, scope_id);
 """
@@ -566,13 +566,13 @@ def _table_decision(conn, event, actor, target, refs, conv, task_row=None):
         return None
     try:
         rows = conn.execute("SELECT * FROM rules WHERE enabled=1 AND event IN (?, '*') "
-                            "ORDER BY position, event='*', created, id", (event,)).fetchall()
+                            "ORDER BY position, event='*', created_at, id", (event,)).fetchall()
     except sqlite3.OperationalError:            # a database from before the table: no rows
         rows = []
     from . import redesign_migration
     converted = redesign_migration.wake_rows(conn, event)   # rules the redesign moved into "What wakes" automations
     if converted:
-        rows = sorted([*rows, *converted], key=lambda r: (r["position"], r["event"] == "*", r["created"], r["id"]))
+        rows = sorted([*rows, *converted], key=lambda r: (r["position"], r["event"] == "*", r["created_at"], r["id"]))
     slug, profile = H.actor_id(target), []
     if PROFILE_RULES:
         profile = [{**r, "scope_kind": "bot", "scope_id": slug} for r in PROFILE_RULES.get(profile_of(conn, slug), ())
@@ -997,7 +997,7 @@ def _bot_room(conn, slug):
     from . import rooms
     if rooms.thread_mode(conn, slug) == rooms.SHARED:
         found = conn.execute("SELECT id FROM conversations WHERE scope='shared' AND room_key=? AND closed_at IS NULL "
-                             "ORDER BY COALESCE(last_message_at,created) DESC LIMIT 1", (slug,)).fetchone()
+                             "ORDER BY COALESCE(last_message_at,created_at) DESC LIMIT 1", (slug,)).fetchone()
         if found:
             return H.conversation(conn, found["id"])
     stored = conn.execute("SELECT operator FROM bot_config WHERE bot=?", (slug,)).fetchone()
@@ -1214,7 +1214,7 @@ def _event_rows(conn, name):
     found += [r for r in redesign_migration.wake_rows(conn) if r["scope_kind"] in ("bot", "department", "team")
               and (r["event"] == name or (r["event"].endswith("*") and r["event"] != "*"))]
     found = [r for r in found if CAT.matches(r["event"], name)]
-    return sorted(found, key=lambda r: (EVENT_PRECEDENCE.index(r["scope_kind"]), r["position"], r["created"], r["id"]))
+    return sorted(found, key=lambda r: (EVENT_PRECEDENCE.index(r["scope_kind"]), r["position"], r["created_at"], r["id"]))
 
 
 def judge_event(conn, event, ctx, *, actor="keeper"):
@@ -1339,7 +1339,7 @@ def steps_renamed(conn, type_id, renamed):
         moved = [lower.get(str(n).lower(), n) for n in names]
         if moved != names:
             when["step"] = moved if isinstance(step, list) else moved[0]
-            conn.execute("UPDATE rules SET condition=?, updated=?, revision=revision+1 WHERE id=?",
+            conn.execute("UPDATE rules SET condition=?, updated_at=?, revision=revision+1 WHERE id=?",
                          (json.dumps(when, sort_keys=True), H.now(), ident))
 
 
@@ -1356,7 +1356,7 @@ def seed_dev(conn):
             for position, (note, when, outcome) in enumerate(DEV_ROWS, 1):
                 conn.execute(
                     "INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,"
-                    "position,note,created_by,created,updated,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
+                    "position,note,created_by,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
                     ("rule-" + H.new_id(), "type", ident, "step_entered", json.dumps(when, sort_keys=True), outcome,
                      "{}", position, note, H.KEEPER, at, at))
             H.event(conn, H.KEEPER, SEEDED, ident, {"rows": len(DEV_ROWS)})
@@ -1427,7 +1427,7 @@ def view(row, conn=None):
             "position": row["position"], "note": row["note"], "built_in": False,
             "protected": row["id"] in tico_notices.RULE_IDS,       # Tico Team's notice rules: editable, never deleted
             "created_by": row["created_by"], "action_by": row["action_by"],
-            "created": row["created"], "updated": row["updated"],
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
             "revision": row["revision"],
             **(TTR.state(conn, row["id"]) if conn is not None and row["event"] in TTR.TRIGGERS else {})}
 

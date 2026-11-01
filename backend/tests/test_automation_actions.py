@@ -58,7 +58,7 @@ def test_a_note_with_no_task_or_bot_stays_in_the_run_log(api):
 
 def test_wake_bot_wakes_it_with_the_run_on_the_notice(api):
     assert act(api, "wake_bot", {"bot": "ops", "text": "Look"})["ok"]
-    woke = sql(api, "SELECT body, refs FROM messages WHERE to_actor='bot:ops' ORDER BY created DESC")[0]
+    woke = sql(api, "SELECT body, refs FROM messages WHERE to_actor='bot:ops' ORDER BY created_at DESC")[0]
     assert woke["body"] == "Look" and json.loads(woke["refs"])["automation_run"] == "run_1"
     assert not act(api, "wake_bot", {"bot": "nobody"})["ok"]
 
@@ -128,7 +128,7 @@ def test_call_webhook_queues_a_delivery_to_a_saved_hook_only(api):
 def test_mail_actions_queue_for_the_mailboxs_computer(api):
     for do in ("archive", "leave_for_you", "draft_reply", "forward", "label"):
         assert act(api, do, {"tag": "x"}, MAIL)["ok"]
-    queued = [r["action"] for r in sql(api, "SELECT action FROM automation_mail_actions ORDER BY created")]
+    queued = [r["action"] for r in sql(api, "SELECT action FROM automation_mail_actions ORDER BY created_at")]
     assert queued == ["archive", "leave", "draft", "forward", "label"]
     assert act(api, "archive") == {"ok": False, "detail": "archive needs a message"}
 
@@ -157,7 +157,7 @@ def test_an_idle_pr_find_reads_open_prs_whose_last_activity_is_old(api):
              ("merged", "merged", H.shift(now, hours=-30)), ("draft", "draft", None)]
     with api.app.state.store.transaction() as c:
         for number, (name, state, activity) in enumerate(links, 1):
-            c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,created,activity_at,repo,number) "
+            c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,created_at,activity_at,repo,number) "
                       "VALUES(?,?,?,?,?,?,?,?,?,?)",
                       (f"link_{name}", task_id, "pr", f"https://github.com/acme/app/pull/{number}", f"Change {name}",
                        state, old, activity, "acme/app", number))

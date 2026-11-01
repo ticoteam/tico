@@ -21,7 +21,7 @@ function rdbDeck(body) {
 // What the briefing is: a daily one is Today or its date; a weekly one is the week it covers (its ISO week's Monday).
 const rdbDay = at => at.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(at.getFullYear() !== new Date().getFullYear() ? {year: 'numeric'} : {})});
 const rdbDate = b => {
-  const at = new Date(b.updated || b.created || Date.now());
+  const at = new Date(b.updated_at || b.created_at || Date.now());
   if (isNaN(at)) return '';
   if (b.cadence === 'daily') return at.toDateString() === new Date().toDateString() ? 'Today' : rdbDay(at);
   const [, y, w] = String(b.week || '').match(/^(\d{4})-W(\d{1,2})$/) || [];

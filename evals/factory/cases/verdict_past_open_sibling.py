@@ -70,7 +70,7 @@ def _watch_results(run, w):
                          "AND json_extract(m.refs,'$.verdict') IS NOT NULL").fetchall()
         for job in map(dict, rows):
             ticket = w.parent_of(json.loads(job.pop("refs"))["subtask"])
-            if ticket not in run.asked or w.H.parse_ts(job["created"]) >= w.now() - w.tick:
+            if ticket not in run.asked or w.H.parse_ts(job["created_at"]) >= w.now() - w.tick:
                 continue
             why = E.job_refusal(c, job, {}, ready, set(), E.lanes_on(runner), E.roots_on(runner))
             if why:

@@ -67,9 +67,9 @@ class CountingStore:
 def test_the_size_pass_reads_in_short_snapshots_and_keeps_its_shape(tmp_path):
     path = tmp_path / "hub.db"
     c = sqlite3.connect(path, isolation_level=None)
-    c.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY, created INTEGER, body TEXT)")
-    c.execute("CREATE INDEX messages_created ON messages(created)")
-    c.executemany("INSERT INTO messages(created, body) VALUES(?, ?)", [(i, "x" * 200) for i in range(500)])
+    c.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY, created_at INTEGER, body TEXT)")
+    c.execute("CREATE INDEX messages_created ON messages(created_at)")
+    c.executemany("INSERT INTO messages(created_at, body) VALUES(?, ?)", [(i, "x" * 200) for i in range(500)])
     for i in range(60):
         c.execute(f"CREATE TABLE extra{i}(x)")
     c.close()

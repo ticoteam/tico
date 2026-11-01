@@ -426,7 +426,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
     if decision == "declined":
         return _close(ctx, row, "denied", "declined", f"declined by {appr.get('decided_by')}")
     if decision != "approved":
-        stale = appr.get("decided_by") == "keeper" and str(appr.get("created") or "") <= \
+        stale = appr.get("decided_by") == "keeper" and str(appr.get("created_at") or "") <= \
             tico.shift(ctx.at, days=-STALE_DAYS)
         status = "expired" if stale else "withdrawn"
         return _close(ctx, row, status, status, "nobody decided in time; ask again" if stale else

@@ -57,7 +57,7 @@ def tool_list(draft):
 
 
 def to_yaml(draft, created=None):
-    """The company file for a draft, with key-shaped strings removed whatever path the draft took. `created` defaults
+    """The company file for a draft, with key-shaped strings removed whatever path the draft took. `created_at` defaults
     to now."""
     draft = D.check(scrub_all(draft)[0])
     created = created or dt.datetime.now(dt.timezone.utc)

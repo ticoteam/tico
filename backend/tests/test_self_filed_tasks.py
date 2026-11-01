@@ -178,7 +178,7 @@ def test_the_hold_ends_after_a_few_minutes_even_while_the_filing_turn_runs(api):
                 token=active["token"])
     assert claim(api, machine) is None
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE to_actor='bot:ops' AND body LIKE 'New task from %Build the docs'",
+        c.execute("UPDATE messages SET created_at=? WHERE to_actor='bot:ops' AND body LIKE 'New task from %Build the docs'",
                   (H.shift(H.now(), seconds=-execution.FILER_HOLD_S - 1),))
     assert H.message_task_id(claim(api, machine)["message"]) == mine["id"]
 

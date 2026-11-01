@@ -79,7 +79,7 @@ def test_the_cancelled_spelling_is_refused_on_a_fresh_file(db):
     with sqlite3.connect(db, isolation_level=None) as conn:
         conn.execute("PRAGMA foreign_keys=OFF")
         with pytest.raises(sqlite3.IntegrityError, match="jobs.state: invalid value"):
-            conn.execute("INSERT INTO jobs(id,message_id,bot,state,created) VALUES('j1','m1','b1','cancelled','t')")
+            conn.execute("INSERT INTO jobs(id,message_id,bot,state,created_at) VALUES('j1','m1','b1','cancelled','t')")
 
 
 def test_a_fresh_file_is_at_the_current_version_with_the_lists_installed(db):
@@ -98,7 +98,7 @@ def _old_file(path):
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript("""
         CREATE TABLE jobs(id TEXT PRIMARY KEY, message_id TEXT NOT NULL, bot TEXT NOT NULL,
-                          state TEXT NOT NULL DEFAULT 'queued', created TEXT NOT NULL);
+                          state TEXT NOT NULL DEFAULT 'queued', created_at TEXT NOT NULL);
         CREATE INDEX jobs_state ON jobs(state);
     """)
     return conn
@@ -119,7 +119,7 @@ def _upgrade_as_migrate_runs_it(conn):
 
 def test_the_upgrade_names_values_it_cannot_map_and_changes_nothing(tmp_path):
     conn = _old_file(tmp_path / "old.db")
-    conn.executemany("INSERT INTO jobs(id,message_id,bot,state,created) VALUES(?,?,?,?,?)",
+    conn.executemany("INSERT INTO jobs(id,message_id,bot,state,created_at) VALUES(?,?,?,?,?)",
                      [("j1", "m", "b", "queued", "t"), ("j2", "m", "b", "stalled", "t"),
                       ("j3", "m", "b", "cancelled", "t")])
     with pytest.raises(SV.StatusValuesError) as failed:
@@ -130,7 +130,7 @@ def test_the_upgrade_names_values_it_cannot_map_and_changes_nothing(tmp_path):
 
 def test_the_upgrade_rewrites_cancelled_and_refuses_it_afterwards(tmp_path):
     conn = _old_file(tmp_path / "old.db")
-    conn.executemany("INSERT INTO jobs(id,message_id,bot,state,created) VALUES(?,?,?,?,?)",
+    conn.executemany("INSERT INTO jobs(id,message_id,bot,state,created_at) VALUES(?,?,?,?,?)",
                      [("j1", "m", "b", "queued", "t"), ("j2", "m", "b", "cancelled", "t")])
     _upgrade_as_migrate_runs_it(conn)
     assert conn.execute("SELECT state FROM jobs ORDER BY id").fetchall() == [("queued",), ("canceled",)]
@@ -142,9 +142,9 @@ def test_google_connects_state_is_renamed_to_oauth_state(tmp_path):
     conn = sqlite3.connect(tmp_path / "old.db", isolation_level=None)
     conn.executescript("""
         CREATE TABLE google_connects(person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL,
-          state TEXT, verifier TEXT, code TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);
+          state TEXT, verifier TEXT, code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE UNIQUE INDEX google_connects_state ON google_connects(state) WHERE state IS NOT NULL;
-        INSERT INTO google_connects(person_id,mailbox,status,state,created,updated)
+        INSERT INTO google_connects(person_id,mailbox,status,state,created_at,updated_at)
           VALUES('p1','ana@acme.example','signing_in','nonce-1','t','t');
     """)
     rename = migrations.Migration(migrations.DIRECTORY / "0003_google_connects_oauth_state.py")

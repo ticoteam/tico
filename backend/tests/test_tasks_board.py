@@ -275,7 +275,7 @@ def test_the_author_edits_a_comment_and_nobody_wakes(api):
     after = get(api, "tasks/" + task["id"])
     assert [(m["body"], bool(m["edited_at"])) for m in after["comments"]] == [("Use the August numbers.", True)]
     assert len(after["messages"]) == len(before["messages"]) and jobs_for(api, "ops") == queued, "nothing sent, nobody woken"
-    assert after["task"]["updated"] > before["task"]["updated"]
+    assert after["task"]["updated_at"] > before["task"]["updated_at"]
     assert any(e["field"] == "comment" and e["new"] == said["comment"]["id"] for e in after["events"])
     with api.app.state.store.read() as c:
         audit = c.execute("SELECT detail FROM events WHERE action='message.edited' AND target=?",
@@ -305,13 +305,13 @@ def test_a_deleted_comment_leaves_the_task_and_never_reaches_the_bot(api):
     assert gone["comment"]["deleted_at"] and gone["woke"] is False
     after = get(api, "tasks/" + task["id"])
     assert said["id"] not in {m["id"] for m in gone["comments"] + after["comments"] + after["messages"]}
-    assert after["task"]["updated"] > before["task"]["updated"]
+    assert after["task"]["updated_at"] > before["task"]["updated_at"]
     assert after["task"]["ask"]["id"] == ask["id"], "the question it answered is open again"
     get(api, "messages/" + said["id"], expected=404)
     post(api, f"tasks/{task['id']}/comments/{said['id']}", {"text": "October"}, expected=404)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (said["id"],)).fetchone()[0] == "canceled"
-        assert c.execute("SELECT expires FROM task_delegations WHERE message_id=?", (said["id"],)).fetchone()[0] <= H.now()
+        assert c.execute("SELECT expires_at FROM task_delegations WHERE message_id=?", (said["id"],)).fetchone()[0] <= H.now()
 
 
 # ----------------------------------------------------------------------------- movers
@@ -521,10 +521,10 @@ def test_number_migration_preserves_shipped_schemas_and_existing_step_order(tmp_
         H._apply(c, schema)
     c.execute('PRAGMA user_version=22')
     stamp = H.now()
-    c.execute("INSERT INTO task_types(id,name,created,updated) VALUES('dev','Dev ticket',?,?)", (stamp, stamp))
+    c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev ticket',?,?)", (stamp, stamp))
     c.execute("INSERT INTO task_steps(id,type_id,name,position,status) VALUES('todo','dev','To do',0,'open')")
     for ident in ('first', 'second'):
-        c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,created,updated,type_id,step_id) "
+        c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,created_at,updated_at,type_id,step_id) "
                   "VALUES(?,?,'x','human:ana','bot:ops','open',?,?,'dev','todo')", (ident, ident, stamp, stamp))
     H.migrate(c)
     ranks = [tuple(row) for row in c.execute('SELECT id,step_rank,number FROM tasks ORDER BY step_rank')]
@@ -588,7 +588,7 @@ def test_delegate_cannot_turn_temporary_access_into_ancestor_access(api):
     parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Own the plan', 'body': 'x'})
     unrelated = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review other work', 'body': 'x'})
     with api.app.state.store.transaction() as c:
-        c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) VALUES(?,?,?,?,?)',
+        c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)',
                   (unrelated['id'], 'bot:ops', 'human:ana', c.execute('SELECT id FROM messages LIMIT 1').fetchone()[0], H.shift(H.now(), days=1)))
     get(api, 'tasks/' + unrelated['id'], token=token)
     relate(api, unrelated['id'], parent['id'], 'parent', token=token, expected=403)
@@ -623,10 +623,10 @@ def test_a_list_carries_a_links_set_columns_not_its_record_or_write_time(api):
                   (json.dumps({'size_mb': 40, 'activity_at': '2026-10-24T00:00:00Z'}), tree['id']))
     listed = {l['kind']: l for l in next(t for t in get(api, 'tasks')['tasks'] if t['id'] == task['id'])['links']}
     assert listed['worktree']['repo'] == 'acme/app' and listed['worktree']['path'] == 'tasks/t1/acme__app'
-    assert not {'detail', 'updated', 'pr_sha', 'number', 'checks'} & set(listed['worktree'])
+    assert not {'detail', 'updated_at', 'pr_sha', 'number', 'checks'} & set(listed['worktree'])
     # The task's own read keeps the whole record.
     full = {l['kind']: l for l in get(api, 'tasks/' + task['id'])['task']['links']}
-    assert json.loads(full['worktree']['detail'])['size_mb'] == 40 and 'updated' in full['worktree']
+    assert json.loads(full['worktree']['detail'])['size_mb'] == 40 and 'updated_at' in full['worktree']
 
 
 def test_people_can_change_visible_task_links_but_bots_need_task_rights(api):

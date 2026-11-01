@@ -93,7 +93,7 @@ def install_team_icon(app, store):
                 cleanup(c, icon)
             storage.put(data, "image/png")
             if icon:
-                c.execute("UPDATE blobs SET digest=?,size=?,created=? WHERE id=?",
+                c.execute("UPDATE blobs SET digest=?,size=?,created_at=? WHERE id=?",
                           (digest, len(data), H.now(), icon["id"]))
             else:
                 icon = blobs.register(c, who, digest, len(data), "team-icon.png", "image/png")

@@ -40,7 +40,7 @@ def seed(store):
         rows.append((str(uuid.uuid4()), f"Task {i}", body, "ana", owner, status, due, None,
                      "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"))
     with store.transaction() as c:
-        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,due,conversation_id,created,updated) "
+        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,due,conversation_id,created_at,updated_at) "
                       "VALUES(?,?,?,?,?,?,?,?,?,?)", rows)
         for i in range(ROUTINES):                      # each moves to its schedule automation
             routine(c, f"r{i}", f"Routine {i}")

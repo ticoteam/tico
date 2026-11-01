@@ -15,18 +15,18 @@ const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1
   const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless: true})
     : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true});
   const now = new Date().toISOString();
-  const messages = [{id: 'm1', from_actor: 'bot:designer', body: 'This week.', created: now, refs: {attachments: [
+  const messages = [{id: 'm1', from_actor: 'bot:designer', body: 'This week.', created_at: now, refs: {attachments: [
     A('f-chart', 'chart.png', 'image/png', 'image', 'Weekly signups'), A('f-page', 'local.html', 'text/html', 'page', 'Embedded pair'),
     A('f-csv', 'data.csv', 'text/csv', 'file', 'data.csv')]}}];
   const task = {id: 't1', title: 'Metrics', owner: 'bot:designer', requester: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
-    parts: {total: 0, done: 0}, version: 1, created: now, updated: now, body: 'Metrics.', attachments: []};
-  const tver = (id, mime) => ({n: 1, size: 1000, mime, sha256: 'x', created: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
+    parts: {total: 0, done: 0}, version: 1, created_at: now, updated_at: now, body: 'Metrics.', attachments: []};
+  const tver = (id, mime) => ({n: 1, size: 1000, mime, sha256: 'x', created_at: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
     width: null, height: null, duration_ms: null, media_state: 'none', url: `/api/v2/files/${id}?v=1`, poster_url: null, thumb_url: null});
   const taskFiles = [{id: 'f-metrics', name: 'metrics.png', mime: 'image/png', current_version: 1, archived: false, versions: [tver('f-metrics', 'image/png')]},
     {id: 'f-remote', name: 'remote.html', mime: 'text/html', current_version: 1, archived: false, versions: [tver('f-remote', 'text/html')]},
     {id: 'f-notes', name: 'notes.csv', mime: 'text/csv', current_version: 1, archived: false, versions: [tver('f-notes', 'text/csv')]},
     {id: 'f-plain', name: 'untitled.png', mime: 'image/png', current_version: 1, archived: false, versions: [tver('f-plain', 'image/png')]}];
-  const taskComments = [{id: 'c1', kind: 'say', from_actor: 'bot:designer', body: 'Metrics attached.', created: now, answers: [], refs: {task: 't1', comment: true,
+  const taskComments = [{id: 'c1', kind: 'say', from_actor: 'bot:designer', body: 'Metrics attached.', created_at: now, answers: [], refs: {task: 't1', comment: true,
     attachments: [A('f-metrics', 'metrics.png', 'image/png', 'image', 'Private metrics'), A('f-remote', 'remote.html', 'text/html', 'page', 'Remote reference'),
       A('f-gone', 'old.html', 'text/html', 'page', 'Earlier draft'),
       // sent without a title: the server stores the file's name as its title (backend/visuals.py)

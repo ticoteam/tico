@@ -149,7 +149,7 @@ def test_a_pre_limit_lane_start_or_restore_cannot_release_the_cooldown(api, monk
         post(api, f"attempts/{two['id']}/started", {"thread_id": two["lane"]}, machine["token"])
         # A lease which lapsed while its worker continued; the runner still owns its lane.
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (before, two["id"]))
+            c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (before, two["id"]))
             c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (two["job_id"],))
     monkeypatch.setattr(H, "now", lambda: H.shift(before, seconds=1))
     post(api, f"attempts/{one['id']}/started", {"thread_id": one["lane"]}, machine["token"])

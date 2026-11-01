@@ -29,7 +29,7 @@ class BotRows:
         sources = {source_of(_json(row["config"])) for row in self.configs.values()} - {""} - set(self.configs)
         self.configs.update({r["bot"]: r for r in read_cache.configs(c, sources)})
         self.humans = {row["id"]: row for row in H.humans(c)}
-        self.assignments = _by(c, "SELECT a.bot,a.runner_id,a.generation,r.label,r.operator,r.last_seen,"
+        self.assignments = _by(c, "SELECT a.bot,a.runner_id,a.generation,r.label,r.operator,r.last_seen_at,"
                                   "r.revoked_at FROM assignments a JOIN runners r ON r.id=a.runner_id "
                                   "WHERE a.bot IN ({})", read)
         self.draining = set(_by(c, "SELECT bot FROM bot_control WHERE draining=1 AND bot IN ({})", read))

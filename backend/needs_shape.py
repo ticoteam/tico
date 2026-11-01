@@ -3,7 +3,7 @@
 Each producer builds its item with what its card needs (a task's view, an ask, an approval row, a card's rows); `item`
 adds the fields every item has, whatever its kind, so a client lists, orders and acts on them without a branch per kind:
 
-- `id`, `kind`, `title`, `created` (when it began waiting on the person);
+- `id`, `kind`, `title`, `created_at` (when it began waiting on the person);
 - `body`: its text, or null when the card has none;
 - `subject`: `{type, id}`, the one thing it is about (a task, a message, an approval, a proposal, a KPI), or null for
   a card that stands for several things or a setting;
@@ -29,7 +29,7 @@ def item(x, subject, actions, body=None):
     """`x` with the common fields set; its own fields stay as its card reads them."""
     assert all(a in ACTIONS for a in actions), actions
     return {**x, "id": x["id"], "kind": x["kind"], "title": x.get("title") or "", "body": body,
-            "subject": subject, "created": x.get("created"), "actions": list(actions)}
+            "subject": subject, "created_at": x.get("created_at"), "actions": list(actions)}
 
 
 def needs_item(x, reader):
@@ -56,4 +56,4 @@ def goal_item(x, title, body, created):
     actions = {"recovery": ("decide",), "proposal": ("decide",), "kpi_stale": ("add_reading",)}.get(kind, ("open",))
     # `ref` is the asks table's key; `id` and `subject` carry it.
     shown = {k: v for k, v in x.items() if k != "ref"}
-    return item({**shown, "id": f"{kind}:{ref}", "title": title, "created": created}, subject, actions, body)
+    return item({**shown, "id": f"{kind}:{ref}", "title": title, "created_at": created}, subject, actions, body)

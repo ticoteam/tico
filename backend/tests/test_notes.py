@@ -94,7 +94,7 @@ def test_the_note_a_lifted_quarantine_leaves_reaches_the_next_run_ahead_of_a_bac
     with api.app.state.store.transaction() as c:
         H.quarantine(c, "ops", "10 repeated refusals today", refusal={"rule": "identity", "detail": "lane is a person's"})
         for i in range(50):
-            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
                       (H.new_id(), "human:ana", "bot:ops", f"Older note {i}", H.shift(H.now(), seconds=-600 + i)))
         H.status_set(c, "human:ana", "ops", state="active", reason="reviewed")
     post(api, "chat/ops", {"text": "Back to the exports"})
@@ -180,7 +180,7 @@ def test_the_waiting_scan_reads_only_the_unsettled_index(api):
     store = api.app.state.store
     with store.read() as c:
         for sql, args in ((f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {H.NOTE_WAITING_SQL} "
-                           "ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created,n.id LIMIT ?",
+                           "ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created_at,n.id LIMIT ?",
                            ("bot:ops", "tico", 50)),
                           (f"SELECT n.to_actor,count(*) FROM notes n WHERE n.to_actor IN (?) AND {H.NOTE_WAITING_SQL} "
                            "GROUP BY n.to_actor", ("bot:ops",))):

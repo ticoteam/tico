@@ -335,7 +335,7 @@ def _stamp(value: object) -> str:
 
 def not_sent(ctx: Ctx, payload: Mapping[str, Any], why: str, unknown: bool, *, started: object = None) -> None:
     """A send that did not clearly land: `unknown` when it may have (no answer, a 5xx, a call cut off), else refused.
-    Either way a finance admin is asked to check Mercury, and nothing sends the transfer again on its own. `started` is
+    Either way a finance admin is asked to check Mercury, and nothing sends the transfer again on its own. `started_at` is
     when the call was claimed: it may have landed from then, so its legs are looked for from that day, not from the day
     the failure is recorded (a recovery can run days later)."""
     tid = str(payload["transfer_id"])

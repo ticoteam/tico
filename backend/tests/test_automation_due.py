@@ -104,7 +104,7 @@ def test_an_overdue_occurrence_stays_open_and_never_blocks_the_next(api):
     aid = due(api, {"first_due": "2030-01-31", "repeats": "monthly", "open_days": 0, "tz": "UTC"})
     tick(api, datetime(2030, 1, 31, 0, 0, 5, tzinfo=timezone.utc))
     drain(api)
-    first = sql(api, "SELECT id, status FROM tasks WHERE title='Payroll' ORDER BY created")
+    first = sql(api, "SELECT id, status FROM tasks WHERE title='Payroll' ORDER BY created_at")
     assert len(first) == 1 and first[0]["status"] == "open"          # never closed: it is overdue by February
     tick(api, datetime(2030, 2, 28, 0, 0, 5, tzinfo=timezone.utc))   # the clamped February day still runs
     drain(api)
@@ -115,7 +115,7 @@ def test_an_overdue_occurrence_stays_open_and_never_blocks_the_next(api):
     # The day after January's due day, the bot-handed sweep leaves January's task open: it is that day's deadline.
     for row in open_tasks[:1]:
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE tasks SET requester='bot:ops', created='2030-01-01T00:00:00.000000Z' WHERE id=?", (row["id"],))
+            c.execute("UPDATE tasks SET requester='bot:ops', created_at='2030-01-01T00:00:00.000000Z' WHERE id=?", (row["id"],))
     with api.app.state.store.read() as c:
         handed = [t["id"] for t in ask_deadlines.handed_to_people(c, "2030-02-01T00:00:00.000000Z",
                                                                   "2030-02-01T00:00:00.000000Z")]
@@ -468,7 +468,7 @@ def test_a_bot_occurrence_due_in_two_weeks_is_stalled_when_idle_and_a_plain_task
     with store.transaction() as c:
         plain = hubdb.task_create(c, "human:ana", "Plain", "Plain", "bot:ops", lint=False, deduplicate=False,
                                   due="2030-03-01T23:59:59+00:00")["id"]
-        c.execute("UPDATE tasks SET updated=? WHERE id IN (?, ?)",
+        c.execute("UPDATE tasks SET updated_at=? WHERE id IN (?, ?)",
                   ("2030-02-15T00:00:00.000000Z", occurrence, plain))
     at = datetime(2030, 2, 15, 1, 0, tzinfo=timezone.utc)
     with store.transaction() as c:   # the creates queued wakes that would make the bot busy: this checks the stall rule

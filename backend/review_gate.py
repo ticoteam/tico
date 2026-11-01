@@ -281,7 +281,7 @@ def evidence(c, row, actor, receipt_owner=None):
         messages = []
         authors = set()
         conv = H.conversation(c, item.get("conversation_id"))
-        for raw in c.execute("SELECT * FROM messages WHERE conversation_id=? AND deleted_at IS NULL ORDER BY created,id",
+        for raw in c.execute("SELECT * FROM messages WHERE conversation_id=? AND deleted_at IS NULL ORDER BY created_at,id",
                              (item.get("conversation_id"),)).fetchall():
             m = {**dict(raw), "refs": H._json(raw["refs"], {}) or {}}
             if H.message_task_id(m, conv) != item["id"] or any(m.get(k) for k in test_receipts.REMOVED):
@@ -339,13 +339,13 @@ def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_
     facts = evidence(c, row, reader or actor, receipt_owner)
     if note is not None:
         facts["note"] = note
-        facts["updated"] = H.now()
+        facts["updated_at"] = H.now()
     # CI is checked across all linked PRs before looking at any receipt.
     for pr in prs:
         detail = snapshots.get(pr["id"], {"error": True}) if snapshots is not None else (H._json(pr.get("detail"), {}) or {})
         head = detail.get("head_sha") or "unknown"
         cached = H._json(pr.get("detail"), {}) or {}
-        changed = snapshots is not None and (pr.get("updated") or "") > detail.get("at", "") and cached.get("head_sha") != head
+        changed = snapshots is not None and (pr.get("updated_at") or "") > detail.get("at", "") and cached.get("head_sha") != head
         if changed or detail.get("error") or not test_receipts.SHA.fullmatch(head):
             why = (detail.get("why") or "GitHub read failed" if detail.get("error")
                    else "the PR link changed while GitHub was read" if changed else "no PR head recorded")

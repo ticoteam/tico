@@ -96,7 +96,7 @@ function drawStrategyBotLog(host) {
   host.innerHTML = `<ul class="strategy-log">${items.map(x => `<li class="strategy-log-entry" data-strategy-log="${esc(x.id)}">
       <div class="row"><strong>${esc(x.reason || (x.kind === 'decision' ? 'A decision' : 'Stays yours'))}</strong>
         ${STRATEGY_LOG_STATE[x.state] ? `<span class="pill">${esc(STRATEGY_LOG_STATE[x.state])}</span>` : ''}
-        <span class="muted">${esc(fmt(x.created))}</span>
+        <span class="muted">${esc(fmt(x.created_at))}</span>
         ${host._strategyCanUndo && x.undoable ? `<button class="linkish" type="button" data-strategy-undo="${esc(x.id)}">Undo</button>` : ''}</div>
       <ul>${lines(x).map(l => `<li>${l}</li>`).join('')}</ul>
       ${x.note ? `<p class="settings-cell-note">${esc(x.note)}</p>` : ''}

@@ -86,7 +86,7 @@ async function open(browser, viewport = {width: 1280, height: 860}, state = serv
       }
       return json({intake: state.intake});
     }
-    if (p === '/api/v2/inbound/inboxes') return json({inboxes: state.inboxes, next: null, configured: true, gaps: [], last_sync: null, error: null});
+    if (p === '/api/v2/inbound/inboxes') return json({inboxes: state.inboxes, next: null, configured: true, gaps: [], last_synced_at: null, error: null});
     if (p === '/api/v2/postal/items') return json({items: state.items, next: null});
     const retry = p.match(/^\/api\/v2\/postal\/items\/([^/]+)\/retry$/);
     if (retry) {

@@ -131,7 +131,7 @@ class ReadIndex:
     def attempts(self):
         if self._attempts is None:
             rows = {r["id"]: {**dict(r), "messages": [r["message_id"]], "tasks": set()} for r in self.c.execute(
-                "SELECT a.id,a.bot,a.created,a.finished,a.lease_until,j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id")}
+                "SELECT a.id,a.bot,a.created_at,a.finished_at,a.lease_until,j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id")}
             for aid, mid in self.c.execute("SELECT attempt_id,message_id FROM attempt_inputs"):
                 if aid in rows:
                     rows[aid]["messages"].append(mid)
@@ -173,15 +173,15 @@ class ReadIndex:
                 middle = len(rows) // 2
                 row = rows[middle]
                 left, right = build(rows[:middle]), build(rows[middle + 1:])
-                end = row["finished"] or row["lease_until"]
+                end = row["finished_at"] or row["lease_until"]
                 return row, end, max(end, left[2] if left else "", right[2] if right else ""), left, right
-            self._intervals = {slug: build(sorted(rows, key=lambda r: r["created"])) for slug, rows in groups.items()}
+            self._intervals = {slug: build(sorted(rows, key=lambda r: r["created_at"])) for slug, rows in groups.items()}
         def search(node):
             if not node or node[2] < ts:
                 return
             row, end, _, left, right = node
             yield from search(left)
-            if row["created"] <= ts:
+            if row["created_at"] <= ts:
                 if ts <= end:
                     yield row["id"]
                 yield from search(right)

@@ -121,8 +121,8 @@ def old_rows(org):
                       (routine_id(name), r.get("timezone", "UTC")))
             made[name] = due
         for n, (name, (bot, event, outcome)) in enumerate(WAKE_RULES.items()):
-            c.execute("INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, position, created_by, created, "
-                      "updated) VALUES(?,?,?,?,?,?,?,?,?)", (rule_id(name), "bot", bot, event, outcome, n,
+            c.execute("INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, position, created_by, created_at, "
+                      "updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (rule_id(name), "bot", bot, event, outcome, n,
                                                              "human:" + DANA_ID, H.now(), H.now()))
         for bot, usd in HOURLY.items():
             c.execute("INSERT INTO usage_limits(bot, hourly_usd) VALUES(?,?) ON CONFLICT(bot) DO UPDATE SET "

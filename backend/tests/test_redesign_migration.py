@@ -38,7 +38,7 @@ def routine(api, sid, bot="coo", *, cron="0 9 * * *", event=None, on=True, text=
 def rule(api, rid, event="comment", then="wake", scope=("bot", "coo"), position=0, enabled=True):
     with db(api).transaction() as c:
         c.execute("INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, enabled, position, created_by, "
-                  "created, updated) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (rid, scope[0], scope[1], event, then, int(enabled), position, "human:ana",
                    "2026-10-01T00:00:0%dZ" % position, "2026-10-01T00:00:00Z"))
     return rid
@@ -249,7 +249,7 @@ def test_rehearsal_cases_team_rules_paused_bots_and_long_inbox_instructions(api)
         c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
     post(api, "access/people/cara", {"inbox_bot": "inbox", "mailbox": "cara@acme.example"})
     with db(api).transaction() as c:
-        c.execute("INSERT OR REPLACE INTO mail_agent_instructions(bot, content, runner_id, updated) VALUES(?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO mail_agent_instructions(bot, content, runner_id, updated_at) VALUES(?,?,?,?)",
                   ("inbox", LONG, "", "2026-10-28T00:00:00Z"))
     done = first_start(api)
     assert not done["failed"] and not done["kept"]
@@ -344,9 +344,9 @@ def test_the_upgrade_drops_the_cutover_record_and_accepts_tables_and_holds_still
     store = db(api)
     with store.transaction() as conn:
         conn.execute("CREATE TABLE redesign_migrations(id TEXT PRIMARY KEY, state TEXT NOT NULL, actor TEXT NOT NULL, "
-                     "created TEXT NOT NULL, expires TEXT NOT NULL, finished TEXT, restored_at TEXT, snapshot_json TEXT, "
+                     "created_at TEXT NOT NULL, expires_at TEXT NOT NULL, finished_at TEXT, restored_at TEXT, snapshot_json TEXT, "
                      "result TEXT)")
-        conn.execute("INSERT INTO redesign_migrations(id, state, actor, created, expires) VALUES('mig_1','converted',"
+        conn.execute("INSERT INTO redesign_migrations(id, state, actor, created_at, expires_at) VALUES('mig_1','converted',"
                      "'human:ana',?,?)", (H.now(), H.now()))
         conn.execute("CREATE TABLE redesign_migration_accepts(flag TEXT PRIMARY KEY, accepted_by TEXT NOT NULL, "
                      "at TEXT NOT NULL)")

@@ -160,7 +160,7 @@ def test_webhook_burst_is_durable_and_sends_one_specific_wake(api):
         assert G.flush_wakes(c) == [task['id']]
         assert G.flush_wakes(c) == []
         assert c.execute('SELECT count(*) FROM messages').fetchone()[0] == before + 1
-        message = c.execute('SELECT body FROM messages ORDER BY created DESC LIMIT 1').fetchone()[0]
+        message = c.execute('SELECT body FROM messages ORDER BY created_at DESC LIMIT 1').fetchone()[0]
         assert '2 review comments' in message and 'tico#412' in message
         job = c.execute("SELECT held,wake_preset FROM jobs WHERE bot='cpo' ORDER BY rowid DESC LIMIT 1").fetchone()
         assert job['held'] and job['wake_preset'] == 'performance'
@@ -189,9 +189,9 @@ def test_task_link_upgrade_preserves_legacy_pr_rows(api):
     store = api.app.state.store
     with store.transaction() as c:
         c.execute('CREATE TABLE legacy_task_links(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), '
-                  'kind TEXT NOT NULL, url TEXT NOT NULL, title TEXT, state TEXT, added_by TEXT, created TEXT NOT NULL, '
+                  'kind TEXT NOT NULL, url TEXT NOT NULL, title TEXT, state TEXT, added_by TEXT, created_at TEXT NOT NULL, '
                   'pr_sha TEXT, pr_merged_at TEXT)')
-        c.execute('INSERT INTO legacy_task_links SELECT id,task_id,kind,url,title,state,added_by,created,pr_sha,pr_merged_at FROM task_links')
+        c.execute('INSERT INTO legacy_task_links SELECT id,task_id,kind,url,title,state,added_by,created_at,pr_sha,pr_merged_at FROM task_links')
         c.execute('DROP TABLE task_links')
         c.execute('ALTER TABLE legacy_task_links RENAME TO task_links')
         c.execute('PRAGMA user_version=17')
@@ -244,7 +244,7 @@ def test_reviewer_who_pushes_is_not_the_bot_and_changes_requests_always_wake(api
             assert 'changes requested' in (burst.get('items') or burst['notes'])[0] and bool(burst.get('items')) == (login == 'sam')
             c.execute("DELETE FROM registry_metadata WHERE key=?", ('github-task-wake:' + task['id'],))
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO github_app(id,app_id,slug,client_id,org,administration,ciphertext,nonce,created,created_by) "
+        c.execute("INSERT INTO github_app(id,app_id,slug,client_id,org,administration,ciphertext,nonce,created_at,created_by) "
                   "VALUES('app',1,'example-app','client','ticoteam',0,X'00',X'00',?,?)", (H.now(), 'human:ana'))
     hook(api, 'pull_request_review_comment', {'action': 'created', 'pull_request': {'html_url': PR},
         'comment': {'id': 44, 'user': {'login': 'token-login'}, 'performed_via_github_app': {'slug': 'example-app'}}})
@@ -255,7 +255,7 @@ def test_reviewer_who_pushes_is_not_the_bot_and_changes_requests_always_wake(api
 def test_a_pr_outside_the_app_org_is_a_plain_link(api):
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship tracked work', 'body': 'x', 'links': [PR]})
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO github_app(id,app_id,slug,client_id,org,administration,ciphertext,nonce,created,created_by) "
+        c.execute("INSERT INTO github_app(id,app_id,slug,client_id,org,administration,ciphertext,nonce,created_at,created_by) "
                   "VALUES('app',1,'example-app','client','ticoteam',0,X'00',X'00',?,?)", (H.now(), 'human:ana'))
     links = post(api, 'tasks/' + task['id'] + '/links', {'url': 'https://github.com/outside/service/pull/2'})['links']
     assert links[-1]['kind'] == 'url'
@@ -267,7 +267,7 @@ def test_background_refresh_keeps_newer_webhook_state(api, monkeypatch):
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Keep newest PR facts', 'body': 'x', 'links': [PR]})
     service = api.app.state.github_app
     with service.store.transaction() as c:
-        c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated) VALUES(?,1,1,?,?)",
+        c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated_at) VALUES(?,1,1,?,?)",
                   ('ticoteam/tico', 'human:ana', H.now()))
     monkeypatch.setattr(service, 'row', lambda c=None: {'slug': 'test-app', 'org': 'ticoteam'})
     monkeypatch.setattr(service, 'mint', lambda *args: ('test-token', 'later'))
@@ -399,7 +399,7 @@ def _burst(api, task_id):
 
 def _app(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO github_app(id,app_id,slug,client_id,org,administration,ciphertext,nonce,created,created_by) "
+        c.execute("INSERT INTO github_app(id,app_id,slug,client_id,org,administration,ciphertext,nonce,created_at,created_by) "
                   "VALUES('app',1,'example-app','client','ticoteam',0,X'00',X'00',?,?)", (H.now(), 'human:ana'))
 
 
@@ -555,7 +555,7 @@ def test_a_pr_linked_again_in_another_case_is_the_same_link(api):
     # A duplicate left by an older install is still disarmed through its own URL.
     with api.app.state.store.transaction() as c:
         H.task_link(c, 'human:ana', task['id'], PR, wake_once=True)
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,number,detail) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,repo,number,detail) "
                   "VALUES('dup',?,'pr',?,'tico#412','open','human:ana',?,'TicoTeam/Tico',412,?)",
                   (task['id'], 'https://github.com/TicoTeam/Tico/pull/412', H.now(), json.dumps({'wake_once': {'by': 'human:ana'}})))
     links = {link['id']: link for link in _arm(api, task['id'], armed=False, url='https://github.com/TicoTeam/Tico/pull/412')}
@@ -575,7 +575,7 @@ def test_wake_once_needs_the_app_and_waits_only_on_a_pr_github_reports(api):
     with api.app.state.store.transaction() as c:
         assert H.waiting_for(c, H.task(c, task['id'])) == 'GitHub on tico#412'
         H.task_update(c, 'bot:cpo', task['id'], status='waiting', note='Waiting on CI for tico#412')
-        c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), hours=-3), task['id']))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-3), task['id']))
         assert H.sweep_stranded(c) == []
     hook(api, 'pull_request', pr_event('closed'))             # a closed PR has nothing left to wait for
     with api.app.state.store.transaction() as c:
@@ -674,7 +674,7 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
     Ancestry says the merge is in the release; its change is not, so no Shipped notice and the ticket stays put."""
     _app(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated) VALUES(?,1,1,?,?)",
+        c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated_at) VALUES(?,1,1,?,?)",
                   ('ticoteam/tico', 'human:ana', H.now()))
     typ = post(api, 'task-types', {'name': 'Dev', 'steps': [
         {'name': 'Pending Release', 'status': 'review'}, {'name': 'Post Release QA', 'status': 'review'}]})['type']
@@ -767,7 +767,7 @@ def test_change_kept_reads_a_merge_commit_against_main_and_ignores_cut_tests():
 def _worktree(api, task_id, repo, branch, state='present', **detail):
     with api.app.state.store.transaction() as c:
         link = uuid.uuid4().hex
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,path,updated,"
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,repo,branch,path,updated_at,"
                   "detail) VALUES(?,?,'worktree',?,?,?,'bot:cpo',?,?,?,?,?,?)",
                   (link, task_id, 'worktree:' + link, repo, state, H.now(), repo, branch,
                    f'tasks/{task_id[:8]}/{repo.replace("/", "__")}', H.now(), json.dumps({'owner': 'bot:cpo', **detail})))
@@ -798,7 +798,7 @@ def _reconciler(api, monkeypatch, fetch, mint=None):
     service = api.app.state.github_app
     with service.store.transaction() as c:
         for repo in ('ticoteam/tico', 'ticoteam/tico-services'):
-            c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated,default_branch) "
+            c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated_at,default_branch) "
                       "VALUES(?,1,1,?,?,'main')", (repo, 'human:ana', H.now()))
     monkeypatch.setattr(service, 'row', lambda c=None: {'slug': 'test-app', 'org': 'ticoteam'})
     monkeypatch.setattr(service, 'mint', mint or (lambda *args, **kw: ('test-token', 'later')))
@@ -948,7 +948,7 @@ def test_reconcile_shares_its_reads_so_a_branch_behind_twenty_open_prs_still_get
         return SimpleNamespace(status_code=200, json=lambda: [])
     service, run = _reconciler(api, monkeypatch, fetch)
     with service.store.transaction() as c:
-        c.execute("UPDATE task_links SET updated=? WHERE task_id=? AND kind='pr'", ('2026-01-01T00:00:00.000000Z', busy['id']))
+        c.execute("UPDATE task_links SET updated_at=? WHERE task_id=? AND kind='pr'", ('2026-01-01T00:00:00.000000Z', busy['id']))
     run()
     assert _prs(api, missed['id'])[200]['state'] == 'draft' and _prs(api, idle['id']) == {}
     assert [c for c in calls if c[0] == 'POST'] == [('POST', '/repos/ticoteam/tico/pulls')]

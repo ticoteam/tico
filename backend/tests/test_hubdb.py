@@ -68,7 +68,7 @@ class Schema(HubCase):
         task = H.task_create(self.conn, ANA, "Prepare packet", "Keep this task through upgrade.", CMO, lint=False)
         # Main has already applied the purpose migration; rotation must be appended after it.
         published_version = H.MIGRATIONS.index(H.RUN_PURPOSE_SCHEMA) + 1
-        self.conn.execute("INSERT INTO turns(id,bot,started,purpose) VALUES('before-rotation','cmo',?,'review PR')",
+        self.conn.execute("INSERT INTO turns(id,bot,started_at,purpose) VALUES('before-rotation','cmo',?,'review PR')",
                           (H.now(),))
         self.conn.execute("ALTER TABLE turns DROP COLUMN rotated")
         self.conn.execute(f"PRAGMA user_version={published_version}")
@@ -249,7 +249,7 @@ class Rule5Tasks(HubCase):
         self.assertTrue(H.task_ask(self.conn, SEO, row["id"], "Which audience?"))
 
     def stale(self, row):
-        self.conn.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), days=-2), row["id"]))
+        self.conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), days=-2), row["id"]))
 
     def closed_notices(self, row, to):
         return [m for m in H.messages(self.conn, row["conversation_id"])
@@ -279,7 +279,7 @@ class Rule5Tasks(HubCase):
     def test_a_task_with_a_worktree_moves_to_review_and_done_where_no_github_app_is_set_up(self):
         """No App table, so no branch Tico could check: the hand-off is not held waiting for one."""
         row = H.task_create(self.conn, CMO, "Trim the overview", "x", SEO)
-        self.conn.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,updated,"
+        self.conn.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,repo,branch,updated_at,"
                           "detail) VALUES('w1',?,'worktree','worktree:w1','acme/site','present','bot:seo',?,"
                           "'acme/site',?,?,'{}')", (row["id"], H.now(), f"tico/{row['id'][:8]}-trim", H.now()))
         self.assertEqual(H.task_update(self.conn, SEO, row["id"], status="review")["status"], "review")
@@ -478,7 +478,7 @@ class Rule4Unsolicited(HubCase):
         chat = H.open_conversation(self.conn, ANA, [ANA, CMO], kind="chat")["id"]
         H.task_create(self.conn, ANA, "Draft the report", "Write a report", CMO, lint=False, conversation_id=chat)
         H.say(self.conn, ANA, CMO, "What is 12 times 7?", conversation_id=chat)
-        first = self.conn.execute("SELECT from_actor FROM messages WHERE conversation_id=? ORDER BY created LIMIT 1",
+        first = self.conn.execute("SELECT from_actor FROM messages WHERE conversation_id=? ORDER BY created_at LIMIT 1",
                                   (chat,)).fetchone()[0]
         self.assertEqual(first, H.KEEPER, "the task's notice opened the chat")
         reply = H.say(self.conn, CMO, ANA, "84.", conversation_id=chat)
@@ -1287,12 +1287,12 @@ class StrategyOldNamesDropped(HubCase):
         return sorted(tuple(r) for r in self.conn.execute(f"SELECT {columns} FROM {table}"))
 
     def act(self, ident, state):
-        self.conn.execute("INSERT INTO strategy_actions(id,created,actor,kind,state) VALUES(?,?,?,'level',?)",
+        self.conn.execute("INSERT INTO strategy_actions(id,created_at,actor,kind,state) VALUES(?,?,?,'level',?)",
                           (ident, H.now(), "bot:goal-manager", state))
 
     def test_the_upgrade_drops_the_old_names_and_their_triggers_and_keeps_the_rows(self):
         self.act("a1", "done")
-        self.conn.execute("INSERT INTO strategy_merges(merged_into,original,person,asker,created) "
+        self.conn.execute("INSERT INTO strategy_merges(merged_into,original,person,asker,created_at) "
                           "VALUES('t1','t2','human:ana','bot:coo',?)", (H.now(),))
         self.install_as_v050_left_it()
         self.conn.commit()
@@ -1404,12 +1404,12 @@ class TurnLegacyUsageDropped(HubCase):
         for column, kind in (("tokens_in", "INTEGER"), ("tokens_out", "INTEGER"), ("cost", "REAL")):
             self.conn.execute(f"ALTER TABLE turns ADD COLUMN {column} {kind}")
         now = H.now()
-        self.conn.execute("INSERT INTO turns(id,bot,started,finished,exit,tokens_in,tokens_out,cost) "
+        self.conn.execute("INSERT INTO turns(id,bot,started_at,finished_at,exit,tokens_in,tokens_out,cost) "
                           "VALUES('old-run','ops',?,?,'completed',500,5,0.75)", (now, now))
-        self.conn.execute("INSERT INTO turns(id,bot,started,finished,exit,tokens_in,tokens_out,cost,"
+        self.conn.execute("INSERT INTO turns(id,bot,started_at,finished_at,exit,tokens_in,tokens_out,cost,"
                           "input_tokens,cached_tokens,output_tokens,est_cost_usd) "
                           "VALUES('measured','ops',?,?,'completed',999,77,9,100,50,10,0.2)", (now, now))
-        self.conn.execute("INSERT INTO turns(id,bot,started,finished,exit,cost) "
+        self.conn.execute("INSERT INTO turns(id,bot,started_at,finished_at,exit,cost) "
                           "VALUES('cost-only','ops',?,?,'completed',9)", (now, now))
         self.conn.commit()
 

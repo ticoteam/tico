@@ -210,8 +210,8 @@ def test_refresh_paces_tickets_by_activity_and_asks_about_the_one_in_view(enviro
         for name, (status, created, checked, said) in rows.items():
             hq.tickets[hq_of[name]]["status"] = status
             hq.tickets[hq_of[name]]["messages"] = [{"id": 1, "created": said, "from": "person", "body": "hi"}]
-            c.execute("UPDATE support_tickets SET status=?, created=?, checked=?, messages=? WHERE id=?",
-                      (status, created, checked, json.dumps([{"id": 1, "created": said, "from": "person", "body": "hi",
+            c.execute("UPDATE support_tickets SET status=?, created_at=?, checked=?, messages=? WHERE id=?",
+                      (status, created, checked, json.dumps([{"id": 1, "created_at": said, "from": "person", "body": "hi",
                                                               "has_diagnostics": False}]), ids[name]))
 
     def asked(body=None):
@@ -381,7 +381,7 @@ def as_bot(api, slug="coo"):
     """The bot, connected as an external agent (a Hermes profile): its own standing credential, no runner lease."""
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   (slug, "hermes", "hash-" + slug, "2026-01-01T00:00:00Z", "human:test"))
     api.app.state.store.settings.test_identities["bot-" + slug] = Identity("bot:" + slug, "bot", agent="hermes")
     return signed_in("bot-" + slug)
@@ -644,7 +644,7 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
     complete_a_bot_turn(api, H.shift(H.now(), hours=2), bot="payroll")
     assert question() is None                                      # a result stamped ahead of this clock waits
     with store.transaction() as c:
-        c.execute("UPDATE attempts SET finished=? WHERE bot='payroll'", (H.shift(H.now(), days=-1),))
+        c.execute("UPDATE attempts SET finished_at=? WHERE bot='payroll'", (H.shift(H.now(), days=-1),))
     assert question() == {"moment": "first_result", "question": "How is Tico working for you?"}
     assert api.get("/api/v2/config", headers=as_bot(api)).json()["feedback_question"] is None
     r = api.post("/api/v2/support/feedback", json={"moment": "first_result", "answer": "Good so far"}, headers=signed_in())
@@ -654,7 +654,7 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
     assert question() is None
     # A week on, the person is asked once more, but not within 3 days of their last answer.
     with store.transaction() as c:
-        c.execute("UPDATE attempts SET finished=? WHERE bot='payroll'", (H.shift(H.now(), days=-8),))
+        c.execute("UPDATE attempts SET finished_at=? WHERE bot='payroll'", (H.shift(H.now(), days=-8),))
         c.execute("UPDATE events SET ts=?", (H.shift(H.now(), days=-9),))
         c.execute("UPDATE preferences SET value=json_set(value,'$.first_result.at',?) WHERE key=?",
                   (H.shift(H.now(), days=-1), "support.feedback"))

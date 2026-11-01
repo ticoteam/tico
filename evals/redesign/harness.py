@@ -183,7 +183,7 @@ class Org(World):
             c.execute("DELETE FROM registry_metadata WHERE key='people'")
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": people}),))
             for bot in (LEAD_ID, CLAUDE_ID, OPENAI_ID):   # the agent credentials the test tokens stand for
-                c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+                c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                           (bot, "test", "x-" + bot, H.now(), "human:dana"))
             for bot, boss in reports.items():
                 c.execute("UPDATE bot_config SET reports_to=? WHERE bot=?", (boss, bot))

@@ -287,11 +287,11 @@ def test_strict_lease_recovery_preserves_unknown_effects_and_late_final_answers(
     execution.served_at = None
     with api.app.state.store.transaction() as c:
         execution.expire(c)
-        c.execute('UPDATE attempts SET finished=? WHERE id=?',
+        c.execute('UPDATE attempts SET finished_at=? WHERE id=?',
                   (H.shift(H.now(), minutes=-16), attempt['id']))
         row = c.execute('SELECT * FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()
-        run = c.execute('SELECT started,finished FROM attempts WHERE id=?', (attempt['id'],)).fetchone()
-        facts = retry_facts(c, row, run['started'], run['finished'])
+        run = c.execute('SELECT started_at,finished_at FROM attempts WHERE id=?', (attempt['id'],)).fetchone()
+        facts = retry_facts(c, row, run['started_at'], run['finished_at'])
         assert not facts['lease_lost']
         execution.auto_reconcile(c)
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
@@ -467,8 +467,8 @@ def test_an_unconfirmed_fallback_never_resumes_the_old_primary_after_a_lost_leas
     with api.app.state.store.transaction() as c:
         execution.expire(c)
         job = dict(c.execute('SELECT * FROM jobs WHERE id=?', (first['job_id'],)).fetchone())
-        attempt = c.execute('SELECT started,finished FROM attempts WHERE id=?', (first['id'],)).fetchone()
-        facts = retry_facts(c, job, attempt['started'], attempt['finished'])
+        attempt = c.execute('SELECT started_at,finished_at FROM attempts WHERE id=?', (first['id'],)).fetchone()
+        facts = retry_facts(c, job, attempt['started_at'], attempt['finished_at'])
         assert facts['fallback_unknown'] and not facts['safe'] and not facts['lease_lost']
         assert not c.execute("SELECT 1 FROM attempts WHERE json_extract(result,'$.lease_continue')=1").fetchone()
     ready(api, machine, ['ops'])

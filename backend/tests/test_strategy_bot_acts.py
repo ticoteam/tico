@@ -27,7 +27,7 @@ def task(api, task_id):
 def proposals(api):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE requester=? AND owner=? AND title LIKE 'Decide %' "
-                                           "ORDER BY created", (STRATEGY_BOT, OWNER))]
+                                           "ORDER BY created_at", (STRATEGY_BOT, OWNER))]
 
 
 def test_at_level_3_one_decision_changes_bot_tasks_under_one_action_id_and_the_owner_undoes_it(api):
@@ -380,7 +380,7 @@ def test_the_log_pages_through_entries_made_in_the_same_instant(api):
     at = H.now()
     with api.app.state.store.transaction() as c:
         for n in range(53):
-            c.execute("INSERT INTO strategy_actions (id, created, actor, kind, reason, state, changes) "
+            c.execute("INSERT INTO strategy_actions (id, created_at, actor, kind, reason, state, changes) "
                       "VALUES (?, ?, ?, 'decision', 'Same instant', 'proposed', '{}')", (f"a{n:02d}", at, STRATEGY_BOT))
     seen, before = [], None
     while True:

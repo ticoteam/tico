@@ -362,7 +362,7 @@ class Auth:
         A revoked or expired token is refused exactly like an unknown one. The lookup answers
         with the same identity the browser sign-in builds for that person, marked `via_token`.
         """
-        row = c.execute("SELECT t.id,t.label,t.last_used,t.expires_at,t.revoked_at,h.id AS human,h.email "
+        row = c.execute("SELECT t.id,t.label,t.last_used_at,t.expires_at,t.revoked_at,h.id AS human,h.email "
                         "FROM human_tokens t JOIN humans h ON h.id=t.human WHERE t.token_hash=?",
                         (digest(token),)).fetchone()
         if not row or row["revoked_at"] or (row["expires_at"] and row["expires_at"] <= H.now()):
@@ -370,8 +370,8 @@ class Auth:
         now = H.now()
         # last_used is a hint for the token list, not part of the decision: a script in a loop
         # should not write a row per request, and a locked database must not refuse a read.
-        if not row["last_used"] or row["last_used"] < H.shift(now, seconds=-60):
-            touch(c, "UPDATE human_tokens SET last_used=? WHERE id=?", (now, row["id"]))
+        if not row["last_used_at"] or row["last_used_at"] < H.shift(now, seconds=-60):
+            touch(c, "UPDATE human_tokens SET last_used_at=? WHERE id=?", (now, row["id"]))
         email = str(row["email"] or "").lower()
         role = "owner" if email and email == self.owner_email else "human"
         return Identity("human:" + row["human"], role, email=email, via_token=True,
@@ -382,15 +382,15 @@ class Auth:
 
         It is no person and no bot: anywhere else it is refused here, before any route could take
         its unfamiliar role for one with more reach. A revoked key is refused like an unknown one."""
-        row = c.execute("SELECT id,label,last_used,revoked_at,scope,made_with_token FROM service_keys WHERE key_hash=?",
+        row = c.execute("SELECT id,label,last_used_at,revoked_at,scope,made_with_token FROM service_keys WHERE key_hash=?",
                         (digest(token),)).fetchone()
         if not row or row["revoked_at"] or service_keys.token_ended(c, row["made_with_token"]):
             raise Problem("identity", "Invalid credential", 401)
         if not service_keys.allowed(row["scope"], method, path):
             raise Problem("forbidden", service_keys.refusal(row["scope"]), 403)
         now = H.now()
-        if not row["last_used"] or row["last_used"] < H.shift(now, seconds=-60):
-            touch(c, "UPDATE service_keys SET last_used=? WHERE id=?", (now, row["id"]))
+        if not row["last_used_at"] or row["last_used_at"] < H.shift(now, seconds=-60):
+            touch(c, "UPDATE service_keys SET last_used_at=? WHERE id=?", (now, row["id"]))
         return Identity("service:" + row["id"], "service", token_label=str(row["label"]), scope=row["scope"] or "tasks")
 
     def assistant_principal(self, c, attempt):
@@ -1114,7 +1114,7 @@ class Auth:
         if TASK_PREFIX_MIN <= len(ident) < 36:
             rows = readable(H._rows(c.execute(
                 "SELECT id,title,owner,requester FROM tasks WHERE substr(id,1,?)=? AND (" + visible + ") "
-                "ORDER BY created LIMIT 50", (len(ident), ident.lower()))))
+                "ORDER BY created_at LIMIT 50", (len(ident), ident.lower()))))
             if len(rows) == 1:
                 return rows[0]["id"]
             if rows:

@@ -44,7 +44,7 @@ FAILURE_WINDOW_SECONDS = 15 * 60
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS owner_links(
- token_hash TEXT PRIMARY KEY, created TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, revoked_at TEXT);
+ token_hash TEXT PRIMARY KEY, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, revoked_at TEXT);
 """
 
 
@@ -96,7 +96,7 @@ def place(c, token_hash, owner_email, *, sign_out=False, only_if_none=False):
     # Every other unused link stops working; the same hash placed again (a retried command) stays live.
     c.execute("UPDATE owner_links SET revoked_at=? WHERE used_at IS NULL AND revoked_at IS NULL AND token_hash<>?",
               (now, token_hash))
-    c.execute("INSERT OR IGNORE INTO owner_links(token_hash,created,expires_at) VALUES(?,?,?)",
+    c.execute("INSERT OR IGNORE INTO owner_links(token_hash,created_at,expires_at) VALUES(?,?,?)",
               (token_hash, now, H.shift(now, days=LINK_DAYS)))
     if sign_out:
         c.execute("DELETE FROM oidc_sessions WHERE human IN (SELECT id FROM humans WHERE lower(email)=?)",

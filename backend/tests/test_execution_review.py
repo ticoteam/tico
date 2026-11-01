@@ -158,7 +158,7 @@ def age_limit(api, seconds):
     from backend.store import H
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_status SET since=? WHERE bot='ops'", (H.shift(H.status(c, 'ops')['since'], seconds=-seconds),))
-        for table, column in (("attempts", "finished"), ("messages", "created")):
+        for table, column in (("attempts", "finished_at"), ("messages", "created_at")):
             for rowid, at in c.execute(f"SELECT rowid,{column} FROM {table} WHERE {column} IS NOT NULL").fetchall():
                 c.execute(f"UPDATE {table} SET {column}=? WHERE rowid=?", (H.shift(at, seconds=-seconds), rowid))
         for key, value in c.execute("SELECT key,value FROM registry_metadata WHERE key LIKE 'login-hold:%'").fetchall():
@@ -287,7 +287,7 @@ def aged(api, attempt_id, grace=False):
     from backend.execution import RESULT_GRACE, STALL_MAX
     from backend.store import H
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE attempts SET finished=? WHERE id=?',
+        c.execute('UPDATE attempts SET finished_at=? WHERE id=?',
                   (H.shift(H.now(), seconds=-(RESULT_GRACE if grace else STALL_MAX) - 1), attempt_id))
 
 
@@ -370,7 +370,7 @@ def test_each_kind_of_sparse_evidence_alone_holds_the_run(api, evidence):
                                       {'output_tokens': 40, 'model': 'muse-spark-1.3'}]}
     else:
         with api.app.state.store.transaction() as c:
-            c.execute('INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)',
+            c.execute('INSERT INTO approvals(id,kind,message_id,requested_by,created_at,consumed_at) VALUES(?,?,?,?,?,?)',
                       (H.new_id(), 'spend', attempt['message']['id'], 'bot:finance', H.now(), H.shift(H.now(), seconds=1)))
     post(api, f"attempts/{attempt['id']}/complete", body, machine['token'])
     assert job_state(api, attempt['job_id']) == 'uncertain'
@@ -672,7 +672,7 @@ def test_a_run_held_before_this_release_for_an_update_settles_on_the_next_sweep(
     hours = 25 if stale else 1
     machine, message, attempt = lapsed_shell_run(api, update=-hours * 3600)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET finished=? WHERE id=?", (H.shift(H.now(), seconds=-hours * 3600 + 60), attempt['id']))
+        c.execute("UPDATE attempts SET finished_at=? WHERE id=?", (H.shift(H.now(), seconds=-hours * 3600 + 60), attempt['id']))
         H.event(c, H.KEEPER, 'job.held', attempt['id'], {'job_id': attempt['job_id'], 'tools': ['shell'],
                                                          'reason': 'Review required before repeating possible effects.'})
     assert [d['state'] for d in sweep(api)] == ['canceled' if stale else 'queued']
@@ -716,7 +716,7 @@ def test_tico_s_saved_choice_for_an_update_cut_is_judged_again_when_its_lane_fre
         post(api, 'bots/ops/stop', {'run_id': attempt['id']})
     with api.app.state.store.transaction() as c:
         if since == 'stale':
-            for table, col, where in (('events', 'ts', "action LIKE 'system.update.%'"), ('attempts', 'finished', 'id=?')):
+            for table, col, where in (('events', 'ts', "action LIKE 'system.update.%'"), ('attempts', 'finished_at', 'id=?')):
                 args = (attempt['id'],) if '?' in where else ()
                 for rid, ts in c.execute(f"SELECT rowid,{col} FROM {table} WHERE {where}", args).fetchall():
                     c.execute(f"UPDATE {table} SET {col}=? WHERE rowid=?", (H.shift(ts, seconds=-25 * 3600), rid))
@@ -788,8 +788,8 @@ def test_a_run_that_only_read_but_consumed_an_approval_is_held(api):
     from backend.store import H
     machine, message, attempt = restarted_mid_turn(api, [('Read', None)])
     with api.app.state.store.transaction() as c:
-        started = c.execute("SELECT started FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
-        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)",
+        started = c.execute("SELECT started_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
+        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
                   (H.new_id(), 'spend', message['id'], 'bot:ops', started, started))
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]          # the card never says "only read" of it
@@ -954,7 +954,7 @@ def test_a_model_at_capacity_after_a_tool_is_saved_for_review_not_replayed(api, 
          machine['token'])
     monkeypatch.setattr(H, 'now', lambda: '2026-10-23T05:02:01.000000Z')
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (H.now(),))
+        c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (H.now(),))
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
@@ -985,7 +985,7 @@ def claim_at(api, monkeypatch, machine, at, continues=True):
     from backend.store import H
     monkeypatch.setattr(H, 'now', lambda: at)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (H.now(),))
+        c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (H.now(),))
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {'ops': True},
                                     "capabilities": ['capacity_continue_v1'] if continues else []}, token=machine['token'])
     return claim(api, machine)
@@ -1549,8 +1549,8 @@ def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
-        finished = c.execute("SELECT finished FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
-        jobs = [r[0] for r in c.execute("SELECT id FROM jobs WHERE attempt_id=? AND state='uncertain' ORDER BY created",
+        finished = c.execute("SELECT finished_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
+        jobs = [r[0] for r in c.execute("SELECT id FROM jobs WHERE attempt_id=? AND state='uncertain' ORDER BY created_at",
                                         (attempt['id'],))]
     assert len(jobs) == 2
     issue = stopped_issue(api)
@@ -1670,7 +1670,7 @@ def test_a_stops_cause_comes_from_what_the_run_recorded_not_from_its_text():
     """A Billing task's answer that says "quota" is not a usage limit; only the run's own fields say why it stopped."""
     from backend.execution import ROUTINE_STOPS, stop_cause
     def attempt(state='failed', stop=None, **result):
-        return {'state': state, 'stop_requested': stop, 'result': json.dumps(result)}
+        return {'state': state, 'stop_requested_at': stop, 'result': json.dumps(result)}
     assert stop_cause(attempt(text='Billing: the quota page and the usage limit table are done')) == 'partway'
     assert stop_cause(attempt(limited=True)) == 'quota'
     assert stop_cause(attempt(primary_limited=True)) == 'partway'  # fell back to another model, then failed
@@ -1968,14 +1968,14 @@ def test_auto_reconcile_defers_only_for_the_live_work_identity_that_matches(api,
             c.execute("UPDATE attempts SET lane='task:shared-root' WHERE id IN (?,?)",
                       (target_attempt['id'], live_attempt['id']))
         elif live_match == 'same_task_without_historical_attempt':
-            c.execute('UPDATE jobs SET attempt_id=NULL,created=? WHERE id=?',
+            c.execute('UPDATE jobs SET attempt_id=NULL,created_at=? WHERE id=?',
                       (H.shift(H.now(), seconds=-STALL_MAX-1), target_attempt['job_id']))
             c.execute('UPDATE turns SET task_id=? WHERE id=?', (target_task['id'], live_attempt['id']))
 
     assert sweep(api) == [] and job_state(api, target_attempt['job_id']) == 'uncertain'
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (H.now(), live_attempt['id']))
-        c.execute('UPDATE turns SET finished=? WHERE id=?', (H.now(), live_attempt['id']))
+        c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), live_attempt['id']))
+        c.execute('UPDATE turns SET finished_at=? WHERE id=?', (H.now(), live_attempt['id']))
     if live_match == 'same_task_without_historical_attempt':
         # With no attempt row, the sweep has no evidence from which to make a recovery decision.
         assert sweep(api) == [] and job_state(api, target_attempt['job_id']) == 'uncertain'
@@ -2000,7 +2000,7 @@ def test_restart_after_shell_resumes_on_next_scheduler_tick_with_cut_time(api, m
     add_recovery_reviewer(api)
     machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
     with api.app.state.store.read() as c:
-        cut = c.execute("SELECT finished FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
+        cut = c.execute("SELECT finished_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
     monkeypatch.setattr(H, 'now', lambda: H.shift(cut, seconds=30))
     Scheduler(api.app.state.store, api.app.state.execution).tick()
     assert job_state(api, attempt['job_id']) == 'queued'
@@ -2171,13 +2171,13 @@ def test_restart_read_only_run_ignores_another_runs_approval_and_merge(api):
     add_recovery_reviewer(api)
     machine, message, attempt = restarted_mid_turn(api, [('Read', None)])
     with api.app.state.store.transaction() as c:
-        started = c.execute("SELECT started FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
+        started = c.execute("SELECT started_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
         # Another lane's approval, consumed while this run was cut off, names another message.
-        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
                   (H.new_id(), 'spend', 'message-elsewhere', 'bot:ops', started, started))
         # Another run's merge on this run's task, inside the report window.
         task = H.task_create(c, 'human:ana', 'Something else', 'Do something else.', 'bot:ops')
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,created,pr_merged_at) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,created_at,pr_merged_at) VALUES(?,?,?,?,?,?)",
                   (H.new_id(), task['id'], 'pr', 'https://example.com/acme/tico/pull/9', started, H.now()))
         # The claim already recorded this run's turn under its attempt id; point it at the task.
         c.execute("UPDATE turns SET task_id=? WHERE id=?", (task['id'], attempt['id']))
@@ -2191,8 +2191,8 @@ def test_restart_run_that_consumed_its_own_approval_is_held(api):
     add_recovery_reviewer(api)
     machine, message, attempt = restarted_mid_turn(api, [('Read', None)])
     with api.app.state.store.transaction() as c:
-        started = c.execute("SELECT started FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
-        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)",
+        started = c.execute("SELECT started_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
+        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
                   (H.new_id(), 'spend', message['id'], 'bot:ops', started, started))
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]

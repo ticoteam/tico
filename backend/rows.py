@@ -21,8 +21,8 @@ class TaskRow(TypedDict):
     status: str | None
     due: str | None
     conversation_id: str | None
-    created: str | None
-    updated: str | None
+    created_at: str | None
+    updated_at: str | None
     done_at: str | None
     closed_at: str | None
     closed_by: str | None
@@ -84,14 +84,14 @@ class AttemptRow(TypedDict):
     token_hash: str
     state: str
     lease_until: str
-    created: str
-    started: str | None
-    finished: str | None
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
     thread_id: str | None
     result: str | None
     final_text: str | None
     last_seq: int
-    stop_requested: str | None
+    stop_requested_at: str | None
     gateway_key_id: str | None
     handed_runtime: str | None
     handed_model: str | None
@@ -106,8 +106,8 @@ class RunnerRow(TypedDict):
     label: str
     operator: str
     token_hash: str
-    created: str
-    last_seen: str | None
+    created_at: str
+    last_seen_at: str | None
     revoked_at: str | None
     platform: str | None
     version: str | None
@@ -116,7 +116,7 @@ class RunnerRow(TypedDict):
     capabilities: str
     awake_since: str | None
     checkout: str | None
-    restart_requested: str | None
+    restart_requested_at: str | None
     readiness_at: str | None
     accepts_member_bots: int
     screen: str
@@ -139,7 +139,7 @@ class ApprovalRow(TypedDict):
     decision: str | None
     decided_at: str | None
     consumed_at: str | None
-    created: str | None
+    created_at: str | None
     decided_via: str | None
     decided_for: str | None
     ready_since: str | None
@@ -153,7 +153,7 @@ class AttemptEventRow(TypedDict):
     seq: int
     kind: str
     payload: str
-    created: str
+    created_at: str
 
 
 class PrincipalRow(TypedDict):

@@ -436,18 +436,18 @@ def restore_snapshot(source, destination):
         active = c.execute("SELECT count(*) FROM attempts WHERE state IN ('leased','running')").fetchone()[0]
         c.execute("UPDATE jobs SET state='uncertain' WHERE state IN ('running','input')")
         c.execute("UPDATE jobs SET state='queued' WHERE state='leased'")
-        c.execute("UPDATE attempts SET state='expired',finished=?,lease_until=? WHERE state IN ('leased','running')", (now, now))
+        c.execute("UPDATE attempts SET state='expired',finished_at=?,lease_until=? WHERE state IN ('leased','running')", (now, now))
         from .run_triggers import SETTLE_SQL
         # Its runner will never report these runs' tokens: 0 with the reason, as hubdb.turn_finish records it.
-        c.execute(f"UPDATE turns SET finished=?,exit='interrupted',{SETTLE_SQL},input_tokens=0,cached_tokens=0,"
-                  "output_tokens=0,est_cost_usd=0,usage_reason='no_result' WHERE finished IS NULL", (now,))
-        c.execute("UPDATE assignments SET generation=generation+1,updated=?,updated_by='keeper'", (now,))
+        c.execute(f"UPDATE turns SET finished_at=?,exit='interrupted',{SETTLE_SQL},input_tokens=0,cached_tokens=0,"
+                  "output_tokens=0,est_cost_usd=0,usage_reason='no_result' WHERE finished_at IS NULL", (now,))
+        c.execute("UPDATE assignments SET generation=generation+1,updated_at=?,updated_by='keeper'", (now,))
         c.execute("UPDATE runners SET revoked_at=coalesce(revoked_at,?)", (now,))
-        c.execute("UPDATE enrollments SET expires=?", (now,))
+        c.execute("UPDATE enrollments SET expires_at=?", (now,))
         c.execute("UPDATE bots SET token_hash=NULL")
         # An old backup must not resurrect a credential grant revoked after it was taken.
         c.execute("UPDATE credential_grants SET revoked=coalesce(revoked,?),revoked_by='recovery'", (now,))
-        c.execute("UPDATE service_jobs SET state='queued',runner_id=NULL,token_hash=NULL,lease_until=NULL,updated=? WHERE state='running'", (now,))
+        c.execute("UPDATE service_jobs SET state='queued',runner_id=NULL,token_hash=NULL,lease_until=NULL,updated_at=? WHERE state='running'", (now,))
         H.event(c, H.KEEPER, "recovery.fenced", "database", {"source_sha256": report["sha256"], "active_attempts": active})
     return {"source": report, "restored": inspect(destination), "reenrollment_required": True, "fenced_attempts": active}
 

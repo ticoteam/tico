@@ -13,7 +13,7 @@ from backend.tests.test_strategy_bot import as_bot
 
 def strategy_bot(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
+        c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('goal-manager','goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
         c.execute("INSERT OR IGNORE INTO bot_config(bot,config,operator) VALUES('goal-manager','{}','ana')")
     return as_bot(api, "goal-manager")
@@ -446,7 +446,7 @@ def test_the_strategy_bot_no_longer_drafts_and_people_s_words_stay_theirs(api):
         # The seats table as the release before recruiting left it, with a person's text: an upgrade keeps it theirs.
         c.execute("DROP TABLE seats")
         c.execute(lifecycle.SCHEMA)
-        c.execute("INSERT INTO seats(id,title,description,reports_to,created,created_by,updated,updated_by) "
+        c.execute("INSERT INTO seats(id,title,description,reports_to,created_at,created_by,updated_at,updated_by) "
                   "VALUES('s-old','Role','Keeps the books.','coo',?,'human:ana',?,'human:ben')", (H.now(), H.now()))
         lifecycle.ensure(c)
         owner = Identity("human:ana", "owner")

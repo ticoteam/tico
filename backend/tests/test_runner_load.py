@@ -125,7 +125,7 @@ def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(worl
                   (json.dumps({"schema_version": 1, "recent_errors": ["private runner log"], "bots": {}}), rid))
         save_metadata(c, "computer-repositories:" + rid,
                       {"repositories": [{"full_name": "acme/private-repo", "error": "private clone error"}]})
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'human:ana')",
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'human:ana')",
                   (counsel_id, rid, P._iso(time.time())))
     failed, detail = call(api, "hub_computer_list", {"computer": rid}, token=tokens["stranger"])
     assert not failed, detail

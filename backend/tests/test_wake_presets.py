@@ -27,13 +27,13 @@ def notice(api, task, body, to="ops", **refs):
 def jobs(api, bot="ops", since=""):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute("SELECT j.id,j.state,j.held,j.wake_class,j.hold_until,m.body FROM jobs j "
-                                           "JOIN messages m ON m.id=j.message_id WHERE j.bot=? AND m.created>? "
+                                           "JOIN messages m ON m.id=j.message_id WHERE j.bot=? AND m.created_at>? "
                                            "ORDER BY m.rowid", (bot, since))]
 
 
 def at(api, job_id, when):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE id=?", (when, job_id))
+        c.execute("UPDATE jobs SET created_at=? WHERE id=?", (when, job_id))
 
 
 def tick(api, when):
@@ -207,7 +207,7 @@ def test_an_enabled_sweep_runs_at_most_once_per_cap_from_its_actual_start(api, n
     attempt = claim(api, machine)
     started = H.shift(t0, seconds=gap - 60)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET created=? WHERE id=?", (started, attempt["id"]))
+        c.execute("UPDATE attempts SET created_at=? WHERE id=?", (started, attempt["id"]))
     finish(api, machine, attempt)
     late = occurrence(2, H.shift(t0, seconds=gap + 60))
     assert late["held"] and late["hold_until"] == H.shift(started, seconds=gap)
@@ -231,7 +231,7 @@ def test_switching_presets_changes_only_the_preset(api):
     assert get(api, "bots/ops")["compact_at"] == 400000
     with api.app.state.store.read() as c:
         assert [r[0] for r in c.execute("SELECT after FROM settings_changes WHERE bot='ops' AND field='wake_preset' "
-                                        "ORDER BY created")] == ['"token_saver"', '"performance"']
+                                        "ORDER BY created_at")] == ['"token_saver"', '"performance"']
 
 
 def test_a_usage_limit_with_a_known_reset_waits_for_it_under_a_preset(api, monkeypatch):
@@ -283,15 +283,15 @@ def test_a_duplicate_is_one_event_through_its_turn_and_a_new_event_is_not(api):
     attempt = claim(api, machine)
     notice(api, task, body, subtask="s1")                                # while its turn runs
     with api.app.state.store.transaction() as c:                         # its turn ran for ten minutes
-        c.execute("UPDATE messages SET created=? WHERE id=(SELECT message_id FROM jobs WHERE attempt_id=?)",
+        c.execute("UPDATE messages SET created_at=? WHERE id=(SELECT message_id FROM jobs WHERE attempt_id=?)",
                   (H.shift(H.now(), minutes=-10), attempt["id"]))
-        c.execute("UPDATE attempts SET created=? WHERE id=?", (H.shift(H.now(), minutes=-10), attempt["id"]))
+        c.execute("UPDATE attempts SET created_at=? WHERE id=?", (H.shift(H.now(), minutes=-10), attempt["id"]))
     finish(api, machine, attempt)
     notice(api, task, body, subtask="s1")                                # just after it ended
     assert states() == [("completed", None)] + [("canceled", "duplicate")] * 3
     notice(api, task, body, subtask="s2")                                # the same words, another dependency
     with api.app.state.store.transaction() as c:                         # the same event, long after the turn ended
-        c.execute("UPDATE attempts SET finished=? WHERE id=?",
+        c.execute("UPDATE attempts SET finished_at=? WHERE id=?",
                   (H.shift(H.now(), seconds=-W.DUPLICATE_SECONDS - 60), attempt["id"]))
     notice(api, task, body, subtask="s1")
     assert states()[-2:] == [("queued", None), ("queued", None)]
@@ -327,7 +327,7 @@ def test_a_batched_event_redelivered_after_its_batch_went_out_wakes_once_until_i
     redeliver()                                                          # just after it ended
     assert [(j["state"], j["wake_class"]) for j in jobs(api, since=since)[released:]] == [("canceled", "duplicate")] * 9
     with api.app.state.store.transaction() as c:                         # long after the turn ended: a new event
-        c.execute("UPDATE attempts SET finished=? WHERE id=?",
+        c.execute("UPDATE attempts SET finished_at=? WHERE id=?",
                   (H.shift(H.now(), seconds=-W.DUPLICATE_SECONDS - 60), attempt["id"]))
     redeliver()
     assert all(j["state"] == "queued" for j in jobs(api, since=since)[-3:])
@@ -377,7 +377,7 @@ def test_a_digest_turn_is_measured_from_each_event_and_split_over_its_tickets(ap
         job = jobs(api, since=since)[-1]
         at(api, job["id"], H.shift(t0, minutes=10 * n))
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE messages SET created=? WHERE id=(SELECT message_id FROM jobs WHERE id=?)",
+            c.execute("UPDATE messages SET created_at=? WHERE id=(SELECT message_id FROM jobs WHERE id=?)",
                       (H.shift(t0, minutes=10 * n), job["id"]))
     tick(api, H.shift(t0, minutes=31))
     attempt = claim(api, machine)

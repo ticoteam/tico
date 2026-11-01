@@ -124,7 +124,7 @@ def test_slow_request_upgrade_keeps_history_and_adds_nullable_attribution(tmp_pa
 
 def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatch):
     with store.transaction() as c:
-        c.execute("CREATE TABLE size_fixture(created INTEGER, payload BLOB)")
+        c.execute("CREATE TABLE size_fixture(created_at INTEGER, payload BLOB)")
         # Large enough to appear in the top 40 alongside the initialized schema's tables/indexes.
         c.execute("INSERT INTO size_fixture VALUES(?, zeroblob(?))", (MINUTE, 128 * 1024))
     monkeypatch.setattr(flight, "BIG", {**flight.BIG, "size_fixture": "created"})
@@ -191,7 +191,7 @@ def test_owners_admins_and_bots_read_the_metrics(tmp_path):
         with app.state.store.transaction() as c:
             H.sync_registry(c, {"qa": {"name": "QA", "status": "active"}},
                             {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
-            c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('qa','hermes','x',?,'human:ana')",
+            c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('qa','hermes','x',?,'human:ana')",
                       (H.now(),))
 
         def get(token, path="/api/v2/system/metrics"):

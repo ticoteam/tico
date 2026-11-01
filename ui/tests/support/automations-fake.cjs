@@ -27,7 +27,7 @@ const SYSTEM = {id: 'au_sys_still', name: 'Still wanted check', owner: 'person:d
   trigger: {type: 'event', name: 'tico.builtin.job.still_wanted'}, steps: [], controls: {on: true},
   source: {kind: 'system_job', id: 'job:still_wanted'}};
 const systemRuns = (now = Date.now()) => Array.from({length: 8}, (_, i) => ({id: 'sys_' + (50 - i), automation_id: SYSTEM.id,
-  started: new Date(now - (i * 3 + 1) * 3600000).toISOString(), finished: new Date(now - (i * 3 + 1) * 3600000 + 4000).toISOString(),
+  started_at: new Date(now - (i * 3 + 1) * 3600000).toISOString(), finished_at: new Date(now - (i * 3 + 1) * 3600000 + 4000).toISOString(),
   status: i === 2 ? 'failed' : 'ok', cost: 0, steps: [], started_by: 'Schedule', outcome: i === 2 ? 'Mail down' : 'Asked 3 owners',
   summary: i === 2 ? 'Mail down' : 'Asked 3 owners'}));
 
@@ -46,7 +46,7 @@ function inboxRuns(now = Date.now()) {
     ];
     if (!failed && !capped) steps.push({id: 'a1', type: 'action', status: 'ok', outputs: {result: 'draft saved'}, cost: 0});
     return {id: 'run_' + (100 - i), automation_id: 'au_inbox', version: i < 12 ? 7 : 6, trigger_ref: 'mail:m' + i,
-      started: new Date(now - i * 17 * 60000).toISOString(), finished: new Date(now - i * 17 * 60000 + 9000).toISOString(),
+      started_at: new Date(now - i * 17 * 60000).toISOString(), finished_at: new Date(now - i * 17 * 60000 + 9000).toISOString(),
       status: failed ? 'failed' : 'ok', cost: steps.reduce((t, s) => t + s.cost, 0), steps};
   });
 }
@@ -96,7 +96,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
   const row = a => {
     const {steps, ...rest} = clone(a), last = db.runs[a.id]?.[0];
     return {...rest, pending: db.versions[a.id].filter(v => v.status === 'pending').length,
-      ...(last && !rest.last_run ? {last_run: {id: last.id, started: last.started, status: last.status}} : {})};
+      ...(last && !rest.last_run ? {last_run: {id: last.id, started_at: last.started_at, status: last.status}} : {})};
   };
   const nextN = id => Math.max(...db.versions[id].map(v => v.n)) + 1;
   const newVersion = (a, actor = 'person:' + me.id) => {
@@ -139,8 +139,8 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     const RANGES = {'5m': [300, 10], '1h': [3600, 12], '24h': [86400, 24], '7d': [604800, 28]};
     const inRange = range => {
       const [secs] = RANGES[range] || RANGES['1h'], since = Date.now() - secs * 1000;
-      return Object.values(db.runs).flat().filter(r => new Date(r.started).getTime() >= since && find(r.automation_id))
-        .sort((x, y) => y.started.localeCompare(x.started));
+      return Object.values(db.runs).flat().filter(r => new Date(r.started_at).getTime() >= since && find(r.automation_id))
+        .sort((x, y) => y.started_at.localeCompare(x.started_at));
     };
     if (p === '/api/v2/automations/runs') {
       const q = url.searchParams, ids = (q.get('ids') || '').split(',').filter(Boolean), status = q.get('status') || '';
@@ -160,7 +160,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
       const per = new Map(), blank = () => Array.from({length: n}, () => ({ok: 0, failed: 0}));
       for (const r of inRange(range)) {
         const s = per.get(r.automation_id) || {id: r.automation_id, runs: 0, failed: 0, cost: 0, buckets: blank()};
-        const b = Math.min(n - 1, Math.floor((new Date(r.started).getTime() - since) / width)), bad = r.status === 'failed';
+        const b = Math.min(n - 1, Math.floor((new Date(r.started_at).getTime() - since) / width)), bad = r.status === 'failed';
         s.runs++; s.failed += bad; s.cost += r.cost || 0; s.buckets[b][bad ? 'failed' : 'ok']++;
         per.set(r.automation_id, s);
       }
@@ -238,7 +238,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     if (p === '/api/v2/chat/botops' && method === 'POST') {
       db.conv ||= {id: 'conv_au', kind: 'chat', title: 'BotOps'};
       const n = db.messages.length, at = new Date().toISOString();
-      const mine = {id: 'msg' + n, from_actor: 'human:' + me.id, body: body.text, refs: body.refs || {}, created: at, kind: 'say'};
+      const mine = {id: 'msg' + n, from_actor: 'human:' + me.id, body: body.text, refs: body.refs || {}, created_at: at, kind: 'say'};
       db.messages.push(mine);
       const a = find(body.refs?.automation);
       let reply = 'Which inbox?';
@@ -254,7 +254,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
         db.versions.au_new = [{n: 1, actor: 'person:' + me.id, at, status: 'active', flow: {trigger: clone(db.list.at(-1).trigger), steps: clone(db.list.at(-1).steps)}}];
         reply = `Saved Sales leads: mail to sales@acme.example about a demo gets the Lead label. It is ${on ? 'on' : 'off'}.`;
       }
-      db.messages.push({id: 'msg' + (n + 1), from_actor: 'bot:botops', body: reply, refs: {}, created: at, kind: 'say'});
+      db.messages.push({id: 'msg' + (n + 1), from_actor: 'bot:botops', body: reply, refs: {}, created_at: at, kind: 'say'});
       return json({conversation: db.conv, message: mine});
     }
     return json(unrouted(p));

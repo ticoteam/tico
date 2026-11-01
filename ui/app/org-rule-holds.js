@@ -94,7 +94,7 @@ function ruleHoldsWire(slot, id) {
 // The keeper's one line where a bot's reply would have been: the rule, never the text (execution.complete).
 function ruleHeldNoteHTML(m) {
   return `<div class="chat-system rh-note" data-message="${esc(m.id || '')}"><span class="rh-note-dot" aria-hidden="true"></span>${
-    esc(plainActors(m.body))}<div class="chat-meta"><time class="chat-time" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time></div></div>`;
+    esc(plainActors(m.body))}<div class="chat-meta"><time class="chat-time" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div></div>`;
 }
 
 // ----------------------------------------------------------------- the Rules page header

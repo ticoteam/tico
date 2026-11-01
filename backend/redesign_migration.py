@@ -220,8 +220,8 @@ def _rule_step(n, row):
     for key, value in sorted(when.items()):
         if isinstance(value, (str, int, float, bool)) and F.FIELD.fullmatch(str(key)) and len(conds) < F.MAX_CONDS:
             conds.append({"field": "task." + str(key), "op": "is", "value": value})
-    rule = {k: row[k] for k in ("id", "scope_kind", "scope_id", "event", "position", "note", "created_by", "created",
-                                 "updated", "revision") if k in row.keys()}
+    rule = {k: row[k] for k in ("id", "scope_kind", "scope_id", "event", "position", "note", "created_by", "created_at",
+                                 "updated_at", "revision") if k in row.keys()}
     rule["action_by"] = dict(row).get("action_by")
     rule["when"] = when
     do = OUTCOME_DO.get(row["then_outcome"], "wake_bot")
@@ -245,7 +245,7 @@ def _wake_rules(c, done, me):
     """The table's wake rules, one "What wakes" automation per scope (a flow holds at most F.MAX_STEPS steps, so a
     longer list becomes more than one)."""
     from . import tico_notices
-    rows = [r for r in c.execute("SELECT * FROM rules ORDER BY scope_kind, scope_id, position, created, id").fetchall()
+    rows = [r for r in c.execute("SELECT * FROM rules ORDER BY scope_kind, scope_id, position, created_at, id").fetchall()
             if not tico_notices.is_builtin_rule(r["id"]) and ("wake_rule", r["id"]) not in done]
     groups = {}
     for row in rows:
@@ -303,7 +303,7 @@ def _builtins(c, done, me):
         out.append({"kind": "builtin", "id": "wake-builtins", "title": "Built-in wake rules", "becomes": wakes_builtin(me),
                     "flags": [], "_do": ("adopt", {})})
     if _table(c, "task_rules"):
-        for row in c.execute("SELECT * FROM task_rules ORDER BY created, id").fetchall():
+        for row in c.execute("SELECT * FROM task_rules ORDER BY created_at, id").fetchall():
             if ("task_rule", row["id"]) in done or not me:
                 continue
             controls = {"on": bool(row["enabled"]), "preset": row["preset"], "at": row["at"],
@@ -400,7 +400,7 @@ def _unchanged(c):
             out.append({"kind": "destination", "id": "destination:" + row["key"], "title": row["key"],
                         "becomes": "unchanged", "flags": [], "_do": None})
     if _table(c, "goals"):
-        for row in c.execute("SELECT id, title FROM goals ORDER BY created, id").fetchall():
+        for row in c.execute("SELECT id, title FROM goals ORDER BY created_at, id").fetchall():
             out.append({"kind": "goal", "id": "goal:" + row["id"], "title": row["title"], "becomes": "unchanged",
                         "flags": [], "_do": None})
     return out
@@ -797,7 +797,7 @@ def _wakes_of(c, scope_kind, scope_id):
     """The "What wakes" automations of one scope, oldest first."""
     from . import automations
     out = []
-    for row in c.execute("SELECT * FROM automations WHERE id>=? AND id<? AND deleted_at IS NULL ORDER BY created, id",
+    for row in c.execute("SELECT * FROM automations WHERE id>=? AND id<? AND deleted_at IS NULL ORDER BY created_at, id",
                          (WAKES_PREFIX, WAKES_PREFIX[:-1] + "`")).fetchall():
         flow = automations.flow_of(row)
         if (flow.get("wakes") or {}) == {"scope_kind": scope_kind, "scope_id": scope_id}:
@@ -999,7 +999,7 @@ def wake_rules_of(aid, flow):
                         "enabled": 0 if step.get("enabled") is False else 1,
                         "position": source.get("position") if source.get("position") is not None else n + 1,
                         "note": source.get("note") or "", "created_by": source.get("created_by") or "",
-                        "created": source.get("created") or "", "updated": source.get("updated") or "",
+                        "created_at": source.get("created_at") or "", "updated_at": source.get("updated_at") or "",
                         "revision": source.get("revision") or 1, "action_by": source.get("action_by")})
     return out
 

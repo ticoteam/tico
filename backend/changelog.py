@@ -119,7 +119,7 @@ def mark_read(c, settings, actor, ids):
     known = {row["id"] for row in products(c, settings)}
     # Merge acknowledgements from concurrent tabs; a later announcement is never acknowledged implicitly.
     read = read_ids(c, actor) | (set(ids) & known)
-    c.execute("INSERT INTO preferences(actor,key,value,updated) VALUES(?,?,?,?) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+    c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) "
+              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
               (actor, READ_KEY, encode(sorted(read)), H.now()))
     return summary(c, settings, actor)

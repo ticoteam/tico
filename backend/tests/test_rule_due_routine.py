@@ -190,7 +190,7 @@ def test_due_soon_follows_the_routines_lead_time(api):
 def prune_runs(api, days_after):
     """automations.prune as the nightly sweep runs it, `days_after` the latest run finished: run detail is gone."""
     from backend import automations
-    last = sql(api, "SELECT max(finished) AS f FROM automation_runs")[0]["f"]
+    last = sql(api, "SELECT max(finished_at) AS f FROM automation_runs")[0]["f"]
     with api.app.state.store.transaction() as c:
         automations.prune(c, H.shift(last, days=days_after))
     assert not sql(api, "SELECT id FROM automation_runs WHERE state IS NOT NULL")

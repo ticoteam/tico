@@ -554,7 +554,7 @@ def hold_item(api, bot="ops"):
 
 def login_card(api, t, runner_id="r1"):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO runners(id,label,token_hash,operator,created) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING",
+        c.execute("INSERT INTO runners(id,label,token_hash,operator,created_at) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING",
                   (runner_id, "Acme Mac", "x-" + runner_id, "ana", H.now()))
         return R.login_refused(c, api.app.state.store.settings, "ops", runner_id, "codex", t["id"])
 

@@ -59,12 +59,12 @@ def fill_synthetic(path, messages=15000, events=5000):
     with closing(sqlite3.connect(path)) as db, db:
         db.execute("PRAGMA foreign_keys=OFF")
         db.executemany(
-            "INSERT INTO conversations(id,kind,subject,task_id,participants,created,last_message_at,scope) "
+            "INSERT INTO conversations(id,kind,subject,task_id,participants,created_at,last_message_at,scope) "
             "VALUES(?,?,?,?,?,?,?,?)",
             [(f"conv-{i:06d}", "chat", "Synthetic " + text(24), None, '["human:owen"]', stamp(i), stamp(i), "direct")
              for i in range(conversations)])
         db.executemany(
-            "INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created,public) "
+            "INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at,public) "
             "VALUES(?,?,?,?,?,?,?,?,?)",
             [(f"msg-{i:08d}", f"conv-{i % conversations:06d}", "human:owen", "human:owen", "chat", text(1200), "{}",
               stamp(i), 0) for i in range(messages)])

@@ -258,7 +258,7 @@ function askSupportRows(t, until = '') {
     ? `<div class="ask-sup them" data-ask-row="sup:${esc(t.id)}:${i}"><span class="ask-sav"><span class="nav-icon" aria-hidden="true">headset_mic</span></span><div><small>Tico Support</small><div class="ask-sup-body">${esc(body)}</div></div></div>`
     : `<div class="ask-sup you" data-ask-row="sup:${esc(t.id)}:${i}"><div class="ask-sup-body">${esc(body)}</div></div>`});
   // What the switch shared is the chat already on screen: not drawn again.
-  return [row(t.message, false, t.created, 0), ...(t.messages || []).map((m, i) => row(m.body, m.from === 'staff', m.created, i + 1))]
+  return [row(t.message, false, t.created_at, 0), ...(t.messages || []).map((m, i) => row(m.body, m.from === 'staff', m.created_at, i + 1))]
     .filter((r, i) => (Date.parse(r.at || '') || 0) <= end && !(!r.staff && askShared(i ? t.messages[i - 1].body : t.message)));
 }
 const askSysRow = s => ({at: s.at, sys: true, html: `<div class="ask-sys" data-ask-row="${esc(s.key)}" role="status">${esc(s.text)}</div>`});
@@ -415,7 +415,7 @@ async function askLoad(chat) {
     const supRows = [].concat(...shown.map(x => askSupportRows(x.t, x.until)));
     const sys = [...(chat.sys || [])];
     for (const {t} of shown) if (!sys.some(s => s.id === t.id && s.text === ASK_SUP_IN))
-      sys.push({at: new Date(at(t.created) - 1).toISOString(), text: ASK_SUP_IN, id: t.id, key: 'sys:in:' + t.id});
+      sys.push({at: new Date(at(t.created_at) - 1).toISOString(), text: ASK_SUP_IN, id: t.id, key: 'sys:in:' + t.id});
     // While the Assistant is replying, Ask's dot works, then talks as the words stream in, the panel open or not;
     // waiting on Tico Support's answer, it listens.
     const streaming = !!(execution && execution.state !== 'completed' && execution.text);
@@ -427,12 +427,12 @@ async function askLoad(chat) {
     // and bots' questions. One with no time comes last.
     const here = new Set(messages.map(m => m.refs?.action).filter(Boolean)), late = new Date().toISOString(), asks = askQuestions();
     chat.pending = pending.filter(a => !here.has(a.id));   // the cards the thread shows, so a peek only points at those
-    const cards = chat.pending.map(a => ({at: a.created || late,
+    const cards = chat.pending.map(a => ({at: a.created_at || late,
       html: `<div class="conv-run chat"><div data-action-host="${esc(a.id)}"><div class="asst-state">Loading the card…</div></div></div>`}))
-      .concat(asks.map(it => ({at: it.ask?.created || it.created || late, html: askQuestionHTML(it)})));
+      .concat(asks.map(it => ({at: it.ask?.created_at || it.created_at || late, html: askQuestionHTML(it)})));
     const listed = new Set(asks.map(it => { const q = it.kind === 'question' && qcardQuestion(it); return q ? askPickKey(it, q) : ''; }));
     for (const k of askPicks.keys()) if (!listed.has(k)) askPicks.delete(k);
-    const rows = messages.slice(-30).map(m => ({at: m.created, html: v2MessageHTML({...m, run: null})}))
+    const rows = messages.slice(-30).map(m => ({at: m.created_at, html: v2MessageHTML({...m, run: null})}))
       .concat(supRows, sys.map(askSysRow), cards)
       .map((r, i) => ({...r, i})).sort((a, b) => at(a.at) - at(b.at) || a.i - b.i).map(r => r.html);
     const live = execution && execution.state !== 'completed' ? execution.text : '';

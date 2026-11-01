@@ -76,7 +76,7 @@ def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
         assert RT.of_message(newest(c, "ops", "Unit tests failed")) == ("pr_checks", None)
         # stall_check: Tico's look at a task nothing will move.
         quiet(c)
-        c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), seconds=-600), task["id"]))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), seconds=-600), task["id"]))
         assert task["id"] in H.wake_stalled(c)["woke"] + H.wake_stalled(c)["checked"]
         stall = c.execute("SELECT id FROM messages WHERE to_actor='bot:ops' AND json_extract(refs,'$.wake') "
                           "IN ('stalled','status_check') ORDER BY rowid DESC LIMIT 1").fetchone()
@@ -160,9 +160,9 @@ def test_backfill_fills_old_runs_from_the_map_and_leaves_unmapped_unknown(api):
     with api.app.state.store.transaction() as c:
         for i, (bot, kind) in enumerate([("ops", "comment"), ("pr-reviewer", "pr_checks"), ("ops", None),
                                          ("ops", "other")]):
-            c.execute("INSERT INTO turns(id,bot,started,trigger,trigger_kind) VALUES(?,?,?,'task',?)",
+            c.execute("INSERT INTO turns(id,bot,started_at,trigger,trigger_kind) VALUES(?,?,?,'task',?)",
                       (f"old{i}", bot, H.now(), kind))
-        c.execute("INSERT INTO turns(id,bot,started,trigger,trigger_kind,purpose) VALUES('named','ops',?,'task',"
+        c.execute("INSERT INTO turns(id,bot,started_at,trigger,trigger_kind,purpose) VALUES('named','ops',?,'task',"
                   "'comment','mine')", (H.now(),))
         RT.backfill(c)
         got = dict(c.execute("SELECT id, purpose FROM turns WHERE id LIKE 'old%' OR id='named'").fetchall())
@@ -238,7 +238,7 @@ def worktree(api, task_id, attempt, path):
     """A worktree of `task_id` on the computer that runs `attempt`."""
     with api.app.state.store.transaction() as c:
         computer = c.execute("SELECT runner_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0]
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,repo,branch,path,computer_id) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,repo,branch,path,computer_id) "
                   "VALUES(?,?,'worktree',?,'present','bot:ops',?,'acme/app','tico/x',?,?)",
                   (path, task_id, "worktree:" + path, H.now(), path, computer))
 
@@ -339,7 +339,7 @@ def test_a_persons_clear_and_a_topic_change_in_a_task_room_are_in_the_tasks_hist
 
 def lost(c, bot, why, n, kind="new", hours=1):
     for i in range(n):
-        c.execute("INSERT INTO turns(id,bot,started,session_kind,session_why) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO turns(id,bot,started_at,session_kind,session_why) VALUES(?,?,?,?,?)",
                   (f"{bot}-{why}-{hours}-{i}", bot, H.shift(H.now(), hours=-hours), kind, why))
 
 
@@ -379,7 +379,7 @@ def test_a_restore_ends_open_runs_with_an_outcome(api):
     post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
-        c.execute(f"UPDATE turns SET finished=?,exit='interrupted',{RT.SETTLE_SQL} WHERE id=?",
+        c.execute(f"UPDATE turns SET finished_at=?,exit='interrupted',{RT.SETTLE_SQL} WHERE id=?",
                   (H.now(), attempt["id"]))
     assert (turn(api, attempt)["outcome"], turn(api, attempt)["did_nothing"]) == ("no_change", 1)
 
@@ -401,9 +401,9 @@ def test_the_weekly_table_counts_every_run_and_old_ones_read_unknown(api):
         {"input_tokens": 150, "cached_tokens": 750, "output_tokens": 20, "model": "fake-fallback"}]})
     with api.app.state.store.transaction() as c:
         # A run from before triggers were recorded, and one still going.
-        c.execute("INSERT INTO turns(id,bot,started,finished,trigger,exit,input_tokens,output_tokens) "
+        c.execute("INSERT INTO turns(id,bot,started_at,finished_at,trigger,exit,input_tokens,output_tokens) "
                   "VALUES('old-run','ops',?,?,'task','completed',500,5)", (H.now(), H.now()))
-        c.execute("INSERT INTO turns(id,bot,started,trigger,trigger_kind) VALUES('live-run','ops',?,'say','comment')",
+        c.execute("INSERT INTO turns(id,bot,started_at,trigger,trigger_kind) VALUES('live-run','ops',?,'say','comment')",
                   (H.now(),))
     # An attempt that failed with no turn row at all (as before turns were written at the claim).
     post(api, "chat/ops", {"text": "And the bank feed?"})
@@ -429,7 +429,7 @@ def test_the_weekly_table_counts_every_run_and_old_ones_read_unknown(api):
 def test_the_weekly_table_is_read_only_and_follows_who_may_read_the_bot(api):
     with api.app.state.store.transaction() as c:
         for bot in ("ops", "inbox"):
-            c.execute("INSERT INTO turns(id,bot,started,trigger,trigger_kind,outcome) "
+            c.execute("INSERT INTO turns(id,bot,started_at,trigger,trigger_kind,outcome) "
                       "VALUES(?,?,?,'task','schedule','no_change')", (bot + "-run", bot, H.now()))
     assert {row["bot"] for row in weekly(api)} == {"ops", "inbox"}
     as_member(api, "ben@acme.example")

@@ -57,7 +57,7 @@ def model(api, **kw):
 def all_tasks(api):
     with api.app.state.store.read() as c:
         return [dict(t) for t in c.execute("SELECT id,title,body,owner,status FROM tasks WHERE title LIKE 'Support%' "
-                                           "ORDER BY created")]
+                                           "ORDER BY created_at")]
 
 
 def calls(api):
@@ -328,7 +328,7 @@ def test_a_ticket_waiting_past_the_hour_goes_to_a_person_and_its_copy_is_removed
     report(api, r, {"op": "comment", "key": "hq:TK-1", "ref": "msg:2", "text": "Any news?"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")               # and it stays paused
-        c.execute("UPDATE watcher_pending SET created=? WHERE key='hq:TK-1'", (H.shift(H.now(), minutes=-61),))
+        c.execute("UPDATE watcher_pending SET created_at=? WHERE key='hq:TK-1'", (H.shift(H.now(), minutes=-61),))
     drain(api)
     Scheduler(api.app.state.store, api.app.state.execution).tick()               # the hourly sweep
     (handed,) = all_tasks(api)
@@ -344,7 +344,7 @@ def test_a_ticket_waiting_past_the_hour_goes_to_a_person_and_its_copy_is_removed
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE watcher_pending SET created=? WHERE key='hq:TK-2'", (H.shift(H.now(), minutes=-61),))
+        c.execute("UPDATE watcher_pending SET created_at=? WHERE key='hq:TK-2'", (H.shift(H.now(), minutes=-61),))
     monkeypatch.setattr(T, "person_for", lambda c, bot: None)                     # no one to give it to
     T.sweep(api.app.state.store)
     with api.app.state.store.read() as c:

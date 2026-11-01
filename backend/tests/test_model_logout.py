@@ -362,10 +362,10 @@ def test_a_write_kept_from_the_lock_answers_busy_with_retry_after_and_a_beat_rew
     r = online(api)
     store = api.app.state.store
     with store.read() as c:
-        before = c.execute("SELECT readiness,last_seen FROM runners WHERE id=?", (r["runner_id"],)).fetchone()
+        before = c.execute("SELECT readiness,last_seen_at FROM runners WHERE id=?", (r["runner_id"],)).fetchone()
     beat(api, r["token"])
     with store.read() as c:
-        after = c.execute("SELECT readiness,last_seen FROM runners WHERE id=?", (r["runner_id"],)).fetchone()
+        after = c.execute("SELECT readiness,last_seen_at FROM runners WHERE id=?", (r["runner_id"],)).fetchone()
     assert after[0] == before[0] and after[1] >= before[1]
     store.writer.acquire()
     timeout, store.writer.timeout = store.writer.timeout, 0.05

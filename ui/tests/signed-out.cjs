@@ -33,7 +33,7 @@ const until = async (what, fn, ms = t(10000)) => {
 };
 
 const task = id => ({id, title: id === 't-a' ? 'Renew the staging certificate' : 'Archive old builds', owner: 'bot:ops',
-  requester: 'human:ana', status: 'doing', lane: 'company', version: 1, created: now, updated: now, conversation_id: 'r-' + id});
+  requester: 'human:ana', status: 'doing', lane: 'company', version: 1, created_at: now, updated_at: now, conversation_id: 'r-' + id});
 
 async function scenario(browser, name, down, check, viewport = {width: 1300, height: 820}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
@@ -68,8 +68,8 @@ async function scenario(browser, name, down, check, viewport = {width: 1300, hei
     if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with')
       ? [{id: 'c-ops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:ops']}] : []});
     if (p === '/api/v2/conversations/c-ops/snapshot') return json({
-      messages: [{id: 'm1', from_actor: 'human:ana', body: 'Draft the release notes', created: now}],
-      execution: {id: 'x1', state: 'running', bot: 'ops', conversation_id: 'c-ops', text: 'Working on it', started: now}});
+      messages: [{id: 'm1', from_actor: 'human:ana', body: 'Draft the release notes', created_at: now}],
+      execution: {id: 'x1', state: 'running', bot: 'ops', conversation_id: 'c-ops', text: 'Working on it', started_at: now}});
     if (p === '/api/v2/tasks') return json({tasks: [], next_offset: null, cursor: '1.a'});
     const one = p.match(/^\/api\/v2\/tasks\/(t-[ab])$/);
     if (one) return json({task: task(one[1]), comments: [], events: [], can_comment: true, children: []});

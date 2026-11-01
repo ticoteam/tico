@@ -116,7 +116,7 @@ def apply(c, ticket_id):
         still = task_blocked.wait(c, row)
         if still:
             # Something else still holds it: say that, not the check that works again.
-            c.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=?,updated=? WHERE id=?",
+            c.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=?,updated_at=? WHERE id=?",
                       (("Waiting on " + still["why"])[:1000], H.now(), ticket_id))
             task_blocked.bump(c, row)
         else:

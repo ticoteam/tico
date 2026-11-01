@@ -371,7 +371,7 @@ RUNNER_TRIGGERS = [
     ("changes_runner_harness_choice_update", "UPDATE", "runner_harness_choices", None,
      _tell("harness_actions", "SELECT NEW.runner_id AS rid")),
     ("changes_runner_restart", "UPDATE", "runners",
-     "NEW.restart_requested IS NOT NULL AND OLD.restart_requested IS NULL", _tell("restart", "SELECT NEW.id AS rid")),
+     "NEW.restart_requested_at IS NOT NULL AND OLD.restart_requested_at IS NULL", _tell("restart", "SELECT NEW.id AS rid")),
 ]
 TRIGGERS += RUNNER_TRIGGERS
 
@@ -392,7 +392,7 @@ NEEDS = {
     "changes_runner_task_links_insert": ("task_links.computer_id",),
     "changes_runner_task_links_update": ("task_links.computer_id",),
     "changes_runner_task_links_delete": ("task_links.computer_id",),
-    "changes_runner_restart": ("runners.restart_requested",),
+    "changes_runner_restart": ("runners.restart_requested_at",),
 }
 # #118's first cut, replaced by `changes`.
 _RETIRED = ["task_changes_insert", "task_changes_update", "task_changes_delete",
@@ -632,8 +632,8 @@ def runner_bell(store):
 
 # ---------------------------------------------------------------- what a viewer is sent
 
-LIVE_SQL = ("SELECT id,created FROM attempts WHERE bot=? AND state IN ('leased','running') "
-            "ORDER BY created DESC,rowid DESC LIMIT 1")
+LIVE_SQL = ("SELECT id,created_at FROM attempts WHERE bot=? AND state IN ('leased','running') "
+            "ORDER BY created_at DESC,rowid DESC LIMIT 1")
 
 
 def prime_bot_rows(c, slugs):
@@ -668,8 +668,8 @@ def prime_status_lines(c, slugs):
     for part in H.chunks(sorted({H.actor_id(s) for s in slugs if s})):
         marks = ",".join("?" * len(part))
         live = {}
-        for row in c.execute(f"SELECT bot,id,created FROM attempts WHERE state IN ('leased','running') AND bot IN ({marks}) "
-                             "ORDER BY created,rowid", part):
+        for row in c.execute(f"SELECT bot,id,created_at FROM attempts WHERE state IN ('leased','running') AND bot IN ({marks}) "
+                             "ORDER BY created_at,rowid", part):
             live[row["bot"]] = row        # the newest run, as LIMIT 1 picks it
         prime(c, LIVE_SQL, {(s,): live.get(s) for s in part})
         keys = [LAST_STOP + s for s in part]
@@ -690,7 +690,7 @@ def prime_status_lines(c, slugs):
         prime(c, STOP_JOB_SQL, {(jid,): jobs.get(jid) for jid in job_ids})
         newest, newest_of = {}, {}
         for row in c.execute(f"SELECT id,attempt_id,bot FROM jobs WHERE state='uncertain' AND bot IN ({marks}) "
-                             "ORDER BY created,rowid", part):
+                             "ORDER BY created_at,rowid", part):
             newest[row["bot"]] = row                         # the newest, as ORDER BY created DESC LIMIT 1 picks it
             newest_of[(row["bot"], row["attempt_id"])] = row
         prime(c, HELD_SQL, {(s,): newest.get(s) for s in part})
@@ -725,8 +725,8 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
         # Before /started, a newly created bot has never written a status. Project only its current
         # wait, without manufacturing status history or copying private task content into a stored row.
         row = {"bot": slug, "state": "waiting_bot", "focus": "", "task_id": None,
-               "since": live["created"], "last_turn_at": None, "last_result": None, "next_due": None,
-               "open_tasks": 0, "needs_human": 0, "updated_at": live["created"]}
+               "since": live["created_at"], "last_turn_at": None, "last_result": None, "next_due": None,
+               "open_tasks": 0, "needs_human": 0, "updated_at": live["created_at"]}
     row = privacy.status(c, who, row, **(inputs or {}))
     row["bot_state"] = (H.bot(c, row["bot"]) or {}).get("state")
     # Why its last run ended without finishing, said plainly for its page header: never a bare "Crashed".
@@ -927,7 +927,7 @@ def _runs(view, rows):
             entry["output"] = event
         elif row["kind"] == "job":
             job = c.execute("SELECT j.*, m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                            "WHERE j.message_id=? ORDER BY j.created DESC LIMIT 1", (row["ref"],)).fetchone()
+                            "WHERE j.message_id=? ORDER BY j.created_at DESC LIMIT 1", (row["ref"],)).fetchone()
             if job is None or not privacy.message_readable(c, view.principal, H.message(c, job["message_id"])):
                 continue
             entry.update(job_id=job["id"], message_id=job["message_id"], state=job["state"], run_id=job["attempt_id"])

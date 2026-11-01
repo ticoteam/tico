@@ -67,7 +67,7 @@ def test_large_documents_round_trip_and_report_allowance_is_runner_route_only(ap
     small = api.get("/api/v2/bots/ops/memory?include_documents=false", headers=headers("ben-test"))
     assert small.status_code == 200
     assert small.json()["documents"] == {}
-    assert small.json()["document_status"]["memory/learnings.md"]["updated"]
+    assert small.json()["document_status"]["memory/learnings.md"]["updated_at"]
     assert len(small.content) < 10_000
     # Worst-case JSON escaping, both files at the byte ceiling, and all 50 diffs also fit.
     body = {"documents": {path: "\x01" * MAX_DOCUMENT_BYTES
@@ -93,7 +93,7 @@ def test_oversized_documents_keep_the_copy_date_and_clear_when_the_file_fits(api
     machine = runner(api)
     assign(api, machine, "ops")
     post(api, "bots/ops/memory/report", {"documents": {path: "original"}}, machine["token"])
-    saved = history(api, "ben-test")["document_status"][path]["updated"]
+    saved = history(api, "ben-test")["document_status"][path]["updated_at"]
     # The runner sends only the path; the stored date must remain the copy's date.
     post(api, "bots/ops/memory/report", {"oversized": [path]}, machine["token"])
     result = history(api, "ben-test")

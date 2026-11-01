@@ -96,7 +96,7 @@ def test_a_person_reads_and_books_only_calendars_they_may_see(api):
 
 def test_leaving_revokes_a_persons_api_tokens(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created,created_by) "
+        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) "
                   "VALUES('t1','cara','x','h','2026-01-01T00:00:00Z','human:cara')")
     post(api, "people/cara", {"left": True})
     with api.app.state.store.read() as c:

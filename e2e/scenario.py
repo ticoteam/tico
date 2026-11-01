@@ -130,16 +130,16 @@ def populate_direct(path):
     health, watcher runs and the company's usage pool. Written straight to the database, the way the runner and the
     hub's own timers write them."""
     with sqlite3.connect(path) as c:
-        c.execute("INSERT INTO rate_limits(runtime,used_percent,window_minutes,resets_at,updated) "
+        c.execute("INSERT INTO rate_limits(runtime,used_percent,window_minutes,resets_at,updated_at) "
                   "VALUES('codex',12.5,300,'2026-11-01T05:00:00.000000Z','2026-11-01T00:00:00.000000Z')")
-        c.execute("INSERT INTO service_health(service,last_success,last_error,detail) "
+        c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) "
                   "VALUES('mail','2026-11-01T00:00:00.000000Z',NULL,'{\"checked\": 3}')")
         c.execute("INSERT INTO perf_points(runner_id,span,ts,n,scope,cpu,cpu_max,load1,mem_used,mem_max,mem_total,"
                   "swap_used,swap_total,disk_free,disk_total,active) "
                   "VALUES('runner-1',60,1793500000,4,'host',0.25,0.5,1.0,100,200,400,0,0,1000,2000,1)")
         c.execute("INSERT INTO runner_load_samples(runner_id,ts,sampled_at,cpu_pct,mem_used,mem_total,swap_used,"
                   "swap_total,running_turns) VALUES('runner-1',1793500000,1793500000,12.0,100,400,0,0,1)")
-        c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started,finished,exit_code,timed_out,every,output,events) "
+        c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started_at,finished_at,exit_code,timed_out,every,output,events) "
                   "VALUES('ops','inbox-check','runner-1','2026-11-01T00:00:00.000000Z','2026-11-01T00:00:01.000000Z',"
                   "0,0,300,'ok',0)")
         c.commit()

@@ -183,8 +183,8 @@ def test_a_manager_bot_follows_its_reports_model_change_without_reading_its_chec
     with store.transaction() as c:
         room = H.task(c, task["id"])["conversation_id"]
         message = c.execute("SELECT id FROM messages WHERE conversation_id=? LIMIT 1", (room,)).fetchone()[0]
-        c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created,"
-                  "updated) VALUES('tr-1',?,'model','{}','human:ana',1,'checkpointing',?,?)", (counsel, H.now(), H.now()))
+        c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created_at,"
+                  "updated_at) VALUES('tr-1',?,'model','{}','human:ana',1,'checkpointing',?,?)", (counsel, H.now(), H.now()))
         c.execute("INSERT INTO bot_transition_checkpoints(transition_id,conversation_id,message_id,state,checkpoint)"
                   " VALUES('tr-1',?,?,'prepared',?)", (room, message, encode({"decisions": ["Drop the break clause"]})))
     [seen] = get(api, "settings/transitions/tr-1", token=lead)["checkpoints"]
@@ -197,7 +197,7 @@ def newer_changes(api, bot_slug, n, created):
     """`n` task-model changes a manager bot made to `bot_slug`, written as the app writes them; `created(i)` is when."""
     bid = bot_id(api, bot_slug)
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created,"
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
                       "via) VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), bid, "task_model", encode(None), encode(HAIKU), "bot:lead", None, created(i),
                         report_managers.VIA) for i in range(n)])
@@ -209,7 +209,7 @@ def test_a_bots_history_keeps_its_change_when_other_bots_fill_the_newest_page(ap
     bot(api, "junior", reports_to="lead")
     task_model(api, lead)
     [mine] = changes_to(api, "counsel", "task_model")
-    newer_changes(api, "junior", 150, lambda i: H.shift(mine["created"], seconds=i + 1))
+    newer_changes(api, "junior", 150, lambda i: H.shift(mine["created_at"], seconds=i + 1))
     # The bot's own card asks for the bot: its change is there for the owner and for the person who manages it.
     for token in ("ana-test", "ben-test"):
         listed = get(api, "settings/history?bot=counsel", token=token)["changes"]
@@ -300,7 +300,7 @@ def test_a_persons_view_of_a_bots_changes_is_an_index_seek_whatever_the_bots_his
     # Counsel's history is 3,000 people's changes and no manager's: Ben's reads of it find nothing, and seek past it.
     counsel = bot_id(api, "counsel")
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created,"
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
                       "via) VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), counsel, "owners", encode([]), encode(["human:ana"]), "human:ana", None,
                         H.shift(H.now(), seconds=-i), None) for i in range(3000)])
@@ -322,7 +322,7 @@ def test_a_tie_of_changes_at_one_time_pages_in_id_order_and_no_read_sorts_it(api
     bot(api, "counsel", reports_to="lead")
     cid = bot_id(api, "counsel")
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created,"
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
                       "via) VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), cid, "task_model", encode(None), encode(HAIKU), "bot:lead", None,
                         "2026-10-28T12:00:00.000000Z", report_managers.VIA if i % 2 else None) for i in range(600)])
@@ -350,7 +350,7 @@ def test_a_tie_of_changes_at_one_time_pages_in_id_order_and_no_read_sorts_it(api
         return answer, plans
 
     with real() as c:
-        rows = c.execute("SELECT id, created, bot, via FROM settings_changes").fetchall()
+        rows = c.execute("SELECT id, created_at, bot, via FROM settings_changes").fetchall()
 
     def newest_first(keep):
         return [row[0] for row in sorted(rows, key=lambda row: (row[1], row[0]), reverse=True) if keep(row)]

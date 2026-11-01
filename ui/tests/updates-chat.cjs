@@ -16,7 +16,7 @@ const yesterday = new Date(new Date(today + 'T12:00:00Z').getTime() - 86400e3).t
 const bots = [['coo', 'Assistant'], ['goal-manager', 'Chief'], ['sales', 'Sales Bot'], ['ops', 'Ops Bot']].map(([name, display_name]) =>
   ({name, display_name, host: 'keeper', status: 'active', can_chat: true, operator: 'cara'}));
 const update = (id, bot, body, day, kind = 'daily') => ({id, bot, kind, day, headline: body.slice(2), body, read: true,
-  created: iso(-hour), updated: iso(-hour), replies: 0, drafted_by: null, edited_by: null, slides: null, inputs: []});
+  created_at: iso(-hour), updated_at: iso(-hour), replies: 0, drafted_by: null, edited_by: null, slides: null, inputs: []});
 const UPDATES = {
   'u-sales': update('u-sales', 'sales', '- Closed the Acme renewal', today),
   'u-ops': update('u-ops', 'ops', '- Moved the warehouse', yesterday),
@@ -60,9 +60,9 @@ async function open(browser, me, viewport, chat, store = {}) {
     if (p === '/api/v2/assistant/messages') {
       const body = req.postDataJSON(); sent.push(body);
       const message = {id: 'm' + (chat.messages.length + 1), conversation_id: chat.room_id, from_actor: 'human:' + me.id, to_actor: 'bot:' + chat.bot,
-                       body: body.text, created: iso(0), refs: {assistant: true, updates: true}};
+                       body: body.text, created_at: iso(0), refs: {assistant: true, updates: true}};
       chat.messages.push(message, {id: 'r' + chat.messages.length, conversation_id: chat.room_id, from_actor: 'bot:' + chat.bot, to_actor: 'human:' + me.id,
-        created: iso(1000), refs: {assistant: true},
+        created_at: iso(1000), refs: {assistant: true},
         body: `Top today: [Sales closed the Acme renewal](${link(UPDATES['u-sales'])}), since it moves the revenue goal. ` +
               `Yesterday: [Ops](${link(UPDATES['u-ops'])}); this week: [the week in review](${link(UPDATES['u-week'])}).`});
       return json({message, reply: null, fast: false, intent: null});
@@ -87,7 +87,7 @@ const chatOf = over => ({available: true, state: 'active', can_turn_on: false, h
     {
       const cara = {id: 'cara', name: 'Cara', email: 'cara@example.test', role: 'member', cloud: true};
       const chat = chatOf({bot: 'coo', name: 'Assistant', room_id: 'room-cara',
-        messages: [{id: 'm0', conversation_id: 'room-cara', from_actor: 'human:cara', to_actor: 'bot:coo', body: 'Asked from the menu tab', created: iso(-hour), refs: {assistant: true}}]});
+        messages: [{id: 'm0', conversation_id: 'room-cara', from_actor: 'human:cara', to_actor: 'bot:coo', body: 'Asked from the menu tab', created_at: iso(-hour), refs: {assistant: true}}]});
       const store = {};
       const {context, page, errors, sent, prefs, trees} = await open(browser, cara, {width: 1400, height: 900}, chat, store);
       await page.goto('http://tico-ui.test/#/updates');

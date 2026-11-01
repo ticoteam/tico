@@ -842,7 +842,7 @@ class Turn:
         turn.finish()                                          # the draft to send back
 
     `keys_removed` says a key-shaped string was cut from the draft or an action's input this turn; `seeded` says the
-    empty chart was started from a company model, and `started` is BotOps's one line on which model and what it added.
+    empty chart was started from a company model, and `started_at` is BotOps's one line on which model and what it added.
     `changed` lists the parts the turn's actions changed (`touched`), in order; `market_note` is what the visitor said
     when they asked for the market to be sized again (`resize_market`), else None.
     """

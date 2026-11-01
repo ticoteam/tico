@@ -682,9 +682,9 @@ def test_a_model_change_checks_this_bots_own_sign_in_on_its_computer(api, botops
     assert keyless.status_code == 409 and keyless.json()["error"]["link"].endswith("/#/credentials")
     # ... and once ops holds its own key, the computer-wide "missing" (another bot's) does not block it.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO credentials(id,name,kind,env,ciphertext,nonce,created,updated,updated_by) "
+        c.execute("INSERT INTO credentials(id,name,kind,env,ciphertext,nonce,created_at,updated_at,updated_by) "
                   "VALUES('k1','OpenRouter','api_key','OPENROUTER_API_KEY',x'00',x'00',?,?,'human:ana')", (H.now(), H.now()))
-        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) "
+        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) "
                   "VALUES('g1','k1','bot:ops','human:ana',?)", (H.now(),))
     keyed = act(api, ana, "POST", "bots/ops/model", {"model": "kimi-k3", "expected_revision": revision})
     assert keyed.status_code == 200, keyed.text
@@ -725,7 +725,7 @@ def test_botops_own_run_manages_other_bots_unless_the_team_limits_it_and_a_bot_a
 # ------------------------------------------------------------------ a person's request lasts while its task is open
 def _age(api, message_id, days):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-days), message_id))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-days), message_id))
 
 
 def test_a_persons_request_lends_rights_while_its_task_is_open_and_their_own_comment_counts(api, botops):
@@ -859,7 +859,7 @@ def test_a_reopened_task_and_a_request_past_the_cap_lend_nothing(api, botops):
     # Done after ten days (within the cap); BotOps moving it back to doing revives nothing.
     _age(api, ana["message"]["id"], 10)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET created=? WHERE id=?", (H.shift(H.now(), days=-10), task_id))
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-10), task_id))
         H.task_update(c, "bot:botops", task_id, status="done", note="Done.")
         H.task_update(c, "bot:botops", task_id, status="doing", note="Again.")
     later = _wake(api, botops)
@@ -882,12 +882,12 @@ def test_a_reopened_task_and_a_request_past_the_cap_lend_nothing(api, botops):
     finish(api, botops, claim(api, botops, "botops"))
     _age(api, ben["message"]["id"], LEND_MAX_DAYS - 1)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET created=? WHERE id=?", (H.shift(H.now(), days=-(LEND_MAX_DAYS - 1)), second))
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-(LEND_MAX_DAYS - 1)), second))
     within = _wake(api, botops)
     assert act(api, within, "GET", "credentials", ref=second).status_code == 200
     finish(api, botops, within)
     _age(api, ben["message"]["id"], LEND_MAX_DAYS + 1)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET created=? WHERE id=?", (H.shift(H.now(), days=-(LEND_MAX_DAYS + 1)), second))
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-(LEND_MAX_DAYS + 1)), second))
     past = _wake(api, botops)
     assert act(api, past, "GET", "credentials", ref=second).status_code == 403

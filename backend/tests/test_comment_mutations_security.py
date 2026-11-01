@@ -71,7 +71,7 @@ def test_already_handed_comments_change_current_record_without_recalling_copies(
         elif handoff == "job":
             c.execute("UPDATE jobs SET state='completed' WHERE message_id=?", (said["id"],))
         elif handoff == "slack":
-            c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated) "
+            c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at) "
                       "VALUES(?,'Dexample','','ops',?,'ready',?,?)", (said["id"], said["body"], H.now(), H.now()))
         elif handoff == "context":
             H.turn_start(c, "bot:ops", "ops")

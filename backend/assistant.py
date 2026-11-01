@@ -45,7 +45,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS assistant_actions (
   id TEXT PRIMARY KEY, owner TEXT NOT NULL, conversation_id TEXT, summary TEXT NOT NULL,
   method TEXT NOT NULL, path TEXT NOT NULL, body TEXT NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL, proposed_via TEXT, created TEXT NOT NULL, decided_at TEXT, result TEXT);
+  status TEXT NOT NULL, proposed_via TEXT, created_at TEXT NOT NULL, decided_at TEXT, result TEXT);
 CREATE INDEX IF NOT EXISTS assistant_actions_owner ON assistant_actions(owner, status);
 """
 
@@ -386,18 +386,18 @@ def approval_words(c, who, cited, assistant_bot, approval):
                       "on a card (`hub assistant propose`)", 403)
     msg = H.message(c, cited) or {}
     words = str(msg.get("body") or "").strip()
-    room, at = msg.get("conversation_id"), str(msg.get("created") or "")
+    room, at = msg.get("conversation_id"), str(msg.get("created_at") or "")
     back = None
-    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created>? AND id<>? "
+    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created_at>? AND id<>? "
                       "AND deleted_at IS NULL LIMIT 1", (room, who.actor, at, cited)).fetchone()
     if len(words) <= 60 and AFFIRM.fullmatch(words) and not later:
-        before = c.execute("SELECT created FROM messages WHERE conversation_id=? AND from_actor=? AND created<? "
-                           "AND id<>? AND deleted_at IS NULL ORDER BY created DESC LIMIT 1",
+        before = c.execute("SELECT created_at FROM messages WHERE conversation_id=? AND from_actor=? AND created_at<? "
+                           "AND id<>? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
                            (room, who.actor, at, cited)).fetchone()
         last = c.execute("SELECT m.id, m.from_actor, m.body, e.detail FROM messages m LEFT JOIN events e "
-                         "ON e.target=m.id AND e.action=? WHERE m.conversation_id=? AND m.from_actor<>? AND m.created>=? AND m.created<=? "
-                         "AND m.id<>? AND m.deleted_at IS NULL ORDER BY m.created DESC, m.rowid DESC LIMIT 1",
-                         (READ_BACK, room, who.actor, before["created"] if before else "", at, cited)).fetchone()
+                         "ON e.target=m.id AND e.action=? WHERE m.conversation_id=? AND m.from_actor<>? AND m.created_at>=? AND m.created_at<=? "
+                         "AND m.id<>? AND m.deleted_at IS NULL ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1",
+                         (READ_BACK, room, who.actor, before["created_at"] if before else "", at, cited)).fetchone()
         if last and last["from_actor"] == bot and last["detail"]:
             back = {"body": last["body"], "approves": (json.loads(last["detail"]) or {}).get("approves") or []}
     if not back or approval not in back["approves"]:
@@ -428,7 +428,7 @@ def instruction(c, who, ref):
             or room.get("owner_actor") != who.actor or room.get("room_key") != rooms.ASSISTANT_ROOM
             or room.get("closed_at")):
         refuse("Cite a message the person sent you in their own Assistant chat")
-    if str(msg["created"]) < H.shift(H.now(), seconds=-INSTRUCTION_TTL_S):
+    if str(msg["created_at"]) < H.shift(H.now(), seconds=-INSTRUCTION_TTL_S):
         refuse(f"That message is more than {INSTRUCTION_TTL_S // 60} minutes old; ask the person again")
     return {"for": who.actor, "cited": msg["id"], "run": "asked"}
 
@@ -574,15 +574,15 @@ def groups(c, steps):
         if (m := _DECIDING.fullmatch(path)):
             row = H.approval(c, m.group(1)) or {}
             verb = "Approve" if body.get("decision") == "approved" else "Decline"
-            noun, created = f"{row.get('kind') or ''} approval".strip(), row.get("created")
+            noun, created = f"{row.get('kind') or ''} approval".strip(), row.get("created_at")
         elif (m := re.fullmatch(r"/api/v2/messages/([^/]+)/answer", path)):
-            verb, noun, created = "Answer", "bot question", (H.message(c, m.group(1)) or {}).get("created")
+            verb, noun, created = "Answer", "bot question", (H.message(c, m.group(1)) or {}).get("created_at")
         else:
             m = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(comments|links))?", path)
             sub = m.group(2) if m else None
             verb = ({"comments": "Comment on", "links": "Link"}.get(sub) or ("Close" if body.get("close") else None)
                     or {"done": "Mark done", "declined": "Decline"}.get(body.get("status"), "Change"))
-            noun, created = "task", (H.task(c, m.group(1)) or {}).get("created") if m else None
+            noun, created = "task", (H.task(c, m.group(1)) or {}).get("created_at") if m else None
         days = days_old(created)
         band = next(label for limit, label in AGE_BANDS if limit is None or days < limit)
         out.setdefault((verb, noun, band), []).append(str(body.get("note") or "").strip())
@@ -650,13 +650,13 @@ def describe(c, method, path, body):
         payload = row.get("payload") or {}
         detail = "; ".join(f"{field_value(k, 40)}: “{field_value(payload[k])}”" for k in approval_fields(payload))
         return (f"{verb} the {row['kind']} approval requested by {who(row['requested_by'])}"
-                + (f" ({detail})" if detail else "") + f", {age(row['created'])}"
+                + (f" ({detail})" if detail else "") + f", {age(row['created_at'])}"
                 + (f"; reason: {preview(body['note'], 120)}" if body.get("note") else ""))
 
     def answer_line(mid):
         asked = H.message(c, mid) or {}
         return (f"Answer {who(asked.get('from_actor'))}'s question “{preview(asked.get('body'), 80)}”"
-                + (f", {age(asked['created'])}" if asked.get("created") else "") + f": {preview(body.get('text'), 120)}")
+                + (f", {age(asked['created_at'])}" if asked.get("created_at") else "") + f": {preview(body.get('text'), 120)}")
     diff = []
     m = re.fullmatch(r"/api/v2/tasks/([^/]+)", path)
     if m and (t := H.task(c, m.group(1))):
@@ -899,11 +899,11 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
         diff = shown
     row = {"id": H.new_id(), "owner": who.actor, "conversation_id": room["id"], "summary": summary,
            "method": method, "path": path, "body": json.dumps(body),
-           "status": "pending", "proposed_via": proposer, "created": H.now(),
+           "status": "pending", "proposed_via": proposer, "created_at": H.now(),
            "description": what, "diff": json.dumps(diff, default=str), "proposer": proposer}
     c.execute("INSERT INTO assistant_actions(id,owner,conversation_id,summary,method,path,body,status,"
-              "proposed_via,created,description,diff,proposer) VALUES(:id,:owner,:conversation_id,:summary,"
-              ":method,:path,:body,:status,:proposed_via,:created,:description,:diff,:proposer)", row)
+              "proposed_via,created_at,description,diff,proposer) VALUES(:id,:owner,:conversation_id,:summary,"
+              ":method,:path,:body,:status,:proposed_via,:created_at,:description,:diff,:proposer)", row)
     bot = room_bot(settings, room) if proposer == "assistant" else proposer
     card = H._write_message(c, "bot:" + bot, who.actor, "Needs your OK: " + summary, room, "say",
                             {"assistant": True, "action": row["id"]}, None, None, delivered_at=H.now())
@@ -921,7 +921,7 @@ def room_bot(settings, room):
 
 def find_room(c, actor):
     row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=? "
-                    "AND closed_at IS NULL ORDER BY created LIMIT 1", (actor, rooms.ASSISTANT_ROOM)).fetchone()
+                    "AND closed_at IS NULL ORDER BY created_at LIMIT 1", (actor, rooms.ASSISTANT_ROOM)).fetchone()
     return H.conversation(c, row["id"]) if row else None
 
 
@@ -969,7 +969,7 @@ def chat_name(c, settings, bot):
 def find_strategy_room(c, actor=None):
     """The owner's earlier Strategy Bot chat: the owner seat's one room. With `actor`, only while it is theirs."""
     row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND room_key=? AND closed_at IS NULL "
-                    "ORDER BY created LIMIT 1", (rooms.STRATEGY_ROOM,)).fetchone()
+                    "ORDER BY created_at LIMIT 1", (rooms.STRATEGY_ROOM,)).fetchone()
     room = H.conversation(c, row["id"]) if row else None
     return room if room and (actor is None or room.get("owner_actor") == actor) else None
 
@@ -998,7 +998,7 @@ def migrate(c, settings):
     moved = 0
     for row in c.execute("SELECT a.id, a.owner, a.summary FROM assistant_actions a JOIN conversations v "
                          "ON v.id=a.conversation_id WHERE a.status='pending' AND v.scope='personal' AND v.room_key=? "
-                         "AND a.owner=v.owner_actor ORDER BY a.created", (rooms.STRATEGY_ROOM,)).fetchall():
+                         "AND a.owner=v.owner_actor ORDER BY a.created_at", (rooms.STRATEGY_ROOM,)).fetchall():
         room = ensure_room(c, row["owner"], settings.assistant_bot)
         c.execute("UPDATE assistant_actions SET conversation_id=? WHERE id=?", (room["id"], row["id"]))
         H._write_message(c, "bot:" + settings.assistant_bot, row["owner"], "Needs your OK: " + row["summary"], room,
@@ -1045,7 +1045,7 @@ def action_view(row, c=None):
             "summary": row["summary"], "method": row["method"], "path": row["path"],
             "body": json.loads(row["body"] or "{}"), "status": row["status"],
             "proposed_via": row["proposed_via"], "proposer": row.get("proposer") or row["proposed_via"],
-            "created": row["created"], "decided_at": row.get("decided_at"),
+            "created_at": row["created_at"], "decided_at": row.get("decided_at"),
             "description": row.get("description") or "", "diff": json.loads(row.get("diff") or "[]"),
             "result": result}
     if c is not None and view["proposer"] == "assistant" and view["conversation_id"]:
@@ -1241,7 +1241,7 @@ async def search_all(api, arg, bots, limit=4):
     async def tasks():
         data = await api.get("tasks", limit=500) or {}
         rows = [t for t in data.get("tasks") or [] if matches(t.get("title"), t.get("id"))]
-        rows.sort(key=lambda t: (t.get("status") in ("done", "closed", "declined"), t.get("updated") or ""), reverse=False)
+        rows.sort(key=lambda t: (t.get("status") in ("done", "closed", "declined"), t.get("updated_at") or ""), reverse=False)
         return [{"title": t["title"], "href": _task_href(t), "note": t.get("status")} for t in rows[:limit]]
 
     async def docs():
@@ -1251,7 +1251,7 @@ async def search_all(api, arg, bots, limit=4):
 
     async def meetings():
         data = await api.get("meetings/search", q=q, limit=limit) or {}
-        return [{"title": m.get("title"), "href": m.get("url") or "#/meetings", "note": (m.get("started") or m.get("created") or "")[:10]}
+        return [{"title": m.get("title"), "href": m.get("url") or "#/meetings", "note": (m.get("started_at") or m.get("created_at") or "")[:10]}
                 for m in (data.get("results") or [])[:limit]]
 
     async def org():
@@ -1350,9 +1350,9 @@ async def fast_bot_today(api, who, bots, slug):
         return None, []
     since = H.shift(H.now(), hours=-24)
     updates = await api.get("updates", bot=bot["id"], limit=10) or {}
-    recent = [u for u in updates.get("updates") or [] if str(u.get("created") or "") >= since]
+    recent = [u for u in updates.get("updates") or [] if str(u.get("created_at") or "") >= since]
     tasks = await api.get("tasks", owner=bot["id"], limit=100) or {}
-    touched = [t for t in tasks.get("tasks") or [] if str(t.get("updated") or "") >= since]
+    touched = [t for t in tasks.get("tasks") or [] if str(t.get("updated_at") or "") >= since]
     lines, links = [], []
     for u in recent[:3]:
         lines.append(f"- {u.get('kind', 'update').title()} update: {link(u.get('headline') or 'Update', '#/updates')}")
@@ -1520,7 +1520,7 @@ def install(app, store, auth, mutate, onboarding):
         visuals.for_reader(app, settings, c, who, snap["messages"])
         ids = [m["refs"]["action"] for m in snap["messages"] if isinstance(m.get("refs"), dict) and m["refs"].get("action")]
         pending = [action_view(dict(r), c) for r in c.execute(
-            "SELECT * FROM assistant_actions WHERE owner=? AND status='pending' ORDER BY created", (who.actor,))]
+            "SELECT * FROM assistant_actions WHERE owner=? AND status='pending' ORDER BY created_at", (who.actor,))]
         info = availability(c, settings, who)
         earlier = earlier_chat(c, settings, who)
         return {**info, "room_id": room["id"] if room else None,
@@ -1638,8 +1638,8 @@ def install(app, store, auth, mutate, onboarding):
 
         def work(c):
             before = decides(c, who.actor)["decides_approvals"]
-            c.execute("INSERT INTO preferences(actor,key,value,updated) VALUES(?,?,?,?) ON CONFLICT(actor,key) "
-                      "DO UPDATE SET value=excluded.value, updated=excluded.updated",
+            c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) ON CONFLICT(actor,key) "
+                      "DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
                       (who.actor, DECIDES_KEY, json.dumps(body.decides_approvals), H.now()))
             if before != body.decides_approvals:
                 H.event(c, who.actor, "assistant.decides_approvals", who.actor, {"on": body.decides_approvals})
@@ -1807,7 +1807,7 @@ def install(app, store, auth, mutate, onboarding):
                 row = load(c, who, aid)
                 if row["status"] != "pending":
                     raise Problem("state", "This proposal is already " + row["status"], 409)
-                if row["created"] < H.shift(H.now(), hours=-CONFIRM_TTL_H):
+                if row["created_at"] < H.shift(H.now(), hours=-CONFIRM_TTL_H):
                     # Recorded here, raised after the transaction commits (raising inside it rolls it back).
                     c.execute("UPDATE assistant_actions SET status='expired', decided_at=? WHERE id=?", (H.now(), aid))
                     return None

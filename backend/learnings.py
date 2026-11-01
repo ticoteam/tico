@@ -38,15 +38,15 @@ LOG = logging.getLogger("tico.learnings")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS learning_runs(
- id TEXT PRIMARY KEY, night TEXT NOT NULL UNIQUE, status TEXT NOT NULL, started TEXT NOT NULL, finished TEXT,
+ id TEXT PRIMARY KEY, night TEXT NOT NULL UNIQUE, status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT,
  read_count INTEGER NOT NULL DEFAULT 0, routed_count INTEGER NOT NULL DEFAULT 0, detail TEXT NOT NULL DEFAULT '{}');
 CREATE TABLE IF NOT EXISTS learning_items(
  run_id TEXT NOT NULL, item_key TEXT NOT NULL, source TEXT NOT NULL, ref TEXT NOT NULL,
- author TEXT NOT NULL DEFAULT '', label TEXT NOT NULL, text TEXT NOT NULL, created TEXT NOT NULL,
+ author TEXT NOT NULL DEFAULT '', label TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL,
  learnable REAL, scores TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(run_id, item_key));
 CREATE TABLE IF NOT EXISTS learning_deliveries(
  run_id TEXT NOT NULL, recipient TEXT NOT NULL, task_id TEXT NOT NULL, item_keys TEXT NOT NULL,
- created TEXT NOT NULL, PRIMARY KEY(run_id, recipient));
+ created_at TEXT NOT NULL, PRIMARY KEY(run_id, recipient));
 CREATE TABLE IF NOT EXISTS learning_cursors(source TEXT PRIMARY KEY, last_ts TEXT NOT NULL);
 """
 
@@ -128,7 +128,7 @@ def roster(c, settings, now=None):
     """
     skip = {*HELPERS, settings.assistant_bot}
     since = utc(H.parse_ts(now or H.now()) - timedelta(hours=LOOKBACK_HOURS))
-    ran = {r[0] for r in c.execute("SELECT DISTINCT bot FROM attempts WHERE started>=?", (since,))}
+    ran = {r[0] for r in c.execute("SELECT DISTINCT bot FROM attempts WHERE started_at>=?", (since,))}
     out = {}
     for row in c.execute("SELECT b.id,b.slug,b.display_name,coalesce(bc.description,'') AS description,"
                          "coalesce(bc.config,'{}') AS config FROM bots b "
@@ -180,10 +180,10 @@ def collect(c, settings, now, team):
 
     delivered = {r[0] for r in c.execute("SELECT task_id FROM learning_deliveries")}
     for m in c.execute(
-            "SELECT m.id,m.conversation_id,m.from_actor,m.body,m.created,m.refs,cv.task_id AS conv_task,"
+            "SELECT m.id,m.conversation_id,m.from_actor,m.body,m.created_at,m.refs,cv.task_id AS conv_task,"
             "cv.participants,cv.subject FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
             "WHERE m.from_actor LIKE 'human:%' AND m.deleted_at IS NULL AND coalesce(m.kind,'')<>'notice' "
-            "AND coalesce(cv.scope,'direct')<>'personal' AND m.created>? AND m.created<=? ORDER BY m.created",
+            "AND coalesce(cv.scope,'direct')<>'personal' AND m.created_at>? AND m.created_at<=? ORDER BY m.created_at",
             (min(since["chat"], since["task"]), now)).fetchall():
         text = clip(m["body"])
         if not text:
@@ -192,19 +192,19 @@ def collect(c, settings, now, team):
         tid = H.message_task_id({"refs": refs if isinstance(refs, dict) else {}}, {"task_id": m["conv_task"]})
         author = who.get(m["from_actor"], m["from_actor"])
         if tid:
-            if m["created"] <= since["task"] or tid in delivered:
+            if m["created_at"] <= since["task"] or tid in delivered:
                 continue
             task = H.task(c, tid)
-            items.append({"key": "task:m:" + m["id"], "source": "task", "author": m["from_actor"], "created": m["created"],
+            items.append({"key": "task:m:" + m["id"], "source": "task", "author": m["from_actor"], "created_at": m["created_at"],
                           "ref": {"message": m["id"], "task": tid},
                           "label": f"{(task or {}).get('title') or 'Task'} · {author}", "text": text,
                           "audience": task_parties(tid)})
             continue
-        if m["created"] <= since["chat"]:
+        if m["created_at"] <= since["chat"]:
             continue
         bots = _bots_in(H._json(m["participants"], []) or [], team)
         place = ("Chat with " + ", ".join(team[b]["name"] for b in sorted(bots))) if bots else (m["subject"] or "Chat")
-        items.append({"key": "chat:" + m["id"], "source": "chat", "author": m["from_actor"], "created": m["created"],
+        items.append({"key": "chat:" + m["id"], "source": "chat", "author": m["from_actor"], "created_at": m["created_at"],
                       "ref": {"message": m["id"], "conversation": m["conversation_id"],
                               **({"bot": next(iter(bots))} if len(bots) == 1 else {})},
                       "label": f"{place} · {author}", "text": text, "audience": bots or None})
@@ -214,7 +214,7 @@ def collect(c, settings, now, team):
                        (since["task"], now)).fetchall():
         if t["id"] in delivered:
             continue              # a packet's own "Nothing new" is not tomorrow's activity
-        items.append({"key": "task:" + t["id"], "source": "task", "author": t["owner"] or "", "created": t["at"],
+        items.append({"key": "task:" + t["id"], "source": "task", "author": t["owner"] or "", "created_at": t["at"],
                       "ref": {"task": t["id"]}, "label": f"{t['title']} · done",
                       "text": clip(t["note"]), "audience": task_parties(t["id"])})
     channels = {r["channel_id"]: r["name"] for r in c.execute("SELECT channel_id,name FROM slack_channels")} \
@@ -227,7 +227,7 @@ def collect(c, settings, now, team):
             continue
         place = "#" + (channels.get(s["channel"]) or s["channel"])
         items.append({"key": "slack:" + s["event_id"], "source": "slack", "author": s["author_name"] or s["user_id"],
-                      "created": s["received"],
+                      "created_at": s["received"],
                       "ref": {"channel": s["channel"], "ts": s["ts"], "thread_ts": s["thread_ts"]},
                       "label": f"{place} · {s['author_name'] or 'Slack'}", "text": text, "audience": None})
     people = {}
@@ -246,22 +246,22 @@ def collect(c, settings, now, team):
             if not text:
                 continue
             items.append({"key": f"mail:{m['mailbox']}:{m['msg_id']}", "source": "mail", "author": "human:" + person["id"],
-                          "created": utc(datetime.fromtimestamp(m["epoch"], timezone.utc)),
+                          "created_at": utc(datetime.fromtimestamp(m["epoch"], timezone.utc)),
                           "ref": {"mailbox": m["mailbox"].lower(), "msg_id": m["msg_id"], "thread": m["thread_id"]},
                           "label": f"{m['subject'] or 'Email'} · {person['name'] or person['id']}",
                           "text": text, "audience": None})
-    for r in c.execute("SELECT m.id,m.title,m.notes,m.metadata,m.created FROM meetings m "
+    for r in c.execute("SELECT m.id,m.title,m.notes,m.metadata,m.created_at FROM meetings m "
                        "LEFT JOIN media_control mc ON mc.meeting_id=m.id WHERE m.review_state='live' "
-                       "AND mc.deleted_at IS NULL AND m.created>? AND m.created<=? ORDER BY m.created",
+                       "AND mc.deleted_at IS NULL AND m.created_at>? AND m.created_at<=? ORDER BY m.created_at",
                        (since["meeting"], now)).fetchall():
         meta = H._json(r["metadata"], {}) or {}
         if meta.get("kind") != "meeting" or meta.get("private"):
             continue
         summary = meta.get("source_summary") or r["notes"] or ""
         text = clip(f"{r['title']}\n\n{summary}".strip(), MEETING_CHARS)
-        items.append({"key": "meeting:" + r["id"], "source": "meeting", "author": "", "created": r["created"],
+        items.append({"key": "meeting:" + r["id"], "source": "meeting", "author": "", "created_at": r["created_at"],
                       "ref": {"meeting": r["id"]}, "label": r["title"] or "Meeting", "text": text, "audience": None})
-    items.sort(key=lambda i: i["created"])
+    items.sort(key=lambda i: i["created_at"])
     dropped = max(0, len(items) - MAX_ITEMS)
     return items[dropped:], dropped
 
@@ -357,7 +357,7 @@ def packets(items, qset):
         for slug, rel in item["scores"].items():
             if rel >= bar:
                 out.setdefault(slug, []).append(item)
-    return {slug: sorted(rows, key=lambda i: (-i["scores"][slug], i["created"]))[:cap] for slug, rows in out.items()}
+    return {slug: sorted(rows, key=lambda i: (-i["scores"][slug], i["created_at"]))[:cap] for slug, rows in out.items()}
 
 
 # ----------------------------------------------------------------------------- dispatch
@@ -384,7 +384,7 @@ def packet_body(slug, rows, team, run_id):
         others = [team[s]["name"] for s, rel in sorted(item["scores"].items(), key=lambda kv: -kv[1])
                   if s != slug and s in item.get("sent_to", ())]
         lines += ["", f"### {n}. {item['label']}",
-                  f"Source: {KIND_WORDS[item['source']]} · {item['label']} · {day_words(item['created'])}"]
+                  f"Source: {KIND_WORDS[item['source']]} · {item['label']} · {day_words(item['created_at'])}"]
         if link(item):
             lines.append(f"Link: {link(item)}")
         lines += ["> " + line if line.strip() else ">" for line in item["text"].splitlines()]
@@ -427,15 +427,15 @@ def dispatch(c, run_id, night, items, chosen, team, detail):
                 item["sent_to"].discard(slug)
             continue
         c.execute("RELEASE learning_delivery")
-        c.execute("INSERT INTO learning_deliveries(run_id,recipient,task_id,item_keys,created) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO learning_deliveries(run_id,recipient,task_id,item_keys,created_at) VALUES(?,?,?,?,?)",
                   (run_id, slug, task["id"], json.dumps([i["key"] for i in rows]), H.now()))
         delivered += 1
     routed = [i for i in items if i["sent_to"]]
     for item in routed:
-        c.execute("INSERT OR REPLACE INTO learning_items(run_id,item_key,source,ref,author,label,text,created,"
+        c.execute("INSERT OR REPLACE INTO learning_items(run_id,item_key,source,ref,author,label,text,created_at,"
                   "learnable,scores) VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (run_id, item["key"], item["source"], json.dumps(item["ref"]), item["author"], item["label"],
-                   item["text"], item["created"], item["learnable"], json.dumps(item["scores"])))
+                   item["text"], item["created_at"], item["learnable"], json.dumps(item["scores"])))
     if refused:
         detail["refused"] = refused
     return delivered, len(routed)
@@ -444,7 +444,7 @@ def dispatch(c, run_id, night, items, chosen, team, detail):
 def advance(c, items, now):
     newest = {}
     for item in items:
-        newest[item["source"]] = max(newest.get(item["source"], ""), item["created"])
+        newest[item["source"]] = max(newest.get(item["source"], ""), item["created_at"])
     for source in SOURCES:
         c.execute("INSERT INTO learning_cursors(source,last_ts) VALUES(?,?) ON CONFLICT(source) DO UPDATE SET "
                   "last_ts=max(learning_cursors.last_ts,excluded.last_ts)", (source, newest.get(source) or now))
@@ -452,7 +452,7 @@ def advance(c, items, now):
 
 def finish(store, run_id, status, detail, read=0, routed=0):
     with store.transaction() as c:
-        c.execute("UPDATE learning_runs SET status=?,finished=?,read_count=?,routed_count=?,detail=? WHERE id=?",
+        c.execute("UPDATE learning_runs SET status=?,finished_at=?,read_count=?,routed_count=?,detail=? WHERE id=?",
                   (status, H.now(), read, routed, json.dumps(detail), run_id))
 
 
@@ -506,7 +506,7 @@ def run(store, run_id):
                     **(engine.detail() if isinstance(engine, Tally) else {})})
             detail["deliveries"] = delivered
             detail["ms"] = round((time.monotonic() - started) * 1000)
-            c.execute("UPDATE learning_runs SET status=?,finished=?,read_count=?,routed_count=?,detail=? WHERE id=?",
+            c.execute("UPDATE learning_runs SET status=?,finished_at=?,read_count=?,routed_count=?,detail=? WHERE id=?",
                       ("capped" if capped else "done" if delivered else "quiet", H.now(), len(items), routed,
                        json.dumps(detail), run_id))
     except Exception as exc:
@@ -523,12 +523,12 @@ def recorded(store, run_id):
     record = SR.Run("learnings")
     run(store, run_id)
     with store.read() as c:
-        row = c.execute("SELECT status,started,read_count,routed_count,detail FROM learning_runs WHERE id=?",
+        row = c.execute("SELECT status,started_at,read_count,routed_count,detail FROM learning_runs WHERE id=?",
                         (run_id,)).fetchone()
     if not row:
         return
     detail = json.loads(row["detail"] or "{}")
-    record.started = row["started"]
+    record.started = row["started_at"]
     if row["status"] == "failed":
         record.error = "Failed: " + SR.FAILURE_WORDS.get(detail.get("error") or "", "unexpected error")
     elif row["status"] in RUN_WORDS:
@@ -553,7 +553,7 @@ def claim(c, night):
     if c.execute("SELECT 1 FROM learning_runs WHERE night=?", (night,)).fetchone():
         return None
     run_id = H.new_id()
-    c.execute("INSERT INTO learning_runs(id,night,status,started) VALUES(?,?,?,?)", (run_id, night, "running", H.now()))
+    c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES(?,?,?,?)", (run_id, night, "running", H.now()))
     return run_id
 
 
@@ -577,7 +577,7 @@ def claim_tonight(c):
     if found and found["status"] not in ("unconfigured", "capped", "failed"):
         raise Problem("conflict", "Tonight's learning run already ran", 409)
     if found:
-        c.execute("UPDATE learning_runs SET status='running',started=?,finished=NULL,detail='{}' WHERE id=?",
+        c.execute("UPDATE learning_runs SET status='running',started_at=?,finished_at=NULL,detail='{}' WHERE id=?",
                   (H.now(), found["id"]))
         return found["id"]
     return claim(c, night)
@@ -641,7 +641,7 @@ def line_diff(old, new):
 
 def window(c, delivery):
     task = H.task(c, delivery["task_id"]) or {}
-    return delivery["created"], task.get("done_at") or task.get("closed_at") or H.now()
+    return delivery["created_at"], task.get("done_at") or task.get("closed_at") or H.now()
 
 
 def saw(c, run_id, keys):
@@ -667,7 +667,7 @@ def bot_entries(c, slug, task_id):
 def doc_subjects(c, delivery, saw_text):
     begin, end = window(c, delivery)
     out = {}
-    for v in c.execute("SELECT * FROM doc_versions WHERE actor=? AND created>=? AND created<=? ORDER BY created",
+    for v in c.execute("SELECT * FROM doc_versions WHERE actor=? AND created_at>=? AND created_at<=? ORDER BY created_at",
                        ("bot:" + LIBRARIAN, begin, end)).fetchall():
         prev = c.execute("SELECT body FROM doc_versions WHERE doc_id=? AND version<? ORDER BY version DESC LIMIT 1",
                          (v["doc_id"], v["version"])).fetchone()
@@ -833,10 +833,10 @@ def install(app, store, auth, mutate):
                     hidden += 1
                     continue
                 data = {"key": item["item_key"], "source": item["source"], "ref": json.loads(item["ref"]),
-                        "label": item["label"], "created": item["created"]}
+                        "label": item["label"], "created_at": item["created_at"]}
                 url = link(data)
                 used = next((m["subject"] for m in commits if url and url in m["diff"]), None)
-                items.append({"source": item["source"], "label": item["label"], "when": item["created"], "link": url,
+                items.append({"source": item["source"], "label": item["label"], "when": item["created_at"], "link": url,
                               "text": item["text"], "score": json.loads(item["scores"]).get(slug, 0),
                               "also_sent_to": [team_names.get("bot:" + s, s) for s in sent.get(item["item_key"], []) if s != slug],
                               "used": used})

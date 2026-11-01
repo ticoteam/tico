@@ -613,12 +613,12 @@ def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, t
     now = H.now()
     row = {"id": eid, "type": type, "name": name, "aliases": dumps(aliases), "external_ids": dumps(external_ids),
            "tier": tier or None, "summary": str(summary or ""), "properties": dumps(properties or {}),
-           "status": "active", "merged_into": None, "last_verified": last_verified, "created": now,
-           "created_by": actor, "updated": now}
+           "status": "active", "merged_into": None, "last_verified_at": last_verified, "created_at": now,
+           "created_by": actor, "updated_at": now}
     conn.execute("INSERT INTO market_entities (id, type, name, aliases, external_ids, tier, summary, properties, "
-                 "status, merged_into, last_verified, created, created_by, updated) VALUES "
+                 "status, merged_into, last_verified_at, created_at, created_by, updated_at) VALUES "
                  "(:id,:type,:name,:aliases,:external_ids,:tier,:summary,:properties,:status,:merged_into,"
-                 ":last_verified,:created,:created_by,:updated)", row)
+                 ":last_verified_at,:created_at,:created_by,:updated_at)", row)
     events = [_event(conn, "entity", eid, actor, "created", None, name, insight_id)]
     if ids:
         _cite(conn, actor, "entity", eid, ids, insight_id)
@@ -648,8 +648,8 @@ def update_entity(conn, actor, entity_id, *, name=None, aliases=None, external_i
         changes["summary"] = str(summary)
     if properties is not None and dict(properties) != row["properties"]:
         changes["properties"] = dict(properties)
-    if last_verified is not None and str(last_verified) != (row["last_verified"] or ""):
-        changes["last_verified"] = _day(conn, last_verified, actor, "last_verified")
+    if last_verified is not None and str(last_verified) != (row["last_verified_at"] or ""):
+        changes["last_verified_at"] = _day(conn, last_verified, actor, "last_verified")
     if status is not None and status != row["status"]:
         if status not in ("active", "retired", "merged"):
             H.refuse(conn, actor, "kind", "status is active, retired or merged")
@@ -667,12 +667,12 @@ def update_entity(conn, actor, entity_id, *, name=None, aliases=None, external_i
                              dumps(old) if isinstance(old, (dict, list)) else old,
                              dumps(value) if isinstance(value, (dict, list)) else value, insight_id))
     assignments = []
-    args = {"id": entity_id, "updated": H.now()}
+    args = {"id": entity_id, "updated_at": H.now()}
     for field, value in changes.items():
         column = field
         args[column] = dumps(value) if field in ("aliases", "external_ids", "properties") else value
         assignments.append(f"{column}=:{column}")
-    conn.execute(f"UPDATE market_entities SET {', '.join(assignments)}, updated=:updated WHERE id=:id", args)
+    conn.execute(f"UPDATE market_entities SET {', '.join(assignments)}, updated_at=:updated_at WHERE id=:id", args)
     if ids and actor != SEED_ACTOR:
         _cite(conn, actor, "entity", entity_id, ids, insight_id)
     return entity(conn, entity_id), events
@@ -703,10 +703,10 @@ def create_edge(conn, actor, *, src, rel, dst, since=None, until=None, confidenc
     ids = [] if actor == SEED_ACTOR else _need_evidence(conn, actor, evidence_ids)
     now = H.now()
     row = {"id": eid, "src": src, "rel": rel, "dst": dst, "since": since_day, "until": until_day,
-           "confidence": confidence, "properties": dumps(properties or {}), "created": now,
-           "created_by": actor, "updated": now}
-    conn.execute("INSERT INTO market_edges (id, src, rel, dst, since, until, confidence, properties, created, created_by, updated) "
-                 "VALUES (:id,:src,:rel,:dst,:since,:until,:confidence,:properties,:created,:created_by,:updated)", row)
+           "confidence": confidence, "properties": dumps(properties or {}), "created_at": now,
+           "created_by": actor, "updated_at": now}
+    conn.execute("INSERT INTO market_edges (id, src, rel, dst, since, until, confidence, properties, created_at, created_by, updated_at) "
+                 "VALUES (:id,:src,:rel,:dst,:since,:until,:confidence,:properties,:created_at,:created_by,:updated_at)", row)
     events = [_event(conn, "edge", eid, actor, "created", None, f"{src} {rel} {dst}", insight_id)]
     if ids:
         _cite(conn, actor, "edge", eid, ids, insight_id)
@@ -757,9 +757,9 @@ def update_edge(conn, actor, edge_id, *, since=None, until=None, confidence=None
         events.append(_event(conn, "edge", edge_id, actor, field,
                              dumps(old) if isinstance(old, (dict, list)) else old,
                              dumps(value) if isinstance(value, (dict, list)) else value, insight_id))
-    args = {"id": edge_id, "updated": H.now(), **{k: (dumps(v) if k == "properties" else v) for k, v in changes.items()}}
+    args = {"id": edge_id, "updated_at": H.now(), **{k: (dumps(v) if k == "properties" else v) for k, v in changes.items()}}
     sets = ", ".join(f"{k}=:{k}" for k in changes)
-    conn.execute(f"UPDATE market_edges SET {sets}, updated=:updated WHERE id=:id", args)
+    conn.execute(f"UPDATE market_edges SET {sets}, updated_at=:updated_at WHERE id=:id", args)
     if ids:
         _cite(conn, actor, "edge", edge_id, ids, insight_id)
     return edge(conn, edge_id), events
@@ -775,22 +775,22 @@ def merge_entities(conn, actor, entity_id, into_id, insight_id=None):
         H.refuse(conn, actor, "kind", "an entity cannot merge into itself")
     aliases = list(dict.fromkeys([*dst["aliases"], src["name"], *src["aliases"]]))
     _event(conn, "entity", into_id, actor, "aliases", dumps(dst["aliases"]), dumps(aliases), insight_id)
-    conn.execute("UPDATE market_entities SET aliases=?, updated=? WHERE id=?", (dumps(aliases), H.now(), into_id))
+    conn.execute("UPDATE market_entities SET aliases=?, updated_at=? WHERE id=?", (dumps(aliases), H.now(), into_id))
     for row in conn.execute("SELECT * FROM market_edges WHERE src=? OR dst=?", (entity_id, entity_id)):
         item = _edge_row(row)
         new_src = into_id if item["src"] == entity_id else item["src"]
         new_dst = into_id if item["dst"] == entity_id else item["dst"]
         if new_src == new_dst:
             today = datetime.now(timezone.utc).date().isoformat()
-            conn.execute("UPDATE market_edges SET until=?, updated=? WHERE id=? AND until IS NULL",
+            conn.execute("UPDATE market_edges SET until=?, updated_at=? WHERE id=? AND until IS NULL",
                          (today, H.now(), item["id"]))
             _event(conn, "edge", item["id"], actor, "until", item["until"], today, insight_id, "ended by merge")
         else:
-            conn.execute("UPDATE market_edges SET src=?, dst=?, updated=? WHERE id=?",
+            conn.execute("UPDATE market_edges SET src=?, dst=?, updated_at=? WHERE id=?",
                          (new_src, new_dst, H.now(), item["id"]))
             _event(conn, "edge", item["id"], actor, "src", item["src"], new_src, insight_id)
             _event(conn, "edge", item["id"], actor, "dst", item["dst"], new_dst, insight_id)
-    conn.execute("UPDATE market_entities SET status='merged', merged_into=?, updated=? WHERE id=?",
+    conn.execute("UPDATE market_entities SET status='merged', merged_into=?, updated_at=? WHERE id=?",
                  (into_id, H.now(), entity_id))
     _event(conn, "entity", entity_id, actor, "status", src["status"], "merged", insight_id)
     _event(conn, "entity", entity_id, actor, "merged_into", src["merged_into"], into_id, insight_id)
@@ -1058,7 +1058,7 @@ def import_batch(conn, actor, text, *, source="", note="", dry_run=False, today=
 
 def is_stale(row, today):
     """Past last_verified plus 60 days, or 30 for a core company. No date is not stale by itself."""
-    raw = row.get("last_verified") if isinstance(row, dict) else None
+    raw = row.get("last_verified_at") if isinstance(row, dict) else None
     if not raw:
         return False
     try:
@@ -1160,7 +1160,7 @@ def sweep(conn, actor, unverified, *, today=None, owner_email=None):
         listening.append({"id": task["id"], "entity_id": row["id"]})
     return {"owner_task": owner_task["id"] if owner_task else None,
             "listening_tasks": listening,
-            "delta": {"updated": delta["updated"]} if delta else None}
+            "delta": {"updated_at": delta["updated_at"]} if delta else None}
 
 
 # ----------------------------------------------------------------------------- narrative pages
@@ -1494,7 +1494,7 @@ def _import_entity(conn, row):
         return False
     now = H.now()
     conn.execute("INSERT INTO market_entities (id, type, name, aliases, external_ids, tier, summary, properties, "
-                 "status, merged_into, last_verified, created, created_by, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                 "status, merged_into, last_verified_at, created_at, created_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (row["id"], row.get("type") or "company", row["name"], dumps(row.get("aliases") or []),
                   dumps(row.get("external_ids") or {}), row.get("tier"), row.get("summary") or "",
                   dumps(row.get("properties") or {}), "active", None, now[:10], now, SEED_ACTOR, now))
@@ -1807,7 +1807,7 @@ def install(app, store, auth, mutate):
             require_writer(who)
             row, _events = create_entity(c, who.actor, type=body.type, name=body.name, aliases=body.aliases,
                                          external_ids=body.external_ids, tier=body.tier, summary=body.summary,
-                                         properties=body.properties, last_verified=body.last_verified,
+                                         properties=body.properties, last_verified=body.last_verified_at,
                                          evidence_ids=body.evidence_ids, force=body.force, insight_id=body.insight_id,
                                          entity_id=body.id)
             return {"entity": row}
@@ -1832,7 +1832,7 @@ def install(app, store, auth, mutate):
                 return {"entity": retire_entity(c, who.actor, entity_id, body.insight_id)}
             row, _events = update_entity(c, who.actor, entity_id, name=body.name, aliases=body.aliases,
                                          external_ids=body.external_ids, tier=body.tier, summary=body.summary,
-                                         properties=body.properties, last_verified=body.last_verified,
+                                         properties=body.properties, last_verified=body.last_verified_at,
                                          status=body.status, evidence_ids=body.evidence_ids, insight_id=body.insight_id,
                                          clear_tier=body.clear_tier)
             return {"entity": row}
@@ -1907,7 +1907,7 @@ def install(app, store, auth, mutate):
             update = None
             if body.entity_id:
                 update = {"entity_id": body.entity_id}
-                for field in ("summary", "properties", "tier", "aliases", "last_verified"):
+                for field in ("summary", "properties", "tier", "aliases", "last_verified_at"):
                     value = getattr(body, field)
                     if value is not None:
                         update[field] = value

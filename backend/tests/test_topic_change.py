@@ -62,7 +62,7 @@ def chat(api):
         with store.transaction() as c:
             last = c.execute("SELECT t.id FROM turns t JOIN bot_sessions s ON s.bot=t.bot AND s.thread_id=t.thread_id "
                              "WHERE t.bot='ops'").fetchone()[0]
-            c.execute("UPDATE turns SET input_tokens=?,cached_tokens=?,prompt_tokens=?,finished=? WHERE id=?",
+            c.execute("UPDATE turns SET input_tokens=?,cached_tokens=?,prompt_tokens=?,finished_at=? WHERE id=?",
                       (summed - cached, cached, context, H.shift(H.now(), seconds=-age), last))
     usage()
     return api, machine, conversation, model, usage
@@ -95,12 +95,12 @@ def session_state(api, conversation):
 
 def test_warm_needs_a_turn_under_five_minutes_old_that_read_the_cache():
     now = H.now()
-    recent = {"finished": H.shift(now, seconds=-60), "input_tokens": 5_000, "cached_tokens": 12_000,
+    recent = {"finished_at": H.shift(now, seconds=-60), "input_tokens": 5_000, "cached_tokens": 12_000,
               "prompt_tokens": 17_000}
     assert T.warmth(recent, now) == (True, 17_000), "a recent turn with cached tokens: warm; context is its last prompt"
-    stale = {**recent, "finished": H.shift(now, seconds=-301)}
+    stale = {**recent, "finished_at": H.shift(now, seconds=-301)}
     assert T.warmth(stale, now) == (False, 17_000), "older than the 5-minute cache lifetime: cold"
-    no_usage = {"finished": H.shift(now, seconds=-10), "cached_tokens": None, "prompt_tokens": 5_000}
+    no_usage = {"finished_at": H.shift(now, seconds=-10), "cached_tokens": None, "prompt_tokens": 5_000}
     assert T.warmth(no_usage, now) == (False, 5_000), "a harness that reports no cache use (Grok) is always cold"
     assert T.warmth({**no_usage, "cached_tokens": 0}, now)[0] is False
     assert T.warmth({**recent, "input_tokens": None}, now)[0] is False, "cached but no fresh count: unknown share, cold"
@@ -116,7 +116,7 @@ def test_warm_needs_a_turn_under_five_minutes_old_that_read_the_cache():
 ])
 def test_warm_needs_at_least_half_the_input_read_from_the_cache(cached, fresh, warm):
     now = H.now()
-    turn = {"finished": H.shift(now, seconds=-60), "input_tokens": fresh, "cached_tokens": cached,
+    turn = {"finished_at": H.shift(now, seconds=-60), "input_tokens": fresh, "cached_tokens": cached,
             "prompt_tokens": cached + fresh, "runtime": "claude"}
     assert T.warmth(turn, now)[0] is warm
 
@@ -126,16 +126,16 @@ def test_every_harness_has_a_cache_lifetime_and_reads_warm_inside_it_and_cold_af
     now = H.now()
     for runtime, lifetime in T.CACHE_LIFETIME.items():
         turn = {"input_tokens": 2_000, "cached_tokens": 18_000, "prompt_tokens": 20_000, "runtime": runtime}
-        inside = {**turn, "finished": H.shift(now, seconds=-(lifetime - 5))}
-        after = {**turn, "finished": H.shift(now, seconds=-(lifetime + 1))}
+        inside = {**turn, "finished_at": H.shift(now, seconds=-(lifetime - 5))}
+        after = {**turn, "finished_at": H.shift(now, seconds=-(lifetime + 1))}
         assert T.warmth(inside, now)[0] is True, runtime
         assert T.warmth(after, now)[0] is False, runtime
         if runtime == "grok":
             reported_none = {**inside, "cached_tokens": None, "input_tokens": 20_000}
             assert T.warmth(reported_none, now)[0] is False, "Grok reports no cached tokens: always cold"
-    unknown = {"finished": H.shift(now, seconds=-(T.WARM_SECONDS + 1)), "input_tokens": 0, "cached_tokens": 9_000,
+    unknown = {"finished_at": H.shift(now, seconds=-(T.WARM_SECONDS + 1)), "input_tokens": 0, "cached_tokens": 9_000,
                "runtime": "something-new"}
-    assert T.warmth(unknown, now)[0] is False and T.warmth({**unknown, "finished": H.shift(now, seconds=-60)}, now)[0], \
+    assert T.warmth(unknown, now)[0] is False and T.warmth({**unknown, "finished_at": H.shift(now, seconds=-60)}, now)[0], \
         "a harness not in the table takes the 5-minute default"
 
 
@@ -374,7 +374,7 @@ def test_slow_reads_or_a_slow_audit_write_do_not_hold_the_send_past_the_budget(c
 
 def bot_says(c, conversation, text):
     """A bot message lands in the chat (a queued reply, another tab's send) while Decide is asked."""
-    c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created) "
+    c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at) "
               "VALUES(?,?,'bot:ops','human:ana','say',?,?)", ("late-" + text[:4], conversation, text, H.now()))
 
 

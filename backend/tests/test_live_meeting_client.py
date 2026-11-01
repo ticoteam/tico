@@ -47,7 +47,7 @@ def test_recorder_private_pause_end_finalize_approve_and_count(live):
         assert tuple(c.execute(query).fetchone()) == ("tico-recorder", 1, 0)
     # A synthetic event proves the reporting predicate; this never attaches or runs a bot.
     with live.app.state.store.transaction() as c:
-        c.execute("INSERT INTO live_meeting_events(meeting_id,event_id,type,payload,created) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO live_meeting_events(meeting_id,event_id,type,payload,created_at) VALUES(?,?,?,?,?)",
                   (mid, 100, "meeting.bot_reply", "{}", H.now()))
         assert tuple(c.execute(query).fetchone()) == ("tico-recorder", 1, 1)
 

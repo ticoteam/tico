@@ -218,7 +218,7 @@ async function pageMail() {
     try {
       const response = await get(`/v2/mail/agent?mailbox=${encodeURIComponent(filterBox)}`);
       if (load !== MAIL_LOAD) return;
-      target.innerHTML = `<div class="mail-agent-meta">Current AGENT.md · updated ${esc(ago(response.updated))}</div>
+      target.innerHTML = `<div class="mail-agent-meta">Current AGENT.md · updated ${esc(ago(response.updated_at))}</div>
         <pre class="mail-agent-text">${esc(response.instructions)}</pre>`;
     } catch (e) {
       if (load === MAIL_LOAD) target.innerHTML = `<div class="empty">${esc(e.message)}</div>`;

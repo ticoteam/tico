@@ -86,7 +86,7 @@ def counts(c, bot, floor="", now=None):
     out = {}
     for window, _, seconds, _ in WINDOWS:
         since = max(H.shift(now, seconds=-seconds), floor or "")
-        out[window] = c.execute("SELECT count(*) FROM attempts WHERE bot=? AND created>?", (bot, since)).fetchone()[0]
+        out[window] = c.execute("SELECT count(*) FROM attempts WHERE bot=? AND created_at>?", (bot, since)).fetchone()[0]
     return out
 
 

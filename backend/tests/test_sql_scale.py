@@ -22,9 +22,9 @@ PEOPLE = ("human:ana", "human:ben", "human:cara")
 def queries():
     day = H.shift(H.now(), days=-1)
     return [("SELECT id FROM turns LIMIT 1", []),
-            ("SELECT count(*) FROM turns WHERE started>=?", [day]),
+            ("SELECT count(*) FROM turns WHERE started_at>=?", [day]),
             ("SELECT id FROM attempts LIMIT 1", []),
-            ("SELECT count(*) FROM attempts WHERE created>=?", [day]),
+            ("SELECT count(*) FROM attempts WHERE created_at>=?", [day]),
             ("SELECT count(*) FROM messages", [])]
 
 
@@ -53,7 +53,7 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
                           "bot:inbox" if hidden else owner, rng.choice(("open", "done", "closed")),
                           room_ids[i] if i < tasks_n * 2 // 3 else None, stamp(rng.randrange(180 * 1440)), 1 if hidden else 0,
                           100_000 + i))
-        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,conversation_id,created,private,number) "
+        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,conversation_id,created_at,private,number) "
                       "VALUES(?,?,?,?,?,?,?,?,?,?)", tasks)
         rooms = []
         for i, cid in enumerate(room_ids):
@@ -63,7 +63,7 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
                 person, bot = rng.choice(PEOPLE), rng.choice(BOTS)
                 rooms.append((cid, "chat", None, json.dumps([person, "bot:" + bot]), "personal", person,
                               f"{bot}:{i}"))
-        c.executemany("INSERT INTO conversations(id,kind,task_id,participants,scope,owner_actor,room_key,created) "
+        c.executemany("INSERT INTO conversations(id,kind,task_id,participants,scope,owner_actor,room_key,created_at) "
                       "VALUES(?,?,?,?,?,?,?,'2026-01-01T00:00:00.000000Z')", rooms)
         messages, jobs, attempts, turns, inputs, events = [], [], [], [], [], []
         last, root, waiting = {}, {}, {}
@@ -103,11 +103,11 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
             if not reply:
                 root[cid] = mid
         c.executemany("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,in_reply_to,"
-                      "created) VALUES(?,?,?,?,?,?,?,?,?)", messages)
-        c.executemany("INSERT INTO jobs(id,message_id,bot,state,created,attempt_id) VALUES(?,?,?,?,?,?)", jobs)
-        c.executemany("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,"
-                      "started,finished) VALUES(?1,?2,substr(?3,5),?4,0,'synthetic-'||?1,'done',?5,?5,?5,?5)", attempts)
-        c.executemany("INSERT INTO turns(id,bot,started,finished,message_id,task_id,trigger_kind,outcome) "
+                      "created_at) VALUES(?,?,?,?,?,?,?,?,?)", messages)
+        c.executemany("INSERT INTO jobs(id,message_id,bot,state,created_at,attempt_id) VALUES(?,?,?,?,?,?)", jobs)
+        c.executemany("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,"
+                      "started_at,finished_at) VALUES(?1,?2,substr(?3,5),?4,0,'synthetic-'||?1,'done',?5,?5,?5,?5)", attempts)
+        c.executemany("INSERT INTO turns(id,bot,started_at,finished_at,message_id,task_id,trigger_kind,outcome) "
                       "VALUES(?,?,?,?3,?,?,'message','acted')", turns)
         c.executemany("INSERT OR IGNORE INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", inputs)
         c.executemany("INSERT INTO events(id,ts,actor,action,target,detail) VALUES"
@@ -278,6 +278,6 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
 
 def world_attempt(c, denied):
     """A finished run that carried a denied private task."""
-    aid = c.execute("SELECT id FROM attempts ORDER BY created LIMIT 1").fetchone()[0]
+    aid = c.execute("SELECT id FROM attempts ORDER BY created_at LIMIT 1").fetchone()[0]
     c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, denied))
     return aid

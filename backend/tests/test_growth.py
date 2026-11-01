@@ -149,7 +149,7 @@ def test_a_bot_files_and_edits_its_own_idea_but_not_another_bots(api):
 def test_idea_test_and_verdict_close_the_task_and_count_as_bet_evidence(api):
     ops, finance = bot(api, "ops"), bot(api, "finance")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO strategy_bets (id, statement, status, created, updated, updated_by) VALUES "
+        c.execute("INSERT INTO strategy_bets (id, statement, status, created_at, updated_at, updated_by) VALUES "
                   "('bet1','Homeowners book online','active',?,?,'human:ana')", (H.now(), H.now()))
     post(api, "growth/ideas", {"title": "Weekend discount", "bet_id": "nope"}, token="cara-test", expected=404)
     first = post(api, "growth/ideas", {"title": "Weekend discount", "assignee": "ops", "bet_id": "bet1"},

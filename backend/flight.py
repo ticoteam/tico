@@ -78,8 +78,8 @@ SAMPLE_WINDOWS = 3              # runs of rows sampled per table for its record 
 SAMPLE_ROWS = 100              # rows per sampled run
 BUFFER = 200_000                # samples waiting for the background thread, at most
 # The tables that grow, counted each hour; with the column that dates their oldest row, read by rowid or an index.
-BIG = {"events": "ts", "messages": "created", "attempt_events": "created", "attempts": "created", "jobs": "created",
-       "idempotency": "created", "changes": "at", "tasks": "created", "mail_messages": None, "flight_requests": None}
+BIG = {"events": "ts", "messages": "created_at", "attempt_events": "created_at", "attempts": "created_at", "jobs": "created_at",
+       "idempotency": "created_at", "changes": "at", "tasks": "created_at", "mail_messages": None, "flight_requests": None}
 # Histogram bucket edges in milliseconds: 25% apart from 0.05 ms to about a minute. A percentile is its bucket's upper
 # edge, so it reads at most a quarter high and never low.
 EDGES = [0.05 * 1.25 ** i for i in range(64)]

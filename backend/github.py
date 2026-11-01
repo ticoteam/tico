@@ -301,7 +301,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         match = PR_LINK.match(url)
         # A GitHub event is activity for the stale-PR find; an internal refresh of the PR's state is not.
         activity = H.now() if action != "refresh" else link.get("activity_at")
-        c.execute("UPDATE task_links SET state=?,mergeable=?,repo=?,number=?,branch=?,updated=?,activity_at=?,"
+        c.execute("UPDATE task_links SET state=?,mergeable=?,repo=?,number=?,branch=?,updated_at=?,activity_at=?,"
                   "pr_sha=coalesce(?,pr_sha),pr_merged_at=coalesce(?,pr_merged_at) WHERE id=?",
                   (state, mergeable, match.group(1) + "/" + match.group(2) if match else None,
                    int(match.group(3)) if match else pr.get("number"), (pr.get("head") or {}).get("ref"), H.now(),
@@ -359,7 +359,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         if new_head:
             changed.append("head")
         if changed and not read_refresh:
-            c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["id"]))
+            c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
         item = f"{link['title']} {state}" if state != "closed" else f"{link['title']} was closed without merging"
         if mergeable == "conflict":
             item += ": Merge conflict"
@@ -528,11 +528,11 @@ def refresh_pending_checks(service):
             return []
         marks = ",".join("?" * len(H.ACTIVE_STATUSES))
         rows = H._rows(c.execute(
-            "SELECT l.id,l.repo,l.number,l.updated,json_extract(l.detail,'$.head_sha') AS head FROM task_links l "
+            "SELECT l.id,l.repo,l.number,l.updated_at,json_extract(l.detail,'$.head_sha') AS head FROM task_links l "
             "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
             f"WHERE l.kind='pr' AND l.state='open' AND l.checks='pending' AND l.number IS NOT NULL AND r.reachable=1 "
-            f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) AND coalesce(l.updated,l.created)<? "
-            "ORDER BY coalesce(l.updated,l.created),l.id LIMIT 200",
+            f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) AND coalesce(l.updated_at,l.created_at)<? "
+            "ORDER BY coalesce(l.updated_at,l.created_at),l.id LIMIT 200",
             (str(app["org"] or "").lower() + "/%", *H.ACTIVE_STATUSES, H.shift(H.now(), minutes=-STUCK_SUITE_MINUTES))))
     now = time.monotonic()
     with _pending_lock:
@@ -549,7 +549,7 @@ def refresh_pending_checks(service):
                 read[key] = _fresh_checks(service, r["repo"], r["head"])
             if read[key]:
                 with service.store.transaction() as c:
-                    if apply_checks(c, r["id"], r["head"], read[key], since=r["updated"]) not in (None, "pending"):
+                    if apply_checks(c, r["id"], r["head"], read[key], since=r["updated_at"]) not in (None, "pending"):
                         left.append(r["id"])
         except Exception:
             logging.getLogger("tico.github").exception("Checks read failed for %s #%s", r["repo"], r["number"])
@@ -568,7 +568,7 @@ def apply_checks(c, link_id, head, checks, since=None):
     task = link and H.task(c, link["task_id"])
     if not checks or not task or link.get("state") != "open" or detail.get("head_sha") != head:
         return None
-    if since is not None and link.get("updated") != since:
+    if since is not None and link.get("updated_at") != since:
         return None
     checks = dict(list(checks.items())[-100:])
     state = _overall(checks)
@@ -578,10 +578,10 @@ def apply_checks(c, link_id, head, checks, since=None):
     finished = state != "pending" and state != link.get("checks")
     finished_head = _finish(c, task, link, detail, head, checks) if finished else None
     record_health_wait({**link, "checks": state}, detail)
-    c.execute("UPDATE task_links SET checks=?,detail=?,updated=? WHERE id=?",
+    c.execute("UPDATE task_links SET checks=?,detail=?,updated_at=? WHERE id=?",
               (state, json.dumps(detail), H.now(), link_id))
     if state != link.get("checks"):
-        c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["id"]))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
         H.event(c, H.KEEPER, "github.checks_read", task["id"], {"url": link["url"], "head": head, "checks": state})
     if finished_head:
         from . import verdict_moves
@@ -694,9 +694,9 @@ def pr_signal(c, event, payload):
             fields["activity_at"] = H.now()      # the stale-PR find's clock (automation_actions FIND)
         changed = any(value != link.get(field) for field, value in fields.items())
         record_health_wait({**link, **fields}, detail)
-        fields.update(detail=json.dumps(detail), updated=H.now())
+        fields.update(detail=json.dumps(detail), updated_at=H.now())
         if changed:
-            c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["id"]))
+            c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
         c.execute("UPDATE task_links SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?",
                   (*fields.values(), link["id"]))
         if finished_head:
@@ -783,7 +783,7 @@ def refresh_task_prs(service, task_id):
             if cached:
                 sql += " AND (lower(l.repo)||'#'||l.number) NOT IN (" + ",".join("?" * len(cached)) + ")"
                 args.extend(cached)
-            links = H._rows(c.execute(sql + " ORDER BY coalesce(l.updated,l.created),l.id LIMIT 20", args))
+            links = H._rows(c.execute(sql + " ORDER BY coalesce(l.updated_at,l.created_at),l.id LIMIT 20", args))
         due = list({(l["repo"].lower(), l["number"]): l for l in links}.values())
         if not due:
             return
@@ -825,8 +825,8 @@ def refresh_task_prs(service, task_id):
                             except Exception:
                                 logging.getLogger("tico.github").debug("Checks unavailable for %s #%s", *key)
                         with service.store.transaction() as c:
-                            current = c.execute("SELECT updated FROM task_links WHERE id=?", (link["id"],)).fetchone()
-                            if not current or current[0] != link.get("updated"):
+                            current = c.execute("SELECT updated_at FROM task_links WHERE id=?", (link["id"],)).fetchone()
+                            if not current or current[0] != link.get("updated_at"):
                                 success = True
                                 continue
                             pull_request(c, {"action": "refresh", "pull_request": pr, "head_login": head_login},
@@ -995,8 +995,8 @@ def reconcile_worktree_prs(service):
                         with service.store.transaction() as c:
                             for pr in found:
                                 if kind == "pr":
-                                    current = c.execute("SELECT updated FROM task_links WHERE id=?", (link["id"],)).fetchone()
-                                    if not current or current[0] != link.get("updated"):
+                                    current = c.execute("SELECT updated_at FROM task_links WHERE id=?", (link["id"],)).fetchone()
+                                    if not current or current[0] != link.get("updated_at"):
                                         continue
                                     pr["html_url"] = link["url"]
                                 match = PR_LINK.match(str(pr.get("html_url") or "").split("?")[0].rstrip("/"))
@@ -1004,7 +1004,7 @@ def reconcile_worktree_prs(service):
                                 # newer facts, for every task it is linked to.
                                 if match and c.execute(
                                         "SELECT 1 FROM task_links WHERE kind='pr' AND lower(repo)=? AND number=? "
-                                        "AND updated>=?", (f"{match.group(1)}/{match.group(2)}".lower(),
+                                        "AND updated_at>=?", (f"{match.group(1)}/{match.group(2)}".lower(),
                                                            int(match.group(3)), started)).fetchone():
                                     continue
                                 pull_request(c, {"action": "refresh", "pull_request": pr},
@@ -1282,8 +1282,8 @@ def ship_deployed(c, settings, *, ancestry=None):
         with isolated(c, "ship_deployed", link["task_id"]):
             if not included(link):
                 continue
-            c.execute("UPDATE task_links SET state='shipped',updated=? WHERE id=?", (H.now(), link["id"]))
-            c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), link["task_id"]))
+            c.execute("UPDATE task_links SET state='shipped',updated_at=? WHERE id=?", (H.now(), link["id"]))
+            c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), link["task_id"]))
             detail = H._json(link.get("detail"), {}) or {}
             item = f"Shipped: {link['title']} is in the running release {commit[:12]} {link['url']}"
             if fire_once(detail, item):

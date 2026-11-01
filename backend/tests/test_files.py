@@ -109,7 +109,7 @@ def test_a_files_page_reads_a_fixed_number_of_statements_and_counts_only_what_ea
                   "archived) VALUES('holder','ops',?,'holder','Holder','document','holder','2026','2026',1)",
                   ("task:" + hidden["id"],))
         c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,thumb_blob_id,digest,size,name,mime,actor,"
-                  "created) VALUES('holder',1,?,?,'d',1,'holder.md','text/markdown','bot:ops','2026')",
+                  "created_at) VALUES('holder',1,?,?,'d',1,'holder.md','text/markdown','bot:ops','2026')",
                   (blob(c, scoped), blob(c, thumbed)))
         c.execute("INSERT INTO blob_media(blob_id,thumb_blob_id,media_state) VALUES(?,?,'ready')",
                   (blob(c, tasked), blob(c, framed)))

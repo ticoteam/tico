@@ -196,7 +196,7 @@
       host.innerHTML = `<h3 class="ca-label">External agents</h3><ul class="ca-conns">${live.map(row =>
         `<li class="ca-conn" data-conn="${esc(row.id)}">${logo(agentOf(row.label), row.label, true)}
           <span class="ca-conn-name">${esc(row.label)}</span>
-          <span class="ca-conn-used">${row.last_used ? 'Used ' + esc(ago(row.last_used)) : 'Never used'}</span>
+          <span class="ca-conn-used">${row.last_used_at ? 'Used ' + esc(ago(row.last_used_at)) : 'Never used'}</span>
           <button class="ghost" type="button" data-revoke="${esc(row.id)}">Revoke</button></li>`).join('')}</ul>`;
       host.querySelectorAll('[data-revoke]').forEach(button => {
         const row = live.find(r => r.id === button.dataset.revoke);
@@ -288,7 +288,7 @@
       try { row = ((await get('/v2/me/tokens')).tokens || []).find(r => r.id === id); }
       catch { row = null; }
       if (closed || !issued || issued.id !== id) return;
-      if (row && row.last_used) { setStatus('connected', 'Connected'); return; }
+      if (row && row.last_used_at) { setStatus('connected', 'Connected'); return; }
       if (row && row.revoked_at) { setStatus('idle', 'Revoked'); return; }
       if (Date.now() >= pollUntil) { setStatus('idle', 'Not seen yet', true); return; }
       timer = setTimeout(poll, POLL_MS);

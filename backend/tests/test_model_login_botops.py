@@ -23,7 +23,7 @@ def effects(api, rid):
     events."""
     with api.app.state.store.read() as c:
         return {"logins": [tuple(r) for r in c.execute("SELECT kind, requested_by FROM model_logins WHERE runner_id=? "
-                                                        "ORDER BY created", (rid,))],
+                                                        "ORDER BY created_at", (rid,))],
                 "cleared": [tuple(r) for r in c.execute("SELECT runtime, profile FROM model_login_cleared "
                                                          "WHERE runner_id=?", (rid,))],
                 "invalidated": c.execute("SELECT 1 FROM registry_metadata WHERE key=?",

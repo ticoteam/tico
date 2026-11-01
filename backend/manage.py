@@ -242,7 +242,7 @@ def main(argv=None):
             fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as stream:
                 json.dump(code, stream)
-        report = {"written": str(args.out), "expires": code["expires"]}
+        report = {"written": str(args.out), "expires": code["expires_at"]}
     elif args.command == "set-repo":
         from .models import repo_reference
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))

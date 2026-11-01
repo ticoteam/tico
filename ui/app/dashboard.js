@@ -37,7 +37,7 @@ function dashSpark(values) {
 const dashTasksHref = card => `${TASKS}?view=list&who=all${card.settings?.team ? '&team=' + encodeURIComponent(card.settings.team) : ''}`;
 function dashPageRow(p) {
   return `<li><a href="#/page/${encodeURIComponent(p.file_id)}">${esc(p.title || 'Untitled')}</a>
-    <span class="muted">${esc(dashBot(p.bot))} · ${agoSpan(p.updated)}</span></li>`;
+    <span class="muted">${esc(dashBot(p.bot))} · ${agoSpan(p.updated_at)}</span></li>`;
 }
 const DASH_BODY = {
   tasks_by_status: (d, card) => `<div class="dash-stats">${[['open', 'Open'], ['doing', 'Doing'], ['waiting', 'Waiting'], ['done', 'Done this week']]
@@ -56,7 +56,7 @@ const DASH_BODY = {
   kpi: d => `<div class="dash-big"><strong>${dashNum(d.value)}${d.unit ? ` <small>${esc(d.unit)}</small>` : ''}</strong>
     <span class="muted">${esc(d.name)}${d.at ? ' · ' + esc(d.at) : ''}</span></div>${dashSpark(d.spark || [])}`,
   automation_runs: d => `<a class="dash-big" href="${AUTOMATIONS}"><strong>${dashNum(d.total)}</strong><span class="muted">runs in 24h${d.failed ? ` · <span class="dash-bad">${d.failed} failed</span>` : ''}${d.running ? ` · ${d.running} running` : ''}</span></a>
-    ${d.runs.length ? `<ul class="dash-list">${d.runs.map(r => `<li><span class="dash-dot ${r.status === 'failed' ? 'bad' : r.status === 'succeeded' || r.status === 'done' ? 'ok' : ''}" aria-hidden="true"></span>${esc(r.name)} <span class="muted">${agoSpan(r.started)}</span></li>`).join('')}</ul>` : ''}`,
+    ${d.runs.length ? `<ul class="dash-list">${d.runs.map(r => `<li><span class="dash-dot ${r.status === 'failed' ? 'bad' : r.status === 'succeeded' || r.status === 'done' ? 'ok' : ''}" aria-hidden="true"></span>${esc(r.name)} <span class="muted">${agoSpan(r.started_at)}</span></li>`).join('')}</ul>` : ''}`,
   latest_pages: d => d.pages.length ? `<ul class="dash-list dash-pages">${d.pages.map(dashPageRow).join('')}</ul>` : '<p class="muted dash-none">No pages yet</p>',
 };
 function dashCardBody(card) {
@@ -71,7 +71,7 @@ function dashPageEl(page, size) {
   const a = document.createElement('a');
   a.className = 'dash-page-link'; a.href = '#/page/' + encodeURIComponent(page.file_id);
   a.innerHTML = `<span class="nav-icon" aria-hidden="true">article</span><span><strong>${esc(page.title || 'Untitled')}</strong>
-    <span class="muted">${esc(dashBot(page.bot))} · Updated ${agoSpan(page.updated)}</span></span>`;
+    <span class="muted">${esc(dashBot(page.bot))} · Updated ${agoSpan(page.updated_at)}</span></span>`;
   return a;
 }
 // A card names its team, except on that team's own page.
@@ -348,7 +348,7 @@ async function dashPageForm(state) {
   const pages = choices.pages.filter(p => !pinned.has(p.file_id));
   dashDialog(state, 'Add page', pages.length
     ? `<fieldset class="dash-pick"><legend class="sr-only">Page</legend>${pages.map((p, i) => `<label class="dash-pick-row"><input type="radio" name="page" value="${esc(p.file_id)}"${i ? '' : ' checked'} required>
-        <span><strong>${esc(p.title || 'Untitled')}</strong> <span class="muted">${esc(dashBot(p.bot))} · ${agoSpan(p.updated)}</span></span></label>`).join('')}</fieldset>
+        <span><strong>${esc(p.title || 'Untitled')}</strong> <span class="muted">${esc(dashBot(p.bot))} · ${agoSpan(p.updated_at)}</span></span></label>`).join('')}</fieldset>
       <label>Size<select name="size">${DASH_SIZES.map(([id, label]) => `<option value="${id}"${id === 'medium' ? ' selected' : ''}>${label}</option>`).join('')}</select></label>`
     : '<p class="muted">No pages to add</p>',
   async f => {

@@ -57,7 +57,7 @@ def test_nothing_automatic_wakes_a_snoozed_task_but_a_person_still_reaches_it(ap
         c.execute("UPDATE jobs SET state='completed' WHERE bot='ops'")
         H.TS.snooze(c, "human:ana", row["id"], ahead(30))
         assert notices(c, row["id"], "Snoozed until") == 1 and jobs(c) == 0             # told, not run
-        c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), days=-9), row["id"]))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), days=-9), row["id"]))
         assert row["id"] not in [t["id"] for t in still_wanted.idle_tasks(c)]
         assert H.wake_stalled(c)["woke"] == []
         H.task_update(c, H.human_actor("ana"), row["id"], status="open")
@@ -161,7 +161,7 @@ def test_a_note_is_cleared_by_unsnoozing_and_by_finishing_and_refused_when_long(
 def snooze_comments(c, task_id):
     """The notes the keeper left on the task when a snooze ended without a wake."""
     return [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs,'$.task')=? "
-                                    "AND body LIKE 'Snooze over. Note:%' ORDER BY created", (task_id,))]
+                                    "AND body LIKE 'Snooze over. Note:%' ORDER BY created_at", (task_id,))]
 
 
 def test_a_snooze_that_changes_bumps_the_version_and_the_same_one_again_does_not(api):

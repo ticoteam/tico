@@ -20,7 +20,7 @@ def ready(api, title="Recheck the cash warning", messages=(), private=None):
             H.task_comment(c, actor, task["id"], text, wake=False)
         c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
         row = H.task(c, task["id"])
-        c.execute("UPDATE tasks SET checkpoint_state=?, checkpoint_by='bot:finance', updated=? WHERE id=?",
+        c.execute("UPDATE tasks SET checkpoint_state=?, checkpoint_by='bot:finance', updated_at=? WHERE id=?",
                   (wake_rules.state_of(c, row), H.shift(H.now(), seconds=-400), task["id"]))
     return task["id"]
 

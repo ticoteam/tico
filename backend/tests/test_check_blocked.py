@@ -33,7 +33,7 @@ def api(tmp_path):
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
             for slug in BOTS:
                 # Each bot connects as an external agent: its own standing credential, no runner lease.
-                c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+                c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                           (slug, "hermes", "hash-" + slug, "2026-01-01T00:00:00Z", "human:ana"))
         yield client
 

@@ -346,7 +346,7 @@ def test_an_older_computer_on_its_own_login_is_left_alone_by_give_remove_and_a_r
         with api.app.state.store.read() as c:
             epoch = c.execute("SELECT epoch FROM session_epochs WHERE conversation_id=?",
                               (message["conversation_id"],)).fetchone()
-            assert c.execute("SELECT state,stop_requested FROM attempts WHERE id=?", (turn["id"],)).fetchone()[:] == (
+            assert c.execute("SELECT state,stop_requested_at FROM attempts WHERE id=?", (turn["id"],)).fetchone()[:] == (
                 "running", None)
         assert not epoch
         assert not post(api, f"attempts/{turn['id']}/renew", {}, old["token"]).get("stop")

@@ -94,7 +94,7 @@
 
     const draw = () => {
       const state = login.state;
-      const seconds = (Date.now() - new Date(login.created)) / 1000;
+      const seconds = (Date.now() - new Date(login.created_at)) / 1000;
       let head = '', label = '';
       if (state === 'requested' || state === 'starting') {
         label = seconds <= STALLED_S ? `Starting the sign-in on ${machine || 'the computer'}…`
@@ -181,7 +181,7 @@
         login = next;
         if (!closed) draw();
         if (changed && next.state === 'signed_in') {
-          refreshUntil(runnerId, runtime, profile, 'ready', next.updated);
+          refreshUntil(runnerId, runtime, profile, 'ready', next.updated_at);
           if (hosted()) { toast(status.textContent); stop(); if (dialog.open) dialog.close(); }
         }
       } catch (error) { status.textContent = error.message; }
@@ -261,7 +261,7 @@
         : row.state === 'failed' ? (row.message || 'The sign-out did not finish; the login is as it was.')
         : row.state === 'expired' ? 'The computer did not sign out in time; the login is as it was.' : '';
       actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>';
-      refreshUntil(runnerId, runtime, profile, row.state === 'signed_out' ? 'signed_out' : 'ready', row.updated);
+      refreshUntil(runnerId, runtime, profile, row.state === 'signed_out' ? 'signed_out' : 'ready', row.updated_at);
     };
     const tick = async id => {
       if (closed) return;
@@ -292,7 +292,7 @@
     try {
       const row = await post(`/v2/computers/${encodeURIComponent(runnerId)}/shared-key`, {runtime});
       toast('The shared key signs it in at the computer\'s next check, if the company has one for it');
-      refreshUntil(runnerId, runtime, '', 'ready', row.created);
+      refreshUntil(runnerId, runtime, '', 'ready', row.created_at);
     } catch (error) { toast(error.message, true); }
   }
 
@@ -395,7 +395,7 @@
       } catch (error) { dialog.querySelector('[data-status]').textContent = error.message; }
       if (active(row.state)) { dialog.timer = setTimeout(tick, POLL_MS); return; }
       done(row);
-      refreshUntil(runnerId, runtime, '', row.state === 'signed_out' ? 'signed_out' : 'ready', row.updated);
+      refreshUntil(runnerId, runtime, '', row.state === 'signed_out' ? 'signed_out' : 'ready', row.updated_at);
     };
     if (active(row.state)) dialog.timer = setTimeout(tick, POLL_MS); else done(row);
   }
@@ -454,7 +454,7 @@
           dialog.querySelector('[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Close</button>';
         };
         if (here) followKeyJob(dialog, runnerId, runtime, here, end); else end({state: 'signed_out'});
-        for (const c of out.computers) if (c.login && c.id !== runnerId) refreshUntil(c.id, runtime, '', 'signed_out', c.login.created);
+        for (const c of out.computers) if (c.login && c.id !== runnerId) refreshUntil(c.id, runtime, '', 'signed_out', c.login.created_at);
       } catch (error) {
         status.textContent = error.message;
         dialog.querySelector('[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Close</button>';

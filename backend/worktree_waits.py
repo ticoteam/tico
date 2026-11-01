@@ -33,7 +33,7 @@ log = logging.getLogger('tico.worktree_waits')
 
 SCHEMA = ("CREATE TABLE IF NOT EXISTS worktree_waits(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, owner TEXT NOT NULL, "
           "repo TEXT NOT NULL, generation INTEGER NOT NULL, attempt_id TEXT, state TEXT NOT NULL, link_id TEXT, "
-          "reason TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL, finished TEXT)")
+          "reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT)")
 
 
 def ensure(c):
@@ -41,7 +41,7 @@ def ensure(c):
     c.execute(SCHEMA)
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS worktree_waits_open ON worktree_waits(task_id, repo COLLATE NOCASE) "
               "WHERE state IN ('waiting','reserved')")
-    c.execute("CREATE INDEX IF NOT EXISTS worktree_waits_state ON worktree_waits(state, owner, created)")
+    c.execute("CREATE INDEX IF NOT EXISTS worktree_waits_state ON worktree_waits(state, owner, created_at)")
     c.execute("CREATE INDEX IF NOT EXISTS worktree_waits_link ON worktree_waits(link_id) WHERE link_id IS NOT NULL")
 
 
@@ -87,10 +87,10 @@ def record(c, who, task, repo, problem):
     now = H.now()
     wait = {'id': uuid.uuid4().hex, 'task_id': task['id'], 'owner': task['owner'], 'repo': repo,
             'generation': generation, 'attempt_id': who.attempt_id, 'state': 'waiting', 'link_id': None,
-            'reason': f'This bot has {problem.extra.get("limit", "its most")} worktrees', 'created': now,
-            'updated': now, 'finished': None}
+            'reason': f'This bot has {problem.extra.get("limit", "its most")} worktrees', 'created_at': now,
+            'updated_at': now, 'finished_at': None}
     c.execute("INSERT INTO worktree_waits VALUES(:id,:task_id,:owner,:repo,:generation,:attempt_id,:state,:link_id,"
-              ":reason,:created,:updated,:finished)", wait)
+              ":reason,:created_at,:updated_at,:finished_at)", wait)
     H.event(c, who.actor, 'worktree.wait', task['id'], {'wait': wait['id'], 'repo': repo, 'generation': generation})
     return wait
 
@@ -102,14 +102,14 @@ def refusal(problem, wait):
               "End your turn now: do not wait, poll, retry or remove worktrees. Your finished worktrees free "
               "themselves once you are idle.")
     return {'detail': detail, 'worktrees': problem.extra.get('worktrees', []),
-            'wait': {'id': wait['id'], 'repo': wait['repo'], 'state': wait['state'], 'since': wait['created'],
+            'wait': {'id': wait['id'], 'repo': wait['repo'], 'state': wait['state'], 'since': wait['created_at'],
                      'generation': wait['generation']}}
 
 
 def _finish(c, wait, state, reason):
     """Close an open wait; False when it was already closed, so nothing is said twice."""
     now = H.now()
-    done = c.execute("UPDATE worktree_waits SET state=?,reason=?,updated=?,finished=? WHERE id=? AND state IN ('waiting','reserved')",
+    done = c.execute("UPDATE worktree_waits SET state=?,reason=?,updated_at=?,finished_at=? WHERE id=? AND state IN ('waiting','reserved')",
               (state, reason[:500], now, now, wait['id'])).rowcount
     if done:
         H.event(c, H.KEEPER, 'worktree.wait.' + state, wait['task_id'], {'wait': wait['id'], 'repo': wait['repo'],
@@ -156,7 +156,7 @@ def serve(c, owners=None, default_org=''):
             return []
         sql += f" AND owner IN ({','.join('?' * len(owners))})"
         args = tuple(owners)
-    rows = [dict(r) for r in c.execute(sql + " ORDER BY owner, created, id", args)]
+    rows = [dict(r) for r in c.execute(sql + " ORDER BY owner, created_at, id", args)]
     full, woken = set(), []
     for wait in rows:
         # One wait that breaks must not fail the heartbeat it runs in: that would also stop the worktree cleanup
@@ -231,7 +231,7 @@ def _serve_one(c, wait, full, default_org):
         detail['wait_id'] = wait['id']
         detail.pop('error', None)
         c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), link['link_id']))
-        c.execute("UPDATE worktree_waits SET state='reserved',link_id=?,updated=? WHERE id=?",
+        c.execute("UPDATE worktree_waits SET state='reserved',link_id=?,updated_at=? WHERE id=?",
                   (link['link_id'], H.now(), wait['id']))
         H.event(c, H.KEEPER, 'worktree.wait.reserved', wait['task_id'],
                 {'wait': wait['id'], 'link': link['link_id'], 'path': link['path']})
@@ -239,7 +239,7 @@ def _serve_one(c, wait, full, default_org):
     link = c.execute("SELECT * FROM task_links WHERE id=? AND kind='worktree'", (wait['link_id'],)).fetchone()
     if not link or link['state'] == 'removed':
         # The reserved worktree went away before it was ready: wait for a place again.
-        c.execute("UPDATE worktree_waits SET state='waiting',link_id=NULL,updated=? WHERE id=?", (H.now(), wait['id']))
+        c.execute("UPDATE worktree_waits SET state='waiting',link_id=NULL,updated_at=? WHERE id=?", (H.now(), wait['id']))
         return False
     detail = json.loads(link['detail'] or '{}')
     ready = (link['state'] == 'present' and not detail.get('setup_pending')
@@ -275,8 +275,8 @@ def for_task(c, task_id):
     """A task's open waits, for its page: what it waits for, since when and why."""
     if not _exists(c):
         return []
-    return [{'id': r['id'], 'repo': r['repo'], 'state': r['state'], 'since': r['created'], 'reason': r['reason']}
-            for r in c.execute(f"SELECT * FROM worktree_waits WHERE task_id=? AND state IN {OPEN} ORDER BY created",
+    return [{'id': r['id'], 'repo': r['repo'], 'state': r['state'], 'since': r['created_at'], 'reason': r['reason']}
+            for r in c.execute(f"SELECT * FROM worktree_waits WHERE task_id=? AND state IN {OPEN} ORDER BY created_at",
                                (task_id,))]
 
 
@@ -285,7 +285,7 @@ def waiting(c):
     if not _exists(c):
         return []
     return [dict(r) for r in c.execute(f"SELECT w.*,t.title,t.private FROM worktree_waits w JOIN tasks t ON t.id=w.task_id "
-                                       f"WHERE w.state IN {OPEN} ORDER BY w.created")]
+                                       f"WHERE w.state IN {OPEN} ORDER BY w.created_at")]
 
 
 def tick(store, default_org='', force=False):

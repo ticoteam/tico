@@ -245,7 +245,7 @@ def create(slug, *, company, app="", assistant="", owner_email, owner_name="", u
                    "providers": {"enabled": enabled, "runtime": runtime, "model": model},
                    "workspace": str(Path(workspace).expanduser() if workspace
                                     else Path.home() / "Companies" / company),
-                   "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+                   "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     if not url:
         environment["port"] = free_port()
         environment["url"] = f"http://127.0.0.1:{environment['port']}"

@@ -15,7 +15,7 @@ def rule_row(api, by="human:ben", scope_kind="team", scope_id="", event="status_
     """A row in the rules table, as the wake engine reads it."""
     row = {"id": "rule_" + H.new_id()[:8], "scope_kind": scope_kind, "scope_id": scope_id, "event": event,
            "condition": json.dumps(when or {}), "then_outcome": then, "params": json.dumps(params or {}),
-           "created_by": by, "action_by": action_by, "created": H.now(), "updated": H.now(), "revision": revision}
+           "created_by": by, "action_by": action_by, "created_at": H.now(), "updated_at": H.now(), "revision": revision}
     with api.app.state.store.transaction() as c:
         c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
     return {"rule": {**row, "params": params or {}}}

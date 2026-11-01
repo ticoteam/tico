@@ -20,7 +20,7 @@ def rule(api, event="task.created", action="note", params=None, *, scope_kind="t
         row = {"id": "rule-" + H.new_id(), "scope_kind": scope_kind, "scope_id": scope_id, "event": event,
                "condition": json.dumps(when, sort_keys=True), "then_outcome": then,
                "params": json.dumps(params, sort_keys=True), "enabled": 1, "position": position, "note": "",
-               "created_by": by, "action_by": by, "created": H.now(), "updated": H.now(), "revision": 1}
+               "created_by": by, "action_by": by, "created_at": H.now(), "updated_at": H.now(), "revision": 1}
         c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
     return row
 

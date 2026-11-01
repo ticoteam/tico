@@ -48,7 +48,7 @@
   function onceHTML(id, esc) {
     const once = shownOnce.get(id);
     if (!once?.code) return '';
-    const until = once.expires ? new Date(once.expires).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '';
+    const until = once.expires_at ? new Date(once.expires_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '';
     return `<div class="asst-once" data-shown-once><span class="asst-state">One-time code for a new computer${until ? `, until ${esc(until)}` : ''}. It is shown only here and works once: use it where the computer's setup asks for a code (Settings &gt; Computers &gt; Add computer shows the commands).</span><code>${esc(once.code)}</code></div>`;
   }
   const SENT = new Set(['message', 'body', 'text', 'comment']);

@@ -48,7 +48,7 @@ def test_overview_counts_bots_on_fallback_and_limited_ones_for_who_may_read_them
     assert health["limited"] == []
     assert [(row["bot"], row["harness"]) for row in health["on_fallback"]] == [("ops", "codex")]
     with api.app.state.store.read() as c:
-        began = c.execute("SELECT coalesce(started,created) FROM attempts WHERE id=?", (again["id"],)).fetchone()[0]
+        began = c.execute("SELECT coalesce(started_at,created_at) FROM attempts WHERE id=?", (again["id"],)).fetchone()[0]
         detail = c.execute("SELECT detail FROM events WHERE action='attempt.fallback' AND target=?",
                            (again["id"],)).fetchone()[0]
     assert health["on_fallback"][0]["since"] == began

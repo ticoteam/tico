@@ -194,7 +194,7 @@ def events(hub):
 
 
 def jobs(hub):
-    return rows(hub, "SELECT bot,state FROM jobs ORDER BY created")
+    return rows(hub, "SELECT bot,state FROM jobs ORDER BY created_at")
 
 
 def send(gateway, text, judge_answer=None, **kw):
@@ -349,8 +349,8 @@ def test_a_post_is_attempted_once_and_a_crash_between_send_and_record_is_uncerta
         c.execute("UPDATE slack_posts SET state='ready' WHERE message_id=?", (mid,))
     slack.failures.append(G.SlackError("chat.postMessage", "ratelimited", retry_after=5))
     gateway.tick()
-    post = rows(hub, "SELECT state,attempts,next_attempt FROM slack_posts")[0]
-    assert post["state"] == "rate_limited" and post["attempts"] == 2 and post["next_attempt"] > clock()
+    post = rows(hub, "SELECT state,attempts,next_attempt_at FROM slack_posts")[0]
+    assert post["state"] == "rate_limited" and post["attempts"] == 2 and post["next_attempt_at"] > clock()
     gateway.tick()
     assert rows(hub, "SELECT attempts FROM slack_posts")[0]["attempts"] == 2, "not before Retry-After"
     clock.advance(6)
@@ -361,7 +361,7 @@ def test_a_post_is_attempted_once_and_a_crash_between_send_and_record_is_uncerta
         H.say(c, "bot:legal", "human:ana", "One more thing.", conversation_id=rows(hub, "SELECT conversation_id FROM slack_threads")[0]["conversation_id"])
     slack.failures.append(G.SlackError("chat.postMessage", "channel_not_found"))
     gateway.tick()
-    assert [p["state"] for p in rows(hub, "SELECT state FROM slack_posts ORDER BY created")] == ["sent", "failed"]
+    assert [p["state"] for p in rows(hub, "SELECT state FROM slack_posts ORDER BY created_at")] == ["sent", "failed"]
     gateway.tick()
     assert len(slack.posts) == 1
 
@@ -441,7 +441,7 @@ def channel_message(text, channel=MARKETING, user="U1", thread_ts=None, subtype=
 
 def digests(hub):
     return rows(hub, "SELECT d.reader,d.count,d.skipped,d.channels,m.body,m.refs,m.from_actor,m.to_actor "
-                     "FROM slack_digests d JOIN messages m ON m.id=d.message_id ORDER BY d.created, d.reader")
+                     "FROM slack_digests d JOIN messages m ON m.id=d.message_id ORDER BY d.created_at, d.reader")
 
 
 def cursors(hub):
@@ -471,7 +471,7 @@ def test_a_channel_message_is_stored_and_reaches_the_readers_once_on_the_hourly_
     assert refs["channel_name"] == "#marketing" and refs["permalink"] == f"https://acme.slack.com/archives/{MARKETING}"
     assert refs["digest"]["count"] == 1 and len(refs["digest"]["event_ids"]) == 1
     assert [j["bot"] for j in jobs(hub)] == ["cmo", "cto", "seo"], "each reader gets one turn"
-    assert rows(hub, "SELECT subject,scope,participants FROM conversations ORDER BY created")[0] == {
+    assert rows(hub, "SELECT subject,scope,participants FROM conversations ORDER BY created_at")[0] == {
         "subject": "Slack channels", "scope": "direct", "participants": '["keeper", "bot:cmo"]'}
     # The cursors moved with the delivery; nothing new means nothing sent and no turn.
     gw.clock.advance(3600)
@@ -606,7 +606,7 @@ def test_a_muted_bot_stays_in_tico_unless_the_person_is_talking_to_it_in_slack(g
     gateway.mirror()
     with hub.transaction() as c:
         # Days later, Legal's unprompted digest lands in the same chat; Ana is no longer talking there.
-        c.execute("UPDATE messages SET created=? WHERE conversation_id=? AND from_actor='human:ana'",
+        c.execute("UPDATE messages SET created_at=? WHERE conversation_id=? AND from_actor='human:ana'",
                   (H.shift(H.now(), days=-2), thread["conversation_id"]))
         muted = H.say(c, "bot:legal", "human:ana", "Weekly contract digest.", conversation_id=thread["conversation_id"])["id"]
     gateway.originate()
@@ -796,7 +796,7 @@ def test_a_slack_thread_reply_links_to_its_own_room_not_the_bots_usual_chat(gate
         usual = H.say(c, "human:ana", "bot:legal", "Hi Legal.")["conversation_id"]
     first = routed_reply(gateway, hub)
     send(gateway, "<@U0BUS6WA4SY> Legal, another thing?", answers(legal=0.9))
-    threads = [r["conversation_id"] for r in rows(hub, "SELECT * FROM slack_threads ORDER BY created")]
+    threads = [r["conversation_id"] for r in rows(hub, "SELECT * FROM slack_threads ORDER BY created_at")]
     assert len(set(threads + [usual])) == 3
     with hub.transaction() as c:
         reply = H.say(c, "bot:legal", "human:ana", "The chart.", conversation_id=threads[0], in_reply_to=first,
@@ -861,8 +861,8 @@ def test_a_stored_channel_message_reaches_a_message_automation_once_and_only_aft
     assert gw.receive(channel_message("Before the automation")) == "stored"
     gw.clock.advance(60)
     with hub.transaction() as c:
-        c.execute("INSERT INTO automations(id,name,owner,grp,trigger_type,enabled,builtin,flow,version,created,"
-                  "created_by,updated) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
+        c.execute("INSERT INTO automations(id,name,owner,grp,trigger_type,enabled,builtin,flow,version,created_at,"
+                  "created_by,updated_at) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
                   ('{"trigger": {"type": "message", "inbox": "slack:#marketing"}}', gw.clock(), gw.clock()))
     gw.clock.advance(60)
     assert gw.receive(channel_message("After the automation")) == "stored"

@@ -258,10 +258,10 @@ async function roles(browser) {
     if (p === '/api/issues') return json([]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
-    if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Shared Mac', operator: 'ana', last_seen: new Date().toISOString(),
+    if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Shared Mac', operator: 'ana', last_seen_at: new Date().toISOString(),
       platform: 'darwin', bots: [], readiness: {}, accepts_member_bots: accepts, turns_at_once: turnsAtOnce,
       turn_limit: 2, capacity: 2},
-      {id: 'r2', label: 'Acme Mac', operator: 'ana', last_seen: new Date().toISOString(), platform: 'darwin', bots: [],
+      {id: 'r2', label: 'Acme Mac', operator: 'ana', last_seen_at: new Date().toISOString(), platform: 'darwin', bots: [],
        readiness: {appdriver: {trusted: true, apps: {grok: {installed: true, signed_in: true, background_ok: true, ready: true, state: 'ready'}}}}}],
       agents: [], services: []});
     if (p.match(/^\/api\/v2\/bots\/[^/]+\/definition$/) && method === 'POST') { posts.push(['definition', request.postDataJSON()]); return json({}); }
@@ -286,9 +286,9 @@ async function roles(browser) {
     if (p === '/api/v2/conversations') return json({conversations: [conv]});
     if (p.endsWith('/snapshot') || p.endsWith('/messages')) return json({conversation: conv, messages: [
       {id: 'm1', conversation_id: conv.id, from_actor: 'human:ana', to_actor: 'bot:botops', kind: 'say', body: 'Add sean@example.test please',
-       created: new Date().toISOString(), refs: {}},
+       created_at: new Date().toISOString(), refs: {}},
       {id: 'm2', conversation_id: conv.id, from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Needs your OK: Add Sean (sean@example.test) to the roster',
-       created: new Date().toISOString(), refs: {assistant: true, action: 'act1'}}], execution: null, has_more: false, next_before: null});
+       created_at: new Date().toISOString(), refs: {assistant: true, action: 'act1'}}], execution: null, has_more: false, next_before: null});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });

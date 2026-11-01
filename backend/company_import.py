@@ -510,7 +510,7 @@ def add_invitee(onboarding, c, who, key, email):
     for seat_id in entry.get("seats") or []:          # a seat someone has moved since stays where they put it
         seat = c.execute("SELECT reports_to FROM seats WHERE id=? AND closed_at IS NULL", (seat_id,)).fetchone()
         if seat and seat["reports_to"] == home:
-            c.execute("UPDATE seats SET reports_to=?,updated=?,updated_by=? WHERE id=?",
+            c.execute("UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE id=?",
                       ("human:" + row["id"], H.now(), who.actor, seat_id))
             H.event(c, who.actor, "seat.updated", seat_id, {"fields": ["reports_to"]})
     people[at] = {**entry, "person": row["id"]}

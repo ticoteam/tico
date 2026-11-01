@@ -95,7 +95,7 @@ def test_the_stream_tells_its_computer_keeps_it_seen_and_ends_once_revoked(api, 
     # The stream is contact: the computer stays seen while it sends nothing else.
     mine.until(topic("keepalive"))
     with api.app.state.store.read() as c:
-        seen = c.execute("SELECT last_seen FROM runners WHERE id=?", (a["runner_id"],)).fetchone()[0]
+        seen = c.execute("SELECT last_seen_at FROM runners WHERE id=?", (a["runner_id"],)).fetchone()[0]
     assert seen > H.shift(H.now(), seconds=-3)
     post(api, f"runners/{a['runner_id']}/revoke", {})
     mine.until(topic("expired"))

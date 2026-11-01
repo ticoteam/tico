@@ -127,7 +127,7 @@ async function inboundMount() {
     status.textContent = !data.configured ? 'Email & Phone is not connected. Ask your owner to set it up.'
       : data.error ? 'Messages could not sync. Tico will retry.'
       : data.gaps.length ? `${data.gaps.reduce((sum,g) => sum+g.count,0)} messages expired before Tico reconnected.`
-      : data.last_sync ? `Last synced ${new Date(data.last_sync*1000).toLocaleString()}.` : 'Waiting for the first sync.';
+      : data.last_synced_at ? `Last synced ${new Date(data.last_synced_at*1000).toLocaleString()}.` : 'Waiting for the first sync.';
     $('#inbound-create').querySelector('button[type="submit"]').disabled = !data.configured;
     if ($('#inbound-phone')) {
       $('#inbound-phone').disabled = !data.configured;

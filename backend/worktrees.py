@@ -214,7 +214,7 @@ def unmerged(c, blocker):
     if release is not None and step['position'] >= release:
         return ''
     prs = c.execute("SELECT number,url,coalesce(state,'open') AS state FROM task_links WHERE task_id=? AND kind='pr' "
-                    "ORDER BY created,rowid", (blocker['id'],)).fetchall()
+                    "ORDER BY created_at,rowid", (blocker['id'],)).fetchall()
     waiting = [pr for pr in prs if pr['state'] not in ('merged', 'closed')]
     if not waiting and any(pr['state'] == 'merged' for pr in prs):
         return ''
@@ -242,7 +242,7 @@ def cancel_pending(c, row, detail, reason):
     asked, nothing on disk is touched, its place frees at once. A reserved wait for it ends once with the reason."""
     detail = {**detail, 'removed_by': 'cancelled', 'release_reason': 'pending cancelled', 'cancelled': reason}
     # Guarded on the stored state: serving waits and the heartbeat's own pass can both reach one reservation.
-    if not c.execute("UPDATE task_links SET state='removed',detail=?,updated=? WHERE id=? AND state='pending'",
+    if not c.execute("UPDATE task_links SET state='removed',detail=?,updated_at=? WHERE id=? AND state='pending'",
                      (json.dumps(detail), H.now(), row['id'])).rowcount:
         return
     if wait := waits.preparing(c, row['id']):
@@ -279,8 +279,8 @@ def held_reason(c, row, detail, memo=None):
     carries the commits and finishes."""
     if live_turn(c, row['task_id'], row.get('owner'), memo):
         return 'held: live turn'
-    last = c.execute("SELECT number,detail,coalesce(pr_merged_at,updated) AS finished FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
-                     f"AND branch=? AND state IN {PR_FINISHED} ORDER BY coalesce(pr_merged_at,updated,created) DESC LIMIT 1",
+    last = c.execute("SELECT number,detail,coalesce(pr_merged_at,updated_at) AS finished_at FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
+                     f"AND branch=? AND state IN {PR_FINISHED} ORDER BY coalesce(pr_merged_at,updated_at,created_at) DESC LIMIT 1",
                      (row['task_id'], row['repo'] or '', row['branch'] or '')).fetchone() if row['branch'] else None
     pr_head = json.loads(last['detail'] or '{}').get('head_sha') if last else None
     # The computer's committed head, once it has nothing unpushed, is the branch as it is now. A push webhook's head
@@ -322,7 +322,7 @@ def attached(c, task_id, computer, bot):
     owner = "coalesce(json_extract(l.detail,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner END)"
     rows = c.execute(f"SELECT l.repo,l.branch,l.path,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id "
                      f"WHERE l.task_id=? AND l.kind='worktree' AND l.computer_id=? AND l.state='present' AND {owner}=? "
-                     "ORDER BY l.created", (task_id, computer, "bot:" + bot)).fetchall()
+                     "ORDER BY l.created_at", (task_id, computer, "bot:" + bot)).fetchall()
     return [{"repo": r["repo"] or "", "branch": r["branch"] or "", "path": r["path"]} for r in rows
             if r["path"] and not json.loads(r["detail"] or "{}").get("setup_pending")]
 
@@ -333,7 +333,7 @@ def allocation_has_pr(row, detail, prs):
     A revived link keeps its original creation date and branch, so its allocation needs its own timestamp.
     Legacy links use creation; missing PR branch/repo metadata keeps its established compatibility behavior.
     """
-    since = H.parse_ts(detail.get('allocation_started') or row['created'])
+    since = H.parse_ts(detail.get('allocation_started') or row['created_at'])
     if since is None:
         return False
 
@@ -342,7 +342,7 @@ def allocation_has_pr(row, detail, prs):
         timestamp = H.parse_ts(value)
         return timestamp is not None and timestamp >= since
 
-    return any(at_or_after(pr['created']) and (not pr['pr_merged_at'] or at_or_after(pr['pr_merged_at']))
+    return any(at_or_after(pr['created_at']) and (not pr['pr_merged_at'] or at_or_after(pr['pr_merged_at']))
                and (not pr['repo'] or not row['repo'] or pr['repo'].casefold() == row['repo'].casefold())
                and (not pr['branch'] or not row['branch'] or pr['branch'] == row['branch']) for pr in prs)
 
@@ -351,12 +351,12 @@ def holdings(c, owner):
     """The bot's live worktrees, each with what clears it: `merged` or `closed` (its pull requests are finished and the
     computer releases it once the bot is idle), `merge_ready` (an approved, passing pull request), `task_finished`,
     or `in_progress`. A worktree the computer kept says why in `kept`."""
-    rows = c.execute("SELECT l.id,l.task_id,l.path,l.repo,l.branch,l.detail,l.created,coalesce(l.updated,l.created) AS updated,t.title,t.status FROM task_links l "
+    rows = c.execute("SELECT l.id,l.task_id,l.path,l.repo,l.branch,l.detail,l.created_at,coalesce(l.updated_at,l.created_at) AS updated_at,t.title,t.status FROM task_links l "
                      "JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(l.state,'unknown')<>'removed' "
-                     "AND coalesce(json_extract(l.detail,'$.owner'),t.owner)=? ORDER BY l.created", (owner,)).fetchall()
+                     "AND coalesce(json_extract(l.detail,'$.owner'),t.owner)=? ORDER BY l.created_at", (owner,)).fetchall()
     out = []
     for row in rows:
-        prs = c.execute("SELECT url,state,review_state,checks,mergeable,created,pr_merged_at,repo,branch FROM task_links WHERE task_id=? AND kind='pr'",
+        prs = c.execute("SELECT url,state,review_state,checks,mergeable,created_at,pr_merged_at,repo,branch FROM task_links WHERE task_id=? AND kind='pr'",
                         (row['task_id'],)).fetchall()
         states = [p['state'] for p in prs]
         detail = json.loads(row['detail'] or '{}')
@@ -372,7 +372,7 @@ def holdings(c, owner):
         else:
             clear, why = 'in_progress', 'in progress'
         item = {'link_id': row['id'], 'task_id': row['task_id'], 'task': row['title'], 'path': row['path'],
-                'repo': row['repo'], 'branch': row['branch'], 'clear': clear, 'why': why, 'updated': row['updated'],
+                'repo': row['repo'], 'branch': row['branch'], 'clear': clear, 'why': why, 'updated_at': row['updated_at'],
                 'pull_requests': [{'url': p['url'], 'state': p['state']} for p in prs]}
         if detail.get('error') and (detail.get('cleanup_requested') or detail.get('release_requested')):
             item['kept'] = detail['error']
@@ -405,7 +405,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
             grants = R.access(c, H.actor_id(row['owner']), connection['org'] if connection else default_org)['effective']
             grant = next((r for r in grants if r['full_name'].lower() == report.repo.lower() and r['access'] == 'write'), None)
             if connection and not grant:
-                c.execute("UPDATE task_links SET state='unknown',detail=?,updated=? WHERE id=?",
+                c.execute("UPDATE task_links SET state='unknown',detail=?,updated_at=? WHERE id=?",
                           (json.dumps({**json.loads(row['detail'] or '{}'), 'error': 'This bot needs write access to the attached repository'}), H.now(), row['id']))
                 continue
             if not connection:
@@ -475,7 +475,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         # A stamped report is stale when the record was added, attached, re-queued or patched after the
         # computer read it; heartbeat writes don't count, or a busy worktree's reports would always be stale.
         # An unstamped one (an older computer) is stale only when it would move the checkout back.
-        stale = (report.record_updated < (detail.get('record_changed') or row['updated'] or '')
+        stale = (report.record_updated < (detail.get('record_changed') or row['updated_at'] or '')
                  if report.record_updated is not None
                  else stale_checkout_report(detail, report.checkout_state))
         if report.state == 'removed' and not stale and detail.get('cleanup_requested'):
@@ -518,13 +518,13 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         # open board follows (backend/events.py), and a computer retrying a failed cleanup reports every few seconds.
         # A tree a bot is working in moves its activity and size on every beat: those alone are written at most every
         # READINGS_EVERY seconds, nothing decides on them sooner (the stall wake waits days).
-        readings = ((state, row['branch'] or branch) == before[:2] and row['updated']
-                    and row['updated'] > H.shift(now, seconds=-READINGS_EVERY)
+        readings = ((state, row['branch'] or branch) == before[:2] and row['updated_at']
+                    and row['updated_at'] > H.shift(now, seconds=-READINGS_EVERY)
                     and all(detail.get(k) == before[2].get(k) for k in set(detail) | set(before[2]) if k not in READINGS))
         if (state, row['branch'] or branch, detail) != before and not readings:
-            c.execute('UPDATE task_links SET state=?,branch=coalesce(branch,?),detail=?,updated=? WHERE id=?',
+            c.execute('UPDATE task_links SET state=?,branch=coalesce(branch,?),detail=?,updated_at=? WHERE id=?',
                       (state, branch, json.dumps(detail), H.now(), row['id']))
-            row['updated'] = H.now()
+            row['updated_at'] = H.now()
         row['state'] = state
         row['detail'] = json.dumps(detail)
         if branch:
@@ -541,7 +541,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
     # PR metadata is unchanged by cleanup; load it once rather than once per checkout.
     task_prs = {}
     for part in H.chunks({row['task_id'] for row in rows.values()}):
-        for pr in c.execute("SELECT task_id,state,created,pr_merged_at,repo,branch FROM task_links "
+        for pr in c.execute("SELECT task_id,state,created_at,pr_merged_at,repo,branch FROM task_links "
                             "WHERE kind='pr' AND task_id IN (%s)" % ','.join('?' * len(part)), part):
             task_prs.setdefault(pr['task_id'], []).append(pr)
     actions = []
@@ -586,7 +586,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         # A tree released in this same pass is not told to retry its setup: the retry would only be removed again.
         if (row['state'] == 'pending' and not closed and not released and not detail.get('pending_expired')
                 and detail.get('checkout_state') != 'setup_failed'
-                and H.shift(row['updated'] or row['created'], hours=PENDING_HOURS) < H.now()
+                and H.shift(row['updated_at'] or row['created_at'], hours=PENDING_HOURS) < H.now()
                 and not live_turn(c, row['task_id'], row['owner'], live_tasks)):
             expire_pending(c, row, detail)
         if released and not detail.get('release_requested'):
@@ -700,7 +700,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                         detail.pop(key, None)
                     detail.update(checkout_state='queued', setup_pending=True)
                 now = detail['record_changed'] = H.now()
-                c.execute('UPDATE task_links SET detail=?,updated=? WHERE id=?',
+                c.execute('UPDATE task_links SET detail=?,updated_at=? WHERE id=?',
                           (json.dumps(detail), now, existing['id']))
             return {'link_id': existing['id'], 'branch': existing['branch'], 'path': existing['path'],
                     'state': existing['state'],
@@ -729,7 +729,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
             detail += ' Kept for the reason given; save or discard that work: ' + '; '.join(kept) + '.'
         if not (merge or freeing or kept):
             # Nothing frees itself, and nothing is removed to make room: name the oldest idle ones to clean up.
-            idle = [f"{w['path']} ({w['task']})" for w in sorted(held, key=lambda w: w['updated'] or '')[:3]]
+            idle = [f"{w['path']} ({w['task']})" for w in sorted(held, key=lambda w: w['updated_at'] or '')[:3]]
             detail += ' Clean one up before making another. Oldest idle: ' + '; '.join(idle) + '.'
         raise Problem('worktree_limit', detail, 409, extra={'worktrees': held, 'limit': LIMIT})
     if existing:
@@ -746,7 +746,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
         detail.pop('checkout_target', None)
         detail.pop('expected_base', None)
         now = detail['record_changed'] = H.now()
-        c.execute("UPDATE task_links SET state='pending',computer_id=?,detail=?,updated=? WHERE id=?",
+        c.execute("UPDATE task_links SET state='pending',computer_id=?,detail=?,updated_at=? WHERE id=?",
                   (assigned['id'], json.dumps(detail), now, existing['id']))
         return {'link_id': existing['id'], 'branch': existing['branch'], 'path': existing['path'],
                 'state': 'pending',
@@ -759,7 +759,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
         raise Problem('worktree_branch', 'Invalid worktree branch', 422)
     link = uuid.uuid4().hex
     now = H.now()
-    c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,computer_id,path,updated) VALUES(?,?,'worktree',?,?,'pending',?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,repo,branch,computer_id,path,updated_at) VALUES(?,?,'worktree',?,?,'pending',?,?,?,?,?,?,?)",
               (link, task['id'], 'worktree:' + link, repo or 'Worktree', who.actor, now, repo, branch, assigned['id'], path, now))
     c.execute('UPDATE task_links SET detail=? WHERE id=?',
               (json.dumps({'owner': task['owner'], 'checkout_state': 'attached_pending' if attaching else 'queued',
@@ -903,7 +903,7 @@ def install(app, store, auth, mutate):
                     raise Problem('worktree_path', 'Attach a new worktree to change its path', 409)
             if 'branch' in fields and fields['branch'] != link['branch']:
                 raise Problem('worktree_branch', 'Attach a new worktree to change its branch', 409)
-            fields['updated'] = now
+            fields['updated_at'] = now
             c.execute('UPDATE task_links SET ' + ','.join(k + '=?' for k in fields) + ' WHERE id=?', (*fields.values(), link_id))
             # A worktree set up, failed or removed may be what a waiting task needs, or the place it waits for.
             owner = detail.get('owner') or H.task(c, task_id)['owner']

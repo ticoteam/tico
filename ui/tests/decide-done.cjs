@@ -7,8 +7,8 @@ const {open} = require('./tasks-page.cjs');
 const at = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 // The bot says what it would do, so the request is answered on a card (a request with nothing to pick opens whole).
 const request = (id, title, created) => ({id, kind: 'task', title, body: '', owner: 'human:ana', requester: 'bot:writer', status: 'open',
-  version: 1, labels: [], tags: [], links: [], lane: 'company', rank: null, parts: {total: 0, done: 0}, created: at(created), updated: at(created),
-  ask: {id: 'q-' + id, from_actor: 'bot:writer', to_actor: 'human:ana', body: 'Which one?', created: at(created)}, open_asks: 1,
+  version: 1, labels: [], tags: [], links: [], lane: 'company', rank: null, parts: {total: 0, done: 0}, created_at: at(created), updated_at: at(created),
+  ask: {id: 'q-' + id, from_actor: 'bot:writer', to_actor: 'human:ana', body: 'Which one?', created_at: at(created)}, open_asks: 1,
   recommend: {ask: 'q-' + id, do: 'The first', option: 'The first', kind: 'reversible'}});
 const items = [request('t-tap', 'Approve the launch post', 200), request('t-noted', 'Pick the launch date', 300)];   // newest first
 (async () => {

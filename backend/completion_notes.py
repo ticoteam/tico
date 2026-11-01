@@ -30,7 +30,7 @@ def record(c, target, task_id):
         note_id = note['id']
     else:
         note_id = H.new_id()
-        c.execute('INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)',
+        c.execute('INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)',
                   (note_id, H.KEEPER, target, body, H.now()))
         H.event(c, H.KEEPER, 'note.create', note_id, {'to': target, 'completion_batch': True})
     c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',

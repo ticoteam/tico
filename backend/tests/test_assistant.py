@@ -172,7 +172,7 @@ def test_a_proposal_cannot_smuggle_a_route_and_never_stores_an_answer(api):
 
 def test_an_assistant_message_never_lends_the_persons_authority_to_botops(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
+        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('botops','botops','BotOps','fake','','','','keeper','active',?)", (H.now(),))
         c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('botops','{}',NULL,'ana')")
         H.VIA.set("assistant")
@@ -404,7 +404,7 @@ def test_a_cited_message_must_be_the_persons_own_recent_words_in_their_assistant
     assert api.put("/api/v2/access/rules", json={"assistant_direct": True}, headers=headers()).status_code == 200
     # Too old: they have to ask again.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), hours=-2), said))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), hours=-2), said))
     refused = asked(api, path, body, token, "turn", expected=403)
     assert refused["error"]["code"] == "on_behalf_of" and "minutes old" in refused["error"]["detail"]
     assert get(api, path, "ben-test")["task"]["status"] != "closed"
@@ -487,7 +487,7 @@ def needs_you_queue(api):
         mine = H.task_create(c, "human:ben", "Run the launch", "Ben decides its sends.", "human:ben")["id"]
         old = [H.approval_request(c, "bot:ops", "publish", {"url": f"https://acme.example/post-{i}",
                                                              "content_sha256": str(i) * 64}, mine)["id"] for i in range(3)]
-        c.execute("UPDATE approvals SET created=? WHERE id IN (?,?,?)", (H.shift(H.now(), days=-40), *old))
+        c.execute("UPDATE approvals SET created_at=? WHERE id IN (?,?,?)", (H.shift(H.now(), days=-40), *old))
         merge = H.approval_request(c, "bot:ops", "merge", {"repo": "acme/site", "pr": 12}, mine)["id"]
         spend = H.approval_request(c, "bot:ops", "spend", {"amount": 500, "account": "card", "what": "Ads"}, mine)["id"]
         hers = H.approval_request(c, "bot:ops", "publish", {"url": "https://acme.example/ana", "content_sha256": "f" * 64})["id"]

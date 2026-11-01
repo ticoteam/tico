@@ -182,7 +182,7 @@ def test_the_assistant_cannot_turn_on_or_edit_an_automation_that_sends_outside_n
 def test_with_the_rule_off_a_repository_setting_is_a_card_the_tap_runs(api):
     # A repository's id is owner/name, two segments of its route: the card names the route the Settings page uses.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?)",
+        c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)",
                   ("repo-acme", "Acme/product", "2026-10-27T00:00:00Z"))
     put(api, "access/rules", {"assistant_direct": False})
     r, attempt = assistant_turn(api, "ana-test", "Switch off the product repository")

@@ -86,7 +86,7 @@ def request_refresh(c, auth, who, body):
         value['state'] = 'unavailable'
     elif state.get('signed_in') is False:
         raise Problem('signed_out', 'Sign in before refreshing this subscription', 409)
-    elif not runner['last_seen'] or runner['last_seen'] < H.shift(now, seconds=-60):
+    elif not runner['last_seen_at'] or runner['last_seen_at'] < H.shift(now, seconds=-60):
         raise Problem('offline', 'This computer is offline; its last weekly reading is unchanged', 409)
     elif len(pending(c, body.runner_id)) >= 5:
         raise Problem('busy', 'This computer already has weekly refreshes queued; try again shortly', 409)

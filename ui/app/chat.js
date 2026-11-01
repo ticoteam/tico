@@ -360,7 +360,7 @@ function chatTaskRowHTML(m) {
   const t = chatTaskMark(m);
   return `<button type="button" class="chat-task-row" data-task-conversation="${esc(t.id)}" data-message="${esc(m.id || '')}" title="${esc(plainActors(m.body || ''))}">
     <span class="ct-dot ${esc(t.state)}" aria-hidden="true"></span><span class="ct-title">${esc(chatLine(t.title, 90))}</span><span class="ct-state">· ${esc(t.state)}</span>${
-    m.created ? `<time class="chat-time" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>` : ''}</button>`;
+    m.created_at ? `<time class="chat-time" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>` : ''}</button>`;
 }
 // Task rows in a row, from one sender: more than three show the oldest, a count of the rest, and the newest.
 function chatTaskRunHTML(run) {
@@ -378,7 +378,7 @@ function v2MessageHTML(m) {
   // A met or stopped goal's notice from the server is the compact goal line (ui/app/chat-goal.js), not a Task line.
   if (m.refs?.chat_goal) return chatGoalNoticeHTML(m);
   if (chatTaskMark(m)) return chatTaskRowHTML(m);
-  const when = `<time class="chat-time" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>`;
+  const when = `<time class="chat-time" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>`;
   // A task's note is its work log: chat names the task and keeps the note one click away.
   if (m.refs?.note) {
     const title = Object.values(m.ref_tasks || {})[0]?.title || chatLine(plainActors(m.body), 80);
@@ -397,11 +397,11 @@ function v2MessageHTML(m) {
   // The message a new topic started a fresh session for (backend/topic_change.py): one quiet line above it.
   const fresh = mine && m.refs?.topic_changed ? '<div class="conv-break chat-topic-break" role="separator">Topic changed</div>' : '';
   return `${fresh}<div class="conv-run chat${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
-    <time class="chat-stamp" datetime="${esc(m.created || '')}" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>
+    <time class="chat-stamp" datetime="${esc(m.created_at || '')}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>
     <div class="conv-run-head">${mine ? `<span class="mono muted">${who}</span>` : actorChip(m.from_actor)}
       ${m.kind && m.kind !== 'say' ? `<span class="pill">${esc(m.kind)}</span>` : ''}
       <span class="spacer" style="flex:1"></span>
-      <span class="tnum" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</span></div>
+      <span class="tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</span></div>
     <div class="bubble ${mine ? 'you' : 'bot reply'}"><span class="who">${who}</span>${
       mine ? esc(m.body || '')
         // The Assistant's read-back of what it will approve is shown exactly as written, never formatted: a requesting
@@ -477,7 +477,7 @@ const CHAT_SIDE_SHORT = 110;
 function chatSideItemHTML(m) {
   const text = plainActors(m.body || ''), long = text.length > CHAT_SIDE_SHORT || /\n/.test(text.trim());
   const open = long && V2C?.openSide?.has(m.id);
-  const when = m.created ? `<time class="chat-time" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>` : '';
+  const when = m.created_at ? `<time class="chat-time" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>` : '';
   return `<div class="cs-item${open ? ' open' : ''}" data-message="${esc(m.id || '')}">
     <div class="cs-head"><b>${esc(chatSideHead(m))}</b>${when}</div>
     <div class="cs-text md${open ? '' : ' clamp'}">${safeMd(text, {shortLinks: true})}</div>${open && S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
@@ -487,7 +487,7 @@ function chatSideItemHTML(m) {
 // A run of side items is one muted line: one item reads as itself, more as "12 updates · Dots, BotOps, tasks · 2h".
 function chatSideHTML(messages, slug) {
   const first = messages[0], last = messages.at(-1), key = `side:${first.id || ''}`;
-  const when = last?.created ? `<time class="chat-time" title="${esc(fmt(last.created))}">${esc(ago(last.created))}</time>` : '';
+  const when = last?.created_at ? `<time class="chat-time" title="${esc(fmt(last.created_at))}">${esc(ago(last.created_at))}</time>` : '';
   const names = [...new Set(messages.map(m => chatSideName(m, slug)).filter(Boolean))];
   const who = names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3}` : '');
   const label = messages.length === 1
@@ -566,7 +566,7 @@ function pendingHintHTML(x) {
 function v2PendingHTML(state) {
   const x = state.execution, key = x?.message_id || 'sent';
   if (state.dismissed === key) return '';
-  const sent = Date.parse(state.messages.find(m => m.id === x?.message_id)?.created || '') || state.sentAt || 0;
+  const sent = Date.parse(state.messages.find(m => m.id === x?.message_id)?.created_at || '') || state.sentAt || 0;
   clearTimeout(state.waitTimer);
   const late = S.me?.cloud && sent && Date.now() - sent >= REPLY_WAIT_MS;
   if (S.me?.cloud && sent && !late) state.waitTimer = setTimeout(() => v2ChatRender(state), sent + REPLY_WAIT_MS - Date.now() + 50);
@@ -581,11 +581,11 @@ function v2PendingHTML(state) {
 // than the loaded page wait until older messages are loaded, so they never pile up above the history; a conversation
 // the person opened shows all it has loaded, so its "Earlier messages" stays in reach.
 function v2WithBotTalk(state, messages) {
-  const own = new Set(messages.map(m => m.id)), from = state.nextBefore ? Date.parse(messages[0]?.created || '') || 0 : 0;
-  const talk = (state.botTalk || []).filter(m => !own.has(m.id) && (m.elsewhere?.open || (Date.parse(m.created || '') || 0) >= from));
+  const own = new Set(messages.map(m => m.id)), from = state.nextBefore ? Date.parse(messages[0]?.created_at || '') || 0 : 0;
+  const talk = (state.botTalk || []).filter(m => !own.has(m.id) && (m.elsewhere?.open || (Date.parse(m.created_at || '') || 0) >= from));
   if (!talk.length) return messages;
   // Merged in, never re-sorted: the chat's own order stays exactly as the server gave it.
-  const time = m => Date.parse(m.created || '') || 0, out = [];
+  const time = m => Date.parse(m.created_at || '') || 0, out = [];
   talk.sort((a, b) => time(a) - time(b));
   let t = 0;
   for (const m of messages) {
@@ -900,8 +900,8 @@ function v2ChatApply(state, d) {
   state.latestIds = new Set((d.messages || []).map(m => m.id));
   // A snapshot the server built just before a message of mine landed does not list it yet. What I sent stays on
   // the page, and the run the send started stays live; the next snapshot lists it and this copy drops away.
-  const newest = String((d.messages || []).at(-1)?.created || '');
-  const late = state.mine.filter(m => !state.latestIds.has(m.id) && String(m.created || '') >= newest);
+  const newest = String((d.messages || []).at(-1)?.created_at || '');
+  const late = state.mine.filter(m => !state.latestIds.has(m.id) && String(m.created_at || '') >= newest);
   state.messages = [...(state.older || []).filter(m => !state.latestIds.has(m.id)), ...(d.messages || []), ...late];
   if (!state.older?.length) state.nextBefore = d.next_before;
   const wasRunning = !!state.live;

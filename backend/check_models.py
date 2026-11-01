@@ -107,7 +107,7 @@ def choose(c, settings, bot, spec, role, authors=()):
 
 
 def record(c, actor, task_id, check):
-    c.execute("INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by,created) "
+    c.execute("INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by,created_at) "
               "VALUES(?,?,?,?,?,?,?,?)", (task_id, check["runtime"], check["model"], check["harness"],
                                           check["effort"], check["role"], actor, H.now()))
     H._task_event(c, task_id, actor, "check_model", None, f"{check['runtime']}:{check['model']}",

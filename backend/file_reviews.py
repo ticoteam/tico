@@ -71,7 +71,7 @@ def same_versions(entries):
     def same(c, task_id):
         row = c.execute("SELECT m.refs FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
                         "WHERE t.id=? AND json_extract(m.refs,'$.review') IS NOT NULL "
-                        "ORDER BY m.created DESC, m.id DESC LIMIT 1", (task_id,)).fetchone()
+                        "ORDER BY m.created_at DESC, m.id DESC LIMIT 1", (task_id,)).fetchone()
         files = ((H._json(row["refs"], {}) or {}).get("review") or {}).get("files") or [] if row else []
         return {(f.get("file"), f.get("version")) for f in files} == mine
     return same
@@ -140,7 +140,7 @@ def record(c, who, task_id, question_id, answer_id, reviewed):
     """Each verdict as a `reviewed` line in its file's activity log, which hub file approved reads."""
     at = H.now()
     for entry in reviewed:
-        c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created,"
+        c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created_at,"
                   "detail) VALUES(?,?,'reviewed',NULL,?,?,?,?,?)",
                   (entry["file"], who.actor, task_id, entry["version"], entry["digest"], at,
                    H._dump({"verdict": entry["verdict"], "question": question_id, "answer": answer_id})))
@@ -182,7 +182,7 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
         # The same bytes another bot published from the same path: the newest such version this reviewer can open.
         row = v = None
         for found in c.execute("SELECT v.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE "
-                               "v.repo_path=? AND v.digest=? AND NOT f.archived ORDER BY (f.bot=?), v.created DESC "
+                               "v.repo_path=? AND v.digest=? AND NOT f.archived ORDER BY (f.bot=?), v.created_at DESC "
                                "LIMIT 20", (path, digest, mine or "")).fetchall():
             candidate = c.execute("SELECT * FROM bot_files WHERE id=?", (found["file_id"],)).fetchone()
             if file_visible(c, auth, who, candidate, {}):
@@ -195,7 +195,7 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
     if mine and row["bot"] == mine:
         raise Problem("forbidden", "A bot never reviews its own file: ask a person or another bot", 403)
     entry = {"file": row["id"], "version": v["version"], "digest": v["source_digest"] or v["digest"]}
-    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created,"
+    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created_at,"
               "detail) VALUES(?,?,'reviewed',?,?,?,?,?,?)",
               (entry["file"], who.actor, getattr(who, "attempt_id", "") or None, task_id, entry["version"], entry["digest"],
                H.now(), H._dump({"verdict": verdict, "question": None, "task": task_id, "note": note or ""})))
@@ -226,7 +226,7 @@ def approved(c, auth, who, fid=None, version=None, path=None, digest=None, by="h
             raise Problem("validation", "A path is a bot's own file: give a file id", 422)
         found = []
         for v in c.execute("SELECT * FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE f.bot=? "
-                           "AND v.repo_path=? AND v.digest=? ORDER BY v.created DESC LIMIT 20",
+                           "AND v.repo_path=? AND v.digest=? ORDER BY v.created_at DESC LIMIT 20",
                            (H.actor_id(who.actor), path, digest)).fetchall():
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (v["file_id"],)).fetchone()
             if file_visible(c, auth, who, row, {}):
@@ -264,7 +264,7 @@ def _verdict(c, who, versions, by="human"):
         detail = H._json(r["detail"], {}) or {}
         verdict = detail.get("verdict")
         digest = digests[(r["file_id"], r["version"])]
-        return {"approved": verdict == "approve" and r["digest"] == digest, "by": r["actor"], "at": r["created"],
+        return {"approved": verdict == "approve" and r["digest"] == digest, "by": r["actor"], "at": r["created_at"],
                 "task": r["task_id"], "question": detail.get("question"), "file": r["file_id"],
                 "version": r["version"], "digest": digest, "verdict": verdict}
     fid, number, digest = versions[0]

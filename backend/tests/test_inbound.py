@@ -357,7 +357,7 @@ def test_native_and_registered_agents_share_inboxes_but_lose_access_when_paused(
     assert native.status_code==200 and len(native.json()['messages'])==1
     external=Identity('bot:ops','bot',agent='hermes')
     with svc.store.transaction() as c:
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('ops','hermes','synthetic',?,'human:ana')",
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('ops','hermes','synthetic',?,'human:ana')",
                   (inbound.H.now(),))
     assert len(svc.list_inboxes(external)['inboxes'])==3
     with svc.store.transaction() as c:c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")

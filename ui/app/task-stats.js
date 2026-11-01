@@ -237,7 +237,7 @@ function taskStatsRender() {
   const cols = stepMode ? [stages.find(([k]) => k === st.stage && k !== 'created') || stages[stages.length - 1]]
     : [['done', 'Done'], ['closed', 'Closed']];
   const peopleRows = (data.people || []).slice(0, 12).map(p => `<tr data-owner="${esc(actorSlug(p.actor) || p.actor)}" tabindex="0">
-      <td>${esc(actorLabel(p.actor))}</td><td class="tnum">${p.created || 0}</td>${cols.map(([k]) => `<td class="tnum">${p[k] || 0}</td>`).join('')}</tr>`).join('');
+      <td>${esc(actorLabel(p.actor))}</td><td class="tnum">${p.created_at || 0}</td>${cols.map(([k]) => `<td class="tnum">${p[k] || 0}</td>`).join('')}</tr>`).join('');
   body.innerHTML = `<div class="flow-tiles" role="group" aria-label="Stage">${tiles}</div>
     <div data-flow-chart></div>
     <div class="flow-tables">

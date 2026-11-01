@@ -97,7 +97,7 @@ function hlComputerHtml(machine) {
     return `<li data-ready="${row.ready}"${bad ? ' class="hl-model-bad"' : ''}>${esc(harnessWords(row.name))}: ${state}${login}</li>`;
   }).join('');
   return `<li class="hl-computer" data-online="${machine.online}"><span class="hl-dot ${machine.online ? 'on' : 'off'}" aria-hidden="true"></span>
-    <div><strong>${esc(machine.label)}</strong> <span class="muted">${machine.online ? 'online' : 'offline'}${machine.last_seen ? ', last seen ' + esc(ago(machine.last_seen)) : ', never seen'}</span>
+    <div><strong>${esc(machine.label)}</strong> <span class="muted">${machine.online ? 'online' : 'offline'}${machine.last_seen_at ? ', last seen ' + esc(ago(machine.last_seen_at)) : ', never seen'}</span>
     ${window.runnerUpdateHtml?.(machine.update, machine.release || machine.update?.release || machine.version) || ''}
     <ul class="hl-models">${models || '<li class="muted">No models reported</li>'}</ul></div></li>`;
 }
@@ -122,7 +122,7 @@ function hlStorageHtml(st) {
 // How often the hourly scan has seen a finding, and when it last did: seeing it again counts and wakes nobody.
 function hlSeen(f) {
   const n = Number(f.occurrences) || 1;
-  return `seen ${n.toLocaleString()} time${n === 1 ? '' : 's'}, last ${ago(f.last_seen)}`;
+  return `seen ${n.toLocaleString()} time${n === 1 ? '' : 's'}, last ${ago(f.last_seen_at)}`;
 }
 
 // The owner: the optional Health Monitor (backend/health_monitor.py). One switch turns it on or off; the second is the team
@@ -136,7 +136,7 @@ function hlMonitorHtml(m) {
     return m && typeof botReleaseButton === 'function' ? botReleaseButton(m[1], 'ghost') : '';
   };
   const found = (m.findings || []).slice(0, 8).map(f => `<li data-hl-finding="${esc(f.key)}"><strong>${esc(f.title)}</strong>
-    <span class="muted">${f.kind === 'setup' ? 'being fixed' : f.ticket_id ? 'reported to Tico' : f.approval_id ? 'report waiting in Needs you' : 'Tico bug'} · since ${esc(ago(f.first_seen))} · ${esc(hlSeen(f))}</span>${stopped(f)}</li>`).join('');
+    <span class="muted">${f.kind === 'setup' ? 'being fixed' : f.ticket_id ? 'reported to Tico' : f.approval_id ? 'report waiting in Needs you' : 'Tico bug'} · since ${esc(ago(f.first_seen_at))} · ${esc(hlSeen(f))}</span>${stopped(f)}</li>`).join('');
   return `<section class="hl-monitor" data-hl-monitor="${m.on ? 'on' : 'off'}">
     <label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-monitor-switch${m.on ? ' checked' : ''}>
       <span><strong>Health Monitor</strong> <span class="muted">checks this install every hour, gets setup problems fixed and reports Tico bugs to the Tico team. It wakes a model only when it finds something new or worse; seeing a problem again only adds to its count.</span></span></label>

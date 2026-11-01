@@ -243,7 +243,7 @@ def test_github_refusing_a_review_403_goes_to_the_tickets_type_manager_without_d
         typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": "In Progress", "status": "doing"}])
         c.execute("UPDATE task_types SET manager='cpo' WHERE id=?", (typ["id"],))
         ticket = H.task_create(c, H.KEEPER, "Build the thing", "x", "bot:cfo", type=typ["id"], lint=False)
-        c.execute("INSERT INTO task_links(id, task_id, kind, url, created) VALUES('l1', ?, 'pr', ?, ?)",
+        c.execute("INSERT INTO task_links(id, task_id, kind, url, created_at) VALUES('l1', ?, 'pr', ?, ?)",
                   (ticket["id"], f"https://github.com/{REPO}/pull/7", H.now()))
     seen["refusal"] = 403
     assert submit(api, key="only").status_code == 409

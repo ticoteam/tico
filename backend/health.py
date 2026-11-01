@@ -161,12 +161,12 @@ def _computers(c, runners_online, settings, limits=None):
     # runtime while the company has no default model: the runner installs only that one.
     default = providers.default_runtime(providers.load(c, settings))
     wanted = {default} - {""}
-    for r in c.execute("SELECT r.id,r.label,r.last_seen,r.platform,r.readiness,coalesce(nullif(h.name,''),r.operator) "
+    for r in c.execute("SELECT r.id,r.label,r.last_seen_at,r.platform,r.readiness,coalesce(nullif(h.name,''),r.operator) "
                        "AS operator FROM runners r LEFT JOIN humans h ON h.id=r.operator WHERE r.revoked_at IS NULL "
                        "ORDER BY r.label"):
         document = readiness_document(r["readiness"])
         runtimes = document.get("runtimes") or {}
-        rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in since, "last_seen": r["last_seen"],
+        rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in since, "last_seen_at": r["last_seen_at"],
                      "platform": r["platform"] or "", "update": runner_versions.view(fleet.get(r["id"])),
                      "disk": document.get("disk"),
                      "operator": r["operator"], "container_exec": document.get("container_exec"),
@@ -492,20 +492,20 @@ def silent_computers(c, minutes=SILENT_MINUTES):
     interrupted run nobody reviewed, as Pipeline splits them. A computer that never checked in is setup, not this."""
     from .execution import unfenced_sql
     rows = c.execute(
-        f"SELECT r.id, r.label, r.operator, r.last_seen, sum(CASE WHEN NOT ({unfenced_sql()}) THEN 1 ELSE 0 END) dead, "
+        f"SELECT r.id, r.label, r.operator, r.last_seen_at, sum(CASE WHEN NOT ({unfenced_sql()}) THEN 1 ELSE 0 END) dead, "
         "count(j.id) n, group_concat(DISTINCT a.bot) bots "
         "FROM runners r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.id=a.bot AND b.state='active' "
         "JOIN jobs j ON j.bot=a.bot AND j.state='queued' AND j.held=0 "
         "LEFT JOIN messages m ON m.id=j.message_id LEFT JOIN conversations cv ON cv.id=m.conversation_id "
-        "WHERE r.revoked_at IS NULL AND r.last_seen < ? GROUP BY r.id ORDER BY r.last_seen",
+        "WHERE r.revoked_at IS NULL AND r.last_seen_at < ? GROUP BY r.id ORDER BY r.last_seen_at",
         (H.shift(H.now(), minutes=-minutes),)).fetchall()
-    return [{"id": r["id"], "label": r["label"], "operator": r["operator"], "last_seen": r["last_seen"],
-             "minutes": quiet_minutes(r["last_seen"]), "queued": r["n"] - r["dead"], "dead": r["dead"],
+    return [{"id": r["id"], "label": r["label"], "operator": r["operator"], "last_seen_at": r["last_seen_at"],
+             "minutes": quiet_minutes(r["last_seen_at"]), "queued": r["n"] - r["dead"], "dead": r["dead"],
              "bots": sorted(r["bots"].split(","))} for r in rows]
 
 
 def quiet_minutes(last_seen):
-    """Whole minutes since `last_seen`; 0 when it cannot be read."""
+    """Whole minutes since `last_seen_at`; 0 when it cannot be read."""
     seen = H.parse_ts(last_seen)
     return int((datetime.now(timezone.utc) - seen).total_seconds() // 60) if seen else 0
 
@@ -547,9 +547,9 @@ def _waiting(c, online_ids, settings=None, limits=None):
     # held job behind an interrupted run as dead, and work held on purpose is not stuck.
     split = pipeline_stats.queue_counts(c, [r["id"] for r in c.execute("SELECT id FROM bots")])
     queued = {r["bot"]: (r["n"], r["oldest"]) for r in c.execute(
-        "SELECT bot, count(*) n, min(created) oldest FROM jobs WHERE state='queued' AND held=0 GROUP BY bot")}
+        "SELECT bot, count(*) n, min(created_at) oldest FROM jobs WHERE state='queued' AND held=0 GROUP BY bot")}
     asked = {r["bot"]: r["oldest"] for r in c.execute(
-        "SELECT j.bot, min(j.created) oldest FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "SELECT j.bot, min(j.created_at) oldest FROM jobs j JOIN messages m ON m.id=j.message_id "
         "WHERE j.state='queued' AND m.from_actor LIKE 'human:%' GROUP BY j.bot")}
     assigned = {r["bot"]: (r["runner_id"], r["label"], r["readiness"]) for r in c.execute(
         "SELECT a.bot, a.runner_id, r.label, r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
@@ -563,7 +563,7 @@ def _waiting(c, online_ids, settings=None, limits=None):
     # writer for seconds on a live install. Detailed wait counts stay on the company-turns check below.
     company_stopped = settings and org_turns.admission(c)['at_stop']
     busy, running, turns = set(), {}, {}
-    for r in c.execute("SELECT id,bot,runner_id,coalesce(started,created) since FROM attempts "
+    for r in c.execute("SELECT id,bot,runner_id,coalesce(started_at,created_at) since FROM attempts "
                        "WHERE state IN ('leased','running') ORDER BY since"):
         busy.add(r["bot"])
         running[r["runner_id"]] = running.get(r["runner_id"], 0) + 1
@@ -676,9 +676,9 @@ def _waiting(c, online_ids, settings=None, limits=None):
             groups = {}
             for job, why in queued_reasons(c, settings, where[0], slug, limits, suspect=suspect):
                 key = why or "slow"
-                group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created"]})
+                group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created_at"]})
                 group["queued"] += 1
-                group["oldest"] = min(group["oldest"], job["created"])
+                group["oldest"] = min(group["oldest"], job["created_at"])
             row["queue_reasons"] = list(groups.values())
             reason = ("limit" if refused == "limit" else "updating" if where[0] in updating
                       else "restarting" if where[0] in restarting else refused or "slow")
@@ -727,9 +727,9 @@ def unfinished_setup(c):
                        f"WHERE bc.onboarding_state IN {PARKED_SQL} AND b.state='active' ORDER BY b.slug").fetchall()
     cutoff, out = H.shift(H.now(), minutes=-SETUP_HOLD_MINUTES), []
     for row in parked:      # few bots are ever parked; each is two indexed reads
-        tasks = c.execute("SELECT count(*) n, min(created) oldest FROM tasks WHERE owner=? AND status IN ('open','doing','ready')",
+        tasks = c.execute("SELECT count(*) n, min(created_at) oldest FROM tasks WHERE owner=? AND status IN ('open','doing','ready')",
                           ("bot:" + row["id"],)).fetchone()
-        notices = c.execute("SELECT count(*) n, min(created) oldest FROM jobs WHERE bot=? AND state='queued'",
+        notices = c.execute("SELECT count(*) n, min(created_at) oldest FROM jobs WHERE bot=? AND state='queued'",
                             (row["id"],)).fetchone()
         count, what, oldest = (tasks["n"], "task", tasks["oldest"]) if tasks["n"] else (notices["n"], "notice", notices["oldest"])
         if count and oldest < cutoff:
@@ -851,8 +851,8 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             text = "No computer"
             fix = _fix("Choose a computer", "#/settings", "bots")
         elif reason == "computer_offline":
-            seen = c.execute("SELECT last_seen FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
-            quiet = quiet_minutes(seen["last_seen"] if seen else None)
+            seen = c.execute("SELECT last_seen_at FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
+            quiet = quiet_minutes(seen["last_seen_at"] if seen else None)
             text = f"{label} has not checked in for {quiet} minutes" if quiet >= SILENT_MINUTES else f"{label} is offline"
             fix = _fix("Open Computers", "#/settings", "devices")
             if full and runtime:
@@ -922,7 +922,7 @@ def holding_turns(c, attempts):
     for a in attempts:
         ids = sorted(attempt_tasks(c, a["id"]))
         task = c.execute(f"SELECT id,title FROM tasks WHERE id IN ({','.join('?' * len(ids))}) AND NOT private "
-                         "ORDER BY updated DESC LIMIT 1", ids).fetchone() if ids else None
+                         "ORDER BY updated_at DESC LIMIT 1", ids).fetchone() if ids else None
         out.append({"run": a["id"], "bot": a["bot"], "name": names.get(a["bot"], a["bot"]), "since": a["since"],
                     "task": task["id"] if task else "", "task_title": task["title"] if task else ""})
     return out
@@ -987,7 +987,7 @@ _TOKEN_CACHE = {}   # (database, threshold) -> (monotonic time, answer)
 def _token_heavy(c, threshold):
     """(bot, tokens) for bots whose uncached input tokens passed `threshold` in the last day. A run records
     `input_tokens` without its cache reads (runner-rs/src/execute.rs), so cache reads, which are cheap, do not count.
-    Both halves filter on `turns.started` (indexed) before summing; the sum still visits every turn of the day
+    Both halves filter on `turns.started_at` (indexed) before summing; the sum still visits every turn of the day
     (about 90 ms at 30,000 turns), so one answer serves every tab's Health poll for five minutes."""
     if not threshold or threshold <= 0:
         return []
@@ -1000,9 +1000,9 @@ def _token_heavy(c, threshold):
     answer = [(r["bot"], r["n"]) for r in c.execute(
         "SELECT bot, sum(n) AS n FROM ("
         "SELECT t.bot, coalesce(s.input_tokens,0) AS n FROM turns t "
-        "JOIN turn_usage_segments s ON s.turn_id=t.id WHERE t.started>=? "
+        "JOIN turn_usage_segments s ON s.turn_id=t.id WHERE t.started_at>=? "
         "UNION ALL SELECT t.bot, coalesce(t.input_tokens,0) FROM turns t "
-        "WHERE t.started>=? AND NOT EXISTS (SELECT 1 FROM turn_usage_segments s WHERE s.turn_id=t.id)) "
+        "WHERE t.started_at>=? AND NOT EXISTS (SELECT 1 FROM turn_usage_segments s WHERE s.turn_id=t.id)) "
         "GROUP BY bot HAVING sum(n)>? ORDER BY sum(n) DESC", (since, since, threshold))]
     _TOKEN_CACHE.clear()
     _TOKEN_CACHE[key] = (time.monotonic(), answer)
@@ -1022,11 +1022,11 @@ def token_failure(c):
     """{"message", "action"} when the GitHub App itself failed to issue a token in the last day and has not
     succeeded since, else None. A row without an action predates App-only recording (0.2.21 also wrote a bot's
     own missing repository here), so it is not this."""
-    health = c.execute("SELECT last_success,last_error,detail FROM service_health WHERE service=?",
+    health = c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?",
                        (GITHUB_HEALTH,)).fetchone()
     recent = H.shift(H.now(), hours=-RECENT_HOURS)
     if not (health and health["last_error"] and health["last_error"] > recent
-            and health["last_error"] > (health["last_success"] or "")):
+            and health["last_error"] > (health["last_succeeded_at"] or "")):
         return None
     try:
         detail = json.loads(health["detail"] or "{}")
@@ -1395,10 +1395,10 @@ def silent_waits(c, at=None):
     return [dict(r) for r in c.execute(
         "SELECT * FROM (SELECT t.id, t.title, t.owner, t.waiting_on, t.conversation_id, t.private, "
         "coalesce((SELECT max(e.ts) FROM task_events e WHERE e.task_id=t.id AND e.field='waiting_on' "
-        "AND e.new=t.waiting_on), t.updated) AS since FROM tasks t "
+        "AND e.new=t.waiting_on), t.updated_at) AS since FROM tasks t "
         "WHERE t.waiting_on IS NOT NULL AND t.status='waiting') w WHERE w.since<? "
         "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.to_actor=w.waiting_on AND m.from_actor=w.owner "
-        "AND m.created>=w.since AND m.deleted_at IS NULL) "
+        "AND m.created_at>=w.since AND m.deleted_at IS NULL) "
         "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=w.conversation_id AND m.kind='ask' "
         f"AND m.to_actor=w.waiting_on AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL}) "
         "ORDER BY w.since LIMIT 20", (cutoff,))]
@@ -1406,11 +1406,11 @@ def silent_waits(c, at=None):
 
 def _failed(c):
     since = H.shift(H.now(), hours=-RECENT_HOURS)
-    rows = c.execute("SELECT bot,state,finished FROM attempts WHERE state IN ('failed','expired') AND finished>? "
-                     "ORDER BY finished DESC LIMIT 5", (since,)).fetchall()
-    total = c.execute("SELECT count(*) FROM attempts WHERE state IN ('failed','expired') AND finished>?",
+    rows = c.execute("SELECT bot,state,finished_at FROM attempts WHERE state IN ('failed','expired') AND finished_at>? "
+                     "ORDER BY finished_at DESC LIMIT 5", (since,)).fetchall()
+    total = c.execute("SELECT count(*) FROM attempts WHERE state IN ('failed','expired') AND finished_at>?",
                       (since,)).fetchone()[0]
-    return total, [{"bot": r["bot"], "state": r["state"], "at": r["finished"]} for r in rows]
+    return total, [{"bot": r["bot"], "state": r["state"], "at": r["finished_at"]} for r in rows]
 
 
 def _fallbacks(c):
@@ -1418,9 +1418,9 @@ def _fallbacks(c):
     harness and when the unbroken run of fallback turns began; and bots a usage limit still holds."""
     from .execution import cooling_off
     since, latest = H.shift(H.now(), hours=-RECENT_HOURS), {}
-    for r in c.execute("SELECT bot,coalesce(started,created) AS began,json_extract(result,'$.fallback') AS harness "
-                       "FROM attempts WHERE state IN ('completed','failed','interrupted') AND finished>? "
-                       "ORDER BY bot,finished DESC", (since,)):
+    for r in c.execute("SELECT bot,coalesce(started_at,created_at) AS began,json_extract(result,'$.fallback') AS harness "
+                       "FROM attempts WHERE state IN ('completed','failed','interrupted') AND finished_at>? "
+                       "ORDER BY bot,finished_at DESC", (since,)):
         row = latest.setdefault(r["bot"], {"bot": r["bot"], "harness": r["harness"], "since": r["began"], "open": bool(r["harness"])})
         if row["open"] and r["harness"]:
             row["since"] = r["began"]
@@ -1480,7 +1480,7 @@ def review_children_sql(visible):
     return ("SELECT tasks.owner FROM task_relations r JOIN tasks ON tasks.id=r.from_task "
             "WHERE r.kind='parent' AND r.to_task=? AND tasks.status IN ('open','doing','waiting','review','ready') "
             "AND tasks.title LIKE 'Review %' "
-            f"AND coalesce(tasks.private,1)=0 AND ({visible}) ORDER BY tasks.created LIMIT 3")
+            f"AND coalesce(tasks.private,1)=0 AND ({visible}) ORDER BY tasks.created_at LIMIT 3")
 
 
 def _aged_pr_checks(c, who, auth, full, kind):
@@ -1493,7 +1493,7 @@ def _aged_pr_checks(c, who, auth, full, kind):
         "SELECT l.*,tasks.title task_title,tasks.owner, tasks.number ticket FROM task_links l "
         "JOIN tasks ON tasks.id=l.task_id WHERE l.kind='pr' AND l.state IN ('open','draft') "
         "AND tasks.owner LIKE 'bot:%' AND coalesce(tasks.private,1)=0 "
-        f"AND ({auth.task_sql(c, who)}) ORDER BY l.created,l.id")
+        f"AND ({auth.task_sql(c, who)}) ORDER BY l.created_at,l.id")
     items, seen = [], set()
     for row in rows:
         link = dict(row)
@@ -1539,7 +1539,7 @@ def _unreviewed_runs(c, who, auth):
     from .execution import HELD_UNREVIEWED
     slugs = [row[0] for row in c.execute(
         "SELECT DISTINCT j.bot FROM jobs j LEFT JOIN attempts a ON a.id=j.attempt_id WHERE j.state='uncertain' "
-        "AND coalesce(a.finished,j.created)<=? ORDER BY j.bot", (H.shift(H.now(), seconds=-HELD_UNREVIEWED),))]
+        "AND coalesce(a.finished_at,j.created_at)<=? ORDER BY j.bot", (H.shift(H.now(), seconds=-HELD_UNREVIEWED),))]
     readable = auth.bot_accesses(c, who, slugs) if slugs else {}
     items = []
     # One read of every held run, then the same per-run visibility check unreviewed does for one bot.
@@ -1547,9 +1547,9 @@ def _unreviewed_runs(c, who, auth):
     if slugs:
         cutoff = H.shift(H.now(), seconds=-HELD_UNREVIEWED)
         marks = ",".join("?" * len(slugs))
-        for row in c.execute("SELECT m.*,j.bot,j.attempt_id,coalesce(a.finished,j.created) AS since FROM jobs j "
+        for row in c.execute("SELECT m.*,j.bot,j.attempt_id,coalesce(a.finished_at,j.created_at) AS since FROM jobs j "
                              "JOIN messages m ON m.id=j.message_id LEFT JOIN attempts a ON a.id=j.attempt_id "
-                             f"WHERE j.bot IN ({marks}) AND j.state='uncertain' AND coalesce(a.finished,j.created)<=? "
+                             f"WHERE j.bot IN ({marks}) AND j.state='uncertain' AND coalesce(a.finished_at,j.created_at)<=? "
                              "AND NOT EXISTS(SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id) "
                              "ORDER BY since", (*slugs, cutoff)):
             held.setdefault(row["bot"], []).append(row)
@@ -1820,7 +1820,7 @@ def view(c, who, settings, auth, github, config):
                     return f'{minutes} min' if minutes < 120 else f'{minutes // 60} h'
                 checks.append(_check('worktree_waits', 'Waiting for a worktree', 'info', '; '.join(
                     f"{H.actor_id(w['owner'])}: {w['repo']}, {'setting up' if w['state'] == 'reserved' else 'no room'} "
-                    f"for {age(w['created'])} ({w['reason']})" for w in waits[:3])
+                    f"for {age(w['created_at'])} ({w['reason']})" for w in waits[:3])
                     + ('.' if len(waits) <= 3 else f'; and {len(waits) - 3} more.'), [_fix('Open tasks', '#/tasks')]))
             # What freed a place lately, and why (backend/worktrees.py released_event): finished work releasing its
             # tree is the normal way room comes back, so it is said, not warned about.
@@ -2062,7 +2062,7 @@ def view(c, who, settings, auth, github, config):
     # checks alone miss that loop. Use the same task visibility as the rest of Tico.
     # Waiting tasks can also escalate when held only by their own quiet subtasks.
     stalled = [row for row in c.execute(
-        "SELECT id,title,number,owner,updated,status,waiting_on FROM tasks "
+        "SELECT id,title,number,owner,updated_at,status,waiting_on FROM tasks "
         "WHERE owner LIKE 'bot:%' AND status IN ('open','doing','waiting') "
         f"AND coalesce(private,1)=0 AND ({auth.task_sql(c, who)}) "
         # A waiting parent's diagnosis must not reveal the activity of an unreadable blocker.
@@ -2073,13 +2073,13 @@ def view(c, who, settings, auth, github, config):
         # Redundant with the EXISTS; lets SQLite start from the few escalated tasks, not every task.
         "AND tasks.id IN (SELECT target FROM events WHERE action='task.stall_escalated') "
         "AND EXISTS (SELECT 1 FROM events e WHERE e.action='task.stall_escalated' "
-        "AND e.target=tasks.id AND e.ts>=tasks.updated) ORDER BY updated", H.ACTIVE_STATUSES)
+        "AND e.target=tasks.id AND e.ts>=tasks.updated_at) ORDER BY updated_at", H.ACTIVE_STATUSES)
         if row["status"] != "waiting" or H.own_stuck_blockers(c, dict(row))]
     if stalled:
         items = [{"bot": H.actor_id(row["owner"]), "name": row["title"][:200], "task": row["id"],
-                  "quiet_minutes": quiet_minutes(row["updated"]),
+                  "quiet_minutes": quiet_minutes(row["updated_at"]),
                   "text": f"#{row['number'] or row['id']} {row['title'][:200]} (owner {row['owner']}): "
-                          f"no progress for {quiet_minutes(row['updated'])} min; check the recovery diagnosis or record the missing dependency",
+                          f"no progress for {quiet_minutes(row['updated_at'])} min; check the recovery diagnosis or record the missing dependency",
                   "fix": "hub task show " + row["id"],
                   "fixes": [_fix("Open task", "#/tasks/" + row["id"])]}
                  for row in stalled[:DIAGNOSTIC_LIMIT]] if full or kind == "bot" else []
@@ -2176,12 +2176,12 @@ def note_github_token(store, error=None, action=""):
             return
     with store.transaction() as c:
         if error:
-            c.execute("INSERT INTO service_health(service,last_success,last_error,detail) VALUES(?,NULL,?,?) "
+            c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,NULL,?,?) "
                       "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail=excluded.detail",
                       (GITHUB_HEALTH, error, detail))
         else:   # only a recovery is written, so a healthy turn costs no extra write
             # The failure's message goes too, so nothing reads an old failure after a recovery.
-            c.execute("UPDATE service_health SET last_success=?,last_error=NULL,detail='{}' WHERE service=? "
+            c.execute("UPDATE service_health SET last_succeeded_at=?,last_error=NULL,detail='{}' WHERE service=? "
                       "AND (last_error IS NOT NULL OR detail<>'{}')", (now, GITHUB_HEALTH))
 
 

@@ -102,8 +102,8 @@ def last_turn(c, settings, bot):
                         (bot, runtime, model)).fetchone()
     if not session or not session[0]:
         return None
-    row = c.execute("SELECT finished,input_tokens,cached_tokens,prompt_tokens FROM turns WHERE bot=? AND thread_id=? "
-                    "AND finished IS NOT NULL ORDER BY finished DESC LIMIT 1", (bot, session[0])).fetchone()
+    row = c.execute("SELECT finished_at,input_tokens,cached_tokens,prompt_tokens FROM turns WHERE bot=? AND thread_id=? "
+                    "AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1", (bot, session[0])).fetchone()
     return {**dict(row), "runtime": runtime} if row else None
 
 
@@ -115,7 +115,7 @@ def warmth(turn, now=None):
     lifetime = CACHE_LIFETIME.get(turn.get("runtime"), WARM_SECONDS)
     context = turn.get("prompt_tokens")
     context = int(context) if context is not None else None
-    finished, at = H.parse_ts(turn.get("finished")), H.parse_ts(now or H.now())
+    finished, at = H.parse_ts(turn.get("finished_at")), H.parse_ts(now or H.now())
     age = (at - finished).total_seconds() if finished and at else None
     # An unknown fresh count (an older row, a runner that sent none) is cold: counting it as 0 would read 100% cached.
     share = cached / (cached + int(fresh)) if cached > 0 and fresh is not None else 0.0
@@ -124,14 +124,14 @@ def warmth(turn, now=None):
 
 def epoch_since(c, conversation_id):
     """When the chat's session was last cleared, or None."""
-    row = c.execute("SELECT updated FROM session_epochs WHERE conversation_id=?", (conversation_id,)).fetchone()
+    row = c.execute("SELECT updated_at FROM session_epochs WHERE conversation_id=?", (conversation_id,)).fetchone()
     return row[0] if row else None
 
 
 def turns_since(c, bot, conversation_id, since):
     """The bot's finished turns on this chat since its last clear."""
     return c.execute("SELECT count(*) FROM turns t JOIN messages m ON m.id=t.message_id WHERE t.bot=? "
-                     "AND m.conversation_id=? AND t.finished IS NOT NULL AND t.started>?",
+                     "AND m.conversation_id=? AND t.finished_at IS NOT NULL AND t.started_at>?",
                      (bot, conversation_id, since or "")).fetchone()[0]
 
 
@@ -155,7 +155,7 @@ def _held(c, conv):
 def snapshot(c, conversation_id):
     """What a decision was made on: the session's epoch and the chat's newest message."""
     epoch = c.execute("SELECT epoch FROM session_epochs WHERE conversation_id=?", (conversation_id,)).fetchone()
-    newest = c.execute("SELECT id FROM messages WHERE conversation_id=? ORDER BY created DESC, id DESC LIMIT 1",
+    newest = c.execute("SELECT id FROM messages WHERE conversation_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
                        (conversation_id,)).fetchone()
     return {"epoch": epoch[0] if epoch else 0, "newest": newest[0] if newest else None}
 

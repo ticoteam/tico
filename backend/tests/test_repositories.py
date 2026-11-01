@@ -134,7 +134,7 @@ def test_modes_mixed_scopes_alias_and_default(api, gh):
     assert turn_token(api).json()['repositories'] == ['Acme/emp-cpo']
     put(api, 'repositories/settings', {'new_bot_default': 'all'})
     with api.app_state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,created) VALUES('new-test','new-test','Sam',?)", (H.now(),))
+        c.execute("INSERT INTO bots(id,slug,display_name,created_at) VALUES('new-test','new-test','Sam',?)", (H.now(),))
         c.execute("INSERT INTO bot_config(bot,config,team,operator,repo) VALUES('new-test','{}','t','ana','bot-new-test')")
         assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='new-test'").fetchone()[0])['repo_access_mode'] == 'all'
 
@@ -281,8 +281,8 @@ def test_a_github_token_recovery_clears_the_old_failure_message(api):
     note_github_token(store, 'GitHub would not issue an installation token (HTTP 500)', 'Check the App.')
     note_github_token(store)
     with store.read() as c:
-        row = c.execute("SELECT last_success,last_error,detail FROM service_health WHERE service='github:token'").fetchone()
-    assert row['last_success'] and row['last_error'] is None and row['detail'] == '{}'
+        row = c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service='github:token'").fetchone()
+    assert row['last_succeeded_at'] and row['last_error'] is None and row['detail'] == '{}'
 
 
 def test_run_workflows_gets_its_own_actions_token_only_once_the_installation_accepts_it(api, gh):
