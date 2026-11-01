@@ -129,7 +129,7 @@ There is no On/Off switch. How much it does is the [level](strategy-bot.md) the 
 bet's wrong-if trips, puts one Decide card in front of them; the owner writes and publishes, never the bot.
 On goals and KPIs it does five things:
 
-1. **Goals make sense.** It flags vague, duplicate or unmeasured goals and suggests a KPI or clearer wording, as proposals on
+1. **Goals make sense.** It flags vague or duplicate goals and may suggest a measure once or clearer wording, as proposals on
    the goal. At Passive it does this when you ask it. It prefers goals that serve a strategy bet and have a KPI, and
    suggests one or two per active bet that no KPI-backed goal serves.
 2. **KPIs.** It is the steward of every KPI. Each has a folder in its repository, `kpis/<slug>/`, with `definition.md`,
@@ -245,7 +245,7 @@ their own click) or rejects it; confirming makes the change as that human.
 | `goal_kpi` | an existing `kpi_id`, or a new `kpi` (`name`, `definition`, `unit`, `direction`, `cadence`, `source_note`), and a `target` | the goal's owner or the KPI's |
 | `kpi_definition` | any of `name`, `definition`, `unit`, `direction`, `cadence`, `source_note` | the KPI's owner |
 | `kpi_target` | the target fields, with `goal_id` | the goal's owner or the KPI's |
-| `flag` | `issue`: `vague`, `duplicate` or `unmeasured`, and a `note` | the goal's owner |
+| `flag` | `issue`: `vague` or `duplicate`, and a `note` | the goal's owner |
 | `goal_why` | `why`: one line, up to 200 characters ([A goal's Why](#a-goals-why)); never for a goal tied to a bet | whoever may change the goal |
 | `strategy_draft` | partial `summary`, `vision`, `sections`, `bets` ([Strategy](strategy.md#who-may-do-what)); confirming writes the draft, never publishes | the team owner |
 | `recovery` | `evidence`, 1 to 4 `options` (`label`, 1 to 6 `actions`: `create`, `reorder` or `settle` on bots' tasks), `pick`; only the Strategy Bot at **Suggests actions** or **Acts on its own** ([Recoveries](#recoveries-and-merged-asks)) | the goal's owner; `{"decision": "confirm", "option": n}` approves another option than the pick |

@@ -1203,6 +1203,7 @@ export type FinanceAccess = {
 }>;
   teammates: Array<{
   default: "everything" | "team_expenses" | "own_expenses" | "none";
+  default_team: string | null;
   grants: Array<Record<string, unknown>>;
   kind: string;
   may_grant: boolean;
@@ -2756,6 +2757,12 @@ export type MeetingSearch = {
   results: Array<unknown>;
 };
 
+export type MemoryTidyPilot = {
+  bot: string;
+  effort?: "low";
+  model: string;
+};
+
 export type Message = {
   answer?: ReviewAnswer;
   answers?: Array<string | ReviewAnswer>;
@@ -3913,6 +3920,7 @@ export type Suggestion = {
 export type SystemRoutineUpdate = {
   at?: string | null;
   on?: boolean | null;
+  pilots?: Array<MemoryTidyPilot> | null;
   preset?: "15m" | "hourly" | "4h" | "daily" | "business" | null;
 };
 
