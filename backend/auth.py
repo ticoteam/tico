@@ -684,63 +684,11 @@ class Auth:
 
     def bot_accesses(self, c, who, slugs=None):
         """{slug: {see, read, write}} for this caller, for `slugs` (default every bot with a
-        configuration). One pass, so a list answers with the same rules as a single check."""
-        wanted = list(dict.fromkeys(slugs)) if slugs is not None else None
-        rows = {r["bot"]: r for r in read_cache.configs(c, wanted)}
-        out = {}
-        if who.role not in ("human", "owner", "bot") or who.role == "owner":
-            return {slug: dict(self.FULL) for slug in (wanted if wanted is not None else rows)}
-        shared = {}     # the roster, org-chart inputs and reports_to map, read once and only when needed
-
-        def context():
-            if not shared:
-                from . import views
-                # Read only: P.person, P.group_chain, P.manages and above never change them, so the snapshot's own
-                # copies are shared rather than copied for every bot list.
-                roster = views.roster(c, shared=True)
-                shared.update(
-                    roster=roster, entries=views.entries(c, shared=True),
-                    archived={r["slug"] for r in H.bots(c) if r.get("state") == "archived"},
-                    parents={r["bot"]: r["reports_to"] or "" for r in read_cache.configs(c)},
-                    bare=True)               # a bot's bare person id in reports_to is that person (people.py)
-                pid = H.actor_id(who.actor)
-                shared["person"] = pid
-                own = (P.person(pid, roster) or {}).get("team") or ""
-                shared["team"] = P.group_chain(own, roster) or ([own] if own else [])
-            return shared
-
-        for slug in (wanted if wanted is not None else rows):
-            row = rows.get(slug)
-            doc = A.document(row["access_json"]) if row else None
-            if doc is None or A.is_open(doc):
-                out[slug] = dict(self.FULL)
-                continue
-            if who.role == "bot":
-                me = H.actor_id(who.actor)
-                if me == slug or above(context()["parents"], me, slug):
-                    out[slug] = dict(self.FULL)
-                    continue
-                levels = {level: A.names(doc[level], bot=me) for level in A.LEVELS}
-                # A bot may answer one that wrote to it, or that holds work it asked for, so a
-                # private bot can still be replied to: nothing else about it opens up.
-                if not levels["write"] and (
-                        c.execute("SELECT 1 FROM messages WHERE to_actor=? AND from_actor=? LIMIT 1",
-                                  (who.actor, "bot:" + slug)).fetchone()
-                        or c.execute("SELECT 1 FROM tasks WHERE requester=? AND owner=? AND status NOT IN "
-                                     "('done','closed','declined') LIMIT 1", ("bot:" + slug, who.actor)).fetchone()):
-                    levels["write"] = True
-            else:
-                ctx = context()
-                pid = ctx["person"]
-                managed = (self.bot_admin(who) or row["operator"] == pid or pid in A.owner_ids(row["bot_owners_json"])
-                           or P.manages(pid, "bot", slug, ctx["roster"], ctx["entries"], ctx["archived"], ctx["bare"]))
-                if managed:
-                    out[slug] = dict(self.FULL)
-                    continue
-                levels = {level: A.names(doc[level], person=pid, team=ctx["team"]) for level in A.LEVELS}
-            levels["see"] = levels["see"] or levels["read"] or levels["write"]
-            out[slug] = levels
-        return out
+        configuration). One pass, so a list answers with the same rules as a single check. The rules live in
+        backend/teammate_access.py, which decides people and groups the same way."""
+        from . import teammate_access
+        admin = self.bot_admin(who) if who.role == "human" else None
+        return teammate_access.bot_levels(c, who, slugs, admin=admin, auth=self)
 
     def bot_access(self, c, who, slug):
         """`{see, read, write}` for this caller on one bot. A slug with no configuration is Open."""
