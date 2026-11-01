@@ -69,6 +69,43 @@ def readable_goals(c, auth, who, rows):
 _readable_goals = readable_goals          # install's closures of the same name call these
 
 
+def org_shape(c):
+    roster, entries = views.roster(c), views.entries(c)
+    archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
+    return roster, entries, archived
+
+
+def is_manager(who):
+    """The Strategy Bot acting as itself."""
+    return who.role == "bot" and who.actor == G.AUTO_ACTOR
+
+
+def stands_above(c, who, owner):
+    """Whether `who` is the owner of the environment or sits above `owner` on the org chart:
+    the tasks board's movers rule, over people and bots alike."""
+    if who.role == "owner":
+        return True
+    if who.role not in ("human", "bot"):
+        return False
+    roster, entries, archived = org_shape(c)
+    return who.actor in G.above(owner, roster, entries, archived, True)
+
+
+def may_edit_kpi(c, who, record):
+    """Whether the KPI's owner, or someone above them on the org chart, may change it."""
+    if who.role == "owner":
+        return True
+    if is_manager(who) or record["owner"] == G.COMPANY:
+        return False
+    return who.actor == record["owner"] or stands_above(c, who, record["owner"])
+
+
+def kpi_editable(c, who, record):
+    """Whether the KPI update route lets `who` change this KPI: the Strategy Bot proposes instead, and a KPI Tico
+    computes is fixed. The growth KPI list flags each KPI with this."""
+    return not is_manager(who) and not K.auto(record["id"]) and may_edit_kpi(c, who, record)
+
+
 def install(app, store, auth, mutate, settings):
     write = mutate
 
@@ -97,15 +134,6 @@ def install(app, store, auth, mutate, settings):
         return write(request, body, work_then_ask)
 
     # ------------------------------------------------------------------ who may
-    def org_shape(c):
-        roster, entries = views.roster(c), views.entries(c)
-        archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-        return roster, entries, archived
-
-    def is_manager(who):
-        """The Strategy Bot acting as itself."""
-        return who.role == "bot" and who.actor == G.AUTO_ACTOR
-
     def goal_owner(c, who, value):
         """A slug, a person id, `me` or `company`, as the actor string a goal or KPI is owned by."""
         if value in ("me", "self", None, ""):
@@ -117,16 +145,6 @@ def install(app, store, auth, mutate, settings):
             return G.COMPANY
         return auth.target(c, who, value)
 
-    def stands_above(c, who, owner):
-        """Whether `who` is the owner of the environment or sits above `owner` on the org chart:
-        the tasks board's movers rule, over people and bots alike."""
-        if who.role == "owner":
-            return True
-        if who.role not in ("human", "bot"):
-            return False
-        roster, entries, archived = org_shape(c)
-        return who.actor in G.above(owner, roster, entries, archived, True)
-
     def parent_owner(c, row):
         parent = G.goal(c, row["parent_id"]) if row.get("parent_id") else None
         return parent["owner"] if parent else None
@@ -136,13 +154,6 @@ def install(app, store, auth, mutate, settings):
         if is_manager(who):
             return False
         return who.actor in (row["owner"], parent_owner(c, row)) or stands_above(c, who, row["owner"])
-
-    def may_edit_kpi(c, who, record):
-        if who.role == "owner":
-            return True
-        if is_manager(who) or record["owner"] == G.COMPANY:
-            return False
-        return who.actor == record["owner"] or stands_above(c, who, record["owner"])
 
     def may_log(c, who, record):
         """Whoever keeps the KPI, the Strategy Bot, or the owner of a goal that uses it."""

@@ -45,6 +45,7 @@ function growthIdeaDraw(slot) {
   // As the server allows: the assignee or an admin runs the test and gives the verdict; the creator also edits and scores.
   const run = grAdmin() || grSame(i.assignee ?? task.owner, grMe()), may = run || grSame(i.created_by, grMe());
   const bet = refs.bets.find(b => b.id === i.bet_id), kpi = refs.kpis.find(k => k.id === i.kpi_id), judged = refs.kpis.find(k => k.id === i.judged_kpi_id);
+  const kpiName = kpi?.name || i.kpi_name, judgedName = judged?.name || i.judged_kpi_name;
   const dl = rows => rows.filter(r => r[1]).map(([k, v, raw]) => `<dt>${esc(k)}</dt><dd>${raw ? v : esc(v)}</dd>`).join('');
   const link = t => `<a href="${grTaskHref(t)}">${esc(titles.get(t) || t)}</a>`;
   const ice = may ? `<form class="gi-ice" data-gi-ice novalidate aria-label="ICE">${[['i', 'Impact', i.ice_i], ['c', 'Confidence', i.ice_c], ['e', 'Ease', i.ice_e]].map(([k, label, v]) =>
@@ -53,7 +54,7 @@ function growthIdeaDraw(slot) {
     : i.ice != null ? `<span class="gr-ice">ICE ${esc([i.ice_i, i.ice_c, i.ice_e].map(x => x ?? '—').join(' · '))}</span>` : '';
   const testing = i.status === 'testing', done = GR_RESULTS.includes(i.status);
   const test = i.test_to || i.change ? `<section class="gi-sec"><h4 class="gr-k">Test</h4><dl class="br-dl">${dl([['Window', [grDay(i.test_from), grDay(i.test_to)].filter(Boolean).join(' – ')],
-      ['Change', i.change], ['Stop if', i.stop_if], ['Min events', i.min_events != null ? String(i.min_events) : ''], ['Judged on', judged?.name], ['Audience', i.audience]])}</dl></section>` : '';
+      ['Change', i.change], ['Stop if', i.stop_if], ['Min events', i.min_events != null ? String(i.min_events) : ''], ['Judged on', judgedName], ['Audience', i.audience]])}</dl></section>` : '';
   const verdict = done || i.result || i.learning ? `<section class="gi-sec"><h4 class="gr-k">Verdict</h4><dl class="br-dl">${dl([['Result', i.result], ['Learning', i.learning],
       ['Bet', i.bet_effect && i.bet_effect !== 'none' ? (i.bet_effect === 'supports' ? 'Supports' : 'Weakens') : ''], ['Confidence', i.confidence],
       ['By', [grWho(i.verdict_by), grDay(i.verdict_at)].filter(Boolean).join(' · ')]])}</dl></section>` : '';
@@ -62,7 +63,7 @@ function growthIdeaDraw(slot) {
       ${run && !done ? '<button class="ghost small" type="button" data-gi-drop>Drop</button>' : ''}${may ? '<button class="ghost small" type="button" data-gi-edit>Edit</button>' : ''}`;
   slot.innerHTML = `<div class="gi-head"><span class="gr-k">Idea</span>${grStatus(i.status)}${ice}<span class="spacer"></span>${actions}</div>
     <dl class="br-dl gi-dl">${dl([['Hypothesis', i.hypothesis], ['Prediction', i.prediction], ['Bet', bet ? `${bet.n} · ${bet.statement}` : i.bet_title],
-      ['Metric', kpi ? `${kpi.name} ${grKpiVal(kpi)}` : ''], ['Channels', (i.channels || []).map(s => `<span class="gr-tag">${esc(grChanName(refs.channels, s))}</span>`).join(''), true],
+      ['Metric', kpi ? `${kpi.name} ${grKpiVal(kpi)}` : kpiName || ''], ['Channels', (i.channels || []).map(s => `<span class="gr-tag">${esc(grChanName(refs.channels, s))}</span>`).join(''), true],
       ['Follow-up of', i.follow_up_of ? link(i.follow_up_of) : '', true], ['Waits on', (i.depends_on || []).map(link).join(', '), true]])}</dl>${test}${verdict}`;
   slot.hidden = false;
   growthIdeaBind(slot);
@@ -90,7 +91,7 @@ function growthIdeaBind(slot) {
       ${grField('To', `<input type="date" name="test_to" required value="${esc(i.test_to || two)}">`)}</div>
       ${grField('Change', `<textarea name="change" rows="2" required>${esc(i.change || '')}</textarea>`)}
       ${grField('Stop if', `<input name="stop_if" required value="${esc(i.stop_if || '')}">`)}
-      <div class="gr-pair">${grField('Judged on', `<select name="judged_kpi_id">${grOpts(refs.kpis.map(k => [k.id, k.name]), i.judged_kpi_id || i.kpi_id, '—')}</select>`)}
+      <div class="gr-pair">${grField('Judged on', `<select name="judged_kpi_id">${grOpts(grKpiOpts(refs, i.judged_kpi_id || i.kpi_id, i.judged_kpi_id ? i.judged_kpi_name : i.kpi_name), i.judged_kpi_id || i.kpi_id, '—')}</select>`)}
       ${grField('Min events', `<input type="number" name="min_events" min="0" step="1" value="${esc(i.min_events ?? '')}">`)}</div>
       ${grField('Audience', `<input name="audience" maxlength="500" value="${esc(i.audience || '')}">`)}`, 'Start', async form => {
       const v = n => form.elements[n].value.trim();

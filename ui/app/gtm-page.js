@@ -299,9 +299,8 @@ function gtSourcesBind(state) {
 
 // ----------------------------------------------------------------- Model: the KPI tree
 function gtModelHtml(state) {
-  // The growth KPI read carries no edit flag: the company owner changes any KPI but those Tico computes (auto:).
-  // Anyone else may only through a KPI they keep, which this read does not say, so they see no Edit.
-  const kpis = state.kpis || [], mayKpi = k => S.me?.role === 'owner' && !String(k.id).startsWith('auto:'), may = kpis.some(mayKpi);
+  // The growth KPI read says per KPI whether the caller may edit it (the KPI update route's check).
+  const kpis = state.kpis || [], mayKpi = k => k.may_edit === true, may = kpis.some(mayKpi);
   if (!kpis.length) return '';
   const ns = kpis.find(k => k.growth_role === 'north_star');
   const tree = ns ? grTree(kpis, ns.id) : [];

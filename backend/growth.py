@@ -231,7 +231,7 @@ def _bet_titles(c, who, bet_ids):
     return {b["id"]: b.get("statement") for b in ((strategy.current(c) or {}).get("bets") or []) if b.get("id") in wanted}
 
 
-def idea_views(c, rows, who=None):
+def idea_views(c, rows, who=None, hidden=()):
     """Ideas as the API shows them, with channels, bet titles, relations and subtask counts read in a few queries."""
     if not rows:
         return []
@@ -254,6 +254,10 @@ def idea_views(c, rows, who=None):
         f"JOIN tasks t ON t.id=rel.from_task WHERE rel.kind='parent' AND rel.to_task IN ({marks}) GROUP BY rel.to_task",
         ids)}
     bets = _bet_titles(c, who, sorted({r["bet_id"] for r in rows if r.get("bet_id")}))
+    kpi_marks = sorted({r[k] for r in rows for k in ("kpi_id", "judged_kpi_id") if r[k]})
+    kpi_names = {r["id"]: r["name"] for r in H._rows(c.execute(
+        f"SELECT id, name, owner FROM kpis WHERE id IN ({','.join('?' * len(kpi_marks))})", kpi_marks))
+        if r["owner"] not in hidden} if kpi_marks else {}
     out = []
     for r in rows:
         tid = r["task_id"]
@@ -262,7 +266,8 @@ def idea_views(c, rows, who=None):
             "created_by": r["created_by"], "created_at": r["task_created"] or r["created_at"],
             "updated_at": r["updated_at"], "hypothesis": r["hypothesis"], "prediction": r["prediction"],
             "bet_id": r["bet_id"], "bet_title": bets.get(r["bet_id"]), "kpi_id": r["kpi_id"],
-            "judged_kpi_id": r["judged_kpi_id"], "channels": slugs.get(tid, []),
+            "kpi_name": kpi_names.get(r["kpi_id"]), "judged_kpi_id": r["judged_kpi_id"],
+            "judged_kpi_name": kpi_names.get(r["judged_kpi_id"]), "channels": slugs.get(tid, []),
             "ice_i": r["ice_i"], "ice_c": r["ice_c"], "ice_e": r["ice_e"], "ice": _ice(r), "status": r["status"],
             **{k: r[k] for k in ("source_kind", "source_ref", "test_from", "test_to", "change", "stop_if", "min_events",
                                  "audience", "external_ref", "result", "learning", "bet_effect", "confidence",
@@ -294,7 +299,12 @@ def ideas(c, auth, who, status=None, bet_id=None, channel_slug=None, kpi_id=None
     limit = max(1, min(int(limit or IDEAS_PAGE), IDEAS_MAX))
     rows = H._rows(c.execute(IDEA_SQL + " WHERE " + " AND ".join(where)
                              + " ORDER BY t.created DESC, g.task_id LIMIT ?", args + [limit]))
-    return idea_views(c, rows, who)
+    return idea_views(c, rows, who, _hidden(c, auth, who))
+
+
+def _hidden(c, auth, who):
+    from . import goal_routes
+    return goal_routes._hidden_owners(c, auth, who)
 
 
 def idea(c, auth, who, task_id):
@@ -302,7 +312,7 @@ def idea(c, auth, who, task_id):
     rows = H._rows(c.execute(IDEA_SQL + " WHERE g.task_id=? AND " + _visible(auth, c, who), (resolved,)))
     if not rows:
         raise Problem("not_found", "No such idea", 404)
-    return idea_views(c, rows, who)[0]
+    return idea_views(c, rows, who, _hidden(c, auth, who))[0]
 
 
 def _cohort_view(row, slugs):
@@ -376,7 +386,7 @@ def economics(c, month=None, hidden=()):
             "total": economics_total(inputs, conf), "guardrails": guardrails(c, hidden)}
 
 
-def kpis(c, hidden=()):
+def kpis(c, hidden=(), may_edit=lambda record: False):
     rows = H._rows(c.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created"))
     rows = [r for r in rows if r.get("owner") not in hidden]
     from . import kpis as K
@@ -390,7 +400,7 @@ def kpis(c, hidden=()):
                     "latest": newest["value"] if newest else None,
                     "latest_at": (newest.get("period_end") or newest.get("collected_at")) if newest else None,
                     "target": link.get("target"), "goal_id": link.get("goal_id"),
-                    **{k: r.get(k) for k in KPI_FIELDS}})
+                    "may_edit": bool(may_edit(r)), **{k: r.get(k) for k in KPI_FIELDS}})
     return {"kpis": out}
 
 
@@ -822,7 +832,7 @@ def kpi_fields(c, actor, kpi_id, fields):
 
 # ----------------------------------------------------------------------------- routes
 def install(app, store, auth, mutate, task_create):
-    from .goal_routes import _hidden_owners
+    from .goal_routes import _hidden_owners, kpi_editable
 
     def reader(who):
         auth.domain(who)
@@ -1032,7 +1042,7 @@ def install(app, store, auth, mutate, task_create):
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            return kpis(c, _hidden_owners(c, auth, who))
+            return kpis(c, _hidden_owners(c, auth, who), lambda record: kpi_editable(c, who, record))
 
     @app.get("/api/v2/growth/evidence")
     def growth_evidence(request: Request):

@@ -104,12 +104,17 @@ const grChecks = (name, pairs, on = []) => `<div class="gr-checks" role="group">
   `<label class="gr-check"><input type="checkbox" name="${esc(name)}" value="${esc(v)}"${on.includes(v) ? ' checked' : ''}>${esc(l)}</label>`).join('')}</div>`;
 const grChecked = (form, name) => [...form.querySelectorAll(`input[name="${CSS.escape(name)}"]:checked`)].map(i => i.value);
 
+// The KPI choices: the loaded list, plus the idea's own KPI when that list does not hold it (hidden or retired).
+const grKpiOpts = (refs, id, name) => {
+  const pairs = refs.kpis.map(k => [k.id, k.name]);
+  if (id && !pairs.some(([x]) => x === id)) pairs.push([id, name || id]);
+  return pairs;
+};
 // The idea form's fields (+ Idea, and editing an idea on its task). The idea's own bet, KPI and channels stay
 // choosable when a list did not load or no longer holds them (retired), so saving never drops them.
 function grIdeaFields(refs, i = {}) {
-  const bets = refs.bets.map(b => [b.id, `${b.n} · ${b.statement}`]), kpis = refs.kpis.map(k => [k.id, k.name]);
+  const bets = refs.bets.map(b => [b.id, `${b.n} · ${b.statement}`]), kpis = grKpiOpts(refs, i.kpi_id, i.kpi_name);
   if (i.bet_id && !bets.some(([id]) => id === i.bet_id)) bets.push([i.bet_id, i.bet_title || i.bet_id]);
-  if (i.kpi_id && !kpis.some(([id]) => id === i.kpi_id)) kpis.push([i.kpi_id, i.kpi_name || i.kpi_id]);
   const chans = (refs.channels || []).filter(c => !c.retired_at).map(c => [c.slug, c.name]);
   for (const slug of i.channels || []) if (!chans.some(([s]) => s === slug)) chans.push([slug, grChanName(refs.channels, slug)]);
   return `${refs.failed ? '<p class="err">Some lists did not load</p>' : ''}${grField('Title', `<input name="title" maxlength="300" required value="${esc(i.title || '')}">`)}

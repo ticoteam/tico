@@ -233,6 +233,20 @@ def test_kpi_tree_fields_and_one_north_star(api):
     assert {k["id"]: k for k in get(api, "growth/kpis")["kpis"]}[booked["id"]]["stage"] is None
 
 
+def test_a_kpi_says_whether_the_caller_may_edit_it_and_an_unreadable_one_has_no_name(api):
+    kpi = post(api, "kpis", {"name": "Refund rate"})["kpi"]
+    hidden = post(api, "kpis", {"name": "Inbox depth"})["kpi"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE kpis SET owner='bot:inbox' WHERE id=?", (hidden["id"],))   # the fixture restricts inbox to Ana
+    may = lambda token: {k["id"]: k["may_edit"] for k in get(api, "growth/kpis", token)["kpis"]}   # noqa: E731
+    assert may("ana-test") == {kpi["id"]: True, hidden["id"]: True}
+    assert may("cara-test") == {kpi["id"]: False} and may(bot(api, "ops"))[kpi["id"]] is False
+    made = post(api, "growth/ideas", {"title": "Cut inbox depth", "kpi_id": hidden["id"], "assignee": "cara"})["idea"]
+    assert get(api, f"growth/ideas/{made['task_id']}")["idea"]["kpi_name"] == "Inbox depth"
+    seen = get(api, f"growth/ideas/{made['task_id']}", "cara-test")["idea"]
+    assert seen["kpi_id"] == hidden["id"] and seen["kpi_name"] is None and seen["judged_kpi_name"] is None
+
+
 # ----------------------------------------------------------------------------- migration
 def test_migration_applies_on_an_empty_file_and_on_one_at_the_previous_version(tmp_path):
     for start in (0, H.MIGRATIONS.index(H.GROWTH_SCHEMA)):
