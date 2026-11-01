@@ -206,7 +206,7 @@
           first = null;
           runnerId = login.runner_id; machine = login.computer || machine; elsewhere = Boolean(login.not_yours);
           // Closed while Try again was on its way: nobody is left to finish the sign-in it started.
-          if (closed) { await post(`${base()}/${encodeURIComponent(login.id)}/cancel`, {}).catch(() => {}); return; }
+          if (closed) { await cancel(login); return; }
         } else login = await post(base(), {runtime, ...(profile ? {profile} : {}), ...(toSubscription ? {to: 'subscription'} : switchAccount ? {switch: true} : {})});
       } catch (error) { status.textContent = error.message; actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; return; }
       draw();
@@ -216,6 +216,9 @@
     void begin();
     return dialog;
   }
+
+  // Cancel a sign-in nobody is left to finish. If this does not reach the server, it expires on its own.
+  const cancel = login => post(`/v2/computers/${encodeURIComponent(login.runner_id)}/logins/${encodeURIComponent(login.id)}/cancel`, {}).catch(() => {});
 
   // "Reviewer 1", "Reviewer 1 and QA", "Reviewer 1, QA and Scout", "Reviewer 1, QA and 2 more".
   function botsWords(names) {
@@ -613,7 +616,7 @@
     return signedIn ? '' : ` <button class="ghost machine-signin" type="button" data-model-key-add ${data}>Add key</button>`;
   }
 
-  window.TicoModelLogin = {open, signOut, useSharedKey, actionsHTML, toSubscriptionHTML, keyActionsHTML, clearKey, replaceKey, scopeHTML, chosenScope};
+  window.TicoModelLogin = {open, cancel, signOut, useSharedKey, actionsHTML, toSubscriptionHTML, keyActionsHTML, clearKey, replaceKey, scopeHTML, chosenScope};
   document.addEventListener('click', event => {
     const button = event.target.closest('[data-model-login], [data-model-switch], [data-model-to-subscription], [data-model-to-key], [data-model-sign-out], [data-model-shared-key], [data-model-key-replace], [data-model-key-clear], [data-model-key-add]');
     if (!button) return;
