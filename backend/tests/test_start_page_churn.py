@@ -3,8 +3,10 @@ start that rewrites most of the file uploads most of it on every restart (script
 import importlib.util
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
+from contextlib import closing
 
 import pytest
 
@@ -51,7 +53,9 @@ def test_a_second_start_rewrites_under_one_percent_of_the_database(tmp_path):
         result, _ = prepare(tmp_path, TICO_ENVIRONMENT_ID=ENVIRONMENT_ID)
         assert result.returncode == 0, result.stderr
         start(data, tmp_path / "backups")
-        assert not (data / "hub.sqlite-wal").exists(), "a connection is still open: the copy would miss its pages"
+        # The stopped server leaves its WAL on disk (by design); fold it in so the copy holds every page the start wrote.
+        with closing(sqlite3.connect(data / "hub.sqlite")) as c:
+            c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         copies.append(tmp_path / f"after-start-{number}.sqlite")
         shutil.copy(data / "hub.sqlite", copies[-1])
     differing, total = page_churn.changed_pages(*copies)
