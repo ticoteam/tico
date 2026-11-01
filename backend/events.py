@@ -1170,6 +1170,11 @@ def _needs_list(view, rows, task_view, held=None):
     return [(rows[-1], entry)]
 
 
+def _changed(c, clauses, args, limit):
+    return [dict(r) for r in c.execute("SELECT * FROM changes WHERE " + " AND ".join(clauses)
+                                       + " ORDER BY seq LIMIT ?", (*args, limit))]
+
+
 def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks=(), parties=(), task_views=None,
          task_view=None, limit=BATCH, needs_held=None, visuals=None, threads_scope=(), shared=None):
     """What `who` may be sent after change `after`: (events, cursor, reset, more). Each event is
@@ -1204,8 +1209,7 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
         if "needs" in topics:
             clauses.append("(topic!='needs' OR subject_id=?)")
             args.append(who.actor)
-        rows = [dict(r) for r in c.execute("SELECT * FROM changes WHERE " + " AND ".join(clauses)
-                                           + " ORDER BY seq LIMIT ?", (*args, limit))]
+        rows = _changed(c, clauses, args, limit)
         more = len(rows) >= limit
         cursor = rows[-1]["seq"] if more else newest
         if not rows:
