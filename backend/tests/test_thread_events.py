@@ -102,7 +102,7 @@ def test_the_threads_topic_says_what_changed_for_the_people_who_may_read_the_thr
     created = [d for _, topic, d in read_as(api, ben, after, ("threads",)) if d.get("thread_id") == thread["id"]]
     assert [d["kind"] for d in created][:1] == ["created"]
     assert created[0]["thread"]["title"] == "Launch"
-    assert any(d["kind"] == "counters" and d["counters"]["last_seq"] >= 1 for d in created)
+    assert not any(d["kind"] == "counters" for d in created)      # counters are written for migrations and repairs only
     after = cursor(api)
     assert api.patch(f"/api/v2/threads/{thread['id']}", json={"title": "Launch day"},
                      headers=headers("ana-test")).status_code == 200
@@ -110,10 +110,10 @@ def test_the_threads_topic_says_what_changed_for_the_people_who_may_read_the_thr
     assert [d["kind"] for d in renamed if d["kind"] == "renamed"] == ["renamed"]
     assert next(d for d in renamed if d["kind"] == "renamed")["thread"]["title"] == "Launch day"
     after = cursor(api)
-    say(api, thread["id"], "One more")
-    last_seq = api.get(f"/api/v2/threads/{thread['id']}", headers=headers("ben-test")).json()["last_seq"]
-    counted = [d for _, topic, d in read_as(api, ben, after, ("threads",)) if d.get("thread_id") == thread["id"]]
-    assert any(d["kind"] == "counters" and d["counters"]["last_seq"] == last_seq == 2 for d in counted)
+    posted = say(api, thread["id"], "One more")
+    assert not [d for _, topic, d in read_as(api, ben, after, ("threads",)) if d.get("kind") == "counters"]
+    carried = [d for _, topic, d in read_as(api, ben, after, ("messages",)) if d.get("id") == posted["id"]]
+    assert carried and carried[0]["thread_id"] == thread["id"] and isinstance(carried[0]["message_seq"], int)
     cara = who(api, "cara-test")
     assert not [d for _, topic, d in read_as(api, cara, 0, ("threads",)) if d.get("thread_id") == thread["id"]]
 
