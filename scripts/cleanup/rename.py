@@ -1636,6 +1636,66 @@ def process(wave, keep, report, write, only=None):
     return changed
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# SQL sites the string pass could not settle: a fragment with no table of its own ("owner=?", "t.owner IN ..."). Waves
+# past 2 rename common words, so these are most of what is left. A site is settled from what the code beside it says:
+# an alias bound nearby, or the one table nearby that has the column. Tables that disagree stay a site, to fix by hand.
+
+NEAR = 12
+USUAL_ALIAS = {"t": "tasks", "tasks": "tasks", "m": "messages", "messages": "messages", "j": "jobs", "jobs": "jobs",
+               "a": "attempts", "attempts": "attempts", "cv": "conversations", "conversations": "conversations"}
+LEFT_TO_HAND = ("backend/events.py", "backend/finance/store/schema", "clients/agent_skill.py")   # NEW.x names a trigger's table
+
+
+def settle_sql_sites(wave, report, write):
+    sys.path.insert(0, str(HERE))
+    from gen_map import EVERY_TABLE, load_schema
+    everywhere = {t: set(c) for t, c in load_schema(EVERY_TABLE)[0].items()}
+    columns = {t: set(c) | everywhere.get(t, set()) for t, c in wave.schema.items()}
+    for t, c in everywhere.items():
+        columns.setdefault(t, set(c))
+    sites = report.sites.get("sql-scoped-skip", [])
+    by_file = defaultdict(list)
+    for site in sites:
+        by_file[site[0]].append(site)
+    left = []
+    for rel, here in sorted(by_file.items()):
+        if not rel.endswith(".py") or rel.startswith(LEFT_TO_HAND):
+            left += here
+            continue
+        path = ROOT / rel
+        lines = path.read_text().split("\n")
+        changed = False
+        for site in here:
+            _, no, name, _text = site
+            per_table = wave.scoped.get(name, {})
+            text = lines[no - 1] if no <= len(lines) else ""
+            window = " ".join(lines[max(0, no - NEAR):no + NEAR])
+
+            def by_alias(m):
+                bound = re.search(rf"\b(?:FROM|JOIN|UPDATE)\s+(\w+)(?:\s+AS)?\s+{re.escape(m[1])}\b", window)
+                table = bound[1] if bound else USUAL_ALIAS.get(m[1])
+                new = per_table.get(table)
+                return f"{m[1]}.{new}" if new else m[0]
+
+            fixed = re.sub(rf"\b(\w+)\.({re.escape(name)})\b", by_alias, text)
+            nearby = set(re.findall(r"(?:FROM|JOIN|UPDATE|INTO|TABLE)\s+(\w+)", window)) | set(re.findall(r'"(\w+)\(', text))
+            have = {t for t in nearby if name in columns.get(t, ())}
+            if have and have <= set(per_table) and len({per_table[t] for t in have}) == 1:
+                new = per_table[sorted(have)[0]]
+                fixed = re.sub(rf"(?<![\w.$'\"]){re.escape(name)}(?![\w'\"(])", new, fixed)
+            if fixed == text:
+                left.append(site)
+            else:
+                lines[no - 1] = fixed
+                changed = True
+                report.edit(rel, "sql-settled")
+        if changed and write:
+            path.write_text("\n".join(lines))
+    if sites:
+        report.sites["sql-scoped-skip"] = left
+
+
 GATING = ("sql-scoped-skip", "key-scoped-skip", "js-scoped", "dup-key")
 
 
@@ -1667,6 +1727,8 @@ def main():
         return 1 if failed else 0
     report = Report()
     changed = process(waves[args.wave], keep, report, write=not args.report_only, only=args.only)
+    if args.wave not in ("1", "2"):
+        settle_sql_sites(waves[args.wave], report, write=not args.report_only)
     if args.only:
         print("--only: report not written")
     else:

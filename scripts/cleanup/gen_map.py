@@ -156,6 +156,9 @@ STABLE = ("tasks", "messages", "conversations", "bots", "humans", "principals", 
           "approvals", "cards", "docs", "task_types", "task_steps", "runners")
 ACTOR_NAMES = {"owner": "owner_id", "requester": "requester_id", "bot": "bot_id", "actor": "actor_id"}
 NOT_ACTOR_BY = {("tasks", "carried_by"): "the attempt id that carried the task, not an actor"}
+# Named like a time, holds something else: left alone. task_reconnects.ended is how the card ended (fixed, cancelled, retired).
+M3_KEPT = {("task_reconnects", "ended")}
+
 WAVE3_NOTES = {("pages", "replaced_by"): "holds the replacing page's file id, not an actor"}
 # Later renames of a column an applied wave already renamed: (table, name now) -> (new, wave, why).
 FOLLOW_UPS = {("automation_runs", "state"): ("saved_state", "3", "the run's saved engine state (JSON); `state` is kept for lifecycle")}
@@ -236,7 +239,7 @@ def build(tables, virtual):
                 add("2", table, col, "created_at")
             elif col == "updated":
                 add("2", table, col, "updated_at")
-            elif col in M3_UNIFORM and (table, col) not in M3_PER_TABLE:
+            elif col in M3_UNIFORM and (table, col) not in M3_PER_TABLE and (table, col) not in M3_KEPT:
                 new, scope, note = M3_UNIFORM[col]
                 # A scoped name is a common word (queued, checked, deleted) that is also a counter, a status or a
                 # flag all over the code, so table-aware renaming cannot settle most of its sites: wave 2s is

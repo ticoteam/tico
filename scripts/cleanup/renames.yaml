@@ -27,8 +27,8 @@ columns:
   attempt_captures.created: created_at
   attempt_events.created: created_at
   attempt_events.payload_json: payload
-  attempt_load_snapshots.end_json: at_end  # CHECK `end` is an SQLite keyword
-  attempt_load_snapshots.start_json: at_start  # CHECK `start` reads as SQL
+  attempt_load_snapshots.end_json: at_end  # `end` is an SQLite keyword
+  attempt_load_snapshots.start_json: at_start  # `start` reads as SQL
   attempts.bot: bot_id
   attempts.created: created_at
   attempts.finished: finished_at
@@ -43,7 +43,7 @@ columns:
   automation_effects.at: created_at  # row time
   automation_effects.result_json: result
   automation_guard_holds.cleared: cleared_at
-  automation_guard_holds.since: held_at  # CHECK
+  automation_guard_holds.since: held_at
   automation_holds.at: created_at  # row time
   automation_inboxes.updated: updated_at
   automation_mail_actions.args_json: args
@@ -52,7 +52,8 @@ columns:
   automation_runs.chain_json: chain
   automation_runs.finished: finished_at
   automation_runs.started: started_at
-  automation_runs.state_json: state  # CHECK a JSON blob named `state` (status/state rule reserves state for lifecycle)
+  automation_runs.state: saved_state  # the run's saved engine state (JSON); `state` is kept for lifecycle
+  automation_runs.state_json: state  # wave 3 renames it saved_state (FOLLOW_UPS)
   automation_turn_answers.at: created_at  # row time
   automation_versions.at: created_at  # row time
   automation_versions.flow_json: flow
@@ -70,7 +71,7 @@ columns:
   batches.responses_json: responses
   blob_purges.queued: queued_at
   blobs.created: created_at
-  bookkeeper_seen.seen: seen_at  # CHECK
+  bookkeeper_seen.seen: seen_at
   bot_agent_instructions.updated: updated_at
   bot_config.access_json: access
   bot_config.bot_owners_json: bot_owners
@@ -85,16 +86,16 @@ columns:
   bot_mail_settings.forward_to_json: forward_to
   bot_mail_settings.updated: updated_at
   bot_memory_documents.updated: updated_at
-  bot_memory_seen.seen: seen_at  # CHECK
+  bot_memory_seen.seen: seen_at
   bot_memory_updates.committed: committed_at
   bot_memory_updates.files_json: files
   bot_memory_updates.reported: reported_at
   bot_session_epochs.updated: updated_at
   bot_sessions.updated: updated_at
   bot_status.next_due: next_due_at  # also a computed field of automation and schedule views
-  bot_status.since: since_at  # CHECK current state's start; maybe changed_at
-  bot_status_history.since: started_at  # CHECK
-  bot_status_history.until: ended_at  # CHECK
+  bot_status.since: changed_at  # when the current state began
+  bot_status_history.since: started_at
+  bot_status_history.until: ended_at
   bot_task_tabs.tabs_json: tabs
   bot_task_tabs.updated: updated_at
   bot_task_tabs.widgets_json: widgets
@@ -119,7 +120,12 @@ columns:
   cards.settings_json: settings
   cards.updated: updated_at
   cards.updated_by: updated_by_id
+  ceo_actions.changes_json: changes
+  ceo_actions.created: created_at
+  ceo_actions.undo_json: undo
+  ceo_merges.created: created_at
   changes.at: created_at  # row time
+  check_head_provenance.created: created_at
   check_waits.created: created_at
   check_waits.updated: updated_at
   cloud_machine_codes.created: created_at
@@ -145,7 +151,7 @@ columns:
   credential_imports.updated: updated_at
   credential_requests.created: created_at
   credential_requests.updated: updated_at
-  credential_uses.at: used_at  # CHECK newest use, not row creation
+  credential_uses.at: used_at  # newest use, not row creation
   credential_uses.logged: logged_at
   credentials.created: created_at
   credentials.updated: updated_at
@@ -153,6 +159,7 @@ columns:
   deferrals.due: due_at  # tasks, deferrals, task_reminders; also a trigger type and finance documents' field
   deferrals.settled: settled_at
   deltas.ts: created_at  # row time
+  directory_credentials.created: created_at
   doc_source_jobs.inventory_json: inventory
   doc_source_jobs.next_try: next_try_at
   doc_sources.last_checked: last_checked_at
@@ -162,17 +169,21 @@ columns:
   docs.created_by: created_by_id
   docs.updated: updated_at
   docs.updated_by: updated_by_id
+  document_versions.imported: imported_at
+  document_versions.payload_json: payload
+  documents.payload_json: payload
+  documents.updated: updated_at
   enrollments.expires: expires_at
   enrollments.operator: owner_id
   events.detail_json: detail
   events.ts: created_at  # row time
   external_snapshots.created: created_at
-  feed_cursors.since: since_at  # CHECK
+  feed_cursors.since: cursor_at
   feed_deliveries.delivered: delivered_at
   feed_sources.fetched: fetched_at
   feed_updates.fetched: fetched_at
   feed_updates.published: published_at
-  feed_walks.next: next_walk_at  # CHECK
+  feed_walks.next: next_walk_at
   feed_walks.started: started_at
   file_deletions.created: created_at
   file_text_state.indexed: indexed_at
@@ -205,7 +216,7 @@ columns:
   fin_rule_runs.outcome_json: outcome
   fin_rules.examples_json: examples
   fin_rules.outcome_json: outcome
-  fin_rules.when_json: condition  # CHECK `when` is an SQLite keyword
+  fin_rules.when_json: condition  # `when` is an SQLite keyword
   fin_settings.value_json: value
   fin_transfers.counted_json: counted
   fin_usage_snapshots.rows_json: rows
@@ -219,6 +230,12 @@ columns:
   flight_requests.ts: created_at  # row time
   flight_slow.ts: created_at  # row time
   flight_sql.ts: created_at  # row time
+  github_app.created: created_at
+  github_app_states.created: created_at
+  github_product_repo_operations.created: created_at
+  github_product_repo_operations.response_json: response
+  github_product_repo_operations.updated: updated_at
+  github_review_operations.response_json: response
   goal_asks.created: created_at
   goal_checkins.ts: created_at  # row time
   goal_events.ts: created_at  # row time
@@ -239,7 +256,7 @@ columns:
   google_connects.created: created_at
   google_connects.started: started_at
   google_connects.updated: updated_at
-  google_mail_holders.seen: seen_at  # CHECK REAL epoch
+  google_mail_holders.seen: seen_at  # REAL epoch seconds
   google_signin_refusals.at: created_at  # row time
   granola_connections.metadata_json: metadata
   growth_cohorts.sources_json: sources
@@ -258,13 +275,13 @@ columns:
   inbound_sync.gaps_json: gaps
   inbound_sync.last_sync: last_synced_at  # REAL epoch seconds
   invariant_state.examples_json: examples
-  invariant_state.since: firing_since_at  # CHECK
+  invariant_state.since: started_firing_at
   invite_sends.created: created_at
   invite_sends.updated: updated_at
   job_recovery.created: created_at
   jobs.bot: bot_id
   jobs.created: created_at
-  kpi_definitions.ts: created_at  # CHECK when this definition version was written
+  kpi_definitions.ts: created_at  # when this definition version was written
   kpi_readings.actor: actor_id
   kpi_readings.created: created_at
   kpi_readings.ts: measured_at  # the reading's time (cleanup-spec)
@@ -312,14 +329,14 @@ columns:
   mail_messages.cc_json: cc
   mail_messages.labels_json: labels
   mail_messages.rule_hits_json: rule_hits
-  mail_messages.to_json: to_addresses  # CHECK `to` is an SQLite keyword
+  mail_messages.to_json: to_addresses  # `to` is an SQLite keyword
   mail_messages.updated: updated_at
-  mail_reads.at: read_at  # CHECK
+  mail_reads.at: read_at
   market_briefings.created: created_at
   market_briefings.updated: updated_at
   market_edges.created: created_at
-  market_edges.since: valid_from  # CHECK edge validity, may be a date
-  market_edges.until: valid_until  # CHECK edge validity, may be a date
+  market_edges.since: valid_from_on  # a date (market._day keeps the first ten characters)
+  market_edges.until: valid_until_on  # a date (market._day keeps the first ten characters)
   market_edges.updated: updated_at
   market_entities.created: created_at
   market_entities.last_verified: last_verified_at
@@ -358,7 +375,7 @@ columns:
   messages.from_actor: sender_id
   messages.refs_json: refs
   messages.to_actor: recipient_id
-  milestones.at: reached_at  # CHECK
+  milestones.at: reached_at
   model_logins.created: created_at
   model_logins.lines_json: lines
   model_logins.updated: updated_at
@@ -383,15 +400,15 @@ columns:
   org_rule_verdicts.created: created_at
   org_rules.cite_json: cite
   org_rules.who_json: who
-  org_rules.with_json: with_scope  # CHECK `with` is an SQLite keyword
+  org_rules.with_json: with_scope  # `with` is an SQLite keyword
   org_turn_waits.created: created_at
   owner_links.created: created_at
   pages.created: created_at
-  pages.replaced_by: replaced_by_id  # CHECK holds the replacing page's file id, not an actor
+  pages.replaced_by: replaced_by_id  # holds the replacing page's file id, not an actor
   pages.updated: updated_at
   perf_overloads.bots_json: bots
   perf_overloads.ended: ended_at
-  perf_overloads.last: last_seen_at  # CHECK INTEGER epoch
+  perf_overloads.last: last_seen_at  # INTEGER epoch seconds
   perf_overloads.procs_json: procs
   perf_overloads.started: started_at
   perf_points.ts: created_at  # row time
@@ -404,23 +421,29 @@ columns:
   rate_limits.updated: updated_at
   recording_source_refs.created: created_at
   recording_transcripts.turns_json: turns
-  redesign_migrated.at: migrated_at  # CHECK
+  redesign_migrated.at: migrated_at
+  redesign_migration_accepts.at: accepted_at
+  redesign_migrations.created: created_at
+  redesign_migrations.expires: expires_at
+  redesign_migrations.finished: finished_at
+  redesign_migrations.result_json: result
+  redesign_migrations.snapshot_json: snapshot
   refusals.detail_json: detail
   refusals.ts: created_at  # row time
   registry_metadata.value_json: value
   repositories.last_seen: last_seen_at
   repositories.updated: updated_at
-  rule_due_dates.first_due: first_due_at  # CHECK rule_due_dates.first_due holds a date; also a due trigger's JSON key
-  rule_due_status.at: satisfied_at  # CHECK
+  rule_due_dates.first_due: first_due_on  # a date, not a time; a due trigger's JSON key stays `first_due`
+  rule_due_status.at: satisfied_at
   rule_reads.created: created_at
   rule_suggestions.before_json: before
   rule_suggestions.created: created_at
   rule_suggestions.decided: decided_at
-  rule_task_runs.at: ran_at  # CHECK
+  rule_task_runs.at: ran_at
   rules.created: created_at
   rules.params_json: params
   rules.updated: updated_at
-  rules.when_json: condition  # CHECK `when` is an SQLite keyword
+  rules.when_json: condition  # `when` is an SQLite keyword
   run_backoff.last_failed: last_failed_at
   runner_harness_actions.created: created_at
   runner_harness_actions.updated: updated_at
@@ -445,7 +468,7 @@ columns:
   seats.created: created_at
   seats.updated: updated_at
   service_health.detail_json: detail
-  service_health.last_success: last_succeeded_at  # CHECK
+  service_health.last_success: last_succeeded_at
   service_jobs.created: created_at
   service_jobs.payload_json: payload
   service_jobs.result_json: result
@@ -460,6 +483,7 @@ columns:
   slack_channels.created: created_at
   slack_channels.readers_json: readers
   slack_channels.updated: updated_at
+  slack_credentials.created: created_at
   slack_digests.channels_json: channels
   slack_digests.created: created_at
   slack_digests.event_ids_json: event_ids
@@ -510,10 +534,9 @@ columns:
   task_manager_reports.checked: checked_at
   task_manager_reports.dept: department
   task_manager_seen.dept: department
-  task_manager_seen.seen: seen_at  # CHECK
+  task_manager_seen.seen: seen_at
   task_milestone_waits.created: created_at
   task_reconnects.created: created_at
-  task_reconnects.ended: ended_at
   task_reconnects.fix_json: fix
   task_relations.created: created_at
   task_reminders.created: created_at
@@ -521,12 +544,12 @@ columns:
   task_requesters.created: created_at
   task_roles.created: created_at
   task_rules.actions_json: actions
-  task_rules.at: applied_at  # CHECK task_rules also has created/updated
+  task_rules.at: daily_at  # a daily rule's time of day (HH:MM), not a timestamp
   task_rules.created: created_at
   task_rules.triggers_json: triggers
   task_rules.updated: updated_at
   task_steps.flow_json: flow
-  task_trash.rows_json: rows  # CHECK `rows` is a window-frame keyword (parses as a column)
+  task_trash.rows_json: rows  # `rows` is a window-frame keyword (parses as a column)
   task_types.created: created_at
   task_types.updated: updated_at
   tasks.acceptance_json: acceptance
@@ -570,7 +593,7 @@ columns:
   webhook_sends.next_attempt: next_attempt_at
   webhooks.created: created_at
   webhooks.events_json: events
-  webhooks.filter_json: filter  # CHECK `filter` is a window keyword (parses as a column)
+  webhooks.filter_json: filter  # `filter` is a window keyword (parses as a column)
   webhooks.headers_json: headers
   webhooks.updated: updated_at
   worktree_waits.created: created_at
@@ -583,7 +606,7 @@ api_fields:
 waves:
   "1":
     rule: "M2: every *_json column drops the suffix (stored encoding unchanged)"
-    count: 177
+    count: 185
     global:
       acceptance_json: acceptance  # 1 table
       access_json: access  # 1 table
@@ -608,7 +631,7 @@ waves:
       category_locks_json: category_locks  # 1 table
       cc_json: cc  # 1 table
       chain_json: chain  # 1 table
-      changes_json: changes  # 1 table
+      changes_json: changes  # 2 tables
       channels_json: channels  # 1 table
       checkout_json: checkout  # 1 table
       checkpoint_json: checkpoint  # 1 table
@@ -654,7 +677,7 @@ waves:
       owner_ids_json: owner_ids  # 1 table
       params_json: params  # 1 table
       participants_json: participants  # 1 table
-      payload_json: payload  # 12 tables
+      payload_json: payload  # 14 tables
       pnl_json: pnl  # 1 table
       procs_json: procs  # 1 table
       purpose_json: purpose  # 1 table
@@ -666,10 +689,10 @@ waves:
       ref_json: ref  # 1 table
       refs_json: refs  # 1 table
       report_json: report  # 1 table
-      response_json: response  # 1 table
+      response_json: response  # 3 tables
       responses_json: responses  # 1 table
       restated_json: restated  # 1 table
-      result_json: result  # 8 tables
+      result_json: result  # 9 tables
       resume_json: resume  # 1 table
       routing_json: routing  # 1 table
       rows_json: rows  # 2 tables
@@ -683,6 +706,7 @@ waves:
       sent_json: sent  # 1 table
       settings_json: settings  # 2 tables
       slides_json: slides  # 1 table
+      snapshot_json: snapshot  # 1 table
       source_json: source  # 1 table
       sources_json: sources  # 1 table
       start_json: at_start  # 1 table
@@ -696,7 +720,7 @@ waves:
       tried_json: tried  # 1 table
       triggers_json: triggers  # 1 table
       turns_json: turns  # 1 table
-      undo_json: undo  # 1 table
+      undo_json: undo  # 2 tables
       value_json: value  # 3 tables
       verdict_json: verdict  # 1 table
       wake_json: wake  # 1 table
@@ -707,13 +731,13 @@ waves:
     scoped: {}
   "2":
     rule: "M1 created/updated -> created_at/updated_at; M3 uniform bare time columns -> <verb>_at"
-    count: 258
+    count: 271
     global:
       code_expires: code_expires_at  # 1 table
-      created: created_at  # 129 tables
+      created: created_at  # 138 tables
       definition_updated: definition_updated_at  # 1 table
-      expires: expires_at  # 4 tables
-      finished: finished_at  # 12 tables
+      expires: expires_at  # 5 tables
+      finished: finished_at  # 13 tables
       first_seen: first_seen_at  # 1 table
       first_started: first_started_at  # 1 table
       last_checked: last_checked_at  # 1 table
@@ -733,7 +757,7 @@ waves:
       restart_requested: restart_requested_at  # 1 table
       started: started_at  # 14 tables
       stop_requested: stop_requested_at  # 1 table
-      updated: updated_at  # 71 tables
+      updated: updated_at  # 73 tables
     scoped: {}
   "2s":
     rule: "M3 per table, common words (queued, checked, deleted...) -> <verb>_at (needs review, not applied: most sites cannot be told apart from counters, statuses and flags)"
@@ -753,6 +777,7 @@ waves:
       credential_uses.logged: logged_at
       deferrals.due: due_at  # tasks, deferrals, task_reminders; also a trigger type and finance documents' field
       deferrals.settled: settled_at
+      document_versions.imported: imported_at
       feed_deliveries.delivered: delivered_at
       feed_sources.fetched: fetched_at
       feed_updates.fetched: fetched_at
@@ -764,7 +789,7 @@ waves:
       model_subscriptions.sealed: sealed_at
       perf_overloads.ended: ended_at
       pin_places.saved: saved_at
-      rule_due_dates.first_due: first_due_at  # CHECK rule_due_dates.first_due holds a date; also a due trigger's JSON key
+      rule_due_dates.first_due: first_due_on  # a date, not a time; a due trigger's JSON key stays `first_due`
       rule_suggestions.decided: decided_at
       runner_versions.nudged: nudged_at
       runner_versions.reported: reported_at
@@ -778,7 +803,6 @@ waves:
       support_tickets.checked: checked_at
       task_manager_reports.changed: changed_at
       task_manager_reports.checked: checked_at
-      task_reconnects.ended: ended_at
       task_reminders.due: due_at  # tasks, deferrals, task_reminders; also a trigger type and finance documents' field
       tasks.due: due_at  # tasks, deferrals, task_reminders; also a trigger type and finance documents' field
       tico_storage.changed: changed_at
@@ -786,27 +810,27 @@ waves:
       turns.rotated: rotated_at
   "2b":
     rule: "M3 per table: bare ts/at/since/until/seen -> named times (needs review, not applied)"
-    count: 51
+    count: 52
     global: {}
     scoped:
       audit_log.at: created_at  # row time
       automation_effects.at: created_at  # row time
-      automation_guard_holds.since: held_at  # CHECK
+      automation_guard_holds.since: held_at
       automation_holds.at: created_at  # row time
       automation_turn_answers.at: created_at  # row time
       automation_versions.at: created_at  # row time
-      bookkeeper_seen.seen: seen_at  # CHECK
-      bot_memory_seen.seen: seen_at  # CHECK
-      bot_status.since: since_at  # CHECK current state's start; maybe changed_at
-      bot_status_history.since: started_at  # CHECK
-      bot_status_history.until: ended_at  # CHECK
+      bookkeeper_seen.seen: seen_at
+      bot_memory_seen.seen: seen_at
+      bot_status.since: changed_at  # when the current state began
+      bot_status_history.since: started_at
+      bot_status_history.until: ended_at
       changes.at: created_at  # row time
       company_events.ts: created_at  # row time
-      credential_uses.at: used_at  # CHECK newest use, not row creation
+      credential_uses.at: used_at  # newest use, not row creation
       deltas.ts: created_at  # row time
       events.ts: created_at  # row time
-      feed_cursors.since: since_at  # CHECK
-      feed_walks.next: next_walk_at  # CHECK
+      feed_cursors.since: cursor_at
+      feed_walks.next: next_walk_at
       flight_db.ts: created_at  # row time
       flight_events.ts: created_at  # row time
       flight_process.ts: created_at  # row time
@@ -815,39 +839,41 @@ waves:
       flight_sql.ts: created_at  # row time
       goal_checkins.ts: created_at  # row time
       goal_events.ts: created_at  # row time
-      google_mail_holders.seen: seen_at  # CHECK REAL epoch
+      google_mail_holders.seen: seen_at  # REAL epoch seconds
       google_signin_refusals.at: created_at  # row time
-      invariant_state.since: firing_since_at  # CHECK
-      kpi_definitions.ts: created_at  # CHECK when this definition version was written
+      invariant_state.since: started_firing_at
+      kpi_definitions.ts: created_at  # when this definition version was written
       kpi_readings.ts: measured_at  # the reading's time (cleanup-spec)
-      mail_reads.at: read_at  # CHECK
-      market_edges.since: valid_from  # CHECK edge validity, may be a date
-      market_edges.until: valid_until  # CHECK edge validity, may be a date
+      mail_reads.at: read_at
+      market_edges.since: valid_from_on  # a date (market._day keeps the first ten characters)
+      market_edges.until: valid_until_on  # a date (market._day keeps the first ten characters)
       market_events.ts: created_at  # row time
       market_turn_sources.at: created_at  # row time
-      milestones.at: reached_at  # CHECK
-      perf_overloads.last: last_seen_at  # CHECK INTEGER epoch
+      milestones.at: reached_at
+      perf_overloads.last: last_seen_at  # INTEGER epoch seconds
       perf_points.ts: created_at  # row time
       perf_usage.ts: created_at  # row time
-      redesign_migrated.at: migrated_at  # CHECK
+      redesign_migrated.at: migrated_at
+      redesign_migration_accepts.at: accepted_at
       refusals.ts: created_at  # row time
-      rule_due_status.at: satisfied_at  # CHECK
-      rule_task_runs.at: ran_at  # CHECK
+      rule_due_status.at: satisfied_at
+      rule_task_runs.at: ran_at
       runner_load_samples.ts: created_at  # row time
       strategy_events.at: created_at  # row time
       support_access_log.ts: created_at  # row time
       task_events.ts: created_at  # row time
-      task_manager_seen.seen: seen_at  # CHECK
-      task_rules.at: applied_at  # CHECK task_rules also has created/updated
+      task_manager_seen.seen: seen_at
+      task_rules.at: daily_at  # a daily rule's time of day (HH:MM), not a timestamp
       webhook_attempts.at: created_at  # row time
   "3":
     rule: "actor columns in the stable SQL set -> <role>_id; operator -> owner_id; grp -> group_id; dept -> department (needs review, not applied)"
-    count: 41
+    count: 42
     global: {}
     scoped:
       approvals.decided_by: decided_by_id
       approvals.requested_by: requested_by_id
       attempts.bot: bot_id
+      automation_runs.state: saved_state  # the run's saved engine state (JSON); `state` is kept for lifecycle
       automations.created_by: created_by_id
       automations.grp: group_id
       automations.owner: owner_id
@@ -877,7 +903,7 @@ waves:
       messages.answered_by: answered_by_id
       messages.from_actor: sender_id
       messages.to_actor: recipient_id
-      pages.replaced_by: replaced_by_id  # CHECK holds the replacing page's file id, not an actor
+      pages.replaced_by: replaced_by_id  # holds the replacing page's file id, not an actor
       runners.operator: owner_id
       task_manager_reports.dept: department
       task_manager_seen.dept: department
