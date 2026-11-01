@@ -61,7 +61,8 @@ RANKS = frozenset(stem for word in ("lead", "head", "manager", "senior", "junior
 # "Data analyst" and "Pricing Analyst". "Engineering" is a field of work and stays.
 ROLE_WORDS = frozenset("""engineer engineers developer developers analyst analysts coordinator coordinators administrator
 administrators agent agents assistant assistants rep reps representative representatives generalist generalists
-consultant consultants writer writers designer designers producer producers accountant accountants""".split())
+consultant consultants writer writers designer designers producer producers accountant accountants scientist
+scientists programmer programmers""".split())
 
 
 # The only small words a job's name holds that say nothing: "Head of People" keeps "People", which the recommender's
@@ -91,6 +92,59 @@ SHORT = ((r"human resources?", "hr"), (r"financial planning", "fp"), (r"public r
 LETTERS = frozenset(short for _, short in SHORT)
 
 
+# A job's other names, said as the catalog says the job: "CMO" is the Chief Marketing Officer, "SDET" the QA Engineer,
+# "PPC Specialist" the Paid Media Manager, "Content Writer" the Content Marketer's work, "Communications" PR's. Applied
+# before SHORT, to a title and a template's name alike.
+ALIASES = tuple((re.compile(pattern), short) for pattern, short in (
+    (r"\bcmo\b", "chief marketing officer"), (r"\bcto\b", "chief technology officer"),
+    (r"\bcfo\b", "chief finance officer"), (r"\bcoo\b", "chief operations officer"),
+    (r"\bcro\b", "chief revenue officer"), (r"\bpmm\b", "product marketing manager"),
+    (r"\bsoftware (?:development )?engineer in test\b|\bsdets?\b", "qa engineer"),
+    (r"\b(?<!qa )test(?:ing|ers?)?\b", "qa \\g<0>"), (r"\bappsec\b", "application security"),
+    (r"\b(?:developer relations|devrel)(?:\s+(?:engineer|manager|lead|specialist)s?)?\b", "developer advocate"),
+    (r"\b(?:ppc|sem|paid search|paid social|paid acquisition|user acquisition|performance marketing)\b", "paid media"),
+    (r"\bmarketers?\b", "marketing"),
+    (r"\b(?:content|copy|blog)\s*writers?\b|\bcopywriters?\b", "content writing"),
+    (r"\bcommunications?\b", "pr \\g<0>"), (r"\b(?:online )?reviews?\b", "reputation \\g<0>"),
+    (r"\bmachine learning\b", "ml"), (r"\bdata scien(?:ce|tists?)\b", "\\g<0> analytics"), (r"\baccounts? payable\b", "payable"),
+    (r"\baccounts? receivable\b", "receivable"), (r"\bops\b", "operations"),
+    (r"\b(?:lifecycle|retention|crm) marketing\b", "email marketing \\g<0>"),
+    (r"\bfield marketing\b", "event \\g<0>"), (r"\bmarketing analy(?:st|tics)\b", "marketing operations \\g<0>"),
+    (r"\b(?:build|ci(?:/cd)?|continuous (?:integration|delivery|deployment)|platform|infrastructure|cloud)\b(?= engineer)",
+     "devops \\g<0>"),
+    (r"\bcode reviewers?\b", "senior software engineer"),
+    (r"\b(?:documentation|docs) (?:engineer|writer|specialist)s?\b", "technical writer")))
+
+
+def _expand(text):
+    """A title or a template's name in lower case, with its other names said as the catalog says them (ALIASES)."""
+    text = re.sub(r"\bvice[\s-]+president\b", "vp", str(text or "").lower().replace("'", ""))
+    for pattern, short in ALIASES:
+        text = pattern.sub(short, text)
+    return text
+
+
+# Words of a field so wide that sharing one names no job: "Influencer Marketing Manager" is not the Head of Marketing,
+# nor "Software Engineer in Test" the Software Architect. A title made only of these must be a template's whole work
+# ("Product Marketing Manager", "Software Engineer", "Engineering Manager").
+GENERIC = frozenset(_name_stem(word) for word in "marketing product software engineering technology tech digital".split())
+
+# Words that pin a title to a department: "Partner Marketing Manager" is Marketing's, never the HR Business Partner.
+PINS = {"marketing": "marketing", "engineering": "engineering", "sales": "sales", "legal": "legal",
+        "finance": "finance", "product": "product", "hr": "hr"}
+
+# The department a title's words point to when no template is the job, the last such word winning: "Rust engineer"
+# and "Growth Engineer" are Engineering's, "Product Designer" Product's. Applicants from it come first.
+DEPARTMENT_WORDS = {word: department for department, words in {
+    "engineering": "engineer engineering developer software programmer architect devops sre qa technology ml backend "
+                   "frontend fullstack ios android mobile code platform infrastructure tech",
+    "marketing": "marketing brand seo content social pr growth campaign campaigns influencer affiliate lifecycle demand",
+    "product": "product designer ux data", "sales": "sales sdr", "finance": "finance accountant bookkeeping",
+    "legal": "legal counsel paralegal", "hr": "hr people recruiter recruiting", "support": "support",
+    "operations": "operations ops"}.items() for word in words.split()}
+
+
+
 # How a job is held, not what it is: a qualifier made only of these words names no work.
 HELD = re.compile(r"(?:(?:contract(?:or)?|to|hire|remote|hybrid|on[\s-]?site|in[\s-]office|temporary|temp|part|full|"
                   r"time|freelance|interim|fractional|permanent|intern(?:ship)?|us|usa|eu|uk|emea|apac|amer|americas|"
@@ -99,7 +153,7 @@ HELD = re.compile(r"(?:(?:contract(?:or)?|to|hire|remote|hybrid|on[\s-]?site|in[
 
 def _name_words(text):
     """(stem, word) for each word of a job's name, two letters and up: "QA", "HR" and "UX" name the work."""
-    text = re.sub(r"\bvice[\s-]+president\b", "vp", str(text or "").lower().replace("'", ""))
+    text = _expand(text)
     # A qualifier after a comma, dash or in brackets names the work ("Software Engineer, Security", "Analyst
     # (Pricing)", "Manager, Engineering") unless it says how the job is held ("UX Designer (Contract)", "Rust engineer
     # - remote"). The work goes in front, so the job's last word still names its kind.
@@ -131,6 +185,10 @@ def _kind(title):
     # A rep is a representative, and a developer the same kind of job as an engineer (the catalog names engineers).
     return {"rep": "representative", "reps": "representative", "developer": "engineer",
             "developers": "engineer"}.get(words[-1]) or _name_stem(words[-1])
+
+
+# Kinds of job that write code: a cloud coding agent is an applicant for one in Engineering.
+CODING_KINDS = frozenset({R._stem("engineer"), R._stem("programmer")})
 
 
 # Kinds of job that are one job: a Support Representative is the Support Agent.
@@ -181,43 +239,99 @@ def _tool(tool):
     return TOOL_LABELS.get(tool, tool.replace("-", " ").replace("_", " ").capitalize())
 
 
+def _title(title):
+    """What matching a template to a title needs from the title, worked out once."""
+    named = _name_words(title)
+    words = {word for _, word in named}
+    work = _work(title)
+    return {"words": R._words(title), "work": work, "specific": work - GENERIC, "stems": {s for s, _ in named} - RANKS,
+            "heads": bool(words & HEAD_WORDS), "kind": _kind(title),
+            "pins": {PINS[word] for word in words if word in PINS}}
+
+
+def _ranked(card):
+    """Whether the card's name ends in a word of rank ("Release Manager", "Tax Specialist"), not a kind of job ("Account
+    Executive", "UX Researcher") nor a head's."""
+    named = _name_words(card["name"])
+    return bool(named) and named[-1][0] in RANKS and not card.get("lead")
+
+
+def _fit(card, t):
+    """How much of the title's work the card's name holds, 0 when the card is not the job (see _best_card)."""
+    if not t["work"] or (t["pins"] and card["department"] not in t["pins"]):
+        return 0
+    name = {stem for stem, _ in _name_words(card["name"])}
+    kind = t["kind"]
+    if kind and not SAME_KIND.get(kind, {kind}) & name and not (_ranked(card) and name & t["specific"]):
+        # A designer is not the UX Writer, an engineer not a specialist; a job of one kind may be a template named by
+        # rank on the work itself ("Release Engineer" is the Release Manager, "Social Media Coordinator" the Social
+        # Media Manager), never on a field ("Product Designer" is not the Product Manager) nor a head's.
+        return 0
+    if t["heads"] and card.get("lead"):
+        # A head's title names the field it heads, which the head's card may not: "Head of HR" is the Head of People,
+        # the head of the HR department. Only a title that is all field: "Director of Revenue Recognition" heads
+        # revenue recognition, not Sales.
+        field = {stem for stem, _ in _name_words(FIELDS.get(card["department"], card["department"]))}
+        if t["work"] <= field:
+            name |= field
+    if t["specific"]:
+        if not name & t["specific"]:
+            return 0                        # "Influencer Marketing Manager" shares only "Marketing" with Marketing's cards
+    elif not (t["heads"] and card.get("lead")) and _work(card["name"]) != t["work"]:
+        return 0                            # "Digital Marketing Manager" is no template's whole work
+    # A job's letters are a whole name ("PR" is Public Relations), so they outweigh one of its words ("Relations").
+    return sum(2 if stem in LETTERS else 1 for stem in name & t["work"])
+
+
 def _best_card(cards, title, team=""):
     """The catalog card that is the job the title names, or None when none is: its name must share a word of work with
     the title ("Support" in "Customer support lead", not "Engineer" in "Rust engineer", nor a tag like "software" on
-    the Product Manager). Among those, the one whose name and tags fit best; a card in the department the seat's group
-    is named for wins a tie."""
-    words, work = R._words(title), _work(title)
-    if not work:
-        return None
+    the Product Manager), more than a word of a whole field ("Marketing" in "Influencer Marketing Manager": GENERIC),
+    and in the department the title names, if any (PINS). Among those, the one whose name and tags fit best; a card in
+    the department the seat's group is named for wins a tie."""
+    best = _ranked_fits(cards, title, team)
+    return best[0][1] if best else None
+
+
+def _ranked_fits(cards, title, team=""):
+    """Every card that is the job the title names, best first, as (key, card); the key's first five are how well the
+    name fits (see _best_card), on which a tie is as good a fit."""
+    t = _title(title)
     common = R._common(cards)
     group = str(team or "").strip().lower()
-    best = None
-    stems = {stem for stem, _ in _name_words(title)} - RANKS
-    heads, kind = bool({word for _, word in _name_words(title)} & HEAD_WORDS), _kind(title)
+    out = []
     for card in cards:
-        name = {stem for stem, _ in _name_words(card["name"])}
-        if kind and not SAME_KIND.get(kind, {kind}) & name:
-            continue                        # a designer is not the UX Writer, an engineer not a specialist
-        if heads and card.get("lead"):
-            # A head's title names the field it heads, which the head's card may not: "Head of HR" is the Head of
-            # People, the head of the HR department. Only a title that is all field: "Director of Revenue
-            # Recognition" heads revenue recognition, not Sales.
-            field = {stem for stem, _ in _name_words(FIELDS.get(card["department"], card["department"]))}
-            if work <= field:
-                name |= field
-        # A job's letters are a whole name ("PR" is Public Relations), so they outweigh one of its words ("Relations").
-        shared = sum(2 if stem in LETTERS else 1 for stem in name & work)
+        shared = _fit(card, t)
         if not shared:
             continue
-        score, _ = R._match(card, words, common)
-        # More of the work in the name wins ("Legal Operations Manager" for "Head of Legal Operations", not the head of
+        name = {stem for stem, _ in _name_words(card["name"])}
+        score, _ = R._match(card, t["words"], common)
+        # The same kind of job first ("Sales rep" is the Sales Development Representative, not the Sales Manager), then
+        # a name that is all of the title's work and no more ("Account Manager", not "Accounts Payable Specialist"), then
+        # more of the work in the name ("Legal Operations Manager" for "Head of Legal Operations", not the head of
         # Legal), then a head's card for a head's title, then more of the title: "Security Engineer", not "Security and
         # Compliance Analyst".
-        score = (shared, heads and bool(card.get("lead")), len(name & stems), score)
-        key = (score, card["department"] == group, -len(card["name"]), card["template"])
-        if best is None or key > best[0]:
-            best = (key, card)
-    return best[1] if best else None
+        same_kind = bool(t["kind"]) and bool(SAME_KIND.get(t["kind"], {t["kind"]}) & name)
+        # A title of no kind is first a template of none: "Product manager" is the Product Manager, not the Product
+        # Analyst.
+        plain = not t["kind"] and not _kind(card["name"])
+        # A head's card is all of a head's title when the title is all its field ("Head of HR" is the Head of People).
+        exact = _work(card["name"]) == t["work"] or (t["heads"] and bool(card.get("lead")) and t["work"] <= {
+            stem for stem, _ in _name_words(FIELDS.get(card["department"], card["department"]))})
+        # A head's card for a head's title, and for another only when no other card is as good ("Marketing manager" is
+        # the Head of Marketing's work, "Engineering Manager" the Engineering Manager's).
+        role = (2 if t["heads"] else 0) if card.get("lead") else 1
+        key = ((same_kind, exact, shared, plain, role, len(name & t["stems"]), score),
+               card["department"] == group, -len(card["name"]), card["template"])
+        out.append((key, card))
+    out.sort(key=lambda item: item[0], reverse=True)
+    return out
+
+
+def _department_hint(title):
+    """The department the title's words point to, the last such word winning (DEPARTMENT_WORDS), or ""."""
+    found = [DEPARTMENT_WORDS[word] for _, word in _name_words(title) if word in DEPARTMENT_WORDS]
+    return found[-1] if found else ""
 
 
 # What a card's bullet says for the bot's own files and limits, not for the person reading the job: "(knowledge/labels.md)",
@@ -277,8 +391,11 @@ def _rewrite_prompt(text, title, boss):
     """The instructions a rewrite is asked with: the composed text to rewrite for this role, or, with no template that is
     the job, the role written from its title. The same words go to Gemini and to the Tico Gateway."""
     role = f"the role \"{title}\"" + (f", reporting to {boss}" if boss else "")
-    rules = ("Plain words, under 150 words, no other headings, and never name a template, a model or a vendor. Answer "
-             "with the text only.")
+    # The catalog's own voice: a template's summary has no subject ("Reviews every open pull request..."), so the
+    # opening line never says "I", "You" or "AI teammate", nor repeats the title the page already shows.
+    rules = ("Start the opening line with a verb and no subject, like \"Owns the Rust services that...\"; never write "
+             "\"I\", \"you\", \"we\" or \"AI teammate\" and never repeat the job title. Plain words, under 150 words, no "
+             "other headings, and never name a template, a model or a vendor. Answer with the text only.")
     if text:
         return (f"Rewrite this job description for {role}. Keep its shape: one opening line, then \"What you'll do\" "
                 "with three to five short bullets starting with \"- \", then one \"Works in:\" line. " + rules
@@ -411,6 +528,27 @@ def _rewrite(text, title, boss, gateway=None):
     return "" if worker.is_alive() else out.get("text", "")
 
 
+_TEAMMATE = re.compile(r"^\s*(?:an?\s+)?ai\s+teammate\b[^.:\n]*[.:]\s*", re.I)
+_PERSON = re.compile(r"^\s*(?:i|you|we)(?:'ll| will)?\s+([a-z]+)\b", re.I)
+_NOT_VERBS = frozenset("am are is was were will would can could should must may might shall".split())
+_IRREGULAR = {"have": "has", "do": "does", "go": "goes"}
+
+
+def _voice(text, title):
+    """The model's opening line in the catalog's voice, whatever the model wrote: "AI teammate for the Rust engineer
+    role. You own the services" and "Rust engineer owns the services" are "Owns the services"."""
+    text = _TEAMMATE.sub("", str(text or ""), count=1)
+    if title:
+        text = re.sub(rf"^\s*(?:the\s+|an?\s+)?{re.escape(title)}\s*[:,]?\s+(?=[a-z])", "", text, count=1, flags=re.I)
+    found = _PERSON.match(text)
+    verb = found.group(1).lower() if found else ""
+    if verb and verb not in _NOT_VERBS:
+        verb = _IRREGULAR.get(verb) or (verb[:-1] + "ies" if re.search(r"[^aeiou]y$", verb) else
+                                        verb + ("es" if verb.endswith(("s", "sh", "ch", "x", "o")) else "s"))
+        text = verb.capitalize() + text[found.end():]
+    return text[:1].upper() + text[1:]
+
+
 def draft(onboarding, title, team="", boss="", redraft=False, gateway=None):
     """A job description for a seat not posted yet: composed in well under a second from the catalog card that is the
     job the title names (`source` "catalog"). `redraft` asks the model to rewrite the composed text once (`source`
@@ -424,13 +562,14 @@ def draft(onboarding, title, team="", boss="", redraft=False, gateway=None):
     if not card:
         # Another job's description is no draft ("Rust engineer" is not the QA Engineer): the model writes one from the
         # title, under the same bound, or the box stays empty for the person's own words.
-        written = "" if offline else _rewrite("", str(title).strip()[:lifecycle.TITLE_MAX], boss, gateway)
+        written = "" if offline else _voice(_rewrite("", str(title).strip()[:lifecycle.TITLE_MAX], boss, gateway),
+                                            str(title).strip())
         if len(written) >= 40:
             return {"description": written[:lifecycle.DESCRIPTION_MAX], "source": "model"}
         return {"description": "", "source": "none"}
     text = compose(card)
     if redraft and not offline:
-        rewritten = _rewrite(text, str(title).strip()[:lifecycle.TITLE_MAX], boss, gateway)
+        rewritten = _voice(_rewrite(text, str(title).strip()[:lifecycle.TITLE_MAX], boss, gateway), str(title).strip())
         if len(rewritten) >= 40:
             return {"description": rewritten[:lifecycle.DESCRIPTION_MAX], "source": "model"}
     return {"description": text, "source": "catalog"}
@@ -481,29 +620,51 @@ def _needs(raw):
 
 def candidates(auth, onboarding, c, who, seat_id):
     """Recruit: up to eight Tico templates for the seat, strong matches first, then good ones, each tier best first.
-    `match` is "strong" when the template's name shares a word of the work with the title (not one of rank or a kind
-    of job: `_work`), "good"
-    when its tags, name or summary fit the title or job description at all, else "". Deterministic and local: the same
-    seat gives the same list, and nothing leaves this server."""
+    `match` is "strong" for the template that is the job (the one a draft is written from, `_ranked_fits`) and any that
+    fits as well, "good" when its tags, name or summary fit the title or job description inside the job's department,
+    else "". A coding job ("Rust engineer") also gets the supported cloud agents as `agents`, placed after the first
+    `agents_at` templates: no template writes features, so they lead unless a template is the job. Deterministic and
+    local: the same seat gives the same list, and nothing leaves this server."""
     row = lifecycle.seat(c, seat_id)
     # Listing candidates changes nothing: BotOps lists them with the rights of the person it acts for, and the pick is
     # their own tap on a card (botops_act.CONFIRM).
     _may_hire(auth, c, replace(who, confirmed=True) if who.via == "botops" else who, row)
     value, cards = _recruitable(onboarding)
     departments = {d["id"]: d["name"] for d in value["departments"]}
-    title = [(stem, word) for stem, word in R._words(row["title"])]
+    t = _title(row["title"])
+    fits = _ranked_fits(cards, row["title"])
+    best = fits[0][1] if fits else None
+    # Strong: as good a fit by name as the template the description is drafted from ("Head of Sales" is the Sales
+    # Manager's job, not the Sales Engineer's, though both say "Sales").
+    strong = {card["template"] for key, card in fits if key[0][:5] == fits[0][0][0][:5]}
+    # The department the job is in: the template that is the job's, else the one the title's words point to.
+    department = best["department"] if best else _department_hint(row["title"])
+    # The title's words of work, not of rank or its kind ("Developer" in "Go Developer" is no fit to the Developer
+    # Advocate).
+    title = [(stem, word) for stem, word in R._words(_expand(row["title"])) if stem not in RANKS and word not in ROLE_WORDS]
     words = title + [("", "")] + R._words(R._text(row["description"], 4000))
     common = R._common(cards)
     scored = []
     for card in cards:
         score, _ = R._match(card, words, common)
         named, _ = R._match(card, title, common)
-        shared = len({stem for stem, _ in _name_words(card["name"])} & _work(row["title"]))
+        shared = _fit(card, t)
         score += 2 * named + 3 * shared
-        match = "strong" if shared else "good" if score > 0 else ""
-        scored.append((("strong", "good", "").index(match), -score, {"default": 0, "common": 1}.get(card["suggest"], 2),
+        here = not department or card["department"] == department
+        match = "strong" if card["template"] in strong else "good" if (score > 0 and here) or shared else ""
+        # Then, the department's own first; a head's template not for a job of a kind ("Head of Engineering" is no
+        # applicant for "Rust engineer") and first for a head's title; a template named for the title's work ("QA
+        # Engineer" for "QA Analyst"); the same kind of job ("Engineer"); the better fit; a template whose name is all
+        # field ("Senior Software Engineer", "Head of Marketing") before a narrower one; the catalog's order.
+        lead = bool(card.get("lead"))
+        misplaced = lead != t["heads"] if (t["kind"] or t["heads"]) else False
+        near = bool({stem for stem, _ in _name_words(card["name"])} & t["specific"])
+        same_kind = bool(t["kind"]) and _kind(card["name"]) == t["kind"]
+        work = _work(card["name"])
+        scored.append((("strong", "good", "").index(match), card is not best, not here, misplaced, not near, not same_kind, -score,
+                       (not work <= GENERIC, len(work)), {"default": 0, "common": 1}.get(card["suggest"], 2),
                        card["name"].lower(), card, match))
-    scored.sort(key=lambda item: item[:4])
+    scored.sort(key=lambda item: item[:10])
     out = []
     for *_, card, match in scored[:CANDIDATES]:
         raw = card["raw"]
@@ -514,7 +675,15 @@ def candidates(auth, onboarding, c, who, seat_id):
                     "onboarding": [item["ask"] for item in raw["onboarding"] if item["ask"]][:6],
                     "prerequisites": _needs(raw), "match": match, "source": "template", "starter": bool(raw["starter"]),
                     **_suggested(c, onboarding, raw)})
-    return {"seat": view(auth, c, who, row), "candidates": out, "models": _models(c, onboarding)}
+    # A job writing code in Engineering has the cloud coding agents Tico connects as applicants too: after the templates
+    # that are the job, and first when none is ("Rust engineer": no template writes Rust, Claude Code and Codex do).
+    agents_at = sum(1 for item in out if item["match"] == "strong")
+    agents = []
+    if department == "engineering" and t["kind"] in CODING_KINDS:
+        from .team_build import _cloud_agents
+        agents = [{**agent, "match": "good" if agents_at else "strong"} for agent in _cloud_agents() if agent["supported"]]
+    return {"seat": view(auth, c, who, row), "candidates": out, "agents": agents, "agents_at": agents_at,
+            "department": department, "models": _models(c, onboarding)}
 
 
 # ------------------------------------------------------------------ 3. the pick
@@ -528,11 +697,14 @@ def _may_hire(auth, c, who, row):
 
 
 def top_card(auth, onboarding, c, who, row):
-    """The raw card of the template Recruit ranks first for the seat, or None when none fits it (no Strong or Good match). A cloud agent's
-    add to a seat builds its bot from this card, since a bot's repository is built from a template."""
-    ranked = candidates(auth, onboarding, c, who, row["id"])["candidates"]
+    """The raw card of the template Recruit ranks first for the seat, or None when none fits it (no Strong or Good match,
+    nor in the department the job is in: a "Rust engineer" is Engineering's). A cloud agent's add to a seat builds its bot
+    from this card, since a bot's repository is built from a template."""
+    found = candidates(auth, onboarding, c, who, row["id"])
+    ranked = found["candidates"]
     _, cards = _recruitable(onboarding)
-    template = ranked[0]["template"] if ranked and ranked[0]["match"] else ""   # a template that does not fit is not one
+    fits = ranked and (ranked[0]["match"] or (found["department"] and ranked[0]["department_id"] == found["department"]))
+    template = ranked[0]["template"] if fits else ""   # a template that does not fit is not one
     return next((card["raw"] for card in cards if card["template"] == template), None)
 
 

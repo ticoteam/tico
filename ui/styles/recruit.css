@@ -49,6 +49,7 @@
 .rc-row+.rc-row{border-top:1px solid var(--line)}
 .rc-row:hover{background:color-mix(in srgb,var(--surface2) 55%,var(--surface))}
 .rc-av{display:inline-flex;align-items:center;justify-content:center;flex:none;width:var(--rc-s);height:var(--rc-s);border-radius:8px;background:var(--rc-c);color:#fff;font-size:12px;font-weight:600;line-height:var(--lh-none)}
+.rc-av-agent{background:var(--surface2);color:var(--muted)}
 .rc-who{min-width:0}
 .rc-name{display:flex;align-items:center;gap:8px;min-width:0}
 .rc-name a{color:var(--ink);font-weight:600;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

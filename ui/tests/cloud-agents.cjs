@@ -33,9 +33,9 @@ const devinPick = {id: 'devin', name: 'Devin', maker: 'Cognition', site: 'devin.
 const briefing = {team: 'eng', department: 'engineering', roles: [{role: 'Second pair of hands', pick: devinPick, alternatives: [],
   on_team: false, checked: false}]};
 
-async function open(browser, viewport, {reducedMotion = 'no-preference', seats = [requested]} = {}) {
+async function open(browser, viewport, {reducedMotion = 'no-preference', seats = [requested], recruit = {}} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-  const errors = [], calls = [], state = {seats, failRequest: false, failAdd: false};
+  const errors = [], calls = [], state = {seats, recruit, failRequest: false, failAdd: false};
   page.on('pageerror', error => errors.push(error.message));
   await page.emulateMedia({reducedMotion});
   await page.addInitScript(() => localStorage.setItem('hub.collapsed.v3.ana', '[]'));
@@ -71,7 +71,7 @@ async function open(browser, viewport, {reducedMotion = 'no-preference', seats =
     const recruit = p.match(/^\/api\/v2\/seats\/([^/]+)\/recruit$/);
     if (recruit && method === 'POST') {
       const seat = state.seats.find(s => s.id === recruit[1]);
-      return seat ? json({seat, candidates: []}) : json({error: {code: 'not_found', detail: 'Seat not found', retryable: false}}, 404);
+      return seat ? json({seat, candidates: [], ...state.recruit}) : json({error: {code: 'not_found', detail: 'Seat not found', retryable: false}}, 404);
     }
     const asked = p.match(/^\/api\/v2\/cloud-agents\/([^/]+)\/request$/) || p.match(/^\/api\/v2\/seats\/([^/]+)\/request-agent$/);
     if (asked && method === 'POST') {
@@ -257,6 +257,40 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       assert.deepEqual(state.seats, [], 'the seat is filled');
       assert.deepEqual(errors, []);
       console.log('cloud-agents: applicants tab ok');
+      await page.close();
+    }
+
+    // A coding job's applicants have the cloud agents Tico connects among them: first when no template is the job, Hire
+    // adds the agent in the seat, and the Templates tab leaves them out.
+    {
+      const rust = {id: 's-rust', kind: 'seat', stage: 'recruiting', title: 'Rust engineer', description: '', team: 'eng',
+        reports_to: 'human:ana', created: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: '', agent_name: '', request_state: '', can_edit: true};
+      const template = {template: 'pr-reviewer', name: 'Senior Software Engineer', icon: '', department: 'Engineering',
+        department_id: 'engineering', line: 'Reviews every open pull request.', tags: [], owns: [], prerequisites: [], match: 'good',
+        source: 'template'};
+      const agents = AGENTS.filter(a => a.supported).map(a => ({...a, source: 'cloud', match: 'strong'}));
+      const {page, errors, calls, state} = await open(browser, {width: 1300, height: 900},
+        {seats: [rust], recruit: {candidates: [template], agents, agents_at: 0}});
+      await page.goto('https://tico-ui.test/#/seat/s-rust');
+      const rows = page.locator('#main .rc-list .rc-row');
+      await rows.nth(2).waitFor();
+      assert.deepEqual(await rows.evaluateAll(els => els.map(el => el.querySelector('.rc-name').textContent.trim())),
+        ['Claude CodeCloud agent · Anthropic', 'CodexCloud agent · OpenAI', 'Senior Software EngineerTemplate']);
+      assert.equal(await page.locator('#rc-tab-all .rc-n').textContent(), '3');
+      assert.equal(await page.locator('#rc-tab-templates .rc-n').textContent(), '1');
+      assert.equal(await rows.first().locator('.rc-match').textContent(), 'Strong');
+      await page.locator('#main [data-recruit-tab="templates"]').click();
+      assert.equal(await page.locator('#main .rc-list .rc-row:visible').count(), 1, 'Templates shows the templates alone');
+      await page.locator('#main [data-recruit-tab="all"]').click();
+      await page.locator('#main [data-recruit-agent-hire="claude"]').click();
+      const add = page.locator('dialog.cloud-add');
+      await add.waitFor();
+      await add.locator('button[type="submit"]').click();
+      await add.waitFor({state: 'detached'});
+      assert.deepEqual(calls, [{method: 'POST', path: '/api/v2/cloud-agents/claude/add', body: {seat_id: 's-rust'}}]);
+      assert.deepEqual(state.seats, [], 'the seat is filled');
+      assert.deepEqual(errors, []);
+      console.log('cloud-agents: coding applicants ok');
       await page.close();
     }
 

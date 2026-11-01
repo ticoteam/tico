@@ -151,6 +151,78 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
     assert first["template"] == "issue-triage" and first["match"] == "strong"
 
 
+def test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_job_by_any_of_its_names(api):
+    """A job's other names are the job ("CMO", "SDET", "PPC Specialist", "Content Writer"); a word of a whole field is
+    not ("Influencer Marketing Manager" is not the Head of Marketing, "Partner Marketing Manager" not the HR Business
+    Partner); a job of a kind may be a template named by rank on the work ("Release Engineer" is the Release Manager)."""
+    _, cards = recruiting._recruitable(api.app.state.onboarding)
+    for title, template in (("CMO", "marketing-lead"), ("Chief Marketing Officer", "marketing-lead"),
+                            ("CTO", "engineering-lead"), ("Head of Growth", "marketing-lead"),
+                            ("PMM", "product-marketing"), ("Senior Product Marketer", "product-marketing"),
+                            ("Content Writer", "content"), ("Copywriter", "content"), ("Blog Writer", "content"),
+                            ("Social Media Coordinator", "listening"), ("Events Coordinator", "events"),
+                            ("Field Marketing Manager", "events"), ("Lifecycle Marketing Manager", "email-marketing"),
+                            ("Retention Marketing Manager", "email-marketing"), ("Marketing Ops Specialist", "marketing-ops"),
+                            ("Performance Marketing Manager", "paid-media"), ("Paid Social Manager", "paid-media"),
+                            ("PPC Specialist", "paid-media"), ("Communications Manager", "pr"),
+                            ("Online Reviews Manager", "reputation"), ("Brand Designer", "brand"),
+                            ("SDET", "issue-triage"), ("Software Engineer in Test", "issue-triage"),
+                            ("Test Engineer", "issue-triage"), ("AppSec Engineer", "security-engineer"),
+                            ("Build Engineer", "devops-engineer"), ("CI/CD Engineer", "devops-engineer"),
+                            ("Release Engineer", "release-notes"), ("Developer Relations Engineer", "developer-advocate"),
+                            ("DevRel", "developer-advocate"), ("Documentation Engineer", "docs-writer"),
+                            ("Code Reviewer", "pr-reviewer"), ("Software Engineer", "pr-reviewer"),
+                            ("Tax accountant", "tax"), ("Key account manager", "account-manager")):
+        assert (recruiting._best_card(cards, title) or {}).get("template") == template, title
+    for title in ("Influencer Marketing Manager", "Partner Marketing Manager", "Affiliate Marketing Manager",
+                  "Marketing Coordinator", "Digital Marketing Manager", "Backend Engineer", "Go Developer",
+                  "Data Scientist", "Tech Lead", "Executive assistant", "UX designer"):
+        assert recruiting._best_card(cards, title) is None, title
+
+
+def test_strong_is_the_template_that_is_the_job_and_a_coding_job_has_the_cloud_agents_among_its_applicants(api):
+    """Strong is as good a fit by name as the drafted template ("Head of Sales" is the Sales Manager's job, not every
+    template that says "Sales"). A job writing code in Engineering lists the cloud coding agents Tico connects: first
+    when no template is the job, after the ones that are; no head's template leads a job of a kind."""
+    def found(title, description=""):
+        seat = post(api, "seats", {"title": title, "reports_to": "coo", "description": description})
+        return post(api, f"seats/{seat['id']}/recruit", {})
+
+    sales = found("Head of Sales")
+    assert [c["template"] for c in sales["candidates"] if c["match"] == "strong"] == ["sales-lead"]
+    assert sales["agents"] == [] and sales["agents_at"] == 1
+
+    rust = found("Rust engineer")
+    assert [a["id"] for a in rust["agents"]] == ["claude", "codex"] and rust["agents_at"] == 0
+    assert {a["match"] for a in rust["agents"]} == {"strong"} and {a["source"] for a in rust["agents"]} == {"cloud"}
+    assert rust["candidates"][0]["department_id"] == "engineering"
+    assert rust["candidates"][0]["template"] != "engineering-lead"
+    assert all(c["match"] != "strong" for c in rust["candidates"])
+
+    security = found("Security engineer")
+    assert security["candidates"][0]["template"] == "security-engineer" and security["agents_at"] == 1
+    assert {a["match"] for a in security["agents"]} == {"good"}
+
+    for title in ("Influencer Marketing Manager", "Engineering Manager", "Technical Writer"):
+        assert found(title)["agents"] == [], title
+    influencer = found("Influencer Marketing Manager")
+    assert {c["department_id"] for c in influencer["candidates"][:5]} == {"marketing"}
+    assert all(c["match"] != "strong" for c in influencer["candidates"])
+
+
+def test_a_model_draft_opens_in_the_catalog_s_voice():
+    """However the model opens, the draft reads as a template does: "Owns...", never "I", "You", "AI teammate" or the
+    title again."""
+    for written, title in (("AI teammate for the Marketing Coordinator role. You own the calendar.", "Marketing Coordinator"),
+                           ("AI Teammate, Frontend Engineer: you own the web interface.", "Frontend Engineer"),
+                           ("I own the Rust services.", "Rust engineer"), ("AI Engineer owns the AI features.", "AI Engineer"),
+                           ("You'll carry the pager.", "SRE"), ("Owns the pipelines.", "Data Engineer")):
+        assert recruiting._voice(written + "\n\nWhat you'll do\n- Ship", title).split("\n")[0] in (
+            "Owns the calendar.", "Owns the web interface.", "Owns the Rust services.", "Owns the AI features.",
+            "Carries the pager.", "Owns the pipelines."), written
+    assert recruiting._voice("You are the owner.", "X") == "You are the owner."
+
+
 def test_without_a_gemini_key_a_draft_is_written_on_the_tico_gateway_or_stays_empty(api, monkeypatch):
     """A hosted install has no Gemini key: the title's draft is written on the Tico AI Gateway with the company's key,
     and with no gateway key it stays empty. Gemini still answers first when it has a key. The network is stubbed: the
