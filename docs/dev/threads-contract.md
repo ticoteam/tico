@@ -228,7 +228,7 @@ threads.AUDIENCES, threads.PRIVATE_AUDIENCES, threads.SAFE_REF_KEYS
 
 ```python
 threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None,
-             via=None, origin=None, checked=None, replay=None, attachments=None) -> message view
+             via=None, origin=None, checked=None, attachments=None) -> message view
 ```
 - `c`: inside the caller's write transaction (`mutate`/`store.transaction`). `principal`: a `threads.viewer(...)`, or
   an actor string for system writes (`keeper`, a migration) which skip C1.
@@ -240,10 +240,12 @@ threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_mes
   `{"origin_id", "revision", "install", "actor"}` for replicated inbound (Slack, federation); a repeat
   `(origin_id, revision)` returns the existing message and writes nothing.
 - `checked`: the org-rule verdict from `org_rule_check.preflight` (step 5, done by the caller **outside** the
-  transaction). `post` applies it with `org_rule_check.apply(c, checked, payload, replay)` and reads **apply's
-  return**: held → returns `org_rule_check.answer(gate)` and writes no message and no delivery; warn → the warned
-  text is written; moved → 409 `moved` (retryable). `replay`: what Send anyway runs (the rules-people track's
-  `threads` replayer: `threads.post` as the recorded principal, the check skipped).
+  transaction, operation `threads`). `post` applies it with `org_rule_check.apply(c, checked, body, replay)` (the
+  payload is the body text) and reads **apply's return**: held → returns `org_rule_check.answer(gate)` and writes no
+  message and no delivery; warn → the warned text is written; moved → 409 `moved` (retryable). `post` builds
+  `replay = {"thread_id", "body", "kind", "refs", "parent_message_id", "to_actor", "via", "origin", "attachments"}`
+  from its own arguments: what Send anyway runs (the rules-people track's `threads` replayer: `threads.post` again as
+  the person it was held for, the check skipped).
 
 Step order (§3.1): (1) the caller authenticated `principal` (actor, represented principal, provenance); (2) C1 post
 right (`can_post`); (3) server mention parse (`threads.mentions(c, thread, body)`); (4) screening for outside

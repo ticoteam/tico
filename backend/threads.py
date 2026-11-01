@@ -1287,7 +1287,7 @@ def _actor_of(principal):
 
 
 def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None, via=None,
-         origin=None, checked=None, replay=None, attachments=None):
+         origin=None, checked=None, attachments=None):
     """Write a message (contract §3.1). Inside the caller's write transaction; `checked` is the org-rule verdict its
     preflight returned outside it."""
     actor, v = _actor_of(principal)
@@ -1317,7 +1317,7 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
     text = str(body or "")
     if not text.strip() and not attachments:
         raise Problem("empty", "Write the message", 422)
-    refs = dict(refs or {})
+    given_refs, refs = refs, dict(refs or {})
     if via:
         refs["via"] = via
     if quiet_notice({"refs": refs}):
@@ -1341,10 +1341,14 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
         target = others[0] if len(others) == 1 else None
     if checked is not None:
         # The org-rule verdict its preflight returned, applied inside the write: a hold writes nothing (no message, no
-        # delivery) and answers with the hold; a warning goes on the recipients' copy. `replay` is what Send anyway
-        # runs (org_rule_check's threads replayer: this post as the recorded principal, the check skipped).
+        # delivery) and answers with the hold; a warning goes on the recipients' copy. The payload is the body the
+        # reviewer reads; `replay` is what Send anyway runs (org_rule_check's `threads` replayer: this post again as
+        # the person it was held for, the check skipped). Callers preflight with operation `threads`.
         from . import org_rule_check
-        gate = org_rule_check.apply(c, checked, {"thread_id": thread["id"], "body": text}, replay)
+        replay = {"thread_id": thread_id, "body": text, "kind": kind, "refs": given_refs or None,
+                  "parent_message_id": parent_message_id, "to_actor": to_actor, "via": via, "origin": origin,
+                  "attachments": attachments}
+        gate = org_rule_check.apply(c, checked, text, replay)
         if gate and gate.get("moved"):
             raise Problem("moved", "The thread changed while the message was checked; send it again", 409,
                           retryable=True)

@@ -100,19 +100,20 @@ def test_a_held_post_writes_no_message_and_no_delivery(world, monkeypatch):
     seen = {}
 
     def apply(c, verdict, payload=None, replay=None, **_):
-        seen["replay"] = replay
+        seen["payload"], seen["replay"] = payload, replay
         return {"held": {"id": "hold-1", "rule": "No prices"}}
 
     monkeypatch.setattr(org_rule_check, "apply", apply)
     with store.transaction() as c:
         before = (c.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
                   c.execute("SELECT COUNT(*) FROM message_deliveries").fetchone()[0])
-        answer = threads.post(c, owner, tid, "The price is $10", checked={"outcome": "broken"}, replay={"op": "x"})
+        answer = threads.post(c, owner, tid, "The price is $10", checked={"outcome": "broken"})
         after = (c.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
                  c.execute("SELECT COUNT(*) FROM message_deliveries").fetchone()[0])
     assert answer == {"held": {"id": "hold-1", "rule": "No prices"}}
     assert after == before
-    assert seen["replay"] == {"op": "x"}
+    assert seen["payload"] == "The price is $10"
+    assert seen["replay"]["thread_id"] == tid and seen["replay"]["body"] == "The price is $10"
 
 
 def test_a_warned_post_writes_the_warned_text(world, monkeypatch):
