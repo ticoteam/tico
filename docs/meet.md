@@ -5,8 +5,11 @@ were attached listen and reply in the thread. When the call ends, the transcript
 are posted to the thread.
 
 Status on this branch: the call API, the CLI, the MCP tools, the OpenAPI operations, the server's recorder and the
-browser signal path are built. Tests run against fakes for LiveKit and the Gateway. No live LiveKit server has been
-run on a real install yet. Text to speech is not built (see Not built).
+browser signal path are built. Most tests run against fakes for LiveKit and the Gateway. One live test
+(`backend/tests/test_call_live.py`) runs against a real `livekit-server` in dev mode, the digest-pinned image: a
+synthetic speaker publishes audio through the LiveKit SDK, the recorder hears it, the Gateway's speech-to-text is the
+only fake, and the transcript posts into the thread and the room is deleted. No install has run calls yet. Text to
+speech is not built (see Not built).
 
 ## How a call works
 
@@ -95,15 +98,23 @@ The `meet` compose profile runs LiveKit (Apache-2.0) on the cell host. It adds n
 - `TICO_MEET_API_KEY` and `TICO_MEET_API_SECRET`: LiveKit's key pair. They go to the LiveKit service and the server only.
 - `TICO_MEET_CERT_DIR`: a folder holding `fullchain.pem` and `privkey.pem` for `TICO_MEET_DOMAIN`. TURN over TLS needs
   them, and the service does not start without them.
-- `TICO_MEET_IMAGE`: optional. The default is `livekit/livekit-server:v1.8.4`, a tag checked on Docker Hub. Pin a digest
-  before you enable the profile.
+- `TICO_MEET_IMAGE`: optional. The default is `livekit/livekit-server:v1.8.4@sha256:621fd87b...c532af`, the tag and
+  its digest, both checked on Docker Hub. A new LiveKit version means a new digest in `compose.yaml`.
 
 `TICO_MEET_INTERNAL_URL` defaults to `http://livekit:7880`, the server's own address for LiveKit's server API and for
 the recorder.
 
 **Signal path.** Caddy (the `caddy` profile) proxies `/rtc` on the app host to LiveKit's port 7880 on the compose network,
-on 443 like the rest of the app (`backend/caddy_assets.py`). Nothing publishes 7880. An install that reaches Tico only
-through the Cloudflare tunnel has no `/rtc` route, so browsers cannot join until the tunnel or a Caddy front routes it.
+on 443 like the rest of the app (`backend/caddy_assets.py`). A tunnel install (the `cloudflared` profile) gets the same
+route in cloudflared's ingress (`tunnel_config` in `docker/entrypoint.sh`), ahead of the app's own rule: `/rtc` goes
+straight to LiveKit, which checks the token itself. The route is written only when `TICO_MEET_URL` is on `TICO_DOMAIN`
+and the key and secret are set. Otherwise the server logs `warning: calls cannot connect over this tunnel: set
+TICO_MEET_URL, key and secret for <domain>`, and browsers cannot join. Nothing publishes 7880. The tunnel carries only
+the signal, so media still needs the ports below open on the host.
+
+**Edge network.** LiveKit joins the `edge` network at `TICO_LIVEKIT_ADDRESS` (172.30.254.4 by default), so Caddy and
+the tunnel reach it by name. The address is outside the dynamic range, and the server does not trust it as a front
+door.
 
 **Ports.**
 
@@ -112,15 +123,18 @@ through the Cloudflare tunnel has no `/rtc` route, so browsers cannot join until
 - No signal port.
 
 **Dependency.** The server installs the `livekit` real-time package (pinned at 1.1.21 in `backend/requirements.txt`, and
-imported only when a call starts). It brings numpy and protobuf into every server image. That is the cost of keeping
-the recorder in-process rather than in a sidecar.
+imported only when a call starts). With numpy and protobuf, its wheels are 28.9 MB compressed; the installed packages
+gzip to about 29 MB, the size of the layer it adds to the server image. The recorder stays in-process, because that is
+under the 40 MB at which a separate recorder image would be worth it. These sizes come from the pinned wheels, not from
+a built image.
 
 ## Not built
 
 - **Text to speech.** `speak_replies` is stored, but no speech is produced. Bots reply in text.
-- **Tunnel-only installs.** There is no `/rtc` route through the Cloudflare tunnel (see Signal path).
-- **Live LiveKit.** The recorder and the media service calls are tested against an in-memory SDK and server. A running
-  LiveKit server has not yet been run with them.
+- **Media through a tunnel.** The tunnel carries only the signal (see Signal path). A tunnel install carries calls only
+  when its TURN and media ports are open to browsers on the host.
+- **Live LiveKit beyond one dev server.** The live test covers one speaker on one `--dev` server. Not run yet: browsers
+  through TURN and TLS, several calls at once, a LiveKit restart in the middle of a call, and the real Gateway.
 - **Bot replies after access ends.** A bot whose membership of the thread has ended cannot post its reply, and the
   reply is not posted at all.
 - **Connector access.** The transcript and action items are posted as the connector. If the connector can no longer
