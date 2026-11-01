@@ -6648,7 +6648,7 @@ def create_app(settings=None):
         with store.read() as c:
             removed_bots = [r[0] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (rid,))]
         for bot in removed_bots:
-            screen_sessions.exit_close(bot=bot, reason="computer removed")
+            screen_sessions.push_bot_generation(bot, "computer removed")
         return result
 
     def closed_computer(c, who, bot, runner_id):

@@ -36,7 +36,8 @@ _HOST = re.compile(r"[A-Za-z0-9._-]{1,253}|[0-9A-Fa-f:.]{2,45}")
 
 
 # Bumps a bot's selection generation in the same transaction as any change to the computer it runs on, whichever
-# code path writes the assignment, and an exit's policy generation when its computer is removed.
+# code path writes the assignment or removes that computer, and an exit's policy generation when its computer is
+# removed.
 TRIGGERS = """
 CREATE TRIGGER IF NOT EXISTS bot_browser_exit_assigned AFTER INSERT ON assignments BEGIN
   UPDATE bot_browser_exits SET generation=generation+1 WHERE bot=NEW.bot; END;
@@ -48,6 +49,10 @@ CREATE TRIGGER IF NOT EXISTS bot_browser_exit_unassigned AFTER DELETE ON assignm
 CREATE TRIGGER IF NOT EXISTS browser_exit_computer_removed AFTER UPDATE OF revoked_at ON runners
   WHEN OLD.revoked_at IS NOT NEW.revoked_at BEGIN
   UPDATE browser_exits SET generation=generation+1 WHERE runner_id=NEW.id; END;
+CREATE TRIGGER IF NOT EXISTS bot_browser_exit_computer_removed AFTER UPDATE OF revoked_at ON runners
+  WHEN OLD.revoked_at IS NOT NEW.revoked_at BEGIN
+  UPDATE bot_browser_exits SET generation=generation+1
+    WHERE bot IN (SELECT bot FROM assignments WHERE runner_id=NEW.id); END;
 """
 
 

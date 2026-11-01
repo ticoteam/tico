@@ -126,6 +126,19 @@ def test_a_bot_browses_only_through_a_computer_that_shares_with_it_and_a_change_
     assert _bot_generation(api, "ops") == gen + 1
 
 
+def test_removing_the_bots_computer_fences_a_grant_read_before_it(api, relay):
+    caras, server = laptop(api)
+    rid = caras["runner_id"]
+    share(api, rid)
+    post(api, "bots/ops/browser-exit", {"runner_id": rid})
+    read_before = _bot_generation(api, "ops")
+    relay.fenced.clear()
+    post(api, f"runners/{server['runner_id']}/revoke", {})
+    # The relay refuses a grant carrying the older generation (exit_stale) and closes the bot's open tunnels.
+    assert _bot_generation(api, "ops") > read_before
+    assert relay.fenced == [("ops", "computer removed")]
+
+
 def test_every_tunnel_fails_closed_with_words_that_name_the_exit(api, relay):
     caras, server = laptop(api)
     rid = caras["runner_id"]
