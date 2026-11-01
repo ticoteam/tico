@@ -2996,6 +2996,11 @@ def open_conversation(conn, actor, participants, kind="chat", subject="", task_i
             people.append(resolved)
     if actor not in people:
         people.insert(0, actor)
+    # A person's new DM (any set of people, or bots beyond a canonical one-bot room) is `personal`, however it was
+    # asked for: `participants` is for migrated rows alone, and no owner inspection reaches a new DM.
+    new_dm = (scope is None and not task_id and is_human(actor) and len(people) >= 2
+              and all(is_human(p) or is_bot(p) for p in people)
+              and (len(people) > 2 or all(is_human(p) for p in people)))
     if scope is None:
         scope = "task" if task_id else "direct"
         humans = [p for p in people if is_human(p)]
@@ -3019,12 +3024,21 @@ def open_conversation(conn, actor, participants, kind="chat", subject="", task_i
                  ":room_key, :created, :last_message_at, :closed_at)", row)
     event(conn, actor, "conversation.open", row["id"],
           {"kind": kind, "scope": scope, "participants": people})
+    if new_dm and scope == "direct":
+        from . import threads
+        threads.personal_dm(conn, row["id"], actor, people)
     return conversation(conn, row["id"])
 
 
 def _pair_conversation(conn, actor, other, kind, subject="", allow_held=False):
     """The live conversation of this kind between these two, opened if there is none."""
     want = {actor, other}
+    if is_human(actor) and is_human(other):
+        # Two people have one DM, a native row included: its participant list names only its starter.
+        from . import threads
+        dm = threads._open_dm(conn, actor, [other])
+        if dm:
+            return conversation(conn, dm)
     for row in _rows(conn.execute(
             "SELECT * FROM conversations WHERE kind=? AND closed_at IS NULL AND task_id IS NULL "
             "ORDER BY COALESCE(last_message_at, created) DESC LIMIT 200", (kind,))):
@@ -9636,12 +9650,14 @@ def tasks_asked_of(conn, actor):
 
 def loose_asks_to(conn, actor):
     """Unanswered questions bots asked this person outside any task (`hub question ask <person>`), oldest first.
-    No task carries them into Needs you, so they are listed on their own; an expired one has left."""
-    return _rows(conn.execute(
+    No task carries them into Needs you, so they are listed on their own; an expired one has left, and so has one in a
+    thread they may no longer read."""
+    from . import threads
+    return threads.asks_still_readable(conn, actor, _rows(conn.execute(
         "SELECT m.* FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE m.to_actor=? AND m.kind='ask' AND m.answered_by IS NULL AND m.deleted_at IS NULL "
         f"AND m.from_actor LIKE 'bot:%' AND {MESSAGE_TASK_SQL} IS NULL AND {OPEN_ASK_SQL} "
-        "AND (m.expires_at IS NULL OR m.expires_at>?) ORDER BY m.created", (actor, now())))
+        "AND (m.expires_at IS NULL OR m.expires_at>?) ORDER BY m.created", (actor, now()))))
 
 
 def needs_you(conn, who):

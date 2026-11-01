@@ -186,6 +186,8 @@ async function threadMembersOpen(view) {
   const t = view.thread; if (!t) return;
   const dlg = threadDialog('thread-members', 'Members');
   const manage = !!t.me?.can_manage;
+  // On a public thread everyone reads already: its members are the bots added to it.
+  const onlyBots = ['company', 'team'].includes(t.audience);
   dlg.innerHTML = `<form>${threadDialogHead('Members')}<div class="dash-form"><ul class="thd-list"><li class="muted">Loading…</li></ul>
     ${t.me?.can_post ? '<details class="thd-add"><summary>Add</summary><div class="thd-add-body"></div></details>' : ''}</div>
     <footer class="dash-form-foot"><span class="err" role="status" data-status></span><span class="spacer"></span><button type="button" class="ghost" data-close>Done</button>${
@@ -199,7 +201,8 @@ async function threadMembersOpen(view) {
       manage && m.actor !== myActor() && m.role !== 'owner' ? `<button type="button" class="ghost small" data-remove="${esc(m.actor)}">Remove</button>` : ''}</li>`).join('')
       || '<li class="muted">Nobody</li>';
     const add = form.querySelector('.thd-add-body');
-    if (add) { add.innerHTML = threadPickerHTML([], new Set(members.map(m => m.actor))); threadPickerWire(add); }
+    const people = onlyBots ? threadAddable().map(a => a.actor).filter(a => !a.startsWith('bot:')) : [];
+    if (add) { add.innerHTML = threadPickerHTML([], new Set([...members.map(m => m.actor), ...people])); threadPickerWire(add); }
   };
   const load = async () => {
     const r = await get(thvPath(t.id) + '/members?limit=100', {fresh: true});

@@ -54,34 +54,48 @@ MASKED = {"bot_control": {"claim_task": "CASE WHEN source.claim_task IS NULL THE
 DENIED_FUNCTIONS = {"load_extension"}
 
 
-def teammate_masks(unseen, me, inner=None):
+def teammate_masks(unseen, me, inner=None, names=None, bots=()):
     """MASKED for one request: participant lists drop the people the caller may not see (in a conversation the caller
     is not in), group lists the groups they may not see. A task's owner, requester and closer, the actor of an event
     or a task event, and a message's author and recipient read '' when they are such a person, unless the caller is a party to
-    that task or in that conversation: whoever works with you there is known to you there. A bot's operator, owners,
+    that task or in that conversation: whoever works with you there is known to you there. A thread's owner, its
+    followers and mentions read the same, and its members also leave out the groups and `bots` the caller may not see.
+    `names` are the thread_members values naming the caller (itself and its groups). A bot's operator, owners,
     manager, author and group (its columns and its configuration) leave out whoever the caller may not see."""
     people = sorted(t for t in unseen if t.startswith("human:"))
     groups = sorted(t.split(":", 1)[1] for t in unseen if t.startswith("group:"))
     bare = sorted(t[6:] for t in people)
     out = {}
-    if people and inner is not None:
+    strangers = people + ["group:" + g for g in groups] + sorted(bots)
+    if strangers and inner is not None:
         hidden = qlist(people)
+        names = names or f"({me})"
 
         def member(conversation):
-            return (f"EXISTS (SELECT 1 FROM {inner('conversations')} v, json_each(v.participants_json) p "
-                    f"WHERE v.id={conversation} AND p.value={me})")
+            # In it, as teammate_access.Known says: its participant list or its root's, or a member of its root.
+            return (f"EXISTS (SELECT 1 FROM {inner('conversations')} v JOIN {inner('conversations')} vr "
+                    f"ON vr.id=COALESCE(v.root_id,v.id) WHERE v.id={conversation} AND ("
+                    f"EXISTS (SELECT 1 FROM json_each(v.participants_json) p WHERE p.value={me}) OR "
+                    f"EXISTS (SELECT 1 FROM json_each(vr.participants_json) p WHERE p.value={me}) OR "
+                    f"EXISTS (SELECT 1 FROM {inner('thread_members')} tm WHERE tm.thread_id=vr.id AND tm.actor IN {names})))")
 
         def party(task):
             return (f"EXISTS (SELECT 1 FROM {inner('tasks')} t WHERE t.id={task} AND (t.owner={me} OR t.requester={me} "
                     f"OR {member('t.conversation_id')}))")
 
-        def masked(column, known):
-            return f"CASE WHEN source.{column} IN {hidden} AND NOT {known} THEN '' ELSE source.{column} END"
+        def masked(column, known, among=hidden):
+            return f"CASE WHEN source.{column} IN {among} AND NOT {known} THEN '' ELSE source.{column} END"
+        out["thread_members"] = {column: masked(column, member("source.thread_id"), qlist(strangers))
+                                 for column in ("actor", "added_by")}
+    if people and inner is not None:
         out["tasks"] = {column: masked(column, party("source.id")) for column in ("owner", "requester", "closed_by")}
         out["task_events"] = {"actor": masked("actor", party("source.task_id"))}
         out["events"] = {"actor": masked("actor", f"({member('source.target')} OR {party('source.target')})")}
         # As REST and the stream say it (teammate_access.Known): the message stays, its author is not named.
         out["messages"] = {column: masked(column, member("source.conversation_id")) for column in ("from_actor", "to_actor")}
+        out["thread_followers"] = {"actor": masked("actor", member("source.thread_id"))}
+        said = (f"(SELECT mm.conversation_id FROM {inner('messages')} mm WHERE mm.id=source.message_id)")
+        out["message_mentions"] = {"actor": masked("actor", member(said))}
     if people or groups:
         out["bot_config"] = bot_config_masks(people, bare, groups)
     if people:
@@ -90,6 +104,8 @@ def teammate_masks(unseen, me, inner=None):
             f"WHEN EXISTS (SELECT 1 FROM json_each(source.participants_json) WHERE value={me}) THEN source.participants_json "
             f"ELSE (SELECT json_group_array(value) FROM json_each(source.participants_json) WHERE value NOT IN {qlist(people)}) "
             "END")}
+        if inner is not None:
+            out["conversations"]["owner_actor"] = masked("owner_actor", member("source.id"))
     if groups:
         out["humans"] = {"teams_json": (
             "CASE WHEN source.teams_json IS NULL OR NOT json_valid(source.teams_json) THEN source.teams_json "
@@ -768,7 +784,10 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         tables = materialize(conn, index, tables, inner, function, private)
         conn.set_progress_handler(None, 0)
         masks = {**MASKED, **live_masks(unsettled_watched(conn, inner))}
-        for table, columns_masked in teammate_masks(unseen, q(who.actor), inner).items():
+        from . import threads
+        names = qlist(threads.Viewer(auth, who).member_names(conn))
+        bots = TA.hidden(conn, who, "see", ("bot",), auth)
+        for table, columns_masked in teammate_masks(unseen, q(who.actor), inner, names, bots).items():
             masks[table] = {**masks.get(table, {}), **columns_masked}
         for table, (predicate, _) in tables.items():
             masked = masks.get(table, {})

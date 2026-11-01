@@ -169,7 +169,7 @@ CREATE TABLE IF NOT EXISTS sequences (name TEXT PRIMARY KEY, value INTEGER NOT N
 | `members` | `thread_members` actors; a `group:<id>` member resolves live | hidden: not listed, not searchable, no existence leak (404) |
 | `task` | whoever may read the task (`auth.task`, `task_private_readable`) | today's task-discussion rule |
 | `home` | the Read audience of `owner_actor` (bot, person or group), its managers (Manage ⇒ Read) | posting needs Read **and** Write on the owner |
-| `personal` | `owner_actor` and `thread_members`; **no owner bypass**; the Strategy owner-seat rule stays | all new DMs; migrated personal/Assistant/Librarian/Strategy rooms |
+| `personal` | `thread_members` (leaving removes reading, its starter's too), plus `owner_actor` for a special room (`room_key`); **no owner bypass**; the Strategy owner-seat rule stays | all new DMs; migrated personal/Assistant/Librarian/Strategy rooms |
 | `participants` | actors in `participants_json`, plus the company owner (today's inspection) | migrated `direct` rows only |
 | `meeting` | `live_privacy.require_conversation` as today | migrated meeting rooms (`room_key` starts `live_privacy.ROOM_PREFIX`) |
 
@@ -187,7 +187,8 @@ Bots are AI employees: an internal bot reads what a person in the same seat read
   stored audience) still opens to an internal bot only by that grant, and migrated shared-room history only to the
   room's bot, a participant or a granted turn.
 - **External agents** (agent token) never get `company` or `team` standing read: there only their participation
-  counts. A bot in a thread's wake audience (`threads.audience_has`: company bots, the group's bots) may still be
+  counts, which `add_member` (or naming the bot when the thread is made) writes on a public root's `participants_json`,
+  and `remove_member` takes away. A bot in a thread's wake audience (`threads.audience_has`: company bots, the group's bots) may still be
   woken there.
 - **Posting in a Home** takes Write on its owner for bots as for people (`can_post`). Only the Home's own bot and a
   run replying into the thread its attempt was granted skip it.
@@ -314,7 +315,7 @@ threads.sub_thread(c, principal, parent_message_id) -> thread row   # get-or-cre
 
 ```python
 threads.add_member(c, principal, thread_id, actor, *, role="member")
-threads.remove_member(c, principal, thread_id, actor)          # thread owner or admin; revoking removes reading
+threads.remove_member(c, principal, thread_id, actor)          # thread owner or admin; revoking removes reading, a DM's starter's too
 threads.members(c, viewer, thread_id, *, cursor=None, limit=100) -> {"members": [...], "next_cursor"}
 threads.follow(c, viewer, thread_id, *, notify="live") ; threads.unfollow(c, viewer, thread_id)
 threads.set_audience(c, principal, thread_id, audience, *, audience_group_id=None)
