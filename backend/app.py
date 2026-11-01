@@ -7803,6 +7803,8 @@ def create_app(settings=None):
     install_strategy_market(app, store, auth, mutate)
     from .strategy import install as install_strategy
     install_strategy(app, store, auth, mutate)
+    from .brand_gtm import install as install_brand_gtm
+    install_brand_gtm(app, store, auth, mutate)          # the brand and go-to-market pages
     from .strategy_setup import install as install_strategy_setup
     install_strategy_setup(app, store, auth, mutate)
     from .lenses import install as install_lenses

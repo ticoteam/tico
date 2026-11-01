@@ -103,6 +103,12 @@ def _build():
         aliases=("recording.ready",))
     add("strategy.published", "A new version of the strategy was published.",
         {"version": 3, "note": "Focus on Acme's renewals.", "published_by": "human:ana"})
+    add("brand.published", "A new version of the brand page was published.",
+        {"version": 2, "note": "Warmer voice for Acme's home visits.", "published_by": "human:ana"})
+    add("gtm.published", "A new version of the go-to-market page was published.",
+        {"version": 2, "note": "Referrals move to scaling.", "published_by": "human:ana"})
+    add("growth.verdict", "A growth idea's test got a verdict.",
+        {"task_id": "t1", "title": "Show prices on the booking page", "status": "won", "verdict_by": "bot:growth"})
     add("market.insight.urgent", "An urgent market insight was reported.",
         {"id": "i1", "about": "Rival Co", "reported_by": "bot:market-analyst"})
     add("market.briefing", "The weekly market briefing is ready.",
