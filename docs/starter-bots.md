@@ -76,7 +76,7 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 
 | Icon | Template | Role | What it does | Suggest | Needs |
 |---|---|---|---|---|---|
-| `campaign` | `marketing-lead` | Head of Marketing (head) | A weekly marketing summary (red/amber/green per workstream, blockers, a six-week calendar, proposed priorities), routing proposals, and a hiring proposal when repeated work has no owner | default | Tico only; calendar, meetings and docs optional |
+| `campaign` | `marketing-lead` | Head of Marketing (head) | A weekly marketing summary (red/amber/green per workstream, blockers, a six-week calendar, proposed priorities), routing proposals, and a hiring proposal when repeated work has no owner. As the Growth Lead it proposes ideas, runs the weekly growth meeting and the monthly growth report ([Growth](growth.md)) | default | Tico only; calendar, meetings and docs optional |
 | `edit_note` | `content` | Content Marketer | A four-week content plan and one finished piece a week with short versions, drafted until outbound sending is on | default | Tico only |
 | `travel_explore` | `seo-visibility` | SEO Specialist | A weekly report on search and AI-answer visibility with three page fixes written ready to apply | common | Public web; search and AI-visibility exports optional |
 | `tag` | `listening` | Social Media Manager | Two weeks of draft social posts per account, and a weekday digest of public mentions, questions and competitor moves | common | Public web; social accounts named at setup |

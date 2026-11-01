@@ -31,15 +31,22 @@ from . import views
 from .store import H, Problem
 
 
+DRAFT_PAGE_KINDS = ("brand_draft", "gtm_draft")
+
+
 def company_editor(who):
     """The owner, on their own click: never an admin or a member, never a bot (the Strategy Bot proposes), never someone
     acting for the owner. The Strategy Bot's level, its regular checks, the vision and the strategy are theirs."""
     return who.role == "owner" and not who.via
 
 
-def strategy_visible(who, proposal):
+def strategy_visible(who, proposal, auth=None):
     """A strategy proposal carries unpublished draft text (strategy_draft) or every affected goal's title
-    (strategy_realign): the owner reads it, and the bot that proposed it; no one else."""
+    (strategy_realign): the owner reads it, and the bot that proposed it; no one else. A brand or GTM draft proposal
+    (backend/brand_gtm.py) is the same for the owner and the admins, who write those drafts."""
+    if proposal["kind"] in DRAFT_PAGE_KINDS:
+        from . import brand_gtm
+        return (auth is not None and brand_gtm.admin(auth, who)) or proposal.get("proposed_by") == who.actor
     if proposal["kind"] not in ("strategy_draft", "strategy_realign"):
         return True
     return company_editor(who) or proposal.get("proposed_by") == who.actor
@@ -60,6 +67,43 @@ def readable_goals(c, auth, who, rows):
 
 
 _readable_goals = readable_goals          # install's closures of the same name call these
+
+
+def org_shape(c):
+    roster, entries = views.roster(c), views.entries(c)
+    archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
+    return roster, entries, archived
+
+
+def is_manager(who):
+    """The Strategy Bot acting as itself."""
+    return who.role == "bot" and who.actor == G.AUTO_ACTOR
+
+
+def stands_above(c, who, owner):
+    """Whether `who` is the owner of the environment or sits above `owner` on the org chart:
+    the tasks board's movers rule, over people and bots alike."""
+    if who.role == "owner":
+        return True
+    if who.role not in ("human", "bot"):
+        return False
+    roster, entries, archived = org_shape(c)
+    return who.actor in G.above(owner, roster, entries, archived, True)
+
+
+def may_edit_kpi(c, who, record):
+    """Whether the KPI's owner, or someone above them on the org chart, may change it."""
+    if who.role == "owner":
+        return True
+    if is_manager(who) or record["owner"] == G.COMPANY:
+        return False
+    return who.actor == record["owner"] or stands_above(c, who, record["owner"])
+
+
+def kpi_editable(c, who, record):
+    """Whether the KPI update route lets `who` change this KPI: the Strategy Bot proposes instead, and a KPI Tico
+    computes is fixed. The growth KPI list flags each KPI with this."""
+    return not is_manager(who) and not K.auto(record["id"]) and may_edit_kpi(c, who, record)
 
 
 def install(app, store, auth, mutate, settings):
@@ -90,15 +134,6 @@ def install(app, store, auth, mutate, settings):
         return write(request, body, work_then_ask)
 
     # ------------------------------------------------------------------ who may
-    def org_shape(c):
-        roster, entries = views.roster(c), views.entries(c)
-        archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-        return roster, entries, archived
-
-    def is_manager(who):
-        """The Strategy Bot acting as itself."""
-        return who.role == "bot" and who.actor == G.AUTO_ACTOR
-
     def goal_owner(c, who, value):
         """A slug, a person id, `me` or `company`, as the actor string a goal or KPI is owned by."""
         if value in ("me", "self", None, ""):
@@ -110,16 +145,6 @@ def install(app, store, auth, mutate, settings):
             return G.COMPANY
         return auth.target(c, who, value)
 
-    def stands_above(c, who, owner):
-        """Whether `who` is the owner of the environment or sits above `owner` on the org chart:
-        the tasks board's movers rule, over people and bots alike."""
-        if who.role == "owner":
-            return True
-        if who.role not in ("human", "bot"):
-            return False
-        roster, entries, archived = org_shape(c)
-        return who.actor in G.above(owner, roster, entries, archived, True)
-
     def parent_owner(c, row):
         parent = G.goal(c, row["parent_id"]) if row.get("parent_id") else None
         return parent["owner"] if parent else None
@@ -129,13 +154,6 @@ def install(app, store, auth, mutate, settings):
         if is_manager(who):
             return False
         return who.actor in (row["owner"], parent_owner(c, row)) or stands_above(c, who, row["owner"])
-
-    def may_edit_kpi(c, who, record):
-        if who.role == "owner":
-            return True
-        if is_manager(who) or record["owner"] == G.COMPANY:
-            return False
-        return who.actor == record["owner"] or stands_above(c, who, record["owner"])
 
     def may_log(c, who, record):
         """Whoever keeps the KPI, the Strategy Bot, or the owner of a goal that uses it."""
@@ -199,6 +217,9 @@ def install(app, store, auth, mutate, settings):
             return False
         if item["kind"] in ("strategy_draft", "strategy_realign"):     # the strategy is the owner's (backend/strategy.py)
             return company_editor(who)
+        if item["kind"] in DRAFT_PAGE_KINDS:                         # the brand and GTM drafts are the admins'
+            from . import brand_gtm
+            return brand_gtm.admin(auth, who)
         goal = G.goal(c, item["goal_id"]) if item["goal_id"] else None
         record = K.kpi(c, item["kpi_id"]) if item["kpi_id"] else None
         by_goal = bool(goal) and may_colour(c, who, goal)
@@ -553,7 +574,7 @@ def install(app, store, auth, mutate, settings):
             names.update(owner_names(c, other))
             visible = {r["id"] for r in rows}
             pending = [p for p in G.proposals(c, "pending") if (not p["goal_id"] or p["goal_id"] in visible)
-                       and not kpi_hidden(c, p, hidden) and strategy_visible(who, p)]
+                       and not kpi_hidden(c, p, hidden) and strategy_visible(who, p, auth)]
             editor = company_editor(who)
             return {"goals": rows, "owners": names, "unaligned": unaligned, "other_kpis": other,
                     "proposals": [{**p, "card": G.card(c, p, hidden, editor), "may_decide": decider(c, who, p)}
@@ -1266,8 +1287,17 @@ def install(app, store, auth, mutate, settings):
             if not may_edit_kpi(c, who, record):
                 raise Problem("forbidden", "The KPI's owner or someone above them changes it", 403)
             owner = goal_owner(c, who, body.owner) if body.owner else None
-            fields = body.model_dump(exclude={"owner"})
+            from . import growth
+            if body.growth_role == "north_star" and "growth_role" in body.model_fields_set:
+                # Naming a North Star moves the role off the old one, so the caller must be able to change that too.
+                for old in H._rows(c.execute("SELECT * FROM kpis WHERE growth_role='north_star' AND id<>?", (kid,))):
+                    if not kpi_editable(c, who, old):
+                        raise Problem("forbidden", "Only whoever may change the current North Star KPI moves "
+                                      "the role", 403)
+            fields = body.model_dump(exclude={"owner", *growth.KPI_FIELDS})
             G.kpi_edit(c, who.actor, kid, fields, owner)
+            growth.kpi_fields(c, who.actor, kid, {k: getattr(body, k) for k in growth.KPI_FIELDS
+                                                  if k in body.model_fields_set})
             return kpi_detail(c, who, K.kpi(c, kid))
         return mutate(request, body, work)
 
@@ -1340,7 +1370,7 @@ def install(app, store, auth, mutate, settings):
             hidden = hidden_owners(c, who)
             rows = []
             for p in G.proposals(c, status if status != "all" else None, goal_id, kpi_id):
-                if not strategy_visible(who, p):
+                if not strategy_visible(who, p, auth):
                     continue
                 goal = G.goal(c, p["goal_id"]) if p["goal_id"] else None
                 record = K.kpi(c, p["kpi_id"]) if p["kpi_id"] else None
@@ -1409,7 +1439,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             item = G.proposal(c, pid)
-            if not item or not strategy_visible(who, item):
+            if not item or not strategy_visible(who, item, auth):
                 raise Problem("not_found", "Unknown proposal", 404)
             if who.role not in ("owner", "human") or who.via:
                 raise Problem("forbidden", "The person who turned the suggestion down adds its reason, on their own click",

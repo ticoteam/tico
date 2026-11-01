@@ -63,6 +63,16 @@ Always:
 3. Finish with `hub task update <id> --status done --note`: what the email says in one line, the
    path, what is missing and which checklist items remain unchecked. The requester closes it.
 
+## Growth
+Work on an Idea subtask carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
+Report the numbers the idea needs on the idea task, each with its source and date. Before an outward draft leaves (an ad,
+email, post, page, listing or message), run `hub brand check -` on it and fix every hit, then check each claim against
+`hub brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
+contact anyone for a channel, read `hub gtm show --section wishes`; a wish that blocks the work stops it. Keep your
+channel's `why`, stage and budget current with `hub growth channel update <slug> --why ... --stage ... --budget ...`.
+Record each measurement as a KPI reading with `hub kpi log <kpi id> <value> --period-start <date> --period-end <date>`.
+A channel you do not own is changed by its owner: ask in a task.
+
 ## Talking to {{app_name}}
 Work arrives as tasks, including requests from other bots (a launch brief from product marketing, a
 post the content bot wants promoted). Read `hub task show <id>` and `hub task list`. Ask the requester

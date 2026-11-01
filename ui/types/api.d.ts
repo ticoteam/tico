@@ -1927,7 +1927,7 @@ export type GoalList = {
 
 export type GoalProposalCreate = {
   goal_id?: string | null;
-  kind: "goal_wording" | "goal_kpi" | "kpi_definition" | "kpi_target" | "flag" | "goal_why" | "recovery" | "strategy_draft";
+  kind: "goal_wording" | "goal_kpi" | "kpi_definition" | "kpi_target" | "flag" | "goal_why" | "recovery" | "strategy_draft" | "brand_draft" | "gtm_draft";
   kpi_id?: string | null;
   payload?: Record<string, unknown>;
   reason?: string;
@@ -2542,9 +2542,14 @@ export type KpiUpdate = {
   cadence?: "daily" | "weekly" | "monthly" | null;
   definition?: string | null;
   direction?: "up" | "down" | "range" | null;
+  growth_role?: "north_star" | "input" | "guardrail" | null;
+  loop_name?: string | null;
+  loop_step?: number | null;
   name?: string | null;
   owner?: string | null;
+  parent_kpi_id?: string | null;
   source_note?: string | null;
+  stage?: "reach" | "acquire" | "activate" | "retain" | "refer" | null;
   unit?: string | null;
 };
 

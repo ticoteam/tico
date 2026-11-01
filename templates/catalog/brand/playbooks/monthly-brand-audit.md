@@ -9,12 +9,12 @@ consistent last month's public work was, and the three fixes that matter most. N
 
     hub task show <id>
 
-Then `knowledge/brand.md`, `knowledge/rulings.md` and last month's audit. Check whether last month's
+Then the brand card (`hub brand show`), `knowledge/rulings.md` and last month's audit. Check whether last month's
 three fixes were made.
 
 ## 2. Take the sample
 
-Twelve to fifteen items published last month, spread across the surfaces in `knowledge/brand.md`:
+Twelve to fifteen items published last month, spread across the surfaces in the brand card:
 the pages that changed, emails sent (from the Email Marketing Manager's reports), posts, app store or
 marketplace listings, and any sales deck a human attached. Weight toward what most people see.
 
@@ -31,7 +31,7 @@ the line as it is and as it should be, the rule, and the owner of the item.
 
 ## 5. Find gaps in the book
 
-A question the audit could not answer from `knowledge/brand.md` (how to write a price change, whether
+A question the audit could not answer from the brand card (how to write a price change, whether
 to use emoji in posts) becomes a proposed rule with an example, for the owner.
 
 ## 6. Write and hand over

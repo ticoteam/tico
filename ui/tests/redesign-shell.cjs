@@ -117,7 +117,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       assert.equal(await page.locator('#side a[data-nav="automations"].cur').count(), 1, tag + ': Automations is current');
       await page.evaluate(() => { location.hash = '#/strategy/org'; });
       await page.locator('.rd-org').waitFor();
-      assert.deepEqual(await page.locator('.strat-tabs a').allInnerTexts(), ['Market', 'Strategy', 'Org', 'Goals', 'Budget'], tag + ': the tabs');
+      assert.deepEqual(await page.locator('.strat-tabs a').allInnerTexts(), ['Market', 'Strategy', 'Growth', 'Org', 'Goals', 'Budget'], tag + ': the tabs');
       const org = await page.locator('.rd-org').innerText();
       assert.ok(org.includes('Builder'), tag + ': Org lists the chart');
       assert.ok(!org.includes('BotOps'), tag + ': helpers are off the Org chart');

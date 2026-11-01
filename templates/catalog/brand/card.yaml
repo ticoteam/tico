@@ -16,7 +16,7 @@ pains:
   - "new copy never sounds like us"
   - "we have no brand guidelines anyone follows"
 owns:
-  - "The brand book in this repository (knowledge/brand.md): positioning line, voice traits with do and don't examples, tone by situation, words used and avoided, naming rules, and where the visual rules live"
+  - "The brand card in Tico (`hub brand show`): positioning line, voice traits with do and don't examples, tone by situation, words used and avoided, naming rules, and where the visual rules live"
   - "Brand reviews: a copy or asset checked against the brand book, with each change marked and the reason"
   - "The monthly brand consistency audit: a sample of what went public that month, scored against the brand book, with the three fixes that matter most"
   - "Naming checks for a new product, feature or campaign: fit with the naming rules and a clash search for its owner to verify against the source"
