@@ -62,6 +62,14 @@ class Follow(BaseModel):
     notify: str = "live"
 
 
+def held_post(c, who, auth, posted):
+    """A held post's answer as its sender reads it: core's `post` answers with the check's own view of the hold, so the
+    authorized hold view (text, can_withdraw, the nonce for a reviewer) is read here; None when nothing was held."""
+    if "held" not in posted:
+        return None
+    return org_rule_check.held_answer(c, who, {"held": posted["held"], "hold_id": posted["held"]["id"]}, auth=auth)
+
+
 def _thread_message(message):
     """A message as the thread routes answer it: with thread_id beside conversation_id, as the timeline and events have it."""
     return {**message, "thread_id": message.get("conversation_id")} if message and message.get("conversation_id") else message
@@ -177,9 +185,7 @@ def install(app, store, auth, mutate, rule_check):
                                       checked=rc)
             else:
                 posted = threads.post(c, v, None, body.body, checked=rc, start=start)
-            if "held" in posted:
-                return posted
-            return {**threads.get(c, v, posted["conversation_id"]), "message": posted}
+            return held_post(c, who, auth, posted) or {**threads.get(c, v, posted["conversation_id"]), "message": posted}
         return mutate(request, body, work)
 
     @app.patch("/api/v2/threads/{thread_id}")
@@ -203,9 +209,10 @@ def install(app, store, auth, mutate, rule_check):
         rc = check(who, thread_id, body)
 
         def work(c):
-            return _thread_message(threads.post(c, threads.viewer(auth, who), thread_id, body.text, kind=body.kind,
-                                                refs=body.refs, parent_message_id=body.parent_message_id,
-                                                to_actor=body.to, checked=rc))
+            posted = threads.post(c, threads.viewer(auth, who), thread_id, body.text, kind=body.kind,
+                                  refs=body.refs, parent_message_id=body.parent_message_id, to_actor=body.to,
+                                  checked=rc)
+            return held_post(c, who, auth, posted) or _thread_message(posted)
         return mutate(request, body, work)
 
     @app.patch("/api/v2/messages/{message_id}")
