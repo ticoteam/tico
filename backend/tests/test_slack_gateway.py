@@ -876,3 +876,41 @@ def test_a_stored_channel_message_reaches_a_message_automation_once_and_only_aft
     assert [s["state"] for s in states] == ["stored", "stored"], "the readers keep the row as it was"
     assert states[0]["processed"] is None, "the backlog is not offered"
     assert states[1]["processed"] is not None
+
+
+def test_a_linked_channel_is_left_out_of_the_readers_pass_its_backfill_its_digest_and_its_automations(readers, monkeypatch):
+    """A channel a thread link carries reaches its thread through the bridge only. The hourly digest, the backfill and
+    the message automations leave it out, including the rows stored before the link (the readers' copies)."""
+    from backend import automations
+    gw, hub, slack = readers, readers.store, readers.slack
+    heard = []
+    monkeypatch.setattr(automations, "on_slack", lambda c, event, person, channel, settings=None: (
+        heard.append(event["text"]) or ["run_1"]))
+    with hub.transaction() as c:
+        c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('redesign',?)", ('{"enabled": true}',))
+        c.execute("INSERT INTO automations(id,name,owner,grp,trigger_type,enabled,builtin,flow_json,version,created,"
+                  "created_by,updated) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
+                  ('{"trigger": {"type": "message", "inbox": "slack:#marketing"}}', gw.clock(), gw.clock()))
+    gw.clock.advance(60)
+    assert gw.receive(channel_message("Control message")) == "stored"
+    gw.offer()
+    assert heard == ["Control message"], "control: an unlinked channel's stored message is offered"
+    gw.clock.advance(60)
+    assert gw.receive(channel_message("Stored before the link")) == "stored"
+    with hub.transaction() as c:
+        c.execute("INSERT INTO conversations (id,kind,subject,created,audience,root_id,path) "
+                  "VALUES ('T-link','thread','Marketing','x','company','T-link','')")
+        c.execute("INSERT INTO slack_thread_links (id,thread_id,channel_ref,channel_id,channel_name,audience,state,"
+                  "linked_by,created_at,updated_at) VALUES ('L1','T-link',?,?,'marketing','company','active','ana','x','x')",
+                  (MARKETING, MARKETING))
+    assert gw.linked_channels() == {MARKETING}
+    gw.offer()
+    assert heard == ["Control message"], "the stored row of a linked channel is not offered"
+    slack.calls.clear()
+    gw.backfill()
+    assert not [c for c in slack.calls if c[0] == "conversations.history" and c[1] == MARKETING]
+    assert [c for c in slack.calls if c[0] == "conversations.history" and c[1] == RELEASE], "the other channels still run"
+    gw.clock.advance(3600)
+    gw.tick()
+    bodies = " ".join(d["body"] for d in digests(hub))
+    assert "Control message" not in bodies and "Stored before the link" not in bodies

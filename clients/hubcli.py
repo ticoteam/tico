@@ -37,7 +37,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub thread search "<words>" [--cursor C]   the messages in threads you can read
     hub thread members list|add|remove <thread> [<actor>] [--owner]   actors: human:<id>, bot:<slug>, group:<id>
     hub thread update <thread> [--title T] [--archive|--unarchive] [--audience ...] [--group G]
-    hub thread link-slack <thread> [<channel>] [--off]   not available in this build yet
+    hub thread link-slack <thread> [<channel>] [--history] [--off]
+                                           a thread's Slack link (admins): with a channel, asks for it and Tico
+                                           checks it; --history also brings the channel's earlier messages; --off
+                                           takes it away; with the thread alone, lists its links
     hub question ask <bot> [<bot>...] "<question>" --wait 60
     hub question answer <message-id> "<text>" [--unknown "needs X"] [--on-behalf-of turn]
     hub note create <bot> "<text>" [--text-file f] [--defer 4h]  a deferred message: wakes nobody; the bot's next
@@ -1030,10 +1033,11 @@ def parser():
                    help="team or company makes it public; only its starter or an admin can")
     s.add_argument("--group", dest="audience_group_id", help="with --audience team: the group's id")
     s.set_defaults(fn="thread update")
-    s = thread.add_parser("link-slack", help="link a Slack channel to a thread, or unlink with --off (not available yet)")
-    s.add_argument("thread")
-    s.add_argument("channel", nargs="?")
-    s.add_argument("--off", action="store_true")
+    s = thread.add_parser("link-slack", help="link a thread to a Slack channel (admins), list its links, or --off to take them away")
+    s.add_argument("thread", help="the thread's id")
+    s.add_argument("channel", nargs="?", help="#name or id (C0123456789); left out, the thread's links are listed")
+    s.add_argument("--history", action="store_true", help="also bring in the channel's earlier messages")
+    s.add_argument("--off", action="store_true", help="take the thread's Slack link away")
     s.set_defaults(fn="thread link-slack")
 
     question = sub.add_parser("question", help="ask other bots a question and wait; answer one asked of you").add_subparsers(dest="sub")

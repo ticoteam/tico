@@ -1633,6 +1633,8 @@ def sub_thread(c, principal, parent_message_id):
         row = _insert_thread(c, actor, title=sub_thread_title(parent_message.get("body")), audience=None,
                              parent=parent, parent_message_id=parent_message_id,
                              kind=parent.get("kind") or "chat", owner_actor=None)
+        for outside in _outside(c, root_of(c, parent)["id"]):        # an outside destination follows its root's replies
+            add_outside_delivery(c, row["id"], outside, added_by=actor)
         c.execute("RELEASE threads_sub_thread")
     except sqlite3.IntegrityError:
         c.execute("ROLLBACK TO threads_sub_thread")

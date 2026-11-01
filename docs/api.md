@@ -65,6 +65,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Webhooks | Outgoing webhooks: endpoints a person owns, the events Tico sends them, and each send's log ([guide](webhooks.md)). |
 | Cards and pins | Tico's built-in cards and where pages and cards are pinned: the Dashboard, team pages, bot sidebars and tasks ([guide](overview.md)). A card shows each reader only what they may see. |
 | Model subscriptions | The company's saved model logins and keys, given to computers per runtime. A value is sent only to add or reconnect one; no answer carries it. |
+| Slack links | A thread's link to a Slack channel, both ways ([guide](slack.md)): asked for by an admin, checked by the gateway, then active, suspended or refused. Admins only. |
 | Threads | Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages in a thread. A thread the viewer may not read answers 404, never 403. |
 <!-- api-tags:end -->
 

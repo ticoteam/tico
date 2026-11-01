@@ -2801,6 +2801,12 @@ export type LinkEdit = {
   url?: string | null;
 };
 
+export type LinkRequest = {
+  channel: string;
+  history?: boolean;
+  thread_id: string;
+};
+
 export type LinkedDoc = {
   added_by: string;
   added_by_name: string;
@@ -3746,6 +3752,30 @@ export type SentAs = {
 export type ServiceKeyCreate = {
   label: string;
   scope?: "tasks" | "update";
+};
+
+export type SlackLink = {
+  audience: string;
+  channel: {
+  id: string;
+  name: string;
+  private: boolean;
+};
+  created_at: string;
+  history: {
+  count: number;
+  state: "off" | "pending" | "running" | "done" | "failed";
+};
+  id: string;
+  linked_by: string;
+  reason: string;
+  state: "requested" | "active" | "suspended" | "refused" | "unlinked";
+  thread_id: string;
+  updated_at: string;
+};
+
+export type SlackLinkList = {
+  links: Array<SlackLink>;
 };
 
 export type SleepSet = {
@@ -7492,6 +7522,14 @@ export type ListServiceKeysParams = Record<string, never>;
 export type ListServiceKeysBody = never;
 export type ListServiceKeysResponse = unknown;
 
+/** GET /api/v2/slack/links */
+export type ListSlackLinksParams = {
+  limit?: number;
+  thread?: string;
+};
+export type ListSlackLinksBody = never;
+export type ListSlackLinksResponse = SlackLinkList;
+
 /** GET /api/v2/doc-sources/{source_id}/documents */
 export type ListSourceDocumentsParams = {
   cursor?: string;
@@ -8189,6 +8227,13 @@ export type RequestSeatAgentParams = {
 export type RequestSeatAgentBody = SeatAgentRequest;
 export type RequestSeatAgentResponse = Seat;
 
+/** POST /api/v2/slack/links */
+export type RequestSlackLinkParams = {
+  "Idempotency-Key": string;
+};
+export type RequestSlackLinkBody = LinkRequest;
+export type RequestSlackLinkResponse = SlackLink;
+
 /** POST /api/v2/tasks/{tid}/comments/{mid}/resolve */
 export type ResolveTaskQuestionParams = {
   "Idempotency-Key": string;
@@ -8230,6 +8275,14 @@ export type RestoreTaskParams = {
 };
 export type RestoreTaskBody = Empty;
 export type RestoreTaskResponse = unknown;
+
+/** POST /api/v2/slack/links/{link_id}/resume */
+export type ResumeSlackLinkParams = {
+  "Idempotency-Key": string;
+  link_id: string;
+};
+export type ResumeSlackLinkBody = never;
+export type ResumeSlackLinkResponse = SlackLink;
 
 /** POST /api/v2/webhooks/{hook_id}/resume */
 export type ResumeWebhookParams = {
@@ -8916,6 +8969,14 @@ export type UnlinkGoalKpiParams = {
 };
 export type UnlinkGoalKpiBody = Empty;
 export type UnlinkGoalKpiResponse = GoalResult;
+
+/** DELETE /api/v2/slack/links/{link_id} */
+export type UnlinkSlackLinkParams = {
+  "Idempotency-Key": string;
+  link_id: string;
+};
+export type UnlinkSlackLinkBody = never;
+export type UnlinkSlackLinkResponse = SlackLink;
 
 /** POST /api/v2/tasks/{tid}/unsnooze */
 export type UnsnoozeTaskParams = {

@@ -2346,6 +2346,26 @@ SCHEMAS['ComputerSubscriptionList'] = obj({
 SCHEMAS['ComputerSubscriptionResult'] = obj({
     'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 'n', 'stopped': 'i', 'sessions_reset': 'i'})
 
+TAGS['Slack links'] = ("A thread's link to a Slack channel, both ways (docs/slack.md): asked for by an admin, checked by the "
+                       "gateway, then active, suspended or refused. Admins only.")
+STABLE.extend([
+    ('/api/v2/slack/links', 'get', 'Slack links', 'listSlackLinks', 'The Slack links of a thread (`thread`), newest first, '
+     'up to `limit` (at most 100); unlinked ones are left out', 'SlackLinkList'),
+    ('/api/v2/slack/links', 'post', 'Slack links', 'requestSlackLink', 'Ask for a thread to be linked to a Slack channel '
+     '(`#name` or its id): the gateway checks it and activates or refuses it later; `history` also brings in its earlier '
+     'messages', 'SlackLink'),
+    ('/api/v2/slack/links/{link_id}', 'delete', 'Slack links', 'unlinkSlackLink', 'Stop a Slack link: nothing more is sent '
+     'to the channel after this; answers the link, now unlinked', 'SlackLink'),
+    ('/api/v2/slack/links/{link_id}/resume', 'post', 'Slack links', 'resumeSlackLink', 'Check a suspended or refused link '
+     'again; any other state answers 409', 'SlackLink'),
+])
+SCHEMAS['SlackLink'] = obj({
+    'id': 's', 'thread_id': 's', 'channel': obj({'id': 's', 'name': 's', 'private': 'b'}),
+    'audience': 's', 'state': {'enum': ['requested', 'active', 'suspended', 'refused', 'unlinked']}, 'reason': 's',
+    'history': obj({'state': {'enum': ['off', 'pending', 'running', 'done', 'failed']}, 'count': 'i'}),
+    'linked_by': 's', 'created_at': 's', 'updated_at': 's'})
+SCHEMAS['SlackLinkList'] = obj({'links': items(ref('SlackLink'))})
+
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
     "never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. "

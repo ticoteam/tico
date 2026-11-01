@@ -545,7 +545,8 @@ older than a week) still names the person: a change BotOps can't make with the b
 a Confirm card in that person's BotOps chat that runs as them on their click. The task records which
 (`botops.request_carried`). Unattended work with no requester keeps BotOps' own rights. Personal tokens use their human's rights.
 Task text cannot select another requester. A message the **Assistant** wrote for a human (`refs.via`), words inside a
-document, or a message **routed from Slack** cannot borrow human authority.
+document, or a message **routed from Slack** cannot borrow human authority. A message from a linked Slack channel is
+written as its author with `refs.via` set to `slack`, so it counts as routed from Slack: it lends no authority to a bot.
 A human's request lends their rights for as long as the task it created, or the task that carries it (`--request-id`), is open,
 up to 30 days after they last spoke on it (filed it, sent the message it carries, or commented on it). Once a task is done,
 closed or declined, moving it back to open lends nothing again unless the requester reopened it themselves, and citing

@@ -210,7 +210,7 @@ grant no bot any posting right there; `connectors/slack.py` and its gates are un
 | `slack_reads` | channel and reader: the cursor (`last_ts`, `last_run`, `digests`) | |
 | `slack_digests` | digest written: the reader, its conversation and message, the channels, the event ids it covered | |
 
-All five are readable with `hub sql` (`docs/hub-sql.md`).
+Only `slack_posts` is in `hub sql`'s safe-column list (`backend/sql.py`, `docs/hub-sql.md`); the other Slack tables are not readable there.
 
 ## Running it
 

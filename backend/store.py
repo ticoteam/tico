@@ -1218,6 +1218,8 @@ class Store:
             c.executescript(_invariants.SCHEMA)
             from . import slack_channels as _slack_channels
             c.executescript(_slack_channels.SCHEMA)
+            from . import slack_threads as _slack_threads
+            _slack_threads.ensure(c)
             from . import flight as _flight
             c.executescript(_flight.SCHEMA)
             for column, kind in (("sql_ms", "REAL"), ("wait_ms", "REAL"), ("queries", "INTEGER")):

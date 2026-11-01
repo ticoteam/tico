@@ -46,6 +46,35 @@ list and its `tools:` entry. Channels shared outside the workspace are always re
 coming from the file, until an owner or an admin presses **Import** (or runs `hub slack channel import`). After that the
 file is ignored. A public install has no such file and needs none.
 
+## Link a channel to a thread
+
+A channel can be linked to a Tico thread, and the two carry each other's messages.
+
+- A **public** channel links to a **company** thread; a **private** channel links to a **members** thread. Only the
+  root of a thread links.
+- Every member of the channel must be a roster person who can read the thread. If one is not, the link is refused and
+  the reason names the problem.
+- An owner or an admin asks for the link with `POST /api/v2/slack/links` (`thread_id`, `channel`, `history`). The gateway
+  checks it on its next pass and activates or refuses it. The API never holds Slack's tokens.
+- A message said in the channel is written in the thread as the person who said it. A message written in the thread
+  goes to the channel as the Tico app, with "*Name* · via Tico" first. Edits and deletes follow. A sub-thread two levels
+  down is flattened into its root's Slack thread with a `↳ title` line.
+- A message a screening rule holds (a Block), or that breaks an org rule in force, is not written, and its author gets a
+  private note. Edits of a held message are held too. A rule's owner or editor can send it anyway; it is then written as
+  its author.
+- If the channel becomes a Slack Connect channel, gains a member who does not map, or the thread narrows, the link is
+  suspended and one Needs-you item asks an owner to look. Nothing moves until the link is checked again
+  (`POST /api/v2/slack/links/{id}/resume`). A message that arrives while the link is suspended is kept, and posted in order
+  when the link resumes.
+- Unlinking (`DELETE /api/v2/slack/links/{id}`) stops both ways at once, and anything not yet sent is not sent.
+- Slack senders are looked up once an hour, not once a message. A repeated edit event (Slack retries) is one revision,
+  and an edit to the same text is not a revision.
+- History is opt-in (`history: true`): the last 30 days, up to 5,000 messages, from members who map to roster people.
+  Nothing wakes a bot for it.
+
+The thread settings screen does not link channels yet. Use `hub thread link-slack <thread> [<channel>]` (CLI), the
+`hub_thread_link_slack` tool (MCP), or the API.
+
 ## What humans can do
 
 - DM Tico to ask for anything; the router picks the right bot, or asks one clarifying question.

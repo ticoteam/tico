@@ -5046,6 +5046,38 @@ def slack_channel_import(api, args):
     return _as_person(api).post("slack/channels/import", {}, key=_key(args))
 
 
+@tool("hub_thread_link_slack", "Link a thread to a Slack channel, list its Slack links, or take them away, as the person who "
+      "asked you (an owner or an admin). With a channel, asks for the link: Tico checks the channel and the thread, then "
+      "activates it or refuses it, and `state` says which (the thread alone shows it again). `history` with a channel also "
+      "brings in the channel's earlier messages. `off` takes the thread's Slack links away. With neither, lists them.",
+      {"thread": _s("The thread's id: the root of a company or members thread"),
+       "channel": _CHANNEL,
+       "history": {"type": "boolean", "default": False, "description": "With a channel: bring in its earlier messages too"},
+       "off": {"type": "boolean", "default": False, "description": "Take the thread's Slack link away"}},
+      required=("thread",), writes=True)
+def thread_link_slack(api, args):
+    """`hub thread link-slack` runs this same tool (clients/remotecli.py), so the CLI and MCP cannot differ."""
+    thread = str(args.get("thread") or "").strip()
+    channel = str(args.get("channel") or "").strip()
+    history, off = bool(args.get("history")), bool(args.get("off"))
+    if not thread:
+        raise APIError("usage", "Give the thread's id")
+    if off and (channel or history):
+        raise APIError("usage", "--off takes the thread's Slack link away: it takes no channel and no --history")
+    if history and not channel:
+        raise APIError("usage", "--history brings in a channel's earlier messages: name the channel too")
+    person = _as_person(api)
+    if channel:
+        return person.post("slack/links", {"thread_id": thread, "channel": channel, "history": history}, key=_key(args))
+    listing = person.get("slack/links", thread=thread, limit=100)
+    if not off:
+        return listing
+    if not listing["links"]:
+        raise APIError("not_found", "This thread has no Slack link to take away")
+    return {"links": [person.call("DELETE", "slack/links/" + quote(link["id"], safe=""), None, _key(args, ":" + link["id"]))
+                      for link in listing["links"]]}
+
+
 @tool("hub_credential_request", "Open a card in the conversation for the person to type a secret into: what it is for, the format, "
       "where to get one. The value goes straight to Credentials and is granted to the bot; you never see it. You are woken when "
       "it is saved: then test the connection and report, or open the card again if it fails. Use this whenever a bot needs a "
@@ -5859,17 +5891,6 @@ def thread_members_remove(api, args):
 def thread_update(api, args):
     body = {key: args[key] for key in ("title", "archived", "audience", "audience_group_id") if args.get(key) is not None}
     return api.patch(_thread_path(args["thread"]), body, key=_key(args))
-
-
-@tool("hub_thread_link_slack", "Link a Slack channel to a thread, both ways, or unlink it with off. Not available in "
-      "this build yet: the Slack bridge is not released.",
-      {"thread": THREAD_ID, "channel": _s("The Slack channel: its id or name"),
-       "off": {"type": "boolean", "default": False}},
-      required=("thread",), writes=True)
-def thread_link_slack(api, args):
-    # The Slack bridge (docs/slack.md) adds its own route here. Until it lands, say so plainly rather than fail on a
-    # missing route.
-    raise APIError("not_available", "Linking a Slack channel to a thread is not available in this build yet.")
 
 
 # ----------------------------------------------------------------------------- the Assistant

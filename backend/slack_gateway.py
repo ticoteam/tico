@@ -218,6 +218,51 @@ class SlackAPI:
             "icon_emoji": icon_emoji, "icon_url": icon_url, "unfurl_links": False, "unfurl_media": False},
             post=True)
 
+    def conversations_members(self, channel):
+        """Every member of a channel (Slack user ids), every page."""
+        out, cursor = [], ""
+        for _ in range(100):
+            data = self.call("conversations.members", {"channel": channel, "limit": 200, "cursor": cursor})
+            out.extend(str(u) for u in data.get("members") or [])
+            cursor = str((data.get("response_metadata") or {}).get("next_cursor") or "").strip()
+            if not cursor:
+                break
+        return out
+
+    def history_page(self, channel, oldest="", cursor="", limit=HISTORY_PAGE):
+        """One page of a channel's top-level messages newer than `oldest`, and the cursor for the next ("" at the end)."""
+        data = self.call("conversations.history", {"channel": channel, "oldest": oldest, "limit": limit, "cursor": cursor})
+        return list(data.get("messages") or []), str((data.get("response_metadata") or {}).get("next_cursor") or "").strip()
+
+    def history_metadata_page(self, channel, oldest, cursor=""):
+        """One page of messages newer than `oldest` with their metadata, and the cursor for the next ("" at the end): where
+        an uncertain send's delivery id is looked for."""
+        data = self.call("conversations.history", {"channel": channel, "oldest": oldest, "limit": HISTORY_PAGE,
+                                                   "cursor": cursor, "include_all_metadata": "true"})
+        return list(data.get("messages") or []), str((data.get("response_metadata") or {}).get("next_cursor") or "").strip()
+
+    def replies_metadata_page(self, channel, thread_ts, oldest, cursor=""):
+        """One page of a thread's replies with their metadata, and the cursor for the next ("" at the end)."""
+        data = self.call("conversations.replies", {"channel": channel, "ts": thread_ts, "oldest": oldest,
+                                                   "limit": HISTORY_PAGE, "cursor": cursor, "include_all_metadata": "true"})
+        return list(data.get("messages") or []), str((data.get("response_metadata") or {}).get("next_cursor") or "").strip()
+
+    def post_thread_message(self, channel, thread_ts, text, delivery_id):
+        """A message as the Tico app, never as a person, carrying its delivery id so an uncertain send can be found."""
+        return self.call("chat.postMessage", {
+            "channel": channel, "thread_ts": thread_ts, "text": text, "unfurl_links": False, "unfurl_media": False,
+            "metadata": {"event_type": "tico_thread_message", "event_payload": {"delivery_id": delivery_id}}}, post=True)
+
+    def update_message(self, channel, ts, text):
+        return self.call("chat.update", {"channel": channel, "ts": ts, "text": text}, post=True)
+
+    def delete_message(self, channel, ts):
+        return self.call("chat.delete", {"channel": channel, "ts": ts}, post=True)
+
+    def post_ephemeral(self, channel, user, text):
+        """A note only `user` sees (the Block note)."""
+        return self.call("chat.postEphemeral", {"channel": channel, "user": user, "text": text}, post=True)
+
     def conversations_open(self, user_id):
         """The IM with this Slack user, created if needed. Needs `im:write`."""
         return self.call("conversations.open", {"users": user_id}, post=True).get("channel") or {}
@@ -482,6 +527,8 @@ class Gateway:
         self.last_model, self.last_usage = "", []   # the last `ask`'s model and usage per call, for the audit
         self.last_cost = 0.0                        # and what its calls cost, in USD (backend/judge.py cost_usd)
         self.last_provider = ""                     # and who answered (the Tico AI Gateway, TypeSafe, the team's LLM)
+        from .slack_threads import Bridge           # imported here: slack_threads reads this module's helpers
+        self.bridge = Bridge(self)                  # native threads: a linked channel is carried into its thread
 
     # ------------------------------------------------------------------ start-up
     @property
@@ -542,6 +589,7 @@ class Gateway:
                           ("gateway restarted while sending", self.clock(), row["message_id"]))
         if rows:
             LOG.warning("%d post(s) were mid-flight at the last stop and are now uncertain", len(rows))
+        self.bridge.recover()
         return len(rows)
 
     # ------------------------------------------------------------------ ingress
@@ -556,6 +604,8 @@ class Gateway:
             return why
         if not event["event_id"]:
             return "shape"
+        if event["op"] in ("store", "edit", "delete", "route") and self.bridge.linked(event["channel"]):
+            return self.bridge.receive(event)       # every event of a linked channel, mentions too, goes to its thread
         if event["op"] in ("edit", "delete"):
             return self.amend(event)
         with self.store.transaction() as c:
@@ -631,7 +681,8 @@ class Gateway:
                 return []
             rows = [dict(r) for r in c.execute(
                 "SELECT * FROM slack_events WHERE state='stored' AND author='human' AND channel_kind='channel' "
-                "AND processed IS NULL AND received>=? ORDER BY received, ts LIMIT 50", (since,))]
+                "AND processed IS NULL AND received>=? AND channel NOT IN (SELECT channel_id FROM slack_thread_links "
+                "WHERE channel_id<>'' AND state IN ('active','suspended')) ORDER BY received, ts LIMIT 50", (since,))]
         out = []
         for event in rows:
             with self.store.read() as c:
@@ -657,6 +708,11 @@ class Gateway:
             user = self.slack.users_info(event["user_id"])
         except (SlackError, SlackUnreachable) as exc:
             return None, None, f"users.info: {getattr(exc, 'code', type(exc).__name__)}"
+        return self.check_user(c, user)
+
+    def check_user(self, c, user):
+        """(person, user, reason) for a Slack user object: the checks every sender passes, from the roster and the
+        workspace alone (no network), so a caller may reuse a users.info answer."""
         if user.get("is_bot") or user.get("id") == "USLACKBOT":
             return None, user, "sender is a bot"
         if user.get("deleted"):
@@ -1426,6 +1482,13 @@ class Gateway:
         return results
 
     # ------------------------------------------------------------------ the readers' pass
+    def linked_channels(self):
+        """The channel ids a thread link carries now (active or suspended). Their messages reach the thread through the
+        bridge, so the readers' pass (backfill, digest, automations) leaves them out, rows stored before the link included."""
+        with self.store.read() as c:
+            return {r[0] for r in c.execute("SELECT DISTINCT channel_id FROM slack_thread_links WHERE channel_id<>'' "
+                                            "AND state IN ('active','suspended')")}
+
     def readable(self):
         """The listed channels (Settings > Tools > Slack) that have readers, by channel id."""
         self.resolve_names()
@@ -1464,7 +1527,8 @@ class Gateway:
         and replies in every thread the gateway knows. Stores only; nothing found here is routed
         (the fast lane is the socket's), so an old mention never wakes a bot late."""
         stored = 0
-        channels = self.readable()
+        linked = self.linked_channels()
+        channels = {cid: entry for cid, entry in self.readable().items() if cid not in linked}
         with self.store.read() as c:
             since = {cid: self.newest_ts(c, cid) for cid in channels}
             threads = [(r["channel"], r["thread_ts"]) for r in c.execute(
@@ -1620,7 +1684,8 @@ class Gateway:
 
     def digest(self):
         """Every reader gets what is unread in its channels, once, and its cursors move with it."""
-        channels = self.readable()
+        linked = self.linked_channels()
+        channels = {cid: entry for cid, entry in self.readable().items() if cid not in linked}
         with self.store.read() as c:
             active = {r["slug"] for r in c.execute("SELECT slug FROM bots WHERE state='active'")}
         by_reader = {}
@@ -1738,7 +1803,12 @@ class Gateway:
         self.mirror()
         posts = self.deliver()
         digests = self.maybe_digest()
-        return {"events": out, "posts": posts, "digests": digests}
+        try:
+            threads = self.bridge.tick()
+        except Exception as exc:                # one bad link never stops the readers
+            LOG.error("Slack thread links failed: %s", type(exc).__name__)
+            threads = {"error": type(exc).__name__}
+        return {"events": out, "posts": posts, "digests": digests, "threads": threads}
 
     def run(self):
         while not self.stop.is_set():
