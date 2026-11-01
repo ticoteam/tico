@@ -12,6 +12,7 @@ hand edits of the YAML, so the map regenerates the same way every time.
 """
 
 import argparse
+import re
 import sqlite3
 import sys
 import tempfile
@@ -23,7 +24,8 @@ YAML_OUT = ROOT / "scripts/cleanup/renames.yaml"
 DATA_OUT = ROOT / "backend/migrations/renames_data.py"
 BASE = "29fcaaf6e"
 
-# Waves whose column renames the server applies at startup (backend/migrations/renames.py) and the codemod has applied.
+# Waves whose column renames the server applies at startup (backend/migrations/renames.py) and the codemod has applied:
+# `--applied 1,2` sets them; without it they stay what renames.yaml says.
 APPLIED_WAVES = (1,)
 
 # Names SQLite refuses as bare identifiers in ordinary statements (tested: to, when, values, order, group, limit),
@@ -70,7 +72,7 @@ M3_UNIFORM = {
     "last_success": ("last_succeeded_at", "global", "CHECK"),
     "last_sync": ("last_synced_at", "global", "REAL epoch seconds"),
     "last_routed": ("last_routed_at", "global", ""),
-    "last_run": ("last_run_at", "global", ""),
+    "last_run": ("last_run_at", "scoped", "also an automation answer's last run object (automations.py, ui)"),
     "last_verified": ("last_verified_at", "global", ""),
     "last_woke": ("last_woke_at", "global", ""),
     "next_check": ("next_check_at", "global", "REAL epoch seconds"),
@@ -352,7 +354,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="exit 1 if the outputs are stale")
     parser.add_argument("--refresh-fixture", action="store_true", help="rebuild the fixture from this tree first")
+    parser.add_argument("--applied", help="the waves the server and the code have taken, e.g. 1,2 (default: as now)")
     args = parser.parse_args()
+    global APPLIED_WAVES
+    if args.applied is not None:
+        APPLIED_WAVES = tuple(int(w) for w in args.applied.split(",") if w.strip())
+    elif YAML_OUT.exists():
+        found = re.search(r"^applied_waves: \[(.*)\]$", YAML_OUT.read_text(), re.M)
+        APPLIED_WAVES = tuple(int(w) for w in found.group(1).split(",") if w.strip()) if found else ()
     if args.refresh_fixture:
         sys.path.insert(0, str(ROOT))
         refresh_fixture()

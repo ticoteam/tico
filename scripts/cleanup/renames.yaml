@@ -467,7 +467,7 @@ columns:
   slack_posts.created: created_at
   slack_posts.next_attempt: next_attempt_at
   slack_posts.updated: updated_at
-  slack_reads.last_run: last_run_at
+  slack_reads.last_run: last_run_at  # also an automation answer's last run object (automations.py, ui)
   slack_threads.created: created_at
   slack_threads.last_routed: last_routed_at
   stale_suggestions.created: created_at
@@ -701,7 +701,7 @@ waves:
     scoped: {}
   "2":
     rule: "M1 created/updated -> created_at/updated_at; M3 uniform bare time columns -> <verb>_at"
-    count: 256
+    count: 255
     global:
       code_expires: code_expires_at  # 1 table
       created: created_at  # 128 tables
@@ -714,7 +714,6 @@ waves:
       last_failed: last_failed_at  # 1 table
       last_fired: last_fired_at  # 1 table
       last_routed: last_routed_at  # 1 table
-      last_run: last_run_at  # 1 table
       last_seen: last_seen_at  # 5 tables
       last_success: last_succeeded_at  # 1 table
       last_sync: last_synced_at  # 1 table
@@ -732,7 +731,7 @@ waves:
     scoped: {}
   "2s":
     rule: "M3 per table, common words (queued, checked, deleted...) -> <verb>_at (needs review, not applied: most sites cannot be told apart from counters, statuses and flags)"
-    count: 42
+    count: 43
     global: {}
     scoped:
       archives.imported: imported_at
@@ -767,6 +766,7 @@ waves:
       slack_events.edited: edited_at
       slack_events.processed: processed_at
       slack_events.received: received_at
+      slack_reads.last_run: last_run_at  # also an automation answer's last run object (automations.py, ui)
       strategy_versions.published: published_at
       support_tickets.checked: checked_at
       task_manager_reports.changed: changed_at

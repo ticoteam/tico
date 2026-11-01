@@ -8,6 +8,7 @@ files:
   - backend/migrations/renames.py     # the rename machinery itself names the old columns
   - backend/migrations/renames_data.py
   - backend/tests/test_schema_renames.py
+  - backend/tests/test_task_delete.py   # trash snapshots saved before the renames, under the old names
   - backend/tests/fixtures/*
   - backend/tests/fixtures/**
   - docs/history/*               # how the schema looked then
@@ -16,13 +17,78 @@ files:
   - runner-rs/*                   # the Rust runner reads and sends the wire names (contracts/runner)
   - runner-rs/**
   - runner/worktrees.py           # reads runners/me/worktrees rows, which keep the wire's detail_json
+  # Wave 2 on: the Python runner's side of the wire and its own state file keep their names (started, updated...).
+  - runner/*.py
+  - runner/importers/**
+  - runner/harnesses/**
+  - runner/tests/conformance/**  # fake harnesses speaking the runner's side
+  - runner/tests/test_hq_tickets.py             # a fake Tico HQ: another system's ticket fields
   - backend/runner_wire.py        # puts the runner wire's old names back on runner bodies
+  - backend/tests/test_runner_wire_names.py
   - backend/migrations/0*         # applied migration files are history: they ran on the shape of their day
   - CHANGELOG.md
 names:
   clients/*.py: [body_json]       # hub_goal_save's exact method/path/body_json step, not a column
   clients/tests/*.py: [body_json]
   backend/tests/test_hubdb.py: [payload_json]   # the documents table as it was before 0008 dropped it
+  ui/app/router.js: [finished]          # a view transition's own `finished` promise
+  ui/app/live.js: [started]             # the live connection's started flag
+  ui/app/task-board.js: [finished]      # the board's folded-column choices
+  ui/app/task-pipelines.js: [finished]
+  ui/tests/task-pipelines.cjs: [finished]   # the board's folded-column choices, as stored
+  ui/tests/bot-pause-strip.cjs: [finished]  # a held request's own finished promise
+  ui/app/settings-billing.js: [expires]   # Tico HQ's billing credits (backend/company_billing.py), another system's fields
+  ui/tests/settings-billing.cjs: [expires]
+  ui/app/meetings-granola.js: [last_sync]   # Granola's sync status: a stored document's field, not a column
+  ui/tests/meetings-granola.cjs: [last_sync]
 keys:
-  runner/tests/test_worktree*.py: [detail_json]   # fake runners/me/worktrees rows (the wire); their hub SQL is renamed
+  runner/tests/test_worktree*.py: [detail_json, created, updated]   # fake runners/me/worktrees rows (the wire); their hub SQL is renamed
+  backend/company_billing.py: [created, expires]   # Tico HQ's billing answer: another system's fields
+  backend/tests/test_company_billing.py: [created, expires]
+  backend/granola_mcp.py: [last_sync]   # Granola's stored sync status (a JSON document) and its answer
+  backend/demo.py: [last_sync]
+  backend/tests/test_granola_*.py: [last_sync]
   backend/finance/core/feeds.py: [created]   # a Stripe balance transaction's own `created` (epoch seconds)
+  backend/tests/test_finance_stripe.py: [created]   # the fake Stripe API's balance transactions
+  evals/botops_automations/*.py: [created]           # the eval's saved answers: {"created": [automation, ...]}
+  backend/tests/test_botops_automations_evals.py: [created]
+# Request models a runner (or another separately updated client) sends: their fields keep the wire names.
+wire_models:
+  - WatcherReport      # POST /api/v2/runners/watchers (runner-rs watchers.rs)
+  - ImportCreate       # POST /api/v2/imports/transcripts (runner/close_calls.py)
+  - TranscriptImport
+# API paths a runner sends bodies to: a dict literal posted to one (in tests too) keeps its keys.
+wire_paths:
+  - '(^|/api/v2/)(runners/|runner-|jobs/|attempts/|imports/)'
+# sites: {glob: [line texts]}: a line holding one of these keeps every name on it (wave 2's hand-checked flags, counts,
+# lists and other systems' fields that are named like a time column). Rename them by hand if they ever should change.
+sites:
+  backend/app.py: ['return {"updated": len(ids)']                     # how many messages an archive changed
+  backend/external_sync.py: ['"created": created', 'record.get("last_sync")']   # a bot made now (flag); stored sync status
+  backend/files.py: ['"created": created, "changed": changed']
+  backend/model_login.py: ['"updated": _handles_keys(row)']           # whether the runner can clear its copy
+  backend/openapi_v2.py: ['"InboundTaskResult": obj(', '"UpdateArchiveResult": obj(']
+  backend/scheduler.py: ['(found or {}).get("created")']              # goal asks made now (list)
+  backend/service_keys.py: ['"created": created, "changed": changed']
+  backend/slack_channels.py: ['"created": created}']
+  backend/support.py: ["HQ calls a message's time", 'item.get("created") or', "HQ's `created`", 'm.get("created") or ""']
+  clients/botcopy.py: ['"updated": []', '"updated": sorted(plan["changes"])']   # the files an update changed
+  clients/tests/test_botcopy.py: ['done["updated"] ==']
+  backend/tests/test_bot_copy.py: ['updated["updated"] ==']
+  backend/tests/test_external_sync.py: ['["created"]', "['last_sync']"]
+  backend/tests/test_github_app.py: ['["created"] is False']
+  backend/tests/test_goal_asks.py: [')["created"]']
+  backend/tests/test_hubdb.py: ['digest TEXT NOT NULL, updated TEXT NOT NULL']   # the documents table before 0008
+  backend/tests/test_lifecycle_failures.py: ['"started": set()']
+  backend/tests/test_member_bots.py: ['["created"] is']
+  backend/tests/test_product_repo_review.py: ["'created': sorted(gh.created_repositories)"]
+  backend/tests/test_scheduler_lock.py: ['entry["started"]']
+  backend/tests/test_service_keys.py: ['["created"]']
+  backend/tests/test_shared_bots.py: ["['created']"]
+  backend/tests/test_slack_channels.py: ['["created"]']
+  backend/tests/test_support.py: ['"created": "x"', '"updated": "y"', '"created": "z"', '"created": "later"', 'hq.tickets[hq_of[name]]["messages"]']
+  backend/tests/test_support_access.py: ['("support_access.started"']
+  backend/tests/test_task_relations.py: ['# v0.2.1, before the renames']
+  backend/tests/test_tasks_board.py: ['flow["days"][-1]["created"]', 'p["created"]) for p in']
+  ui/model-login.js: ['c.updated === false']
+  ui/tests/model-keys.cjs: ['may: true, updated:']

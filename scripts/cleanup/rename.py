@@ -41,7 +41,7 @@ PY_FILES = ("conftest.py",)
 JS_GLOBS = ("ui/**/*.js", "ui/**/*.cjs", "ui/**/*.mjs", "app/shell/**/*.js", "scripts/**/*.cjs", "scripts/**/*.mjs")
 RS_DIRS = ("runner-rs", "relay-rs", "app/src")
 MD_DIRS = ("docs", "templates", "skills", "examples", "integrations", "contracts", "questions", "runner-rs")
-JSON_GLOBS = ("contracts/runner/fixtures/*.json",)
+JSON_GLOBS = ("contracts/runner/fixtures/*.json", "ui/tests/fixtures/*.json")   # the UI tests answer with these
 SKIP_PARTS = ("node_modules", "/vendor/", "ui/assets/", "__pycache__", "scripts/cleanup/", "/target/")
 
 SQL_STRONG = re.compile(
@@ -128,20 +128,42 @@ def base_schema():
     return {t: set(c) for t, c in tables.items()}
 
 
+def glob_match(rel, pattern):
+    """A path glob where `*` stays inside one folder and `**` crosses folders, `**/` none or more of them (fnmatch's
+    `*` crosses folders and its `**/` needs one: ui/**/*.js missed ui/support.js)."""
+    regex = re.escape(pattern).replace(r"\*\*/", "\1").replace(r"\*\*", "\0").replace(r"\*", "[^/]*") \
+        .replace("\1", "(?:.*/)?").replace("\0", ".*")
+    return re.fullmatch(regex, rel) is not None
+
+
 class Keep:
     def __init__(self, data):
         self.files = list(data.get("files") or [])
         self.names = data.get("names") or {}      # glob -> [names]
         self.keys = data.get("keys") or {}        # glob -> [names] kept as Python keys/values; SQL still renamed
+        self.sites = data.get("sites") or {}      # glob -> [line texts] whose names are all kept
+        self.wire_models = set(data.get("wire_models") or [])   # request models whose fields are wire names
+        # API paths whose request bodies are wire: a dict literal sent to one keeps its keys.
+        self.wire_paths = [re.compile(p) for p in data.get("wire_paths") or []]
 
     def file(self, rel):
-        return any(fnmatch.fnmatch(rel, g) for g in self.files)
+        return any(glob_match(rel, g) for g in self.files)
 
     def name(self, rel, name):
-        return any(fnmatch.fnmatch(rel, g) and name in names for g, names in self.names.items())
+        return any(glob_match(rel, g) and name in names for g, names in self.names.items())
 
     def key(self, rel, name):
-        return any(fnmatch.fnmatch(rel, g) and name in names for g, names in self.keys.items())
+        return any(glob_match(rel, g) and (name in names or "*" in names) for g, names in self.keys.items())
+
+    def site(self, rel, text, offset):
+        """The line holding `offset` has a text keep.yaml `sites` lists for this file: a flag, count or other
+        system's field that only looks like a renamed column, kept where a whole-file `keys` entry would be too wide."""
+        found = [t for g, texts in self.sites.items() if glob_match(rel, g) for t in texts]
+        if not found:
+            return False
+        start, end = text.rfind("\n", 0, offset) + 1, text.find("\n", offset)
+        here = text[start:end if end >= 0 else len(text)]
+        return any(t in here for t in found)
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -160,6 +182,9 @@ class Report:
 
 
 CATEGORY_HELP = {
+    "dom-api": "a browser API's own field (an Animation's `finished` promise): kept",
+    "js-method": "a method call on an object (`response.finished()`): not a field, kept",
+    "site-kept": "a line keep.yaml `sites` keeps: a flag, count or other system's field named like a column",
     "sql-scoped-skip": "SQL naming a scoped column where the touched tables did not settle it (unknown/placeholder "
                        "table, or tables that disagree): fix by hand",
     "key-scoped-skip": "a key literal equal to a scoped name outside a function that touches its table",
@@ -179,6 +204,10 @@ CATEGORY_HELP = {
                 "rows keep the old key, so it is not renamed; rename it only together with a data migration",
     "key-kept": "a key or value keep.yaml `keys` leaves alone in this file: another system's field (Stripe, Xero) "
                 "that shares the name",
+    "key-foreign-dict": "a bare word key in a dict literal none of whose other keys is a column of a table holding it (a word table): kept",
+    "event-name": "an event name (an argument of event(...), or event=/action=): not a column, kept",
+    "wire-field": "a field of a keep.yaml wire model (what a runner or other separately updated client sends): "
+                  "kept under its wire name",
     "mention": "an old name inside a string that is neither SQL nor an exact key (f-string or other text)",
     "js-scoped": "JavaScript site for a scoped (per-table) name: not renamed",
     "js-string": "JavaScript string literal equal to a renamed name outside ['x'] / in / URL params",
@@ -323,6 +352,8 @@ def is_path(text, wave):
 def is_fragment(text, identifiers):
     """A piece of SQL without a statement keyword: 'created DESC', 't.updated>=?', 'id, created, title'."""
     clean = strip_sql_literals(text).replace(PLACEHOLDER, " ")
+    if re.fullmatch(r"\s*[A-Za-z_]\w*(\.[A-Za-z_]\w*)+\s*", clean):
+        return False                    # a lone dotted name ('order.created', 'system.update.started': an event type)
     if not clean.strip() or not re.search(r"[,=<>?()]|\b(AND|OR|DESC|ASC|IS|IN|LIKE|BETWEEN|NOT)\b|\w\.\w", clean):
         return False
     if re.search(r"[!;\"{}\[\]]|\s-\s|\.\s|:\s", clean):
@@ -506,6 +537,7 @@ class PyFile:
                 self.parents[child] = node
         self.docstrings = self._docstrings(tree)
         self.func_tables = self._function_tables(tree)
+        self.event_names = self._event_names(tree)
         self._sql()
         self._keys(tree)
         self._prose_spans()
@@ -607,6 +639,39 @@ class PyFile:
             return news.pop()
         return None
 
+    EVENT_ARGS = {"event", "action", "kind"}
+
+    def _event_names(self, tree):
+        """Source offsets of string literals that are event names: the arguments of an `event(...)` call
+        (H.event(c, actor, 'docs.updated', ...)) and `event=`/`action=` keywords or parameter defaults."""
+        found = set()
+
+        def mark(node):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                found.add(self.src.ast_offset(node.lineno, node.col_offset))
+            elif isinstance(node, ast.IfExp):
+                mark(node.body)
+                mark(node.orelse)
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+                if name == "event":
+                    for arg in node.args:
+                        mark(arg)
+                for kw in node.keywords:
+                    if kw.arg in self.EVENT_ARGS:
+                        mark(kw.value)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                args = node.args
+                for arg, default in zip(args.args[len(args.args) - len(args.defaults):], args.defaults):
+                    if arg.arg in self.EVENT_ARGS:
+                        mark(default)
+                for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+                    if default is not None and arg.arg in self.EVENT_ARGS:
+                        mark(default)
+        return found
+
     # -- SQL strings
     def _sql(self):
         identifiers = set()
@@ -623,6 +688,9 @@ class PyFile:
             if not hits:
                 continue
             if line in self.docstrings and group["triple"]:
+                continue
+            if group["start"] in self.event_names and re.fullmatch(r"[\w.]+", text):
+                self.site("event-name", group["start"], sorted(hits)[0])
                 continue
             if is_sql(text) or is_fragment(text, identifiers) or is_path(text, self.wave):
                 edits, skipped = sql_edits(text, self.wave)
@@ -689,7 +757,9 @@ class PyFile:
             elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and \
                     node.target.id in names and isinstance(self.parents.get(node), ast.ClassDef):
                 new = wave.glob.get(node.target.id)
-                if new and self._field_class(self.parents[node]):
+                if self.parents[node].name in self.keep.wire_models:
+                    self.site("wire-field", node.lineno, node.target.id, line_is=True)
+                elif new and self._field_class(self.parents[node]):
                     start = self.src.ast_offset(node.target.lineno, node.target.col_offset)
                     self.add(start, start + len(node.target.id), new, "class-field", node.target.id)
                 else:
@@ -782,6 +852,12 @@ class PyFile:
         """The new name of `param.old` when `param` is annotated with a model class that declares `old`."""
         if not isinstance(node.value, ast.Name):
             return None
+        if self._wire_annotated(node):
+            self.site("wire-field", node.lineno, node.attr, line_is=True)
+            return None
+        if node.value.id == "body" and node.attr in getattr(self.wave, "wire_fields", ()):
+            self.site("wire-field", node.lineno, node.attr, line_is=True)   # maybe a wire body handed on: keep
+            return None
         if node.value.id == "body" and any(node.attr in f for f in self.wave.models.values()):
             return self.wave.glob.get(node.attr)       # a request body handed on to a helper without its annotation
         cur = self.parents.get(node)
@@ -794,6 +870,43 @@ class PyFile:
                     return None
             cur = self.parents.get(cur)
         return None
+
+    def _foreign_siblings(self, dct, node):
+        """Whether dict literal `dct` has other string keys and none is a column of a table holding `node`'s name:
+        then it is a lookup table of words ({'started': TEMPLATE, 'blocked': ...}), not a row."""
+        holders = [cols for cols in self.wave.schema.values() if node.value in cols]
+        others = [k.value for k in dct.keys if k is not node and isinstance(k, ast.Constant) and isinstance(k.value, str)]
+        return bool(others) and not any(k in cols for k in others for cols in holders)
+
+    def _wire_body(self, node):
+        """Whether dict literal `node` is (inside) the body of a call to a keep.yaml wire path."""
+        cur = node
+        while isinstance(self.parents.get(cur), (ast.Dict, ast.List, ast.Tuple, ast.keyword)):
+            cur = self.parents[cur]
+        return self._wire_call(self.parents.get(cur))
+
+    def _wire_call(self, call):
+        """Whether `call` (or a call it is chained on: `api.post(path).json()`) names a keep.yaml wire path."""
+        while isinstance(call, ast.Call):
+            texts = [a.value for a in call.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+            texts += ["".join(v.value if isinstance(v, ast.Constant) else "{}" for v in a.values)
+                      for a in call.args if isinstance(a, ast.JoinedStr)]
+            if any(p.search(t) for p in self.keep.wire_paths for t in texts):
+                return True
+            call = call.func.value if isinstance(call.func, ast.Attribute) else None
+        return False
+
+    def _wire_annotated(self, node):
+        """Whether `param` in `param.x` is annotated, in an enclosing function, with a keep.yaml wire model."""
+        cur = self.parents.get(node)
+        while cur is not None:
+            if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for arg in [*cur.args.posonlyargs, *cur.args.args, *cur.args.kwonlyargs]:
+                    if arg.arg == node.value.id and arg.annotation is not None:
+                        names = {getattr(n, "id", None) or getattr(n, "attr", None) for n in ast.walk(arg.annotation)}
+                        return bool(names & self.keep.wire_models)
+            cur = self.parents.get(cur)
+        return False
 
     def _model_call(self, call, name):
         """The new name of keyword `name` in a call to a model class that declares it: M.TaskCreate(due=...)."""
@@ -846,6 +959,10 @@ class PyFile:
         if isinstance(parent, ast.Dict) and node in parent.values:
             key = parent.keys[parent.values.index(node)]
             return isinstance(key, ast.Constant) and key.value in holders
+        if isinstance(parent, ast.Tuple) and parent.elts.index(node) >= 1:
+            before = parent.elts[parent.elts.index(node) - 1]
+            if isinstance(before, ast.Constant) and before.value in holders:
+                return True              # (table, column, ...): ("attempts", "finished")
         if isinstance(parent, (ast.List, ast.Tuple)) and isinstance(self.parents.get(parent), ast.keyword) and \
                 self.parents[parent].arg == "required":
             return True                  # a schema's required fields: the properties beside it are keys, renamed
@@ -895,9 +1012,19 @@ class PyFile:
                     not isinstance(value.value, str) and old not in wave.glob_json():
                 self.site("key-bool", node.lineno, old, line_is=True)
                 return
+            if old not in wave.glob_json() and self._foreign_siblings(parent, node):
+                self.site("key-foreign-dict", node.lineno, old, line_is=True)
+                return
             context = "key"
         elif isinstance(parent, ast.Call) and node in parent.args and self._column_arg(parent, node):
             context = "column-arg"
+        if context == "key" and isinstance(parent, ast.Dict) and self._wire_body(parent):
+            self.site("wire-field", node.lineno, old, line_is=True)
+            return
+        if context == "key" and self._wire_call(parent.value if isinstance(parent, ast.Subscript) else
+                                                 parent.func.value if isinstance(parent, ast.Call) else None):
+            self.site("wire-field", node.lineno, old, line_is=True)   # a field of a runner answer: post(path)['x']
+            return
         if context == "key" and old not in wave.glob_json() and self._json_doc(node, parent):
             self.site("json-key", node.lineno, old, line_is=True)
             return
@@ -938,6 +1065,10 @@ class PyFile:
         text = self.src.text
         for (start, end), (new, kind, old) in sorted(self.edits.items(), reverse=True):
             if text[start:end] != old:
+                continue
+            if self.keep.site(self.rel, self.src.text, start):
+                self.report.site("site-kept", self.rel, self.src.text.count("\n", 0, start) + 1, old,
+                                 line(self.src.text, start))
                 continue
             text = text[:start] + new + text[end:]
             self.report.edit(self.rel, kind)
@@ -1077,6 +1208,12 @@ def js_tokens(text):
     return out
 
 
+# A line naming the browser's animation APIs: `.finished` there is an Animation's or a ViewTransition's promise.
+JS_DOM_LINE = re.compile(r"getAnimations|startViewTransition|\.animate\(")
+# A `{` after one of these opens a block (a function body, an if/else, a try), not an object literal or pattern.
+JS_BLOCK_BEFORE = {")", "=>", "else", "try", "finally", "do", ";", "{", "}", ""}
+
+
 def js_file(rel, text, wave, report, keep):
     toks = js_tokens(text)
     edits = {}
@@ -1120,6 +1257,12 @@ def js_file(rel, text, wave, report, keep):
                 report.site("js-scoped", rel, ln, value, line(text, start))
             continue
         if prev and prev[3] in (".", "?."):
+            if nxt and nxt[3] == "(":            # a method (Playwright's response.finished()), not a field
+                report.site("js-method", rel, ln, value, line(text, start))
+                continue
+            if JS_DOM_LINE.search(line(text, start)):   # an Animation's or a view transition's `finished` promise
+                report.site("dom-api", rel, ln, value, line(text, start))
+                continue
             owner = toks[k - 2] if k >= 2 else None
             if owner and owner[0] == "ident" and owner[3] in JSON_DOCS and not value.endswith("_json"):
                 report.site("json-key", rel, ln, value, line(text, start))
@@ -1131,8 +1274,8 @@ def js_file(rel, text, wave, report, keep):
             continue
         opener = brackets[-1][1]
         before = toks[opener - 1][3] if opener else ""
-        if before in ("import", "export"):
-            continue
+        if before in ("import", "export") or before in JS_BLOCK_BEFORE:
+            continue                     # a block, not an object: `let a = [], created = []` declares a variable
         if nxt and nxt[3] == ":" and not (prev and prev[3] == "?"):
             edits[(start, end)] = (new, "js-key", value)
         elif nxt and nxt[3] in (",", "}", "="):
@@ -1140,6 +1283,9 @@ def js_file(rel, text, wave, report, keep):
     out = text
     for (a, b), (new, kind, old) in sorted(edits.items(), reverse=True):
         if out[a:b] != old:
+            continue
+        if keep.site(rel, text, a):
+            report.site("site-kept", rel, text.count("\n", 0, a) + 1, old, line(text, a))
             continue
         out = out[:a] + new + out[b:]
         report.edit(rel, kind)
@@ -1298,13 +1444,13 @@ def tracked_files():
 def classify(rel):
     if rel.endswith(".py") and (rel.split("/", 1)[0] in PY_DIRS or rel in PY_FILES):
         return "py"
-    if rel.endswith((".js", ".cjs", ".mjs")) and any(fnmatch.fnmatch(rel, g) for g in JS_GLOBS):
+    if rel.endswith((".js", ".cjs", ".mjs")) and any(glob_match(rel, g) for g in JS_GLOBS):
         return "js"
     if rel.endswith(".rs") and rel.startswith(tuple(d + "/" for d in RS_DIRS)):
         return "rs"
     if rel.endswith(".md") and (rel.split("/", 1)[0] in MD_DIRS or "/" not in rel):
         return "md"
-    if rel.endswith(".json") and any(fnmatch.fnmatch(rel, g) for g in JSON_GLOBS):
+    if rel.endswith(".json") and any(glob_match(rel, g) for g in JSON_GLOBS):
         return "json"
     if rel.endswith(".sh") and rel.split("/", 1)[0] in ("docker", "scripts", "setup", "deploy"):
         return "sh"
@@ -1358,7 +1504,9 @@ def model_classes(wave):
 def process(wave, keep, report, write, only=None):
     changed = []
     if wave.models is None:
-        wave.models = model_classes(wave)
+        models = model_classes(wave)
+        wave.models = {k: v for k, v in models.items() if k not in keep.wire_models}
+        wave.wire_fields = set().union(*[v for k, v in models.items() if k in keep.wire_models])
     for rel in tracked_files():
         kind = classify(rel)
         if kind is None or keep.file(rel) or (only and not any(rel.startswith(o) for o in only)):
