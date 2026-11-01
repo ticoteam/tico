@@ -287,8 +287,8 @@ def _owned(ctx: Ctx, group: Sequence[str], tid: str, start: str, end: str, read:
             continue
         amount = int(row["amount"])
         if read is not None:
-            keys = [vendor, *SAP.vendor_keys(ctx.c, ctx.book.id, vendor)] if vendor else [""]
-            amount -= _cut_in(ctx, read, start, end, [account], [team], tid, keys)
+            # Netted under this group's own vendor key only: each hidden line sits in one group, so it comes out once.
+            amount -= _cut_in(ctx, read, start, end, [account], [team], tid, [vendor])
         near = [x for x in covering if not any(y in below[x] for y in covering)]
         owner = near[0]
         for x in near[1:]:

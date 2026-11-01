@@ -5,16 +5,19 @@ import json
 import random
 import threading
 from dataclasses import replace
+from datetime import date
 
 import pytest
 
 from backend import hubdb as H
 from backend.finance import actions as FA
+from backend.finance import budgeting
 from backend.finance import reads as FR
 from backend.finance.context import load
 from backend.finance.core import budgets as B
 from backend.finance.core.errors import FinanceError
 from backend.finance.store import budgets as SB
+from backend.finance.store import ledger as SL
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, budget, finance_template, spend, store  # noqa: F401
 
 
@@ -695,3 +698,58 @@ def test_lowering_a_parent_below_an_ended_childs_retained_allocation_is_refused(
         assert lowered.code == "invalid" and "reserve 80.00" in lowered.reason, lowered
         assert FA.budget_state(c, pid, AT).amount == 10_000
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "amount": 8_000}).status == "committed"
+
+
+def _checking(c) -> str:
+    """A checking account on the 1000 line; its id."""
+    money = SL.new_id()
+    c.execute("INSERT INTO fin_money_accounts(id, book_id, kind, name, provider, account_id, created_at, created_by) "
+              "VALUES(?,?,?,?,?,?,?,?)", (money, SL.book(c).id, "bank", "Checking", "mercury", account(c, "1000"), AT, OWNER))  # type: ignore[union-attr]
+    return money
+
+
+def _feed_row(c, money: str, amount: int, counterparty: str) -> str:
+    """A bank feed row (what the bank brings in) on that checking account; its id."""
+    fid = SL.new_id()
+    c.execute("INSERT INTO fin_feed_txns(id, money_account_id, provider_id, txn_date, amount, currency, counterparty, "
+              "status, created_at, created_by) VALUES(?,?,?,?,?,?,?,?,?,?)",
+              (fid, money, f"txn-{fid[:8]}", "2026-10-10", amount, SL.book(c).base_currency, counterparty,  # type: ignore[union-attr]
+               "new", AT, OWNER))
+    return fid
+
+
+def _private_bank_entry(c, fid: str, vendor: str) -> None:
+    """The bank entry a feed row posts: 1,000 of Software under `vendor`, 1,000 on a private payroll account (so the row
+    stands for a private line), and 2,000 out of the bank. The row is linked to the entry as posted."""
+    entry = FA.post_entry(c, {"date": "2026-10-10", "source": "bank", "source_id": f"{fid}:1", "lines": [
+        {"account_id": account(c, "6100"), "amount": 1_000, "contact_id": vendor, "tags": {"teammate": "human:eve"}},
+        {"account_id": account(c, "6200"), "amount": 1_000},
+        {"account_id": account(c, "1000"), "amount": -2_000}]}, at=AT)
+    c.execute("UPDATE fin_feed_txns SET entry_id=?, status='posted' WHERE id=?", (entry["entry_id"], fid))
+
+
+def test_a_vendor_under_its_old_name_and_its_contact_id_nets_each_private_line_once(books):
+    """Codex's case: two private bank entries, each with 1,000 of Software and a 1,000 payroll line. One posts the vendor
+    under its old name (posted before the contact took the name), the other under its contact id. A 5,000 teammate
+    allocation on a Software budget scoped to the vendor. The owner sees 2,000 spent and 3,000 held. A reader without
+    payroll detail sees nothing spent and 5,000 held. Netting each vendor group under every one of its keys took each
+    hidden line out twice (held 7,000, remaining 3,000), which exposed the 2,000 that is not theirs to see."""
+    with books.transaction() as c:
+        pay = str(act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                                   "parent_id": account(c, "6000")}).result["account_id"])
+        assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
+        money = _checking(c)
+        _private_bank_entry(c, _feed_row(c, money, -2_000, "Acme Cloud"), "Acme Cloud")
+        contact = str(act(c, OWNER, "contact_create", {"name": "Acme Cloud", "kind": "vendor"}).result["contact_id"])
+        assert act(c, OWNER, "contact_update", {"contact_id": contact, "name": "Acme Hosting"}).status == "committed"
+        _private_bank_entry(c, _feed_row(c, money, -2_000, "Acme Hosting"), contact)
+        root = act(c, OWNER, "budget_create", {"name": "Cloud", "account_id": account(c, "6100"), "amount": 10_000,
+                                               "at_limit": "decline"})
+        assert root.status == "committed", root
+        bid = _child(c, str(root.result["budget_id"]), "Software", 10_000, vendor=contact)
+        _allot(c, bid, 5_000)
+        owner = budgeting.state(load(c, AT), bid, date(2026, 10, 15))
+        gus = load(c, AT).view("human:gus")
+        seen = budgeting.state(load(c, AT), bid, date(2026, 10, 15), read=budgeting.Netted(gus))
+        assert (owner.actual, owner.held) == (2_000, 3_000), owner
+        assert (seen.actual, seen.held, seen.remaining) == (0, 5_000, 5_000), seen
