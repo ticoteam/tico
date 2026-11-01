@@ -728,6 +728,34 @@ def decide(conn, actor, target, kind, refs, body, conv, in_reply_to=None):
     return (found.outcome, found.rule) if found else None
 
 
+THREAD_WAKE = "thread_wake"
+
+
+def thread_wake(conn, message, bot, thread, mode="queue"):
+    """The thread wake rule (docs/dev/threads-contract.md §4.3) for a bot that a thread message reaches but is not
+    addressed to (a mention, its DM or Home, a sub-thread it posted in): (mode, rule id), or (None, None) for no
+    delivery. backend/threads.py chose the reason by precedence; the engine judges it as it judges a message to the
+    bot, so a table row or a built-in hold still decides: `wake` keeps `mode`, `note` (or a hold) defers it to the
+    bot's next run, `batch` digests it, `ignore` drops it. Fail open: an error wakes."""
+    try:
+        refs = dict(message.get("refs") or {})
+        refs.pop("carries", None)
+        found = judge(conn, message.get("from_actor") or H.KEEPER, bot, message.get("kind") or "say", refs,
+                      message.get("body") or "", thread, message.get("in_reply_to"))
+    except Exception:  # noqa: BLE001 - fail open
+        return mode, FAIL_OPEN
+    if found is None:
+        return mode, THREAD_WAKE
+    rule = found.rule or THREAD_WAKE
+    if found.outcome == IGNORE:
+        return None, None
+    if found.outcome == BATCH:
+        return "digest", rule
+    if found.outcome == WAKE and not found.reason:
+        return mode, rule
+    return "defer", rule
+
+
 def bot_to_bot_decision(conn, actor, target, kind, refs, body, conv, in_reply_to=None):
     """What a plain bot-to-bot message does, when the built-in lets it wait (bot_to_bot.can_wait): `bot_to_bot`, or
     the row that overrides it. None when it does not wait, or a rule wakes it (the engine then judges it again in
