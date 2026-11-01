@@ -52,6 +52,10 @@ def install_policy(app, store, auth, execution, settings):
         return {"allowed": True}
 
 
+# Usage batches collected in one tick at most: 16 x 2,048 rows is twice the relay's whole backlog (relay-rs exit.rs).
+EXIT_BATCHES_PER_TICK = 16
+
+
 class RemoteRegistry:
     def __init__(self, store):
         self.store = store
@@ -287,25 +291,31 @@ class RemoteRegistry:
             self.start(initial=False)
             if not self.healthy:
                 return
-        with self.lock:
-            answer = self._command("heartbeat", ack=self.acks, exit_ack=self.exit_acks)
-            reports, usage, boot = answer["reports"], answer.get("exit_usage"), self.boot
-            self.acks, self.exit_acks = [], []
-        # Never take the store lock while holding the control lock: admission takes them in the other order.
+        # Browser-exit usage the relay holds beyond the batch in hand is collected in this tick, up to a limit, so no
+        # backlog builds up: a relay that stops on its own loses at most about one tick's bytes.
         from . import browser_exit
-        prune = time.monotonic() - self.pruned > 3600
-        with self.store.transaction() as c:
-            for report in reports:
-                self._record(c, report)
-            recorded = browser_exit.record_batch(c, boot, usage)
+        for _ in range(EXIT_BATCHES_PER_TICK):
+            with self.lock:
+                answer = self._command("heartbeat", ack=self.acks, exit_ack=self.exit_acks)
+                reports, usage, boot = answer["reports"], answer.get("exit_usage"), self.boot
+                self.acks, self.exit_acks = [], []
+            # Never take the store lock while holding the control lock: admission takes them in the other order.
+            prune = time.monotonic() - self.pruned > 3600
+            with self.store.transaction() as c:
+                for report in reports:
+                    self._record(c, report)
+                recorded = browser_exit.record_batch(c, boot, usage)
+                if prune:
+                    browser_exit.prune(c)
             if prune:
-                browser_exit.prune(c)
-        if prune:
-            self.pruned = time.monotonic()
-        with self.lock:
-            self.acks.extend(report["id"] for report in reports)
-            if recorded:
-                self.exit_acks.append(recorded)
+                self.pruned = time.monotonic()
+            with self.lock:
+                self.acks.extend(report["id"] for report in reports)
+                if recorded:
+                    self.exit_acks.append(recorded)
+            in_hand = len(usage.get("rows") or []) if isinstance(usage, dict) else 0
+            if not recorded or int(answer.get("exit_backlog") or 0) <= in_hand:
+                break
         self._exit_reconcile()
 
     async def run(self, stop):

@@ -90,6 +90,11 @@ Control operations, under the same lease and sequence rules:
   that is above zero the lease stays for heartbeats only, and ends with the heartbeat that finds
   nothing left; anything left when the lease lapses waits for the next one.
 
+Python's heartbeat (every 2 s) keeps asking within the same tick while `exit_backlog` is more than the
+batch in hand, up to 16 batches, so no backlog builds up. Usage lives only in the relay's memory: a relay
+stopped on its own (SIGTERM) waits up to 6 s for Python to collect it, and loses at most about one tick's
+bytes otherwise.
+
 Both ends must connect within 15 seconds or the tunnel closes (`exit_no_answer` when the exit did
 not). The exit's first message may be a short text status (`{"ok": true}` or `{"ok": false,
 "error"}`); everything else is binary and counted both ways. Crossing the day's cap closes every

@@ -275,6 +275,36 @@ def test_a_usage_batch_resent_after_a_long_outage_is_recorded_once(api, relay):
         assert BE.used(c, rid) == 250
 
 
+def test_one_tick_collects_the_whole_usage_backlog_so_none_builds_up(api, monkeypatch):
+    sessions = api.app.state.store.screen_sessions
+    caras, _ = laptop(api)
+    rid = caras["runner_id"]
+    row = {"exit": rid, "runner_id": "bot-computer", "day": BE.today(), "bot": "ops", "tunnels": 0, "bytes": 10}
+    waiting = [{**row, "host": f"h{i}.acme.example"} for i in range(9)]
+    relay, beats = {"batch": None, "seq": 0}, []
+
+    def command(op, **fields):          # the relay's heartbeat, two rows a batch
+        beats.append(fields["exit_ack"])
+        if relay["batch"] and relay["batch"]["id"] in fields["exit_ack"]:
+            relay["batch"] = None
+        if relay["batch"] is None and waiting:
+            relay["seq"] += 1
+            relay["batch"] = {"id": f"b{relay['seq']}", "seq": relay["seq"], "rows": waiting[:2]}
+            del waiting[:2]
+        in_hand = len(relay["batch"]["rows"]) if relay["batch"] else 0
+        return {"reports": [], "exit_usage": relay["batch"], "exit_backlog": len(waiting) + in_hand}
+    monkeypatch.setattr(sessions, "_command", command)
+    monkeypatch.setattr(sessions, "_exit_reconcile", lambda: None)
+    monkeypatch.setattr(sessions, "healthy", True)
+    monkeypatch.setattr(sessions, "boot", "boot-1")
+    sessions.tick()
+    with api.app.state.store.read() as c:
+        assert BE.used(c, rid) == 90
+    assert len(beats) == 5 and sessions.exit_acks == ["b5"]    # the last one is acknowledged by the next tick
+    sessions.tick()
+    assert len(beats) == 6 and relay["batch"] is None
+
+
 def _bot_generation(api, bot):
     with api.app.state.store.read() as c:
         return BE.bot_generation(c, bot)
