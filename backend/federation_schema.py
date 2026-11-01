@@ -15,7 +15,7 @@ like backend/strategy.py: an older release never reads these tables.
 - `federation_messages`: which local message an origin id is, its author and revision, and its home number once known.
 - `federation_receipts`: every envelope processed, by (sender, envelope id), for replay refusal.
 - `federation_outbox`: what this install still has to send: a delivery from core (a replica's post to the home), an
-  item (the home's stream to a member) or a catch-up request.
+  item (the home's stream to a member), a catch-up request, or a refusal receipt for a message this install did not take.
 """
 
 SCHEMA = """
@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS federation_peerings (
   direction TEXT NOT NULL CHECK (direction IN ('outgoing','incoming')),
   status TEXT NOT NULL CHECK (status IN ('pending','active','revoked')),
   approved_at TEXT, peer_key_id TEXT, peer_public_key TEXT, paused_at TEXT, paused_by TEXT,
-  revoked_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+  revoked_at TEXT, peer_company TEXT NOT NULL DEFAULT '', approved_by TEXT, created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS federation_peerings_live ON federation_peerings(peer_install) WHERE status <> 'revoked';
 CREATE TABLE IF NOT EXISTS federation_directory (
   install TEXT NOT NULL, key_id TEXT NOT NULL, public_key TEXT NOT NULL, fetched_at TEXT NOT NULL,
@@ -60,7 +61,7 @@ CREATE TABLE IF NOT EXISTS federation_receipts (
   received_at TEXT NOT NULL, UNIQUE (peer_install, envelope_id));
 CREATE TABLE IF NOT EXISTS federation_outbox (
   id TEXT PRIMARY KEY, recipient TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('delivery','item','catch_up')),
+  kind TEXT NOT NULL CHECK (kind IN ('delivery','item','catch_up','refusal')),
   delivery_id TEXT, item_id TEXT, payload BLOB, attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt_at REAL NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
   UNIQUE (kind, delivery_id), UNIQUE (kind, item_id, recipient));
@@ -68,12 +69,20 @@ CREATE INDEX IF NOT EXISTS federation_outbox_due ON federation_outbox(next_attem
 CREATE TABLE IF NOT EXISTS federation_state (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1), cursor INTEGER NOT NULL DEFAULT 0,
   acked INTEGER NOT NULL DEFAULT 0, last_pull_at REAL, failing_since REAL, last_error TEXT NOT NULL DEFAULT '',
-  listed_at REAL);
+  listed_at REAL, company TEXT NOT NULL DEFAULT '');
 INSERT OR IGNORE INTO federation_state(singleton) VALUES (1);
 """
+
+
+# Columns added after their table first existed: a database created before them gets them on open.
+COLUMNS = (("federation_peerings", "peer_company", "TEXT NOT NULL DEFAULT ''"), ("federation_peerings", "approved_by", "TEXT"),
+           ("federation_state", "company", "TEXT NOT NULL DEFAULT ''"))
 
 
 def ensure(c):
     for statement in SCHEMA.split(";\n"):
         if statement.strip():
             c.execute(statement)
+    for table, column, kind in COLUMNS:
+        if column not in {row[1] for row in c.execute(f"PRAGMA table_info({table})")}:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")

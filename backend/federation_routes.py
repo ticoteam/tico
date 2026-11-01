@@ -3,19 +3,21 @@ shares with them. Owner only, reads and writes alike (a peering shows the other 
 first where it must, then records the local change through `store.write`, so it carries the audit row (H.event) and the
 change event every write does. `/api/v2/federation/...` is the surface; the CLI and MCP tools call these routes.
 """
-from fastapi import Request
+from fastapi import Query, Request
 
 from . import federation as F
 from . import federation_envelope as E
 from . import federation_relay as R
 from . import federation_sync as S
+from . import federation_threads as T
 from . import hook_relay as HR
 from . import hubdb as H
 from .auth import validate_identity
 from .models import Contract
 from .store import Problem
 
-LIST_LIMIT = 50          # threads and peerings a status read lists, newest first
+PAGE_LIMIT = 50          # peerings and threads per page, newest first; a read asks for up to PAGE_MAX
+PAGE_MAX = 100
 MEMBER_LIMIT = 20        # members listed per thread: 50 threads x 20 members stays inside the list byte budget
 HQ_MESSAGES = {"unknown_install": "That install has no key with Tico HQ yet.",
                "no_key": "Register this install's key first.",
@@ -35,6 +37,10 @@ class PauseBody(Contract):
 
 class InstallBody(Contract):
     install: str
+
+
+class ReaderBody(Contract):
+    actor: str
 
 
 def install(app, settings, store, auth):
@@ -76,29 +82,72 @@ def install(app, settings, store, auth):
             raise Problem("gateway", "Tico HQ gave an answer this server cannot use. Try again.", 502)
         return F.show(row)
 
-    def threads_of(c):
+    def page(c, table, after, limit):
+        """One keyset page of a table, newest first: rows below `after` (a rowid; None for the first page). `pos` is the
+        cursor for the next page, or None when this page is the last."""
+        rows = [dict(r) for r in c.execute(f"SELECT rowid AS pos, * FROM {table} WHERE rowid<? ORDER BY rowid DESC LIMIT ?",
+                                           (after if after is not None else 2**62, limit + 1)).fetchall()]
+        more = len(rows) > limit
+        rows = rows[:limit]
+        return rows, (str(rows[-1]["pos"]) if more and rows else None)
+
+    def cursor_of(value):
+        if not value:
+            return None
+        if not value.isdigit():
+            raise Problem("cursor", "A cursor is one from a page's next_cursor or threads_next_cursor", 422)
+        return int(value)
+
+    def guests_of(c, thread_id):
+        """The remote people a thread here has as guests (`<actor>@<install>` rows), with their install's company name."""
+        return [{"actor": r["actor"], "company": F.company_of(c, r["actor"].rsplit("@", 1)[1])}
+                for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=? AND instr(actor, '@') > 0 "
+                                   "ORDER BY actor LIMIT ?", (thread_id, MEMBER_LIMIT)).fetchall()]
+
+    def threads_of(c, rows):
         me = F.install(c)
         out = []
-        for row in c.execute("SELECT * FROM federation_threads ORDER BY updated_at DESC LIMIT ?", (LIST_LIMIT,)).fetchall():
-            row = dict(row)
-            members = [dict(m) for m in c.execute("SELECT install, status, joined_at_seq, removed_at_seq FROM federation_members "
-                                                  "WHERE thread_id=? ORDER BY install LIMIT ?", (row["thread_id"], MEMBER_LIMIT))]
+        for row in rows:
+            row.pop("pos", None)
+            members = [dict(m) for m in c.execute(
+                "SELECT m.install, m.status, m.joined_at_seq, m.removed_at_seq, COALESCE((SELECT p.peer_company FROM "
+                "federation_peerings p WHERE p.peer_install=m.install AND p.status<>'revoked'), '') AS company "
+                "FROM federation_members m WHERE m.thread_id=? ORDER BY m.install LIMIT ?", (row["thread_id"], MEMBER_LIMIT))]
             out.append({"thread_id": row["thread_id"], "home": row["home_install"] == me, "home_install": row["home_install"],
                         "applied_through": row["applied_through"], "high_seq": row["high_seq"],
-                        "removed_at_seq": row["removed_at_seq"], "members": members if row["home_install"] == me else []})
+                        "removed_at_seq": row["removed_at_seq"], "members": members if row["home_install"] == me else [],
+                        "guests": guests_of(c, row["thread_id"])})
         return out
 
-    def status_of(c):
-        return {"federation": relay.status(c), "peerings": [F.show(r) for r in F.peerings(c)],
-                "threads": threads_of(c)}
+    def status_of(c, limit=PAGE_LIMIT, cursor="", threads_cursor=""):
+        peering_rows, next_cursor = page(c, "federation_peerings", cursor_of(cursor), limit)
+        thread_rows, threads_next = page(c, "federation_threads", cursor_of(threads_cursor), limit)
+        peerings = [F.show(dict({k: v for k, v in r.items() if k != "pos"})) for r in peering_rows]
+        return {"federation": relay.status(c), "peerings": peerings, "next_cursor": next_cursor,
+                "threads": threads_of(c, thread_rows), "threads_next_cursor": threads_next}
 
     @app.get("/api/v2/federation")
-    def status_read(request: Request):
-        """This install's federation: its key, the Gateway, what waits at HQ, its peerings (newest first, at most 50) and
-        the threads it shares (at most 50). No key material. Owner only."""
+    def status_read(request: Request, limit: int = Query(PAGE_LIMIT, ge=1, le=PAGE_MAX), cursor: str = "",
+                    threads_cursor: str = ""):
+        """This install's federation: its key, the Gateway, what waits at HQ, and one page of its peerings and of the
+        threads it shares (newest first; `limit` up to 100). `next_cursor` and `threads_next_cursor` give the next page
+        of each, or null on the last one. No key material. Owner only."""
         owner(request)
         with store.read() as c:
-            return status_of(c)
+            return status_of(c, limit, cursor, threads_cursor)
+
+    @app.post("/api/v2/federation/threads/{thread_id}/readers")
+    def reader_add(request: Request, thread_id: str, body: ReaderBody):
+        """Adds a local person to a thread on this install. A replica's readers are the people the admin adds here, and
+        the thread's home mirrors its own members onto this install as guests. Owner only."""
+        who = owner(request)
+        actor = body.actor.strip()
+
+        def add(c):
+            result = T.add_reader(c, thread_id, actor)
+            H.event(c, who.actor, "federation.reader_added", thread_id, {"actor": actor})
+            return result
+        return store.write(who, add)
 
     def keys(request, rotate):
         who = owner(request)
@@ -169,6 +218,7 @@ def install(app, settings, store, auth):
 
         def record(c):
             fresh = R.record(c, view, pin=(found["key_id"], found["public_key"]))
+            F.note_approver(c, fresh["id"], who.actor)
             H.event(c, who.actor, "federation.peering_approved", peering_id, {"peer": row["peer_install"],
                                                                               "peer_key_id": found["key_id"]})
             return shown(fresh)

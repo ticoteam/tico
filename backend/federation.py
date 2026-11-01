@@ -58,6 +58,37 @@ def peering(c, install_id):
     return dict(row) if row else None
 
 
+def company(c):
+    """This install's display name (its settings' company name), as the relay last recorded it. Peers see it on the
+    peering, and the home sends it in each membership item."""
+    row = c.execute("SELECT company FROM federation_state WHERE singleton=1").fetchone()
+    return row["company"] if row else ""
+
+
+def set_company(c, name):
+    c.execute("INSERT INTO federation_state(singleton,company) VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET "
+              "company=excluded.company WHERE federation_state.company<>excluded.company", (name,))
+
+
+def company_of(c, install_id):
+    """The company name a peer gave for its live peering, or ''."""
+    row = c.execute("SELECT peer_company FROM federation_peerings WHERE peer_install=? AND status<>'revoked'",
+                    (install_id,)).fetchone()
+    return row["peer_company"] if row else ""
+
+
+def remember_company(c, install_id, name):
+    """A peer's company name, from a membership item it signed. Kept on its live peering."""
+    if isinstance(name, str) and 0 < len(name.strip()) <= 120:
+        c.execute("UPDATE federation_peerings SET peer_company=? WHERE peer_install=? AND status<>'revoked'",
+                  (name.strip(), install_id))
+
+
+def note_approver(c, row_id, actor):
+    """The local person who approved the peering. They read the threads it brings in: their admin accepted the peer."""
+    c.execute("UPDATE federation_peerings SET approved_by=COALESCE(approved_by, ?) WHERE id=?", (actor, row_id))
+
+
 def peering_by_id(c, peering_id):
     row = c.execute("SELECT * FROM federation_peerings WHERE id=?", (peering_id,)).fetchone()
     return dict(row) if row else None
@@ -80,7 +111,8 @@ def show(row):
     """A peering as the API shows it: no key material, only the ids."""
     return {"id": row["id"], "peer": row["peer_install"], "direction": row["direction"], "status": row["status"],
             "approved": row["approved_at"] is not None, "paused": row["paused_at"] is not None,
-            "paused_by": row["paused_by"], "peer_key_id": row["peer_key_id"], "updated": row["updated_at"]}
+            "paused_by": row["paused_by"], "peer_key_id": row["peer_key_id"], "company": row["peer_company"] or "",
+            "updated": row["updated_at"]}
 
 
 def new_id(prefix):

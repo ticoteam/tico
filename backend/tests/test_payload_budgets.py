@@ -251,3 +251,31 @@ def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
     assert all("snoozed_note" not in r for r in rows), "a list row carries no snooze note"
     whole = get(api, "tasks/" + task["id"])["task"]
     assert whole["snoozed_note"] == note, "the task's own view keeps the note whole"
+
+
+def test_the_federation_status_pages_its_peerings_and_shared_threads(api):
+    """GET /api/v2/federation: one page of peerings and one of shared threads at a time, each with its cursor."""
+    other = "gi_" + "b" * 24
+    with api.app.state.store.transaction() as c:
+        for i in range(130):
+            install = f"gi_{i:024x}"
+            c.execute("INSERT INTO federation_peerings(id,hq_peering_id,peer_install,direction,status,peer_company,created_at,"
+                      "updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                      (f"fp_{i:04d}", f"hq_{i:04d}", install, "outgoing", "active", f"Acme {i} " + "x" * 100, H.now(), H.now()))
+            c.execute("INSERT INTO federation_threads(id,thread_id,home_install,origin_id,applied_through,high_seq,"
+                      "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                      (uuid.uuid4().hex, uuid.uuid4().hex, other, f"origin-{i:04d}", 1, 1, H.now(), H.now()))
+    first = get(api, "federation?limit=100")
+    assert len(first["peerings"]) == 100 and first["next_cursor"] and len(first["threads"]) == 100
+    assert first["threads_next_cursor"]
+    assert size(first) < 64 * KB
+    rest = get(api, f"federation?limit=100&cursor={first['next_cursor']}&threads_cursor={first['threads_next_cursor']}")
+    assert len(rest["peerings"]) == 30 and rest["next_cursor"] is None
+    assert len(rest["threads"]) == 30 and rest["threads_next_cursor"] is None
+    seen = [p["id"] for p in first["peerings"] + rest["peerings"]]
+    assert len(set(seen)) == 130
+    threads = [t["thread_id"] for t in first["threads"] + rest["threads"]]
+    assert len(set(threads)) == 130
+    assert first["peerings"][0]["company"].startswith("Acme 129 ")         # newest first
+    assert api.get("/api/v2/federation?limit=101", headers=headers()).status_code == 422
+    assert api.get("/api/v2/federation?cursor=nope", headers=headers()).status_code == 422

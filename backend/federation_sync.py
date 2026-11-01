@@ -17,13 +17,17 @@ from . import federation as F
 from . import federation_envelope as E
 from . import federation_threads as T
 from . import hubdb as H
+from . import org_rule_check as OR
 from .store import Problem
 
 CATCH_UP_EVERY = 300        # seconds between catch-up requests for one thread
 CATCH_UP_BATCH = 200        # items one catch-up answer queues
-MESSAGE_KINDS = ("say", "ask", "answer", "notice")
+MESSAGE_KINDS = ("say", "ask", "answer")          # what a remote author may write (core: say, ask or answer)
 RETRY_FIRST = 15            # seconds before a failed send is tried again; doubled per attempt
 BACKOFF_MAX = 300
+REASON_NOTES = {"rules": "Tico held this message, so it did not reach the thread.",
+                "namespace": "Tico did not take this message: its author is not from the install that sent it.",
+                "unknown_thread": "Tico did not take this message: the thread is not shared with this install."}
 
 
 def stamp():
@@ -152,6 +156,7 @@ def stage(c, vault, now, limit=100):
     me = F.install(c)
     if not me or F.key(c) is None:
         return 0
+    sync_rosters(c, vault, now)
     staged = 0
     for row in T.due(c, limit):
         delivery = row["id"]
@@ -224,7 +229,8 @@ def share(c, vault, now, thread_id, install_id):
         raise Problem("already_shared", "That install is already in the thread", 409)
     item = sign_item(c, vault, row, kind="membership", now=now, origin=None, revision=0,
                      payload={"type": "membership", "thread": thread_id, "change": "added", "install": install_id,
-                              "title": T.title(c, thread_id)})
+                              "title": T.title(c, thread_id), "members": T.roster(c, thread_id),
+                              "company": F.company(c)})
     if member:
         c.execute("UPDATE federation_members SET status='active', joined_at_seq=?, removed_at_seq=NULL, updated_at=? "
                   "WHERE id=?", (item["home_seq"], stamp(), member["id"]))
@@ -248,9 +254,11 @@ def unshare(c, vault, now, thread_id, install_id):
         raise Problem("not_found", "That install is not in the thread", 404)
     item = sign_item(c, vault, row, kind="membership", now=now, origin=None, revision=0,
                      payload={"type": "membership", "thread": thread_id, "change": "removed", "install": install_id,
-                              "title": ""})
+                              "title": "", "members": T.roster(c, thread_id),
+                              "company": F.company(c)})
     c.execute("UPDATE federation_members SET status='removed', removed_at_seq=?, updated_at=? WHERE id=?",
               (item["home_seq"], stamp(), member["id"]))
+    T.remove_outside(c, thread_id, install_id)
     enqueue(c, thread_local(c, thread_id), item)
     queue(c, recipient=install_id, kind="item", item_id=item["id"])
     return {"thread_id": thread_id, "install": install_id, "removed_at_seq": item["home_seq"]}
@@ -272,9 +280,11 @@ def author_key(c, me, sender, peer, author, key_id, fetched):
     return base64.b64decode(found["public_key"]) if found and found["key_id"] == key_id else None
 
 
-def receive(c, now, sender, envelope_id, headers, body, received_at, fetched):
+def receive(c, now, sender, envelope_id, headers, body, received_at, fetched, gate=None):
     """One envelope the HQ pull handed over, inside the caller's transaction. `fetched` holds keys the caller looked up
-    outside it, {install: {key_id, public_key}}, which are kept in the directory. Returns the outcome."""
+    outside it, {install: {key_id, public_key}}, which are kept in the directory. `gate(actor, text, install, origin_id,
+    thread_id)` is the org-rule verdict of a carried message (the relay supplies it; None checks nothing). Returns the
+    outcome."""
     me = F.install(c)
     if not me:
         return "not_set_up"
@@ -283,13 +293,16 @@ def receive(c, now, sender, envelope_id, headers, body, received_at, fetched):
     for install, found in fetched.items():
         c.execute("INSERT OR IGNORE INTO federation_directory(install,key_id,public_key,fetched_at) VALUES(?,?,?,?)",
                   (install, found["key_id"], found["public_key"], stamp()))
-    outcome = _receive(c, now, me, sender, envelope_id, headers, body, received_at, fetched)
+    try:
+        outcome = _receive(c, now, me, sender, envelope_id, headers, body, received_at, fetched, gate)
+    except Problem:                     # core refused the write before it wrote anything: the envelope is recorded as invalid
+        outcome = "invalid"
     c.execute("INSERT INTO federation_receipts(id,peer_install,envelope_id,outcome,received_at) VALUES(?,?,?,?,?)",
               (H.new_id(), sender, envelope_id, outcome, stamp()))
     return outcome
 
 
-def _receive(c, now, me, sender, envelope_id, headers, body, received_at, fetched):
+def _receive(c, now, me, sender, envelope_id, headers, body, received_at, fetched, gate):
     peer = F.peering(c, sender)
     if peer is None or peer["status"] == "revoked":
         return "no_peering"
@@ -310,11 +323,13 @@ def _receive(c, now, me, sender, envelope_id, headers, body, received_at, fetche
         return "invalid"
     kind = payload.get("type")
     if kind == "message":
-        return on_message(c, now, me, sender, payload, envelope_id, sent, signature, body)
+        return on_message(c, now, me, sender, payload, envelope_id, sent, signature, body, gate)
     if kind == "catch_up":
         return on_catch_up(c, me, sender, payload)
     if kind == "item":
-        return on_item(c, now, me, sender, peer, payload, fetched)
+        return on_item(c, now, me, sender, peer, payload, fetched, gate)
+    if kind == "refusal":
+        return on_refusal(c, me, sender, payload)
     return "invalid"
 
 
@@ -334,11 +349,12 @@ def checked_message(payload):
             "deleted": deleted}
 
 
-def on_message(c, now, me, sender, payload, envelope_id, sent, signature, body):
-    """A replica's post, sent to the home: numbered, stored, posted into the home's thread and relayed."""
+def on_message(c, now, me, sender, payload, envelope_id, sent, signature, body, gate=None):
+    """A replica's post, sent to the home: screened by the org rules, numbered, stored, posted into the home's thread and
+    relayed. A refusal (rules, namespace, unknown thread) goes back to the sender as a signed receipt."""
     thread = thread_of_home(c, me, payload.get("thread"))
     if thread is None:
-        return "unknown_thread"
+        return refuse(c, sender, payload, "unknown_thread")
     member = member_of(c, thread["thread_id"], sender)
     if member is None or member["status"] != "active":
         return "not_member"
@@ -346,17 +362,20 @@ def on_message(c, now, me, sender, payload, envelope_id, sent, signature, body):
     if fields is None:
         return "invalid"
     if E.install_of(fields["actor"]) != sender:
-        return "namespace"
+        return refuse(c, sender, payload, "namespace")
     origin, revision, actor = fields["origin_id"], fields["revision"], fields["actor"]
     peer = F.peering(c, sender)
     known = message_row(c, origin)
     if revision == 0:
         if known is not None:
             return "duplicate"
+        text, refused = screen(c, gate, actor, fields["body"], sender, origin, thread["thread_id"])
+        if refused:
+            return refuse(c, sender, payload, "rules")
+        view = T.post_inbound(c, thread["thread_id"], text, kind=fields["message_kind"],
+                              origin={"origin_id": origin, "revision": 0, "install": sender, "actor": actor})
         item = insert_item(c, thread, kind="message", origin=origin, revision=0, author=sender, envelope_id=envelope_id,
                            sent_at=sent, key_id=peer["peer_key_id"], signature=signature, body=body)
-        view = T.post_inbound(c, thread["thread_id"], fields["body"], kind=fields["message_kind"],
-                              origin={"origin_id": origin, "revision": 0, "install": sender, "actor": actor})
         c.execute("INSERT INTO federation_messages(id,origin_id,message_id,thread_id,author,revision,home_seq,created_at,"
                   "updated_at) VALUES(?,?,?,?,?,0,?,?,?)",
                   (H.new_id(), origin, view["id"], thread["thread_id"], actor, item["home_seq"], stamp(), stamp()))
@@ -365,8 +384,14 @@ def on_message(c, now, me, sender, payload, envelope_id, sent, signature, body):
             return "unknown_message"
         if revision <= known["revision"]:
             return "duplicate"
+        if fields["deleted"]:
+            text, refused = "", False
+        else:
+            text, refused = screen(c, gate, actor, fields["body"], sender, origin, thread["thread_id"])
+        if refused:
+            return refuse(c, sender, payload, "rules")
         view = T.apply_revision(c, {"origin_id": origin, "revision": revision, "install": sender, "actor": actor},
-                                body=fields["body"], deleted=fields["deleted"])
+                                body=text, deleted=fields["deleted"])
         if view is None:
             return "unknown_message"
         item = insert_item(c, thread, kind="message", origin=origin, revision=revision, author=sender,
@@ -400,7 +425,7 @@ def on_catch_up(c, me, sender, payload):
     return "applied"
 
 
-def on_item(c, now, me, sender, peer, wrapper, fetched):
+def on_item(c, now, me, sender, peer, wrapper, fetched, gate=None):
     """An item from the home: its author's signature checked, then applied in the home's order."""
     item_type, seq, author = wrapper.get("item_type"), wrapper.get("home_seq"), wrapper.get("author")
     item_envelope, item_sent, key_id = wrapper.get("envelope_id"), wrapper.get("sent_at"), wrapper.get("key_id")
@@ -425,7 +450,10 @@ def on_item(c, now, me, sender, peer, wrapper, fetched):
         return "invalid"
     thread = thread_of_home(c, sender, origin_thread)
     if item_type == "membership":
-        if author != sender or payload.get("change") not in ("added", "removed") or not E.INSTALL.fullmatch(str(payload.get("install"))):
+        change = payload.get("change")
+        if author != sender or change not in ("added", "removed", "roster"):
+            return "namespace"
+        if change != "roster" and not E.INSTALL.fullmatch(str(payload.get("install"))):
             return "namespace"
         return on_membership(c, now, me, sender, thread, seq, payload)
     if E.install_of(payload.get("actor")) != author:
@@ -440,7 +468,7 @@ def on_item(c, now, me, sender, peer, wrapper, fetched):
     if seq > thread["applied_through"] + 1:
         request_catch_up(c, now, thread, thread["applied_through"])
         return "gap"
-    outcome = apply_message(c, now, me, thread, author, seq, fields)
+    outcome = apply_message(c, now, me, thread, author, seq, fields, gate, sender)
     if outcome == "unknown_message":
         request_catch_up(c, now, thread, 0)             # the message's create comes back with the next catch-up
     if seq > thread["applied_through"]:
@@ -453,14 +481,26 @@ def advance(c, thread, seq):
               (seq, seq, stamp(), thread["id"]))
 
 
-def apply_message(c, now, me, thread, author, seq, fields):
-    """One message from the stream into the local thread, through core's door. Works for a number already passed too,
-    so a message a replica lost comes back on a catch-up."""
+def apply_message(c, now, me, thread, author, seq, fields, gate=None, sender=None):
+    """One message from the stream into the local thread, through core's door and the org rules (for a message another
+    install wrote). A message refused here is recorded with no local message, so a catch-up never screens it again.
+    Works for a number already passed too, so a message a replica lost comes back on a catch-up."""
     origin, revision, actor = fields["origin_id"], fields["revision"], fields["actor"]
     known = message_row(c, origin)
+    carried = author != me
     if revision == 0:
         if known is None:
-            view = T.post_inbound(c, thread["thread_id"], fields["body"], kind=fields["message_kind"],
+            if carried:
+                text, refused = screen(c, gate, actor, fields["body"], author, origin, thread["thread_id"])
+            else:
+                text, refused = fields["body"], False
+            if refused:
+                c.execute("INSERT INTO federation_messages(id,origin_id,message_id,thread_id,author,revision,home_seq,created_at,"
+                          "updated_at) VALUES(?,?,'',?,?,0,?,?,?)",
+                          (H.new_id(), origin, thread["thread_id"], actor, seq, stamp(), stamp()))
+                refuse(c, sender, {"thread": thread["origin_id"], "origin_id": origin, "revision": 0}, "rules")
+                return "rules"
+            view = T.post_inbound(c, thread["thread_id"], text, kind=fields["message_kind"],
                                   origin={"origin_id": origin, "revision": 0, "install": author, "actor": actor})
             c.execute("INSERT INTO federation_messages(id,origin_id,message_id,thread_id,author,revision,home_seq,created_at,"
                       "updated_at) VALUES(?,?,?,?,?,0,?,?,?)",
@@ -472,11 +512,20 @@ def apply_message(c, now, me, thread, author, seq, fields):
         return "duplicate"
     if known is None or known["author"] != actor:
         return "unknown_message"
+    if known["message_id"] == "":                     # refused here when it came: nothing to edit
+        return "rules"
     if revision <= known["revision"]:
         return "duplicate"
-    if author != me:
+    if carried and not fields["deleted"]:
+        text, refused = screen(c, gate, actor, fields["body"], author, origin, thread["thread_id"])
+    else:
+        text, refused = fields["body"], False
+    if refused:
+        refuse(c, sender, {"thread": thread["origin_id"], "origin_id": origin, "revision": revision}, "rules")
+        return "rules"
+    if carried:
         view = T.apply_revision(c, {"origin_id": origin, "revision": revision, "install": author, "actor": actor},
-                                body=fields["body"], deleted=fields["deleted"])
+                                body=text, deleted=fields["deleted"])
         if view is None:
             return "unknown_message"
     c.execute("UPDATE federation_messages SET revision=?, updated_at=? WHERE origin_id=?", (revision, stamp(), origin))
@@ -484,17 +533,32 @@ def apply_message(c, now, me, thread, author, seq, fields):
 
 
 def on_membership(c, now, me, sender, thread, seq, payload):
-    target, change = payload["install"], payload["change"]
+    change = payload.get("change")
+    F.remember_company(c, sender, payload.get("company"))
+    if change == "roster":
+        if thread is None:
+            return "unknown_thread"
+        return on_roster(c, now, sender, thread, seq, payload)
+    target = payload.get("install")
+    members = roster_of(payload)
+    if members is None:
+        return "invalid"
     if target == me and change == "added":
         if thread is None:
             view = T.create_thread(c, "keeper", title=str(payload.get("title") or "")[:200])
             T.add_outside(c, view["id"], sender)
+            T.set_guests(c, view["id"], sender, members)
+            accepted_by = (F.peering(c, sender) or {}).get("approved_by") or ""
+            if accepted_by and "@" not in accepted_by:          # the local admin who accepted the peering reads it
+                T.add_reader(c, view["id"], accepted_by)
             c.execute("INSERT INTO federation_threads(id,thread_id,home_install,origin_id,applied_through,high_seq,removed_at_seq,"
                       "catch_up_requested_at,created_at,updated_at) VALUES(?,?,?,?,?,?,NULL,NULL,?,?)",
                       (H.new_id(), view["id"], sender, payload["thread"], seq, seq, stamp(), stamp()))
             return "applied"
         if thread["removed_at_seq"] is None and seq <= thread["applied_through"]:
             return "duplicate"
+        T.add_outside(c, thread["thread_id"], sender)
+        T.set_guests(c, thread["thread_id"], sender, members)
         c.execute("UPDATE federation_threads SET removed_at_seq=NULL, applied_through=max(applied_through,?), "
                   "high_seq=max(high_seq,?), updated_at=? WHERE id=?", (seq, seq, stamp(), thread["id"]))
         return "applied"
@@ -506,6 +570,7 @@ def on_membership(c, now, me, sender, thread, seq, payload):
             return "gap"
         c.execute("UPDATE federation_threads SET removed_at_seq=?, applied_through=max(applied_through,?), "
                   "high_seq=max(high_seq,?), updated_at=? WHERE id=?", (seq, seq, seq, stamp(), thread["id"]))
+        T.remove_outside(c, thread["thread_id"], sender)
         return "applied"
     if seq <= thread["applied_through"]:
         return "duplicate"
@@ -514,6 +579,102 @@ def on_membership(c, now, me, sender, thread, seq, payload):
         return "gap"
     advance(c, thread, seq)
     return "applied"
+
+
+# ----------------------------------------------------------------------------- screening, refusals, rosters
+def screen(c, gate, actor, text, install, origin_id, thread_id):
+    """The org rules on one carried message: (text to write, refused). A Block writes nothing (refused); a warning is
+    written with its line, as core writes a local message the rules warned about."""
+    if gate is None:
+        return text, False
+    verdict = gate(actor, text, install, origin_id, thread_id)
+    outcome = OR.apply(c, verdict, text, {"install": install, "origin_id": origin_id, "thread_id": thread_id})
+    if outcome and ("held" in outcome or "moved" in outcome):
+        return None, True
+    return OR.warned_text(outcome, text), False
+
+
+def refusal_bytes(thread, origin, revision, reason):
+    return E.payload_bytes({"type": "refusal", "thread": str(thread or "")[:200], "origin_id": origin,
+                            "revision": int(revision) if type(revision) is int else 0, "reason": reason})
+
+
+def refuse(c, to, payload, reason):
+    """A signed refusal back to the install that sent a message this install will not take: it names the message (origin
+    id and revision) and why. The sender posts a quiet note to the message's author. Returns the reason."""
+    origin = payload.get("origin_id")
+    if isinstance(origin, str) and origin:
+        queue(c, recipient=to, kind="refusal", payload=refusal_bytes(payload.get("thread"), origin, payload.get("revision"),
+                                                                    reason))
+    return reason
+
+
+def on_refusal(c, me, sender, payload):
+    """A receiver refused a message this install sent, or relayed. The author's own install posts the quiet note to the
+    local author; a refusal from another install is passed on to the install the message came from."""
+    origin = payload.get("origin_id")
+    if not isinstance(origin, str) or not origin:
+        return "invalid"
+    row = message_row(c, origin)
+    if row is None or row["message_id"] == "":
+        return "unknown_message"
+    reason = str(payload.get("reason") or "")
+    author_install = E.install_of(row["author"])
+    if author_install == me:
+        T.post_notice(c, row["thread_id"], REASON_NOTES.get(reason, REASON_NOTES["rules"]), row["author"].rsplit("@", 1)[0])
+        return "applied"
+    if author_install and author_install != sender:
+        queue(c, recipient=author_install, kind="refusal",
+              payload=refusal_bytes(payload.get("thread"), origin, payload.get("revision"), reason))
+        return "relayed"
+    return "unknown_message"
+
+
+def roster_of(payload):
+    """The local members a membership item carries, or None when the list is missing or not local people."""
+    members = payload.get("members")
+    if not isinstance(members, list) or any(not isinstance(m, str) or E.install_of(m) or len(m) > 300 for m in members):
+        return None
+    return members
+
+
+def membership_payload(thread, change, install, members, title=""):
+    return {"type": "membership", "thread": thread["origin_id"], "change": change, "install": install, "title": title,
+            "members": members}
+
+
+def on_roster(c, now, sender, thread, seq, payload):
+    """The home's roster, numbered like every item: this replica's guest rows for the home match it."""
+    members = roster_of(payload)
+    if members is None:
+        return "invalid"
+    if thread["removed_at_seq"] is not None and seq > thread["removed_at_seq"]:
+        return "removed"
+    if seq <= thread["applied_through"]:
+        return "duplicate"
+    if seq > thread["applied_through"] + 1:
+        request_catch_up(c, now, thread, thread["applied_through"])
+        return "gap"
+    T.set_guests(c, thread["thread_id"], sender, members)
+    advance(c, thread, seq)
+    return "applied"
+
+
+def sync_rosters(c, vault, now):
+    """The home's roster goes out as a numbered membership item whenever it differs from the last one sent, so every
+    member's guest rows follow the home's member list."""
+    me = F.install(c)
+    for row in c.execute("SELECT * FROM federation_threads WHERE home_install=? AND removed_at_seq IS NULL", (me,)).fetchall():
+        thread = dict(row)
+        roster = T.roster(c, thread["thread_id"])
+        last = c.execute("SELECT payload FROM federation_items WHERE thread_id=? AND kind='membership' "
+                         "ORDER BY home_seq DESC LIMIT 1", (thread["thread_id"],)).fetchone()
+        seen = (E.parse_payload(bytes(last[0])) or {}).get("members") if last else None
+        if seen == roster:
+            continue
+        item = sign_item(c, vault, thread, kind="membership", now=now, origin=None, revision=0,
+                         payload={**membership_payload(thread, "roster", "", roster), "company": F.company(c)})
+        enqueue(c, thread, item)
 
 
 # ----------------------------------------------------------------------------- outbound, to HQ

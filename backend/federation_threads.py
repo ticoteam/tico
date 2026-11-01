@@ -1,15 +1,18 @@
-"""The one door from federation into core's threads (backend/threads.py, owned by threads/core). Every call uses the names in
-docs/dev/threads-contract.md sections 3, 6 and 11, as core is merged on threads/federation. Nothing else in federation
+"""The one door from federation into core's threads (backend/threads.py, owned by threads/core). Nothing else in federation
 names core.
 
-Inbound peer writes go through `post` as principal "keeper" with via="peer" and the origin dict. Core runs its C1 checks
-only for a person or bot principal, so federation's own gate (an active, pinned peering, a member install, the namespace
-check) admits a message. Core keeps the real author in refs.origin.actor; from_actor is "keeper", because core has no
-remote-author column. `due()` adds to core's outside deliveries the fields federation reads: the message kind, and the
-install a replicated message came from (so a replica never sends a message back to the home it came from).
+A carried message is written by the keeper with `as_actor`: the real remote author (`human:ana@<install>`), which core
+checks is in the signer's namespace and is a guest member of the thread (spec 7.2). `origin` keeps the origin id,
+revision and install. Core's C1 for a remote author is a thread_members row for the author or for `peer:<install>`.
+
+The home's roster is mirrored here as guest rows (`<actor>@<home install>`), through core's add_member and remove_member,
+so a replica shows who is in the thread. Local readers are the people an admin adds on this install (core's add_member).
+A replicated message from a guest never wakes a bot: a queued run for a bot whose name carries an install is cancelled
+(local bot names never contain `@`).
 """
 import json
 
+from . import org_rule_check as OR
 from . import threads as CORE
 
 
@@ -23,15 +26,68 @@ def add_outside(c, thread_id, install):
     CORE.add_outside_delivery(c, thread_id, f"peer:{install}")
 
 
+def remove_outside(c, thread_id, install):
+    """Unlink a peer install: its deliveries go moot, so nothing more is sent or accepted for it as a link."""
+    CORE.remove_outside_member(c, "keeper", thread_id, f"peer:{install}")
+
+
+def roster(c, thread_id):
+    """The home's local members, the list a replica mirrors: people and bots on this install, sorted."""
+    return sorted(r[0] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (thread_id,))
+                  if str(r[0]).startswith(("human:", "bot:")) and "@" not in str(r[0]))
+
+
+def set_guests(c, thread_id, install, actors):
+    """Mirror the home's roster on this replica: each actor as `actor@install`, and no other guest of that install."""
+    wanted = {f"{actor}@{install}" for actor in actors}
+    have = {r[0] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (thread_id,))
+            if str(r[0]).endswith("@" + install)}
+    for actor in sorted(wanted - have):
+        CORE.add_member(c, "keeper", thread_id, actor)
+    for actor in sorted(have - wanted):
+        CORE.remove_member(c, "keeper", thread_id, actor)
+    return len(wanted ^ have)
+
+
+def add_reader(c, thread_id, actor):
+    """A local person the accepting admin adds to a thread on this install. Core checks the person exists."""
+    return CORE.add_member(c, "keeper", thread_id, actor)
+
+
+
+
 def post_inbound(c, thread_id, body, *, kind, origin):
-    """A replicated message. `origin` is {"origin_id", "revision", "install", "actor"}. A repeat (origin_id, revision)
-    returns the existing message with `duplicate: True` and writes nothing."""
-    return CORE.post(c, "keeper", thread_id, body, kind=kind, via="peer", origin=origin)
+    """A carried message, as its remote author. `origin` is {"origin_id", "revision", "install", "actor"}. A repeat
+    (origin_id, revision) returns the existing message with `duplicate: True` and writes nothing."""
+    view = CORE.post(c, "keeper", thread_id, body, kind=kind, via="peer", origin=origin, as_actor=origin["actor"])
+    hold_guest_wakes(c)
+    return view
 
 
 def apply_revision(c, origin, *, body, deleted):
-    """A replicated edit or delete. None when nothing was applied (no such message, or an older or repeated revision)."""
-    return CORE.apply_revision(c, origin, body=body, deleted=deleted)
+    """A carried edit or delete. None when nothing was applied (no such message, or an older or repeated revision)."""
+    view = CORE.apply_revision(c, origin, body=body, deleted=deleted)
+    hold_guest_wakes(c)
+    return view
+
+
+def hold_guest_wakes(c):
+    """A remote guest never wakes a bot here: a run queued for a bot whose name carries an install is cancelled. Local
+    bots (names without `@`) keep the normal wake rule."""
+    c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND instr(bot, '@') > 0")
+
+
+def post_notice(c, thread_id, text, to_actor):
+    """A quiet note from the keeper to one local person in the thread, like a held message's note."""
+    return CORE.post(c, "keeper", thread_id, text, kind="notice", to_actor=to_actor)
+
+
+def checked_inbound(store, judge, actor, text, install, origin_id, thread_id):
+    """The org-rule verdict for a message carried in from another install, held as its remote author (`inbound`). The
+    rules apply to remote actors as guests: nothing here is a roster person."""
+    return OR.inbound(store, judge, actor, "federated_message", text, (), source="federation",
+                      authenticated=f"federation:{install}", origin=f"{install}:{origin_id}",
+                      place=lambda c, principal, recipients: OR.place_for(c, principal, recipients, conversation_id=thread_id))
 
 
 def due(c, limit):

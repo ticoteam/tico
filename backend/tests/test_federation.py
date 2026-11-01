@@ -21,13 +21,15 @@ from backend import federation_relay as R
 from backend import gateway_connection as GC
 from backend import hook_relay
 from backend import hubdb as H
+from backend import org_rule_check as OR
 from backend import threads as CORE
 from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
-from backend.store import encode
+from backend.store import Problem, encode
 
 OWNER = {"Authorization": "Bearer ana-test"}
+BEN = {"Authorization": "Bearer ben-test"}
 PEOPLE = {"people": [{"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
                      {"id": "ben", "email": "ben@acme.example"}]}
 URL = "https://updates.tico.team/v1/federation/envelopes"
@@ -70,7 +72,7 @@ class HQ:
                 return 409, {"error": "already_peered"}
             pid = "fp_" + uuid.uuid4().hex[:24]
             self.peerings[pid] = {"id": pid, "a": me, "b": peer, "requester": me, "approved": {}, "paused": {},
-                                  "revoked": False}
+                                  "revoked": False, "company": {me: str(body.get("company") or "")}}
             return 201, self.view(pid, me)
         parts = path.split("/")
         if len(parts) == 3 and parts[0] == "peerings":
@@ -82,6 +84,7 @@ class HQ:
                 if body.get("peer_key_id") != self.keys[other]["key_id"]:
                     return 422, {"error": "key_changed"}
                 p["approved"][me] = body["peer_key_id"]
+                p["company"][me] = str(body.get("company") or "")
             elif parts[2] == "pause":
                 p["paused"][me] = bool(body["paused"])
             elif parts[2] == "revoke":
@@ -106,7 +109,7 @@ class HQ:
         return {"id": pid, "peer": other, "status": status, "requested_by_you": p["requester"] == me,
                 "you_approved": me in p["approved"], "peer_approved": other in p["approved"],
                 "you_paused": p["paused"].get(me, False), "peer_paused": p["paused"].get(other, False),
-                "your_key_id": self.keys[me]["key_id"], "peer_key_id": self.keys[other]["key_id"], "updated": ""}
+                "your_key_id": self.keys[me]["key_id"], "peer_key_id": self.keys[other]["key_id"], "peer_company": p["company"].get(other, ""), "updated": ""}
 
     def live(self, a, b):
         for p in self.peerings.values():
@@ -178,7 +181,7 @@ def make_side(tmp_path, hq):
         registry = root / "registry"
         registry.mkdir(parents=True)
         (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": "ana@acme.example", "bot_admins": []}))
-        settings = Settings(db_path=root / "hub.db", registry_dir=registry, gateway_key="tgw_" + name, test_identities={
+        settings = Settings(db_path=root / "hub.db", registry_dir=registry, gateway_key="tgw_" + name, company_name=name.title() + " Co", test_identities={
             "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
             "ben-test": Identity("human:ben", "human", "ben@acme.example")})
         app = create_app(settings)
@@ -259,6 +262,11 @@ def local_thread(side, home_thread, home):
     with side.app.state.store.read() as c:
         return c.execute("SELECT thread_id FROM federation_threads WHERE origin_id=? AND home_install=?",
                          (home_thread, home.id)).fetchone()[0]
+
+
+def reader(side, thread, actor):
+    with side.app.state.store.transaction() as c:
+        CORE.add_member(c, "keeper", thread, actor)
 
 
 def texts(side, thread):
@@ -445,3 +453,150 @@ def test_every_federation_command_parses_and_has_its_mcp_tool():
     writes = {name for name in hubtools.BY_NAME if name.startswith("hub_peer_")}
     assert writes == {remotecli.tool_name(fn) for fn in PEER_COMMANDS.values()}
     assert all(hubtools.BY_NAME[name]["writes"] for name in writes - {"hub_peer_list"})
+
+
+def rows(side, sql, args=()):
+    with side.app.state.store.read() as c:
+        return [tuple(r) for r in c.execute(sql, args).fetchall()]
+
+
+def receipts(side, peer):
+    return [r[0] for r in rows(side, "SELECT outcome FROM federation_receipts WHERE peer_install=? ORDER BY received_at",
+                               (peer.id,))]
+
+
+def test_a_carried_message_is_written_as_its_remote_author(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    say(a, tid, "hello from alpha")
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    assert rows(b, "SELECT from_actor FROM messages WHERE conversation_id=? AND body=?", (there, "hello from alpha")) == [
+        (f"human:ana@{a.id}",)]
+
+
+def test_a_local_person_reads_a_replica_only_once_an_admin_adds_them(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    say(a, tid, "hello from alpha")
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    assert b.client.get(f"/api/v2/threads/{there}", headers=BEN).status_code == 404
+    assert b.client.get(f"/api/v2/threads/{there}", headers=OWNER).status_code == 200    # the admin who accepted the peering
+    assert b.client.post(f"/api/v2/federation/threads/{there}/readers", json={"actor": "human:ben"},
+                         headers=BEN).status_code == 403
+    added = b.client.post(f"/api/v2/federation/threads/{there}/readers", json={"actor": "human:ben"}, headers=OWNER)
+    assert added.status_code == 200, added.text
+    assert b.client.get(f"/api/v2/threads/{there}", headers=BEN).status_code == 200
+
+
+def test_the_homes_roster_reaches_the_replica_as_guest_rows_and_leaves_with_them(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+
+    def guests():
+        return [r[0] for r in rows(b, "SELECT actor FROM thread_members WHERE thread_id=?", (there,)) if r[0].endswith("@" + a.id)]
+
+    with a.app.state.store.transaction() as c:
+        CORE.add_member(c, "keeper", tid, "human:ben")
+    drive(a, b, rounds=3)
+    assert guests() == ["human:ben@" + a.id]
+    with a.app.state.store.transaction() as c:
+        CORE.remove_member(c, "keeper", tid, "human:ben")
+    drive(a, b, rounds=3)
+    assert guests() == []
+
+
+def test_a_message_the_org_rules_block_is_written_nowhere_and_its_author_is_told(make_side, hq, monkeypatch):
+    real_apply = OR.apply
+
+    def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None):
+        if "BLOCKED" in str(payload or ""):
+            return {"held": {"id": "hold"}}
+        return real_apply(c, verdict, payload, replay, tell, obj_now)
+
+    monkeypatch.setattr(OR, "apply", apply)
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    reader(b, there, "human:ben")
+    say(b, there, "BLOCKED: the draft plan", who="human:ben")
+    drive(a, b, rounds=4)
+    assert "BLOCKED: the draft plan" not in texts(a, tid)
+    assert "rules" in receipts(a, b)
+    assert ("human:ben",) in rows(b, "SELECT to_actor FROM messages WHERE conversation_id=? AND kind='notice'", (there,))
+
+
+def test_a_replica_refuses_a_carried_message_its_own_rules_block(make_side, hq, monkeypatch):
+    real_apply = OR.apply
+
+    def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None):
+        if "BLOCKED" in str(payload or ""):
+            return {"held": {"id": "hold"}}
+        return real_apply(c, verdict, payload, replay, tell, obj_now)
+
+    monkeypatch.setattr(OR, "apply", apply)
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    reader(a, tid, "human:ana")
+    say(a, tid, "BLOCKED: the home's post")
+    drive(a, b, rounds=4)
+    assert "BLOCKED: the home's post" not in texts(b, there)
+    assert "rules" in receipts(b, a)
+    assert ("human:ana",) in rows(a, "SELECT to_actor FROM messages WHERE conversation_id=? AND kind='notice'", (tid,))
+
+
+def test_a_remote_guest_bot_never_wakes_here(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    with a.app.state.store.transaction() as c:
+        c.execute("INSERT INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                  (H.new_id(), tid, "bot:scout", "member", H.KEEPER, H.now(), H.now()))
+    drive(a, b, rounds=3)
+    guest = f"bot:scout@{a.id}"
+    assert (guest,) in rows(b, "SELECT actor FROM thread_members WHERE thread_id=?", (there,))
+    reader(b, there, "human:ben")
+    with b.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as refused:
+            CORE.post(c, "human:ben", there, "hello scout", to_actor=guest)
+    assert refused.value.code == "not_found"        # no local bot has that name, so nothing here can address it
+    say(a, tid, "hello team")
+    drive(a, b, rounds=3)
+    assert "hello team" in texts(b, there)
+    assert rows(b, "SELECT COUNT(*) FROM jobs WHERE instr(bot, '@') > 0") == [(0,)]
+
+
+def test_each_side_sees_the_company_its_peer_gave_and_guests_carry_theirs(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    assert status(a)["peerings"][0]["company"] == "Beta Co"
+    assert status(b)["peerings"][0]["company"] == "Alpha Co"
+    tid = make_thread(a, "Launch")
+    with a.app.state.store.transaction() as c:
+        CORE.add_member(c, "keeper", tid, "human:ben")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    home = next(t for t in status(a)["threads"] if t["thread_id"] == tid)
+    assert {"install": b.id, "company": "Beta Co"} in [{"install": m["install"], "company": m["company"]} for m in home["members"]]
+    replica = next(t for t in status(b)["threads"] if t["thread_id"] == there)
+    assert {"actor": f"human:ben@{a.id}", "company": "Alpha Co"} in replica["guests"]

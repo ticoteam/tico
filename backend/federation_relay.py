@@ -14,6 +14,7 @@ import time
 from . import federation as F
 from . import federation_envelope as E
 from . import federation_sync as S
+from . import federation_threads as T
 from . import hook_relay as HR
 
 AREA = "federation"          # HQ's routes: <root>/federation/... where the root is the Gateway's base without `/gateway`
@@ -76,9 +77,10 @@ def record(c, view, pin=None):
     paused_by = ("you" if you else "peer") if (you or theirs) else None
     approved_at = (row["approved_at"] or current) if view.get("you_approved") else None
     revoked_at = (row["revoked_at"] or current) if status == "revoked" else None
+    company = str(view.get("peer_company") or row["peer_company"] or "").strip()[:120]
     c.execute("UPDATE federation_peerings SET status=?, approved_at=?, peer_key_id=?, peer_public_key=?, paused_at=?, "
-              "paused_by=?, revoked_at=?, updated_at=? WHERE id=?",
-              (status, approved_at, key_id, public, paused_at, paused_by, revoked_at, current, row["id"]))
+              "paused_by=?, revoked_at=?, peer_company=?, updated_at=? WHERE id=?",
+              (status, approved_at, key_id, public, paused_at, paused_by, revoked_at, company, current, row["id"]))
     return F.peering_by_id(c, row["id"])
 
 
@@ -98,6 +100,10 @@ class Relay:
     def vault(self):
         return getattr(self.app.state, "vault", None)
 
+    def company(self):
+        """This install's display name, sent to HQ with a peering request or approval."""
+        return str(getattr(self.settings, "company_name", "") or "").strip()[:120]
+
     def link(self, c):
         """The HQ link at the API root, or None without a Gateway key."""
         vault = self.vault()
@@ -115,10 +121,10 @@ class Relay:
         return answer
 
     def request(self, link, peer, idempotency):
-        return self.call(link, "POST", "peerings", {"peer": peer}, idempotency=idempotency)
+        return self.call(link, "POST", "peerings", {"peer": peer, "company": self.company()}, idempotency=idempotency)
 
     def approve(self, link, hq_id, peer_key_id):
-        return self.call(link, "POST", f"peerings/{hq_id}/approve", {"peer_key_id": peer_key_id})
+        return self.call(link, "POST", f"peerings/{hq_id}/approve", {"peer_key_id": peer_key_id, "company": self.company()})
 
     def pause(self, link, hq_id, paused):
         return self.call(link, "POST", f"peerings/{hq_id}/pause", {"paused": bool(paused)})
@@ -160,6 +166,7 @@ class Relay:
         """Stages what core and the home need sent, then sends each waiting row. A refusal by HQ or the peer that will not
         change is settled as failed; anything else waits and is tried again with a longer wait."""
         with self.store.transaction() as c:
+            F.set_company(c, self.company())
             S.stage(c, self.vault(), now())
         with self.store.read() as c:
             rows = S.due_outbox(c, now())
@@ -185,6 +192,12 @@ class Relay:
                 continue
             with self.store.transaction() as c:
                 S.sent(c, row)
+
+    def gate(self):
+        """The org-rule verdict for a carried message, checked with this app's judge. It runs inside the receive's write."""
+        judge = getattr(self.app.state, "judge", None)
+        return lambda actor, text, install, origin_id, thread_id: T.checked_inbound(
+            self.store, judge, actor, text, install, origin_id, thread_id)
 
     def fetch_authors(self, link, me, sender, body):
         """HQ's keys for the authors of an item from the home, looked up here, outside any transaction."""
@@ -230,7 +243,8 @@ class Relay:
             fetched = self.fetch_authors(link, me, sender, body) if me else {}
             with self.store.transaction() as c:
                 if F.install(c):
-                    S.receive(c, now(), sender, envelope_id, headers, body, epoch(item.get("received_at")), fetched)
+                    S.receive(c, now(), sender, envelope_id, headers, body, epoch(item.get("received_at")), fetched,
+                              gate=self.gate())
             through = item.get("hq_seq", through)
         top = answer.get("cursor") if isinstance(answer.get("cursor"), int) else through
         if top > cursor:
