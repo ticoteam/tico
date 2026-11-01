@@ -46,7 +46,7 @@ async function thvResolve(view) {
   const o = view.opts;
   if (o.id) return o.id;
   if (o.home) {
-    const t = await get(thvPath('home/' + o.home), {fresh: true});
+    const t = await get('/v2/threads/home/' + encodeURIComponent(o.home), {fresh: true});
     view.thread = t;
     return t?.id || '';
   }
