@@ -38,11 +38,6 @@ OUTCOME_DO = {"wake": "wake_bot", "batch": "wake_bot", "action": "wake_bot", "no
 MESSAGE_PART = ("\n\nThe message to handle: id {{message.id}} in thread {{message.thread}}, from {{message.from}} "
                 "({{message.from_name}}), subject {{message.subject}}. Its body:\n{{message.body}}")
 SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS redesign_migrations(id TEXT PRIMARY KEY, state TEXT NOT NULL, actor TEXT NOT NULL, "
-    "created TEXT NOT NULL, expires TEXT NOT NULL, finished TEXT, restored_at TEXT, snapshot_json TEXT, "
-    "result_json TEXT)",
-    "CREATE TABLE IF NOT EXISTS redesign_migration_accepts(flag TEXT PRIMARY KEY, accepted_by TEXT NOT NULL, "
-    "at TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS redesign_migrated(kind TEXT NOT NULL, id TEXT NOT NULL, migration TEXT NOT NULL, "
     "automation TEXT, PRIMARY KEY(kind, id))",
 )
@@ -151,10 +146,6 @@ def plan(c, who):
     out += _unchanged(c)
     out += _limits(c, done)
     out += _budgets(c, done)
-    accepted = {r["flag"] for r in c.execute("SELECT flag FROM redesign_migration_accepts")} if ensure_read else set()
-    for obj in out:
-        for flag in obj["flags"]:
-            flag["accepted"] = flag["id"] in accepted
     return out
 
 
@@ -733,8 +724,6 @@ def _finish(c, who, mid, waiting):
     untold = c.execute("SELECT 1 FROM redesign_migrated WHERE migration=? AND told IS NULL LIMIT 1", (mid,)).fetchone()
     record = {"state": "done", "migration": mid, "at": _now(), **total, "told": told or previous.get("told"),
               "owner_wait": who.role != "owner" or bool(waiting) or bool(untold)}
-    c.execute("UPDATE redesign_migrations SET state='converted', finished=?, result_json=? WHERE id=?",
-              (_now(), json.dumps({**total, "waiting": waiting}, sort_keys=True), mid))
     _set_meta(c, CUTOVER, json.dumps(record, sort_keys=True))
     line = (f"redesign cutover {mid}: {total['converted']} moved to automations, {total['kept']} kept as they were, "
             f"{total['failed']} failed, {waiting} wait for an owner; owner told: "
@@ -765,8 +754,6 @@ def cutover(store):
         mid = record.get("migration") or "mig_" + H.new_id()
         if not record:
             now = _now()
-            c.execute("INSERT OR IGNORE INTO redesign_migrations(id, state, actor, created, expires) "
-                      "VALUES(?,?,?,?,?)", (mid, "converting", who.actor, now, now))
             _set_meta(c, CUTOVER, json.dumps({"state": "running", "migration": mid, "at": now}, sort_keys=True))
         else:
             log.warning("redesign cutover %s: resuming after a restart", mid)

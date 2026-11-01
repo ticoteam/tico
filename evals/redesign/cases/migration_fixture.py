@@ -109,7 +109,6 @@ def old_rows(org):
         # The release before never ran the cutover: no record, nothing marked.
         c.execute("DELETE FROM registry_metadata WHERE key=?", (M.CUTOVER,))
         c.execute("DELETE FROM redesign_migrated")
-        c.execute("DELETE FROM redesign_migrations")
         # The org's bots joined after this server started; the release before's start gave each its profile, and a
         # Custom one its profile's rows in the rules table (the Librarian's), as they sit on an old install.
         profiles.migrate(c)

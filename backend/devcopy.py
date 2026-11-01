@@ -89,7 +89,6 @@ EMPTY = (
     # migration snapshot (restoring it would act).
     "automations", "automation_versions", "automation_runs", "automation_mail_actions", "automation_daily",
     "automation_inboxes", "automation_effects", "automation_holds", "automation_guard_holds", "automation_turn_answers",
-    "redesign_migrations",
     # Task cap counts are today's sends; the caps themselves are kept.
     "task_cap_log",
     # A hard delete's queue of bytes still to remove from storage: the copy never deletes from the source's stores.
@@ -128,7 +127,7 @@ KEEP = frozenset((
     "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "market_turn_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
     "meeting_items", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
     "message_links_seen", "notes", "pages", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
-    "recording_source_refs", "recording_transcripts", "org_rules", "org_rule_misses", "redesign_migrated", "redesign_migration_accepts", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_reads", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners",
+    "recording_source_refs", "recording_transcripts", "org_rules", "org_rule_misses", "redesign_migrated", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_reads", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_events", "strategy_versions",
     "system_runs", "tags", "task_assets",

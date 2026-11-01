@@ -977,7 +977,10 @@ DROP TRIGGER IF EXISTS strategy_actions_to_old_insert;
 DROP TRIGGER IF EXISTS strategy_actions_to_old_update;
 DROP TRIGGER IF EXISTS strategy_actions_to_old_delete;
 DROP TABLE IF EXISTS ceo_merges;
-DROP TABLE IF EXISTS ceo_actions;"""]
+DROP TABLE IF EXISTS ceo_actions;""",
+              # user_version 74: the redesign's cutover record table (its state is in registry_metadata) and the
+              # accepts table nothing writes. redesign_migrated, which holds() reads, stays.
+              "DROP TABLE IF EXISTS redesign_migrations;\nDROP TABLE IF EXISTS redesign_migration_accepts;"]
 
 
 class Refused(Exception):

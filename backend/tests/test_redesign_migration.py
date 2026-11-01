@@ -6,6 +6,7 @@ import json
 import pytest
 
 from backend import automation_flow as F
+from backend import hubdb as H
 from backend import redesign_migration as M
 from backend import rules as R
 from backend.tests.test_api import api, get, post  # noqa: F401
@@ -334,3 +335,30 @@ def test_a_routine_longer_than_an_automation_takes_moves_off_with_its_text_cut(a
     assert mark["outcome"] == "converted" and "cut to fit" in mark["why"]
     flow = json.loads(rows(api, "SELECT flow_json FROM automations WHERE id=?", (mark["automation"],))[0]["flow_json"])
     assert flow["enabled"] is False and len(flow["steps"][0]["prompt"]) == F.MAX_PROMPT
+
+
+def test_the_upgrade_drops_the_cutover_record_and_accepts_tables_and_holds_still_reads_the_marks(tmp_path):
+    """An install from before the drop has the record and accepts tables. The upgrade removes them; `redesign_migrated`
+    stays, and `holds` still sees a routine the cutover converted (so it is never reseeded and fires twice)."""
+    conn = H.connect(tmp_path / "hub.db")
+    try:
+        M.ensure(conn)                       # the store's startup: the marks table the cutover writes
+        conn.execute("CREATE TABLE redesign_migrations(id TEXT PRIMARY KEY, state TEXT NOT NULL, actor TEXT NOT NULL, "
+                     "created TEXT NOT NULL, expires TEXT NOT NULL, finished TEXT, restored_at TEXT, snapshot_json TEXT, "
+                     "result_json TEXT)")
+        conn.execute("INSERT INTO redesign_migrations(id, state, actor, created, expires) VALUES('mig_1','converted',"
+                     "'human:ana',?,?)", (H.now(), H.now()))
+        conn.execute("CREATE TABLE redesign_migration_accepts(flag TEXT PRIMARY KEY, accepted_by TEXT NOT NULL, "
+                     "at TEXT NOT NULL)")
+        conn.execute("INSERT INTO redesign_migrated(kind, id, migration, automation) VALUES('routine','sch_1','mig_1','a1')")
+        conn.execute(f"PRAGMA user_version={len(H.MIGRATIONS) - 1}")
+        conn.commit()
+        H.migrate(conn)
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert not {"redesign_migrations", "redesign_migration_accepts"} & tables
+        assert "redesign_migrated" in tables
+        assert M.holds(conn, "routine", "sch_1") is True
+        assert M.holds(conn, "routine", "sch_2") is False
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(H.MIGRATIONS)
+    finally:
+        conn.close()

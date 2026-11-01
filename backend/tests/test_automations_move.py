@@ -45,7 +45,6 @@ def old_install(tmp_path, *, routines=True):
             c.execute("INSERT INTO usage_limits(bot, hourly_usd) VALUES('coo', 0.35)")
         c.execute("DELETE FROM registry_metadata WHERE key=?", (M.CUTOVER,))
         c.execute("DELETE FROM redesign_migrated")
-        c.execute("DELETE FROM redesign_migrations")
     close(store)
     return settings
 
