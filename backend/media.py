@@ -603,8 +603,11 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         """Ask ingest's preflight of a task question (backend/ask_ingest.py), outside the write."""
         from . import ask_ingest
         question = body.question.strip()
-        return ask_ingest.preflight(store, app.state.judge, who, body.on, body.title or question,
-                                    "\n\n".join(filter(None, (question, body.why, body.body))), kind="task_question")
+        options = body.options or [M.QuestionChoice(label="Yes"), M.QuestionChoice(label="No")]
+        asked = [{"question": question, "why": body.why,
+                  "options": [o.model_dump(include={"label", "description", "then", "recommended"}) for o in options]}]
+        return ask_ingest.preflight(store, app.state.judge, who, body.on, body.title or question, body.body or "",
+                                    kind="task_question", asked=asked)
 
     def question_replay(body, option_files, stored, review_seal=None):
         """What Send anyway needs to ask a held question again: the request without its option files' bytes (they are

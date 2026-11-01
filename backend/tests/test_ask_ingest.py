@@ -1142,3 +1142,90 @@ def test_a_settings_read_that_always_fails_still_lands_a_failed_open_row(gate, m
     assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, "error")
     assert item["ref"] == out["task"]["id"] and item["call_id"] is None
     assert not calls(api) and not model.calls
+
+
+# ---- what the model reads for a structured question (Dev 724) --------------------------------------------------
+
+DATES = [{"id": "date", "header": "Date", "question": "Which launch date do you want?",
+          "why": "It sets the venue deposit.",
+          "options": [{"label": "Nov 3", "then": "Book the venue for Nov 3", "description": "The earlier date"},
+                      {"label": "Nov 10", "then": "Book the venue for Nov 10", "recommended": True}]}]
+
+
+def model_text(model):
+    return model.calls[-1]["state"]["item"]["text"]
+
+
+def test_a_structured_task_question_carries_its_lines_and_the_task_body(gate):
+    api, model, token = gate
+    r = api.post("/api/v2/task-questions", headers=headers(token), json={
+        "on": "human:ben", "question": "Which launch date do you want?", "why": "It sets the venue deposit.",
+        "body": "Dates and venue.",
+        "options": [{"label": "Nov 3", "then": "Book Nov 3"}, {"label": "Nov 10", "then": "Book Nov 10", "recommended": True}]})
+    assert r.status_code == 200, r.text
+    assert model_text(model) == (
+        "Question: Which launch date do you want?\n"
+        "Why: It sets the venue deposit.\n"
+        "Option: Nov 3 (then: Book Nov 3)\n"
+        "Option: Nov 10 (then: Book Nov 10)\n"
+        "Recommended: Nov 10\n\n"
+        "Dates and venue.")
+    assert model.calls[-1]["state"]["item"]["title"] == "Which launch date do you want?"
+
+
+def test_a_structured_comment_ask_carries_its_lines(gate):
+    api, model, token = gate
+    tid = own_task(api, token)["id"]
+    r = api.post(f"/api/v2/tasks/{tid}/comments", headers=headers(token),
+                 json={"text": "Dates and venue.", "ask": {"questions": DATES, "who": "ben"}})
+    assert r.status_code == 200, r.text
+    assert model_text(model).startswith("Question: Which launch date do you want?\nWhy: It sets the venue deposit.\n")
+    assert model_text(model).endswith("Recommended: Nov 10\n\nDates and venue.")
+
+
+def test_a_long_task_body_is_cut_and_the_lines_and_options_survive(gate):
+    api, model, token = gate
+    r = api.post("/api/v2/task-questions", headers=headers(token), json={
+        "on": "human:ben", "question": "Which launch date do you want?", "why": "It sets the venue deposit.",
+        "body": "Long context. " * 300,
+        "options": [{"label": "Nov 3", "then": "Book Nov 3"}, {"label": "Nov 10", "then": "Book Nov 10", "recommended": True}]})
+    assert r.status_code == 200, r.text
+    text = model_text(model)
+    assert len(text) == A.MAX_TEXT
+    assert text.startswith("Question: Which launch date do you want?\nWhy: It sets the venue deposit.\n"
+                           "Option: Nov 3 (then: Book Nov 3)\nOption: Nov 10 (then: Book Nov 10)\n"
+                           "Recommended: Nov 10\n\nLong context.")
+
+
+def test_an_item_without_structured_questions_is_judged_as_before(gate):
+    api, model, token = gate
+    text = "Which venue do you want? " * 100
+    r = api.post("/api/v2/messages", headers=headers(token), json={"to": "ben", "text": text, "kind": "ask"})
+    assert r.status_code == 200, r.text
+    assert model.calls[-1]["state"]["item"]["text"] == text[:A.MAX_TEXT]
+    assert A.structured_text(None, "plain") == "plain" and A.structured_text([], "plain") == "plain"
+
+
+def test_a_structured_question_with_lines_longer_than_the_limit_keeps_its_options(gate):
+    long_options = [{"label": f"Option {n}", "then": "T" * 120, "recommended": n == 6} for n in range(1, 7)]
+    text = A.structured_text([{"question": "Q" * 300, "why": "W" * 200, "options": long_options}] * 2, "Body")
+    assert len(text) <= A.MAX_TEXT
+    for n in range(1, 7):
+        assert f"Option: Option {n}" in text
+    assert "Recommended: Option 6" in text and text.count("Recommended:") == 2
+
+
+def test_a_replayed_structured_question_judges_the_same_lines(gate):
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "rehearsal", "budget": 10, "chores_budget": 5, "criteria": []})
+    tid = own_task(api, token)["id"]
+    r = api.post(f"/api/v2/tasks/{tid}/comments", headers=headers(token),
+                 json={"text": "Tell me which date.", "ask": {"questions": DATES, "who": "ben"}})
+    assert r.status_code == 200, r.text
+    day = H.now()[:10]
+    out = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": day}, headers=headers("ben-test"))
+    assert out.status_code == 200, out.text
+    assert model_text(model).endswith("Recommended: Nov 10\n\nTell me which date.")
+    assert model.calls[-1]["label"] and '"mode": "replay"' in str(calls(api)[-1])
+    assert all("Recommended" not in str(row) and "Tell me" not in str(row) for row in calls(api))
