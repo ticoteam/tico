@@ -437,7 +437,12 @@ error that says the session grew too large to send (*too many total text bytes*,
 thread compact its session first; if that run fails the same way, the next one starts in a fresh provider session, as Clear does
 ([Sessions](sessions.md#checkpoints-and-resume)).
 
-**Run time limits.** A run cut by its configured time limit continues on the same task and provider session.
+**Run time limits.** Five minutes before its configured time limit, a running turn that supports in-turn input
+receives one warning to stop at a safe point, commit or stash work, push what is ready and leave a hand-off note.
+Limits under ten minutes warn halfway through; the warning states the actual time left and starts no new run.
+This uses Codex's native input and Claude Code's input on supported versions (2.1.296 or later).
+Other runtimes keep the existing cut without a warning. A cut retains the last reply text and any task hand-off.
+A run cut by its configured time limit continues on the same task and provider session.
 The task says “Reached its 60-minute run limit; continuing” with its actual limit, and the continuation receives
 any hand-off note left on the task. Local edits, shell commands and branch pushes do not require review.
 A named merge, publish, send, payment or consumed approval still holds the run for BotOps to check.

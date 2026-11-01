@@ -22,6 +22,26 @@ def listed(api, aid):
     return next(r for r in get(api, 'bots/ops/turns') if r['id'] == aid)
 
 
+def test_timeout_keeps_last_text_and_the_existing_task_handoff(api):
+    machine, _, a = start(api)
+    task_id = a['task']['id']
+    note = 'Committed and pushed; next: review the warning change.'
+    # The bot left this hand-off before the deadline. Completion must retain it.
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE tasks SET note=? WHERE id=?', (note, task_id))
+    reason = 'Timeout: max_run_minutes (60 minutes)'
+    post(api, f"attempts/{a['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'message', 'payload': {'text': 'Work saved; review remains.'}},
+        {'seq': 2, 'kind': 'diagnostic', 'payload': {'end_reason': reason}}]}, machine['token'])
+    post(api, f"attempts/{a['id']}/complete", {
+        'outcome': 'interrupted', 'text': 'Work saved; review remains.', 'last_seq': 2}, machine['token'])
+    row = listed(api, a['id'])
+    assert row['end_reason'] == reason
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT final_text FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'Work saved; review remains.'
+    assert get(api, f'tasks/{task_id}')['task']['note'] == note
+
+
 @pytest.mark.parametrize(('cause', 'expected'), [
     ({'error': 'killed', 'exit_code': -15, 'process_exit': True}, 'Process exited (signal 15)'),
     ({'error': 'out of memory', 'exit_code': -9, 'process_exit': True}, 'Process exited (signal 9)'),

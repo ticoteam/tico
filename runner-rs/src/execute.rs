@@ -941,9 +941,10 @@ impl Runner {
         let _ = self.state.append(aid, "diagnostic", &json!({"text": text}));
     }
 
-    fn run_deadline(&self, aid: &str, config: &Value, relay: Option<&crate::gateway_relay::Relay>) -> Result<(Instant, String), Fail> {
+    fn run_deadline(&self, aid: &str, config: &Value, relay: Option<&crate::gateway_relay::Relay>) -> Result<(Instant, String, Instant), Fail> {
         let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
-        let requested = run_clock() + Duration::from_secs_f64(60.0 * minutes);
+        let started = run_clock();
+        let requested = started + Duration::from_secs_f64(60.0 * minutes);
         let limit = relay.map_or(requested, |r| r.limit(requested));
         let name = if limit < requested { "Gateway credential lifetime (24 hours)".into() } else { format!("max_run_minutes ({minutes} minutes)") };
         if limit < requested {
@@ -953,7 +954,7 @@ impl Runner {
             let _ = self.state.append(aid, "diagnostic", &json!({"end_reason": format!("Timeout: {name}")}));
             return Err(Fail::runtime("Tico Gateway run time limit reached; start a new attempt to continue with its current key"));
         }
-        Ok((limit, name))
+        Ok((limit, name, crate::drive::warning_at(started, limit)))
     }
 
     /// publish_history with the turn's token, logged when it changes (service.py publish).
@@ -1207,6 +1208,8 @@ impl Runner {
         let key = session_key(&attempt);
         // Goal continuations count per thread: one task's stuck goal does not pause another's.
         let mut goal = GoalRun {
+            deadline_warned: false,
+            cut: None,
             chat_goal: attempt["chat_goal"].is_object().then(|| attempt["chat_goal"].clone()),
             controlled: false,
             failure: None,
@@ -1491,7 +1494,7 @@ impl Runner {
             let binding_changed = source_resume.as_ref().is_some_and(|s|
                 s.profile != selected.as_ref().map_or("", |p| p.name.as_str()) || s.epoch != clear_epoch(&attempt, &key));
             let previous = if side_run || binding_changed || fresh_chat { None } else { self.state.session(&bot, &conv, &session_runtime)? };
-            let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
+            let (limit, limit_name, warning_at) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
             prepared = true;
             if busy.is_some() || held.is_some() {
                 return Ok(()); // the fallback takes the turn below; this harness never starts
@@ -1747,7 +1750,7 @@ impl Runner {
                 }
             }
             turn = Some(t.clone());
-            let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, login: yields(&attempt, &login_held), fresh: fresh.as_ref() };
+            let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, warning_at, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, login: yields(&attempt, &login_held), fresh: fresh.as_ref() };
             drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
             turn = Some(drove.turn.clone());
             h.compaction_refresh(&th, None);
@@ -1807,6 +1810,7 @@ impl Runner {
             unavailable = true;
         }
 
+        if let Some(cut) = goal.cut.take() { drove = cut; }
         if let Err(e) = &ran {
             if self.drain.returning(&aid) || e.text == crate::drain::WAITING {
                 unavailable = false;
@@ -1949,7 +1953,7 @@ impl Runner {
                 if let Some(c) = &capture {
                     h.set_capture(c);
                 }
-                let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
+                let (limit, limit_name, warning_at) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
                 h.start().await?;
                 let settings = Settings {
                     identity: turn_identity,
@@ -2025,6 +2029,7 @@ impl Runner {
                     thread: &th,
                     effort: hop.reasoning_effort.as_deref(),
                     limit,
+                    warning_at,
                     flags: &flags,
                     wake: &wake,
                     redactor: redactor.as_ref(),
@@ -2073,6 +2078,7 @@ impl Runner {
                 log(&format!("Tico runner: {bot}: {why}; ran the turn on {}{how}", hop.harness));
                 Ok(())
             }.await;
+            if let Some(cut) = goal.cut.take() { drove = cut; }
             if let Err(e) = hopped {
                 if self.drain.returning(&aid) {
                     // The regular settlement below saves and hands the continuation back.
@@ -3325,6 +3331,110 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
+    #[test]
+    fn run_deadline_warns_at_fifty_five_or_half_of_a_short_limit() {
+        let _controls = RunControls;
+        let (runner, dir) = runner_at("http://127.0.0.1:9", "warning-schedule");
+        let now = Instant::now();
+        for (config, minutes, at) in [(json!({}), 60, 55), (json!({"max_run_minutes": 6}), 6, 3),
+                                      (json!({"max_run_minutes": "10"}), 10, 5)] {
+            RUN_CLOCK.with(|clock| *clock.borrow_mut() = vec![now, now].into());
+            let (limit, name, warning) = runner.run_deadline("warning", &config, None).unwrap();
+            assert_eq!(limit, now + Duration::from_secs(minutes * 60));
+            assert_eq!(warning, now + Duration::from_secs(at * 60));
+            assert_eq!(name, format!("max_run_minutes ({minutes} minutes)"));
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    async fn deadline_warning_native_turn(safe_stop: bool) {
+        use std::os::unix::fs::PermissionsExt;
+        let (url, seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "deadline-warning");
+        runner.state.record(&json!({"id": "a-warning"})).unwrap();
+        let program = dir.join("codex");
+        std::fs::write(&program, r#"#!/usr/bin/env python3
+import json, os, pathlib, sys
+def say(m): print(json.dumps(m), flush=True)
+def event(method, params): say({"method": method, "params": params})
+for line in sys.stdin:
+    msg = json.loads(line)
+    method, p = msg.get("method"), msg.get("params") or {}
+    with open(os.environ["FAKE_CALLS"], "a") as f: f.write(json.dumps(msg) + "\n")
+    if method == "turn/start":
+        say({"id": msg["id"], "result": {"turn": {"id": "t1"}}})
+        event("turn/started", {"threadId": "th1", "turn": {"id": "t1"}})
+    elif method == "turn/steer":
+        say({"id": msg["id"], "result": {"turnId": "t1"}})
+        event("item/completed", {"threadId": "th1", "turnId": "t1", "item": {"type": "agentMessage", "id": "m1", "text": "First progress."}})
+        event("item/completed", {"threadId": "th1", "turnId": "t1", "item": {"type": "agentMessage", "id": "m2", "text": "Work saved; hand-off is on the task.", "phase": "final_answer"}})
+        if os.environ["SAFE_STOP"] == "yes":
+            pathlib.Path(os.environ["FAKE_NOTE"]).write_text("Committed and pushed; next: review the change.")
+            event("turn/completed", {"threadId": "th1", "turn": {"id": "t1", "status": "completed"}})
+    elif "id" in msg:
+        say({"id": msg["id"], "result": {}})
+"#).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let calls = dir.join("calls");
+        let note = dir.join("task-note");
+        let env: Env = [("PATH".into(), format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default())),
+                        ("FAKE_CALLS".into(), calls.display().to_string()), ("FAKE_NOTE".into(), note.display().to_string()),
+                        ("SAFE_STOP".into(), if safe_stop { "yes" } else { "no" }.into())].into_iter().collect();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = Host::Codex(crate::hosts::codex::CodexHost::on_home(env, tx, None));
+        host.start().await.unwrap();
+        let turn = host.start_turn("th1", "Work on the task", None).await.unwrap();
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
+                            done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
+        let wake = Notify::new();
+        let now = Instant::now();
+        let limit = now + if safe_stop { Duration::from_secs(300) } else { Duration::from_secs(1) };
+        let d = Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-warning", host: &host, thread: "th1", effort: None,
+                        limit, warning_at: now, flags: &flags, wake: &wake, redactor: None, runtime: "codex", bot: "ops", session: "th1", login: None, fresh: None };
+        let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "subscription" };
+        let mut goal = GoalRun { deadline_warned: false, cut: None, chat_goal: None, controlled: false, failure: None,
+                                 paused: None, tries_key: ("ops".into(), "task-warning".into()) };
+        let result = tokio::time::timeout(Duration::from_secs(10), runner.drive(&d, &mut rx, turn, &mut segment,
+                                             &mut BTreeMap::new(), &mut None, &mut goal)).await.unwrap();
+        if safe_stop {
+            let drove = result.unwrap();
+            assert_eq!(drove.outcome, "completed");
+            assert!(!drove.yielded);
+            assert_eq!(drove.reply, "Work saved; hand-off is on the task.");
+            assert!(std::fs::read_to_string(note).unwrap().contains("next: review"));
+            assert!(goal.failure.is_none());
+        } else {
+            assert_eq!(result.err().unwrap().text, "Timeout: max_run_minutes (60 minutes)");
+            let cut = goal.cut.take().expect("the last text survives the timeout");
+            assert_eq!(cut.outcome, "interrupted");
+            assert_eq!(cut.reply, "Work saved; hand-off is on the task.");
+            assert!(!cut.yielded);
+        }
+        assert!(goal.deadline_warned);
+        let calls: Vec<Value> = std::fs::read_to_string(calls).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(calls.iter().filter(|c| c["method"] == "turn/start").count(), 1, "the warning starts no new turn");
+        let steers: Vec<_> = calls.iter().filter(|c| c["method"] == "turn/steer").collect();
+        assert_eq!(steers.len(), 1, "one warning despite multiple event batches");
+        let text = text_of(&steers[0]["params"]["input"][0]["text"]);
+        if safe_stop { assert!(text.starts_with("You have 5 minutes left"), "{text}"); }
+        assert!(text.contains("commit or stash") && text.contains("push what is ready") && text.contains("hand-off note on the task"));
+        // Only the run's normal event/input traffic reaches the hub; no warning message creates another job.
+        assert!(!seen.lock().unwrap().iter().any(|(_, path, _)| path.ends_with("/messages")));
+        host.stop().await;
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn deadline_warning_safe_stop_completes_in_the_running_turn() {
+        deadline_warning_native_turn(true).await;
+    }
+
+    #[tokio::test]
+    async fn deadline_warning_ignored_keeps_timeout_and_last_text() {
+        deadline_warning_native_turn(false).await;
+    }
+
     #[tokio::test]
     async fn an_expired_gateway_primary_is_refused_before_its_harness_starts() {
         expired_gateway_harness_is_not_started(false).await;
@@ -3386,10 +3496,10 @@ for line in sys.stdin:
         let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
-        let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
+        let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, warning_at: Instant::now() + Duration::from_secs(30), limit: Instant::now() + Duration::from_secs(60), flags: &flags,
                                       wake: &wake, redactor: None, runtime: "codex", bot: "ops", session: "th1", login: Some(held.cap()), fresh: None };
         let mut segment = crate::drive::Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "subscription" };
-        let mut goal = crate::drive::GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "task-7".into()) };
+        let mut goal = crate::drive::GoalRun { deadline_warned: false, cut: None, chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "task-7".into()) };
         let drove = tokio::time::timeout(Duration::from_secs(20), runner.drive(&d, &mut rx, t, &mut segment, &mut BTreeMap::new(), &mut None, &mut goal))
             .await.expect("the turn ended at its safe point").unwrap();
         assert!(drove.yielded && drove.outcome == "completed", "{}", drove.outcome);
@@ -3462,10 +3572,10 @@ for line in sys.stdin:
         let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
-        let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
+        let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, warning_at: Instant::now() + Duration::from_secs(30), limit: Instant::now() + Duration::from_secs(60), flags: &flags,
                                       wake: &wake, redactor: None, runtime: "codex", bot: "ops", session: "th1", login: Some(held.cap()), fresh: None };
         let mut segment = crate::drive::Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "subscription" };
-        let mut goal = crate::drive::GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "task-7".into()) };
+        let mut goal = crate::drive::GoalRun { deadline_warned: false, cut: None, chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "task-7".into()) };
         let drove = tokio::time::timeout(Duration::from_secs(20), runner.drive(&d, &mut rx, t, &mut segment, &mut BTreeMap::new(), &mut None, &mut goal))
             .await.expect("the turn was interrupted at the end of its grace").unwrap();
         // Paused, not stopped or failed: it goes back in the queue and continues after the waiter.
@@ -4505,10 +4615,10 @@ for line in sys.stdin:
         let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
-        let d = Drive { aid: "a-cap", host: &host, thread: &th, effort: None, limit: Instant::now() + Duration::from_secs(60), limit_name: "synthetic drain", flags: &flags,
+        let d = Drive { aid: "a-cap", host: &host, thread: &th, effort: None, warning_at: Instant::now() + Duration::from_secs(30), limit: Instant::now() + Duration::from_secs(60), limit_name: "synthetic drain", flags: &flags,
                         wake: &wake, redactor: None, runtime: "pi", bot: "ops", session: "c-cap", login: None, fresh: None };
         let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
-        let mut goal = GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "c-cap".into()) };
+        let mut goal = GoalRun { deadline_warned: false, cut: None, chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "c-cap".into()) };
         let mut carried = BTreeMap::new();
         let mut rejected = None;
         let work = runner.drive(&d, &mut rx, t, &mut segment, &mut carried, &mut rejected, &mut goal);
