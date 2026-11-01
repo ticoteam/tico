@@ -106,7 +106,9 @@ def recorder_token(config, room, identity, *, now=None, ttl=TOKEN_TTL_SECONDS):
 
 def admin_token(config, room="", *, now=None):
     """A short-lived token for LiveKit's server API: list and administer one room (or all, when `room` is empty)."""
-    video = {"roomList": True, "roomAdmin": True, "room": room}
+    # DeleteRoom is gated on roomCreate, not roomAdmin: without it LiveKit answers 401 and the room stays open.
+    # The token is minted on the server, sent only to LiveKit's API and lives a minute.
+    video = {"roomList": True, "roomAdmin": True, "roomCreate": True, "room": room}
     return sign(_claims(config, "tico-server", "", video, 60, now), config.api_secret)
 
 

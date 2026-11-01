@@ -77,6 +77,7 @@ def test_the_recorder_hears_the_room_and_cannot_publish():
 def test_the_server_api_token_is_admin_for_one_room_and_short_lived():
     claims = decode(media.admin_token(CONFIG, "thread-acme-1", now=1000))
     assert claims["video"]["roomAdmin"] is True and claims["video"]["roomList"] is True
+    assert claims["video"]["roomCreate"] is True
     assert claims["video"]["room"] == "thread-acme-1"
     assert claims["exp"] - 1000 == 60
 
@@ -110,6 +111,21 @@ def test_removing_a_participant_calls_the_room_service_with_the_rooms_admin_toke
     assert sent["body"] == {"room": "thread-acme-1", "identity": "human:ben"}
     claims = decode(sent["auth"].split(" ", 1)[1])
     assert claims["video"]["room"] == "thread-acme-1" and claims["video"]["roomAdmin"] is True
+
+
+def test_ending_a_room_deletes_it_with_a_token_allowed_to_create_and_delete_rooms(monkeypatch):
+    sent = {}
+
+    def fake_urlopen(request, timeout=None):
+        sent["url"] = request.full_url
+        sent["auth"] = request.get_header("Authorization")
+        return _Answer(b"{}")
+
+    monkeypatch.setattr(media.urllib.request, "urlopen", fake_urlopen)
+    media.LiveKitMedia(CONFIG).end_room("thread-acme-1")
+    assert sent["url"] == "http://livekit:7880/twirp/livekit.RoomService/DeleteRoom"
+    claims = decode(sent["auth"].split(" ", 1)[1])
+    assert claims["video"]["roomCreate"] is True and claims["video"]["room"] == "thread-acme-1"
 
 
 def test_removing_someone_already_gone_is_done_and_other_refusals_are_not(monkeypatch):
