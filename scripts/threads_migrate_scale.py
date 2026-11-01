@@ -237,6 +237,10 @@ def start_then_kill(args):
         print(f"killed mid-start after {args.kill_after}s (pid {child.pid})", flush=True)
     else:
         print(f"child finished before the kill ({child.returncode})", flush=True)
+    conn = sqlite3.connect(str(args.db), timeout=0)
+    recorded = conn.execute("SELECT COUNT(*) FROM registry_metadata WHERE key='threads-migration'").fetchone()[0]
+    conn.close()
+    print(f"migration recorded after the kill: {bool(recorded)}", flush=True)
 
 
 # ----------------------------------------------------------------------------- compare
