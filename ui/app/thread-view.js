@@ -142,7 +142,8 @@ function thvMerge(view, fresh, tid) {
   const had = new Map(view.messages.map(m => [m.id, m]));
   const out = fresh.map(f => {
     const e = had.get(f.id);
-    if (!e || (Number(e.revision) || 0) <= (Number(f.revision) || 0) && !(e.deleted && !f.deleted)) return f;
+    // A row the server now hides or has deleted stays so; otherwise the later revision wins.
+    if (!e || f.hidden || f.deleted || (Number(e.revision) || 0) <= (Number(f.revision) || 0) && !e.deleted) return f;
     return {...f, ...e, depth: f.depth, sub_thread: f.sub_thread || e.sub_thread};
   });
   const ids = new Set(out.map(m => m.id)), top = thvMaxSeq(out.filter(m => (m.thread_id || tid) === tid));

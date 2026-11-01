@@ -9,7 +9,8 @@ function pageThread(id) {
   const main = $('#main'), focus = new URLSearchParams(S.route.split('?')[1] || '').get('m') || '';
   main.classList.add('chat-layout', 'thread-layout');
   if (THREAD_PAGE?.id === id && THREAD_PAGE.host.isConnected) {
-    if (focus && THREAD_PAGE.view.state !== 'loading') void thvFocus(THREAD_PAGE.view, focus);
+    if (focus && THREAD_PAGE.view.state === 'loading') THREAD_PAGE.view.opts.focus = focus;
+    else if (focus) void thvFocus(THREAD_PAGE.view, focus);
     return;
   }
   threadUnmount(THREAD_PAGE?.view);
