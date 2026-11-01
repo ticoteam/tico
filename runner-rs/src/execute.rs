@@ -2372,6 +2372,17 @@ impl Runner {
         let active = self.active.lock().unwrap().len();
         let completion = crate::perf::with_snapshot(Value::Object(completion), active).await.as_object().unwrap().clone();
         mark("finished", &aid);
+        // A nightly memory tidy pass commits and pushes nothing, whatever ended its turn: what it changed in its
+        // checkout is discarded here, before the turn settles, and the run log says what it was (criterion 24).
+        if crate::continuity::memory_pass(&attempt["config"]) {
+            if let Some(p) = place.as_ref() {
+                match self.discard_pass_place(p, &env).await {
+                    Ok(changed) if changed.is_empty() => {}
+                    Ok(changed) => self.diagnose(&aid, &format!("Nightly memory tidy: this pass changed {} in its checkout; those changes were discarded and nothing was committed or pushed.", changed.join(", "))),
+                    Err(problem) => self.diagnose(&aid, &format!("Nightly memory tidy: could not discard this pass's checkout ({problem}); nothing was pushed.")),
+                }
+            }
+        }
         let settled: Result<(), String> = async {
             let id = aid.clone();
             let completion = self.state.off(move |s| s.finish(&id, &completion)).await?;
@@ -2404,18 +2415,12 @@ impl Runner {
                     let repository = crate::appdriver::delivery(&config).is_none();
                     // A private meeting's copy is never committed, pushed, published or reported (sessions.rs).
                     if let Some(p) = place.as_ref().filter(|p| drove.outcome == "completed" && host.is_some() && repository && !p.private) {
-                        if !committed_secret && p.session_path.is_none() {
+                        if !committed_secret && p.session_path.is_none() && !crate::continuity::memory_pass(&attempt["config"]) {
                             self.publish(&bot, &execution_path, &env).await;
                         }
                         let closed = p.session_path.is_some() && self.task_closed(&attempt).await;
+                        // A nightly memory tidy pass was discarded above and never pushes (criterion 24).
                         let pushed = if crate::continuity::memory_pass(&attempt["config"]) {
-                            // A nightly memory tidy pass commits and pushes nothing: its checkout is discarded, and the
-                            // run log says what it had changed (criterion 24).
-                            match self.discard_pass_place(p, &env).await {
-                                Ok(changed) if changed.is_empty() => {}
-                                Ok(changed) => self.diagnose(&aid, &format!("Nightly memory tidy: this pass changed {} in its checkout; those changes were discarded and nothing was committed or pushed.", changed.join(", "))),
-                                Err(problem) => self.diagnose(&aid, &format!("Nightly memory tidy: could not discard this pass's checkout ({problem}); nothing was pushed.")),
-                            }
                             false
                         } else {
                             self.finish_place(p, &attempt, &env, &skipped, committed_secret).await
@@ -4591,6 +4596,39 @@ for line in sys.stdin:
             assert!(runner.state.pending("a-start-wait").unwrap().is_empty(), "handback must flush its history");
             std::fs::remove_dir_all(dir).ok();
         }
+    }
+
+    #[tokio::test]
+    async fn a_memory_pass_without_a_checkout_of_its_own_is_refused_and_an_ordinary_task_still_falls_back_to_the_bots_checkout() {
+        let (url, _seen, server) = recording_server().await;
+        let (runner, dir) = drain_runner_on(&url, 300).await;
+        let env = crate::env::Env::new();
+        let bot = format!("pass-{}", uuid::Uuid::new_v4().simple());
+        let config = json!({"runtime": "pi", "harness": "pi", "model": "synthetic"});
+        // A folder that is no git checkout: its task worktree cannot be made, so the placement has no checkout of its own.
+        let main = crate::sessions::local_path(&runner.config, &bot, &config);
+        std::fs::create_dir_all(&main).unwrap();
+        for pass in [true, false] {
+            let mut config = config.clone();
+            if pass {
+                config["memory_pass"] = json!(true);
+            }
+            let mut attempt = json!({"id": format!("a-pass-{pass}"), "bot": bot, "token": "synthetic", "lease_seconds": 120,
+                                     "lane": "task:t-pass", "task": {"id": "t-pass"},
+                                     "conversation": {"id": "c1"}, "message": {"refs": {}}, "config": config});
+            let lost = AtomicBool::new(false);
+            let mut place = runner.enter_lanes(&attempt, &lost).await.unwrap();
+            let placed = runner.place_turn(&mut place, &mut attempt, &env, &lost).await;
+            if pass {
+                assert!(placed.unwrap_err().contains("no checkout of its own"), "a pass must not run in the bot's checkout");
+            } else {
+                assert!(placed.is_ok(), "an ordinary task keeps its fallback: {placed:?}");
+                assert!(place.session_path.is_none(), "an ordinary task runs in the bot's checkout as before");
+            }
+            drop(place);
+        }
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
     }
 
     async fn placement_wait_survives_start_window(kind: &str) {

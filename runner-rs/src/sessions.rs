@@ -1098,6 +1098,10 @@ impl Runner {
                     (tracked, problem) = self.task_worktree(place, &session, attempt, env).await?;
                 }
             }
+            if !problem.is_empty() && crate::continuity::memory_pass(&attempt["config"]) {
+                // A memory pass never runs in the bot's own checkout: its edits there would reach main (criterion 24).
+                return Err(format!("the nightly memory tidy pass has no checkout of its own ({problem}), so it did not run"));
+            }
             if !problem.is_empty() {
                 // Without a worktree of its own the task's turn waits for the main checkout like any other.
                 crate::util::diagnostic(&format!("Tico runner: {}: task {} runs in the bot's checkout ({problem})", place.bot, place.task));
@@ -1116,6 +1120,9 @@ impl Runner {
                 // Claude finds a session to resume by its working directory: the worktree keeps threads of its own.
                 suffix = ":worktree";
             }
+        }
+        if crate::continuity::memory_pass(&attempt["config"]) && place.session_path.is_none() {
+            return Err("the nightly memory tidy pass has no checkout of its own, so it did not run".into());
         }
         let dirs = resolve_rules(&self.config.projects_dir(), &attempt["worktrees"]);
         let (rules, digest) = rules_block(&dirs);

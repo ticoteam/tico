@@ -96,3 +96,17 @@ def test_a_pass_with_no_memory_commit_since_its_last_pass_is_a_free_skip(api):
                    "2026-11-01T21:00:00Z"))
     with api.app.state.store.read() as c:
         assert memory_history.changed_since(c, "ops", since, [parent["id"]]) is True, "an ordinary turn's commit counts"
+
+
+def queued_for(api, bot):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT count(*) FROM jobs WHERE bot=? AND state='queued'", (bot,)).fetchone()[0]
+
+
+def test_a_skipped_pass_wakes_nothing_on_its_parent(api):
+    machine, parent, sub = pass_filed(api)
+    check = claim(api, machine)
+    assert check["task"]["id"] == sub["id"]
+    before = queued_for(api, "ops")
+    out_of_quota(api, machine, check)
+    assert queued_for(api, "ops") == before, "a skipped pass adds no job for its parent (or anything else)"

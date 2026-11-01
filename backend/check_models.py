@@ -228,7 +228,7 @@ def move_on(c, settings, bot, task_id, check, runner_id):
 def skip_pass(c, task_id, check):
     """A nightly memory tidy pass whose named model cannot run (its login is out of quota) ends skipped with the reason
     on its own subtask: declined, so no parent wake and no retry. Nothing else runs for it: no other model is named."""
-    H.task_update(c, H.KEEPER, task_id, status="declined", note=PASS_SKIPPED, quiet=True)
+    H.task_update(c, H.KEEPER, task_id, status="declined", note=PASS_SKIPPED, quiet=True, parent_wake=False)
     H._task_event(c, task_id, H.KEEPER, "memory_pass", f"{check['runtime']}:{check['model']}", None, PASS_SKIPPED)
 
 
