@@ -1252,6 +1252,7 @@ class Store:
                 H.add_column(c, "runners", "memory_hold", "INTEGER NOT NULL DEFAULT 0")
                 # The newest sample's time, kept with the computer: sample retention drops old rows, not this mark.
                 H.add_column(c, "runners", "last_sampled_at", "INTEGER")
+                _performance.backfill_last_sampled(c)
                 # When a computer said it is restarting after a person pressed Restart, from its heartbeat; NULL once
                 # a heartbeat no longer says so (backend/health.py `restarting`).
                 H.add_column(c, "runners", "restart_since", "TEXT")

@@ -599,9 +599,33 @@ def test_a_computer_that_reported_then_went_silent_past_retention_is_not_reporti
     import time
     computer = bot_waiting_for_finance(api)
     memory(api, computer, .3)
+    with api.app.state.store.read() as c:
+        marked = c.execute('SELECT last_sampled_at FROM runners WHERE id=?', (computer['runner_id'],)).fetchone()[0]
+    assert marked == int(time.time()) // 60 * 60
     with api.app.state.store.transaction() as c:
         c.execute('DELETE FROM runner_load_samples WHERE runner_id=?', (computer['runner_id'],))
-        c.execute('UPDATE runners SET last_sampled_at=? WHERE id=?', (int(time.time()) - 200000, computer['runner_id']))
+        c.execute('UPDATE runners SET last_sampled_at=last_sampled_at-200000 WHERE id=?', (computer['runner_id'],))
+    assert claim(api, computer, 'finance') is None
+    memory(api, computer, .3)
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_a_computer_that_sampled_before_the_upgrade_is_held_once_its_samples_age_out(api):
+    """The mark is backfilled from the samples a computer already kept, so an upgraded computer that then goes
+    silent past retention is still not reporting, and a fresh sample releases it."""
+    import time
+    from backend import performance as P
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .3)
+    now = int(time.time()) // 60 * 60
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE runners SET last_sampled_at=NULL WHERE id=?', (computer['runner_id'],))
+        P.backfill_last_sampled(c)
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT last_sampled_at FROM runners WHERE id=?', (computer['runner_id'],)).fetchone()[0] == now
+    with api.app.state.store.transaction() as c:
+        c.execute('DELETE FROM runner_load_samples WHERE runner_id=?', (computer['runner_id'],))
+        c.execute('UPDATE runners SET last_sampled_at=last_sampled_at-200000 WHERE id=?', (computer['runner_id'],))
     assert claim(api, computer, 'finance') is None
     memory(api, computer, .3)
     assert claim(api, computer, 'finance') is not None

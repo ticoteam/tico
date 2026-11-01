@@ -92,6 +92,13 @@ def _volume(sample):
     return d.free_bytes, d.total_bytes
 
 
+def backfill_last_sampled(c):
+    """A computer that sampled before its last-sample mark existed takes the time of its newest kept sample. Runs at
+    every start; a mark already set is left as it is."""
+    c.execute("UPDATE runners SET last_sampled_at=(SELECT max(sampled_at) FROM runner_load_samples s "
+              "WHERE s.runner_id=runners.id) WHERE last_sampled_at IS NULL")
+
+
 def ingest(c, runner_id, samples, now=None):
     """Store a batch of samples; returns the number kept. A sample from more than a day away is dropped, and one
     ahead of the server's clock counts as now, so a computer's fast clock cannot hold back the minutes after it."""
