@@ -7326,7 +7326,7 @@ def create_app(settings=None):
             if body.build and body.template:
                 bot_id = H.resolve_bot(c, created["slug"])["id"]
                 current = onboarding._declared(c, bot_id)
-                if not created["created_at"] and current.get("template") != body.template:
+                if not created["created"] and current.get("template") != body.template:
                     raise Problem("template", "Change the bot's template in its definition before building it", 409)
                 created.update(onboarding.attach_template(c, who, bot_id, body.template, body.instructions,
                                                           queue_build=True, title_prefix=body.title_prefix))

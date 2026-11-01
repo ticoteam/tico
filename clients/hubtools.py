@@ -6063,7 +6063,7 @@ def spoken(view):
         return view
     item = view.get("item")
     if isinstance(item, dict):
-        item = {k: v for k, v in item.items() if k not in ("rank", "created")}
+        item = {k: v for k, v in item.items() if k not in ("rank", "created_at")}
         clipped = False
         for field, n in SPOKEN_CLIP.items():
             if isinstance(item.get(field), str) and len(item[field]) > n:

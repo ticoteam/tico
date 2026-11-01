@@ -9,7 +9,7 @@
         "archived_by": null,
         "auto": false,
         "cadence": "daily",
-        "created": "<time>",
+        "created_at": "<time>",
         "created_by": "human:ana",
         "definition": "",
         "definition_version": 1,
@@ -49,7 +49,7 @@
         ],
         "status": "none",
         "unit": "%",
-        "updated": "<time>"
+        "updated_at": "<time>"
       }
     ]
   },

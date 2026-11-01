@@ -535,10 +535,10 @@ def test_attempt_time_index_upgrades_existing_history_without_changing_rows(api,
     store.initialize()  # Existing installs and repeated starts take the same additive path.
     with store.read() as c:
         assert [dict(row) for row in c.execute('SELECT * FROM attempts ORDER BY id')] == before
-        assert [row[2] for row in c.execute('PRAGMA index_info(attempts_created)')] == ['created']
+        assert [row[2] for row in c.execute('PRAGMA index_info(attempts_created)')] == ['created_at']
         assert c.execute('SELECT count(*) FROM cloud_migrations WHERE version=62').fetchone()[0] == 1
         plan = c.execute("EXPLAIN QUERY PLAN SELECT count(*) FROM attempts WHERE created_at>=?", (H.now(),))
-        assert any('attempts_created (created>?)' in row[3] for row in plan)
+        assert any('attempts_created (created_at>?)' in row[3] for row in plan)
 
 
 def test_attempt_provenance_uses_keyed_inputs_and_retained_run_events(api, world, monkeypatch):

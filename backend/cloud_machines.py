@@ -929,7 +929,7 @@ class Manager:
             else:
                 ttl = hq.heartbeat(current["machine_id"])
                 with self.store.transaction() as c:
-                    save(c, key, heartbeat_at=at, ttl_s=ttl, failures=0, next_try=None)
+                    save(c, key, heartbeat_at=at, ttl_s=ttl, failures=0, next_try_at=None)
                 return
         except Refused as refused:
             self.refused(current, action, refused, at)
@@ -938,7 +938,7 @@ class Manager:
             # HQ still has the machine deleted (until boat confirms) or failed here: the new one is made once it is
             # gone, and HQ answering with that same machine is not a new one.
             with self.store.transaction() as c:
-                save(c, key, next_try=at + BACKOFF, enroll_by=None)     # the code it took for that goes unused
+                save(c, key, next_try_at=at + BACKOFF, enroll_by=None)     # the code it took for that goes unused
             return
         fields = self.described(machine)
         if action == "create" and machine["state"] == "failed":
@@ -947,7 +947,7 @@ class Manager:
             woke_for = wake_for(current, found)[0]
             fields.update(active_at=at, heartbeat_at=at, wake_key=woke_for, woke_at=at)
         with self.store.transaction() as c:
-            save(c, key, **fields, failures=0, next_try=None, problem="", problem_at=None, stop_until=None)
+            save(c, key, **fields, failures=0, next_try_at=None, problem="", problem_at=None, stop_until=None)
             H.event(c, H.KEEPER, "cloud_machine." + {"create": "created", "start": "started", "stop": "stopped"}[action],
                     key, {"size": machine["size"], "machine": machine["id"]})
 
@@ -959,7 +959,7 @@ class Manager:
             # Its id stays, as deleted: HQ keeps a machine live until boat confirms the delete, and a create meanwhile
             # answers with that one (act), which is not the new machine.
             save(c, key, state="deleted", enroll_by=None, enroll_fails=fails, wake_key=None,
-                 woke_at=None, active_at=None, heartbeat_at=None, failures=0, next_try=None, stop_until=None,
+                 woke_at=None, active_at=None, heartbeat_at=None, failures=0, next_try_at=None, stop_until=None,
                  **({"problem": "no_enroll", "problem_at": H.now()} if fails >= ENROLL_TRIES
                     else {"problem": "", "problem_at": None}))
             H.event(c, H.KEEPER, "cloud_machine.deleted", key, {"machine": current["machine_id"],
@@ -1211,7 +1211,7 @@ def remove(store, hq, who, auth, key):
         # back from HQ (idempotent on key), which `act` takes for no new one and tries again later.
         save(c, key, runner_id=None, state="deleted", machine_size=None, started_at=None,
              stopped_at=None, cost_month_usd=0, starts_month=0, last_error="", active_at=None, heartbeat_at=None,
-             ttl_s=None, next_try=None, failures=0, problem="", problem_at=None, wake_key=None, woke_at=None,
+             ttl_s=None, next_try_at=None, failures=0, problem="", problem_at=None, wake_key=None, woke_at=None,
              enroll_by=None, enroll_fails=0, stop_until=None, changed_by=who.actor)
         H.event(c, who.actor, "cloud_machine.deleted", key, {"machine": current["machine_id"]})
     return {"ok": True}

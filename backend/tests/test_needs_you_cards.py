@@ -45,7 +45,7 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
 
     assert items[send["id"]]["title"] == "Send: '$200 for each rental owner you introduce' to Jennie Ooten"
     # One item shape whatever the kind (backend/needs_shape.py): what it is about and the writes that settle it.
-    common = {"id", "kind", "title", "body", "subject", "created", "actions"}
+    common = {"id", "kind", "title", "body", "subject", "created_at", "actions"}
     assert all(common <= set(i) and i["actions"] for i in page["items"])
     assert (items[send["id"]]["subject"], items[send["id"]]["actions"]) == ({"type": "approval", "id": send["id"]},
                                                                             ["decide"])

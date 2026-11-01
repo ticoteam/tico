@@ -97,7 +97,7 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
                     "source": source, "name": spec["name"], "enabled": enabled,
                     "runner_id": cfg.get("runner_id") or "", "runner_label": machine["label"] if machine else "",
                     "status": status_of(enabled, health, spec["interval"], now),
-                    "last_success": health["last_succeeded_at"] if health else None,
+                    "last_succeeded_at": health["last_succeeded_at"] if health else None,
                     "last_attempt": detail.get("last_attempt"), "last_import": detail.get("last_import"),
                     "imported_total": detail.get("imported_total", 0),
                     "error_code": code, "error": (detail.get("message") or ERROR_TEXT.get(code, "")) if code else "",

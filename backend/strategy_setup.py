@@ -215,7 +215,7 @@ def _update(store, job_id, **changes):
 
 
 def _fail(store, job_id, code, message, **more):
-    _update(store, job_id, state="failed", step=None, finished=H.now(), error={"code": code, "message": message},
+    _update(store, job_id, state="failed", step=None, finished_at=H.now(), error={"code": code, "message": message},
             **more)
 
 
@@ -229,7 +229,7 @@ def run(store, job_id):
         _put(c, {**job, "claimed": True})
         write = writer(c, store.settings, store)
     if write is None:
-        _update(store, job_id, state="no_model", step=None, finished=H.now())
+        _update(store, job_id, state="no_model", step=None, finished_at=H.now())
         return None
     pages = []
     try:

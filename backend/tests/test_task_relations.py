@@ -63,7 +63,7 @@ def test_a_previous_release_database_upgrades_through_the_cloud_store(tmp_path):
     with gzip.open(FIXTURES / "hub-v0.2.1.sqlite.gz") as source, open(path, "wb") as target:
         shutil.copyfileobj(source, target)
     with sqlite3.connect(path) as c:
-        ids = [r[0] for r in c.execute("SELECT id FROM tasks ORDER BY created_at, id")]
+        ids = [r[0] for r in c.execute("SELECT id FROM tasks ORDER BY created, id")]   # v0.2.1, before the renames
         c.execute("UPDATE tasks SET parent_id=? WHERE id=?", (ids[0], ids[1]))
     # Below the bridge (test_migrations), so this is the legacy import path: adopt_legacy, as manage.migrate_legacy boots.
     boot(path, adopt_legacy=True)

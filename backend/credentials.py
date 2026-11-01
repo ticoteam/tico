@@ -570,8 +570,8 @@ def last_used(c,cid):
     key) for Library › Tools: the newest use of the credential, from credential_uses."""
     row=c.execute('SELECT at,bot FROM credential_uses WHERE credential_id=? ORDER BY at DESC LIMIT 1',(cid,)).fetchone()
     if not row:
-        return {'last_used':None,'last_used_by':''}
-    return {'last_used':row['at'],'last_used_by':(H.bot(c,row['bot']) or {}).get('slug') or row['bot'] or ''}
+        return {'last_used_at':None,'last_used_by':''}
+    return {'last_used_at':row['at'],'last_used_by':(H.bot(c,row['bot']) or {}).get('slug') or row['bot'] or ''}
 
 
 def install_credentials(app,store,delegate=None,propose=None):

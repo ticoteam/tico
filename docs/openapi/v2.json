@@ -34014,10 +34014,10 @@
                 "owner": {
                   "type": "string"
                 },
-                "started": {
+                "started_at": {
                   "type": "string"
                 },
-                "finished": {
+                "finished_at": {
                   "type": [
                     "string",
                     "null"
@@ -34050,7 +34050,7 @@
                 "automation_id",
                 "automation_name",
                 "id",
-                "started",
+                "started_at",
                 "status",
                 "trigger"
               ],
@@ -34205,10 +34205,10 @@
           "trigger_ref": {
             "type": "string"
           },
-          "started": {
+          "started_at": {
             "type": "string"
           },
-          "finished": {
+          "finished_at": {
             "type": [
               "string",
               "null"
@@ -35157,7 +35157,7 @@
           "published": {
             "type": "boolean"
           },
-          "updated": {
+          "updated_at": {
             "type": [
               "string",
               "null"
@@ -35172,7 +35172,7 @@
           "content",
           "published",
           "source",
-          "updated"
+          "updated_at"
         ],
         "additionalProperties": true
       },
@@ -36739,7 +36739,7 @@
               "description": {
                 "type": "string"
               },
-              "updated": {
+              "updated_at": {
                 "type": [
                   "string",
                   "null"
@@ -36757,7 +36757,7 @@
             },
             "required": [
               "description",
-              "updated",
+              "updated_at",
               "updated_by",
               "updated_by_name",
               "vision"
@@ -37007,7 +37007,7 @@
               "type": "string"
             }
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "last_message_at": {
@@ -37022,7 +37022,7 @@
         },
         "required": [
           "closed_at",
-          "created",
+          "created_at",
           "id",
           "kind",
           "last_message_at",
@@ -37301,7 +37301,7 @@
               "access_needed"
             ]
           },
-          "last_checked": {
+          "last_checked_at": {
             "type": [
               "string",
               "null"
@@ -37324,7 +37324,7 @@
           "error_code",
           "id",
           "kind",
-          "last_checked",
+          "last_checked_at",
           "path",
           "provider",
           "reference",
@@ -37442,7 +37442,7 @@
                 "title": {
                   "type": "string"
                 },
-                "created": {
+                "created_at": {
                   "type": "string"
                 },
                 "last_message_at": {
@@ -37460,7 +37460,7 @@
               },
               "required": [
                 "closed_at",
-                "created",
+                "created_at",
                 "id",
                 "last_message_at",
                 "title"
@@ -38025,7 +38025,7 @@
               "commit": {
                 "type": "string"
               },
-              "last_checked": {
+              "last_checked_at": {
                 "type": [
                   "string",
                   "null"
@@ -38043,7 +38043,7 @@
               "commit",
               "content",
               "id",
-              "last_checked",
+              "last_checked_at",
               "path",
               "reference_notice",
               "source_id",
@@ -38104,7 +38104,7 @@
           "commit": {
             "type": "string"
           },
-          "last_checked": {
+          "last_checked_at": {
             "type": [
               "string",
               "null"
@@ -38123,7 +38123,7 @@
           "commit",
           "excerpt",
           "id",
-          "last_checked",
+          "last_checked_at",
           "path",
           "score",
           "section",
@@ -38313,7 +38313,7 @@
           "version": {
             "type": "integer"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "url": {
@@ -38342,7 +38342,7 @@
           "page",
           "score",
           "title",
-          "updated",
+          "updated_at",
           "url",
           "version"
         ],
@@ -41815,13 +41815,13 @@
               "null"
             ]
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "created_by": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "owner_name": {
@@ -41849,7 +41849,7 @@
         },
         "required": [
           "body",
-          "created",
+          "created_at",
           "created_by",
           "id",
           "owner",
@@ -41861,7 +41861,7 @@
           "status_note",
           "status_source",
           "title",
-          "updated"
+          "updated_at"
         ],
         "additionalProperties": true
       },
@@ -42772,13 +42772,13 @@
                   "null"
                 ]
               },
-              "created": {
+              "created_at": {
                 "type": "string"
               },
               "created_by": {
                 "type": "string"
               },
-              "updated": {
+              "updated_at": {
                 "type": "string"
               },
               "owner_name": {
@@ -42851,7 +42851,7 @@
               "chain",
               "checkins",
               "children",
-              "created",
+              "created_at",
               "created_by",
               "events",
               "id",
@@ -42867,7 +42867,7 @@
               "status_source",
               "tasks",
               "title",
-              "updated"
+              "updated_at"
             ],
             "additionalProperties": true
           }
@@ -42984,13 +42984,13 @@
                     "null"
                   ]
                 },
-                "created": {
+                "created_at": {
                   "type": "string"
                 },
                 "created_by": {
                   "type": "string"
                 },
-                "updated": {
+                "updated_at": {
                   "type": "string"
                 },
                 "owner_name": {
@@ -43038,7 +43038,7 @@
               },
               "required": [
                 "body",
-                "created",
+                "created_at",
                 "created_by",
                 "id",
                 "kpis",
@@ -43052,7 +43052,7 @@
                 "status_note",
                 "status_source",
                 "title",
-                "updated"
+                "updated_at"
               ],
               "additionalProperties": true
             }
@@ -43198,7 +43198,7 @@
               "required": [
                 "actions",
                 "body",
-                "created",
+                "created_at",
                 "id",
                 "kind",
                 "subject",
@@ -43259,7 +43259,7 @@
                   ],
                   "description": "The one thing it is about; null for a card standing for several things or a setting"
                 },
-                "created": {
+                "created_at": {
                   "type": [
                     "string",
                     "null"
@@ -44241,7 +44241,7 @@
           "configured": {
             "type": "boolean"
           },
-          "last_sync": {
+          "last_synced_at": {
             "type": [
               "number",
               "null"
@@ -44262,7 +44262,7 @@
           "error",
           "gaps",
           "inboxes",
-          "last_sync"
+          "last_synced_at"
         ],
         "additionalProperties": true
       },
@@ -44536,13 +44536,13 @@
           "created_by": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "updated_by": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "archived": {
@@ -44559,14 +44559,14 @@
         "required": [
           "archived",
           "body",
-          "created",
+          "created_at",
           "created_by",
           "created_by_name",
           "id",
           "locked",
           "path",
           "title",
-          "updated",
+          "updated_at",
           "updated_by",
           "updated_by_name",
           "version"
@@ -44619,7 +44619,7 @@
           "title": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "updated_by": {
@@ -44641,7 +44641,7 @@
           "locked",
           "path",
           "title",
-          "updated",
+          "updated_at",
           "updated_by",
           "updated_by_name",
           "version"
@@ -44663,7 +44663,7 @@
           "actor": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "note": {
@@ -44682,7 +44682,7 @@
         "required": [
           "actor",
           "actor_name",
-          "created",
+          "created_at",
           "current",
           "note",
           "path",
@@ -44713,7 +44713,7 @@
               "actor": {
                 "type": "string"
               },
-              "created": {
+              "created_at": {
                 "type": "string"
               },
               "note": {
@@ -44727,7 +44727,7 @@
               "actor",
               "actor_name",
               "body",
-              "created",
+              "created_at",
               "note",
               "path",
               "title",
@@ -44805,7 +44805,7 @@
           "definition_version": {
             "type": "integer"
           },
-          "created": {
+          "created_at": {
             "type": [
               "string",
               "null"
@@ -44817,7 +44817,7 @@
               "null"
             ]
           },
-          "updated": {
+          "updated_at": {
             "type": [
               "string",
               "null"
@@ -45474,7 +45474,7 @@
           "ts": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "superseded_by": {
@@ -46185,10 +46185,10 @@
           "added_by": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "added_by_name": {
@@ -46198,13 +46198,13 @@
         "required": [
           "added_by",
           "added_by_name",
-          "created",
+          "created_at",
           "description",
           "host",
           "id",
           "kind",
           "title",
-          "updated",
+          "updated_at",
           "url"
         ],
         "additionalProperties": true
@@ -46438,7 +46438,7 @@
           "body": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "in_reply_to": {
@@ -46530,7 +46530,7 @@
         "required": [
           "body",
           "conversation_id",
-          "created",
+          "created_at",
           "from_actor",
           "id",
           "in_reply_to",
@@ -46828,10 +46828,10 @@
           "added_by_name": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           }
         },
@@ -46839,7 +46839,7 @@
           "added_by",
           "added_by_name",
           "computers",
-          "created",
+          "created_at",
           "id",
           "kind",
           "label",
@@ -46850,7 +46850,7 @@
           "status",
           "status_at",
           "status_detail",
-          "updated",
+          "updated_at",
           "usage"
         ],
         "additionalProperties": true
@@ -47077,7 +47077,7 @@
             ],
             "description": "The one thing it is about; null for a card standing for several things or a setting"
           },
-          "created": {
+          "created_at": {
             "type": [
               "string",
               "null"
@@ -47100,7 +47100,7 @@
         "required": [
           "actions",
           "body",
-          "created",
+          "created_at",
           "id",
           "kind",
           "subject",
@@ -47345,7 +47345,7 @@
           "version": {
             "type": "integer"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "updated_by": {
@@ -47422,7 +47422,7 @@
           "stale_days",
           "task_id",
           "title",
-          "updated",
+          "updated_at",
           "updated_by",
           "version"
         ],
@@ -47954,7 +47954,7 @@
                     "bot": {
                       "type": "string"
                     },
-                    "updated": {
+                    "updated_at": {
                       "type": "string"
                     },
                     "archived": {
@@ -47966,7 +47966,7 @@
                     "bot",
                     "file_id",
                     "title",
-                    "updated"
+                    "updated_at"
                   ],
                   "additionalProperties": true
                 }
@@ -48312,13 +48312,13 @@
               "Visitor"
             ]
           },
-          "created": {
+          "created_at": {
             "type": "string"
           }
         },
         "required": [
           "author",
-          "created",
+          "created_at",
           "id",
           "text"
         ],
@@ -49058,7 +49058,7 @@
           "reachable": {
             "type": "boolean"
           },
-          "last_seen": {
+          "last_seen_at": {
             "type": [
               "string",
               "null"
@@ -49070,7 +49070,7 @@
           "default_branch",
           "enabled",
           "full_name",
-          "last_seen",
+          "last_seen_at",
           "reachable",
           "setup_command",
           "setup_source"
@@ -50224,7 +50224,7 @@
           "team": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "org_parent": {
@@ -50603,7 +50603,7 @@
           "team": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "description_by": {
@@ -51755,7 +51755,7 @@
           "id": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "kind": {
@@ -51823,7 +51823,7 @@
           }
         },
         "required": [
-          "created",
+          "created_at",
           "done",
           "id",
           "kind",
@@ -52568,15 +52568,15 @@
           "version": {
             "type": "integer"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           }
         },
         "required": [
-          "created",
+          "created_at",
           "id",
           "is_template",
           "key",
@@ -52585,7 +52585,7 @@
           "metadata",
           "owner",
           "template_id",
-          "updated",
+          "updated_at",
           "version"
         ],
         "additionalProperties": true
@@ -52838,10 +52838,10 @@
           "status": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "due": {
@@ -53088,7 +53088,7 @@
           }
         },
         "required": [
-          "created",
+          "created_at",
           "due",
           "holds",
           "id",
@@ -53098,7 +53098,7 @@
           "requester",
           "status",
           "title",
-          "updated",
+          "updated_at",
           "version"
         ],
         "additionalProperties": true
@@ -53510,12 +53510,12 @@
           "proposed_by": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           }
         },
         "required": [
-          "created",
+          "created_at",
           "id",
           "per_day",
           "proposed_by",
@@ -53543,7 +53543,7 @@
           "closed": {
             "type": "integer"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "updated_by": {
@@ -53556,7 +53556,7 @@
           "per_day",
           "receiver",
           "sender",
-          "updated",
+          "updated_at",
           "updated_by"
         ],
         "additionalProperties": true
@@ -54210,7 +54210,7 @@
           "sha256": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "by": {
@@ -54289,7 +54289,7 @@
           "ask",
           "by",
           "comment_id",
-          "created",
+          "created_at",
           "duration_ms",
           "height",
           "media_state",
@@ -54748,13 +54748,13 @@
           "bot": {
             "type": "string"
           },
-          "started": {
+          "started_at": {
             "type": [
               "string",
               "null"
             ]
           },
-          "finished": {
+          "finished_at": {
             "type": [
               "string",
               "null"
@@ -54772,11 +54772,11 @@
         },
         "required": [
           "bot",
-          "finished",
+          "finished_at",
           "outcome",
           "ran_on",
           "run",
-          "started"
+          "started_at"
         ],
         "additionalProperties": true
       },
@@ -55094,10 +55094,10 @@
           "steps_only": {
             "type": "boolean"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "steps": {
@@ -55145,13 +55145,13 @@
         },
         "required": [
           "bots",
-          "created",
+          "created_at",
           "id",
           "name",
           "numbered",
           "steps",
           "steps_only",
-          "updated"
+          "updated_at"
         ],
         "additionalProperties": true
       },
@@ -56212,7 +56212,7 @@
         "required": [
           "archived",
           "unread",
-          "updated"
+          "updated_at"
         ],
         "additionalProperties": true
       },
@@ -57169,10 +57169,10 @@
               "null"
             ]
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "revision": {
@@ -57234,7 +57234,7 @@
         "required": [
           "allow_http",
           "can_change",
-          "created",
+          "created_at",
           "created_by",
           "disabled_at",
           "disabled_reason",
@@ -57251,7 +57251,7 @@
           "rate_per_hour",
           "requested_by",
           "revision",
-          "updated",
+          "updated_at",
           "url"
         ],
         "additionalProperties": true
@@ -57713,13 +57713,13 @@
           "last_error": {
             "type": "string"
           },
-          "next_attempt": {
+          "next_attempt_at": {
             "type": [
               "string",
               "null"
             ]
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "delivered_at": {
@@ -57731,13 +57731,13 @@
         },
         "required": [
           "attempts",
-          "created",
+          "created_at",
           "delivered_at",
           "event_id",
           "id",
           "last_error",
           "last_status",
-          "next_attempt",
+          "next_attempt_at",
           "state",
           "subject",
           "type",

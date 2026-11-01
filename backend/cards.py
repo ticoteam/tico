@@ -798,7 +798,7 @@ def edit_card(ctx, cid, title=None, settings=None):
     if fields:
         fields.update(updated_at=H.now(), updated_by=ctx.who.actor)
         ctx.c.execute("UPDATE cards SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), cid))
-        H.event(ctx.c, ctx.who.actor, "card.changed", cid, {"fields": sorted(k for k in fields if k != "updated")})
+        H.event(ctx.c, ctx.who.actor, "card.changed", cid, {"fields": sorted(k for k in fields if k != "updated_at")})
     return card_view(ctx, card_row(ctx.c, cid))
 
 

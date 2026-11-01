@@ -1436,7 +1436,7 @@ def _fallbacks(c):
 def _bot_computers(computers):
     """A bot checking the team's health sees which computers are up, their release and disk, never who operates
     them or their sign-in, container and browser errors."""
-    keep = ("id", "label", "online", "last_seen", "platform", "disk", "turn_counts", "turn_summary")
+    keep = ("id", "label", "online", "last_seen_at", "platform", "disk", "turn_counts", "turn_summary")
     return [{**{k: x.get(k) for k in keep}, "update": {k: x["update"].get(k) for k in ("release", "state", "label")}}
             for x in computers]
 

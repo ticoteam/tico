@@ -9,7 +9,7 @@
       {
         "bet_id": null,
         "body": "",
-        "created": "<time>",
+        "created_at": "<time>",
         "created_by": "human:ana",
         "id": "<goal>",
         "last_read_at": null,
@@ -27,7 +27,7 @@
         "suggest_note": null,
         "suggest_status": null,
         "title": "Raise activation",
-        "updated": "<time>",
+        "updated_at": "<time>",
         "why": "",
         "why_at": null,
         "why_by": null

@@ -1159,7 +1159,7 @@ SCHEMAS = {
                        "quality": {"enum": ["measured", "estimate", "partial"]}, "evidence": "s", "note": "s", "source": "s",
                        "actor": "s", "definition_version": "i", "supersedes": "n"},
                       required=["id", "value", "period_end", "quality", "definition_version"],
-                      kpi_id={"type": "string"}, ts={"type": "string"}, created={"type": "string"},
+                      kpi_id={"type": "string"}, ts={"type": "string"}, created_at={"type": "string"},
                       superseded_by={"type": ["string", "null"], "description": "The reading that corrected this one, if any"},
                       actor_name={"type": "string"}),
     "Kpi": obj({"id": {"type": "string", "description": "A UUID, or auto:<bot>:<metric> for a bot's automatic KPI"}, "slug": "n",

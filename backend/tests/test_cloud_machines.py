@@ -192,7 +192,7 @@ def test_decide_idle_stop_at_break_even_heartbeat_and_always_on():
 def test_decide_frozen_backoff_and_the_stuck_guard():
     assert CM.decide(machine_row(), facts(want="job:a", frozen=True), 1000, 300) == (None, "out_of_credit")
     assert CM.decide(machine_row(state="running"), facts(frozen=True), 1000, 300) == ("stop", "out_of_credit")
-    waiting = machine_row(next_try=1100, problem="out_of_credit")
+    waiting = machine_row(next_try_at=1100, problem="out_of_credit")
     assert CM.decide(waiting, facts(want="job:a"), 1050, 300) == (None, None)
     assert CM.decide(waiting, facts(want="job:a", retry_now=True), 1050, 300) == ("start", None)
     assert CM.decide(waiting, facts(want="job:a"), 1100, 300) == ("start", None)
@@ -224,7 +224,7 @@ def test_decide_gives_a_machine_being_made_until_its_code_expires_then_makes_it_
     # Enrolled (0) or never made (None): no deadline.
     assert CM.decide({**booting, "enroll_by": 0}, facts(), 1960, 300) == ("stop", None)
     # A refusal's wait holds the delete too; out of credit stops it first.
-    assert CM.decide({**booting, "next_try": 2000}, facts(), 1960, 300) == (None, None)
+    assert CM.decide({**booting, "next_try_at": 2000}, facts(), 1960, 300) == (None, None)
     assert CM.decide(booting, facts(frozen=True), 1960, 300) == ("stop", "out_of_credit")
     # Machines made in a row that never enrolled: nothing more is made until a person looks.
     gone = machine_row(machine_id=None, runner_id=None, state="deleted", enroll_by=None)

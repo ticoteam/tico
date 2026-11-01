@@ -16,7 +16,7 @@
         "stale_days": null,
         "task_id": null,
         "title": "Launch weekly",
-        "updated": "<time>",
+        "updated_at": "<time>",
         "updated_by": "bot:ops",
         "updated_by_name": "ops",
         "version": 1

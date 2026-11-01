@@ -520,7 +520,7 @@ def seed_from_env(c, settings, now):
     if not seed:
         return False
     c.execute("INSERT INTO registry_metadata VALUES(?,?)",
-              (KEY, json.dumps({**seed, "revision": 1, "updated": now, "updated_by": "environment",
+              (KEY, json.dumps({**seed, "revision": 1, "updated_at": now, "updated_by": "environment",
                                 "source": "environment"}, sort_keys=True)))
     return True
 

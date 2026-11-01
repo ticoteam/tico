@@ -22,7 +22,7 @@
         }
       ],
       "children": [],
-      "created": "<time>",
+      "created_at": "<time>",
       "created_by": "human:ana",
       "events": [
         {
@@ -84,7 +84,7 @@
           "archived_by": null,
           "auto": false,
           "cadence": "daily",
-          "created": "<time>",
+          "created_at": "<time>",
           "created_by": "human:ana",
           "definition": "",
           "definition_version": 1,
@@ -131,7 +131,7 @@
           "status": "green",
           "target_label": "→ 70% by Dec 31, 2099",
           "unit": "%",
-          "updated": "<time>"
+          "updated_at": "<time>"
         }
       ],
       "last_read_at": null,
@@ -151,7 +151,7 @@
       "suggest_status": null,
       "tasks": [],
       "title": "Raise activation",
-      "updated": "<time>",
+      "updated_at": "<time>",
       "why": "",
       "why_at": null,
       "why_by": null

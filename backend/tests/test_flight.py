@@ -127,7 +127,7 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
         c.execute("CREATE TABLE size_fixture(created_at INTEGER, payload BLOB)")
         # Large enough to appear in the top 40 alongside the initialized schema's tables/indexes.
         c.execute("INSERT INTO size_fixture VALUES(?, zeroblob(?))", (MINUTE, 128 * 1024))
-    monkeypatch.setattr(flight, "BIG", {**flight.BIG, "size_fixture": "created"})
+    monkeypatch.setattr(flight, "BIG", {**flight.BIG, "size_fixture": "created_at"})
     sizing, dbstat = [], []                      # the size pass's statements, and any that walk pages with dbstat
     read = store.read
 

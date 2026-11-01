@@ -7368,7 +7368,7 @@ def sweep_stranded(conn, at=None, grace_hours=STRANDED_GRACE_HOURS):
     # Its clock runs from when its last hold cleared, else from when its wait began (backend/task_holds.py): a note
     # written while it waits on nothing does not hold it back.
     clock = "coalesce(holds_cleared_at, blocked_since, updated_at)" if "holds_cleared_at" in {
-        r[1] for r in conn.execute("PRAGMA table_info(tasks)")} else "updated"
+        r[1] for r in conn.execute("PRAGMA table_info(tasks)")} else "updated_at"
     for row in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND owner LIKE 'bot:%' "
                                   f"AND {clock}<=? ORDER BY {clock}", (cutoff,))):
         with isolated(conn, "sweep_stranded", row["id"]):

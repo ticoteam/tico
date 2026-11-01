@@ -1013,14 +1013,14 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 state = status_of(True, health, IMPORTERS[r["source"]]["interval"], H.now())
                 extra.append({"id": r["source"], "name": IMPORTERS[r["source"]]["name"],
                               "status": "needs_setup" if state == "waiting" else state,
-                              "last_success": health["last_succeeded_at"] if health else None,
+                              "last_succeeded_at": health["last_succeeded_at"] if health else None,
                               "last_attempt": detail.get("last_attempt"), "last_import": detail.get("last_import"),
                               "pending": 0, "imported": detail.get("imported_total", 0),
                               "error_code": detail.get("error_code", "")})
             return {"sources": [
-                {"id": "import", "name": "Import", "status": "available", "last_success": None},
+                {"id": "import", "name": "Import", "status": "available", "last_succeeded_at": None},
                 {"id": "close", "name": "Close", "status": status,
-                 "last_success": row["last_succeeded_at"] if row else None,
+                 "last_succeeded_at": row["last_succeeded_at"] if row else None,
                  "last_attempt": detail.get("last_attempt"), "last_import": detail.get("last_import"),
                  "pending": detail.get("pending", 0),
                  "imported": detail.get("imported", 0), "error_code": detail.get("error_code", "")},

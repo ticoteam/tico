@@ -228,11 +228,11 @@ export type AutomationOverviewRuns = {
   automation_name: string;
   cost?: number;
   count?: number;
-  finished?: string | null;
+  finished_at?: string | null;
   id: string;
   outcome?: string;
   owner?: string;
-  started: string;
+  started_at: string;
   started_by?: string;
   status: string;
   step_count?: number | null;
@@ -256,9 +256,9 @@ export type AutomationPatch = {
 export type AutomationRun = {
   automation_id: string;
   cost?: number;
-  finished?: string | null;
+  finished_at?: string | null;
   id: string;
-  started?: string;
+  started_at?: string;
   status: "queued" | "running" | "waiting" | "ok" | "failed" | "empty" | "skipped" | "held";
   steps: Array<Record<string, unknown>> | null;
   summary?: string | null;
@@ -476,7 +476,7 @@ export type BotInstructions = {
   content: string;
   published: boolean;
   source: string;
-  updated: string | null;
+  updated_at: string | null;
 };
 
 export type BotKeepTasksGoing = {
@@ -819,7 +819,7 @@ export type CompanyHistory = {
 export type CompanyResult = {
   company: {
   description: string;
-  updated: string | null;
+  updated_at: string | null;
   updated_by: string | null;
   updated_by_name: string;
   vision: string;
@@ -874,7 +874,7 @@ export type Contract = Record<string, unknown>;
 
 export type Conversation = {
   closed_at: string | null;
-  created: string;
+  created_at: string;
   id: string;
   kind: string;
   last_message_at: string;
@@ -929,7 +929,7 @@ export type DocSource = {
   error_code: string;
   id: string;
   kind: string;
-  last_checked: string | null;
+  last_checked_at: string | null;
   path: string;
   provider: string;
   reference: string;
@@ -965,7 +965,7 @@ export type DocsAsked = {
 export type DocsConversations = {
   conversations: Array<{
   closed_at: string | null;
-  created: string;
+  created_at: string;
   id: string;
   last_message_at: string | null;
   title: string;
@@ -1080,7 +1080,7 @@ export type ExternalDocResult = {
   commit: string;
   content: string;
   id: string;
-  last_checked: string | null;
+  last_checked_at: string | null;
   path: string;
   reference_notice: string;
   source_id: string;
@@ -1098,7 +1098,7 @@ export type ExternalHit = {
   commit: string;
   excerpt: string;
   id: string;
-  last_checked: string | null;
+  last_checked_at: string | null;
   path: string;
   score: number;
   section: string;
@@ -1152,7 +1152,7 @@ export type FileSearchHit = {
   page: boolean;
   score: number;
   title: string;
-  updated: string;
+  updated_at: string;
   url: string | null;
   version: number;
 };
@@ -1882,7 +1882,7 @@ export type FinanceWebhookDeliveries = {
 
 export type Goal = {
   body: string;
-  created: string;
+  created_at: string;
   created_by: string;
   id: string;
   owner: string;
@@ -1899,7 +1899,7 @@ export type Goal = {
   suggest_note?: string | null;
   suggest_status?: string | null;
   title: string;
-  updated: string;
+  updated_at: string;
   why?: string;
   why_at?: string | null;
   why_by?: string | null;
@@ -2054,7 +2054,7 @@ export type GoalResult = {
   chain: Array<Goal>;
   checkins: Array<GoalCheckinView>;
   children: Array<Goal>;
-  created: string;
+  created_at: string;
   created_by: string;
   events: Array<Record<string, unknown>>;
   id: string;
@@ -2075,7 +2075,7 @@ export type GoalResult = {
   suggest_status?: string | null;
   tasks: Array<Record<string, unknown>>;
   title: string;
-  updated: string;
+  updated_at: string;
   why?: string;
   why_at?: string | null;
   why_by?: string | null;
@@ -2091,7 +2091,7 @@ export type GoalTree = {
   goals: Array<{
   body: string;
   checkin?: GoalCheckinView | null;
-  created: string;
+  created_at: string;
   created_by: string;
   id: string;
   kpis: Array<Kpi>;
@@ -2110,7 +2110,7 @@ export type GoalTree = {
   suggest_note?: string | null;
   suggest_status?: string | null;
   title: string;
-  updated: string;
+  updated_at: string;
   why?: string;
   why_at?: string | null;
   why_by?: string | null;
@@ -2140,7 +2140,7 @@ export type GoalsNeedsYou = {
   items: Array<{
   actions: Array<"answer" | "update" | "decide" | "add_reading" | "open">;
   body: string | null;
-  created: string | null;
+  created_at: string | null;
   freshness?: string;
   goal_id?: string;
   goal_title?: string | null;
@@ -2345,7 +2345,7 @@ export type InboundInboxes = {
   error: string;
   gaps: Array<Record<string, unknown>>;
   inboxes: Array<Record<string, unknown>>;
-  last_sync: number | null;
+  last_synced_at: number | null;
 };
 
 export type InboundMessages = {
@@ -2393,14 +2393,14 @@ export type InboxSwitch = {
 export type InternalDoc = {
   archived: boolean;
   body: string;
-  created: string;
+  created_at: string;
   created_by: string;
   created_by_name: string;
   id: string;
   locked: boolean;
   path: string;
   title: string;
-  updated: string;
+  updated_at: string;
   updated_by: string;
   updated_by_name: string;
   version: number;
@@ -2420,7 +2420,7 @@ export type InternalDocRow = {
   locked: boolean;
   path: string;
   title: string;
-  updated: string;
+  updated_at: string;
   updated_by: string;
   updated_by_name: string;
   version: number;
@@ -2429,7 +2429,7 @@ export type InternalDocRow = {
 export type InternalDocVersion = {
   actor: string;
   actor_name: string;
-  created: string;
+  created_at: string;
   current: boolean;
   note: string;
   path: string;
@@ -2443,7 +2443,7 @@ export type InternalDocVersionResult = {
   actor: string;
   actor_name: string;
   body: string;
-  created: string;
+  created_at: string;
   note: string;
   path: string;
   title: string;
@@ -2461,7 +2461,7 @@ export type Kpi = {
   archived_by?: string | null;
   auto: boolean;
   cadence: "daily" | "weekly" | "monthly";
-  created?: string | null;
+  created_at?: string | null;
   created_by?: string | null;
   definition?: string;
   definition_version: number;
@@ -2482,7 +2482,7 @@ export type Kpi = {
   status: "green" | "yellow" | "red" | "gray" | "none" | null;
   target_label?: string;
   unit: string;
-  updated?: string | null;
+  updated_at?: string | null;
 };
 
 export type KpiCreate = {
@@ -2569,7 +2569,7 @@ export type KpiReadingView = {
   actor?: string;
   actor_name?: string;
   collected_at?: string;
-  created?: string;
+  created_at?: string;
   definition_version: number;
   evidence?: string;
   id: string;
@@ -2700,13 +2700,13 @@ export type LinkEdit = {
 export type LinkedDoc = {
   added_by: string;
   added_by_name: string;
-  created: string;
+  created_at: string;
   description: string;
   host: string;
   id: string;
   kind: "website" | "google_drive" | "google_doc" | "notion" | "github" | "other";
   title: string;
-  updated: string;
+  updated_at: string;
   url: string;
 };
 
@@ -2769,7 +2769,7 @@ export type Message = {
   body: string;
   body_raw?: string;
   conversation_id: string;
-  created: string;
+  created_at: string;
   deleted_at?: string | null;
   edited_at?: string | null;
   from_actor: string;
@@ -2821,7 +2821,7 @@ export type ModelSubscription = {
   added_by: string;
   added_by_name: string;
   computers: Array<string>;
-  created: string;
+  created_at: string;
   id: string;
   kind: "claude_token" | "codex_login" | "anthropic_key" | "openai_key";
   label: string;
@@ -2832,7 +2832,7 @@ export type ModelSubscription = {
   status: "new" | "working" | "needs_reconnect";
   status_at: string | null;
   status_detail: string;
-  updated: string;
+  updated_at: string;
   usage: {
   cost_usd_month: number | null;
   resets_at?: string | null;
@@ -2881,7 +2881,7 @@ export type NeedsYou = {
 export type NeedsYouItem = {
   actions: Array<"answer" | "update" | "decide" | "add_reading" | "open">;
   body: string | null;
-  created: string | null;
+  created_at: string | null;
   id: string;
   kind: string;
   subject: {
@@ -2959,7 +2959,7 @@ export type Page = {
   stale_days: number | null;
   task_id: string | null;
   title: string;
-  updated: string;
+  updated_at: string;
   updated_by: string | null;
   updated_by_name?: string;
   version: number;
@@ -3063,7 +3063,7 @@ export type Place = {
   bot: string;
   file_id: string;
   title: string;
-  updated: string;
+  updated_at: string;
 };
   position: number;
   size: "small" | "medium" | "large";
@@ -3143,7 +3143,7 @@ export type ProfileChoices = {
 
 export type PublicComment = {
   author: "Team" | "Visitor";
-  created: string;
+  created_at: string;
   id: string;
   text: string;
 };
@@ -3289,7 +3289,7 @@ export type Repository = {
   default_branch: string | null;
   enabled: boolean;
   full_name: string;
-  last_seen: string | null;
+  last_seen_at: string | null;
   reachable: boolean;
   setup_command: string | null;
   setup_source: string | null;
@@ -3474,7 +3474,7 @@ export type ScreeningTest = Record<string, unknown>;
 export type Seat = {
   agent: string;
   agent_name: string;
-  created?: string;
+  created_at?: string;
   description: string;
   id: string;
   kind: "seat";
@@ -3562,7 +3562,7 @@ export type SeatCreate = {
 
 export type SeatDetail = {
   can_edit: boolean;
-  created?: string;
+  created_at?: string;
   description: string;
   description_by?: "chart" | "person";
   id: string;
@@ -3778,7 +3778,7 @@ export type StrategyBotLog = {
 };
 
 export type StrategyBotLogEntry = {
-  created: string;
+  created_at: string;
   done: Array<Record<string, unknown>>;
   goal_id?: string;
   id: string;
@@ -3932,7 +3932,7 @@ export type SystemRoutineUpdate = {
 };
 
 export type Tag = {
-  created: string;
+  created_at: string;
   id: string;
   is_template: boolean;
   key: string;
@@ -3941,7 +3941,7 @@ export type Tag = {
   metadata: Record<string, unknown>;
   owner: string | null;
   template_id: string | null;
-  updated: string;
+  updated_at: string;
   version: number;
 };
 
@@ -3991,7 +3991,7 @@ export type Task = {
   url: string;
   width: number | null;
 } | null;
-  created: string;
+  created_at: string;
   due: string | null;
   external_requesters?: number;
   guest?: string | null;
@@ -4033,7 +4033,7 @@ export type Task = {
   name: string;
 } | null;
   type_id?: string | null;
-  updated: string;
+  updated_at: string;
   version: number;
   visibility?: "public" | "private";
   waiting_on?: string | null;
@@ -4110,7 +4110,7 @@ export type TaskCap = {
 };
 
 export type TaskCapProposal = {
-  created: string;
+  created_at: string;
   id: string;
   per_day: number;
   proposed_by: string;
@@ -4125,7 +4125,7 @@ export type TaskCapRow = {
   per_day: number;
   receiver: string;
   sender: string;
-  updated: string;
+  updated_at: string;
   updated_by: string;
 };
 
@@ -4223,7 +4223,7 @@ export type TaskFileVersion = {
   ask: TaskReviewAskView | null;
   by: string;
   comment_id: string | null;
-  created: string;
+  created_at: string;
   duration_ms: number | null;
   height: number | null;
   media_state: string | null;
@@ -4309,11 +4309,11 @@ export type TaskReviewAskView = {
 
 export type TaskRun = {
   bot: string;
-  finished: string | null;
+  finished_at: string | null;
   outcome: string | null;
   ran_on: RanOn;
   run: string;
-  started: string | null;
+  started_at: string | null;
 };
 
 export type TaskRunChoice = {
@@ -4368,7 +4368,7 @@ export type TaskStepInput = {
 
 export type TaskType = {
   bots: "read" | "work" | null;
-  created: string;
+  created_at: string;
   default_visibility?: "public" | "private";
   id: string;
   manager?: string | null;
@@ -4377,7 +4377,7 @@ export type TaskType = {
   role?: "product-roadmap" | "engineering" | null;
   steps: Array<TaskStep>;
   steps_only: boolean;
-  updated: string;
+  updated_at: string;
 };
 
 export type TaskTypeCreate = {
@@ -4538,7 +4538,7 @@ export type UpdateArchive = {
 export type UpdateArchiveResult = {
   archived: boolean;
   unread: number;
-  updated: number;
+  updated?: number;
 };
 
 export type UpdateList = {
@@ -4705,7 +4705,7 @@ export type WakeUrl = {
 export type Webhook = {
   allow_http: boolean;
   can_change: boolean;
-  created: string;
+  created_at: string;
   created_by: string;
   disabled_at: string | null;
   disabled_reason: string | null;
@@ -4726,7 +4726,7 @@ export type Webhook = {
   rate_per_hour: number;
   requested_by: string | null;
   revision: number;
-  updated: string;
+  updated_at: string;
   url: string;
 };
 
@@ -4837,13 +4837,13 @@ export type WebhookSend = {
 
 export type WebhookSendRow = {
   attempts: number;
-  created: string;
+  created_at: string;
   delivered_at: string | null;
   event_id: string;
   id: string;
   last_error: string;
   last_status: number | null;
-  next_attempt: string | null;
+  next_attempt_at: string | null;
   state: "ready" | "sending" | "delivered" | "failed" | "canceled" | "withheld";
   subject: string;
   type: string;

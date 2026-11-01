@@ -1152,7 +1152,7 @@ def _terms(arg):
 
 
 # Cards whose answer carries a one-time value for the person who taps: the route and the fields shown to them.
-SHOWN_ONCE = {"/api/v2/enrollments": ("code", "expires", "operator")}
+SHOWN_ONCE = {"/api/v2/enrollments": ("code", "expires_at", "operator")}
 
 
 def shown_once(response, fields):

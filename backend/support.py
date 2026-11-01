@@ -228,26 +228,33 @@ def _answer(response, success):
 
 
 def _messages(value):
-    """HQ's message list cut down to the fields the page shows, whatever HQ sent."""
+    """HQ's message list cut down to the fields the page shows, whatever HQ sent. HQ calls a message's time `created`;
+    the hub keeps it as `created_at`."""
     out = []
     for item in (value if isinstance(value, list) else [])[:200]:
         if isinstance(item, dict) and isinstance(item.get("id"), int):
-            out.append({"id": item["id"], "created": str(item.get("created") or "")[:30],
+            out.append({"id": item["id"], "created_at": str(item.get("created") or item.get("created_at") or "")[:30],
                         "from": "person" if item.get("from") == "person" else "staff",
                         "body": str(item.get("body") or "")[:8000],
                         "has_diagnostics": item.get("has_diagnostics") is True})
     return out
 
 
+def _stored_messages(row):
+    """A ticket's stored messages; one stored before the time column renames has HQ's `created` instead of `created_at`."""
+    return [{**m, "created_at": m.get("created_at") or m.get("created") or ""} if "created" in m else m
+            for m in json.loads(row["messages"] or "[]")]
+
+
 def _last_activity(row):
     """When the ticket was last written on, by either side, or filed: an aware datetime (the epoch when none reads)."""
-    times = [H.parse_ts(m.get("created_at")) for m in json.loads(row["messages"] or "[]")] + [H.parse_ts(row["created_at"])]
+    times = [H.parse_ts(m.get("created_at")) for m in _stored_messages(row)] + [H.parse_ts(row["created_at"])]
     return max((t for t in times if t and t.tzinfo), default=EPOCH)
 
 
 def view(row):
     """A ticket as the page sees it. The HQ secret and id are not in it."""
-    messages = json.loads(row["messages"] or "[]")
+    messages = _stored_messages(row)
     return {"id": row["id"], "created_at": row["created_at"], "status": row["status"], "message": row["message"],
             "email": row["email"], "sent": json.loads(row["sent"] or "{}"), "messages": messages,
             "unread": sum(1 for m in messages if m["from"] == "staff" and m["id"] > row["seen_id"])}

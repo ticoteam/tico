@@ -63,7 +63,9 @@ wire_paths:
 # sites: {glob: [line texts]}: a line holding one of these keeps every name on it (wave 2's hand-checked flags, counts,
 # lists and other systems' fields that are named like a time column). Rename them by hand if they ever should change.
 sites:
-  backend/app.py: ['return {"updated": len(ids)']                     # how many messages an archive changed
+  backend/app.py:                                                     # how many messages an archive changed; bot register's flag
+    - 'return {"updated": len(ids)'
+    - 'not created["created"] and current.get("template")'
   backend/external_sync.py: ['"created": created', 'record.get("last_sync")']   # a bot made now (flag); stored sync status
   backend/files.py: ['"created": created, "changed": changed']
   backend/model_login.py: ['"updated": _handles_keys(row)']           # whether the runner can clear its copy

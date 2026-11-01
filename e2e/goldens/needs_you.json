@@ -16,7 +16,7 @@
         "body": null,
         "consumed_at": null,
         "conversation_id": "<id2>",
-        "created": "<time>",
+        "created_at": "<time>",
         "decided_at": null,
         "decided_by": null,
         "decided_for": null,

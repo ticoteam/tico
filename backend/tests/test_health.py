@@ -231,7 +231,7 @@ def test_a_bot_reads_computers_and_failed_runs_without_admin_detail(environment)
     body, checks = health_of(api, signed_in("qa-bot"))
     assert body["audience"] == "bot" and "storage" not in body
     assert body["computers"][0]["online"] and set(body["computers"][0]) == {
-        "id", "label", "online", "last_seen", "platform", "disk", "update", "turn_counts", "turn_summary"}
+        "id", "label", "online", "last_seen_at", "platform", "disk", "update", "turn_counts", "turn_summary"}
     assert body["failures"] == [] and set(checks) == {
         "computers", "waiting", "queue", "failed", "stalled_runs", "turns:" + body["computers"][0]["id"]}
     assert api.get("/api/v2/health/issues", headers=signed_in("qa-bot")).status_code == 200

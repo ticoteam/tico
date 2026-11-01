@@ -146,7 +146,7 @@ def document_status(c, bot):
     saved = {r["path"]: r["updated_at"] for r in
              c.execute("SELECT path,updated_at FROM bot_memory_documents WHERE bot=?", (bot,))}
     oversized = {r["path"] for r in c.execute("SELECT path FROM bot_memory_oversized WHERE bot=?", (bot,))}
-    return {path: {"oversized": path in oversized, "updated": saved.get(path, "")}
+    return {path: {"oversized": path in oversized, "updated_at": saved.get(path, "")}
             for path in DOCUMENTS if path in saved or path in oversized}
 
 

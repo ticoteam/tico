@@ -115,11 +115,11 @@ def seed(c, settings, now):
     if not _load_json(c, OWNER) and settings.owner_email:
         c.execute("INSERT INTO registry_metadata VALUES(?,?)",
                   (OWNER, json.dumps({"email": settings.owner_email.strip().lower(), "revision": 1,
-                                      "updated": now, "updated_by": "environment", "source": "environment"},
+                                      "updated_at": now, "updated_by": "environment", "source": "environment"},
                                      sort_keys=True)))
     if not _load_json(c, ACCESS):
         c.execute("INSERT INTO registry_metadata VALUES(?,?)",
-                  (ACCESS, json.dumps({**_access_seed(settings), "revision": 1, "updated": now,
+                  (ACCESS, json.dumps({**_access_seed(settings), "revision": 1, "updated_at": now,
                                        "updated_by": "environment", "source": "environment"}, sort_keys=True)))
 
 
@@ -702,7 +702,7 @@ def view(c, settings, roster, proxy_kind, owner_id):
                        "removable": left and people_remove.removable(c, p)})
     return {"owner": {**owner, "person": owner_id}, "people": people, **{
         k: access[k] for k in ("allowed", "allowed_domains", "admins", "bot_admins", "member_bot_limit", "revision",
-                               "updated", "updated_by")},
+                               "updated_at", "updated_by")},
         "company_domains": domains_,
         "company_domain_source": ("allowed" if access["allowed_domains"] else "owner" if home_domain(owner["email"], []) else
                                   "team" if domains_ else "none"),

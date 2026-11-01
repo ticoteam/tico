@@ -5,7 +5,7 @@
         "builtin": false,
         "can_edit": true,
         "can_pause": true,
-        "created": "<time>",
+        "created_at": "<time>",
         "created_by": "human:ana",
         "enabled": true,
         "id": "<automation>",
@@ -33,7 +33,7 @@
           "type": "schedule",
           "tz": "UTC"
         },
-        "updated": "<time>",
+        "updated_at": "<time>",
         "version": 1
       }
     ],

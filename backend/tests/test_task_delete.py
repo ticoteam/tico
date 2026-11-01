@@ -185,7 +185,7 @@ def test_a_task_bots_worked_on_deletes_and_comes_back_whole(api):
     post(api, f"tasks/{task['id']}/comments", {"text": "Look again tomorrow."})
     with store.transaction() as c:
         conversation = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (task["id"],)).fetchone()[0]
-        c.execute("INSERT INTO turns(id,bot,task_id,started) VALUES('turn-1','ops',?,?)", (task["id"], H.now()))
+        c.execute("INSERT INTO turns(id,bot,task_id,started_at) VALUES('turn-1','ops',?,?)", (task["id"], H.now()))
     assert post(api, f"tasks/{task['id']}/delete", {}) == {"deleted": task["id"]}
     get(api, "tasks/" + task["id"], expected=404)
     with store.read() as c:
@@ -233,7 +233,7 @@ def test_a_purged_tasks_number_is_never_given_out_again(api):
     first = post(api, "tasks", {"owner": "ben", "title": "Fix the about page", "body": "x"}, token="priya-test")
     second = post(api, "tasks", {"owner": "ben", "title": "Fix the terms page", "body": "x"}, token="priya-test")
     with store.transaction() as c:
-        c.execute("INSERT INTO task_types(id,name,created,updated,numbered) VALUES('t2','Bug',?,?,1)", (H.now(), H.now()))
+        c.execute("INSERT INTO task_types(id,name,created_at,updated_at,numbered) VALUES('t2','Bug',?,?,1)", (H.now(), H.now()))
         c.execute("UPDATE tasks SET type_id='t2', number=90 WHERE id=?", (first["id"],))
         c.execute("UPDATE tasks SET type_id='t2' WHERE id=?", (second["id"],))
     post(api, f"tasks/{first['id']}/delete", {}, token="priya-test")
@@ -337,7 +337,7 @@ def test_a_delete_finds_its_runs_and_messages_by_index_not_by_scanning_them(api)
                                           "ON m.conversation_id=t.conversation_id WHERE t.id=? LIMIT 1",
                                           (ticket["id"],)).fetchone()
         # Work on the task, so the delete takes the keep_work path, which also updates the jobs about it.
-        c.execute("INSERT INTO turns(id,bot,started,finished,exit,message_id,task_id) VALUES(?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO turns(id,bot,started_at,finished_at,exit,message_id,task_id) VALUES(?,?,?,?,?,?,?)",
                   ("turn-cart", "ops", H.now(), H.now(), "ok", message, ticket["id"]))
         statements = []
         c.set_trace_callback(statements.append)
@@ -388,6 +388,7 @@ def test_a_task_deleted_before_the_column_renames_comes_back_with_every_value(ap
         saved = json.loads(c.execute("SELECT rows FROM task_trash WHERE task_id=?", (ticket["id"],)).fetchone()[0])
         _as_saved_before(saved["rows"], COLUMNS)
         assert "acceptance_json" in saved["rows"]["tasks"][0] and "refs_json" in saved["rows"]["messages"][0]
+        assert "created" in saved["rows"]["tasks"][0] and "created" in saved["rows"]["messages"][0]   # wave 2
         c.execute("UPDATE task_trash SET rows=? WHERE task_id=?", (json.dumps(saved), ticket["id"]))
 
     assert post(api, f"tasks/{ticket['id']}/restore", {}, token="ben-test")["restored"] == ticket["id"]

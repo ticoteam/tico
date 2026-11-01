@@ -72,8 +72,29 @@ def shape_differences(golden, actual, schema, root, where="$"):
             found += shape_differences(golden[key], actual[key], schema.get("properties", {}).get(key, {}), root,
                                        where + "." + key)
         return found
+    if isinstance(golden, dict):
+        # An open object may gain fields, never lose one: a runner in the window may still read it (a renamed
+        # column keeps its old wire name, backend/runner_wire.py).
+        missing = sorted(set(golden) - set(actual))
+        found = ["%s: lost fields %s" % (where, missing)] if missing else []
+        for key in set(golden) & set(actual):
+            found += missing_fields(golden[key], actual[key], where + "." + key)
+        return found
     if isinstance(golden, list) and golden and actual and isinstance(schema.get("items"), dict):
         return shape_differences(golden[0], actual[0], schema["items"], root, where + "[0]")
+    return missing_fields(golden, actual, where)
+
+
+def missing_fields(golden, actual, where):
+    """The fields of `golden`'s objects, at any depth, that `actual` no longer has."""
+    if isinstance(golden, dict) and isinstance(actual, dict):
+        missing = sorted(set(golden) - set(actual))
+        found = ["%s: lost fields %s" % (where, missing)] if missing else []
+        for key in set(golden) & set(actual):
+            found += missing_fields(golden[key], actual[key], where + "." + key)
+        return found
+    if isinstance(golden, list) and isinstance(actual, list) and golden and actual:
+        return missing_fields(golden[0], actual[0], where + "[0]")
     return []
 
 

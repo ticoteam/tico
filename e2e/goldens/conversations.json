@@ -9,7 +9,7 @@
     "conversations": [
       {
         "closed_at": null,
-        "created": "<time>",
+        "created_at": "<time>",
         "id": "<conversation>",
         "kind": "chat",
         "last_message_at": "<time>",
@@ -29,7 +29,7 @@
       },
       {
         "closed_at": null,
-        "created": "<time>",
+        "created_at": "<time>",
         "id": "<id1>",
         "kind": "notice",
         "last_message_at": "<time>",
@@ -49,7 +49,7 @@
       },
       {
         "closed_at": null,
-        "created": "<time>",
+        "created_at": "<time>",
         "id": "<id2>",
         "kind": "task",
         "last_message_at": "<time>",
@@ -69,7 +69,7 @@
       },
       {
         "closed_at": null,
-        "created": "<time>",
+        "created_at": "<time>",
         "id": "<id3>",
         "kind": "task",
         "last_message_at": "<time>",
@@ -87,7 +87,7 @@
       },
       {
         "closed_at": null,
-        "created": "<time>",
+        "created_at": "<time>",
         "id": "<id4>",
         "kind": "notice",
         "last_message_at": "<time>",
