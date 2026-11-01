@@ -3,7 +3,7 @@
 use crate::client::Client;
 use serde_json::json;
 use std::collections::BTreeMap;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 const LIMIT: usize = 64_000_000;
@@ -98,7 +98,7 @@ async fn manifest(checkout: &Path, workspace: &Path) -> Result<String, String> {
 }
 
 impl Packet {
-    pub async fn prepare(client: &Client, source: &Path, checkout: &Path, directory: &Path, aid: &str) -> Result<Self, String> {
+    pub async fn prepare(client: &Client, source: &Path, checkout: &Path, aid: &str, identity: Option<(u32, u32)>) -> Result<Self, String> {
         let commit = git(source, &["rev-parse", "--verify", "@{u}"]).await?.trim().to_string();
         if ![40, 64].contains(&commit.len()) || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err("Nightly memory tidy: no pinned pushed commit".into());
@@ -122,8 +122,18 @@ impl Packet {
             }
             snapshot.insert(path, content);
         }
-        let workspace = directory.join("memory-tidy").join(aid);
-        std::fs::create_dir_all(&workspace).map_err(|_| "Nightly memory tidy: cannot prepare empty workspace")?;
+        // The supervisor's state directory is deliberately inaccessible to bot
+        // processes. Use a private, freshly created temporary directory owned by
+        // exactly the identity that will start the provider process.
+        let workspace = std::env::temp_dir().join(format!("tico-tidy-{aid}"));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&workspace)
+            .map_err(|_| "Nightly memory tidy: cannot prepare empty workspace")?;
+        if let Some((uid, gid)) = identity.or_else(crate::isolation::identity) {
+            std::os::unix::fs::lchown(&workspace, Some(uid), Some(gid))
+                .map_err(|_| "Nightly memory tidy: cannot assign packet workspace")?;
+        }
         let before = manifest(checkout, &workspace).await?;
         let result = client
             .post(

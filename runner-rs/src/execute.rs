@@ -1465,7 +1465,7 @@ impl Runner {
                     return Err(Fail::runtime("Nightly memory tidy: named harness cannot run a packet-only pass"));
                 }
                 tidy_packet = Some(crate::memory_tidy::Packet::prepare(&self.client, &p.main_path,
-                    &execution_path, &self.state.directory, &aid).await?);
+                    &execution_path, &aid, turn_identity).await?);
                 // The model receives only its packet, never its Hub credentials or MCP tools.
                 env.retain(|key, _| !crate::env::RUNNER_HUB_ENV.contains(&key.as_str()));
             }
