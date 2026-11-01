@@ -82,19 +82,17 @@ def live_masks(unsettled):
 DERIVED = {
     # Runs per week (Monday, UTC), bot, trigger and purpose, with tokens and outcome (backend/run_triggers.py).
     # A run from before triggers were recorded reads `unknown`, and is counted, never dropped. Input is the run's
-    # measured usage (every primary and fallback segment) first, and the runner's older one-number `tokens_in` only
-    # when there is none: a resumed thread may report its whole running total there. An attempt that never got a
+    # measured usage (every primary and fallback segment). A run from before measured usage has its one-number
+    # count in input_tokens (migration 76). An attempt that never got a
     # turn row (one that failed or expired before it started) is counted too, as `unknown`, with no tokens or outcome;
     # one whose turn the caller may not read is not turnless, and is not counted.
     "run_weekly": (("turns", "attempts"), """
         SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
                coalesce(purpose, 'unknown') AS purpose,
                count(*) AS runs,
-               sum(CASE WHEN input_tokens IS NOT NULL OR cached_tokens IS NOT NULL
-                        THEN coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)
-                        ELSE coalesce(tokens_in, 0) END) AS input_tokens,
+               sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)) AS input_tokens,
                sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
-               sum(coalesce(output_tokens, tokens_out, 0)) AS output_tokens,
+               sum(coalesce(output_tokens, 0)) AS output_tokens,
                sum(coalesce(outcome, '') = 'acted') AS acted,
                sum(coalesce(outcome, '') = 'no_change') AS no_change,
                sum(coalesce(outcome, '') = 'nothing_to_do') AS nothing_to_do,
@@ -105,11 +103,11 @@ DERIVED = {
                round(100.0 * sum(coalesce(outcome, '') = 'no_change') / count(*), 1) AS no_change_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
                round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
-        FROM (SELECT started, bot, trigger_kind, purpose, input_tokens, cached_tokens, tokens_in, output_tokens, tokens_out,
+        FROM (SELECT started, bot, trigger_kind, purpose, input_tokens, cached_tokens, output_tokens,
                      outcome, did_nothing, rotated
               FROM {turns} WHERE started IS NOT NULL
               UNION ALL
-              SELECT coalesce(a.started, a.created), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+              SELECT coalesce(a.started, a.created), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
               FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {all_turns} t WHERE t.id = a.id))
         GROUP BY 1, 2, 3, 4"""),
     # Runs per week, bot and wake rule (backend/rules.py): the rule that woke the run, with its tokens and how many did
@@ -117,11 +115,9 @@ DERIVED = {
     "rule_weekly": (("turns",), """
         SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(rule_id, 'unknown') AS rule,
                count(*) AS runs,
-               sum(CASE WHEN input_tokens IS NOT NULL OR cached_tokens IS NOT NULL
-                        THEN coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)
-                        ELSE coalesce(tokens_in, 0) END) AS input_tokens,
+               sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)) AS input_tokens,
                sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
-               sum(coalesce(output_tokens, tokens_out, 0)) AS output_tokens,
+               sum(coalesce(output_tokens, 0)) AS output_tokens,
                sum(coalesce(outcome, '') = 'acted') AS acted,
                sum(coalesce(did_nothing, 0) = 1) AS did_nothing,
                round(100.0 * sum(coalesce(did_nothing, 0) = 1) / count(*), 1) AS did_nothing_pct
@@ -419,8 +415,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         "meeting_versions": by_meeting, "meeting_deliveries": by_meeting, "media_assets": by_meeting, "media_control": by_meeting,
         "meeting_items": by_meeting, "meeting_brain": by_meeting, "meeting_comments": by_meeting,
         "import_refs": by_meeting,
-        "documents": "1" if owner else "visibility='external'",
-        "document_versions": "id IN (SELECT id FROM documents)",
+        "market_pages": "1",
         "docs": "id IS NOT NULL", "doc_versions": "doc_id IN (SELECT id FROM docs)",
         "linked_docs": "id IS NOT NULL",
         "bot_files": (file_gate + " AND " + (f"bot={q(H.actor_id(who.actor))} AND " if bot else "")
@@ -451,7 +446,7 @@ def guarded(c, auth, who, inner, function, columns=None):
                          " t WHERE (t.owner='bot:'||bot OR t.requester='bot:'||bot) "
                          "AND (t.private IS NULL OR t.private<>0) AND NOT " +
                          function("task") + "(t.id))")
-    for table in ("docs", "doc_versions", "linked_docs", "documents", "document_versions"):
+    for table in ("docs", "doc_versions", "linked_docs", "market_pages"):
         cols = columns.get(table, ()) if columns is not None else [r[1] for r in c.execute(f'PRAGMA table_info("{table}")')]
         rules[table] = "(" + rules[table] + ") AND " + content_gate(cols)
     rules["task_file_reviews"] = "file_id IN (SELECT id FROM bot_files) OR file_id IN (SELECT id FROM blobs)"

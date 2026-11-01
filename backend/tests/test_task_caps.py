@@ -1,6 +1,7 @@
 """Task caps (redesign/CONTRACT.md §1, backend/task_caps.py): how many tasks a teammate may send a manager a day.
 
 The org here: ops reports to coo, coo to Ana (the owner). A cap on (ops, Ana) limits the tasks ops creates for Ana."""
+from backend import task_caps
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
@@ -139,16 +140,20 @@ def test_a_retry_with_a_saved_idempotency_key_replays_instead_of_hitting_the_cap
     task(api, "ops-test", "Twice", owner="ana", expected=409)                         # a new key is a new send
 
 
-def test_the_upgrade_keeps_the_sends_already_counted(tmp_path):
-    conn = H.connect(tmp_path / "hub.db")
-    try:
-        conn.execute("DROP TABLE task_cap_log")
-        conn.execute("INSERT INTO task_cap_sends(task_id, sender, receiver, sent_at) VALUES('t1','bot:ops','human:ana',?)",
-                     (H.now(),))
-        conn.execute(f"PRAGMA user_version={H.MIGRATIONS.index(H.TASK_CAP_LOG_SCHEMA)}")
-        H.migrate(conn)
-        assert [tuple(r) for r in conn.execute("SELECT task_id, sender, receiver FROM task_cap_log")] == \
-            [("t1", "bot:ops", "human:ana")]
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(H.MIGRATIONS)
-    finally:
-        conn.close()
+def test_the_upgrade_drops_the_retired_send_table_and_the_log_keeps_counting(api):
+    """An install from before the drop still has task_cap_sends. Migration 0004 removes it at the next start, and a send
+    the cap counts (task_cap_log) still counts after it."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("CREATE TABLE task_cap_sends(task_id TEXT PRIMARY KEY, sender TEXT, receiver TEXT, sent_at TEXT)")
+        c.execute("INSERT INTO task_cap_sends(task_id, sender, receiver, sent_at) VALUES('t0','bot:ops','human:ana',?)",
+                  (H.now(),))
+        # As a file from before 0004 has it: that migration and every later one not run yet.
+        c.execute("DELETE FROM schema_migrations WHERE version>='0004' AND version NOT LIKE 'legacy_%'")
+    store.initialize(seed_market=False)
+    with store.transaction() as c:
+        tables = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "task_cap_sends" not in tables and "task_cap_log" in tables
+        assert c.execute("SELECT 1 FROM schema_migrations WHERE version='0004_drop_task_cap_sends'").fetchone()
+        task_caps.record(c, "t1", "bot:ops", "human:ana")
+        assert task_caps.tally(c, "bot:ops", "human:ana") == (1, 0)

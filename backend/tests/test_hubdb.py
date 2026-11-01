@@ -13,7 +13,10 @@ import unittest.mock
 from pathlib import Path
 
 from backend import hubdb as H
+from backend import market as MK
+from backend import migrations
 from backend import task_relations as TR
+from backend import wake_presets as WP
 
 EMPLOYEES = {
     "coo": {"display_name": "COO", "status": "active", "host": "keeper", "runtime": "codex",
@@ -1254,30 +1257,21 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(stored('seo'), 1)
 
 
-# ----------------------------------------------------------------------------- the Strategy Bot's tables, renamed
-# The two tables the Strategy Bot had under their old names, with each index as an install from before has it.
-OLD_STRATEGY_TABLES = {
-    "strategy_actions": ("ceo_actions", {"strategy_actions_created": ("ceo_actions_created", "created")}),
-    "strategy_merges": ("ceo_merges", {"strategy_merges_original": ("ceo_merges_original", "original, state"),
-                                       "strategy_merges_person": ("ceo_merges_person", "person, created")}),
-}
+# ----------------------------------------------------------------------------- the Strategy Bot's old names, dropped
+class StrategyOldNamesDropped(HubCase):
+    """Installs from before v0.5.0 renamed the Strategy Bot's tables (ceo_* -> strategy_*) and kept the old names as
+    mirrors of the new ones. Migration 0006 drops the mirrors and their triggers; the new tables keep
+    every row."""
 
-
-class StrategyTableNames(HubCase):
-    """An install from before the rename keeps its Strategy Bot rows in the new tables, and for one release the old
-    tables stay equal to them, so an older release reopened after a rollback reads every row and what it writes there
-    comes back (hubdb.STRATEGY_TABLES)."""
-
-    def back_to_old_names(self, new):
-        old, indexes = OLD_STRATEGY_TABLES[new]
-        self.conn.execute(f"DROP TABLE {old}")      # the twin a new install keeps for an older release
-        for event in ("insert", "update", "delete"):
-            self.conn.execute(f"DROP TRIGGER {new}_to_old_{event}")
-        for index in indexes:
-            self.conn.execute(f"DROP INDEX {index}")
-        self.conn.execute(f"ALTER TABLE {new} RENAME TO {old}")
-        for index, (old_index, columns) in indexes.items():
-            self.conn.execute(f"CREATE INDEX {old_index} ON {old}({columns})")
+    def install_as_v050_left_it(self):
+        """The old-named twins and the triggers that mirrored writes to them, as the v0.5.0 schema had them."""
+        for old, new in (("ceo_actions", "strategy_actions"), ("ceo_merges", "strategy_merges")):
+            self.conn.execute(f"CREATE TABLE {old} AS SELECT * FROM {new} WHERE 0")
+            self.conn.execute(f"INSERT INTO {old} SELECT * FROM {new}")
+            for event in ("insert", "update", "delete"):
+                self.conn.execute(f"CREATE TRIGGER {new}_to_old_{event} AFTER {event.upper()} ON {new} "
+                                  f"BEGIN SELECT 1; END")
+        self.conn.commit()
 
     def names(self, kind="table"):
         return {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type=?", (kind,))}
@@ -1285,84 +1279,40 @@ class StrategyTableNames(HubCase):
     def rows(self, table, columns="id, state"):
         return sorted(tuple(r) for r in self.conn.execute(f"SELECT {columns} FROM {table}"))
 
-    def act(self, ident, state, table="strategy_actions"):
-        self.conn.execute(f"INSERT INTO {table}(id,created,actor,kind,state) VALUES(?,?,?,'level',?)",
+    def act(self, ident, state):
+        self.conn.execute("INSERT INTO strategy_actions(id,created,actor,kind,state) VALUES(?,?,?,'level',?)",
                           (ident, H.now(), "bot:goal-manager", state))
 
-    def test_rows_move_to_the_new_names_when_an_older_schema_starts_again(self):
+    def test_the_upgrade_drops_the_old_names_and_their_triggers_and_keeps_the_rows(self):
         self.act("a1", "done")
         self.conn.execute("INSERT INTO strategy_merges(merged_into,original,person,asker,created) "
                           "VALUES('t1','t2','human:ana','bot:coo',?)", (H.now(),))
-        self.back_to_old_names("strategy_actions")
-        self.back_to_old_names("strategy_merges")
-        # An install that has not reached the migrations that create these tables runs them again, as it would on start.
-        first = min(H.MIGRATIONS.index(H.STRATEGY_ACTIONS_SCHEMA), H.MIGRATIONS.index(H.STRATEGY_MERGES_SCHEMA))
-        self.conn.execute(f"PRAGMA user_version={first}")
+        self.install_as_v050_left_it()
         self.conn.commit()
-        H.migrate(self.conn)
+        migrations.apply(self.conn)
+        self.assertFalse({"ceo_actions", "ceo_merges"} & self.names())
+        self.assertFalse({f"{t}_to_old_{e}" for t in ("strategy_actions", "strategy_merges")
+                          for e in ("insert", "update", "delete")} & self.names("trigger"))
         self.assertEqual(self.rows("strategy_actions"), [("a1", "done")])
         self.assertEqual(self.rows("strategy_merges", "merged_into, original"), [("t1", "t2")])
-        self.assertEqual(self.rows("ceo_merges", "merged_into, original"), [("t1", "t2")])
-        self.assertLessEqual({"strategy_actions_created", "strategy_merges_original", "strategy_merges_person"},
-                             self.names("index"))
         self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
+
+    def test_writes_after_the_upgrade_go_to_the_new_tables_without_mirrors(self):
+        self.install_as_v050_left_it()
+        self.conn.commit()
+        migrations.apply(self.conn)
+        self.act("a2", "done")
+        self.conn.execute("UPDATE strategy_actions SET state='undone' WHERE id='a2'")
+        self.assertEqual(self.rows("strategy_actions"), [("a2", "undone")])
 
     def test_a_second_start_changes_nothing(self):
         self.act("a1", "done")
-        self.back_to_old_names("strategy_actions")
-        H.migrate(self.conn)
-        before = self.rows("strategy_actions")
-        H.migrate(self.conn)
-        self.assertEqual(self.rows("strategy_actions"), before)
-        self.assertEqual(before, [("a1", "done")])
-
-    def test_every_write_this_release_makes_reaches_the_old_tables(self):
-        """A merged question and a log entry from before a rollback are there for the older release to read: its
-        answer is relayed to the original askers, and its Undo finds the entry."""
-        self.act("a1", "done")
-        self.act("a2", "done")
-        self.conn.execute("INSERT INTO strategy_merges(merged_into,original,person,asker,created) "
-                          "VALUES('t1','t2','human:ana','bot:coo',?)", (H.now(),))
-        self.conn.execute("UPDATE strategy_actions SET state='undone' WHERE id='a1'")
-        self.conn.execute("DELETE FROM strategy_actions WHERE id='a2'")
-        self.conn.execute("INSERT INTO strategy_actions(id,created,actor,kind,state) VALUES('a3',?,?,'level','done') "
-                          "ON CONFLICT(id) DO NOTHING", (H.now(), "bot:goal-manager"))
-        self.assertEqual(self.rows("ceo_actions"), self.rows("strategy_actions"))
-        self.assertEqual(self.rows("ceo_actions"), [("a1", "undone"), ("a3", "done")])
-        self.assertEqual(self.rows("ceo_merges", "merged_into, original, state"), [("t1", "t2", "merged")])
-
-    def test_what_an_older_release_wrote_after_a_rollback_is_what_the_next_start_reads(self):
-        """The older release writes only to the old tables: an entry it added, one it undid and one it removed are all
-        as it left them once this release starts again."""
-        self.act("a1", "done")
-        self.act("a2", "done")
+        self.install_as_v050_left_it()
         self.conn.commit()
-        for statement in ("INSERT INTO ceo_actions(id,created,actor,kind,state) VALUES('a3','x','bot:goal-manager',"
-                          "'level','done')", "UPDATE ceo_actions SET state='undone' WHERE id='a1'",
-                          "DELETE FROM ceo_actions WHERE id='a2'",
-                          "UPDATE ceo_merges SET state='settled' WHERE 0"):
-            self.conn.execute(statement)
-        self.conn.commit()
-        H.migrate(self.conn)
-        self.assertEqual(self.rows("strategy_actions"), [("a1", "undone"), ("a3", "done")])
-        # The triggers are back, so this release's writes reach the old table again.
-        self.act("a4", "done")
-        self.assertEqual(self.rows("ceo_actions"), self.rows("strategy_actions"))
-
-    def test_the_start_that_copies_an_older_releases_rows_leaves_the_triggers_in_place(self):
-        """Another server of this release may write as soon as the copy commits: that write reaches the old table."""
-        self.act("a1", "done")
-        self.conn.commit()
-        self.conn.execute("UPDATE ceo_actions SET state='undone' WHERE id='a1'")
-        self.conn.commit()
-        H._sync_strategy_tables(self.conn)
-        self.act("a2", "done")
-        self.assertEqual(self.rows("ceo_actions"), [("a1", "undone"), ("a2", "done")])
-
-    def test_a_new_install_has_the_old_tables_with_the_new_columns(self):
-        for old, new, _ in H.STRATEGY_TABLES:
-            columns = [r[1] for r in self.conn.execute(f"PRAGMA table_info({new})")]
-            self.assertEqual([r[1] for r in self.conn.execute(f"PRAGMA table_info({old})")], columns)
+        migrations.apply(self.conn)
+        migrations.apply(self.conn)
+        self.assertEqual(self.rows("strategy_actions"), [("a1", "done")])
+        self.assertFalse({"ceo_actions", "ceo_merges"} & self.names())
 
 
 class WalLeftForLitestream(unittest.TestCase):
@@ -1385,3 +1335,86 @@ class WalLeftForLitestream(unittest.TestCase):
             control.execute("CREATE TABLE probe(x)")
             control.close()
             self.assertFalse(Path(f"{plain}-wal").exists())
+
+
+class MarketNotesMoved(HubCase):
+    """Installs from before the market pages had their own table kept them in `documents`, the repository mirror's
+    table, with the mirror's versions beside it. Migration 0008 copies the market notes into
+    market_pages and drops both tables. The mirror's other rows were never shown anywhere, so they go too."""
+
+    def install_as_before_it_moved(self):
+        self.conn.execute("DROP TABLE IF EXISTS market_pages")
+        self.conn.execute("CREATE TABLE documents(id TEXT PRIMARY KEY, visibility TEXT NOT NULL, collection TEXT NOT NULL, "
+                          "payload_json TEXT NOT NULL, digest TEXT NOT NULL, updated TEXT NOT NULL)")
+        self.conn.execute("CREATE TABLE document_versions(id TEXT NOT NULL, digest TEXT NOT NULL, "
+                          "payload_json TEXT NOT NULL, imported TEXT NOT NULL, PRIMARY KEY(id,digest))")
+        overview = {"id": "market/overview", "title": "Overview", "content": "The market is small.", "category": "Market",
+                    "collection": "market", "search": "The market is small.", "format": "markdown",
+                    "owner": MK.CURATOR, "fetched": "2026-10-01T00:00:00.000000Z", "seeded": True}
+        raw = json.dumps(overview)
+        self.conn.execute("INSERT INTO documents VALUES(?,?,?,?,?,?)",
+                          ("market/overview", "external", "market", raw, "d1", "2026-10-01T00:00:00.000000Z"))
+        self.conn.execute("INSERT INTO document_versions VALUES(?,?,?,?)",
+                          ("market/overview", "d1", raw, "2026-10-01T00:00:00.000000Z"))
+        self.conn.execute("INSERT INTO documents VALUES(?,?,?,?,?,?)",
+                          ("repo/readme.md", "internal", "repo", json.dumps({"title": "Readme", "content": "x"}),
+                           "d2", "2026-10-01T00:00:00.000000Z"))
+        self.conn.commit()
+
+    def test_the_upgrade_copies_the_market_notes_and_drops_the_mirror_tables(self):
+        self.install_as_before_it_moved()
+        migrations.apply(self.conn)
+        names = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertNotIn("documents", names)
+        self.assertNotIn("document_versions", names)
+        self.assertEqual([tuple(r) for r in self.conn.execute(
+            "SELECT id, title, category, body, seeded, updated_at FROM market_pages")],
+            [("market/overview", "Overview", "Market", "The market is small.", 1, "2026-10-01T00:00:00.000000Z")])
+
+    def test_the_pages_still_read_list_and_write_after_the_upgrade(self):
+        self.install_as_before_it_moved()
+        migrations.apply(self.conn)
+        page = MK.read_page(self.conn, "market/overview")
+        self.assertEqual((page["content"], page["seeded"], page["collection"]),
+                         ("The market is small.", True, "market"))
+        self.assertIsNone(MK.read_page(self.conn, "repo/readme.md"))
+        MK.write_page(self.conn, MK.SEED_ACTOR, "market/theses", "Theses", "Our bet.", "Market", record=False)
+        rewritten = MK.write_page(self.conn, MK.SEED_ACTOR, "market/overview", "Overview", "Rewritten.", "Market",
+                                  replace=True, record=False)
+        self.assertEqual([p["id"] for p in MK.list_pages(self.conn)], ["market/overview", "market/theses"])
+        self.assertEqual((rewritten["content"], rewritten["seeded"]), ("Rewritten.", True))   # the seed's own write
+        self.assertEqual(MK.read_page(self.conn, "market/theses")["content"], "Our bet.")
+
+
+class TurnLegacyUsageDropped(HubCase):
+    """Runs from before measured usage kept a one-number tokens_in and tokens_out, and a cost, on their turn row. The
+    migration 0009 moves those into input_tokens, output_tokens and est_cost_usd where those are empty, and
+    drops the three columns. A run with measured usage keeps its own numbers."""
+
+    def install_as_before_measured_usage(self):
+        for column, kind in (("tokens_in", "INTEGER"), ("tokens_out", "INTEGER"), ("cost", "REAL")):
+            self.conn.execute(f"ALTER TABLE turns ADD COLUMN {column} {kind}")
+        now = H.now()
+        self.conn.execute("INSERT INTO turns(id,bot,started,finished,exit,tokens_in,tokens_out,cost) "
+                          "VALUES('old-run','ops',?,?,'completed',500,5,0.75)", (now, now))
+        self.conn.execute("INSERT INTO turns(id,bot,started,finished,exit,tokens_in,tokens_out,cost,"
+                          "input_tokens,cached_tokens,output_tokens,est_cost_usd) "
+                          "VALUES('measured','ops',?,?,'completed',999,77,9,100,50,10,0.2)", (now, now))
+        self.conn.execute("INSERT INTO turns(id,bot,started,finished,exit,cost) "
+                          "VALUES('cost-only','ops',?,?,'completed',9)", (now, now))
+        self.conn.commit()
+
+    def test_the_upgrade_moves_the_legacy_tokens_and_cost_and_drops_the_columns(self):
+        self.install_as_before_measured_usage()
+        migrations.apply(self.conn)
+        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(turns)")}
+        self.assertFalse({"tokens_in", "tokens_out", "cost"} & columns)
+        self.assertEqual([tuple(r) for r in self.conn.execute(
+            "SELECT id, input_tokens, cached_tokens, output_tokens, est_cost_usd FROM turns ORDER BY id")],
+            [("cost-only", None, None, None, 9.0), ("measured", 100, 50, 10, 0.2), ("old-run", 500, None, 5, 0.75)])
+
+    def test_the_run_totals_read_the_moved_numbers(self):
+        self.install_as_before_measured_usage()
+        migrations.apply(self.conn)
+        totals = {r[0]: r[1] for r in self.conn.execute(f"SELECT t.id, {WP.RUN_TOKENS} FROM turns t")}
+        self.assertEqual(totals, {"cost-only": 0, "measured": 160, "old-run": 505})

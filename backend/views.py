@@ -2012,8 +2012,7 @@ def install_views(app, store, auth, mutate, task_view):
                 **{k: turn.get(k) for k in ("end_reason", "ended_at", "last_event", "last_event_at", "stalled", "stalled_at")},
                 "finished": turn.get("finished") or turn.get("started"),
                 "exit": 0 if success else 1, "duration_s": duration,
-                "output_tokens": turn.get("output_tokens") if turn.get("output_tokens") is not None else turn.get("tokens_out"),
-                "cost_usd": turn.get("est_cost_usd") if turn.get("est_cost_usd") is not None else turn.get("cost"),
+                "output_tokens": turn.get("output_tokens"), "cost_usd": turn.get("est_cost_usd"),
                 "resumed": False, "fallback": made["fallback"] if made else None, "ran_on": made,
                 "load_start": turn.get("load_start"), "load_end": turn.get("load_end")}
 

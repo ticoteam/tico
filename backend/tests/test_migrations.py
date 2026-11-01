@@ -105,7 +105,7 @@ def test_a_rename_lands_before_startup_code_that_uses_the_new_name(tmp_path):
         c.execute("CREATE UNIQUE INDEX google_connects_state ON google_connects(state) WHERE state IS NOT NULL")
         c.execute("INSERT INTO google_connects(person_id,mailbox,status,state,created,updated) "
                   "VALUES('p1','ana@acme.example','signing_in','nonce-1','t','t')")
-        c.execute("DELETE FROM schema_migrations WHERE version='0003_google_connects_oauth_state'")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0003' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
         assert c.execute("SELECT oauth_state FROM google_connects").fetchall() == [("nonce-1",)]
@@ -195,8 +195,9 @@ def test_failed_migration_rolls_back_its_ddl_and_row_then_runs_once_fixed(tmp_pa
 def test_a_changed_applied_file_refuses_to_boot(tmp_path, monkeypatch):
     directory = tmp_path / "migrations"
     directory.mkdir()
+    for migration in migrations.files():
+        shutil.copy(migration.path, directory / migration.path.name)
     shipped = directory / "0001_audit_log.sql"
-    shutil.copy(migrations.DIRECTORY / "0001_audit_log.sql", shipped)
     monkeypatch.setattr(migrations, "DIRECTORY", directory)
     path = tmp_path / "hub.sqlite"
     boot(path)

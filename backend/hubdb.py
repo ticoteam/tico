@@ -229,8 +229,7 @@ CREATE TABLE IF NOT EXISTS schedules (
 
 CREATE TABLE IF NOT EXISTS turns (
   id TEXT PRIMARY KEY, bot TEXT, thread_id TEXT, started TEXT, finished TEXT, trigger TEXT,
-  message_id TEXT, task_id TEXT, exit TEXT, tokens_in INTEGER, tokens_out INTEGER,
-  cost REAL, summary TEXT);
+  message_id TEXT, task_id TEXT, exit TEXT, summary TEXT);
 
 CREATE TABLE IF NOT EXISTS deltas (
   id TEXT PRIMARY KEY, turn_id TEXT, seq INTEGER, kind TEXT, text TEXT, ts TEXT);
@@ -746,8 +745,7 @@ CREATE TABLE IF NOT EXISTS compact_first(
 """
 
 # The Strategy Bot's merged asks (backend/strategy_merge.py): each original item in a person's Needs you that one
-# Strategy Bot item stands for, and what became of it. An install that has the old table gets the table and its rows
-# before the migrations run (`_sync_strategy_tables`), so this creates the table only on a new install.
+# Strategy Bot item stands for, and what became of it.
 STRATEGY_MERGES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS strategy_merges (
   merged_into TEXT NOT NULL, original TEXT NOT NULL, person TEXT NOT NULL, asker TEXT NOT NULL,
@@ -760,7 +758,6 @@ CREATE INDEX IF NOT EXISTS strategy_merges_person ON strategy_merges(person, cre
 
 # The Strategy Bot log (backend/strategy_acts.py): each decision it made alone at level 3, or each thing it proposed
 # because it stays the owner's, and its Undo. Every task event one decision (or its Undo) wrote carries its action id.
-# As for STRATEGY_MERGES_SCHEMA, an install with the old table gets the table and its rows first.
 STRATEGY_ACTIONS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS strategy_actions (
   id TEXT PRIMARY KEY, created TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
@@ -836,19 +833,14 @@ CREATE TABLE IF NOT EXISTS market_sources (
 TASK_CAPS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_caps(sender TEXT, receiver TEXT, per_day INTEGER, updated TEXT, updated_by TEXT,
   PRIMARY KEY(sender, receiver));
-CREATE TABLE IF NOT EXISTS task_cap_sends(task_id TEXT PRIMARY KEY, sender TEXT, receiver TEXT, sent_at TEXT);
-CREATE INDEX IF NOT EXISTS task_cap_sends_pair ON task_cap_sends(sender, receiver, sent_at);
 """
 
 # Every task cap send is kept (backend/task_caps.py): one row per task, sender, receiver and time, so a hand-over adds a
-# send and never replaces the one before it. `task_cap_sends` (one row per task) is copied in and no longer written.
+# send and never replaces the one before it.
 TASK_CAP_LOG_SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_cap_log(task_id TEXT NOT NULL, sender TEXT NOT NULL, receiver TEXT NOT NULL,
   sent_at TEXT NOT NULL, PRIMARY KEY(task_id, sender, receiver, sent_at));
 CREATE INDEX IF NOT EXISTS task_cap_log_pair ON task_cap_log(sender, receiver, sent_at);
-INSERT OR IGNORE INTO task_cap_log(task_id, sender, receiver, sent_at)
-  SELECT task_id, sender, receiver, sent_at FROM task_cap_sends
-  WHERE task_id IS NOT NULL AND sender IS NOT NULL AND receiver IS NOT NULL AND sent_at IS NOT NULL;
 """
 
 # A pull request's last activity (CONTRACT section 6, PR find): the time of its newest GitHub pull_request, review or
@@ -1235,93 +1227,6 @@ def ensure_market_reads(conn):
         conn.execute("RELEASE market_read_indexes")
 
 
-# The Strategy Bot's tables, each under the name an older release gives it. That release, reopened on the file after a
-# rollback, counts the migrations that make its tables as run, so for one release the old tables stay here. Triggers
-# keep each equal to its new one, so that release reads every row as it last was; it writes only to the old table, so
-# on start the old table holds the rows as they are, and the new one is made equal to it (`_sync_strategy_tables`).
-STRATEGY_TABLES = (("ceo_merges", "strategy_merges", STRATEGY_MERGES_SCHEMA),
-                   ("ceo_actions", "strategy_actions", STRATEGY_ACTIONS_SCHEMA))
-_MIRRORS = ("insert", "update", "delete")
-
-
-def _tables(conn):
-    return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-
-
-def _shared_columns(conn, old, new):
-    kept = {row[1] for row in conn.execute(f"PRAGMA table_info({new})")}
-    return [row[1] for row in conn.execute(f"PRAGMA table_info({old})") if row[1] in kept]
-
-
-def _mirror(conn, old, new):
-    """The triggers that copy every write to `new` to `old` (STRATEGY_TABLES)."""
-    columns = _shared_columns(conn, old, new)
-    names, values = ",".join(columns), ",".join("new." + column for column in columns)
-    keys = [row[1] for row in conn.execute(f"PRAGMA table_info({new})") if row[5]]
-    match = " AND ".join(f"{key}=old.{key}" for key in keys)
-    upsert = f"INSERT OR REPLACE INTO {old}({names}) VALUES({values});"
-    for event, body in (("insert", upsert), ("update", f"DELETE FROM {old} WHERE {match}; {upsert}"),
-                        ("delete", f"DELETE FROM {old} WHERE {match};")):
-        conn.execute(f"CREATE TRIGGER IF NOT EXISTS {new}_to_old_{event} AFTER {event.upper()} ON {new} "
-                     f"BEGIN {body} END")
-
-
-def _sync_strategy_tables(conn):
-    """Make each Strategy Bot table under its new name equal to the one under its old name, before the migrations run:
-    the old one holds every row as it last was, whichever release wrote it (STRATEGY_TABLES). A file from before the
-    rename gets its new tables here. What differs is looked at again under the write lock, so two servers starting
-    together copy once."""
-    def pending(old, new):
-        found = _tables(conn)
-        if old not in found:
-            return False
-        if new not in found:
-            return True
-        columns = ",".join(_shared_columns(conn, old, new))
-        return conn.execute(f"SELECT 1 FROM (SELECT {columns} FROM {old} EXCEPT SELECT {columns} FROM {new}) UNION ALL "
-                            f"SELECT 1 FROM (SELECT {columns} FROM {new} EXCEPT SELECT {columns} FROM {old}) "
-                            "LIMIT 1").fetchone() is not None
-    for old, new, schema in STRATEGY_TABLES:
-        if not pending(old, new):
-            continue
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            if pending(old, new):
-                _apply(conn, schema)
-                for event in _MIRRORS:      # the copy below is not this release's write to mirror back
-                    conn.execute(f"DROP TRIGGER IF EXISTS {new}_to_old_{event}")
-                columns = ",".join(_shared_columns(conn, old, new))
-                conn.execute(f"DELETE FROM {new}")
-                conn.execute(f"INSERT INTO {new}({columns}) SELECT {columns} FROM {old}")
-                _mirror(conn, old, new)     # back before the lock goes, so no write by another server is missed
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-
-
-def _keep_old_strategy_tables(conn):
-    """Give each Strategy Bot table its old-named twin, with its columns, where a new install has none, and the
-    triggers that copy every write to it (STRATEGY_TABLES)."""
-    triggers = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
-    if all(old in _tables(conn) and {f"{new}_to_old_{event}" for event in _MIRRORS} <= triggers
-           for old, new, _ in STRATEGY_TABLES):
-        return
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        for old, new, _ in STRATEGY_TABLES:
-            if old not in _tables(conn):
-                sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (new,)).fetchone()[0]
-                conn.execute(re.sub(r'^CREATE TABLE (IF NOT EXISTS )?("?)\w+\2', f"CREATE TABLE {old}", sql))
-                columns = ",".join(_shared_columns(conn, old, new))
-                conn.execute(f"INSERT INTO {old}({columns}) SELECT {columns} FROM {new}")
-            _mirror(conn, old, new)
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
-
-
 def migrate(conn, adopt_legacy=False):
     """Apply every migration the file has not seen, by `PRAGMA user_version`.
 
@@ -1332,7 +1237,6 @@ def migrate(conn, adopt_legacy=False):
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version == 0 and not adopt_legacy:
         _refuse_foreign(conn)
-    _sync_strategy_tables(conn)
     from .flight import begin
     for i in range(version, len(MIGRATIONS)):
         done = begin(conn)
@@ -1353,7 +1257,6 @@ def migrate(conn, adopt_legacy=False):
             raise
         finally:
             done()
-    _keep_old_strategy_tables(conn)
     ensure_market_reads(conn)
     # Cloud added explicit room scopes after the original local schema. Keep old local
     # databases usable without relying on SQLite's unsupported ADD COLUMN IF NOT EXISTS.
@@ -8925,15 +8828,15 @@ def turn_start(conn, actor, bot_slug, thread_id=None, trigger="message", message
         refuse(conn, actor, "identity", f"{actor_id(actor)} may only record its own turns")
     row = {"id": new_id(), "bot": slug, "thread_id": thread_id, "started": now(),
            "finished": None, "trigger": trigger, "message_id": message_id, "task_id": task_id,
-           "exit": None, "tokens_in": None, "tokens_out": None, "cost": None, "summary": None,
+           "exit": None, "summary": None,
            "trigger_kind": trigger_kind or "other", "trigger_source": trigger_source,
            "purpose": RT.clean_purpose(purpose) or RT.purpose_for(slug, trigger_kind or "other"),
            "rule_id": (str(rule_id)[:80] if rule_id else None)}
     conn.execute("INSERT INTO turns (id, bot, thread_id, started, finished, trigger, message_id, "
-                 "task_id, exit, tokens_in, tokens_out, cost, summary, trigger_kind, trigger_source, purpose, writes, "
+                 "task_id, exit, summary, trigger_kind, trigger_source, purpose, writes, "
                  "rule_id) "
                  "VALUES (:id, :bot, :thread_id, :started, :finished, :trigger, :message_id, :task_id, :exit, "
-                 ":tokens_in, :tokens_out, :cost, :summary, :trigger_kind, :trigger_source, :purpose, 0, "
+                 ":summary, :trigger_kind, :trigger_source, :purpose, 0, "
                  ":rule_id)", row)
     event(conn, actor, "turn.start", row["id"], {"bot": slug, "trigger": trigger, "trigger_kind": row["trigger_kind"],
                                               "purpose": row["purpose"]})
@@ -8956,7 +8859,7 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
     `usage` is what the run cost in tokens: input_tokens, cached_tokens, output_tokens, model, provider,
     est_cost_usd and billing (see USAGE_SCHEMA), and prompt_tokens, its newest request's prompt when known.
     Without `usage` the run is recorded at 0 tokens and $0 with `usage_reason` (USAGE_REASONS) saying why; never
-    left blank. The legacy `tokens_in`, `tokens_out` and `cost` columns are no longer written (docs/hub-sql.md)."""
+    left blank."""
     _writer(conn, actor)
     ts = now()
     conn.execute("UPDATE turns SET finished=?, exit=?, summary=? WHERE id=?", (ts, exit_code, summary, turn_id))

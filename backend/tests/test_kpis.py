@@ -25,13 +25,12 @@ ACTIVATION = {"name": "Activation", "unit": "%", "direction": "up", "cadence": "
 CLIMB = {"kind": "improve", "baseline": 40.0, "baseline_at": stamp(60), "target": 70.0, "deadline": "2026-11-28"}
 
 
-def test_automatic_cost_uses_measured_api_cost_and_ignores_retired_cost(api):
+def test_automatic_cost_uses_measured_api_cost_only(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id, bot, started, cost, billing) VALUES('legacy', 'ops', ?, 900, 'api')",
-                  (stamp(1),))
+        c.execute("INSERT INTO turns(id, bot, started, billing) VALUES('unmeasured', 'ops', ?, 'api')", (stamp(1),))
         assert botkpis.value(c, "ops", "cost_7d", NOW) is None
-        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, cost, billing) VALUES(?, 'ops', ?, ?, ?, ?)", [
-            ("measured", stamp(1), 2.5, 1000, "api"), ("subscription", stamp(1), 5, 500, "subscription")])
+        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+            ("measured", stamp(1), 2.5, "api"), ("subscription", stamp(1), 5, "subscription")])
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 2.5
         c.execute("UPDATE turns SET est_cost_usd=0 WHERE billing='api' AND est_cost_usd IS NOT NULL")
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 0

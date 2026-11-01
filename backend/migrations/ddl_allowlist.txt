@@ -25,7 +25,7 @@ backend/docs.py:7
 backend/events.py:5
 backend/file_library.py:5
 backend/files.py:10
-backend/finance/store/schema.py:131
+backend/finance/store/schema.py:129
 backend/finance/store/tico.py:1
 backend/flight.py:7
 backend/github_app.py:3
@@ -33,7 +33,7 @@ backend/github_reviews.py:1
 backend/google_connect.py:4
 backend/health_monitor.py:2
 backend/hook_relay_schema.py:3
-backend/hubdb.py:302
+backend/hubdb.py:297
 backend/idempotency_messages.py:6
 backend/inbound.py:5
 backend/invariants.py:4
@@ -63,7 +63,7 @@ backend/provenance_clock.py:2
 backend/public_roadmaps.py:1
 backend/read_deps.py:22
 backend/reconnects.py:3
-backend/redesign_migration.py:6
+backend/redesign_migration.py:4
 backend/repositories_schema.py:2
 backend/roadmap_flow.py:2
 backend/roadmaps.py:13
@@ -86,7 +86,7 @@ backend/start_places.py:2
 backend/status_values.py:5
 backend/step_flow.py:1
 backend/storage_schema.py:11
-backend/store.py:181
+backend/store.py:179
 backend/strategy.py:8
 backend/subscriptions_schema.py:2
 backend/support.py:2

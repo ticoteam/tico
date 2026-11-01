@@ -296,8 +296,9 @@ def _usage(c, sub):
     spec = KINDS.get(sub["kind"]) or {}
     if spec.get("billing") == "api":
         month = H.now()[:7] + "-01"
-        cost = c.execute("SELECT coalesce(sum(t.cost),0) FROM attempt_subscriptions s JOIN turns t ON t.id=s.attempt_id "
-                         "JOIN attempts a ON a.id=s.attempt_id WHERE s.subscription_id=? AND t.started>=? "
+        cost = c.execute("SELECT coalesce(sum(t.est_cost_usd),0) FROM attempt_subscriptions s "
+                         "JOIN turns t ON t.id=s.attempt_id JOIN attempts a ON a.id=s.attempt_id "
+                         "WHERE s.subscription_id=? AND t.started>=? "
                          "AND coalesce(a.handed_runtime,s.runtime)=s.runtime", (sub["id"], month)).fetchone()[0]
         return {"window": None, "used_pct": None, "cost_usd_month": round(float(cost or 0), 2)}
     hold = login_holds.get(c, "", login_holds.subscription_login(sub["id"]), spec.get("runtime", ""))
