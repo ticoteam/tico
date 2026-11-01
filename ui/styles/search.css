@@ -21,7 +21,7 @@
 .search-results li .search-kind{margin-left:auto;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .search-results .search-empty{color:var(--muted);cursor:default;font-size:var(--t-base)}
 .search-results .search-empty:hover{background:none}
-@media (max-width:760px){#search-open{display:none}#topbar{padding:0 12px}#topbar:not(:has(#app-nudge:not([hidden]))){display:none}#app-nudge{margin-top:12px}.search-modal{margin-top:6vh}}
+@media (max-width:760px){.side-ask #ask-row~#search-open{flex:1;width:auto;min-height:44px;justify-content:flex-start;padding:7px 10px}.side-ask #ask-row~#search-open .search-label{display:revert}.side-ask #ask-row~#search-open kbd{display:none}#topbar{padding:0 12px}#topbar:not(:has(#app-nudge:not([hidden]))){display:none}#app-nudge{margin-top:12px}.search-modal{margin-top:6vh}}
 .tmodal-title{font-size:var(--t-md);font-weight:600;margin:8px 16px 4px;line-height:var(--lh-tight);letter-spacing:var(--track-snug)}
 .tmodal-body{padding:8px 16px 16px;font-size:var(--t-base);overflow:auto;max-height:calc(86vh - 90px)}
 .tmodal-body .q{white-space:pre-wrap;background:var(--surface2);padding:8px 10px;border-radius:6px;max-height:50vh;overflow:auto;margin-bottom:8px}

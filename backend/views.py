@@ -2289,6 +2289,12 @@ def install_views(app, store, auth, mutate, task_view):
                 for p in r["people"]]}
             # The people and groups this caller may not see are not on the roster, the chart or the @mention picker.
             from . import teammate_access
+            # The caller's own access to each, from the teammate rules in one pass, as a bot's row has it: what a page
+            # offers (edit a profile, add to a thread), which the server checks again.
+            mine = teammate_access.levels_many(c, who, ["human:" + p["id"] for p in out["people"]]
+                                               + ["group:" + g["id"] for g in out["org_groups"]], auth=auth)
+            out["people"] = [{**p, "my_access": mine["human:" + p["id"]]} for p in out["people"]]
+            out["org_groups"] = [{**g, "my_access": mine["group:" + g["id"]]} for g in out["org_groups"]]
             people_hidden, groups_hidden = teammate_access.unseen(c, who, auth)
             if people_hidden or groups_hidden:
                 out = teammate_access.redact_chart(out, r, people_hidden, groups_hidden)

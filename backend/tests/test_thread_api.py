@@ -261,6 +261,19 @@ def test_a_block_holds_a_group_dm_first_message_and_writes_no_message(ruled):
     assert hold_row(api, got.json()["held"]["id"])["author"] == "human:cara"
 
 
+def test_a_held_edit_leaves_the_message_as_it_was_and_its_hold_names_the_message(ruled):
+    api, judge = ruled
+    thread = new_thread(api, members=("human:cara",))
+    message = say(api, thread["id"], "Plain words", token="cara-test")
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
+    got = api.patch(f"/api/v2/messages/{message['id']}", json={"text": GOLD}, headers=headers("cara-test"))
+    assert got.status_code == 200 and got.json()["held"]["outcome"] == "blocked", got.text
+    # What a page needs to place the hold under its message and leave the message's words alone.
+    view = get(api, f"rule-holds/{got.json()['held']['id']}", "cara-test")
+    assert view["message_id"] == message["id"]
+    assert api.get(f"/api/v2/threads/{thread['id']}/timeline", headers=headers("cara-test")).json()["messages"][0]["body"] == "Plain words"
+
+
 def test_a_block_holds_a_new_threads_first_message_and_makes_no_thread(ruled):
     api, judge = ruled
     rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})

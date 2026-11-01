@@ -83,7 +83,7 @@ async function threadsLoad() {
 function threadsSideRender() {
   const on = THREADS.on === true;
   for (const id of ['#nav-threads-section', '#nav-dms-section']) { const el = $(id); if (el) el.hidden = !on; }
-  // On a phone Threads takes Search's place in the bottom bar; search is a button on the Threads page.
+  // On a phone Threads takes Search's place in the bottom bar; global search is then in More (the drawer's footer).
   const tab = $('#mobile-threads'), search = $('#mobile-search');
   if (tab) tab.hidden = !on;
   if (search) search.hidden = on;

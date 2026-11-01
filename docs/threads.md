@@ -32,8 +32,9 @@ A thread's audience is one of these:
   Making a thread public changes its audience, so it needs no Write on the group.
 - Adding a person, bot or group needs **Write** on them. Removing someone needs the thread's owner or an admin.
 - A group added to a thread is resolved live: whoever leaves the group loses the thread.
-- A bot's earlier messages reach its Home readers only once a manager of the bot opens them
-  (`hub thread open-earlier <thread>`).
+- A bot's earlier messages reach its Home readers only once a manager of the bot opens them: **Open earlier messages to
+  Read** in the Home's menu or on the notice each manager gets in their DM with the bot, or
+  `hub thread open-earlier <thread>`. Until then readers see one **Earlier messages** row.
 - Sub-threads follow the audience of the thread they branch from.
 - Mentions and follows never give access. Naming someone outside the thread leaves a warning for the author, and
   nothing else happens until that person is added.
@@ -50,6 +51,15 @@ A thread's audience is one of these:
 Reply under one message when the side topic would bury the main discussion:
 `hub thread reply <thread> <message> "..."`. `hub thread sub <message>` opens the sub-thread without posting.
 Use them sparingly. The work that everyone needs to see stays in the thread.
+
+A thread shows its sub-threads inline: each message is followed by its sub-thread's messages, indented and quieter, in
+tree order. They organize; they don't hide. Tap one to open that sub-thread with the path back above it, and it shows
+its own sub-threads the same way. A long sub-thread shows its latest messages under an **N more** row that loads the
+rest in place. `hub thread show` returns the same tree: each row has its `depth`, and a `collapsed` row's `cursor` reads
+the rest with `hub thread show <that thread> --cursor <cursor>`.
+
+Opening a thread reads what it shows, per thread: it and each sub-thread inline, up to the last message drawn. A
+sub-thread whose **N more** holds something unread stays unread until you open that part.
 
 ## Following and unread
 

@@ -252,8 +252,8 @@ def install(app, store, auth, mutate, rule_check):
     @app.get("/api/v2/threads/{thread_id}/timeline")
     def timeline(request: Request, thread_id: str, cursor: str | None = None, limit: int | None = None,
                  max_bytes: int | None = None):
-        """The thread's messages in tree order: a page of its own messages, sub-threads summarised inline, the parent
-        and the breadcrumb. `next_cursor` is the seq to pass as `cursor` for the page above."""
+        """The thread in tree order: a page of its own messages, each followed by its sub-thread's messages, and the
+        breadcrumb. `next_cursor` is the seq to pass as `cursor` for the page above."""
         with store.read() as c:
             return threads.timeline(c, threads.viewer(auth, request.state.identity), thread_id, cursor=cursor,
                                     limit=limit, max_bytes=max_bytes)

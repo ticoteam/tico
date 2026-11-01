@@ -87,6 +87,8 @@ a.th-who:hover{text-decoration:underline}
 .th-more-new{color:var(--accent);font-weight:600}
 .th-fold{--d:0;display:flex;align-items:center;gap:var(--s2);padding:6px 6px 6px calc(6px + var(--d) * 28px);color:var(--muted);font-size:var(--t-sm)}
 .th-fold::before{content:"";width:18px;height:1px;background:var(--line)}
+.th-more{width:100%;border:0;background:none;text-align:left;cursor:pointer}
+.th-more:hover{color:var(--ink)}
 
 /* the actions on a message show on hover or focus; on touch they are always there, small */
 .th-acts{position:absolute;top:2px;right:4px;display:flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--surface);opacity:0;pointer-events:none}
@@ -156,6 +158,12 @@ a.th-who:hover{text-decoration:underline}
 /* a person's or a team's Home */
 .home-card .thv-head{display:none}
 .home-card h2{margin:0 0 var(--s2)}
+.home-card-acts{margin-left:auto;min-width:0}
+.home-card-acts:empty{display:none}
+.thv-blank .thv-scroll{display:none}
+.th-earlier-open{margin-top:6px}
+.thv-pop [role="menuitemradio"][aria-checked="true"]{font-weight:600}
+.thv-pop [role="menuitemradio"][aria-checked="true"]::after{content:" ✓"}
 
 /* New thread and Members */
 .thd-members{display:flex;flex-direction:column;gap:6px}

@@ -103,18 +103,19 @@ function threadSearchWire(main) {
 }
 
 // ----------------------------------------------------------------- choosing teammates
-// Whom the viewer may add: a bot they may write to, a person they may write to (everyone, unless the server says
-// otherwise). The helpers and the viewer are never listed.
-function threadAddable() {
+// Whom the viewer may add: a bot, a person or (except to a DM, which names its people) a group they may write to. The
+// helpers and the viewer are never listed.
+function threadAddable({groups = true} = {}) {
   const bots = shownEmps().filter(e => e.can_chat !== false && (!e.my_access || e.my_access.write))
     .map(e => ({actor: 'bot:' + e.name, label: e.display_name || e.name}));
   const people = (S.people || []).filter(p => p.id && !p.hidden && p.id !== S.me?.id && p.my_access?.write !== false)
     .map(p => ({actor: 'human:' + p.id, label: p.name || p.id}));
-  return [...people, ...bots].sort((a, b) => a.label.localeCompare(b.label));
+  const teams = groups ? (S.orgGroups || []).filter(g => g.id && g.my_access?.write).map(g => ({actor: 'group:' + g.id, label: g.name || g.id})) : [];
+  return [...people, ...teams, ...bots].sort((a, b) => a.label.localeCompare(b.label));
 }
-function threadPickerHTML(chosen, skip = new Set()) {
+function threadPickerHTML(chosen, skip = new Set(), opts = {}) {
   return `<input type="search" class="thd-q" placeholder="Find a teammate" aria-label="Find a teammate">
-    <div class="thd-picks" role="group" aria-label="Teammates">${threadAddable().filter(t => !skip.has(t.actor)).map(t =>
+    <div class="thd-picks" role="group" aria-label="Teammates">${threadAddable(opts).filter(t => !skip.has(t.actor)).map(t =>
       `<label class="dash-pick-row thd-pick" data-label="${esc(t.label.toLowerCase())}"><input type="checkbox" name="member" value="${esc(t.actor)}"${chosen.includes(t.actor) ? ' checked' : ''}>${actorAvatar(t.actor, 20)}<span>${esc(t.label)}</span></label>`).join('')
       || '<p class="muted">Nobody to add</p>'}</div>`;
 }
@@ -153,7 +154,7 @@ function threadNewOpen({dm = false, members = []} = {}) {
   dlg.innerHTML = `<form>${threadDialogHead(dm ? 'New DM' : 'New thread')}
     <div class="dash-form">
       ${dm ? '' : '<label>Title<input name="title" maxlength="200" autocomplete="off"></label>'}
-      <div class="thd-members"><span class="thd-lbl">${dm ? 'With' : 'Members'}</span>${threadPickerHTML(members)}</div>
+      <div class="thd-members"><span class="thd-lbl">${dm ? 'With' : 'Members'}</span>${threadPickerHTML(members, new Set(), {groups: !dm})}</div>
       ${dm ? '' : threadAudienceHTML()}
       <label>Message<textarea name="body" rows="3"></textarea></label></div>
     ${threadDialogFoot(dm ? 'Start' : 'Create')}</form>`;
@@ -202,7 +203,7 @@ async function threadMembersOpen(view) {
       || '<li class="muted">Nobody</li>';
     const add = form.querySelector('.thd-add-body');
     const people = onlyBots ? threadAddable().map(a => a.actor).filter(a => !a.startsWith('bot:')) : [];
-    if (add) { add.innerHTML = threadPickerHTML([], new Set([...members.map(m => m.actor), ...people])); threadPickerWire(add); }
+    if (add) { add.innerHTML = threadPickerHTML([], new Set([...members.map(m => m.actor), ...people]), {groups: !threadIsDm(t)}); threadPickerWire(add); }
   };
   const load = async () => {
     const r = await get(thvPath(t.id) + '/members?limit=100', {fresh: true});
@@ -236,7 +237,10 @@ function threadMenuOpen(view, button) {
     manage && ['rename', 'Rename'],
     manage && root && t.audience !== 'home' && !threadIsDm(t) && ['share', 'Who can read'],
     t.me?.following ? ['unfollow', 'Unfollow'] : ['follow', 'Follow'],
+    ['notify', 'Notifications'],
+    ['catchup', 'Catch up'],
     ['read', 'Mark all read'],
+    t.earlier && ['earlier', 'Open earlier messages to Read'],
     manage && t.audience !== 'home' && [t.archived_at ? 'unarchive' : 'archive', t.archived_at ? 'Unarchive' : 'Archive'],
   ].filter(Boolean);
   thvMenuShow(button, items, async key => {
@@ -247,6 +251,9 @@ function threadMenuOpen(view, button) {
         if (title == null || !title.trim()) return;
         view.thread = {...t, ...(await patch(path, {title: title.trim()}))};
       } else if (key === 'share') { threadShareOpen(view); return; }
+      else if (key === 'notify') { threadNotifyOpen(view, button); return; }
+      else if (key === 'catchup') { await threadCatchUp(t); return; }
+      else if (key === 'earlier') { await threadEarlierOpen(view, view.id); return; }
       else if (key === 'follow') { await put(path + '/follow', {notify: 'live'}); view.thread = {...t, me: {...t.me, following: true}}; }
       else if (key === 'unfollow') { await writeRequest('DELETE', path + '/follow'); view.thread = {...t, me: {...t.me, following: false}}; }
       else if (key === 'read') { await post(path + '/read-all', {}); threadsMarkedRead(t.id, Number(t.last_seq) || 0); }
@@ -255,6 +262,32 @@ function threadMenuOpen(view, button) {
       thvDraw(view);
     } catch (e) { toast(e.message, true); }
   });
+}
+// Per reader, this thread only: how much of it reaches them. Choosing one follows the thread.
+const THREAD_NOTIFY = [['live', 'Live'], ['mentions', 'Mentions'], ['digest', 'Digest'], ['muted', 'Muted']];
+function threadNotifyOpen(view, button) {
+  const now = view.thread?.me?.notify || 'live';
+  thvMenuShow(button, THREAD_NOTIFY.map(([k, label]) => [k, label, k === now]), async notify => {
+    const t = view.thread;
+    try {
+      const r = await put(thvPath(t.id) + '/follow', {notify});
+      view.thread = {...t, me: {...t.me, following: true, notify: r?.notify || notify}};
+      threadsPut(view.thread); thvDraw(view);
+    } catch (e) { toast(e.message, true); }
+  });
+}
+// A summary of what is new here and under it, in the viewer's own Assistant DM (backend/thread_catchup.py).
+async function threadCatchUp(t) {
+  toast('Catching up…');
+  const r = await post(thvPath(t.id) + '/catch-up', {scope: 'subtree'});
+  if (r?.posted) toast('Catch-up ready', false, {label: 'Open', run: () => { location.hash = ASSISTANT; }});
+  else toast(r?.words || 'Nothing new');
+}
+// A bot's manager opens its Home's closed history to the Home's readers, from the Home or from the notice in a DM.
+async function threadEarlierOpen(view, homeId) {
+  await post(thvPath(homeId) + '/open-earlier', {});
+  toast('Earlier messages open');
+  if (homeId === view.id) await thvRefresh(view);
 }
 function threadShareOpen(view) {
   const t = view.thread;

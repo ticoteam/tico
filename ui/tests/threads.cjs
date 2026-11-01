@@ -31,7 +31,7 @@ const sub = {id: 't-sub', title: 'Pricing', audience: 'team', audience_group_id:
 const timeline = {
   't-plan': () => ({thread: plan, breadcrumb: [{id: 't-plan', title: 'Launch plan'}], next_cursor: null, messages: [
     msg('m1', 1, 'human:bea', 'Kickoff is Monday.'),
-    msg('m2', 2, 'human:ana', 'What price do we open with?', {sub_thread: {id: 't-sub', count: 3, last_seq: 4, unread: 0, more: 0}}),
+    msg('m2', 2, 'human:ana', 'What price do we open with?', {sub_thread: {id: 't-sub', title: 'Pricing', count: 3, last_seq: 4, unread: 0, more: 0}}),
     msg('s1', 1, 'bot:ops', 'Last quarter we opened at 40.', {thread_id: 't-sub', depth: 1, sub_thread: {id: 't-sub2', count: 1, last_seq: 1, unread: 0}}),
     msg('s1a', 1, 'human:bea', 'And churn was low.', {thread_id: 't-sub2', depth: 2}),
     msg('s2', 2, 'human:bea', 'Then 45 this time.', {thread_id: 't-sub', depth: 1}),
@@ -40,8 +40,25 @@ const timeline = {
     msg('m5', 5, 'bot:ops', 'Checked the notes.', {refs: {turn_id: 'turn1'}, run: {steps: 3, tool_calls: 1, took_s: 4}}),
   ]}),
   't-sub': () => ({thread: sub, breadcrumb: [{id: 't-plan', title: 'Launch plan'}, {id: 't-sub', title: 'Pricing'}], next_cursor: null, messages: [
-    msg('s1', 1, 'bot:ops', 'Last quarter we opened at 40.', {thread_id: 't-sub'}),
-    msg('s2', 2, 'human:bea', 'Then 45 this time.', {thread_id: 't-sub'}),
+    msg('s1', 1, 'bot:ops', 'Last quarter we opened at 40.', {thread_id: 't-sub', depth: 1, sub_thread: {id: 't-sub2', count: 1, last_seq: 1, unread: 0}}),
+    msg('s1a', 1, 'human:bea', 'And churn was low.', {thread_id: 't-sub2', depth: 2}),
+    msg('s2', 2, 'human:bea', 'Then 45 this time.', {thread_id: 't-sub', depth: 1}),
+  ]}),
+  // A tree with seqs as the server gives them: t-rb is read, t-lb is long ("2 more", unread), t-nb has an unread reply.
+  't-tree': () => ({thread: thread('t-tree', 'Vendors', 60, {me: me(0, {last_read_seq: 58})}), breadcrumb: [{id: 't-tree', title: 'Vendors'}], next_cursor: null, messages: [
+    msg('p1', 10, 'human:bea', 'Which vendor?', {thread_id: 't-tree', sub_thread: {id: 't-rb', title: '', count: 1, last_seq: 11, last_read_seq: 11, unread: 0, more: 0}}),
+    msg('r1', 11, 'human:bea', 'Old reply.', {thread_id: 't-rb', depth: 1}),
+    msg('p2', 12, 'human:bea', 'A long one.', {thread_id: 't-tree', sub_thread: {id: 't-lb', title: '', count: 4, last_seq: 22, last_read_seq: 0, unread: 4, more: 2}}),
+    {id: 'more:t-lb', thread_id: 't-lb', depth: 1, collapsed: true, count: 2, cursor: 21, unread: true},
+    msg('b3', 21, 'human:bea', 'Long three.', {thread_id: 't-lb', depth: 1}),
+    msg('b4', 22, 'human:bea', 'Long four.', {thread_id: 't-lb', depth: 1}),
+    msg('p3', 23, 'human:bea', 'Has news.', {thread_id: 't-tree', sub_thread: {id: 't-nb', title: '', count: 1, last_seq: 24, last_read_seq: 0, unread: 1, more: 0}}),
+    msg('n1', 24, 'human:bea', 'Unread inline.', {thread_id: 't-nb', depth: 1}),
+    ...Array.from({length: 30}, (_, i) => msg('f' + i, 30 + i, 'human:bea', `Later ${i}.`, {thread_id: 't-tree'})),
+  ]}),
+  't-lb': () => ({thread: thread('t-lb', 'A long one.', 22), breadcrumb: [], next_cursor: null, messages: [
+    msg('b1', 13, 'human:bea', 'Long one.', {thread_id: 't-lb', depth: 1}),
+    msg('b2', 14, 'human:bea', 'Long two.', {thread_id: 't-lb', depth: 1}),
   ]}),
   'h-ops': () => ({thread: {id: 'h-ops', audience: 'home', home: {actor: 'bot:ops'}, last_seq: 2, me: me()}, breadcrumb: [], next_cursor: null, messages: [
     {...msg('o1', 1, 'bot:ops', 'Weekly numbers are in the doc.'), thread_id: 'h-ops'},
@@ -50,13 +67,27 @@ const timeline = {
   'h-bea': () => ({thread: {id: 'h-bea', audience: 'home', home: {actor: 'human:bea'}, last_seq: 1, me: me(0, {can_post: false})}, breadcrumb: [], next_cursor: null, messages: [
     {...msg('b1', 1, 'human:bea', 'Daily update, Oct 31', {kind: 'notice', refs: {card: 'update', update: {id: 'u2', kind: 'daily', day: '2026-10-31'}}}), thread_id: 'h-bea'},
   ]}),
+  // Empty Homes: one the viewer may post to, one they may not.
+  'h-cy': () => ({thread: {id: 'h-cy', audience: 'home', home: {actor: 'human:cy'}, last_seq: 0, me: me()}, breadcrumb: [], next_cursor: null, messages: []}),
+  'h-di': () => ({thread: {id: 'h-di', audience: 'home', home: {actor: 'human:di'}, last_seq: 0, me: me(0, {can_post: false})}, breadcrumb: [], next_cursor: null, messages: []}),
+  // A migrated Home: its closed history is one row, with the control for the bot's manager.
+  'h-old': () => ({thread: {id: 'h-old', title: 'Old room', audience: 'home', home: {actor: 'bot:ops'}, last_seq: 3, earlier: {count: 2}, me: me()}, breadcrumb: [], next_cursor: null, messages: [
+    {id: 'e1', seq: 1, thread_id: 'h-old', depth: 0, hidden: true, earlier: true},
+    {...msg('e3', 3, 'bot:ops', 'New plan.'), thread_id: 'h-old'},
+  ]}),
+  't-notice': () => ({thread: {id: 't-notice', title: '', audience: 'personal', last_seq: 1, me: me(), members: [{actor: 'human:ana'}, {actor: 'bot:ops'}]}, breadcrumb: [], next_cursor: null, messages: [
+    {...msg('nt1', 1, 'keeper', "Ops's earlier messages are closed to its Home's readers.", {kind: 'notice', refs: {earlier_messages: {thread_id: 'h-old'}}}), thread_id: 't-notice'},
+  ]}),
+  't-edit': () => ({thread: thread('t-edit', 'Edits', 1), breadcrumb: [{id: 't-edit', title: 'Edits'}], next_cursor: null, messages: [
+    {...msg('ed1', 1, 'human:ana', 'Open at 40.'), thread_id: 't-edit'},
+  ]}),
 };
-const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'group:ops': ''};
+const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'human:cy': 'h-cy', 'human:di': 'h-di', 'group:ops': ''};
 
 async function open(browser, who, {phone = false} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
-  const seen = {errors: [], posts: [], reads: [], homes: [], steps: [], tasks: [], calls: []};
+  const seen = {errors: [], posts: [], reads: [], readSeqs: [], homes: [], steps: [], tasks: [], calls: [], catchUps: [], follows: [], earlier: [], withdrawn: []};
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
   // A stand-in media client: rooms connect after a moment and remember whether their microphone is on.
@@ -87,7 +118,10 @@ async function open(browser, who, {phone = false} = {}) {
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [],
       my_access: bob ? {see: true, read: false, write: false} : {see: true, read: true, write: true}}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'bea', name: 'Bea', email: 'bea@acme.example'},
-      {id: 'bob', name: 'Bob', email: 'bob@acme.example'}]});
+      {id: 'bob', name: 'Bob', email: 'bob@acme.example'},
+      {id: 'cy', name: 'Cy', email: 'cy@acme.example', reports_to: 'ana', my_access: {see: true, read: true, write: true, manage: true}},
+      {id: 'di', name: 'Di', email: 'di@acme.example', my_access: {see: true, read: true, write: true, manage: false}}],
+      org_groups: [{id: 'ops', name: 'Ops team', my_access: {see: true, read: true, write: true}}, {id: 'legal', name: 'Legal', my_access: {see: true, read: true, write: false}}]});
     if (p === '/api/issues') return json([]);
     if (p === '/api/v2/events') return route.abort();
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: bob ? [] : attention, threads: bob ? [] : listed, dms: bob ? [] : [dm], next_cursor: null});
@@ -102,7 +136,7 @@ async function open(browser, who, {phone = false} = {}) {
     const tl = p.match(/^\/api\/v2\/threads\/([^/]+)\/timeline$/);
     if (tl && timeline[tl[1]]) return json(timeline[tl[1]]());
     const one = p.match(/^\/api\/v2\/threads\/([^/]+)\/read$/);
-    if (one) { seen.reads.push(one[1]); return json({ok: true}); }
+    if (one) { seen.reads.push(one[1]); seen.readSeqs.push(one[1] + ':' + JSON.parse(req.postData() || '{}').seq); return json({ok: true}); }
     if (/^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) return json({calls: [], next_before: null});
     const send = p.match(/^\/api\/v2\/threads\/([^/]+)\/messages$/);
     if (send && method === 'POST') {
@@ -112,6 +146,20 @@ async function open(browser, who, {phone = false} = {}) {
       return json({message: msg('n' + seen.posts.length, 9 + seen.posts.length, 'human:ana', body.text, {thread_id: send[1], parent_message_id: body.parent_message_id || null})});
     }
     if (p === '/api/v2/rule-holds/hold1') return json({id: 'hold1', can_send: false});
+    if (p === '/api/v2/rule-holds/hold2') return json({id: 'hold2', operation: 'threads_edit', message_id: 'ed1', can_send: false});
+    if (p === '/api/v2/rule-holds/hold2/withdraw') { seen.withdrawn.push('hold2'); return json({ok: true}); }
+    const edit = p.match(/^\/api\/v2\/messages\/([^/]+)$/);
+    if (edit && method === 'PATCH') {
+      const body = JSON.parse(req.postData() || '{}');
+      if (/secret/i.test(body.text)) return json({held: {id: 'hold2', outcome: 'blocked', rules: [{id: 'r1', text: 'No secrets in threads'}]}});
+      return json({...msg(edit[1], 1, 'human:ana', body.text), thread_id: 't-edit', edited_at: at(0)});
+    }
+    const asked = p.match(/^\/api\/v2\/threads\/([^/]+)\/(catch-up|follow|open-earlier)$/);
+    if (asked) {
+      if (asked[2] === 'catch-up') { seen.catchUps.push({thread: asked[1], ...JSON.parse(req.postData() || '{}')}); return json({thread_id: asked[1], messages: 2, posted: {id: 'cu1'}}); }
+      if (asked[2] === 'follow') { const body = JSON.parse(req.postData() || '{}'); seen.follows.push(body.notify); return json({notify: body.notify}); }
+      seen.earlier.push(asked[1]); return json({home: 'bot:ops', messages: 2});
+    }
     const react = p.match(/^\/api\/v2\/messages\/([^/]+)\/reactions\/(.+)$/);
     // The server answers a reaction with the message's reactions, a bare list.
     if (react) return json(method === 'PUT' ? [{emoji: decodeURIComponent(react[2]), count: 1, actors: ['human:ana']}] : []);
@@ -170,10 +218,13 @@ async function shot(page, name) {
     const order = await page.locator('.thv-list .th-msg .th-body').allTextContents();
     assert.deepEqual(order.slice(0, 5).map(s => s.trim()), ['Kickoff is Monday.', 'What price do we open with?', 'Last quarter we opened at 40.', 'And churn was low.', 'Then 45 this time.'], 'tree order');
     assert.equal(await page.locator('.th-msg.th-sub[data-mid="s1a"]').getAttribute('style'), '--d:2');
-    assert.equal(await page.locator('.th-fold, [data-mid="h1"]').count(), 0, 'a message the viewer may not read leaves no row');
+    assert.equal((await page.locator('.th-notshown[data-mid="h1"]').textContent()).trim(), 'Not shown', 'a message the viewer may not read is one quiet row');
     // Each sub-thread opens with one header row that links to it; its replies follow, indented.
     assert.deepEqual(await page.locator('.th-subhead').evaluateAll(els => els.map(a => a.getAttribute('href'))), ['#/thread/t-sub', '#/thread/t-sub2']);
     assert.equal(await page.locator('.th-msg[data-mid="m2"] + .th-subhead + .th-msg[data-mid="s1"]').count(), 1, 'the header sits between the message and its replies');
+    // A title only if it was given one: otherwise the row doesn't repeat the line above it.
+    assert.deepEqual(await page.locator('.th-subhead-title').allTextContents(), ['Pricing']);
+    assert.match(await page.locator('.th-msg[data-mid="s1"] + .th-subhead').innerText(), /^1 reply$/);
     // A turn's steps load when their fold opens.
     await page.locator('.th-msg[data-mid="m5"] details.run-steps summary').click();
     await page.locator('.th-msg[data-mid="m5"] .steps-list .step-tool').waitFor();
@@ -227,6 +278,41 @@ async function shot(page, name) {
     await page.evaluate(() => thvRefresh([...THV_VIEWS].find(v => v.id === 't-plan')));
     assert.equal(await page.locator('.th-msg[data-mid="live1"]').count(), 1, 'the refresh did not wipe the live message');
 
+    // A whole tree inline: a long branch keeps its latest messages under "N more", and what is drawn is what is read.
+    await page.goto('https://tico-ui.test/#/thread/t-tree');
+    await page.getByText('Unread inline.').waitFor();
+    await page.waitForFunction(() => document.querySelector('.th-msg[data-mid="n1"]'));
+    const mids = () => page.locator('.thv-list [data-mid]').evaluateAll(els => els.map(e => e.dataset.mid).filter(id => !/^f\d/.test(id)));
+    assert.deepEqual(await mids(), ['p1', 'r1', 'p2', 'more:t-lb', 'b3', 'b4', 'p3', 'n1']);
+    assert.match(await page.locator('.th-more').textContent(), /2 more.*new/);
+    assert.equal((await page.locator('.th-msg[data-mid="p3"] + .th-subhead').innerText()).replace(/\s+/g, ' '), '1 reply · 1 new');
+    await page.waitForTimeout(150);
+    assert.ok(seen.readSeqs.includes('t-nb:24'), 'a sub-thread drawn inline is read: ' + seen.readSeqs);
+    assert.ok(seen.readSeqs.includes('t-tree:59') && !seen.reads.includes('t-rb'), 'read as far as drawn; nothing new, nothing sent: ' + seen.readSeqs);
+    assert.ok(!seen.reads.includes('t-lb'), 'a collapsed part with news stays unread: ' + seen.readSeqs);
+    assert.equal(await page.locator('.th-msg[data-mid="n1"].th-new').count(), 1, 'the mark is its own thread\'s, not the parent\'s');
+    assert.equal(await page.locator('.th-msg[data-mid="r1"].th-new').count(), 0);
+    await page.evaluate(() => document.querySelector('.th-msg[data-mid="p1"]').scrollIntoView());
+    await shot(page, 'subthreads-desktop');
+    await page.locator('.th-more').click();
+    await page.getByText('Long one.', {exact: true}).waitFor();
+    assert.deepEqual((await mids()).slice(2, 7), ['p2', 'b1', 'b2', 'b3', 'b4'], 'the older part takes the row\'s place');
+    await page.waitForTimeout(150);
+    assert.ok(seen.readSeqs.includes('t-lb:22'), 'opened, it reads to the last message: ' + seen.readSeqs);
+    // A reply in an old sub-thread lands under its parent, new, and Unread goes there.
+    await page.evaluate(() => { const b = document.querySelector('.thv-scroll'); b.scrollTop = b.scrollHeight; });
+    await page.evaluate(() => threadViewsLive('messages', {id: 'lv', thread_id: 't-rb', root_id: 't-tree',
+      message: {id: 'lv', seq: 70, revision: 0, thread_id: 't-rb', from_actor: 'human:bea', body: 'Late reply.', created: new Date().toISOString()}}));
+    assert.deepEqual((await mids()).slice(0, 3), ['p1', 'r1', 'lv']);
+    assert.equal(await page.locator('.th-msg[data-mid="lv"].th-new').count(), 1);
+    assert.match(await page.locator('.th-msg[data-mid="p1"] + .th-subhead').textContent(), /2 replies/);
+    await page.locator('.thv-unread').click();
+    await page.waitForFunction(() => { const b = document.querySelector('.thv-scroll').getBoundingClientRect(), r = document.querySelector('[data-mid="lv"]').getBoundingClientRect(); return r.top >= b.top && r.bottom <= b.bottom; });
+    await page.waitForTimeout(100);
+    assert.ok(seen.readSeqs.includes('t-rb:70'), seen.readSeqs);
+    await page.goto('https://tico-ui.test/#/thread/t-plan');
+    await page.getByText('And churn was low.').waitFor();
+
     // Posting closed (archived) hides the composer; reopened, it is back with what was typed.
     await page.locator('.thv-composer .p-text').fill('Kept while archived');
     await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); v.thread = {...v.thread, me: {...v.thread.me, can_post: false}}; thvDraw(v); });
@@ -255,6 +341,9 @@ async function shot(page, name) {
     await page.locator('.th-msg[data-mid="s2"] .th-body').click();
     await page.waitForFunction(() => location.hash === '#/thread/t-sub');
     await page.locator('.thv-crumbs a', {hasText: 'Launch plan'}).waitFor();
+    // Opened, it shows its own sub-threads the same way, one step in from itself.
+    assert.equal(await page.locator('.th-msg.th-sub[data-mid="s1a"]').getAttribute('style'), '--d:1');
+    assert.equal(await page.locator('.th-msg[data-mid="s1"] + .th-subhead + .th-msg[data-mid="s1a"]').count(), 1);
     await page.locator('.thv-back').click();
     await page.waitForFunction(() => location.hash === '#/thread/t-plan');
 
@@ -289,6 +378,95 @@ async function shot(page, name) {
     await page.locator('#person-home .th-update').waitFor();
     await shot(page, 'person-desktop');
 
+    // A Home with nothing in it is its composer, never a blank timeline; its actions sit in the card's header.
+    await page.goto('https://tico-ui.test/#/person/cy');
+    await page.locator('#person-home .thv-composer .p-text').waitFor();
+    assert.equal(await page.locator('#person-home .thv-scroll').isVisible(), false);
+    await page.locator('#person-home-acts [data-call="start"]').waitFor();    // a call starts from a person's Home
+    await shot(page, 'person-empty-home-desktop');
+    assert.equal(await page.locator('#person-notify-browser').count(), 0, 'browser notifications are the viewer\'s own, on their own page');
+    assert.equal(await page.locator('#person-github').count(), 1, 'their manager gets the profile\'s edit controls');
+    // One the viewer may not post to has nothing to show at all.
+    await page.goto('https://tico-ui.test/#/person/di');
+    await page.locator('h1', {hasText: 'Di'}).waitFor();
+    await page.waitForFunction(() => document.getElementById('person-home')?.hidden === true);
+    assert.equal(await page.locator('#person-github').count(), 0, 'no Manage, no edit controls');
+
+    // A sub-thread opened on its own starts a call too.
+    await page.goto('https://tico-ui.test/#/thread/t-sub');
+    await page.locator('.thv-head [data-call="start"]').waitFor();
+
+    // A held edit: the message keeps its words, the held text waits under it, and Edit takes it back into the box.
+    await page.goto('https://tico-ui.test/#/thread/t-edit');
+    const body = page.locator('.th-msg[data-mid="ed1"] .th-body');
+    await body.getByText('Open at 40.').waitFor();
+    const editWith = async text => {
+      await page.locator('.th-msg[data-mid="ed1"]').hover();
+      await page.locator('.th-msg[data-mid="ed1"] [data-th-more]').click();
+      await page.locator('.thv-pop').getByText('Edit', {exact: true}).click();
+      await page.locator('.th-edit-text').fill(text);
+      await page.locator('[data-th-edit-save]').click();
+    };
+    await editWith('Open at the secret price.');
+    await page.locator('.th-held').getByText('No secrets in threads').waitFor();
+    assert.equal((await body.textContent()).trim(), 'Open at 40.', 'a held edit changes nothing yet');
+    await shot(page, 'held-edit-desktop');
+    await page.locator('.th-held [data-held-edit]').click();
+    assert.equal(await page.locator('.th-edit-text').inputValue(), 'Open at the secret price.');
+    await page.waitForTimeout(100);
+    assert.deepEqual(seen.withdrawn, ['hold2'], 'editing it takes the held one back');
+    await page.locator('.th-edit-text').fill('Open at 45.');
+    await page.locator('[data-th-edit-save]').click();
+    await body.getByText('Open at 45.').waitFor();
+    assert.equal(await page.locator('.th-held').count(), 0);
+    await editWith('Another secret.');
+    await page.locator('.th-held [data-held-drop]').click();
+    await page.waitForFunction(() => !document.querySelector('.th-held'));
+    await page.waitForTimeout(100);
+    assert.equal((await body.textContent()).trim(), 'Open at 45.', 'Discard leaves the message alone');
+    assert.equal(seen.withdrawn.length, 2);
+
+    // The thread menu: Catch up, and one reader's notification setting.
+    const pick = async (...labels) => {
+      await page.locator('[data-thv-menu]').click();
+      for (const label of labels) await page.locator('.thv-pop').getByText(label, {exact: true}).click();
+    };
+    await pick('Catch up');
+    await page.locator('.toast', {hasText: 'Catch-up ready'}).waitFor();
+    assert.deepEqual(seen.catchUps, [{thread: 't-edit', scope: 'subtree'}]);
+    await pick('Notifications', 'Digest');
+    await page.waitForTimeout(100);
+    assert.deepEqual(seen.follows, ['digest']);
+    await page.locator('[data-thv-menu]').click();
+    await page.locator('.thv-pop').getByText('Notifications', {exact: true}).click();
+    assert.equal(await page.locator('.thv-pop [aria-checked="true"]').textContent(), 'Digest', 'the menu shows the current setting');
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+
+    // A migrated Home: one "Earlier messages" row and the manager's control; the notice in a DM opens the same history.
+    await page.goto('https://tico-ui.test/#/thread/h-old');
+    await page.getByText('New plan.').waitFor();
+    assert.equal(await page.locator('.th-earlier').count(), 1);
+    assert.match(await page.locator('.th-earlier').textContent(), /Earlier messages/);
+    await shot(page, 'earlier-desktop');
+    await page.locator('.th-earlier [data-th-earlier]').click();
+    await page.locator('.toast', {hasText: 'Earlier messages open'}).waitFor();
+    assert.deepEqual(seen.earlier, ['h-old']);
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+    await page.goto('https://tico-ui.test/#/thread/t-notice');
+    await page.locator('.th-earlier-open').click();
+    await page.waitForFunction(() => document.querySelector('.toast')?.textContent.includes('Earlier messages open'));
+    assert.deepEqual(seen.earlier, ['h-old', 'h-old']);
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+
+    // A team the viewer has Write on can join a thread; a DM stays people and bots.
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#th-new').click();
+    await page.locator('#thread-new .thd-pick').first().waitFor();
+    assert.equal(await page.locator('#thread-new input[value="group:ops"]').count(), 1);
+    assert.equal(await page.locator('#thread-new input[value="group:legal"]').count(), 0, 'no Write, not offered');
+    await page.keyboard.press('Escape');
+
     // Search in Threads: hits from the threads search, each opening its thread at the message.
     await page.goto('https://tico-ui.test/#/threads');
     await page.locator('#th-search').click();
@@ -303,6 +481,7 @@ async function shot(page, name) {
     await page.locator('#thread-new .thd-pick').first().waitFor();
     const picks = await page.locator('#thread-new .thd-pick span').allTextContents();
     assert.ok(picks.includes('Bea') && picks.includes('Ops') && !picks.includes('Ana'), 'teammates, not yourself: ' + picks);
+    assert.equal(await page.locator('#thread-new input[value^="group:"]').count(), 0);
     await shot(page, 'new-dm-desktop');
     await page.keyboard.press('Escape');
 
@@ -334,24 +513,51 @@ async function shot(page, name) {
     await page.goto('https://tico-ui.test/#/tasks');
     await page.locator('#mobile-threads:not([hidden])').waitFor();
     assert.equal(await page.locator('#mobile-threads .nav-badge').textContent(), '5', 'the tab carries the unread total');
+    // Threads takes Search's place in the bar, so search over everything is in the drawer.
+    assert.equal(await page.locator('#mobile-search').isVisible(), false);
+    await page.locator('#mobile-more').click();
+    await page.locator('#search-open').waitFor();
+    await page.waitForTimeout(300);     // the drawer slides in
+    await shot(page, 'drawer-phone');
+    await page.locator('#search-open').click();
+    await page.locator('#search-modal[open]').waitFor();
+    assert.equal(await page.evaluate(() => document.body.classList.contains('drawer')), false, 'the drawer closes behind it');
+    await page.keyboard.press('Escape');
+    await page.locator('#search-modal[open]').waitFor({state: 'detached'});
     await page.locator('#mobile-threads').click();
     await page.waitForFunction(() => location.hash === '#/threads');
     await page.locator('.threads-page .th-row').first().waitFor();
     await shot(page, 'sidebar-phone');
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('And churn was low.').waitFor();
+    // On a phone the tree reads the same, indented less, with no sideways scroll.
+    assert.equal(await page.locator('.th-msg[data-mid="s1a"]').isVisible(), true);
     // On a phone each message shows only ⋯; Acknowledge is in its menu.
     assert.equal(await page.locator('.th-msg[data-mid="m1"] [data-th-ack]').isVisible(), false);
     assert.equal(await page.locator('.th-msg[data-mid="m1"] [data-th-more]').isVisible(), true);
     const width = await page.evaluate(() => document.documentElement.scrollWidth);
     assert.ok(width <= 390, 'no sideways scroll: ' + width);
     await shot(page, 'thread-phone');
+    await page.goto('https://tico-ui.test/#/thread/t-tree');
+    await page.getByText('Unread inline.').waitFor();
+    await page.evaluate(() => document.querySelector('.th-msg[data-mid="p1"]').scrollIntoView());
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390);
+    await shot(page, 'subthreads-phone');
     await page.goto('https://tico-ui.test/#/bot/ops');
     await page.getByText('Weekly numbers are in the doc.').waitFor();
     await shot(page, 'bot-home-phone');
     await page.goto('https://tico-ui.test/#/person/bea');
     await page.locator('#person-home .th-update').waitFor();
     await shot(page, 'person-phone');
+    await page.goto('https://tico-ui.test/#/person/cy');
+    await page.locator('#person-home .thv-composer .p-text').waitFor();
+    await page.evaluate(() => document.querySelector('#person-home').scrollIntoView());
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390);
+    await shot(page, 'person-empty-home-phone');
+    await page.goto('https://tico-ui.test/#/thread/t-plan');
+    await page.locator('.th-notshown').waitFor();
+    await page.evaluate(() => document.querySelector('.th-notshown').scrollIntoView({block: 'center'}));
+    await shot(page, 'not-shown-phone');
     await page.goto('https://tico-ui.test/#/threads?view=dms');
     await page.locator('[data-thp-new]').click();
     await page.locator('#thread-new .thd-pick').first().waitFor();

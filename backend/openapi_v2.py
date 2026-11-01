@@ -2551,7 +2551,7 @@ STABLE.extend([
     ("/api/v2/threads/{thread_id}", "patch", "Threads", "updateThread",
      "Rename, archive or unarchive a thread, or change who it is for; its managers only", "ThreadView"),
     ("/api/v2/threads/{thread_id}/timeline", "get", "Threads", "getThreadTimeline",
-     "The thread's messages in tree order, a page at a time (`cursor` is the seq from next_cursor), with the breadcrumb", "ThreadTimeline"),
+     "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest", "ThreadTimeline"),
     ("/api/v2/threads/{thread_id}/members", "get", "Threads", "listThreadMembers",
      "Who a thread is for, a page at a time", "ThreadMembers"),
     ("/api/v2/threads/{thread_id}/members", "post", "Threads", "addThreadMember",

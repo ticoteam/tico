@@ -8,8 +8,9 @@ const PERSON_TABS = ['profile', 'slack'];
 // Assistant page (ui/app/assistant-page.js), the owner's too. The old #/person/<you>/assistant link lands there too.
 const personTabs = p => S.me?.id === p.id ? ['assistant', ...PERSON_TABS] : PERSON_TABS;
 const PERSON_TAB_LABELS = {assistant: 'Assistant', profile: 'Profile', slack: 'Slack'};
+// Manage on them, as the server says it: yourself, the owner, an admin, or anyone they report up to.
 function personCanEdit(p) {
-  return S.me?.role === 'owner' || S.me?.id === p.id;
+  return p.my_access ? !!p.my_access.manage : S.me?.role === 'owner' || S.me?.id === p.id;
 }
 function fieldEditor(label, value, {placeholder, rows, save}) {
   const current = String(value || '');
@@ -79,7 +80,7 @@ function pagePerson(id, tab) {
       <div id="person-id">${p.title || p.team ? `<div class="meta">${esc([...new Set([p.title, p.team ? teamLabel(p.team) : ''].filter(Boolean))].join(' · '))}</div>` : ''}
         ${p.about ? `<div class="role">${esc(about.lead)}${about.rest ? `<span id="goal-rest" hidden> ${esc(about.rest)}</span> <button class="linkish" type="button" id="goal-more" aria-expanded="false">more</button>` : ''}</div>`
           : edit && !p.title ? '<div class="muted">No title or description yet.</div>' : ''}</div></section>` : ''}
-    <section class="card home-card" id="person-home"><header><h2>Home</h2></header><div id="person-home-thread"></div></section>
+    <section class="card home-card" id="person-home"><header><h2>Home</h2><div class="home-card-acts" id="person-home-acts"></div></header><div id="person-home-thread"></div></section>
     <section class="card tasks" id="person-tasks-card"><header><h2>Tasks</h2>
         <button class="ghost" type="button" id="person-task-add" aria-haspopup="dialog">+ Add task</button></header>
       <div id="person-tasks">Loading…</div></section>
@@ -100,9 +101,9 @@ function pagePerson(id, tab) {
         <input type="checkbox" role="switch" class="people-switch" id="person-notify-bots" ${p.notify_slack_bot_messages !== false ? 'checked' : ''}>
         <span>Bot messages in Slack</span></label>
       <div class="person-muted" id="person-muted" ${p.notify_slack_bot_messages === false ? 'hidden' : ''}></div>
-      <label class="person-notify" title="A browser notification for new threads that need you (a question, a mention, a DM, a held message), while Tico is in the background. Your browser asks permission the first time">
+      ${S.me?.id === p.id ? `<label class="person-notify" title="A browser notification for new threads that need you (a question, a mention, a DM, a held message), while Tico is in the background. Your browser asks permission the first time">
         <input type="checkbox" role="switch" class="people-switch" id="person-notify-browser" ${p.notify_browser === true ? 'checked' : ''}>
-        <span>Browser notifications</span></label>
+        <span>Browser notifications</span></label>` : ''}
       <label class="person-notify" title="One email an hour for the threads you follow on digest that have new messages for you: each title, its unread count and a link. Never the messages or who wrote them">
         <input type="checkbox" role="switch" class="people-switch" id="person-email-digest" ${p.email_digest !== false ? 'checked' : ''}>
         <span>Email digests</span></label>
@@ -222,8 +223,8 @@ function pagePerson(id, tab) {
   };
   githubPaint(false);
   // Their Home under the profile: their posts and update cards, never an empty timeline.
-  threadMount($('#person-home-thread'), {home: 'human:' + p.id, card: true, header: false, hideGone: $('#person-home'),
-    empty: 'Nothing posted yet'});
+  threadMount($('#person-home-thread'), {home: 'human:' + p.id, card: true, header: 'compact', actsHost: $('#person-home-acts'),
+    hideGone: $('#person-home'), compactEmpty: true});
   const cards = $('#pane-profile').querySelectorAll('section.card');
   const goalsCard = [...cards].find(el => el.querySelector('h2')?.textContent === 'Goals');
   const notesCard = [...cards].find(el => el.querySelector('h2')?.textContent === 'Notes');

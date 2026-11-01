@@ -152,12 +152,13 @@ def run_bookkeeper_rules_digest(store, auth, at, failures=None):
 
 
 def run_thread_followups(store, auth, at, failures=None):
-    # Asks a bot left unanswered for a day get one nudge in their thread (backend/thread_followups.py). Nothing due is a
-    # quiet run: no post, no model.
+    # Asks a bot left unanswered for a day get one nudge in their thread, and a bot's managers one notice about its Home's
+    # closed history (backend/thread_followups.py). Nothing due is a quiet run: no post, no model.
     with SR.recording(store, "thread_followups", failures, "helper") as run:
         from . import thread_followups
         with store.transaction() as c:
             nudged = thread_followups.sweep(c, stamp(at))
+            thread_followups.earlier_sweep(c, auth, stamp(at))
         run.did(SR.words_of(nudged, "follow-up", "Nothing to follow up"), quiet=not nudged)
 
 

@@ -74,6 +74,10 @@ EDITABLE_KINDS = ("say",)
 MAX_TITLE = 200
 MAX_PAGE = 200
 MAX_PAGE_BYTES = 512 * 1024
+BRANCH_TAIL = 20                  # a timeline shows this many of a branch's latest messages; the rest is "N more"
+MAX_INLINE_ROWS = 1000            # a page opens no deeper branches past this many inline rows
+MAX_BRANCH_LEVELS = 16
+BRANCH_CHECKS = 200               # restricted rows a branch count checks one by one per level
 
 # Set while `post` writes, so `record` knows the message came through the new door: only then do mentions of other
 # teammates wake them and the loop guard count it. A legacy writer (hubdb.say from an older route) keeps its own rules.
@@ -1408,11 +1412,12 @@ def wake_mode(c, thread, message, bot, reason):
     return rules.thread_wake(c, message, bot, thread, mode)
 
 
-NO_WAKE_REF_KEYS = ("follow_up", "card")
+NO_WAKE_REF_KEYS = ("follow_up", "card", "earlier_messages")
 
 
 def quiet_notice(message):
-    """A follow-up nudge or an update card (refs.follow_up, refs.card) is read, never a reason to start a run."""
+    """A follow-up nudge, an update card or a closed-history notice (refs.follow_up, refs.card, refs.earlier_messages) is read,
+    never a reason to start a run."""
     refs = (message or {}).get("refs") or {}
     return isinstance(refs, dict) and any(refs.get(k) for k in NO_WAKE_REF_KEYS)
 
@@ -2684,63 +2689,192 @@ def _message_out(m):
     return out
 
 
+def _depth(row):
+    """A thread's place in its tree: 0 for a root, 1 for a sub-thread, and so on (`path`)."""
+    return max(0, len([p for p in str(row.get("path") or f"/{row['id']}/").split("/") if p]) - 1)
+
+
+def _timeline_rows(c, v, rows, thread_id, depth):
+    """Messages of one thread, as given, each through the per-message check: the message, its tombstone for a viewer who
+    read it before it went, or the quiet hidden row. Consecutive hidden rows of one kind collapse into one; a row that
+    stands for shared-room history the viewer's Home Read doesn't reach says so (`earlier`), the "Earlier messages" row."""
+    known = v.known(c)
+    out, hidden_open = [], None
+    for m in rows:
+        shown = (readable_before_deletion(c, v, m) if m.get("deleted_at")
+                 else message_readable(c, v, m, thread_checked=True))
+        if not shown:
+            kind = "earlier" if m.get("legacy_audience") and legacy_hidden(c, v, m) else "plain"
+            if hidden_open != kind:
+                out.append({"id": m["id"], "seq": m["seq"], "thread_id": thread_id, "depth": depth, "hidden": True,
+                            **({"earlier": True} if kind == "earlier" else {})})
+            hidden_open = kind
+            continue
+        out.append({**known.message(_message_out(m)), "depth": depth})
+        hidden_open = None
+    return out
+
+
+def _branch_tails(c, ids):
+    """The latest BRANCH_TAIL messages of each of these threads, newest first in each: one query, whatever the count."""
+    marks = ",".join("?" * len(ids))
+    tails = {i: [] for i in ids}
+    for m in c.execute(
+            "SELECT m.* FROM conversations t JOIN messages m ON m.conversation_id=t.id AND m.seq IS NOT NULL AND m.seq>="
+            "COALESCE((SELECT x.seq FROM messages x WHERE x.conversation_id=t.id AND x.seq IS NOT NULL "
+            f"ORDER BY x.seq DESC LIMIT 1 OFFSET ?),0) WHERE t.id IN ({marks}) ORDER BY m.conversation_id, m.seq DESC",
+            (BRANCH_TAIL - 1, *ids)):
+        tails[m["conversation_id"]].append(dict(m))
+    return tails
+
+
+def _branch_stats(c, v, branches, below):
+    """{thread id: {"count", "older", "unseen", "unread"}} of the messages the viewer reads: how many there are, how many
+    sit below the rendered tail (`below`, a seq per thread), how many of those are past the viewer's mark, and the unread
+    count (`unread`'s rule). The counts come from one query. Only the rows it can't decide, restricted or from an old
+    room, are checked one by one, up to BRANCH_CHECKS, so a count never gives away a message the viewer can't read."""
+    me = v.actor
+    cuts = ",".join(["(?,?,?)"] * len(branches))
+    args = [x for b in branches for x in (b["id"], below[b["id"]], b["mark"])]
+    stats = {b["id"]: {"count": 0, "older": 0, "unseen": 0, "unread": 0} for b in branches}
+    for r in c.execute(
+            f"WITH cut(tid,below,mark) AS (VALUES {cuts}) SELECT cut.tid, COUNT(*), SUM(m.seq<cut.below), "
+            "SUM(m.seq<cut.below AND m.seq>cut.mark AND m.from_actor<>?), "
+            "SUM(m.seq>cut.mark AND m.from_actor<>? AND (m.from_actor LIKE 'human:%' OR EXISTS (SELECT 1 FROM "
+            "message_deliveries d WHERE d.message_id=m.id AND d.recipient=?))) "
+            "FROM cut JOIN messages m ON m.conversation_id=cut.tid WHERE m.seq IS NOT NULL AND m.deleted_at IS NULL "
+            "AND m.restricted=0 AND m.legacy_audience IS NULL GROUP BY cut.tid", (*args, me, me, me)):
+        stats[r[0]].update(count=r[1], older=r[2] or 0, unseen=r[3] or 0, unread=r[4] or 0)
+    ids = [b["id"] for b in branches]
+    marks = {b["id"]: b["mark"] for b in branches}
+    for m in c.execute(f"SELECT * FROM messages WHERE conversation_id IN ({','.join('?' * len(ids))}) AND seq IS NOT NULL "
+                       "AND deleted_at IS NULL AND (restricted<>0 OR legacy_audience IS NOT NULL) ORDER BY seq DESC LIMIT ?",
+                       (*ids, BRANCH_CHECKS)).fetchall():
+        m = dict(m)
+        if not message_readable(c, v, m, thread_checked=True):
+            continue
+        tid, at, past = m["conversation_id"], stats[m["conversation_id"]], m["seq"] > marks[m["conversation_id"]]
+        at["count"] += 1
+        if m["seq"] < below[tid]:
+            at["older"] += 1
+            at["unseen"] += int(past and m["from_actor"] != me)
+        if past and m["from_actor"] != me and (str(m["from_actor"]).startswith("human:") or m.get("to_actor") == me):
+            at["unread"] += 1
+    return stats
+
+
+def _more_row(thread_id, depth, count, cursor, unseen):
+    """The older part of a long branch: `GET /threads/{thread_id}/timeline?cursor=` reads it, to put in this row's place."""
+    return {"id": f"more:{thread_id}", "thread_id": thread_id, "depth": depth, "collapsed": True, "count": count,
+            "cursor": cursor, "unread": bool(unseen)}
+
+
+def _own_titles(c, found):
+    """{branch id: the title someone gave it}, "" while its stored title is only its parent's first line, as the parent
+    reads now or read before an edit: a header that repeated the line right above it would say nothing."""
+    parents = list({b["parent_message_id"] for b in found})
+    marks = ",".join("?" * len(parents))
+    lines = {}
+    for mid, body in c.execute(
+            f"SELECT id, substr(body, 1, 2000) FROM messages WHERE id IN ({marks}) UNION ALL "
+            f"SELECT message_id, substr(body, 1, 2000) FROM message_revisions WHERE message_id IN ({marks}) "
+            "AND body IS NOT NULL", (*parents, *parents)):
+        lines.setdefault(mid, set()).add(sub_thread_title(body))
+    return {b["id"]: "" if (b["subject"] or "") in lines.get(b["parent_message_id"], ()) else b["subject"] or ""
+            for b in found}
+
+
+def _branches(c, v, tops):
+    """{parent message id: {"sub_thread", "more", "rows"}} for these timeline rows and the rows under them. It walks one
+    level of the tree at a time, so the queries follow the tree's depth, not its number of branches. Past MAX_INLINE_ROWS
+    or MAX_BRANCH_LEVELS a branch comes as its summary and one "N more" row."""
+    out = {}
+    frontier, total, level = [t["id"] for t in tops if not t.get("hidden")], 0, 0
+    while frontier:
+        found = [dict(r) for r in c.execute(
+            "SELECT id, parent_message_id, path, subject, last_seq FROM conversations WHERE parent_message_id IN "
+            f"({','.join('?' * len(frontier))})", frontier)]
+        allowed = readable_ids(c, v, [b["id"] for b in found])
+        found = [b for b in found if b["id"] in allowed]
+        if not found:
+            break
+        ids = [b["id"] for b in found]
+        read = {r[0]: r[1] for r in c.execute(
+            f"SELECT thread_id, last_read_seq FROM thread_followers WHERE actor=? AND thread_id IN ({','.join('?' * len(ids))})",
+            (v.actor, *ids))}
+        for b in found:
+            b["mark"] = int(read.get(b["id"]) or 0)
+        tails = _branch_tails(c, ids) if total < MAX_INLINE_ROWS and level < MAX_BRANCH_LEVELS else {}
+        below = {b["id"]: (tails[b["id"]][-1]["seq"] if tails.get(b["id"]) else int(b["last_seq"] or 0) + 1) for b in found}
+        stats = _branch_stats(c, v, found, below)
+        titles = _own_titles(c, found)
+        frontier = []
+        for b in found:
+            at = stats[b["id"]]
+            depth = _depth(b)
+            rows = _timeline_rows(c, v, tails.get(b["id"], []), b["id"], depth)
+            rows.reverse()
+            total += len(rows)
+            frontier += [r["id"] for r in rows if not r.get("hidden")]
+            out[b["parent_message_id"]] = {
+                "sub_thread": {"id": b["id"], "title": titles[b["id"]], "count": at["count"], "last_seq": b["last_seq"],
+                               "last_read_seq": b["mark"], "unread": at["unread"], "more": at["older"]},
+                "more": _more_row(b["id"], depth, at["older"], below[b["id"]], at["unseen"]) if at["older"] else None,
+                "rows": rows}
+        level += 1
+    return out
+
+
 def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
-    """A thread's messages in seq order, newest page first (`cursor` is the seq to read below), with each parent's
-    sub-thread summary. Hidden messages are one quiet row; carriers never show."""
+    """A thread in tree order, newest page first: `cursor` and `limit` page its own messages, and each is followed by its
+    sub-thread's messages, recursively, each with its `depth`. A long branch shows its latest messages under a
+    `collapsed` row ("N more", with the cursor that reads the rest). Every row passes the per-message check: hidden
+    messages are one quiet row, and carriers never show. A page always ends on a whole message and its branch; a first
+    message whose branch alone is over the byte cap keeps its summary and an "N more" row in the branch's place."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
     limit = max(1, min(int(limit or 50), MAX_PAGE))
     max_bytes = min(int(max_bytes or MAX_PAGE_BYTES), MAX_PAGE_BYTES)
     below = int(cursor) if cursor not in (None, "") else (1 << 62)
-    only_old = " AND legacy_audience IS NOT NULL" if legacy_reader_only(c, v, row) else ""
+    # An old reader of a migrated Home opens only its root, for the history they read: there is no branch for them.
+    old_only = legacy_reader_only(c, v, row)
+    only_old = " AND legacy_audience IS NOT NULL" if old_only else ""
     rows = [dict(r) for r in c.execute("SELECT * FROM messages WHERE conversation_id=? AND seq IS NOT NULL AND seq<?"
                                        f"{only_old} ORDER BY seq DESC LIMIT ?", (row["id"], below, limit + 1))]
     more = len(rows) > limit
-    rows = rows[:limit]
-    subs = {}
-    ids = [r["id"] for r in rows]
-    if ids:
-        for s in c.execute("SELECT id, parent_message_id, last_seq FROM conversations WHERE parent_message_id IN (%s)"
-                           % ",".join("?" * len(ids)), ids):
-            n = c.execute("SELECT COUNT(*) FROM messages WHERE conversation_id=? AND seq IS NOT NULL "
-                          "AND deleted_at IS NULL", (s["id"],)).fetchone()[0]
-            u = unread(c, v, s["id"])
-            subs[s["parent_message_id"]] = {"id": s["id"], "count": n, "last_seq": s["last_seq"],
-                                            "unread": u["unread"], "more": n > 0}
-    marks = reactions(c, ids)
-    # Every message sits at its thread's depth in the tree: 0 in a root, 1 in a sub-thread, and so on (`path`).
-    depth = max(0, len([p for p in str(row.get("path") or f"/{row['id']}/").split("/") if p]) - 1)
+    tops = _timeline_rows(c, v, rows[:limit], row["id"], _depth(row))
+    branches = {} if old_only else _branches(c, v, tops)
+    shown = [r["id"] for r in tops if not r.get("hidden")] + [
+        r["id"] for b in branches.values() for r in b["rows"] if not r.get("hidden")]
+    marks = reactions(c, shown)
     known = v.known(c)
-    out, size, hidden_open = [], 0, False
-    for m in rows:
-        if m.get("deleted_at") and readable_before_deletion(c, v, m):
-            item = {**known.message(_message_out(m)), "depth": depth}
-            hidden_open = False
-        elif m.get("deleted_at"):
-            if hidden_open:
-                continue
-            item = {"id": m["id"], "seq": m["seq"], "thread_id": row["id"], "hidden": True}
-            hidden_open = True
-        elif not message_readable(c, v, m, thread_checked=True):
-            if hidden_open:
-                continue                     # consecutive hidden rows collapse into one
-            item = {"id": m["id"], "seq": m["seq"], "thread_id": row["id"], "hidden": True}
-            hidden_open = True
-        else:
-            item = {**known.message(_message_out(m)), "depth": depth}
-            hidden_open = False
-        if m["id"] in subs and not item.get("hidden"):
-            item["sub_thread"] = subs[m["id"]]
-        if m["id"] in marks and not item.get("hidden") and not item.get("deleted"):
-            item["reactions"] = known.reactions(marks[m["id"]], row["id"])
-        size += len(json.dumps(item, default=str))
-        if out and size > max_bytes:
+
+    def block(item):
+        if item["id"] in marks and not item.get("deleted"):
+            item["reactions"] = known.reactions(marks[item["id"]], item["thread_id"])
+        found = branches.get(item["id"])
+        if not found:
+            return [item]
+        item["sub_thread"] = found["sub_thread"]
+        return [item, *([found["more"]] if found["more"] else []), *(r for child in found["rows"] for r in block(child))]
+
+    pages, size = [], 0
+    for item in tops:
+        rows_of = block(item)
+        bytes_of = sum(len(json.dumps(r, default=str)) for r in rows_of)
+        if pages and size + bytes_of > max_bytes:
             more = True
             break
-        out.append(item)
-    out.reverse()
-    next_cursor = out[0]["seq"] if more and out else None
-    return {"thread": view(c, v, row), "breadcrumb": breadcrumb(c, row), "messages": out, "next_cursor": next_cursor}
+        if bytes_of > max_bytes and len(rows_of) > 1:
+            st = item["sub_thread"]
+            rows_of = [item, _more_row(st["id"], rows_of[1]["depth"], st["count"], int(st["last_seq"] or 0) + 1,
+                                       int(st["last_seq"] or 0) > int(st["last_read_seq"] or 0))]
+            bytes_of = sum(len(json.dumps(r, default=str)) for r in rows_of)
+        size += bytes_of
+        pages.append(rows_of)
+    next_cursor = pages[-1][0]["seq"] if more and pages else None
+    return {"thread": {**view(c, v, row), **_earlier(c, v, row)}, "breadcrumb": breadcrumb(c, row),
+            "messages": [r for rows_of in reversed(pages) for r in rows_of], "next_cursor": next_cursor}
 
 
 def _attention_roots(c, v):
@@ -2997,6 +3131,21 @@ def _store_shared_homes(c, slug=None):
               f"AND s.closed_at IS NULL AND s.archived_at IS NULL AND s.audience IS NULL{one} AND NOT EXISTS (SELECT 1 "
               f"FROM conversations h WHERE h.audience='home' AND h.closed_at IS NULL AND "
               f"h.owner_actor='bot:'||{_ROOM_BOT.format(r='s')}))", (slug,) if slug else ())
+
+
+def _earlier(c, v, row):
+    """`{"earlier": {"count": n}}` for a manager of a bot on its Home's root while shared-room history is still closed:
+    what the control to open it needs, whether or not this manager already reads that history. Nobody else gets a count."""
+    found = legacy_home(c, row["id"]) if row["id"] == (row.get("root_id") or row["id"]) else None
+    owner = str((found or {}).get("owner") or "")
+    if not owner.startswith("bot:") or not v.is_person:
+        return {}
+    from . import teammate_access
+    if not teammate_access.can(c, v.who, "manage", owner, auth=v.auth):
+        return {}
+    count = c.execute("SELECT COUNT(*) FROM messages WHERE conversation_id=? AND legacy_audience IS NOT NULL",
+                      (row["id"],)).fetchone()[0]
+    return {"earlier": {"count": count}} if count else {}
 
 
 def open_earlier_messages(c, principal, slug):

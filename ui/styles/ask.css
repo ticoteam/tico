@@ -112,7 +112,7 @@ button.ask-card-q[aria-expanded="true"]{display:block;-webkit-line-clamp:none}
 .mobile-ask{display:none}
 .mobile-ask[hidden]{display:none!important}
 @media (max-width:760px){
-  .side-ask{display:none}   /* the tab bar's dot is Ask, and Search has its own tab */
+  #ask-row{display:none}   /* the tab bar's dot is Ask; Search stays here, in More, for when Threads holds its tab */
   .mobile-ask{display:flex}
   /* The dot, live, in the centre of the tab bar: the two tabs on its left share the width the three on its right do. */
   #mobile-nav:has(.mobile-ask:not([hidden])){grid-template-columns:repeat(2,minmax(0,1.5fr)) minmax(64px,1.2fr) repeat(3,minmax(0,1fr))}
