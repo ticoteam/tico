@@ -1147,7 +1147,7 @@ def update(version, running=""):
                     with step("Starting %s" % name):
                         compose("up", "-d", "--no-deps", name, tag=version)
                 except RuntimeError as exc:
-                    notes.append("Updated, but %s did not restart: %s" % (name, exc))
+                    notes.append("Updated, but %s did not restart: %s." % (name, exc))
         message = " ".join(notes)
         set_status(state="healthy", message=message, settle_tag="", settle_outcome="", settle_caddy=False, settle_tunnel=False)
         save_status()

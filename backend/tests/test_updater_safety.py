@@ -515,3 +515,25 @@ def test_a_stall_reading_the_front_door_before_any_change_rolls_back_cleanly(mon
     assert updater.status["message"] == "Reading the server's services exceeded 600 seconds. Went back to v0.1.0."
     assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.1.0"]
 
+
+def test_a_service_that_does_not_restart_after_a_healthy_update_is_named_and_the_update_is_kept(monkeypatch, tmp_path):
+    """After the new version is healthy, a service that does not restart is named with its limit; the update is kept."""
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    monkeypatch.setattr(updater, "healthy", lambda seconds: True)
+    monkeypatch.setattr(updater, "BUNDLE", "always")
+    monkeypatch.setattr(updater, "fetch_bundle", lambda release, into: {})
+    monkeypatch.setattr(updater, "tunnel_services", lambda: [])
+    monkeypatch.setattr(updater, "other_services", lambda: ["slack"])
+    run = docker.run
+
+    def stall(argv, env=None, timeout=None, **kw):
+        if "slack" in argv and "up" in argv:
+            raise updater.Stalled(argv, timeout)   # what docker_run raises when the start runs past its limit
+        return run(argv, env=env, timeout=timeout, **kw)
+    monkeypatch.setattr(updater, "docker_run", stall)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "healthy"
+    assert updater.status["message"] == "Updated, but slack did not restart: Starting slack exceeded 600 seconds."
+    assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.2.0"]     # the new version is still running
+
