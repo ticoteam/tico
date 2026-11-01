@@ -30,12 +30,11 @@ The page is cards, in this order: the summary on top; **Where we play** beside t
 **Related news**; then the sections. The owner edits each in place; a × on hover (always shown on a touch screen)
 removes a thing.
 
-- **Brand and GTM.** Two cards beside the Summary: the Brand strip (name, positioning, colours, voice, never-say) and the
-  Go-to-market card (motion, buyer, channels, North Star and target). Each opens its full page, is versioned on its own,
-  and is published by the owner. See [Growth](growth.md#brand-and-gtm-cards).
+- **Brand.** The Brand strip (name, positioning, colours, voice, never-say) opens the brand book, which is versioned on
+  its own and published by the owner. See [Growth](growth.md#brand-and-gtm-cards).
 - **Growth.** Its own section under Strategy in the sidebar (`#/growth`; the old `#/strategy/growth` and
-  `#/strategy/gtm` addresses redirect): ideas, tests, verdicts, channel economics, the frameworks and the Go-to-market
-  page. See [Growth](growth.md).
+  `#/strategy/gtm` addresses redirect): ideas, buyers and go-to-market, channel economics, sources, tests and verdicts.
+  The KPI views (Tree, Loops, Journey) are on the Goals tab. See [Growth](growth.md).
 - **Summary.** At most 400 characters, drafted from the bets and edited by the owner. It is the one line on top and the
   text every bot gets in its run context.
 - **Vision.** Stored, not shown on the page. The Goals page reads it from here and, when it is empty, reads the
@@ -60,7 +59,7 @@ removes a thing.
   may be each. × removes a segment (its sub-segments move up to its parent) and **Add a segment** adds one by name
   (defining the market first, as "<company> market", when there is none). These are the market graph's own rows: Us is
   `company/self` `operates_in` the segment, Next is `next: true` on the segment, as the company file's import writes
-  them. They mirror the [Growth segments](growth.md#segments): Us is a serving segment and Next a next one, and a
+  them. They mirror the [Growth buyers](growth.md#buyers): Us is a serving segment and Next a next one, and a
   change on either page shows on the other. A write straight to the graph (the market routes, an import) moves the
   Growth segment too: Us makes it serving, Next next, and losing both drops a serving or next one. A segment merged
   into another hands it its Growth segment (or folds into the one it has, keeping the stronger status, with its
