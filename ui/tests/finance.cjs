@@ -121,13 +121,14 @@ function line(id, url) {
     entries: [{line_id: 'l1', entry_id: 'e1', date: '2026-10-28', account_id: id, amount: 21000, vendor, description: vendor + ' Team', memo: '', source: 'feed', tags: {}}], more: false};
   return {account: {id: l[0], code: l[1], name: l[2], type: l[3]}, vendor: null, total: l[5], excluded: 0, hidden: 0,
     paid_by: [{kind: 'card', name: 'Engineering', amount: 84000, count: 4}], next_month: {month: iso(nm).slice(0, 7), projection: 310000},
-    // Each column sums to next_month; Slack and Content have a projection but no spend (Slack falls in the capped Other).
-    next_by: {vendor: {GitHub: 120000, Figma: 60000, Notion: 50000, unattributed: 10000, Slack: 70000},
+    // Each column sums to next_month; Slack and Content have a projection but no spend (Slack falls in the capped Other);
+    // a real vendor named Other (key 'other') is an ordinary key, apart from the folded row's reserved ' other'.
+    next_by: {vendor: {GitHub: 120000, Figma: 60000, Notion: 50000, unattributed: 10000, Slack: 60000, other: 10000},
       team: {eng: 200000, mkt: 60000, content: 40000, unattributed: 10000},
       teammate: {'bot:eng-lead': 150000, 'bot:writer': 60000, 'human:cara': 40000, unattributed: 60000}},
-    next_labels: {vendor: {GitHub: 'GitHub', Figma: 'Figma', Notion: 'Notion', unattributed: 'No vendor', Slack: 'Slack'},
+    next_labels: {vendor: {GitHub: 'GitHub', Figma: 'Figma', Notion: 'Notion', unattributed: 'No vendor', Slack: 'Slack', other: 'Other'},
       team: {eng: 'Engineering', mkt: 'Marketing', content: 'Content', unattributed: 'Unattributed'}, teammate: {unattributed: 'Unattributed'}},
-    by_vendor: [{key: 'GitHub', label: 'GitHub', amount: 84000}, {key: 'Figma', label: 'Figma', amount: 42000}, {key: 'Notion', label: 'Notion', amount: 32000}, {key: 'unattributed', label: 'No vendor', amount: 5000}, {key: 'other', label: 'Other · 4', amount: 21000}],
+    by_vendor: [{key: 'GitHub', label: 'GitHub', amount: 84000}, {key: 'Figma', label: 'Figma', amount: 42000}, {key: 'Notion', label: 'Notion', amount: 32000}, {key: 'unattributed', label: 'No vendor', amount: 5000}, {key: 'other', label: 'Other', amount: 3000}, {key: ' other', label: 'Other · 4', amount: 21000}],
     by_team: [{key: 'eng', label: 'Engineering', amount: 120000}, {key: 'mkt', label: 'Marketing', amount: 50000}, {key: 'unattributed', label: 'Unattributed', amount: 9000}],
     by_teammate: [{key: 'bot:eng-lead', label: 'Engineering Lead', amount: 64000}, {key: 'bot:writer', label: 'Writer', amount: 30000}, {key: 'human:cara', label: 'Cara Lee', amount: 22000}],
     entries: [{line_id: 'l1', entry_id: 'e1', date: '2026-10-28', account_id: id, amount: 21000, vendor: 'GitHub', description: 'GitHub Team', memo: '', source: 'feed', tags: {teammate: 'bot:eng-lead'}},
@@ -442,9 +443,11 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('a[href$="/line/a-6100"]').click();
       await page.locator('[data-fin-key="GitHub"]').waitFor();
       assert.deepEqual(await page.locator('#fin-line thead th').allInnerTexts().then(t => t.slice(0, 2)), ['VENDOR', 'TEAM'].map(s => s), tag + ': vendor rows');
-      assert.equal(await page.locator('#fin-line tbody tr').count(), 5, tag + ': one row per vendor, No vendor and Other, no totals row');
+      assert.equal(await page.locator('#fin-line tbody tr').count(), 6, tag + ': one row per vendor, No vendor and Other, no totals row');
       const projSum = async () => (await page.locator('#fin-line tbody td.fin-p').allInnerTexts()).reduce((n, t) => n + (Number(t.replace(/[^\d.-]/g, '')) || 0), 0);
       assert.equal(await projSum(), 3100, tag + ': the projection column adds up to the line\'s (a projection-only vendor in the capped Other)');
+      assert.equal(await page.locator('[data-fin-key="other"] td.fin-p').innerText().then(t => Number(t.replace(/[^\d.-]/g, ''))), 100,
+        tag + ': a vendor named Other is an ordinary row with its own projection, not the folded one');
       await page.locator('[data-fin-by]').selectOption('team');
       await page.locator('[data-fin-key="content"]').waitFor();
       assert.match(await page.locator('[data-fin-key="content"]').innerText(), /^Content\s/, tag + ': a team with only a projection gets its own row');
@@ -465,7 +468,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(actions(writes).at(-1), {kind: 'budget_update', payload: {budget_id: 'b-github', amount: 95000, effective_from: next + '-01'}},
         tag + ': a vendor budget changes from the month shown');
       assert.equal(await page.locator('input[data-fin-vb="Figma"]').count(), 0, tag + ': a quarterly vendor budget is not edited as a month');
-      assert.equal(await page.locator('input[data-fin-vb="unattributed"], input[data-fin-vb="other"]').count(), 0, tag + ': No vendor and Other take no budget');
+      assert.equal(await page.locator('input[data-fin-vb="unattributed"], input[data-fin-vb=" other"]').count(), 0, tag + ': No vendor and Other take no budget');
       assert.match(await page.locator('[data-fin-key="Figma"]').innerText(), /\b1,350 \/ qtr/, tag + ': it says its period');
       await page.locator('input[data-fin-vb="Notion"]').fill('400');
       await page.locator('input[data-fin-vb="Notion"]').press('Enter');

@@ -425,3 +425,18 @@ def test_a_projection_with_no_spend_is_named_for_its_drill_down_row(books):
         assert got["next_by"]["team"]["sales"] == 400 and "sales" not in {r["key"] for r in got["by_team"]}
         assert got["next_labels"]["team"]["sales"] == "Sales"
         assert got["next_labels"]["teammate"]["unattributed"] == "Unattributed"
+
+
+def test_a_vendor_keyed_other_is_its_own_row_apart_from_the_folded_one(books):
+    with books.transaction() as c:
+        for day in ("2026-09-05", "2026-10-05"):                           # Software recurs: September's projects
+            for vendor, amount in (("other", 10_000), ("acme-a", 500), ("acme-b", 400), ("acme-c", 300)):
+                spend(c, "6100", amount, day=day, team="eng", vendor=vendor)
+        got = FR.line_detail(c, OWNER, account(c, "6100"), *OCT, at=AT, top_n=2)
+        keys = [r["key"] for r in got["by_vendor"]]
+        assert len(keys) == len(set(keys)) and keys[-1] == FR.OTHER and "other" in keys
+        assert next(r for r in got["by_vendor"] if r["key"] == "other")["amount"] == 10_000
+        assert got["by_vendor"][-1]["amount"] == 700 and got["by_vendor"][-1]["label"] == "Other · 2"
+        nxt = got["next_by"]["vendor"]
+        assert nxt["other"] == 10_000 and sum(nxt.values()) == got["next_month"]["projection"] == 11_200
+        assert FR.OTHER not in nxt                                         # the folded row's sum is the UI's to add

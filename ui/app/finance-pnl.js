@@ -408,7 +408,7 @@ async function finPnlRail() {
     const d = await get(`/v2/finance/lines/${encodeURIComponent(row.account_id)}?start=${col.start}&end=${col.end}&top_n=6&limit=1${fq ? '&' + fq : ''}`, {fresh: true});
     if (FIN?.pnl !== state || p.sel !== sel || !$('#fin-by')) return;
     const by = (d.by_teammate || []).filter(r => r.amount);
-    $('#fin-by').innerHTML = by.length ? `<h3 class="fin-h">By teammate</h3>${finBars(by.map(r => ({label: r.key === 'other' ? r.label : finWho(r.key), amount: r.amount})))}` : '';
+    $('#fin-by').innerHTML = by.length ? `<h3 class="fin-h">By teammate</h3>${finBars(by.map(r => ({label: r.key === FIN_OTHER ? r.label : finWho(r.key), amount: r.amount})))}` : '';
   } catch { /* the figures above stand on their own */ }
 }
 function finTeammatesHtml() {
@@ -548,6 +548,7 @@ async function finLineLoad() {
 const FIN_PER = {month: 'mo', quarter: 'qtr', year: 'yr'};
 const finVendorBudget = vendor => (FIN.line?.budgets || []).find(b => b.active && b.account_id === FIN.line.id && b.vendor === vendor && !b.team && !b.teammate);
 const FIN_LINE_TOP = 50;     // the drill-down's top_n: rows past it fold into "Other · n"
+const FIN_OTHER = ' other';  // that row's key (backend/finance/reads.py OTHER): no real key starts with a space
 function finLineKeys() {
   const state = FIN.line, by = 'by_' + FIN_LINE.by, cur = state.cur?.[by] || [], prev = state.prev?.[by] || [];
   const keys = [...cur.map(r => r.key), ...prev.map(r => r.key).filter(k => !cur.some(r => r.key === k))];
@@ -556,19 +557,19 @@ function finLineKeys() {
   // reads were not capped; otherwise (or past the cap) it goes into Other, so the column adds up to the line's.
   const proj = state.cur?.next_by?.[FIN_LINE.by] || {}, names = state.cur?.next_labels?.[FIN_LINE.by] || {};
   const extra = Object.keys(proj).filter(k => !keys.includes(k)).sort((x, y) => proj[y] - proj[x] || x.localeCompare(y));
-  const room = keys.includes('other') ? 0 : Math.max(0, FIN_LINE_TOP - keys.length);
+  const room = keys.includes(FIN_OTHER) ? 0 : Math.max(0, FIN_LINE_TOP - keys.length);
   const fold = extra.slice(room);
   keys.push(...extra.slice(0, room));
-  if (fold.length && !keys.includes('other')) keys.push('other');
+  if (fold.length && !keys.includes(FIN_OTHER)) keys.push(FIN_OTHER);
   // "Other · n" last, whichever read it came from.
-  keys.sort((x, y) => (x === 'other') - (y === 'other'));
+  keys.sort((x, y) => (x === FIN_OTHER) - (y === FIN_OTHER));
   const folded = fold.length ? fold.reduce((n, k) => n + proj[k], 0) : null;
-  return keys.map(k => ({key: k, label: (cur.find(r => r.key === k) || prev.find(r => r.key === k))?.label || names[k] || (k === 'other' ? `Other · ${fold.length}` : k),
+  return keys.map(k => ({key: k, label: (cur.find(r => r.key === k) || prev.find(r => r.key === k))?.label || names[k] || (k === FIN_OTHER ? `Other · ${fold.length}` : k),
     cur: cur.find(r => r.key === k)?.amount ?? null, prev: prev.find(r => r.key === k)?.amount ?? null,
-    proj: k === 'other' ? folded : proj[k] ?? null}));
+    proj: k === FIN_OTHER ? folded : proj[k] ?? null}));
 }
 function finLineLabel(key, label) {
-  if (key === 'other') return label;
+  if (key === FIN_OTHER) return label;
   if (FIN_LINE.by === 'teammate') return key === 'unattributed' ? 'Unattributed' : finWho(key);
   if (FIN_LINE.by === 'team') return key === 'unattributed' ? 'Unattributed' : key === 'no_team' ? 'No team' : finTeamName(key) || label;
   // A vendor's label is a contact's name or "" (a contact the viewer can't see), never the key: a bill's key is an id.
@@ -599,7 +600,7 @@ function finLineDraw() {
   box.innerHTML = rows.length ? `<table class="fin-t"><thead>${head}</thead><tbody>${body}</tbody></table>` : finNote('No spend on this line yet.');
 }
 // Other (the rest, rolled up) and No vendor (spend with none, key unattributed) are not vendors a budget can name.
-const finIsVendor = k => k !== 'other' && k !== 'unattributed';
+const finIsVendor = k => k !== FIN_OTHER && k !== 'unattributed';
 function finLineRail() {
   const state = FIN.line, L = FIN_LINE; if (!state?.cur) return;
   const row = finLineKeys().find(r => r.key === L.sel);
@@ -608,13 +609,13 @@ function finLineRail() {
   const amount = b?.state?.amount ?? null, spent = row.cur || 0;
   const pct = amount ? Math.min(100, Math.round(spent / amount * 100)) : null;
   // A vendor's own read (lines/{id}?vendor=): how it was paid, by team, its transactions.
-  const one = vendor && row.key !== 'other', got = one ? state.vendors[row.key] : null, d = got?.data || null;
+  const one = vendor && row.key !== FIN_OTHER, got = one ? state.vendors[row.key] : null, d = got?.data || null;
   const match = e => L.by === 'team' ? (e.tags?.team || (e.tags?.teammate ? 'no_team' : 'unattributed')) === row.key : (e.tags?.teammate || 'unattributed') === row.key;
-  const entries = one ? (d?.entries || []).slice(0, 5) : row.key === 'other' ? [] : (state.cur.entries || []).filter(match).slice(0, 8);
+  const entries = one ? (d?.entries || []).slice(0, 5) : row.key === FIN_OTHER ? [] : (state.cur.entries || []).filter(match).slice(0, 8);
   const paid = one ? d?.paid_by || [] : [], teams = one ? (d?.by_team || []).filter(r => r.amount) : [];
   const name = finLineLabel(row.key, row.label), lineName = state.cur.account?.name || '';
   const nm = state.cur.next_month, nmLabel = nm?.month ? FIN_MON[Number(nm.month.slice(5, 7)) - 1] : '';
-  const q = new URLSearchParams({account_id: state.id}); if (vendor && row.key !== 'other' && row.key !== 'unattributed') q.set('q', row.key);
+  const q = new URLSearchParams({account_id: state.id}); if (vendor && row.key !== FIN_OTHER && row.key !== 'unattributed') q.set('q', row.key);
   const paidLabel = r => r.kind === 'card' ? 'Card · ' + r.name : r.kind === 'bank' ? r.name : r.name === 'manual' ? 'Journal' : r.name;
   finRail(`<div class="fin-rail-title"><h2>${esc(name)}</h2><span class="fin-big">${finUsd(row.cur)}${vendor ? ' / mo' : ''}</span></div>
     ${pct == null ? '' : `<div class="fin-bar-m${pct >= 100 ? ' bad' : b && pct >= b.warn_pct ? ' warn' : ''}" aria-hidden="true"><i style="width:${pct}%"></i></div><div class="muted fin-small">${finUsd(spent)} of ${finUsd(amount)} · ${month}</div>`}
@@ -622,9 +623,9 @@ function finLineRail() {
     ${nm && nm.projection != null ? finKv(`${lineName} · ${nmLabel} projected`, finUsd(nm.projection) + finProjTag(nm.projection_method)) : ''}
     ${one && d?.seats != null ? finKv('Seats', esc(Number(d.seats).toLocaleString('en-US'))) : ''}${one && d?.renewal_on ? finKv('Renews', esc(finDayLabel(d.renewal_on))) : ''}
     ${paid.length ? `<h3 class="fin-h">Paid by</h3>${paid.map(r => finKv(paidLabel(r), finUsd(r.amount))).join('')}` : ''}
-    ${teams.length ? `<h3 class="fin-h">By team · ${month}</h3>${finBars(teams.map(r => ({label: r.key === 'unattributed' ? 'Unattributed' : r.key === 'other' ? r.label : finTeamName(r.key) || r.label, amount: r.amount})))}` : ''}
+    ${teams.length ? `<h3 class="fin-h">By team · ${month}</h3>${finBars(teams.map(r => ({label: r.key === 'unattributed' ? 'Unattributed' : r.key === FIN_OTHER ? r.label : finTeamName(r.key) || r.label, amount: r.amount})))}` : ''}
     ${entries.length ? `<h3 class="fin-h">Transactions</h3>${entries.map(e => finKv(finDayLabel(e.date), finCents(e.amount))).join('')}` : ''}
-    ${row.key !== 'other' ? `<a class="fin-more" href="${FIN_ROUTE}/transactions?${q}${state.fq ? '&' + state.fq : ''}">All ${esc(name)} transactions</a>` : ''}`);
+    ${row.key !== FIN_OTHER ? `<a class="fin-more" href="${FIN_ROUTE}/transactions?${q}${state.fq ? '&' + state.fq : ''}">All ${esc(name)} transactions</a>` : ''}`);
   if (!one || got) return;
   const ask = state.vendors[row.key] = {data: null}, [a, z] = finMonthBounds(L.month);
   const v = row.key === 'unattributed' ? '' : row.key;

@@ -28,7 +28,7 @@ def test_managers_see_only_their_teams_and_members_only_their_own(books):
             posted.append((team, mate, amount))
         for viewer, teams in SEES.items():
             got = FR.expenses(c, viewer, "2026-10-01", "2026-10-31", "team", top_n=50, at=AT)
-            assert {r["key"] for r in got["rows"]} <= teams | {"other"}
+            assert {r["key"] for r in got["rows"]} <= teams | {FR.OTHER}
             assert got["total"] == sum(a for t, m, a in posted if t in teams or m == viewer)
             assert FR.expenses(c, viewer, "2026-10-01", "2026-10-31", "team", team="sales" if viewer != "human:dan"
                                else "web", at=AT)["total"] == 0

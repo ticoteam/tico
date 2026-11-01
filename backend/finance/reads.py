@@ -39,6 +39,8 @@ from .store import raw_totals as SR
 from .store import tico as ST
 
 UNATTRIBUTED = "Unattributed"
+OTHER = " other"                  # the folded "Other · n" row's key: every real key is stripped (V.opt_text,
+                                  # L.name_key, SAP.vendor_key), so none starts with a space, not even a vendor named Other
 NO_TEAM = "no_team"                # a teammate's spend with no team on it: the No team group, not Unattributed
 GROUPS = ("department", "team", "teammate", "bot", "person", "vendor", "account")
 MAX_TOP = 200
@@ -143,7 +145,7 @@ def _cap(rows: list[Row], top_n: int) -> list[Row]:
     if len(rows) <= top_n:
         return rows
     rest = rows[top_n:]
-    return rows[:top_n] + [{"key": "other", "label": f"Other · {len(rest)}", "amount":
+    return rows[:top_n] + [{"key": OTHER, "label": f"Other · {len(rest)}", "amount":
                             sum(int(str(r["amount"])) for r in rest), "count": len(rest)}]
 
 
