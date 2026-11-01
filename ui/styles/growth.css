@@ -1,4 +1,4 @@
-/* Growth, Brand and Go-to-market (ui/app/growth-page.js, brand-page.js, gtm-page.js, growth-channels.js,
+/* Growth, Brand and Go-to-market (ui/app/growth-page.js, brand-page.js, gtm-page.js, growth-segments.js, growth-channels.js,
    growth-learning.js, growth-idea.js), and the Brand strip and Go-to-market card on the Strategy page. */
 
 /* ---------- shared */
@@ -159,6 +159,31 @@ a.gr-row:hover .gr-row-t{text-decoration:underline}
 .gr-num{font-variant-numeric:tabular-nums;white-space:nowrap}
 .gr-row-l{flex-basis:100%;font-size:var(--t-xs);color:var(--muted)}
 .gr-breach .gr-num{color:var(--wait-ink,var(--wait));font-weight:600}
+
+/* ---------- Segments */
+.gr-body .card.gs-group{padding:0}
+.gs-h{display:flex;align-items:center;gap:8px;margin:0;padding:10px var(--s4);border-bottom:1px solid var(--line)}
+summary.gs-h{cursor:pointer;list-style:none;border-bottom:0}
+summary.gs-h::-webkit-details-marker{display:none}
+summary.gs-h::before{content:'';width:6px;height:6px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(-45deg);margin-right:2px}
+.gs-dropped[open]>summary.gs-h{border-bottom:1px solid var(--line)}
+.gs-dropped[open]>summary.gs-h::before{transform:rotate(45deg)}
+.gs-cnt{font-size:var(--t-xs);font-variant-numeric:tabular-nums}
+.gs-n{font-weight:600}
+.gs-t{table-layout:fixed;min-width:720px}
+.gs-t.gs-may{min-width:900px}
+.gs-t :is(th,td):not(:has(.gs-in)){overflow:hidden;text-overflow:ellipsis}
+.gs-c-seg{width:21%}.gs-c-status{width:11%}.gs-c-motion{width:14%}.gs-c-buyer{width:19%}.gs-c-deal{width:12%}.gs-c-chans{width:15%}
+.gs-c-ideas{width:64px}.gs-c-edit{width:72px}
+.gs-t th[scope=row]{white-space:normal}
+.gs-t td:has(.gs-in){padding-top:3px;padding-bottom:3px}
+.gs-chips{display:inline-flex;flex-wrap:wrap;gap:4px}
+.gs-t td:has(.gs-chips){white-space:normal}
+.gs-tag{background:var(--run-bg);color:var(--run)}
+/* In-place fields read as text until pointed at or focused. */
+:is(input,select).gs-in{width:calc(100% + 7px);min-width:0;max-width:none;height:28px;padding:2px 6px;margin-left:-7px;border-color:transparent;background:transparent;font-size:inherit}
+:is(input,select).gs-in:hover{border-color:var(--line);background:var(--surface)}
+:is(input,select).gs-in:focus{background:var(--surface)}
 
 /* ---------- Channels */
 .gc-kept{display:inline-flex;align-items:flex-end;gap:2px}

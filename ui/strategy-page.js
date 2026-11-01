@@ -295,7 +295,8 @@ function strategyRetiredHtml(view) {
 
 // ---------------------------------------------------------------- Where we play
 // The market's segments by spend (GET /v2/market/spend), a sized segment inside its sized parent, the rest as plain
-// tiles. Us is filled, Next outlined; a click moves a segment Us, then Next, then neither (one of each).
+// tiles. Us is filled, Next outlined; a click moves a segment Us, then Next, then neither. Several may be Us or Next, as
+// Growth's Serving and Next segments are (the server keeps both in step).
 function strategyAddRowHtml(kind, placeholder) {
   return `<form class="strat-addrow" data-add="${kind}" novalidate><input type="text" name="name" maxlength="${kind === 'rival' ? 300 : 120}" autocomplete="off" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}">
       <button type="submit" class="strat-add">Add</button></form>`;
@@ -750,10 +751,6 @@ function strategyBindMarket(state, body) {
       const seg = (spend()?.segments || []).find(s => s.id === tile.dataset.seg);
       if (!seg) return;
       const to = seg.self ? 'next' : seg.next ? 'none' : 'ours';
-      for (const s of spend().segments) {
-        if (to === 'ours' && s !== seg) s.self = false;
-        if (to === 'next' && s !== seg) s.next = false;
-      }
       seg.self = to === 'ours'; seg.next = to === 'next';
       strategyPaintMarket('spend');
       $(`#strat-where [data-seg="${CSS.escape(seg.id)}"]`)?.focus();

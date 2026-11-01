@@ -146,10 +146,26 @@ def summary_text(c, kind, current=None, hidden=None):
         if who:
             deal = _clip(buyer.get("deal_size"), 50, first=True)
             parts.append(_end("Buyer: " + who.rstrip(".") + (f", {deal}" if deal else "")))
+        parts += _segments_line(c)
         parts += _north_star_line(c, hidden)
         parts += _channels_line(c)
     text = " ".join(parts)
     return text if len(text) <= SUMMARY_MAX else text[:SUMMARY_MAX - 1].rstrip() + "…"
+
+
+SEGMENTS_CHARS = 100
+
+
+def _segments_line(c):
+    """The Growth segments served and tested, as `Segments: serving A, B; testing C.`, cut at a word boundary."""
+    rows = H._rows(c.execute("SELECT g.status, coalesce(e.name, g.segment_id) AS name FROM growth_segments g "
+                             "LEFT JOIN market_entities e ON e.id=g.segment_id WHERE g.status IN ('serving','testing') "
+                             "ORDER BY g.sort, name COLLATE NOCASE"))
+    groups = [f"{status} " + ", ".join(r["name"] for r in rows if r["status"] == status)
+              for status in ("serving", "testing") if any(r["status"] == status for r in rows)]
+    if not groups:
+        return []
+    return [_end(_clip("Segments: " + "; ".join(groups), SEGMENTS_CHARS))]
 
 
 def _channels_line(c):

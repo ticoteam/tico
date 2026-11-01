@@ -132,6 +132,28 @@ def test_summary_keeps_north_star_and_channels_when_a_field_is_long(api):
     assert all(item in avoid for item in listed)
 
 
+def test_gtm_summary_names_served_and_tested_segments_after_the_buyer_within_the_cap(api, monkeypatch):
+    draft(api, "gtm", {"motion": {"primary": "local"}, "buyer": {"who_buys": "Homeowners", "deal_size": "$90/month"}})
+    post(api, "gtm/publish", {"note": "First"})
+    names = {"Homeowners": "serving", "Rental owners": "serving", "Property managers": "testing",
+             "Offices": "next", "Hotels": "dropped"}
+    for name, status in names.items():
+        post(api, "growth/segments", {"name": name, "status": status})
+    text = get(api, "gtm/summary")["text"]
+    assert "Buyer: Homeowners, $90/month. Segments: serving Homeowners, Rental owners; testing Property managers." \
+        in text
+    assert "Offices" not in text and "Hotels" not in text
+    for i in range(12):
+        post(api, "growth/segments", {"name": f"Long-tail landlord segment number {i}", "status": "testing"})
+    text = get(api, "gtm/summary")["text"]
+    shown = "Segments: " + text.split("Segments: ")[1].split("…")[0]
+    assert len(text) <= B.SUMMARY_MAX and len(shown) < B.SEGMENTS_CHARS
+    monkeypatch.setattr(B, "SEGMENTS_CHARS", 10_000)
+    with api.app.state.store.read() as c:
+        full = B._segments_line(c)[0]
+    assert full.startswith(shown) and full[len(shown)] in " ,;"                   # cut at a word, never inside one
+
+
 def test_clip_keeps_abbreviations_and_whole_words():
     assert B._clip("U.S. homeowners with 1-3 units. Next: managers.", 90, first=True) == "U.S. homeowners with 1-3 units"
     assert B._clip("Dr. Smith and other dentists", 90, first=True) == "Dr. Smith and other dentists"
@@ -196,6 +218,17 @@ def test_the_hub_tools_reach_every_brand_gtm_and_growth_route(api):
     err, _ = ok("hub_growth_cohort_set", {"channel": "google-search", "month": "2026-10", "spend": 3400,
                                          "bot_cost": 260, "new_customers": 71, "source": ["spend=Google Ads"]})
     assert not err and ok("hub_growth_economics", {"month": "2026-10"})[1]["rows"][0]["cac"]
+    err, seg = ok("hub_growth_segment_create", {"name": "Property managers", "status": "serving", "motion": "sales_led"})
+    assert not err and seg["status"] == "serving" and seg["segment_id"] == "segment/property-managers"
+    assert ok("hub_growth_segment_update", {"id": seg["segment_id"], "deal_size": "$400/month"})[1]["deal_size"] \
+        == "$400/month"
+    assert ok("hub_growth_segment_list")[1]["segments"][0]["motion"] == "sales_led"
+    assert ok("hub_growth_channel_update", {"slug": "google-search", "segments": [seg["id"]]})[1]["segments"] == [seg["id"]]
+    assert not ok("hub_growth_cohort_set", {"channel": "google-search", "month": "2026-10", "segment_id": seg["id"],
+                                            "new_customers": 5})[0]
+    assert ok("hub_growth_economics", {"segment": seg["id"]})[1]["total"]["new_customers"] == 5
+    assert ok("hub_growth_cohort_list", {"segment": seg["id"]})[1]["cohorts"][0]["new_customers"] == 5
+    assert ok("hub_growth_idea_list", {"segment": seg["id"]})[1]["ideas"] == []
     assert not ok("hub_growth_settings", {"set": ["revenue_month=90", "margin_pct=40"]})[0]
     assert ok("hub_growth_settings")[1]["revenue_month"] == 90
     for name in ("hub_growth_week", "hub_growth_evidence", "hub_growth_working", "hub_growth_kpis",

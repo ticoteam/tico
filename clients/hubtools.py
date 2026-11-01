@@ -1946,6 +1946,15 @@ def gtm_sources(api, args):
     return api.get("growth/sources", include_retired="true" if args.get("include_retired") else None)
 
 
+_SEGMENTS = {"type": "array", "items": {"type": "string"},
+             "description": "Growth segment ids or market segment ids (hub growth segment list); [] clears"}
+
+
+def _segment_refs(values):
+    """Segment refs as sent; an empty string (`--segment ""`) clears."""
+    return [v for v in values if v] if values is not None else None
+
+
 CHANNEL_PROPS = {
     "name": _s("What people call it: Google Search"),
     "track": {"type": "string", "enum": ["performance", "brand"], "description": "Judged by CAC, or by reach"},
@@ -1956,13 +1965,16 @@ CHANNEL_PROPS = {
     "why": _s("Why we use it, in a line"),
     "guardrail_kpi_id": _s("A KPI that must stay under guardrail_max"),
     "guardrail_max": {"type": "number"},
-    "sort": {"type": "integer"}}
+    "sort": {"type": "integer"},
+    "segments": _SEGMENTS}
 
 
 def _channel_body(api, args, keys):
     body = {k: args[k] for k in keys if k in CHANNEL_PROPS and k != "owner" and args.get(k) is not None}
     if args.get("owner") is not None:
         body["owner_ref"] = _target(api, args["owner"]) if args["owner"] else None
+    if "segments" in body:
+        body["segments"] = _segment_refs(body["segments"])
     return body
 
 
@@ -1997,6 +2009,54 @@ def growth_channel_update(api, args):
       {"slug": _s("Channel slug")}, required=("slug",), writes=True)
 def growth_channel_retire(api, args):
     return _as_person(api).post(f"growth/channels/{args['slug']}/retire", {}, key=_key(args))
+
+
+SEGMENT_STATUSES = ["serving", "testing", "next", "dropped"]
+MOTIONS = ["self_serve", "sales_led", "partner", "marketplace", "local", "community", "ecommerce"]
+SEGMENT_PROPS = {
+    "status": {"type": "string", "enum": SEGMENT_STATUSES,
+               "description": "serving (Us on the Strategy page), testing, next (Next there) or dropped"},
+    "motion": {"type": "string", "enum": MOTIONS, "description": "How this segment buys"},
+    "who_buys": _s("Who signs or pays in this segment"),
+    "deal_size": _s("A typical deal or monthly spend: $40/month"),
+    "why": _s("Why this segment, in a line"),
+    "owner": _s("Who answers for it: me, a bot slug or a person id; \"\" clears"),
+    "sort": {"type": "integer"}}
+
+
+def _segment_body(api, args):
+    body = {k: args[k] for k in ("name", *SEGMENT_PROPS) if k != "owner" and args.get(k) is not None}
+    if args.get("owner") is not None:
+        body["owner_ref"] = _target(api, args["owner"]) if args["owner"] else None
+    return body
+
+
+@tool("hub_growth_segment_list", "Who the company sells to: each segment's status (serving, testing, next, dropped), "
+      "motion, buyer, deal size, why, the channels that reach it, its idea count and last month's new customers.", {})
+def growth_segment_list(api, args):
+    return api.get("growth/segments")
+
+
+@tool("hub_growth_segment_create", "Add a customer segment by name (the market segment of that name or alias, else a "
+      "new one) or by market segment id. Owner or admin: any status; a bot adds one to test (status testing). Serving "
+      "and next show as Us and Next on the Strategy page.",
+      {"name": _s("The segment: Property managers"), "segment_id": _s("Or a market segment id: segment/..."),
+       **SEGMENT_PROPS}, writes=True)
+def growth_segment_create(api, args):
+    body = _segment_body(api, args)
+    if args.get("segment_id"):
+        body["segment_id"] = args["segment_id"]
+    body.setdefault("status", "testing")
+    return _as_person(api).post("growth/segments", body, key=_key(args))["segment"]
+
+
+@tool("hub_growth_segment_update", "Change a segment, only the fields sent. Owner or admin: any field, status "
+      "included; a bot: why, who_buys and deal_size.",
+      {"id": _s("The segment's id or its market segment id"), "name": _s("A new name for the market segment"),
+       **SEGMENT_PROPS}, required=("id",), writes=True)
+def growth_segment_update(api, args):
+    return _as_person(api).patch("growth/segments/" + quote(args["id"], safe="/"), _segment_body(api, args),
+                                 key=_key(args))["segment"]
 
 
 SOURCE_PROPS = {
@@ -2047,6 +2107,7 @@ IDEA_PROPS = {
     "bet_id": _s("The strategy bet it tests (hub strategy show lists them)"),
     "kpi_id": _s("The KPI it should move"),
     "channels": {"type": "array", "items": {"type": "string"}, "description": "Channel slugs"},
+    "segments": _SEGMENTS,
     "source_kind": {"type": "string", "enum": IDEA_SOURCES, "description": "Where the idea came from"},
     "source_ref": _s("A link or id for that source")}
 
@@ -2064,6 +2125,8 @@ IDEA_PROPS = {
 def growth_idea_create(api, args):
     keys = ("title", *IDEA_PROPS, "ice_i", "ice_c", "ice_e", "follow_up_of", "body")
     body = {k: args[k] for k in keys if args.get(k) not in (None, [])}
+    if "segments" in body:
+        body["segments"] = _segment_refs(body["segments"])
     if args.get("assignee"):
         body["assignee"] = _target(api, args["assignee"])
     return _as_person(api).post("growth/ideas", body, key=_key(args))["idea"]
@@ -2072,10 +2135,11 @@ def growth_idea_create(api, args):
 @tool("hub_growth_idea_list", "Growth ideas you may see, best ICE first, with status, bet, KPI, channels and verdict.",
       {"status": {"type": "string", "enum": ["idea", "testing", "won", "lost", "inconclusive", "dropped", "paused"]},
        "bet_id": _s("Only ideas testing this bet"), "channel": _s("Only ideas on this channel slug"),
-       "kpi_id": _s("Only ideas for this KPI"), "q": _s("Words in the title or hypothesis"),
-       "limit": {"type": "integer", "default": 200, "maximum": 500}})
+       "kpi_id": _s("Only ideas for this KPI"), "segment": _s("Only ideas that target this segment"),
+       "q": _s("Words in the title or hypothesis"), "limit": {"type": "integer", "default": 200, "maximum": 500}})
 def growth_idea_list(api, args):
-    return api.get("growth/ideas", **{k: args.get(k) for k in ("status", "bet_id", "channel", "kpi_id", "q", "limit")})
+    return api.get("growth/ideas", **{k: args.get(k) for k in ("status", "bet_id", "channel", "kpi_id", "segment", "q",
+                                                               "limit")})
 
 
 @tool("hub_growth_idea_show", "One growth idea whole: its test plan, verdict, follow-ups and subtasks.",
@@ -2095,6 +2159,8 @@ def growth_idea_update(api, args):
     keys = ("title", *IDEA_PROPS, "judged_kpi_id", "test_from", "test_to", "change", "stop_if", "min_events",
             "audience", "external_ref")
     body = {k: args[k] for k in keys if args.get(k) is not None}
+    if "segments" in body:
+        body["segments"] = _segment_refs(body["segments"])
     return _as_person(api).patch("growth/ideas/" + args["id"], body, key=_key(args))["idea"]
 
 
@@ -2142,15 +2208,17 @@ COHORT_FIELDS = ("spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "
 
 @tool("hub_growth_cohort_list", "Monthly cohorts by channel: spend, bot cost, new customers, % kept at 30/90/180 "
       "days, revenue and margin.",
-      {"channel": _s("A channel slug, or unknown"), "month": _s("YYYY-MM"),
+      {"channel": _s("A channel slug, or unknown"), "month": _s("YYYY-MM"), "segment": _s("Only this segment's rows"),
        "limit": {"type": "integer", "default": 500, "maximum": 2000}})
 def growth_cohort_list(api, args):
-    return api.get("growth/cohorts", channel=args.get("channel"), month=args.get("month"), limit=args.get("limit"))
+    return api.get("growth/cohorts", channel=args.get("channel"), month=args.get("month"), segment=args.get("segment"),
+                   limit=args.get("limit"))
 
 
 @tool("hub_growth_cohort_set", "Set one channel's numbers for one month, only the fields sent (any bot or an admin). "
-      "Use channel unknown for customers no channel claims.",
+      "Use channel unknown for customers no channel claims; segment_id records one segment's share of the month.",
       {"channel": _s("A channel slug, or unknown"), "month": _s("YYYY-MM"),
+       "segment_id": _s("A segment id or market segment id; omit for the whole channel"),
        "spend": {"type": "number"}, "bot_cost": {"type": "number"},
        "new_customers": {"type": "integer", "minimum": 0},
        "kept_d30": {"type": "number", "description": "% kept after 30 days"},
@@ -2164,6 +2232,7 @@ def growth_cohort_list(api, args):
       required=("channel", "month"), writes=True)
 def growth_cohort_set(api, args):
     body = {"channel": args["channel"], "month": args["month"],
+            **({"segment_id": args["segment_id"]} if args.get("segment_id") else {}),
             **{k: args[k] for k in COHORT_FIELDS if args.get(k) is not None}}
     sources = dict(args.get("sources") or {})
     for pair in args.get("source") or []:
@@ -2177,10 +2246,11 @@ def growth_cohort_set(api, args):
 
 
 @tool("hub_growth_economics", "Unit economics by channel for a month: CAC (spend plus bot cost per new customer), "
-      "expected months kept, LTV and LTV:CAC, with the total and the Unknown row.",
-      {"month": _s("YYYY-MM; default the latest with numbers")})
+      "expected months kept, LTV and LTV:CAC, with the total and the Unknown row. segment: only that segment's "
+      "cohorts.",
+      {"month": _s("YYYY-MM; default the latest with numbers"), "segment": _s("A segment id or market segment id")})
 def growth_economics(api, args):
-    return api.get("growth/economics", month=args.get("month"))
+    return api.get("growth/economics", month=args.get("month"), segment=args.get("segment"))
 
 
 @tool("hub_growth_week", "The growth week: tests running and due, verdicts in the last week, guardrails over their "
