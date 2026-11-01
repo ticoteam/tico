@@ -7897,6 +7897,8 @@ def create_app(settings=None):
     from .judge import install_judge
     install_judge(app, store, auth)
     ask_ingest.install(app, store, auth)
+    from . import thread_catchup
+    thread_catchup.install(app, store, auth, mutate)
     from . import stale_review
     stale_review.install(app, store, auth, mutate)
     from . import system_routines

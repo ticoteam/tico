@@ -151,6 +151,16 @@ def run_bookkeeper_rules_digest(store, auth, at, failures=None):
         run.did(made["words"], quiet=not made["items"])
 
 
+def run_thread_followups(store, auth, at, failures=None):
+    # Asks a bot left unanswered for a day get one nudge in their thread (backend/thread_followups.py). Nothing due is a
+    # quiet run: no post, no model.
+    with SR.recording(store, "thread_followups", failures, "helper") as run:
+        from . import thread_followups
+        with store.transaction() as c:
+            nudged = thread_followups.sweep(c, stamp(at))
+        run.did(SR.words_of(nudged, "follow-up", "Nothing to follow up"), quiet=not nudged)
+
+
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
          "engineering_exceptions": run_engineering_exceptions, "bookkeeper_check": run_bookkeeper_check}
@@ -158,7 +168,8 @@ QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_sca
 # The Bookkeeper's Watch (daily) and rules digest (weekly): their own cadence, not controlled jobs (CONTROLS has the
 # six a person switches). The Bookkeeper's pause is their off switch.
 FIXED = {"bookkeeper_watch": (run_bookkeeper_watch, timedelta(days=1)),
-         "bookkeeper_rules_digest": (run_bookkeeper_rules_digest, timedelta(days=7))}
+         "bookkeeper_rules_digest": (run_bookkeeper_rules_digest, timedelta(days=7)),
+         "thread_followups": (run_thread_followups, timedelta(minutes=15))}
 
 
 def run_now(store, auth, key, actor):
