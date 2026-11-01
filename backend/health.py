@@ -197,12 +197,13 @@ def _computers(c, runners_online, settings, limits=None):
                                   if v.get("installed") or n in wanted or n in assigned.get(r["id"], ())
                                   or n in run_on.get(r["id"], ())]})
     from . import org_turns
-    from .start_places import summary, describe
+    from .start_places import summaries, describe
     # Below warning, Health's stuck and queue checks already say why a bot is not starting: the Turns line skips
     # claim_refusal per queued bot. At warning it names quota and readiness waits again.
     classify = org_turns.admission(c)['at_warning']
+    counts = summaries(c, [row["id"] for row in rows], settings, limits, classify=classify)     # one pass, not per computer
     for row in rows:
-        row["turn_counts"] = summary(c, row["id"], settings, limits, classify=classify)
+        row["turn_counts"] = counts[row["id"]]
         row["turn_summary"] = describe(row["turn_counts"])
     return rows
 
@@ -802,6 +803,8 @@ HELD = {
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
     "login_upgrade": ("Update {computer} to use one login per AI tool; its bots wait without changing accounts",
                       COMPUTERS),
+    # A bot with Browse through runs only on a runner that takes it there (backend/browser_exit.py CAPABILITY).
+    "browser_exit_update": ("Update {computer} to use Browse through", COMPUTERS),
     # A Tico model runs only where bots run as their own user (execution.claim_refusal): the bot waits, it never fails.
     "not_isolated": ("{computer} can't run Tico Gateway work (it needs Tico's Docker runner): it waits for another "
                      "model or computer", BOT_SETTINGS),
@@ -827,11 +830,28 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
     """Each stuck bot with a reason in plain words and one fix: sign in, move to a computer that can run it,
     or the settings page that can. Only administrators get fixes; a Bot administrator moves only to their own computers.
     A bot stuck in onboarding is the exception: whoever may manage it gets "Finish with defaults"."""
+    from . import readiness
     from .readiness import own_harness
     if not rows:
         return []
     computers = _movable(c, who, online_ids) if full else []
     configured = {r["slug"]: r["runtime"] or "" for r in c.execute("SELECT slug,runtime FROM bots")}
+    # Each offline computer's last check-in, read once for every bot waiting on one (not one read per bot).
+    offline = sorted({row["runner_id"] for row in rows if row["reason"] == "computer_offline"})
+    seen_at = {r["id"]: r["last_seen"] for r in c.execute(
+        f"SELECT id,last_seen FROM runners WHERE id IN ({','.join('?' * len(offline))})", offline)} if offline else {}
+    # Every quarantined bot's quarantine record, read together for its explanation (quarantine_display.explanation).
+    H.prime_quarantines(c, [row["bot"] for row in rows if row["reason"] == "quarantined"])
+    # Every stuck bot's configuration and operator, read together for its harness check and quarantine
+    # explanation (readiness._config and auth.operator read them per bot otherwise).
+    from .read_cache import prime
+    from .auth import OPERATOR_SQL
+    for part in H.chunks(sorted({row["bot"] for row in rows})):
+        marks = ",".join("?" * len(part))
+        found = {r["bot"]: r for r in c.execute(
+            f"SELECT bot,config_json,operator FROM bot_config WHERE bot IN ({marks})", part)}
+        prime(c, readiness.CONFIG_SQL, {(s,): found.get(s) for s in part})
+        prime(c, OPERATOR_SQL, {(s,): found.get(s) for s in part})
     out = []
     for row in rows:
         label, reason = row["computer"], row["reason"]
@@ -848,8 +868,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             text = "No computer"
             fix = _fix("Choose a computer", "#/settings", "bots")
         elif reason == "computer_offline":
-            seen = c.execute("SELECT last_seen FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
-            quiet = quiet_minutes(seen["last_seen"] if seen else None)
+            quiet = quiet_minutes(seen_at.get(row["runner_id"]))
             text = f"{label} has not checked in for {quiet} minutes" if quiet >= SILENT_MINUTES else f"{label} is offline"
             fix = _fix("Open Computers", "#/settings", "devices")
             if full and runtime:
@@ -1892,18 +1911,20 @@ def view(c, who, settings, auth, github, config):
     else:
         checks.append(_check("computers", "Computers", "ok", f"{_plural(len(online), 'computer')} online."))
 
-    from .performance import load_status
+    from .performance import load_statuses, recent_overloads
+    loads = load_statuses(c, [computer["id"] for computer in computers])     # one read for every computer
     for computer in computers:
         if full or kind == "bot":
             checks.append(_check("turns:" + computer["id"], "Turns", "ok", computer["label"] + ": " + computer["turn_summary"],
                                  [_fix("Open Computers", "#/settings", "devices")] if full else []))
-        load = load_status(c, computer["id"])
+        load = loads[computer["id"]]
         if load["overloaded"]:
             checks.append(_check("runner_load:" + computer["id"], "Load", "warn",
                                  f"{computer['label']}: overloaded now (CPU or memory above 90% for five minutes).",
                                  [_fix("Open Computers", "#/settings", "devices")]))
 
     if full:
+        overloads = recent_overloads(c, [computer["id"] for computer in computers])
         for computer in computers:
             disk = computer.get("disk") or {}
             total, free = disk.get("total_bytes"), disk.get("free_bytes")
@@ -1914,8 +1935,8 @@ def view(c, who, settings, auth, github, config):
                                      "`docker image prune -a` to remove unused images. The update retries when space frees.",
                                      [_fix("Open Computers", "#/settings", "devices")]))
             # Diagnostics only: an overload is shown here and on the computer's Performance page; nothing acts on it.
-            from .performance import recent_overload, describe
-            overload = recent_overload(c, computer["id"])
+            from .performance import describe
+            overload = overloads[computer["id"]]
             if overload:
                 checks.append(_check("performance:" + computer["id"], "Load", "warn",
                                      f"{computer['label']}: {'overloaded now' if not overload['ended'] else 'was overloaded'}"

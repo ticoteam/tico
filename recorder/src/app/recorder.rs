@@ -2209,6 +2209,25 @@ impl Recorder {
     fn shared_transcript(&self, record: &Recording, recording: bool) -> Option<Value> {
         live::shared_transcript(&self.store, record, recording)
     }
+    /// Keep the destination pinned to this live meeting, even if the default Tico changes.
+    fn live_url(&self) -> Option<String> {
+        if self.context.live_id.is_empty() {
+            return None;
+        }
+        let destination = self
+            .config
+            .destinations
+            .iter()
+            .find(|row| row.id == self.context.live_destination)?;
+        let base = settings::safe_url(&destination.base_url).ok()?;
+        let mut url = reqwest::Url::parse(&format!("{}/", base.trim_end_matches('/'))).ok()?;
+        url.query_pairs_mut()
+            .append_pair("live", &self.context.live_id);
+        let query = url.query()?.to_owned();
+        url.set_query(None);
+        url.set_fragment(Some(&format!("/meetings?{query}")));
+        Some(url.into())
+    }
     fn meeting_view(&mut self) -> Value {
         let Some(record) = self
             .current
@@ -2254,6 +2273,7 @@ impl Recorder {
                 (false, true) => "Team can join",
                 (false, false) => "Private in Tico",
             }) } else { None },
+            "live_url": self.live_url(),
             "can_finish": live && record.state != "recording" && record.deliveries.is_empty()
                 && (!ended || has_text),
             "place": if live { format!("Shared live · {org}") } else { "Private · on this Mac".into() },

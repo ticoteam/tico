@@ -45,8 +45,7 @@ def explanation(c, slug, who, auth):
     text = (f"Quarantined for repeated refused writes (rule 8; {H.quarantine_reason(c, slug)}): "
             f"resumes by itself {resumes}; a person who manages it can clear it sooner.")
     if manages:
-        row = H._one(c, "SELECT detail_json FROM events WHERE action='quarantine' AND target=? "
-                        "ORDER BY ts DESC LIMIT 1", (H.bot_actor(slug),))
+        row = H._one(c, H.QUARANTINE_DETAIL_SQL, (H.bot_actor(slug),))
         detail = (H._json(row["detail_json"], {}) or {}) if row else {}
         refused = detail.get("refusal") or {}
         if refused.get("rule") and refused.get("detail"):

@@ -1,8 +1,9 @@
-/* ui/app/growth-channels.js — Growth › Channels (#/strategy/growth/channels, growth spec §5): one month's unit economics
+/* ui/app/growth-channels.js — Growth › Channels (#/growth/channels, growth spec §5): one month's unit economics
    per channel from GET /api/v2/growth/economics (spend, bot time, new customers, CAC, kept at 30/90/180 days, LTV,
    LTV:CAC, payback, how good the data is), with Unknown as its own row and the total. Choosing a row opens the channel
    below: its guardrail, retention by month joined (GET /api/v2/growth/cohorts?channel=), where the numbers come from
-   and its ideas. The owner corrects a month's row (PUT /api/v2/growth/cohorts) and the settings the maths uses.
+   and its ideas. A segment picker narrows all of it to one segment's rows (?segment=). The owner corrects a month's row
+   (PUT /api/v2/growth/cohorts, its segment chosen in the form) and the settings the maths uses.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -13,22 +14,27 @@ const gcQuality = q => q ? `<span class="pill ${q === 'actual' ? 'ok' : 'waiting
 const gcMonths = n => n == null ? '—' : `${grX(n)} mo`;
 const gcRatio = v => v == null ? '—' : `${grX(v)}×`;
 const gcKey = slug => slug || 'unknown';
+// A query string from the pairs that have a value.
+const gcQs = pairs => { const q = new URLSearchParams(pairs.filter(([, v]) => v)).toString(); return q ? '?' + q : ''; };
+const gcHref = state => GR_CHANNELS + gcQs([['m', state.month], ['s', state.seg]]);
 
 function pageGrowthChannels(state) {
-  state.month = new URLSearchParams((S.route || '').split('?')[1] || '').get('m') || '';
+  const q = new URLSearchParams((S.route || '').split('?')[1] || '');
+  state.month = q.get('m') || '';
+  state.seg = q.get('s') || '';
   state.pick = null;
   void gcRead(state);
 }
 async function gcRead(state) {
-  let econ, ideas, chans, sources;
+  let econ, ideas, chans, sources, segs;
   try {
-    [econ, ideas, chans, sources] = await Promise.all([get('/v2/growth/economics' + (state.month ? `?month=${encodeURIComponent(state.month)}` : ''), {fresh: true}),
+    [econ, ideas, chans, sources, segs] = await Promise.all([get('/v2/growth/economics' + gcQs([['month', state.month], ['segment', state.seg]]), {fresh: true}),
       get('/v2/growth/ideas').then(r => r.ideas || []).catch(() => []), get('/v2/growth/channels').catch(() => ({})),
-      get('/v2/growth/sources').then(r => r.sources || []).catch(() => [])]);
-  } catch (e) { if (GR === state) $('#gr-body').innerHTML = grCrumbs(GR_ROUTE, 'Growth', 'Channels') + grFail(e); return; }
+      get('/v2/growth/sources').then(r => r.sources || []).catch(() => []), gsRead()]);
+  } catch (e) { if (GR === state) $('#gr-body').innerHTML = grFail(e); return; }
   if (GR !== state) return;
   // may_edit on the channels read: the caller is the owner or an admin, who keeps settings and cohorts.
-  state.data = {econ, ideas, chans: chans.channels || [], sources, may: chans.may_edit ?? grAdmin()};
+  state.data = {econ, ideas, chans: chans.channels || [], sources, segs, may: chans.may_edit ?? grAdmin()};
   state.month = econ.month || state.month;
   gcDraw(state);
 }
@@ -39,8 +45,10 @@ function gcDraw(state) {
   const months = (econ.months || []).slice().sort().reverse();
   if (state.month && !months.includes(state.month)) months.unshift(state.month);
   const pick = months.length ? `<label class="gr-inline"><span class="sr-only">Month</span><select data-gc-month>${months.map(m => `<option value="${esc(m)}"${m === state.month ? ' selected' : ''}>${esc(grMonth(m))}</option>`).join('')}</select></label>` : '';
+  const segPairs = gsPairs(state.data.segs, state.seg ? [state.seg] : []);
+  const segPick = segPairs.length ? `<label class="gr-inline"><span class="sr-only">Segment</span><select data-gc-seg>${grOpts(segPairs, state.seg, 'All segments')}</select></label>` : '';
   const facts = [st.unit ? `Counted in ${st.unit}` : '', st.revenue_month != null ? `${grUsd(st.revenue_month)}/mo` : '', st.margin_pct != null ? `${grPct(st.margin_pct)} margin` : ''].filter(Boolean).join(' · ');
-  const tools = `${facts ? `<span class="muted gr-meta">${esc(facts)}</span>` : ''}${may ? '<button class="ghost" type="button" data-gc-settings>Settings</button>' : ''}${pick}`
+  const tools = `${facts ? `<span class="muted gr-meta">${esc(facts)}</span>` : ''}${may ? '<button class="ghost" type="button" data-gc-settings>Settings</button>' : ''}${segPick}${pick}`
     + (may ? '<button class="ghost" type="button" data-gc-month-add>+ Month</button>' : '');
   const breached = new Set((econ.guardrails || []).filter(g => g.breached).map(g => gcKey(g.channel)));
   const cell = r => `<td class="num">${esc(grUsd(r.spend))}</td><td class="num">${esc(grUsd(r.bot_cost))}</td><td class="num">${esc(grX(r.new_customers, 0))}</td>
@@ -55,9 +63,11 @@ function gcDraw(state) {
     <th scope="col" class="num">New</th><th scope="col" class="num">CAC</th><th scope="col">Kept 30 · 90 · 180</th><th scope="col" class="num">LTV</th><th scope="col" class="num">LTV:CAC</th>
     <th scope="col" class="num">Payback</th><th scope="col">Data</th></tr></thead><tbody>${rows.map(tr).join('')}</tbody>
     <tfoot><tr><th scope="row">All channels</th>${cell(t)}<td>${gcQuality(t.quality)}</td></tr></tfoot></table></div>` : '';
-  body.innerHTML = grCrumbs(GR_ROUTE, 'Growth', 'Channels', tools) + table + `<div id="gc-detail"></div>`;
+  body.innerHTML = grTools(tools) + table + `<div id="gc-detail"></div>`;
   const sel = body.querySelector('[data-gc-month]');
-  if (sel) sel.onchange = () => { state.month = sel.value; history.replaceState(history.state, '', `${GR_CHANNELS}?m=${state.month}`); void gcRead(state); };
+  if (sel) sel.onchange = () => { state.month = sel.value; history.replaceState(history.state, '', gcHref(state)); void gcRead(state); };
+  const segSel = body.querySelector('[data-gc-seg]');
+  if (segSel) segSel.onchange = () => { state.seg = segSel.value; history.replaceState(history.state, '', gcHref(state)); void gcRead(state); };
   const set = body.querySelector('[data-gc-settings]');
   if (set) set.onclick = () => gcSettings(state);
   const addMonth = body.querySelector('[data-gc-month-add]');
@@ -74,27 +84,30 @@ async function gcDetail(state) {
   const box = $('#gc-detail');
   box.innerHTML = `<section class="card gc-detail">${skelRows(3, {dot: false})}</section>`;
   let cohorts = [];
-  try { cohorts = (await get(`/v2/growth/cohorts?channel=${encodeURIComponent(k)}`, {fresh: true})).cohorts || []; }
+  try { cohorts = (await get('/v2/growth/cohorts' + gcQs([['channel', k], ['segment', state.seg]]), {fresh: true})).cohorts || []; }
   catch (e) { if (GR === state && state.pick === k) box.innerHTML = `<section class="card gc-detail">${grFail(e)}</section>`; return; }
   if (GR !== state || state.pick !== k || !box.isConnected) return;
+  // Newest month first; within a month, the rows not split by segment first.
+  cohorts.sort((a, b) => String(b.month).localeCompare(String(a.month)) || String(a.segment_id || '').localeCompare(String(b.segment_id || '')));
   const guards = (econ.guardrails || []).filter(g => gcKey(g.channel) === k);
   const banner = guards.filter(g => g.breached).map(g => `<div class="gr-banner gr-amber">${esc(g.kpi_name || 'Guardrail')} ${esc(grX(g.value))} · max ${esc(grX(g.max))}</div>`).join('');
   const heat = cohorts.length ? `<section class="gr-sec"><h3 class="gr-k">Kept, by month joined</h3><div class="gr-scroll"><table class="gr-t gc-heat"><thead><tr><th scope="col">Joined</th>
       <th scope="col" class="num">New</th>${GC_KEPT.map(([, d]) => `<th scope="col" class="num">${d} days</th>`).join('')}<th scope="col">Data</th>${may ? '<th scope="col"><span class="sr-only">Edit</span></th>' : ''}</tr></thead>
-      <tbody>${cohorts.slice().sort((a, b) => String(b.month).localeCompare(String(a.month))).map(c => `<tr><th scope="row">${esc(grMonth(c.month))}</th><td class="num">${esc(grX(c.new_customers, 0))}</td>
+      <tbody>${cohorts.map(c => `<tr><th scope="row">${esc(grMonth(c.month))}${!state.seg && c.segment_id ? ` ${gsTags(state.data.segs, [c.segment_id])}` : ''}</th><td class="num">${esc(grX(c.new_customers, 0))}</td>
         ${GC_KEPT.map(([f]) => `<td class="num gc-h"${c[f] == null ? '' : ` style="--k:${Math.max(0, Math.min(100, Number(c[f])))}"`}>${esc(grPct(c[f]))}</td>`).join('')}<td>${gcQuality(c.quality)}</td>
-        ${may ? `<td><button class="ghost small" type="button" data-gc-edit="${esc(c.month)}">Edit</button></td>` : ''}</tr>`).join('')}</tbody></table></div></section>` : '';
+        ${may ? `<td><button class="ghost small" type="button" data-gc-edit="${cohorts.indexOf(c)}">Edit</button></td>` : ''}</tr>`).join('')}</tbody></table></div></section>` : '';
   const from = {...(r.sources || {})};
   const src = sources.find(s => s.id === ch?.source_id);
   const where = Object.keys(from).length || src ? `<section class="gr-sec"><h3 class="gr-k">Where the numbers come from</h3>
       ${src ? `<div class="gr-row"><span class="gr-row-t">${esc(src.truth_for)}</span><a href="${GTM_ROUTE}/sources">${esc(src.system)}</a></div>` : ''}
       ${Object.entries(from).map(([f, v]) => `<div class="gr-row"><span class="gr-row-t">${esc(f.replace(/_/g, ' '))}</span><span class="muted">${esc(v)}</span></div>`).join('')}</section>` : '';
-  const mine = ideas.filter(i => k === 'unknown' ? !(i.channels || []).length : (i.channels || []).includes(k));
+  const segOk = i => !state.seg || gsIds(state.data.segs, i.segments).includes(gsIds(state.data.segs, [state.seg])[0]);
+  const mine = ideas.filter(i => (k === 'unknown' ? !(i.channels || []).length : (i.channels || []).includes(k)) && segOk(i));
   const list = mine.length ? `<section class="gr-sec"><h3 class="gr-k">Ideas</h3><div class="gr-flow">${mine.map(i => grIdeaCard(i, chans, {chan: false, result: true})).join('')}</div></section>` : '';
   box.innerHTML = `<section class="card gc-detail" aria-label="${esc(r.name || ch?.name || 'Unknown')}"><div class="gc-dh"><h3>${esc(r.name || ch?.name || 'Unknown')}</h3>
       ${ch ? `<span class="muted">${esc([ch.track === 'brand' ? 'Brand' : 'Performance', grWho(ch.owner_ref)].filter(Boolean).join(' · '))}</span>${grStage(ch.stage)}` : ''}
       </div>${banner}${heat}<div class="gc-dcols">${where}${list}</div></section>`;
-  box.querySelectorAll('[data-gc-edit]').forEach(b => { b.onclick = () => gcCohortDialog(state, k, cohorts.find(c => c.month === b.dataset.gcEdit)); });
+  box.querySelectorAll('[data-gc-edit]').forEach(b => { b.onclick = () => gcCohortDialog(state, k, cohorts[Number(b.dataset.gcEdit)]); });
 }
 
 // `k` null: the channel is picked in the form (the page's + Month).
@@ -102,9 +115,12 @@ function gcCohortDialog(state, k, c, fresh = false) {
   const n = (name, label, v, extra = '') => grField(label, `<input name="${name}" inputmode="decimal" value="${esc(v ?? '')}"${extra}>`);
   const srcs = c.sources || {};
   const chans = [...state.data.chans.filter(x => !x.retired_at).map(x => [x.slug, x.name]), ['unknown', 'Unknown']];
-  grDialog(k ? `${grChanName(state.data.chans, k === 'unknown' ? 'Unknown' : k)} · ${fresh ? 'New month' : grMonth(c.month)}` : 'New month',
+  // A new month starts in the segment picked above; a kept row stays in its own (another segment is another row).
+  const segPairs = fresh ? gsPairs(state.data.segs, state.seg ? [state.seg] : []) : [];
+  grDialog(k ? [grChanName(state.data.chans, k === 'unknown' ? 'Unknown' : k), fresh ? 'New month' : grMonth(c.month), !fresh && c.segment_id ? gsName(state.data.segs, c.segment_id) : ''].filter(Boolean).join(' · ') : 'New month',
     `${k ? '' : grField('Channel', `<select name="channel">${grOpts(chans, chans.some(([x]) => x === state.pick) ? state.pick : chans[0][0], null)}</select>`)}
     ${fresh ? grField('Month', `<input name="month" type="month" required value="${esc(c.month)}">`) : ''}
+    ${segPairs.length ? grField('Segment', `<select name="segment_id">${grOpts(segPairs, gsIds(state.data.segs, [state.seg])[0], 'All segments')}</select>`) : ''}
     <div class="gr-pair">${n('spend', 'Spend', c.spend)}${n('bot_cost', 'Bot time', c.bot_cost)}</div>
     <div class="gr-pair">${n('new_customers', 'New', c.new_customers)}${grField('Data', `<select name="quality">${grOpts([['actual', 'Actual'], ['estimate', 'Estimate']], c.quality || 'estimate', null)}</select>`)}</div>
     <div class="gr-trio">${GC_KEPT.map(([f, d]) => n(f, `Kept ${d} days %`, c[f])).join('')}</div>
@@ -118,11 +134,14 @@ function gcCohortDialog(state, k, c, fresh = false) {
       setSrc('spend', v('src_spend')); setSrc('new_customers', v('src_new'));
       const month = fresh ? v('month') : c.month;
       if (!/^\d{4}-\d{2}$/.test(month)) throw new Error('A month');
-      await put('/v2/growth/cohorts', {channel: k || v('channel'), month, spend: grNum(v('spend')), bot_cost: grNum(v('bot_cost')), new_customers: grNum(v('new_customers')),
+      const row = {channel: k || v('channel'), month, spend: grNum(v('spend')), bot_cost: grNum(v('bot_cost')), new_customers: grNum(v('new_customers')),
         kept_d30: grNum(v('kept_d30')), kept_d90: grNum(v('kept_d90')), kept_d180: grNum(v('kept_d180')), revenue_month: grNum(v('revenue_month')),
-        margin_pct: grNum(v('margin_pct')), quality: v('quality'), sources});
+        margin_pct: grNum(v('margin_pct')), quality: v('quality'), sources};
+      if (form.elements.segment_id) row.segment_id = v('segment_id') || null;
+      else if (!fresh && c.segment_id) row.segment_id = c.segment_id;
+      await put('/v2/growth/cohorts', row);
       toast('Saved');
-      if (fresh && month !== state.month) { state.month = month; history.replaceState(history.state, '', `${GR_CHANNELS}?m=${month}`); }
+      if (fresh && month !== state.month) { state.month = month; history.replaceState(history.state, '', gcHref(state)); }
       void gcRead(state);
     });
 }

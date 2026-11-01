@@ -136,7 +136,7 @@ The payload is partial: send only the fields you have something for.
                "wrong_if": {"kind": "kpi", "kpi_id": "...", "direction": "above", "threshold": 4, "check_by": "2027-03-31"},
                "cites": ["..."], "status": "active"}]}
 
-A bet already on the page carries its `id`. Look at `hub proposal list` first: one pending `strategy_draft` from a
+A bet already on the page carries its `id`. A bet may list the growth ideas it serves as `"ideas": ["<idea task id>"]`; confirming links them. Look at `hub proposal list` first: one pending `strategy_draft` from a
 drafting run at a time; replace yours rather than file a second beside it. Confirming writes the draft and the bets
 as the owner; nothing is published.
 

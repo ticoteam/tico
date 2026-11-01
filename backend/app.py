@@ -815,7 +815,7 @@ def create_app(settings=None):
                                 # read-back it answered.
                                 return {**record, "assistant": request.state.identity.task_actor,
                                         **goal_read_back.agreement(c, request.state.identity, record["cited"],
-                                                                   request.method, request.url.path, raw)}
+                                                                   request.method, request.url.path, raw, auth=auth)}
                             record = assistant_instruction(c, request.state.identity, asked)
                             assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
                             if setting:
@@ -2993,12 +2993,16 @@ def create_app(settings=None):
         anyway replays it: the org rule check's verdict, then ask ingest's, then the send."""
         rule = org_rule_check.apply(c, rc, body.text, {"body": body.model_dump(mode="json", by_alias=True)})
         if rule and rule.get("held"):
+            if ingest:
+                ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule)
         sent = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
         # Judged against the plate before the question is on it.
         gate = ask_ingest.apply(c, ingest) if ingest else None
         message = send(c, who, sent)
         if not ask_ingest.matches(ingest, message.get("to_actor")) or message.get("kind") != "ask":
+            if ingest:
+                ask_ingest.skipped(c, ingest, "target")
             return {**message, **org_rule_check.answer(rule)}
         tid = H.message_task_id(H.message(c, message["id"]), H.conversation(c, message["conversation_id"]))
         verdict = {**ingest, "kind": "question" if tid else "loose"}
@@ -3007,16 +3011,18 @@ def create_app(settings=None):
             ask_ingest.withdraw_loose(c, who.actor, message["id"], ingest["person"])
         return {**message, **ask_ingest.reply(gate), **org_rule_check.answer(rule)}
 
-    def message_checks(who, body):
-        """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it)."""
+    def message_checks(who, body, retry=False):
+        """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
+        does a saved retry, `retry`: `mutate` replays its answer without the write)."""
         rc = rule_check(who, "message", body.text, lambda c: rule_message_audience(c, who, body))
-        return rc, (None if org_rule_check.holds(rc) else message_ingest(who, body))
+        return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
 
     @app.post("/api/v2/messages")
     def say(request: Request, body: M.MessageCreate):
         who = request.state.identity
-        rc, ingest = message_checks(who, body)
-        return mutate(request, body, lambda c: message_write(c, who, body, rc, ingest))
+        rc, ingest = message_checks(who, body, retry=saved_retry(request, who))
+        return ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: message_write(
+            c, who, body, rc, ingest)))
 
     def rule_prepare_message(store_, bot, replay):
         return message_ingest(bot, M.MessageCreate.model_validate(replay["body"]))
@@ -3063,7 +3069,7 @@ def create_app(settings=None):
                                attachments=body.attachments, delivery=body.delivery, defer_for=body.defer_for)
         # A bot's message here is a message like any other: the same checks and write as `/messages`, held or warned
         # the same way, and replayed by Send anyway as one.
-        rc, ingest = message_checks(who, sent)
+        rc, ingest = message_checks(who, sent, retry=saved_retry(request, who))
 
         def work(c):
             cleared = topic_change.apply(c, settings, who, bot, topic)
@@ -3076,7 +3082,7 @@ def create_app(settings=None):
                 message = topic_change.record(c, who, message, topic)
             onboarding.start_setup(c, who, bot)
             return {"conversation": H.conversation(c, message["conversation_id"]), "message": message, **extra}
-        return mutate(request, body, work)
+        return ask_ingest.judged(store, ingest, lambda: mutate(request, body, work))
 
     def topic_check(request, who, bot, body):
         """The topic check's outcome for a person's chat message, or None: not a person, a retried request (its first
@@ -3510,12 +3516,14 @@ def create_app(settings=None):
                 # The recipient changed after the check: delivered unchecked (no engine call in the write), recorded.
                 author = org_rule_check.author_of(who, settings.assistant_bot)
                 check = org_rule_check.changed(c, rc, author, "message", rule_message_audience(c, who, sent))
+            if ingest and sent.to != target:
+                ask_ingest.skipped(c, ingest, "target")      # judged for the first recipient, delivered to another
             out = message_write(c, who, sent, check, ingest if sent.to == target else None)
             if out.get("held"):
                 return out
             extra = {k: out.pop(k) for k in ("rule_warning",) if k in out}
             return {"message": out, **extra}
-        return mutate(request, body, work)
+        return ask_ingest.judged(store, ingest, lambda: mutate(request, body, work))
 
     def answer_write(c, who, mid, text, unknown=False, warn="", destination=False):
         """One answer, as `/messages/{mid}/answer` writes it and Send anyway replays it. The pick is resolved on the
@@ -4100,6 +4108,8 @@ def create_app(settings=None):
         rule_gate = org_rule_check.apply(c, rule, rule_create_text(body),
                                          {"body": body.model_dump(mode="json", by_alias=True)}) if rule else None
         if rule_gate and rule_gate.get("held"):
+            if ingest:
+                ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule_gate)
         public_warning = ""
         if rule_gate and rule_gate.get("warn"):
@@ -4114,6 +4124,8 @@ def create_app(settings=None):
             gate = ask_ingest.apply(c, ingest)
             if gate["acts"]:
                 owner, check, unchecked = who.actor, None, None
+        elif ingest:
+            ask_ingest.skipped(c, ingest, "joined" if joins else "not_applied")
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
         requester_actor = None
@@ -4303,6 +4315,12 @@ def create_app(settings=None):
             original = auth.target(c, who, owner_ref, need="write")
             task_caps.check(c, who.actor, auth.target(c, who, route(c, who.actor, original), need="write"))
 
+    def saved_retry(request, who):
+        """Whether this request's Idempotency-Key already has a saved answer: `mutate` replays it without the write, so
+        ask ingest does not judge it again (a retry makes no judge call, and so writes no second row either)."""
+        with store.read() as c:
+            return store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
+
     @app.post("/api/v2/tasks")
     def create_task(request: Request, body: M.TaskCreate):
         parents = [r.task for r in body.relations if r.kind == "parent"]
@@ -4312,11 +4330,12 @@ def create_app(settings=None):
         rc = rule_check(who, "task_create", rule_create_text(body),
                         lambda c: [rule_target(c, who, body.owner), *(org_rule_check.company(c) if rule_public(body)
                                                                      else [])])
-        # A write the rule check holds skips ask ingest's call.
-        ingest = None if org_rule_check.holds(rc) else \
+        # A write the rule check holds, or a saved retry, skips ask ingest's call.
+        ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else \
             ask_ingest.preflight(store, app.state.judge, request.state.identity, body.owner, body.title, body.body)
-        return mutate(request, body, lambda c: task_create(c, request.state.identity, body, review_prs=snapshots,
-                                                           ingest=ingest, rule=rc))
+        return ask_ingest.judged(store, ingest, lambda: mutate(
+            request, body, lambda c: task_create(c, request.state.identity, body, review_prs=snapshots,
+                                                 ingest=ingest, rule=rc)))
 
     def rule_prepare_task(store_, bot, replay):
         body = replay.get("body") or {}
@@ -4364,6 +4383,8 @@ def create_app(settings=None):
                                          {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)}) \
             if rule else None
         if rule_gate and rule_gate.get("held"):
+            for verdict in ingest or ():
+                ask_ingest.skipped(c, verdict, "held")
             return org_rule_check.answer(rule_gate)
         allowance = 0
         if rule_gate and rule_gate.get("warn"):
@@ -4409,6 +4430,7 @@ def create_app(settings=None):
                         if fields.get("status") == "waiting":
                             fields["status"] = None
                 else:
+                    ask_ingest.skipped(c, verdict, "not_applied")
                     continue
                 gates.append(gate)
             if "size" in body.model_fields_set and body.size is None:
@@ -4447,8 +4469,9 @@ def create_app(settings=None):
         snapshots = review_preflight(caller, tid, step=body.step, status=body.status, task_type=body.type)
         rc = rule_update_check(caller, tid, body)
         # A write the rule check holds skips ask ingest.
-        ingest = [] if org_rule_check.holds(rc) else update_ingest(caller, tid, body)
-        return mutate(request, body, lambda c: task_update_one(c, caller, tid, body, snapshots, ingest=ingest, rule=rc))
+        ingest = [] if org_rule_check.holds(rc) or saved_retry(request, caller) else update_ingest(caller, tid, body)
+        return ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: task_update_one(
+            c, caller, tid, body, snapshots, ingest=ingest, rule=rc)))
 
     def update_ingest(caller, tid, body):
         """Ask ingest for a bot's change to its own task: the handoff and the wait, judged each on its own (a request
@@ -4566,7 +4589,8 @@ def create_app(settings=None):
                                                           pairs)):
                     if verdict:
                         rule_checks[r["id"]] = {**verdict, "operation": "bulk"}
-        if body.action == "owner" and body.owner and not body.dry_run and ask_ingest.gated(caller, settings.assistant_bot):
+        if body.action == "owner" and body.owner and not body.dry_run and ask_ingest.gated(caller, settings.assistant_bot) \
+                and not saved_retry(request, caller):
             # A bot handing its own tasks to a person: each is judged by ask ingest first, a few calls at a time.
             with store.read() as c:
                 mine = [r for r in (H.task(c, tid) for tid in chosen) if r and r["owner"] == caller.actor
@@ -4635,6 +4659,11 @@ def create_app(settings=None):
                     changed.append(tid)
                     if done.get("ingest"):
                         judged[tid] = done["ingest"]      # what ask ingest did with this handoff, and why
+            # A handoff judged for a task this change did not land names its call: refused, or unchanged.
+            held_tids, refused_tids = {t for t, code, *_ in skipped if code == "held"}, {t for t, *_ in skipped}
+            for tid, verdict in ingests.items():
+                if tid not in changed and tid not in held_tids:
+                    ask_ingest.skipped(c, verdict, "refused" if tid in refused_tids else "not_applied")
             if body.dry_run:
                 c.execute("ROLLBACK TO bulk_dry_run")
                 c.execute("RELEASE bulk_dry_run")
@@ -4652,7 +4681,7 @@ def create_app(settings=None):
                     "changed": len(changed), "unchanged": len(unchanged), "skipped": len(skipped),
                     "tasks": {"changed": [line(t) for t in changed if t in readable],
                               "skipped": [line(t, code, reason) for t, code, reason in skipped if t in readable]}}
-        return mutate(request, body, work)
+        return ask_ingest.judged(store, list(ingests.values()), lambda: mutate(request, body, work))
 
     @app.post("/api/v2/tasks/{tid}/run-now")
     def task_run_now(request: Request, tid: str, body: M.Empty):
@@ -4776,8 +4805,9 @@ def create_app(settings=None):
         not wait on them."""
         who = request.state.identity
         rc = rule_check(who, "task_ask", body.text, lambda c: [auth.task(c, who, auth.resolve_task(c, who, tid))["requester"]])
-        ingest = None if org_rule_check.holds(rc) else task_ask_ingest(who, tid, body)
-        return mutate(request, body, lambda c: task_ask_write(c, who, tid, body, ingest, rc))
+        ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else task_ask_ingest(who, tid, body)
+        return ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: task_ask_write(
+            c, who, tid, body, ingest, rc)))
 
     def readable_task(who, tid):
         """The task `who` may read, or None: what an ingest preflight outside the write judges."""
@@ -4807,9 +4837,13 @@ def create_app(settings=None):
         lifecycle.refuse_send(c, who, None, what="task questions")
         rule = org_rule_check.apply(c, rc, body.text, {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)})
         if rule and rule.get("held"):
+            if ingest:
+                ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule)
         body = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
         gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, row["requester"]) else None
+        if ingest and not gate:
+            ask_ingest.skipped(c, ingest, "target")
         # Not parked on a question that is not sent: the task keeps its status and the bot's own note.
         msg = H.task_ask(c, who.actor, task_id, body.text, park=not (gate and gate["acts"]))
         if gate:
@@ -4833,6 +4867,8 @@ def create_app(settings=None):
         # The org rule check (backend/org_rule_check.py), applied before anything is written: held, nothing is.
         rule = org_rule_check.apply(c, rc, body.text, {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)})
         if rule and rule.get("held"):
+            if ingest:
+                ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule)
         text = org_rule_check.warned_text(rule, body.text)
         attached, report = visuals.attach(c, who, app.state.files, app.state.blobs, body.attachments, task_id=task_id)
@@ -4903,6 +4939,9 @@ def create_app(settings=None):
             goal = set_goal(c, auth, who, row["conversation_id"], "set", body.text, send)
         if gate and not ask_ingest.matches(ingest, msg.get("to_actor")):
             gate = None
+            ask_ingest.skipped(c, ingest, "target")
+        elif ingest and not gate:
+            ask_ingest.skipped(c, ingest, "not_applied")
         if gate:
             ask_ingest.record(c, ingest, gate, task_id, msg["id"])
             if gate["acts"]:
@@ -4960,8 +4999,9 @@ def create_app(settings=None):
         rc = rule_check(who, "comment", body.text, lambda c: rule_task_audience(
             c, auth.task(c, who, auth.resolve_task(c, who, tid)), who.actor, body.text,
             *([rule_target(c, who, body.ask.who)] if body.ask and body.ask.who else [])))
-        ingest = None if org_rule_check.holds(rc) else comment_ingest(who, tid, body)
-        result = mutate(request, body, lambda c: comment_write(c, who, tid, body, ingest, rc, request.state.identity))
+        ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else comment_ingest(who, tid, body)
+        result = ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: comment_write(
+            c, who, tid, body, ingest, rc, request.state.identity)))
         if body.attachments:
             app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now
         return result
@@ -6647,6 +6687,13 @@ def create_app(settings=None):
             return {"revoked": True}
         result = mutate(request, body, work)
         screen_sessions.set_mode(rid, "off", "computer removed")
+        # A removed computer is no one's browser exit, and its bots' connections through others close.
+        screen_sessions.push_exit_policy(rid)
+        screen_sessions.exit_close(exit=rid, reason="computer removed")
+        with store.read() as c:
+            removed_bots = [r[0] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (rid,))]
+        for bot in removed_bots:
+            screen_sessions.push_bot_generation(bot, "computer removed")
         return result
 
     def closed_computer(c, who, bot, runner_id):
@@ -6773,9 +6820,9 @@ def create_app(settings=None):
             return result
 
     def computer_rows(c, who):
-        from .performance import load_status
+        from .performance import load_statuses
         from . import usage_limits
-        from .start_places import summary as turn_counts, describe as describe_turns
+        from .start_places import summaries, describe as describe_turns
         online = {r["id"] for r in _online_runners(c)}
         everyone = who.role == "owner" or auth.bot_admin(who)
         mine = H.actor_id(who.actor)
@@ -6785,8 +6832,12 @@ def create_app(settings=None):
         rows = []
         # One Default for the whole listing: each computer's summary reuses pools/groups/spend memos.
         limits = usage_limits.company(c)
-        for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY label"):
-            counts = turn_counts(c, r["id"], settings, limits)
+        runners = list(c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY label"))
+        # One pass for every computer's turn counts and load (not one summary and one load per computer).
+        turn_counts = summaries(c, [r["id"] for r in runners], settings, limits)
+        loads = load_statuses(c, [r["id"] for r in runners])
+        for r in runners:
+            counts = turn_counts[r["id"]]
             turns = {"turn_counts": counts, "turn_summary": describe_turns(counts)}
             detailed = everyone or r["operator"] == mine or r["accepts_member_bots"]
             if not detailed:
@@ -6794,7 +6845,7 @@ def create_app(settings=None):
                     # Discovery and load do not grant access to repositories, logs or operator identity.
                     rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in online,
                                  "platform": r["platform"] or "", "accepts_member_bots": False,
-                                 **load_status(c, r["id"]), **turns})
+                                 **loads[r["id"]], **turns})
                 continue
             bots = [bot for bot in placed.get(r["id"]) or [] if (readable.get(bot) or {}).get("see")]
             rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in online,
@@ -6802,7 +6853,7 @@ def create_app(settings=None):
                          "accepts_member_bots": bool(r["accepts_member_bots"]), "bots": bots,
                          "turns_at_once": r["turns_at_once"], "turn_limit": start_places.turn_limit(r),
                          **screen_listing(r), **performance_listing(r), **views.computer_details(c, r, who, auth),
-                         **load_status(c, r["id"]), **turns})
+                         **loads[r["id"]], **turns})
         return rows
 
     @app.get("/api/v2/computers")
@@ -7997,6 +8048,9 @@ def create_app(settings=None):
     screen_sessions = install_screen(app, store, auth, mutate, execution, settings)
     from .performance import install as install_performance
     install_performance(app, store, auth, mutate, execution)
+    # A bot's browser through another computer's internet (backend/browser_exit.py); the same relay as the screen.
+    from .browser_exit import install as install_browser_exit
+    install_browser_exit(app, store, auth, mutate, execution, screen_sessions)
     from .route_renames import install as install_route_renames
     install_route_renames(app)           # after every route: the new spellings canonical, the old ones deprecated
 

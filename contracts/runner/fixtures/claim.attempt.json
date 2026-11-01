@@ -3,6 +3,7 @@
   "attempt": {
    "bot": "ops",
    "bot_session_epoch": 0,
+   "browser_exit": null,
    "chat_goal": null,
    "computer_label": "Test Mac",
    "computer_logins_v1": true,

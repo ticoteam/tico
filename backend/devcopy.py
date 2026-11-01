@@ -58,6 +58,9 @@ EMPTY = (
     "enrollments", "hosting_enrollments", "assignments", "cloud_machines", "cloud_machine_codes", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "compact_first", "model_logins", "model_login_cleared", "computer_keys", "model_login_key_off",
     "computer_profiles", "subscription_assignments", "runner_harness_actions", "runner_harness_choices",
     "runner_versions", "start_places", "org_turn_waits",
+    # Browse through: a computer's sharing and a bot's choice open tunnels through a real person's internet; the relay's
+    # batch marks only settle that relay's usage reports (backend/browser_exit.py)
+    "browser_exits", "bot_browser_exits", "browser_exit_marks",
     # human sign-in and service keys
     "human_tokens", "oidc_sessions", "oidc_codes", "oauth_grants", "oauth_clients", "service_keys",
     "service_key_tasks", "owner_links",
@@ -102,7 +105,7 @@ AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhoo
                "automation_versions")
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
 HISTORY = {"attempts": "created", "jobs": "created", "messages": "created", "events": "ts", "deltas": "ts",
-           "bot_status_history": "since", "audit_log": "at"}
+           "bot_status_history": "since", "audit_log": "at", "browser_exit_usage": "day"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
@@ -147,7 +150,8 @@ KEEP = frozenset((
     "fin_raw_imports", "fin_close_snapshots", "fin_tax_jurisdictions", "fin_tax_seeds",
     # Growth, brand and go-to-market (backend/growth.py, backend/brand_gtm.py)
     "brand_drafts", "brand_versions", "gtm_drafts", "gtm_versions", "gtm_sources", "growth_channels", "growth_ideas",
-    "growth_idea_channels", "growth_cohorts", "growth_settings",
+    "growth_idea_channels", "growth_cohorts", "growth_settings", "growth_segments", "growth_channel_segments",
+    "growth_idea_segments",
 ))
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.

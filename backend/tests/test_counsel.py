@@ -298,21 +298,40 @@ def test_the_run_asked_reads_a_long_file_on_a_private_task(api):
     counsel_on(api)
     text = CONTRACT + "\n\n" + "Filler clause, nothing to suggest. " * 1000
     assert len(text) > counsel.TEXT_INLINE_MAX
-    data = text.encode("utf-8")
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "human:ana", "Acme contract", "The signed copy.", "bot:ops", private=True)
-        digest = api.app.state.blobs.put(data, "text/plain")
-        item = register(c, Identity("human:ana", "human"), digest, len(data), "contract.txt", "text/plain")
-        row, _, _ = api.app.state.files.add_version(
-            c, bot="ops", actor="human:ana", scope="task:" + task["id"], task=task["id"], conversation=None, attempt="",
-            identity="upload:contract", title="Acme contract", name="contract.txt", mime="text/plain",
-            blob_id=item["id"], digest=digest, size=len(data))
-    read = read_document(api, row["id"])
+
+    def upload(text, identity="upload:contract"):
+        data = text.encode("utf-8")
+        with api.app.state.store.transaction() as c:
+            digest = api.app.state.blobs.put(data, "text/plain")
+            item = register(c, Identity("human:ana", "human"), digest, len(data), "contract.txt", "text/plain")
+            row, _, _ = api.app.state.files.add_version(
+                c, bot="ops", actor="human:ana", scope="task:" + task["id"], task=task["id"], conversation=None,
+                attempt="", identity=identity, title="Acme contract", name="contract.txt", mime="text/plain",
+                blob_id=item["id"], digest=digest, size=len(data))
+            return row["id"], row["current_version"]
+
+    file_id, version = upload(text)
+    unrelated, _ = upload("Unrelated private document.", identity="upload:unrelated")
+    read = read_document(api, file_id)
+    # Publish another revision after delegation: the read remains pinned to the original bytes.
+    same_file, newer = upload("Newer private contract, not delegated.")
+    assert same_file == file_id and newer == version + 1
     with api.app.state.store.read() as c:
-        assert "hub file read" in c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
-    got = api.get(f"/api/v2/files/{row['id']}/versions/1", headers=read_run(api))
-    assert got.status_code == 200 and len(got.content) == len(data)
-    assert api.get(f"/api/v2/files/{row['id']}/versions/1", headers=headers("counsel-test")).status_code == 403
+        body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
+    assert f"hub file read {file_id} --version {version}" in body
+    assert "Filler clause" not in body
+    run = read_run(api)
+    got = api.get(f"/api/v2/files/{file_id}/versions/{version}", headers=run)
+    assert got.status_code == 200, got.text
+    assert got.content == text.encode("utf-8")
+    assert api.get(f"/api/v2/tasks/{read['task_id']}", headers=run).status_code == 200
+    for path in (f"tasks/{task['id']}", f"files/{unrelated}/versions/1", f"files/{file_id}/versions/{newer}"):
+        denied = api.get("/api/v2/" + path, headers=run)
+        assert denied.status_code == 403, (path, denied.text)
+        assert "Unrelated private document" not in denied.text and "Newer private contract" not in denied.text
+    assert api.get(f"/api/v2/files/{file_id}/versions/{version}", headers=headers("counsel-test")).status_code == 403
 
 
 def test_counsel_reads_no_sql_in_a_run_or_out_of_one(api):

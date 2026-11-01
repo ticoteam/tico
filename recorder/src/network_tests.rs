@@ -1568,3 +1568,30 @@ fn edit_guards_and_the_shared_view_follow_what_tico_has() {
     assert_eq!(ended["blocks"][0]["editable"], false);
     assert!(error(crate::live::edit_shared(&store, id, 1, Some("late"))).contains("ended in Tico"));
 }
+
+#[test]
+fn old_tico_refuses_private_connect_without_dropping_visibility() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let record = store.create("Private synthetic replay").unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"status":422})),
+        Some(json!({"status":422})),
+    ]);
+    let error = tico
+        .connect(&store, &record.id, Some("private"))
+        .unwrap_err();
+    worker.join().unwrap();
+    assert!(error.to_string().contains("nothing was shared"));
+    assert!(store.context(&record.id).unwrap().live_id.is_empty());
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[0].0.starts_with("GET /api/v2/me "));
+    for (request, body, _) in requests.iter().skip(1) {
+        assert!(request.starts_with("POST /api/v2/live-meetings "));
+        assert_eq!(body["visibility"], "private");
+    }
+    assert_eq!(requests[1].1["client"], "tico-recorder");
+    assert!(requests[2].1.get("client").is_none());
+}

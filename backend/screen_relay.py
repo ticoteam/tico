@@ -8,6 +8,7 @@ import hmac
 import json
 import logging
 import threading
+import time
 import uuid
 from types import SimpleNamespace
 
@@ -30,6 +31,9 @@ def install_policy(app, store, auth, execution, settings):
     def authorize(request: Request, body: dict):
         if not private_request(request, settings):
             raise Problem("forbidden", "Private relay key required", 403)
+        if body.get("kind") == "exit_link":
+            from .browser_exit import authorize_link
+            return authorize_link(store, auth, execution, body)
         if body.get("kind") == "browser":
             origin = body.get("origin")
             if origin is not None and (not isinstance(origin, str) or not settings.allows_origin(origin)):
@@ -48,6 +52,10 @@ def install_policy(app, store, auth, execution, settings):
         return {"allowed": True}
 
 
+# Usage batches collected in one tick at most: 16 x 2,048 rows is twice the relay's whole backlog (relay-rs exit.rs).
+EXIT_BATCHES_PER_TICK = 16
+
+
 class RemoteRegistry:
     def __init__(self, store):
         self.store = store
@@ -56,6 +64,10 @@ class RemoteRegistry:
                                  headers={"Authorization": "Bearer " + store.settings.screen_relay_key})
         self.lease, self.boot, self.sequence = "", "", 0
         self.generations, self.acks = {}, []
+        # Browser exits (backend/browser_exit.py): the policy and bot-selection generations this lease's relay has
+        # (pushed again after a new lease, and until a push succeeds), and the usage batch to acknowledge.
+        self.exit_pushed, self.bot_pushed, self.exit_acks = {}, {}, []
+        self.pruned = 0.0
         self.healthy, self.superseded = False, False
 
     def _request(self, path, body=None):
@@ -100,6 +112,8 @@ class RemoteRegistry:
             answer = self._request("/control/v1/start", {"challenge": hello["challenge"], "lease": lease})
             self.lease, self.boot, self.sequence = lease, answer["boot"], 0
             self.generations.clear()
+            self.exit_pushed.clear()    # a new lease clears the relay's exit policies and bot generations too
+            self.bot_pushed.clear()
             self.healthy = True
         self._reconcile()
 
@@ -143,6 +157,112 @@ class RemoteRegistry:
         with self.lock:
             return self._command("pending", runner_id=runner_id)["sessions"]
 
+    # ------------------------------------------------------------------ browser exits (relay-rs/src/exit.rs)
+    EXIT_REFUSALS = ("exit_offline", "exit_not_shared", "exit_over_cap", "exit_busy", "exit_stale",
+                     "stale exit policy")
+
+    def _exit_command(self, op, /, **fields):
+        """An exit operation: its answer, or the relay's refusal code as a string. Anything else is the relay
+        unavailable (503)."""
+        if not self.healthy:
+            raise Problem("browser_exit_unavailable", "The relay is unavailable. Try again shortly.", 503)
+        self.sequence += 1
+        try:
+            response = self.http.post("/control/v1/command",
+                                      json={"lease": self.lease, "sequence": self.sequence, "op": op, **fields})
+            answer = response.json()
+        except (httpx.HTTPError, ValueError):
+            self.healthy = False
+            raise Problem("browser_exit_unavailable", "The relay is unavailable. Try again shortly.", 503) from None
+        if response.status_code != 200:
+            code = answer.get("error") if isinstance(answer, dict) else None
+            if code in self.EXIT_REFUSALS:
+                return code
+            if code in ("stale permission lease", "stale control sequence"):
+                self.healthy = False
+            raise Problem("browser_exit_unavailable", "The relay refused the request. Try again shortly.", 503)
+        if answer.get("boot") != self.boot:
+            self.healthy = False
+            raise Problem("browser_exit_unavailable", "The relay restarted. Try again shortly.", 503)
+        return answer
+
+    def exit_epoch(self):
+        """The relay lease a grant is read under (see exit_grant)."""
+        with self.lock:
+            return self.lease
+
+    def push_exit_policy(self, runner_id):
+        """Send the exit computer's stored policy and its generation; the relay keeps the newest. A push that fails is
+        logged and sent again by the next tick (_exit_reconcile); a grant carries the stored policy meanwhile."""
+        from . import browser_exit
+        with self.store.read() as c:
+            p = browser_exit.policy(c, runner_id)
+        with self.lock:
+            epoch = self.lease
+            try:
+                answer = self._exit_command("exit_policy", runner_id=runner_id, policy={
+                    "generation": p["generation"], "sharing": p["sharing"], "bots": p["bots"],
+                    "cap": p["daily_cap_bytes"]})
+            except Problem:
+                log.warning("browser exit policy for %s not pushed to the relay; retrying", runner_id)
+                return 0
+            if answer == "stale exit policy" or isinstance(answer, dict):     # the relay has this one or newer
+                if self.lease == epoch:
+                    self.exit_pushed[runner_id] = max(self.exit_pushed.get(runner_id, 0), p["generation"])
+                return answer.get("closed", 0) if isinstance(answer, dict) else 0
+            log.warning("browser exit policy for %s refused by the relay (%s); retrying", runner_id, answer)
+            return 0
+
+    def push_bot_generation(self, bot, reason):
+        """Tell the relay the bot's selection changed (its exit, or the computer it runs on): grants read before are
+        refused and its tunnels opened under them close. Retried by the next tick when it fails."""
+        from . import browser_exit
+        with self.store.read() as c:
+            generation = browser_exit.bot_generation(c, bot)
+        with self.lock:
+            epoch = self.lease
+            try:
+                answer = self._exit_command("exit_close", bot=bot, bot_generation=generation, reason=reason)
+            except Problem:
+                log.warning("browser exit change for %s not pushed to the relay; retrying", bot)
+                return 0
+            if isinstance(answer, dict) and self.lease == epoch:
+                self.bot_pushed[bot] = max(self.bot_pushed.get(bot, 0), generation)
+            return answer.get("closed", 0) if isinstance(answer, dict) else 0
+
+    def _exit_reconcile(self, batch=32):
+        """Push what the relay is missing: generations committed but not pushed under this lease (a failed push, a
+        new lease, a bot moved to another computer)."""
+        from . import browser_exit
+        with self.store.read() as c:
+            exits, bots = browser_exit.generations(c)
+        with self.lock:
+            exits = [rid for rid, g in exits.items() if g > self.exit_pushed.get(rid, 0)][:batch]
+            bots = [bot for bot, g in bots.items() if g > self.bot_pushed.get(bot, 0)][:batch]
+        for rid in exits:
+            self.push_exit_policy(rid)
+        for bot in bots:
+            self.push_bot_generation(bot, "browser exit changed")
+
+    def exit_grant(self, grant, epoch):
+        """The relay's answer to one tunnel ({"ticket"}), or its refusal code. `epoch` is the lease the grant was read
+        under: after a new lease the relay's generations start again, so an older read is read again (exit_stale)."""
+        with self.lock:
+            if self.lease != epoch:
+                return "exit_stale"
+            try:
+                return self._exit_command("exit_grant", grant=grant)
+            except Problem:
+                return "unavailable"
+
+    def exit_close(self, bot=None, exit=None, reason=""):
+        with self.lock:
+            try:
+                answer = self._exit_command("exit_close", bot=bot, exit=exit, reason=reason)
+                return answer.get("closed", 0) if isinstance(answer, dict) else 0
+            except Problem:
+                return 0
+
     @staticmethod
     def _record(c, report):
         sid, rid = report["id"], report["runner_id"]
@@ -171,15 +291,32 @@ class RemoteRegistry:
             self.start(initial=False)
             if not self.healthy:
                 return
-        with self.lock:
-            reports = self._command("heartbeat", ack=self.acks)["reports"]
-            self.acks = []
-        # Never take the store lock while holding the control lock: admission takes them in the other order.
-        with self.store.transaction() as c:
-            for report in reports:
-                self._record(c, report)
-        with self.lock:
-            self.acks.extend(report["id"] for report in reports)
+        # Browser-exit usage the relay holds beyond the batch in hand is collected in this tick, up to a limit, so no
+        # backlog builds up: a relay that stops on its own loses at most about one tick's bytes.
+        from . import browser_exit
+        for _ in range(EXIT_BATCHES_PER_TICK):
+            with self.lock:
+                answer = self._command("heartbeat", ack=self.acks, exit_ack=self.exit_acks)
+                reports, usage, boot = answer["reports"], answer.get("exit_usage"), self.boot
+                self.acks, self.exit_acks = [], []
+            # Never take the store lock while holding the control lock: admission takes them in the other order.
+            prune = time.monotonic() - self.pruned > 3600
+            with self.store.transaction() as c:
+                for report in reports:
+                    self._record(c, report)
+                recorded = browser_exit.record_batch(c, boot, usage)
+                if prune:
+                    browser_exit.prune(c)
+            if prune:
+                self.pruned = time.monotonic()
+            with self.lock:
+                self.acks.extend(report["id"] for report in reports)
+                if recorded:
+                    self.exit_acks.append(recorded)
+            in_hand = len(usage.get("rows") or []) if isinstance(usage, dict) else 0
+            if not recorded or int(answer.get("exit_backlog") or 0) <= in_hand:
+                break
+        self._exit_reconcile()
 
     async def run(self, stop):
         try:
@@ -194,15 +331,33 @@ class RemoteRegistry:
                 except TimeoutError:
                     pass
         finally:
-            def shutdown():
-                with self.lock:
-                    if self.healthy:
-                        self._command("stop")
             try:
-                await asyncio.to_thread(shutdown)
+                await asyncio.to_thread(self.stop_and_drain)
             except Problem:
                 pass
             self.http.close()
+
+    def stop_and_drain(self, deadline=5.0):
+        """Stop: the relay closes every socket, which counts the open tunnels' last bytes, and keeps the lease for
+        heartbeats until Python has collected the browser-exit usage it holds. Collected here until none is left or
+        the deadline passes; what's left stays in the relay for the next lease."""
+        from . import browser_exit
+        with self.lock:
+            if not self.healthy:
+                return
+            answer = self._command("stop")
+        until = time.monotonic() + deadline
+        while (answer.get("exit_usage") or answer.get("exit_backlog")) and time.monotonic() < until:
+            with self.lock:
+                answer = self._command("heartbeat", ack=[], exit_ack=self.exit_acks)
+                usage, boot, self.exit_acks = answer.get("exit_usage"), self.boot, []
+            if usage:
+                with self.store.transaction() as c:
+                    recorded = browser_exit.record_batch(c, boot, usage)
+                with self.lock:
+                    if recorded:
+                        self.exit_acks.append(recorded)
+        self.healthy = False
 
 
 def reconcile_sessions(store, lease=""):
