@@ -102,6 +102,7 @@ def _name_words(text):
         text = re.sub(rf"\b{full}\b", lambda found, short=short: f"{short} {found.group(0)}", text)
     text = re.sub(r"\baccounting\b", "bookkeeping", text)      # the books, not a client account ("Account Manager")
     text = re.sub(r"\bcustomer service\b", "support customer service", text)     # the Support Agent's work
+    text = re.sub(r"\bemployee relations?\b", lambda found: f"hr {found.group(0)}", text)    # HR's, not investors'
     words = re.findall(r"[a-z0-9]+", text)
     return [(_name_stem(word), word) for word in words if len(word) > 1 and word not in NAME_STOP]
 
@@ -190,8 +191,11 @@ def _best_card(cards, title, team=""):
             continue                        # a designer is not the UX Writer, an engineer not a specialist
         if heads and card.get("lead"):
             # A head's title names the field it heads, which the head's card may not: "Head of HR" is the Head of
-            # People, the head of the HR department.
-            name |= {stem for stem, _ in _name_words(FIELDS.get(card["department"], card["department"]))}
+            # People, the head of the HR department. Only a title that is all field: "Director of Revenue
+            # Recognition" heads revenue recognition, not Sales.
+            field = {stem for stem, _ in _name_words(FIELDS.get(card["department"], card["department"]))}
+            if work <= field:
+                name |= field
         # A job's letters are a whole name ("PR" is Public Relations), so they outweigh one of its words ("Relations").
         shared = sum(2 if stem in LETTERS else 1 for stem in name & work)
         if not shared:
