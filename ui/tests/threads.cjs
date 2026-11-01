@@ -175,8 +175,8 @@ async function shot(page, name) {
     assert.equal(await page.locator('#pane-chat [data-talk="home"]').getAttribute('aria-selected'), 'true');
     await page.locator('#pane-chat [data-talk="dm"]').click();
     await page.waitForFunction(() => location.hash === '#/bot/ops/dm');
+    await page.locator('#pane-chat [data-talk="dm"][aria-selected="true"]').waitFor();
     await page.locator('#bot-thread .thv-composer .p-text').waitFor();
-    assert.equal(await page.locator('#pane-chat [data-talk="dm"]').getAttribute('aria-selected'), 'true');
     await shot(page, 'bot-dm-desktop');
 
     // A person's Home under their profile, with the update card.
