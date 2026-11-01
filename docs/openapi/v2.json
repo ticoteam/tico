@@ -33713,7 +33713,7 @@
           "name": {
             "type": "string"
           },
-          "owner": {
+          "owner_id": {
             "type": "string"
           },
           "enabled": {
@@ -33914,7 +33914,7 @@
           "name": {
             "type": "string"
           },
-          "owner": {
+          "owner_id": {
             "type": "string"
           },
           "enabled": {
@@ -34213,7 +34213,7 @@
                     "system"
                   ]
                 },
-                "owner": {
+                "owner_id": {
                   "type": "string"
                 },
                 "started_at": {
@@ -41990,7 +41990,7 @@
           "title": {
             "type": "string"
           },
-          "owner": {
+          "owner_id": {
             "type": "string"
           },
           "parent_id": {
@@ -42059,7 +42059,7 @@
           "created_at": {
             "type": "string"
           },
-          "created_by": {
+          "created_by_id": {
             "type": "string"
           },
           "updated_at": {
@@ -42091,14 +42091,14 @@
         "required": [
           "body",
           "created_at",
-          "created_by",
+          "created_by_id",
           "id",
-          "owner",
+          "owner_id",
           "parent_id",
           "rank",
           "status",
           "status_at",
-          "status_by",
+          "status_by_id",
           "status_note",
           "status_source",
           "title",
@@ -42947,7 +42947,7 @@
               "title": {
                 "type": "string"
               },
-              "owner": {
+              "owner_id": {
                 "type": "string"
               },
               "parent_id": {
@@ -43016,7 +43016,7 @@
               "created_at": {
                 "type": "string"
               },
-              "created_by": {
+              "created_by_id": {
                 "type": "string"
               },
               "updated_at": {
@@ -43093,17 +43093,17 @@
               "checkins",
               "children",
               "created_at",
-              "created_by",
+              "created_by_id",
               "events",
               "id",
               "kpis",
-              "owner",
+              "owner_id",
               "parent_id",
               "proposals",
               "rank",
               "status",
               "status_at",
-              "status_by",
+              "status_by_id",
               "status_note",
               "status_source",
               "tasks",
@@ -43159,7 +43159,7 @@
                 "title": {
                   "type": "string"
                 },
-                "owner": {
+                "owner_id": {
                   "type": "string"
                 },
                 "parent_id": {
@@ -43228,7 +43228,7 @@
                 "created_at": {
                   "type": "string"
                 },
-                "created_by": {
+                "created_by_id": {
                   "type": "string"
                 },
                 "updated_at": {
@@ -43280,16 +43280,16 @@
               "required": [
                 "body",
                 "created_at",
-                "created_by",
+                "created_by_id",
                 "id",
                 "kpis",
                 "open_tasks",
-                "owner",
+                "owner_id",
                 "parent_id",
                 "rank",
                 "status",
                 "status_at",
-                "status_by",
+                "status_by_id",
                 "status_note",
                 "status_source",
                 "title",
@@ -44774,13 +44774,13 @@
           "version": {
             "type": "integer"
           },
-          "created_by": {
+          "created_by_id": {
             "type": "string"
           },
           "created_at": {
             "type": "string"
           },
-          "updated_by": {
+          "updated_by_id": {
             "type": "string"
           },
           "updated_at": {
@@ -44801,14 +44801,14 @@
           "archived",
           "body",
           "created_at",
-          "created_by",
+          "created_by_id",
           "created_by_name",
           "id",
           "locked",
           "path",
           "title",
           "updated_at",
-          "updated_by",
+          "updated_by_id",
           "updated_by_name",
           "version"
         ],
@@ -44863,7 +44863,7 @@
           "updated_at": {
             "type": "string"
           },
-          "updated_by": {
+          "updated_by_id": {
             "type": "string"
           },
           "locked": {
@@ -44883,7 +44883,7 @@
           "path",
           "title",
           "updated_at",
-          "updated_by",
+          "updated_by_id",
           "updated_by_name",
           "version"
         ],
@@ -45037,7 +45037,7 @@
               "monthly"
             ]
           },
-          "owner": {
+          "owner_id": {
             "type": "string"
           },
           "source_note": {
@@ -45052,7 +45052,7 @@
               "null"
             ]
           },
-          "created_by": {
+          "created_by_id": {
             "type": [
               "string",
               "null"
@@ -45149,7 +45149,7 @@
           "id",
           "latest",
           "name",
-          "owner",
+          "owner_id",
           "readings",
           "reason",
           "spark",
@@ -46926,12 +46926,12 @@
           "body",
           "conversation_id",
           "created_at",
-          "from_actor",
           "id",
           "in_reply_to",
           "kind",
+          "recipient_id",
           "refs",
-          "to_actor"
+          "sender_id"
         ],
         "additionalProperties": true
       },
@@ -53242,7 +53242,7 @@
           "requester_id": {
             "type": "string"
           },
-          "owner": {
+          "owner_id": {
             "type": "string"
           },
           "status": {
@@ -53287,7 +53287,7 @@
           },
           "owner_name": {
             "type": "string",
-            "description": "Display name of owner (`owner` stays the actor id)"
+            "description": "Display name of owner (`owner_id` stays the actor id)"
           },
           "requester_name": {
             "type": "string",
@@ -53363,7 +53363,7 @@
                   "status": {
                     "type": "string"
                   },
-                  "owner": {
+                  "owner_id": {
                     "type": "string"
                   },
                   "direction": {
@@ -53373,7 +53373,7 @@
                 "required": [
                   "direction",
                   "id",
-                  "owner",
+                  "owner_id",
                   "status",
                   "title"
                 ],
@@ -53499,13 +53499,13 @@
         },
         "required": [
           "created_at",
-          "due",
+          "due_at",
           "holds",
           "id",
           "labels",
           "lane",
-          "owner",
-          "requester",
+          "owner_id",
+          "requester_id",
           "status",
           "title",
           "updated_at",

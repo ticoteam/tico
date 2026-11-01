@@ -76,11 +76,11 @@ def to_yaml(draft, created=None):
         L += ["  - id: you", '    name: "You"', '    role: "Owner"', "    owner: true"]
     for p in draft["people"]:
         L += ["  - id: %s" % word(p["id"]), "    name: %s" % q(p["name"]), "    role: %s" % q(p["role"]),
-              "    owner: true" if p["owner_id"] else "    reports_to: %s" % word(head_id)]
+              "    owner: true" if p["owner"] else "    reports_to: %s" % word(head_id)]
     L.append("employees:" + ("" if any(not b["existing"] for b in draft["bots"]) else " []"))
     for b in (b for b in draft["bots"] if not b["existing"]):
         L += ["  - id: %s" % word(b["id"]), "    template: %s" % word(b["template"]), "    title: %s" % q(b["title"]),
-              "    department: %s" % b["department"], "    reports_to: %s" % word(D.manager_of(draft, b)),
+              "    department: %s" % b["dept"], "    reports_to: %s" % word(D.manager_of(draft, b)),
               "    start: %s" % ("now" if b["start"] else "later"), "    reason: %s" % q(b["reason"])]
         if b.get("team"):
             L.append("    team: %s" % q(b["team"]))
@@ -97,14 +97,14 @@ def to_yaml(draft, created=None):
     L.append("existing_agents:" + ("" if any(b["existing"] for b in draft["bots"]) else " []"))
     for b in (b for b in draft["bots"] if b["existing"]):
         L += ["  - id: %s" % word(b["id"]), "    runtime: %s" % b["runtime"], "    title: %s" % q(b["title"]),
-              "    job: %s" % q(b["about"]), "    department: %s" % b["department"], "    reason: %s" % q(b["reason"]),
+              "    job: %s" % q(b["about"]), "    department: %s" % b["dept"], "    reason: %s" % q(b["reason"]),
               "    reports_to: %s" % word(D.manager_of(draft, b))]
         if b.get("team"):
             L.append("    team: %s" % q(b["team"]))
     L.append("goals:" + ("" if draft["goals"] else " []"))
     for g in draft["goals"]:
         L += ["  - id: %s" % word(g["id"]), "    title: %s" % q(g["title"]),
-              "    owner: %s" % word(head_id if g["owner_id"] == "you" else g["owner_id"]),
+              "    owner: %s" % word(head_id if g["owner"] == "you" else g["owner"]),
               "    measure: %s" % (q(g["measure"]) if g["measure"] else "null  " + NOT_SET),
               "    unit: %s" % q(g["unit"]), "    direction: %s" % g["direction"]]
         for key in D.AIM[g["direction"]]:
@@ -235,7 +235,7 @@ def from_yaml(text):
     if len(people) == 1 and people[0] == {"id": "you", "name": "You", "role": "Owner", "owner": True}:
         people = []
     draft["people"] = [{"id": _str(p.get("id")), "name": _str(p.get("name")), "role": _str(p.get("role")),
-                        "department": D.dept_of(_str(p.get("role"))), "owner_id": p.get("owner_id") is True} for p in people]
+                        "dept": D.dept_of(_str(p.get("role"))), "owner": p.get("owner") is True} for p in people]
     chosen = {}
     for b in _rows(doc, "employees"):
         role = next((r for r in D.ROLES if r["slug"] == b.get("template")), None) \
@@ -264,7 +264,7 @@ def from_yaml(text):
         chosen[bot["id"]] = _str(b.get("reports_to"))
         draft["bots"].append(bot)
     for g in _rows(doc, "goals"):
-        goal = {"id": _str(g.get("id")), "title": _str(g.get("title")), "owner_id": _str(g.get("owner_id")),
+        goal = {"id": _str(g.get("id")), "title": _str(g.get("title")), "owner": _str(g.get("owner")),
                 "measure": _str(g.get("measure")), "unit": _str(g.get("unit")), "direction": g.get("direction") or "up"}
         for key in D.AIM.get(goal["direction"], ()):
             goal[key] = _str(g.get(key)) or None if key == "deadline" else g.get(key)

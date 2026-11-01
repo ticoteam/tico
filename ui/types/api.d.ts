@@ -138,7 +138,7 @@ export type Automation = {
   name?: string;
   next_due_at?: string | null;
   next_run?: string | null;
-  owner?: string;
+  owner_id?: string;
   paused?: boolean;
   pending?: number;
   problems?: Array<{
@@ -188,7 +188,7 @@ export type AutomationHeld = {
   name?: string;
   next_due_at?: string | null;
   next_run?: string | null;
-  owner?: string;
+  owner_id?: string;
   paused?: boolean;
   pending?: number;
   problems?: Array<{
@@ -231,7 +231,7 @@ export type AutomationOverviewRuns = {
   finished_at?: string | null;
   id: string;
   outcome?: string;
-  owner?: string;
+  owner_id?: string;
   started_at: string;
   started_by?: string;
   status: string;
@@ -1890,15 +1890,15 @@ export type FinanceWebhookDeliveries = {
 export type Goal = {
   body: string;
   created_at: string;
-  created_by: string;
+  created_by_id: string;
   id: string;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   parent_id: string | null;
   rank: number | null;
   status: string | null;
   status_at: string | null;
-  status_by_id?: string | null;
+  status_by_id: string | null;
   status_by_name?: string;
   status_note: string;
   status_source: string | null;
@@ -2062,18 +2062,18 @@ export type GoalResult = {
   checkins: Array<GoalCheckinView>;
   children: Array<Goal>;
   created_at: string;
-  created_by: string;
+  created_by_id: string;
   events: Array<Record<string, unknown>>;
   id: string;
   kpis: Array<Kpi>;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   parent_id: string | null;
   proposals: Array<GoalProposalView>;
   rank: number | null;
   status: string | null;
   status_at: string | null;
-  status_by_id?: string | null;
+  status_by_id: string | null;
   status_by_name?: string;
   status_note: string;
   status_source: string | null;
@@ -2099,17 +2099,17 @@ export type GoalTree = {
   body: string;
   checkin?: GoalCheckinView | null;
   created_at: string;
-  created_by: string;
+  created_by_id: string;
   id: string;
   kpis: Array<Kpi>;
   open_tasks: number;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   parent_id: string | null;
   rank: number | null;
   status: string | null;
   status_at: string | null;
-  status_by_id?: string | null;
+  status_by_id: string | null;
   status_by_name?: string;
   status_note: string;
   status_source: string | null;
@@ -2401,14 +2401,14 @@ export type InternalDoc = {
   archived: boolean;
   body: string;
   created_at: string;
-  created_by: string;
+  created_by_id: string;
   created_by_name: string;
   id: string;
   locked: boolean;
   path: string;
   title: string;
   updated_at: string;
-  updated_by: string;
+  updated_by_id: string;
   updated_by_name: string;
   version: number;
 };
@@ -2428,7 +2428,7 @@ export type InternalDocRow = {
   path: string;
   title: string;
   updated_at: string;
-  updated_by: string;
+  updated_by_id: string;
   updated_by_name: string;
   version: number;
 };
@@ -2469,7 +2469,7 @@ export type Kpi = {
   auto: boolean;
   cadence: "daily" | "weekly" | "monthly";
   created_at?: string | null;
-  created_by?: string | null;
+  created_by_id?: string | null;
   definition?: string;
   definition_version: number;
   direction: "up" | "down" | "range";
@@ -2479,7 +2479,7 @@ export type Kpi = {
   latest: KpiReadingView | null;
   link?: KpiLink;
   name: string;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   readings: number;
   reason: string;
@@ -2821,14 +2821,14 @@ export type Message = {
   id: string;
   in_reply_to: string | null;
   kind: string;
-  recipient_id?: string;
+  recipient_id: string;
   refs: Record<string, unknown>;
   run?: {
   job_id?: string;
   run_id?: string;
   state?: "started_run" | "added_to_run";
 };
-  sender_id?: string;
+  sender_id: string;
   sent_as?: SentAs;
   to_name?: string;
   woke?: boolean;
@@ -4037,7 +4037,7 @@ export type Task = {
   width: number | null;
 } | null;
   created_at: string;
-  due_at?: string | null;
+  due_at: string | null;
   external_requesters?: number;
   guest?: string | null;
   holds: Array<TaskHold>;
@@ -4049,7 +4049,7 @@ export type Task = {
   number?: number | null;
   occurrence?: string | null;
   open_asks?: number;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   private?: boolean;
   public_summary?: string;
@@ -4057,12 +4057,12 @@ export type Task = {
   relations?: Record<string, Array<{
   direction: string;
   id: string;
-  owner: string;
+  owner_id: string;
   status: string;
   title: string;
 }>>;
   requester_count?: number;
-  requester_id?: string;
+  requester_id: string;
   requester_name?: string;
   roles?: Record<string, Array<string>>;
   size?: number | null;

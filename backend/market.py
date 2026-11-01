@@ -126,6 +126,7 @@ def _event(conn, kind, subject, actor, field, old, new, insight_id=None, note=""
     """One `market_events` row. `trip=False` keeps the strategy's fit check out of it: a proposed size is not yet
     a change to what a bet rests on."""
     eid = H.new_id()
+    # `field` is the column name when the event was written, so older rows may say last_verified, valid_from or valid_until.
     conn.execute("INSERT INTO market_events (id, subject_kind, subject_id, created_at, actor, field, old, new, insight_id, note) "
                  "VALUES (?,?,?,?,?,?,?,?,?,?)",
                  (eid, kind, subject, H.now(), actor, field,

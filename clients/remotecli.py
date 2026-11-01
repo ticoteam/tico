@@ -715,7 +715,7 @@ def run(args, who=None):
             if sub == "close":
                 body["close"] = True
             elif sub == "update":
-                body.update({"status": args.status, "owner_id": args.owner, "due_at": args.due,
+                body.update({"status": args.status, "owner": args.owner, "due": args.due,
                              "goal_id": getattr(args, "goal", None)})
                 if getattr(args, "private", None) is not None:
                     body["private"] = args.private
@@ -1057,7 +1057,7 @@ def seed_automations(client, slug, path):
                    {"type": "event", "name": on} if on else
                    {"type": "schedule", "cron": entry["cron"], "tz": entry["timezone"]})
         made = client.post("automations", {
-            "name": entry["title"][:120], "owner_id": "bot:" + slug, "enabled": entry["enabled"], "trigger": trigger,
+            "name": entry["title"][:120], "owner": "bot:" + slug, "enabled": entry["enabled"], "trigger": trigger,
             "steps": [{"id": "turn", "type": "bot_turn", "bot": "bot:" + slug,
                        "prompt": entry["instructions"] or "Do this routine's work."}]})
         seeded.append(made.get("id") or (made.get("automation") or {}).get("id"))
@@ -1149,7 +1149,7 @@ def integrations_text(rows):
 
 
 def integration_text(page):
-    out = [f"# {page['title']} ({page['service']}, {page['kind']}, writes: {page['writes']}, owner: {page['owner_id']})",
+    out = [f"# {page['title']} ({page['service']}, {page['kind']}, writes: {page['writes']}, owner: {page['owner']})",
            "", page["summary"], "", f"Access: {page['access']}", "Credentials:"]
     out += [f"  - {c}" for c in page["credentials"]]
     out += ["Declared in bot.yaml as:"] + ["  " + line for line in page["declared_as"].rstrip().splitlines()]

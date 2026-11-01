@@ -301,13 +301,13 @@ def add_person(draft, name, role, owner=False):
     base = D.slugify(name)[:D.LIMITS["id"] - 8]
     taken = {row["id"] for rows in (draft["bots"], draft["people"], draft["goals"]) for row in rows}
     person_id = next_id(draft, base) if base in taken or (base == "you" and not me) else base
-    person = {"id": person_id, "name": name, "role": role, "department": D.dept_of(role), "owner": False, "isNew": True}
+    person = {"id": person_id, "name": name, "role": role, "dept": D.dept_of(role), "owner": False, "isNew": True}
     founder = re.search(r"\b(ceo|founder|owner|president)\b", role, re.I) or me
-    if owner or not draft["people"] or (founder and not any(p["owner_id"] and re.search(r"\b(ceo|founder|owner)\b", p["role"], re.I)
+    if owner or not draft["people"] or (founder and not any(p["owner"] and re.search(r"\b(ceo|founder|owner)\b", p["role"], re.I)
                                                               for p in draft["people"])):
         for other in draft["people"]:
-            other["owner_id"] = False
-        person["owner_id"] = True
+            other["owner"] = False
+        person["owner"] = True
     draft["people"].append(person)
     return person
 
@@ -332,8 +332,8 @@ def _take_off(draft, gone):
         if bot.get("reports_to") in ids:
             del bot["reports_to"]
     for goal in draft["goals"]:
-        if goal["owner_id"] in ids:
-            goal["owner_id"] = D.owner_id(draft)
+        if goal["owner"] in ids:
+            goal["owner"] = D.owner_id(draft)
     removed = [r for r in draft.get("removed", []) if r["title"].lower() not in {b["title"].lower() for b in gone}]
     removed += [{"template": b["template"], "title": b["title"]} for b in gone]
     draft["removed"] = removed[-D.LIMITS["removed"]:]
@@ -361,7 +361,7 @@ def _lay_out(draft, model, reason):
         if _title_taken(draft, title):
             continue
         bot = _make_bot(draft, role, title, reason, False)
-        bot["department"] = row["team"]  # a model may seat a role in another team: the store's Pricing Analyst is in Finance
+        bot["dept"] = row["team"]  # a model may seat a role in another team: the store's Pricing Analyst is in Finance
         draft["bots"].append(bot)
     by_title = {b["title"].lower(): b for b in draft["bots"]}  # the same case-blind match as `_title_taken`
     for row in model["seats"]:
@@ -396,7 +396,7 @@ def seed(draft):
         role = BY_SLUG[row["template"]]
         if not role["lead"] or (role["department"] in ("product", "engineering") and not software):
             continue
-        if any(b["department"] == role["department"] and b["lead"] for b in draft["bots"]) or role["name"].lower() in gone:
+        if any(b["dept"] == role["department"] and b["lead"] for b in draft["bots"]) or role["name"].lower() in gone:
             continue
         draft["bots"].append(_make_bot(draft, role, role["name"], "Every chart has a head for each department.", False))
         heads.append(role["name"])
@@ -466,11 +466,11 @@ def bot_remove(draft, args, today, notes):
 
 
 def team_remove(draft, args, today, notes):
-    gone = [b for b in draft["bots"] if b["department"] == args["team"] and not b["core"] and not b["existing"]]
+    gone = [b for b in draft["bots"] if b["dept"] == args["team"] and not b["core"] and not b["existing"]]
     if not gone:
         raise Refusal("There's no %s team on the chart." % args["team"])
     _take_off(draft, gone)
-    kept = [b["title"] for b in draft["bots"] if b["department"] == args["team"] and b["existing"]]
+    kept = [b["title"] for b in draft["bots"] if b["dept"] == args["team"] and b["existing"]]
     return "Removed the %s team (%d bots).%s" % (args["team"], len(gone),
                                                  " Kept your own %s." % ", ".join(kept) if kept else "")
 
@@ -573,8 +573,8 @@ def goal_add(draft, args, today, notes):
         raise Refusal("The plan has the most goals it can hold (%d)." % D.LIMITS["goals"])
     title = _text(args, "title", D.LIMITS["goal_title"])
     aim = _aim(args, today)
-    owner = _target(draft, args["owner_id"], notes, add_people=True) if args.get("owner_id") else D.owner_id(draft)
-    draft["goals"].append({"id": next_id(draft, "goal"), "title": title, "owner_id": owner, **aim, "isNew": True})
+    owner = _target(draft, args["owner"], notes, add_people=True) if args.get("owner") else D.owner_id(draft)
+    draft["goals"].append({"id": next_id(draft, "goal"), "title": title, "owner": owner, **aim, "isNew": True})
     return "Added the goal \"%s\", owned by %s%s." % (title, _name(draft, owner),
                                                       "" if aim["measure"] else "; its measure is not set yet")
 
@@ -588,8 +588,8 @@ def goal_edit(draft, args, today, notes):
     if any(key in args for key in MEASURE_KEYS):
         old = {key: goal.pop(key) for key in MEASURE_KEYS if key in goal}
         goal.update(_aim(args, today, old if old.get("measure") else None))
-    if "owner_id" in args:
-        goal["owner_id"] = _target(draft, args["owner"], notes, add_people=True)
+    if "owner" in args:
+        goal["owner"] = _target(draft, args["owner"], notes, add_people=True)
     goal["isNew"] = True
     return "Updated the goal \"%s\"." % goal["title"]
 
@@ -612,14 +612,14 @@ def person_set(draft, args, today, notes):
     other = _person_named(draft, name)
     if other and other is not person:
         raise Refusal("%s is already on the team." % name)
-    if args.get("owner") is False and person["owner_id"]:
+    if args.get("owner") is False and person["owner"]:
         raise Refusal("Someone has to own the company: mark another person as the owner instead.")
     person["name"], person["isNew"] = name, True
     if "role" in args:
-        person["role"], person["department"] = role, D.dept_of(role)
+        person["role"], person["dept"] = role, D.dept_of(role)
     if args.get("owner"):
         for each in draft["people"]:
-            each["owner_id"] = each is person
+            each["owner"] = each is person
     return "Updated %s." % name
 
 
@@ -803,8 +803,8 @@ def seat_fill(draft, args, today, notes):
             # The visitor owns the company, not the first coworker who holds a seat.
             add_person(draft, "me", "Owner", owner=True)
         person = add_person(draft, args["name"], bot["title"])
-    if person["department"] is None:
-        person["department"] = bot["department"]
+    if person["dept"] is None:
+        person["dept"] = bot["dept"]
     for other in draft["bots"]:
         if other.get("person") == person["id"] and other is not bot:
             del other["person"]

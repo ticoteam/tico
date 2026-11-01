@@ -53,7 +53,7 @@ def depts(draft):
     counts = {}
     for bot in draft["bots"]:
         if not bot["core"]:
-            counts[bot["department"]] = counts.get(bot["department"], 0) + 1
+            counts[bot["dept"]] = counts.get(bot["dept"], 0) + 1
     return counts
 
 
@@ -146,7 +146,7 @@ def test_5_the_software_company_s_finance_holds_investor_relations_equity_and_fu
     draft, _ = first_chart("SaaS.", ["sells_software"])
     by = {b["title"]: b for b in draft["bots"]}
     for title in ("Investor Relations Manager", "Equity Manager", "Fundraising Manager"):
-        assert by[title]["department"] == "finance" and by[title]["template"] not in D.OPEN_SEATS
+        assert by[title]["dept"] == "finance" and by[title]["template"] not in D.OPEN_SEATS
     assert not [b for b in draft["bots"] if b["template"] in D.OPEN_SEATS]
 
 
@@ -167,8 +167,8 @@ def test_6_a_person_fills_a_seat_with_no_bot_yet():
     assert results[1]["said"] == "Ana holds the Equity Manager seat."
     ana = next(p for p in after["people"] if p["name"] == "Ana")
     seat = next(b for b in after["bots"] if b["title"] == "Equity Manager")
-    assert seat["person"] == ana["id"] and ana["role"] == "Equity Manager" and ana["department"] == "finance"
-    assert not ana["owner_id"]
+    assert seat["person"] == ana["id"] and ana["role"] == "Equity Manager" and ana["dept"] == "finance"
+    assert not ana["owner"]
     text = C.to_yaml(after, CREATED)
     assert "held_by: %s" % ana["id"] in text and C.to_yaml(C.from_yaml(text), CREATED) == text
     # One person holds one seat: moving Ana frees the first; a person who leaves frees theirs.
@@ -231,9 +231,9 @@ def test_filling_a_seat_on_an_empty_team_keeps_the_visitor_the_owner():
     assert results[0]["ok"], results
     owner = D.owner(after)
     assert owner["name"] == "You" and owner["id"] != "ana"
-    assert not next(p for p in after["people"] if p["name"] == "Ana")["owner_id"]
+    assert not next(p for p in after["people"] if p["name"] == "Ana")["owner"]
     doc = yaml.safe_load(C.to_yaml(after, CREATED))
-    assert [p["name"] for p in doc["people"] if p.get("owner_id")] == ["You"]
+    assert [p["name"] for p in doc["people"] if p.get("owner")] == ["You"]
 
 
 def test_8_a_company_no_model_fits_starts_from_everything():
@@ -272,7 +272,7 @@ def test_5_the_visitor_s_own_edits_stand_and_a_removed_bot_stays_off():
 def test_6_undo_takes_back_the_last_change_once_and_leaves_pending_alone():
     draft = started(pending=["sales"])
     after, results = run(draft, ("team_remove", {"team": "finance"}))
-    assert results[0]["ok"] and not any(b["department"] == "finance" for b in after["bots"])
+    assert results[0]["ok"] and not any(b["dept"] == "finance" for b in after["bots"])
     assert "pending" not in after["undo"] and "chat" not in after["undo"] and after["pending"] == ["sales"]
     after["pending"], after["chat"] = ["sales", "marketing"], [{"who": "me", "text": "undo that"}]
     restored, result = C.undo(after, TODAY)
@@ -305,7 +305,7 @@ def test_7_the_file_matches_the_draft_and_reads_back_after_any_edits():
                 ("bot_set_first_job", {"bot": rng.choice(bots), "job": rng.choice(odd) or "Send the invoices"}),
                 ("bot_set_routine", {"bot": rng.choice(bots), "routine": rng.choice(odd) or "Daily"}),
                 ("team_remove", {"team": rng.choice(D.TEAMS)}),
-                ("goal_add", {"title": rng.choice(odd) or "Grow", "owner_id": rng.choice(["Sam", "you", "Jo Kim"]),
+                ("goal_add", {"title": rng.choice(odd) or "Grow", "owner": rng.choice(["Sam", "you", "Jo Kim"]),
                               "measure": "accounts", "unit": "#", "direction": "down", "target": rng.choice([3, 2.5, 1e-05]),
                               "baseline": 9, "deadline": "in 90 days"}),
                 ("goal_add", {"title": "Steady", "measure": "response hours", "unit": "h", "direction": "range",
@@ -335,7 +335,7 @@ def test_7_the_file_matches_the_draft_and_reads_back_after_any_edits():
 
 
 def test_8_and_18_a_goal_in_words_gets_its_measure_deadline_and_owner():
-    said = {"title": "50 wholesale accounts by March 1", "owner_id": "Sam", "measure": "wholesale accounts",
+    said = {"title": "50 wholesale accounts by March 1", "owner": "Sam", "measure": "wholesale accounts",
             "unit": "accounts", "direction": "up", "target": 50, "deadline": "by March 1"}
     draft, results = run(started(), ("goal_add", said))
     goal, sam = draft["goals"][0], D.owner(draft)
@@ -344,9 +344,9 @@ def test_8_and_18_a_goal_in_words_gets_its_measure_deadline_and_owner():
         "measure": "wholesale accounts", "unit": "accounts", "direction": "up", "target": 50, "baseline": None,
         "deadline": "2027-03-01"}
     assert [p["name"] for p in draft["people"]] == ["You", "Sam"] and sam["name"] == "You"
-    assert goal["owner_id"] == next(p["id"] for p in draft["people"] if p["name"] == "Sam")
+    assert goal["owner"] == next(p["id"] for p in draft["people"] if p["name"] == "Sam")
     goals = yaml.safe_load(C.to_yaml(draft, CREATED))["goals"]
-    assert goals[0]["owner_id"] == "sam" and goals[0]["deadline"] == dt.date(2027, 3, 1) and goals[0]["target"] == 50
+    assert goals[0]["owner"] == "sam" and goals[0]["deadline"] == dt.date(2027, 3, 1) and goals[0]["target"] == 50
     # "the next March 1": on March 2 that is a year on.
     assert A.deadline("March 1", dt.date(2027, 3, 2)) == "2028-03-01" == A.deadline("1 March", dt.date(2027, 3, 1))
     assert A.deadline("2027-06-30", TODAY) == A.deadline("end of June", TODAY) == "2027-06-30"
@@ -358,7 +358,7 @@ def test_8_and_18_a_goal_in_words_gets_its_measure_deadline_and_owner():
 def test_19_a_goal_without_a_number_is_saved_with_its_measure_not_set_yet():
     draft, results = run(started(), ("goal_add", {"title": "happier customers"}))
     goal = draft["goals"][0]
-    assert results[0]["ok"] and "not set yet" in results[0]["said"] and goal["measure"] == "" and goal["owner_id"] == "you"
+    assert results[0]["ok"] and "not set yet" in results[0]["said"] and goal["measure"] == "" and goal["owner"] == "you"
     text = C.to_yaml(draft, CREATED)
     assert "measure: null  # not set yet: which number, and by when?" in text
     assert yaml.safe_load(text)["goals"][0]["measure"] is None
@@ -395,7 +395,7 @@ def test_10_key_shaped_strings_never_reach_the_draft_or_the_file():
         assert secret not in text
     # The file writer scrubs on its own: a page draft can reach it without a turn.
     direct = started()
-    direct["people"] = [{"id": "maya", "name": "Maya", "role": "Key " + OPENAI, "department": None, "owner": True}]
+    direct["people"] = [{"id": "maya", "name": "Maya", "role": "Key " + OPENAI, "dept": None, "owner": True}]
     assert OPENAI not in C.to_yaml(direct, CREATED)
     assert C.apply_action(started(), "step_go", {"step": "goals"}, TODAY)[1]["keys_removed"] is False
     # The words of every role, and an ordinary sentence about tokens, are left alone.
@@ -577,7 +577,7 @@ def test_10_short_values_are_cut_at_every_door_and_each_one_is_reported():
     read = C.from_yaml(clean.replace('about: ""', 'about: "{\\"password\\": \\"Qz\\"}"'))
     assert read["company"]["about"] == '{"password": "[removed]"}'
     direct = started()
-    direct["people"] = [{"id": "maya", "name": "Maya", "role": "secret=Qz", "department": None, "owner": True}]
+    direct["people"] = [{"id": "maya", "name": "Maya", "role": "secret=Qz", "dept": None, "owner": True}]
     assert yaml.safe_load(C.to_yaml(direct, CREATED))["people"][0]["role"] == "secret=[removed]"
 
 
@@ -645,9 +645,9 @@ def test_a_draft_that_breaks_its_shape_or_limits_is_refused():
     for bad in ({**good, "extra": 1}, {**good, "seq": 0}, {**good, "step": "x"}, {**good, "bots": "all"},
                 {**good, "pending": ["sales"] * 2}, {**good, "pending": ["a%d" % i for i in range(11)]},
                 {**good, "chat": [{"who": "system", "text": "x"}]}, {**good, "undo": {**good, "chat": []}},
-                {**good, "goals": [{"id": "g", "title": "x", "owner_id": "you", "measure": "m", "unit": "", "direction": "up",
+                {**good, "goals": [{"id": "g", "title": "x", "owner": "you", "measure": "m", "unit": "", "direction": "up",
                                     "target": float("nan"), "deadline": None}]},
-                {**good, "goals": [{"id": "g", "title": "x", "owner_id": "you", "measure": "", "target": "50", "due_at": "x"}]},
+                {**good, "goals": [{"id": "g", "title": "x", "owner": "you", "measure": "", "target": "50", "due": "x"}]},
                 {**good, "bots": good["bots"] * 2}, {**good, "company": {**good["company"], "about": "x" * 300001}},
                 {**good, "bots": good["bots"][:2] + [{**good["bots"][2], "template": "wizard"}]}):
         with pytest.raises(C.DraftError):
@@ -659,7 +659,7 @@ def test_a_draft_that_breaks_its_shape_or_limits_is_refused():
 
 def test_pending_rides_along_outside_the_file_and_the_undo_and_lets_go_of_a_team_that_is_gone():
     draft = started(pending=["sales", "marketing", "legal"])
-    draft["bots"] = [b for b in draft["bots"] if b["department"] != "legal"]
+    draft["bots"] = [b for b in draft["bots"] if b["dept"] != "legal"]
     after, _ = run(draft, ("bot_rename", {"bot": "builder", "title": "Ada"}))
     assert after["pending"] == ["sales", "marketing"], "no legal team on the chart"
     assert "pending" not in after["undo"] and "pending" not in C.to_yaml(after, CREATED)
@@ -846,7 +846,7 @@ def test_a_full_300_seat_chart_with_its_undo_and_chat_fits_the_draft_and_the_com
     back = C.from_yaml(text)
     assert len(back["bots"]) == 300 and len(back["people"]) == 300
     # The starter import takes the owner and the bots: all 300 of them.
-    owner_only = {**draft, "company": {**draft["company"], "name": "Acme"}, "people": [p for p in draft["people"] if p["owner_id"]]}
+    owner_only = {**draft, "company": {**draft["company"], "name": "Acme"}, "people": [p for p in draft["people"] if p["owner"]]}
     assert len(starter.load(C.to_yaml(owner_only, CREATED))["bots"]) == 300
 
 
@@ -854,7 +854,7 @@ def test_the_chat_adds_goals_up_to_the_goal_limit_and_refuses_the_next_in_plain_
     """The chat's own goals stay inside the limit the file check uses (Dev 449): the 325th lands, the 326th is refused,
     and the full plan passes the check and its file reads back."""
     draft = started()
-    draft["goals"] = [{"id": "goal-%d" % i, "title": "Goal %d" % i, "owner_id": "you", "measure": "", "unit": "",
+    draft["goals"] = [{"id": "goal-%d" % i, "title": "Goal %d" % i, "owner": "you", "measure": "", "unit": "",
                        "direction": "up", "target": None, "baseline": None, "deadline": None}
                       for i in range(C.LIMITS["goals"] - 1)]
     draft, (last, over) = run(draft, ("goal_add", {"title": "The last goal"}), ("goal_add", {"title": "One too many"}))
@@ -872,14 +872,14 @@ def layered_goals():
     aim = {"measure": "things", "unit": "things", "direction": "up", "target": 4, "baseline": None, "deadline": "2027-01-15"}
     dept = "marketing"
     draft["goals"] = [
-        {"id": "goal-1", "title": "Sign 4 customers", "owner_id": owner, "level": "company", "parent": None, **aim},
-        {"id": "goal-2", "title": "Publish 2 guides", "owner_id": owner, "level": "group", "parent": "goal-1", "dept": dept, **aim},
-        {"id": "goal-3", "title": "Hand in work early", "owner_id": owner, "level": "role", "parent": "goal-2", "dept": dept, **aim}]
+        {"id": "goal-1", "title": "Sign 4 customers", "owner": owner, "level": "company", "parent": None, **aim},
+        {"id": "goal-2", "title": "Publish 2 guides", "owner": owner, "level": "group", "parent": "goal-1", "dept": dept, **aim},
+        {"id": "goal-3", "title": "Hand in work early", "owner": owner, "level": "role", "parent": "goal-2", "dept": dept, **aim}]
     return draft
 
 
 def layers(draft):
-    return [(g["id"], g.get("level"), g.get("parent"), g.get("department")) for g in draft["goals"]]
+    return [(g["id"], g.get("level"), g.get("parent"), g.get("dept")) for g in draft["goals"]]
 
 
 def test_goals_with_a_level_parent_and_dept_pass_the_check_and_keep_them():
@@ -896,7 +896,7 @@ def test_a_parent_not_among_the_goals_or_itself_is_let_go_not_refused():
     draft["goals"][2]["parent"] = "goal-3"
     out = D.check(draft)
     assert out["goals"][1]["parent"] is None and out["goals"][2]["parent"] is None
-    assert out["goals"][1]["level"] == "group" and out["goals"][1]["department"] == draft["goals"][1]["department"]
+    assert out["goals"][1]["level"] == "group" and out["goals"][1]["dept"] == draft["goals"][1]["dept"]
 
 
 def test_the_company_file_holds_no_level_parent_or_dept():
@@ -1055,7 +1055,7 @@ def test_a_full_strategy_at_every_limit_beside_a_300_seat_chart_fits_the_starter
                       "posts": [{"source": "web", "url": url, "title": prose(L["post_title"]), "when": "2026-10-24",
                                  "tag": "market"} for _ in range(L["posts"])]}}
     draft, _ = run(chart(300, people=300), ("bot_rename", {"bot": "billing", "title": "Books"}))
-    owner_only = {**draft, "company": {**draft["company"], "name": "Acme"}, "people": [p for p in draft["people"] if p["owner_id"]],
+    owner_only = {**draft, "company": {**draft["company"], "name": "Acme"}, "people": [p for p in draft["people"] if p["owner"]],
                   "strategy": strategy}
     saved = starter.load(C.to_yaml(owner_only, CREATED))
     assert saved["strategy"] == D.check(owner_only)["strategy"] and len(saved["bots"]) == 300

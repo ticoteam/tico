@@ -564,7 +564,7 @@ def tag_create(api, args):
 @tool("hub_tag_update", "Edit a tag's metadata, checklist, label or owner. Send its current version; stale edits are refused.",
       {"id": _s("Tag id or key"), "version": {"type": "integer"}, "label": _s("Display label"),
        "metadata": {"type": "object", "description": "Replace metadata"}, "markdown": _s("Replace Markdown"),
-       "owner_id": _s("New owner; empty to clear")}, required=("id", "version"), writes=True)
+       "owner": _s("New owner; empty to clear")}, required=("id", "version"), writes=True)
 def tag_update(api, args):
     body = {k: args[k] for k in ("version", "label", "metadata", "markdown", "owner") if args.get(k) is not None}
     return _as_person(api).post("tags/" + quote(args["id"], safe=""), body, key=_key(args))
@@ -578,14 +578,14 @@ def tag_update(api, args):
       "trial for Thursday? If yes, I'll send the invite.\" Details go below it (a ticket on a custom "
       "type's board is exempt; asks stay on General). `dry_run` reports the "
       "checks a create would fail and writes nothing.",
-      {"owner_id": _s("Who does it: a bot slug, a person id, or `me`"),
+      {"owner": _s("Who does it: a bot slug, a person id, or `me`"),
        "title": _s("Task title: General uses plain words without reference numbers or all-caps; custom types keep board references"),
        "body": _s("The details", default=""),
        "visibility": _s("People only: roadmap visibility at creation; public needs public_title. A bot is refused; "
                         "it creates the task, then requests a publication", enum=["public", "private"]),
        "public_title": _s("People only (a bot is refused): public title; the internal title is never published"),
        "public_summary": _s("People only (a bot is refused): public summary; the internal body is never published"),
-       "due_at": _s("ISO-8601 date-time with timezone"),
+       "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only requester and assignee may read; bot defaults also apply"},
        "from_private": {"type": "boolean", "default": False,
                         "description": "From a run on your own private task with no person on it: a company-visible "
@@ -634,8 +634,8 @@ def tag_update(api, args):
        "dry_run": {"type": "boolean", "default": False}},
       required=("owner", "title"), writes=True)
 def task_create(api, args):
-    body = {"owner_id": _target(api, args["owner_id"]), "title": args["title"], "body": args.get("body") or "",
-            "due_at": args.get("due_at"), "goal_id": args.get("goal_id") or None}
+    body = {"owner": _target(api, args["owner"]), "title": args["title"], "body": args.get("body") or "",
+            "due": args.get("due"), "goal_id": args.get("goal_id") or None}
     if args.get("parent"):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model",
@@ -661,7 +661,7 @@ def task_create(api, args):
 @tool("hub_task_child_create", "Create a subtask under a parent; you are its requester. With `check_model`, the "
       "subtask is your own and runs on that model in a session of its own, reading only the subtask: name in its "
       "body the PR or files to look at. Mark it done with the verdict as the note; it comes back to the parent.",
-      {"parent": TASK_ID, "owner_id": _s("Bot slug or human id; `me` for a check_model subtask (the default)"),
+      {"parent": TASK_ID, "owner": _s("Bot slug or human id; `me` for a check_model subtask (the default)"),
        "title": _s("What to do"), "body": _s("Details", default=""),
        "check_model": _s("A company-enabled runtime, optionally with a model: `grok`, `codex:gpt-6.1-sol`; `auto` for "
                          "the company's check model, from a provider other than the parent's author when one can run it"),
@@ -672,7 +672,7 @@ def task_child_create(api, args):
     owner = args.get("owner") or ("me" if args.get("check_model") else None)
     if not owner:
         raise ValueError("owner is required (or check_model, which files the subtask for you)")
-    return task_create(api, {**args, "owner_id": owner, "body": args.get("body") or args["title"]})
+    return task_create(api, {**args, "owner": owner, "body": args.get("body") or args["title"]})
 
 
 @tool("hub_task_tree", "The nested subtasks with status, owner and worst PR state.",
@@ -764,8 +764,8 @@ def task_unsnooze(api, args):
       "first is what to do next. `all` also returns every bot you may see (the board: `{tasks, bots}`). `stuck` is "
       "BotOps's sweep: every bot's open work that has not moved in a day and waits on nobody (no human owes an "
       "answer, no open blocker, no run queued).",
-      {"owner_id": _s("Owner: a bot slug, a human id, or `me`"),
-       "requester_id": _s("Requester: a bot slug, a human id, or `me`"),
+      {"owner": _s("Owner: a bot slug, a human id, or `me`"),
+       "requester": _s("Requester: a bot slug, a human id, or `me`"),
        "status": {"type": "array", "items": {"type": "string", "enum": list(TASK_STATUSES)},
                   "description": "Only these statuses"},
        "lane": {"type": "string", "enum": ["company", "product"]},
@@ -796,8 +796,8 @@ def task_list(api, args):
             more["role"] = args["role"]
     if args.get("brief"):
         more["brief"] = "true"
-    rows = api.get("tasks", owner_id=_target(api, args.get("owner_id")) if args.get("owner_id") else None,
-                   requester_id=_target(api, args.get("requester_id")) if args.get("requester_id") else None,
+    rows = api.get("tasks", owner=_target(api, args.get("owner")) if args.get("owner") else None,
+                   requester=_target(api, args.get("requester")) if args.get("requester") else None,
                    status=",".join(args["status"]) if args.get("status") else None,
                    lane=args.get("lane") or None, label=args.get("label") or None, **more)["tasks"]
     return {"tasks": rows, "bots": api.get("bots")} if args.get("all") else rows
@@ -954,8 +954,8 @@ BRIEF_OLD = {"type": "boolean", "description": "Older name for brief"}
        "number": {"type": "integer", "minimum": 1, "description": "Movers: the number of a task that has none"},
        "note": _s("What changed, or the result"),
        "brief": BRIEF, "quiet": BRIEF_OLD,
-       "owner_id": _s("Hand the task to this bot or person"),
-       "due_at": _s("ISO-8601 date-time with timezone"),
+       "owner": _s("Hand the task to this bot or person"),
+       "due": _s("ISO-8601 date-time with timezone"),
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
        "waiting_on": _s("With status waiting: the person you need (their id). The note is your ask to them: one or two "
                         "plain sentences saying what you need and what happens after, at most 40 words, no ids, hashes, "
@@ -1024,7 +1024,7 @@ TASK_BULK_FILTER = ("owner", "requester", "status", "lane", "label", "type", "st
       {"filter": {"type": "object", "additionalProperties": False, "description": "Which tasks: at least one of these",
                   "properties": {
                       "owner": _s("Owner: a bot slug, a human id, or `me`"),
-                      "requester_id": _s("Requester: a bot slug, a human id, or `me`"),
+                      "requester": _s("Requester: a bot slug, a human id, or `me`"),
                       "status": {"type": "array", "items": {"type": "string", "enum": list(TASK_STATUSES)},
                                  "description": "Only these statuses"},
                       "lane": {"type": "string", "enum": ["company", "product"]},
@@ -1338,13 +1338,13 @@ def goal_save(api, args):
 
 @tool("hub_goal_list", "What you are for: your goals in order, the goals they support, and your reports' goals. Read this before you read a task. `all` is every "
       "live goal in the team.",
-      {"owner_id": _s("Someone else's: a bot slug or a person id; default is yourself"),
+      {"owner": _s("Someone else's: a bot slug or a person id; default is yourself"),
        "all": {"type": "boolean", "default": False},
        "status": _s("With `all`: only these, comma-separated (red,yellow,green,gray,done,dropped)")})
 def goals(api, args):
     if args.get("all"):
         return api.get("goals", all="1", status=args.get("status") or None)["goals"]
-    return api.get("goals", owner_id=_target(api, args["owner_id"]) if args.get("owner_id") else None)
+    return api.get("goals", owner=_target(api, args["owner"]) if args.get("owner") else None)
 
 
 @tool("hub_goal_show", "One goal: its body, KPIs with their latest readings, the goals it serves and "
@@ -1357,7 +1357,7 @@ def goal_show(api, args):
       "you on the org chart. A parent is optional: with none the goal is simply not linked. With one "
       "it supports that goal. It starts with no colour, which its data or a person (its owner, the owner of "
       "the goal it serves, or someone above them) sets.",
-      {"owner_id": _s("`me`, a bot slug, or a person id (`company` is the owner's)"),
+      {"owner": _s("`me`, a bot slug, or a person id (`company` is the owner's)"),
        "title": _s("Plain English: what you are going for"),
        "parent_id": _s("The goal this one supports, if any; leave it out when there is none"),
        "body": _s("What it means, what counts, what does not", default=""),
@@ -1365,7 +1365,7 @@ def goal_show(api, args):
        "bet_id": _s("The strategy bet it serves (hub_strategy_show lists them)"), "on_behalf_of": GOAL_YES},
       required=("owner", "title"), writes=True)
 def goal_create(api, args):
-    return _asked(api, args).post("goals", {"owner_id": _target(api, args["owner_id"]), "title": args["title"],
+    return _asked(api, args).post("goals", {"owner": _target(api, args["owner"]), "title": args["title"],
                               "parent_id": args.get("parent_id"), "body": args.get("body") or "",
                               "top": bool(args.get("top")), "bet_id": args.get("bet_id") or None},
                     key=_key(args))["goal"]
@@ -1402,7 +1402,7 @@ def goal_refresh(api, args):
       "them, or the Strategy Bot recording an owner's answer (`from_actor`).",
       {"id": _s("Goal id"), "body": _s("What is going on, in a sentence or two"),
        "signal": {"type": "string", "enum": ["on_track", "at_risk", "off_track"]},
-       "sender_id": _s("Whose words these are, when you record them for someone else: a bot slug or a person id"),
+       "from_actor": _s("Whose words these are, when you record them for someone else: a bot slug or a person id"),
        "kpi_id": _s("The KPI that prompted it, if any")},
       required=("id", "body"), writes=True)
 def goal_checkin(api, args):
@@ -1468,7 +1468,7 @@ def goal_strategy_bot_level3_offer(api, args):
        "changes": {"type": "array", "items": {"type": "object", "properties": {
            "do": {"type": "string", "enum": ["create", "reorder", "reassign", "close"]},
            "task_id": _s("The bot task to reorder, reassign or close"),
-           "owner_id": _s("The bot for a new or reassigned task"), "title": _s("A new task's title"),
+           "owner": _s("The bot for a new or reassigned task"), "title": _s("A new task's title"),
            "body": _s("A new task's body"), "note": _s("Why a task closes")}, "required": ["do"]},
            "description": "1 to 10 changes"},
        "goal_id": _s("The goal this serves, if any")},
@@ -1499,7 +1499,7 @@ def goal_strategy_bot_log(api, args):
       "the owner's order. Moving it is for the parent's owner or someone above.",
       {"id": _s("Goal id"), "title": _s("New title"), "body": _s("New body"),
        "parent_id": _s("The goal it supports; an empty string unlinks it"),
-       "owner_id": _s("New owner: a bot slug or a person id"),
+       "owner": _s("New owner: a bot slug or a person id"),
        "rank": {"type": "integer", "description": "Position in the owner's order"},
        "top": {"type": "boolean", "default": False},
        "bet_id": _s("The strategy bet it serves; an empty string unlinks it"), "on_behalf_of": GOAL_YES},
@@ -1547,14 +1547,14 @@ def _target_body(args):
 @tool("hub_kpi_list", "The KPIs you may see, each with its latest reading, freshness and colour. `bot` is one "
       "bot's five automatic KPIs (tasks done, time to first response, approval rate, failed runs, model cost; "
       "Read on the bot).",
-      {"goal_id": _s("Only the KPIs this goal uses"), "owner_id": _s("Only this owner's: me, a bot slug or a person id"),
+      {"goal_id": _s("Only the KPIs this goal uses"), "owner": _s("Only this owner's: me, a bot slug or a person id"),
        "unlinked": {"type": "boolean", "default": False, "description": "Only the KPIs no goal uses"},
        "include_archived": {"type": "boolean", "default": False,
                             "description": "Include archived KPIs for explicit historical review"},
        "bot": _s("A bot slug: its automatic KPIs")})
 def kpi_list(api, args):
     return api.get("kpis", goal_id=args.get("goal_id") or None,
-                   owner_id=_target(api, args["owner_id"]) if args.get("owner_id") else None,
+                   owner=_target(api, args["owner"]) if args.get("owner") else None,
                    unlinked="1" if args.get("unlinked") else None, auto_for=args.get("bot") or None,
                    include_archived="1" if args.get("include_archived") else None)
 
@@ -1576,12 +1576,12 @@ def kpi_show(api, args):
       "With `goal_id` it is linked to that goal, with the target fields on the link (an improvement: target and "
       "deadline; or a range: min/max). The Strategy Bot proposes instead (hub_proposal_create).",
       {"name": _s("'booked Calendly demos per two weeks'"), "goal_id": _s("Link it to this goal"),
-       "owner_id": _s("`me` (default), `company` (the owner's), a bot slug or a person id"),
+       "owner": _s("`me` (default), `company` (the owner's), a bot slug or a person id"),
        **KPI_PROPS, **TARGET_PROPS, "on_behalf_of": GOAL_YES},
       required=("name",), writes=True)
 def kpi_add(api, args):
     body = {"name": args["name"], "goal_id": args.get("goal_id"),
-            "owner_id": _target(api, args["owner_id"]) if args.get("owner_id") else None,
+            "owner": _target(api, args["owner"]) if args.get("owner") else None,
             **{k: args[k] for k in KPI_PROPS if args.get(k) is not None}, **_target_body(args)}
     if args.get("on_behalf_of") and args.get("goal_id"):
         body.pop("goal_id")
@@ -1592,7 +1592,7 @@ def kpi_add(api, args):
 @tool("hub_kpi_update", "Change a KPI. A change to what it measures (definition, unit, direction, cadence, "
       "source note) is a new definition version; a rename or a new owner is not. The KPI's owner or someone above.",
       {"id": _s("KPI id"), "name": _s("New name"),
-       "owner_id": _s("New owner: `me`, a bot slug or a person id"), **KPI_PROPS, **KPI_TREE_PROPS},
+       "owner": _s("New owner: `me`, a bot slug or a person id"), **KPI_PROPS, **KPI_TREE_PROPS},
       required=("id",), writes=True)
 def kpi_update(api, args):
     body = {k: args.get(k) for k in ("name", *KPI_PROPS)}
@@ -3735,7 +3735,7 @@ def automation_held(api, args):
       {"range": {"type": "string", "enum": ["5m", "1h", "24h", "7d"], "default": "1h"},
        "status": {"type": "string", "enum": ["done", "failed", "waiting", "running", "held"]},
        "trigger": _s("message, task_received, schedule, webhook, listening, event, due or system; comma-separated"),
-       "owner_id": _s("person:<id>, bot:<slug> or group:<id>"), "limit": {"type": "integer", "default": 50},
+       "owner": _s("person:<id>, bot:<slug> or group:<id>"), "limit": {"type": "integer", "default": 50},
        "before": _s("`next` from the page before")})
 def automation_recent_runs(api, args):
     query = "&".join(f"{k}={quote(str(args[k]), safe=',')}" for k in ("range", "status", "trigger", "owner", "limit", "before")
@@ -4921,7 +4921,7 @@ def computers(api, args):
         if args.get("section"):
             raise ValueError("Name the computer whose section you want: `computer`")
         return {"computers": [computer_summary(r) for r in rows],
-                "services": [{"name": s.get("name"), "ok": not s.get("last_error"), "last_success": s.get("last_succeeded_at")}
+                "services": [{"name": s.get("name"), "ok": not s.get("last_error"), "last_succeeded_at": s.get("last_succeeded_at")}
                              for s in listing.get("services") or []],
                 "detail": "One computer in full: hub_computer_list computer=<label or id>"}
     match = [r for r in rows if wanted == r.get("id")] or [
@@ -5370,7 +5370,7 @@ def recent(api, args):
 _SYNCED_MESSAGE = {"type": "object", "additionalProperties": False, "required": ["role", "text"], "properties": {
     "role": _s("user (the person) or bot (the agent)", enum=["user", "bot"]),
     "text": _s("The message, verbatim"),
-    "created_at": _s("When it was sent, ISO 8601"),
+    "at": _s("When it was sent, ISO 8601"),
     "id": _s("The platform's id for the message, if you have one"),
     "images": {"type": "array", "maxItems": 10, "description": "Images shown in this message: each a public "
                "https `url` Tico can download, or for a file on your computer `content_base64` (under 5 MB) "
@@ -5598,7 +5598,7 @@ def turns(api, args):
       "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).\n"
       "- exceptions[] (the engineering type's manager only; absent for anyone else): key (subject:kind), kind (stuck, run, pool, slots, backlog, outage, refusal, merge), cause and since; ticket (id, number, title, step, owner) when it is about a ticket, check (id, title, owner) when the open check below it is what stands, bot, step or tickets for the others, pr and head on a failed merge. One row per subject and kind, oldest first.",
       {"type": _s("Task type id or name; default the engineering board"),
-       "owner_id": _s("Only tickets this person or bot owns"),
+       "owner": _s("Only tickets this person or bot owns"),
        "label": _s("Only tickets with this label"),
        "updated_since": _s("Only tickets changed after this: ISO date-time or a window like `7d`"),
        "snoozed": _s("all (default), hide or only", enum=["all", "hide", "only"]),
@@ -6871,7 +6871,7 @@ TASK_DAYS = {"type": "integer", "minimum": 0, "maximum": 366,
       "routine's lead time in days.",
       {"id": _s("The rule's id"), "first_due": _s("YYYY-MM-DD"),
        "repeats": {"type": "string", "enum": ["once", "weekly", "monthly", "quarterly", "yearly"]},
-       "owner_id": _s("The bot or person who owns it, by name or id"), "timezone": _s("An IANA zone, such as America/Chicago"),
+       "owner": _s("The bot or person who owns it, by name or id"), "timezone": _s("An IANA zone, such as America/Chicago"),
        "task_days": TASK_DAYS},
       required=("id", "first_due", "repeats", "owner"), writes=True)
 def rules_due_set(api, args):
@@ -6884,7 +6884,7 @@ def rules_due_set(api, args):
       "turns the routine off.",
       {"id": _s("The due date's id"), "first_due": _s("YYYY-MM-DD"),
        "repeats": {"type": "string", "enum": ["once", "weekly", "monthly", "quarterly", "yearly"]},
-       "owner_id": _s("The bot or person who owns it, by name or id"), "timezone": _s("An IANA zone, such as America/Chicago"),
+       "owner": _s("The bot or person who owns it, by name or id"), "timezone": _s("An IANA zone, such as America/Chicago"),
        "task_days": TASK_DAYS, "no_routine": {"type": "boolean", "description": "Turn the routine off"}},
       required=("id",), writes=True)
 def rules_due_edit(api, args):

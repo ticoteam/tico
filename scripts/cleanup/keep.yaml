@@ -43,7 +43,13 @@ names:
   ui/app/meetings-granola.js: [last_sync]   # Granola's sync status: a stored document's field, not a column
   ui/tests/meetings-granola.cjs: [last_sync]
 keys:
-  backend/strategy_setup.py: [started, finished]   # the jobs saved in registry_metadata (strategy.draft_from)
+  backend/strategy_setup.py: [started, finished]
+  clients/hubtools.py: [owner, requester, due, from_actor, at]   # a tool's input takes a name or an id
+  clients/remotecli.py: [owner, due]
+  backend/company_file/*.py: [dept, owner]   # the company file's draft, a stored document
+  backend/sample_company.py: [dept, owner]
+  backend/tests/test_company_file.py: [dept, owner, due]
+  backend/tests/test_company_import.py: [dept, owner]   # the jobs saved in registry_metadata (strategy.draft_from)
   runner/tests/test_worktree*.py: [detail_json, created, updated]   # fake runners/me/worktrees rows (the wire); their hub SQL is renamed
   backend/company_billing.py: [created, expires]   # Tico HQ's billing answer: another system's fields
   backend/tests/test_company_billing.py: [created, expires]

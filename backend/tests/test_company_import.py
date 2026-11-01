@@ -130,8 +130,8 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
                        ("person_set", {"name": "me", "role": "Founder"}),
                        ("seat_fill", {"seat": seat["accounts-payable"], "name": "Ana"}),
                        ("seat_fill", {"seat": seat["controller"], "name": "Ben"}),
-                       ("goal_add", {"title": "Close the books by day 5", "owner_id": seat["controller"]}),
-                       ("goal_add", {"title": "Clean ledgers", "owner_id": "Ana"})):
+                       ("goal_add", {"title": "Close the books by day 5", "owner": seat["controller"]}),
+                       ("goal_add", {"title": "Clean ledgers", "owner": "Ana"})):
         assert turn.apply(name, args)["ok"], name
     draft = turn.finish()
     next(b for b in draft["bots"] if b["template"] == "finance-lead")["reports_to"] = "ana"
@@ -149,7 +149,7 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
     assert [(p["id"], p["name"], p["title"]) for p in summary["people"]] == [
         ("ana", "Ana", seat["accounts-payable"]), ("ben", "Ben", seat["controller"])]
     assert not {"open_seats", "coworkers"} & set(summary["deferred"])
-    assert {g["title"]: g["owner_id"] for g in summary["goals"]} == {"Close the books by day 5": "company", "Clean ledgers": "company"}
+    assert {g["title"]: g["owner"] for g in summary["goals"]} == {"Close the books by day 5": "company", "Clean ledgers": "company"}
     body["fingerprint"] = summary["fingerprint"]
     done = api.post("/api/v2/onboarding/company/import", json=body, headers=signed_in())
     assert done.status_code == 200, done.text
@@ -163,7 +163,7 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
     invited_from_setup(api, finance[0]["id"])
     # A coworker who holds no role still joins in Tico, not by import.
     loose = C.from_yaml(text)
-    loose["people"].append({"id": "cara", "name": "Cara", "role": "Designer", "department": None, "owner": False, "isNew": True})
+    loose["people"].append({"id": "cara", "name": "Cara", "role": "Designer", "dept": None, "owner": False, "isNew": True})
     with pytest.raises(C.DraftError, match="add other coworkers in Tico"):
         starter.load(C.to_yaml(loose))
 
@@ -486,20 +486,20 @@ def goals_text(person=True):
     """A company file with a company goal (the owner's), a bot's goal with a target and a range goal not measured yet."""
     draft = C.from_yaml(company_text())
     if person:
-        draft["people"] = [{"id": "dana", "name": "Dana Ruiz", "role": "Founder", "department": "leadership", "owner": True}]
+        draft["people"] = [{"id": "dana", "name": "Dana Ruiz", "role": "Founder", "dept": "leadership", "owner": True}]
     draft["goals"] = [
-        {"id": "g-revenue", "title": "Reach 40 paying firms", "owner_id": "dana" if person else "you",
+        {"id": "g-revenue", "title": "Reach 40 paying firms", "owner": "dana" if person else "you",
          "measure": "Paying firms", "unit": "firms", "direction": "up", "target": 40, "baseline": 12,
          "deadline": "2027-01-31"},
-        {"id": "g-close", "title": "Close every month's books in five days", "owner_id": "finance-lead",
+        {"id": "g-close", "title": "Close every month's books in five days", "owner": "finance-lead",
          "measure": "Days to close the books", "unit": "days", "direction": "range", "min": 0, "max": 5},
-        {"id": "g-later", "title": "Answer every bookkeeping question", "owner_id": "accounts-payable", "measure": "",
+        {"id": "g-later", "title": "Answer every bookkeeping question", "owner": "accounts-payable", "measure": "",
          "unit": "", "direction": "up", "target": None, "baseline": None, "deadline": None},
         # Up, but its target is below its baseline: Tico refuses that target, and the import still lands the goal.
-        {"id": "g-backwards", "title": "Grow referrals", "owner_id": "finance-lead", "measure": "Referrals a month",
+        {"id": "g-backwards", "title": "Grow referrals", "owner": "finance-lead", "measure": "Referrals a month",
          "unit": "", "direction": "up", "target": 5, "baseline": 9, "deadline": "2027-01-31"},
         # A blank title is allowed in the file, never on Goals.
-        {"id": "g-blank", "title": " ", "owner_id": "accounts-payable", "measure": "Questions answered", "unit": "",
+        {"id": "g-blank", "title": " ", "owner": "accounts-payable", "measure": "Questions answered", "unit": "",
          "direction": "up", "target": None, "baseline": None, "deadline": None}]
     return C.to_yaml(draft)
 
@@ -523,7 +523,7 @@ def test_imported_goals_show_on_goals_with_their_owner_and_measure(tmp_path, env
         api = environment()
         preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in()).json()
         assert "goals" not in preview["deferred"]
-        assert [(g["title"], g["owner_id"]) for g in preview["goals"]] == [
+        assert [(g["title"], g["owner"]) for g in preview["goals"]] == [
             ("Reach 40 paying firms", "company"), ("Close every month's books in five days", "company"),
             ("Answer every bookkeeping question", "company"), ("Grow referrals", "company"),
             ("Questions answered", "company")]
@@ -536,7 +536,7 @@ def test_imported_goals_show_on_goals_with_their_owner_and_measure(tmp_path, env
 def imported_goals_on_goals_page(api, text):
     tree = api.get("/api/v2/goals/tree", headers=signed_in()).json()
     goals = {g["title"]: g for g in tree["goals"]}
-    assert {title: g["owner_id"] for title, g in goals.items()} == {
+    assert {title: g["owner"] for title, g in goals.items()} == {
         "Reach 40 paying firms": "company", "Close every month's books in five days": "company",
         "Answer every bookkeeping question": "company", "Grow referrals": "company",
         "Questions answered": "company"}
@@ -566,9 +566,9 @@ def test_a_renamed_assistants_goals_import_as_company_goals_and_an_untitled_unme
     # Goals keeps the built-in bots out of its tree, so a goal the file gives the Assistant must land on the company.
     draft = C.from_yaml(company_text())
     draft["goals"] = [
-        {"id": "g-week", "title": "Run the week", "owner_id": "coo", "measure": "Weekly reviews held", "unit": "",
+        {"id": "g-week", "title": "Run the week", "owner": "coo", "measure": "Weekly reviews held", "unit": "",
          "direction": "up", "target": None, "baseline": None, "deadline": None},
-        {"id": "g-blank", "title": "", "owner_id": "coo", "measure": "", "unit": "", "direction": "up", "target": None,
+        {"id": "g-blank", "title": "", "owner": "coo", "measure": "", "unit": "", "direction": "up", "target": None,
          "baseline": None, "deadline": None}]
     text = C.to_yaml(draft)
     owners = [("Run the week", "company"), ("Untitled goal", "company")]
@@ -596,7 +596,7 @@ def test_a_renamed_assistants_goals_import_as_company_goals_and_an_untitled_unme
                 c.execute("INSERT INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
                           (slug, encode(config), "owner", "bot-" + slug))
         preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in()).json()
-        assert [(g["title"], g["owner_id"]) for g in preview["goals"]] == owners
+        assert [(g["title"], g["owner"]) for g in preview["goals"]] == owners
         done = api.post("/api/v2/onboarding/company/import", json={"company_yaml": text, "fingerprint": preview["fingerprint"]},
                         headers=signed_in())
         assert done.status_code == 200, done.text
@@ -605,9 +605,9 @@ def test_a_renamed_assistants_goals_import_as_company_goals_and_an_untitled_unme
 
 def renamed_assistant_goals_on_goals_page(api, owners):
     goals = {g["title"]: g for g in api.get("/api/v2/goals/tree", headers=signed_in()).json()["goals"]}
-    assert sorted((title, g["owner_id"]) for title, g in goals.items()) == owners
+    assert sorted((title, g["owner"]) for title, g in goals.items()) == owners
     week, = goals["Run the week"]["kpis"]
-    assert rows(api, "SELECT owner_id FROM kpis WHERE id=?", (week["id"],)) == [{"owner_id": "company"}]
+    assert rows(api, "SELECT owner_id FROM kpis WHERE id=?", (week["id"],)) == [{"owner": "company"}]
     assert goals["Untitled goal"]["kpis"] == []
     assert not rows(api, "SELECT id FROM goals WHERE owner_id IN ('bot:ace','bot:coo')")
 
@@ -660,11 +660,11 @@ def starter_chart():
 
     draft = started()
     roles = {"engineering": 8, "finance": 2, "marketing": 2, "sales": 2, "support": 2, "product": 0}
-    keep = [b for b in draft["bots"] if b["core"] or (b["lead"] and b["department"] in roles)]
+    keep = [b for b in draft["bots"] if b["core"] or (b["lead"] and b["dept"] in roles)]
     for dept, count in roles.items():
-        keep += [b for b in draft["bots"] if b["department"] == dept and not b["lead"] and not b["core"]][:count]
+        keep += [b for b in draft["bots"] if b["dept"] == dept and not b["lead"] and not b["core"]][:count]
     draft["bots"] = keep
-    draft["people"] = [{"id": "dana", "name": "Dana Ruiz", "role": "Founder", "department": "leadership", "owner": True}]
+    draft["people"] = [{"id": "dana", "name": "Dana Ruiz", "role": "Founder", "dept": "leadership", "owner": True}]
     draft["company"].update(name="Acme Finance", about="We help small firms manage their books.")
     return C.Turn(draft).finish()
 
@@ -674,16 +674,16 @@ def every_goal(draft):
     2 for each department (its head's) and 1 for each bot that is neither built in nor a head, each title, measure and
     unit as long as the file allows."""
     def goal(owner, title):
-        return {"id": "goal-%d" % (len(draft["goals"]) + 1), "owner_id": owner,
+        return {"id": "goal-%d" % (len(draft["goals"]) + 1), "owner": owner,
                 "title": (title + ", every single week of the quarter" * 8)[:C.LIMITS["goal_title"]],
                 "measure": "m" * C.LIMITS["measure"], "unit": "u" * C.LIMITS["unit"], "direction": "up",
                 "target": 4, "baseline": None, "deadline": "2027-01-15"}
 
-    owner = next(p["id"] for p in draft["people"] if p["owner_id"])
+    owner = next(p["id"] for p in draft["people"] if p["owner"])
     for i in range(3):
         draft["goals"].append(goal(owner, "Company goal %s" % "ABC"[i]))
-    for dept in dict.fromkeys(b["department"] for b in draft["bots"] if not b["core"]):
-        head = next((b["id"] for b in draft["bots"] if b["lead"] and b["department"] == dept), owner)
+    for dept in dict.fromkeys(b["dept"] for b in draft["bots"] if not b["core"]):
+        head = next((b["id"] for b in draft["bots"] if b["lead"] and b["dept"] == dept), owner)
         for i in range(2):
             draft["goals"].append(goal(head, "%s goal %s" % (dept, "AB"[i])))
     for bot in (b for b in draft["bots"] if not b["core"] and not b["lead"]):
@@ -729,7 +729,7 @@ def test_a_325_goal_company_file_imports_and_a_326_goal_file_is_refused_plainly(
     api = environment()
     # Written by hand: our own writer refuses to make a 326-goal file.
     extra = ("  - id: goal-326\n    title: One goal too many\n    owner: %s\n    measure: null\n    unit: ''\n"
-             "    direction: up\n" % draft["goals"][0]["owner_id"])
+             "    direction: up\n" % draft["goals"][0]["owner"])
     over = text.replace("\nrules:\n", "\n" + extra + "rules:\n", 1)
     assert over != text
     for path, body in (("preview", {}), ("import", {"fingerprint": "0" * 64})):
