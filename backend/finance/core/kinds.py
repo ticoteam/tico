@@ -23,7 +23,10 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "feed_match", "mirror_start", "mirror_stop", "mirror_tags", "tax_jurisdiction_add", "tax_remit",
        "import_raw_totals",
        # shared records (backend/records): items, places and projects
-       "item_create", "item_update", "place_create", "place_update", "project_create", "project_update")
+       "item_create", "item_update", "place_create", "place_update", "project_create", "project_update",
+       # purchase orders and estimates (backend/finance/purchasing.py)
+       "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
+       "estimate_accept", "estimate_decline", "estimate_convert")
 LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
@@ -46,7 +49,10 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         # history imports: a spreadsheet's totals as raw totals (finance/raw_totals.py)
         "import_raw_totals",
         # shared records (backend/records): items, places and projects
-        "item_create", "item_update", "place_create", "place_update", "project_create", "project_update")
+        "item_create", "item_update", "place_create", "place_update", "project_create", "project_update",
+        # purchase orders and estimates
+        "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
+        "estimate_accept", "estimate_decline", "estimate_convert")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
@@ -65,7 +71,10 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "feed_match": (R.AP, R.AR), "mirror_start": R.BOOK, "mirror_stop": R.BOOK, "mirror_tags": R.BOOK,
          "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP, "import_raw_totals": R.BOOK,
          "item_create": R.BOOK, "item_update": R.BOOK, "place_create": R.BOOK, "place_update": R.BOOK,
-         "project_create": R.BOOK, "project_update": R.BOOK}
+         "project_create": R.BOOK, "project_update": R.BOOK,
+         "po_create": R.AP, "po_send": R.AP, "po_approve": R.AP, "po_close": R.AP, "po_void": R.AP,
+         "estimate_create": R.AR, "estimate_send": R.AR, "estimate_accept": R.AR, "estimate_decline": R.AR,
+         "estimate_convert": R.AR}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
               "connection_disconnect", "connection_map")
@@ -149,6 +158,7 @@ def default_gate(org: Org, actor: str, kind: str) -> Gate:
 Field = tuple[str, str, str]
 _LINE = "list[{account_id?, item_id?, amount: minor, description?, tags?: obj}]"
 _INVOICE_LINE = "list[{account_id?, item_id?, amount: minor, description?, tags?: obj, taxable?: bool}]"
+_BILL_LINE = "list[{account_id?, item_id?, po_line_id?, amount: minor, description?, tags?: obj}]"
 _RULE: tuple[Field, ...] = (
     ("kind?", "gate|posting", "gate (before an action) or posting (on a new feed row or bill draft); default gate"),
     ("name", "str", "short name"), ("words?", "str", "the rule in plain words"),
@@ -266,11 +276,11 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "bill_create": (("vendor_id", "str", "a vendor contact"), ("number?", "str", "the vendor's bill number"),
                     ("bill_date", "day", ""), ("due_date?", "day", "or terms_days"),
                     ("terms_days?", "int", "due this many days after bill_date"), ("memo?", "str", ""),
-                    ("lines", _LINE, "expense lines; amounts positive"),
+                    ("lines", _BILL_LINE, "expense lines; amounts positive; po_line_id bills an open purchase order's line"),
                     ("attachments?", "list[str]", "Library file ids"), ("origin?", "manual|email|upload", "")),
     "bill_update": (("bill_id", "str", ""), ("vendor_id?", "str", "draft only"), ("number?", "str", ""),
                     ("bill_date?", "day", "draft only"), ("due_date?", "day", ""), ("terms_days?", "int", ""),
-                    ("memo?", "str", ""), ("lines?", _LINE, "draft only; replaces every line"),
+                    ("memo?", "str", ""), ("lines?", _BILL_LINE, "draft only; replaces every line"),
                     ("attachments?", "list[str]", "file ids to add")),
     "bill_approve": (("bill_id", "str", "enters a draft: expense lines debit, accounts payable credit"),),
     "bill_schedule": (("bill_id", "str", ""), ("pay_on", "day", "the payment is requested on this day"),
@@ -332,6 +342,19 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                        ("status?", "open|closed", "")),
     "project_update": (("project_id", "str", ""), ("name?", "str", ""), ("customer_id?", "str", "empty to clear"),
                        ("status?", "open|closed", ""), ("active?", "bool", "")),
+    "po_create": (("vendor_id", "str", "a vendor contact"), ("number?", "str", "default PO-0001 onward"),
+                  ("po_date", "day", ""), ("memo?", "str", ""), ("lines", _LINE, "expense lines; amounts positive")),
+    "po_send": (("po_id", "str", "a draft is marked sent; nothing is emailed"),),
+    "po_approve": (("po_id", "str", "holds each line's unbilled amount in its budget; over $1,000 asks the owner"),),
+    "po_close": (("po_id", "str", "an approved order closes; what is not billed is released"),),
+    "po_void": (("po_id", "str", "a draft, sent or approved order nothing is billed against"),),
+    "estimate_create": (("customer_id", "str", "a customer contact"), ("number?", "str", "default EST-0001 onward"),
+                        ("estimate_date", "day", ""), ("memo?", "str", ""),
+                        ("lines", _LINE, "income lines; amounts positive")),
+    "estimate_send": (("estimate_id", "str", "a draft is marked sent; the owner approves it"),),
+    "estimate_accept": (("estimate_id", "str", "a sent estimate is accepted"),),
+    "estimate_decline": (("estimate_id", "str", "a sent estimate is declined"),),
+    "estimate_convert": (("estimate_id", "str", "an accepted estimate becomes one invoice draft, once"),),
 }
 WORDS: dict[str, str] = {
     "journal": "Post a balanced entry, or reverse one.",
@@ -383,6 +406,16 @@ WORDS: dict[str, str] = {
     "place_update": "Rename, move, or deactivate a location.",
     "project_create": "Add a project that lines can be tagged with.",
     "project_update": "Rename, re-status, or deactivate a project.",
+    "po_create": "Draft a purchase order: its lines are what the vendor will bill.",
+    "po_send": "Mark a draft purchase order sent.",
+    "po_approve": "Approve an order: each line's unbilled amount holds budget until it is billed or closed.",
+    "po_close": "Close an approved order: what is not billed is released.",
+    "po_void": "Void an order nothing has been billed against.",
+    "estimate_create": "Draft an estimate for a customer.",
+    "estimate_send": "Mark an estimate sent (the owner approves).",
+    "estimate_accept": "Record that the customer accepted an estimate.",
+    "estimate_decline": "Record that the customer declined an estimate.",
+    "estimate_convert": "Make an accepted estimate one invoice draft (once).",
 }
 
 

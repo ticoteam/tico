@@ -390,6 +390,7 @@ CREATE INDEX IF NOT EXISTS fin_entries_reverses ON fin_entries(reverses_id);
 CREATE INDEX IF NOT EXISTS fin_raw_imports_hash ON fin_raw_imports(book_id, content_hash);
 CREATE INDEX IF NOT EXISTS fin_lines_entry ON fin_lines(entry_id);
 CREATE INDEX IF NOT EXISTS fin_lines_account ON fin_lines(account_id, entry_date);
+CREATE INDEX IF NOT EXISTS fin_bill_lines_po_line ON fin_bill_lines(po_line_id);
 CREATE INDEX IF NOT EXISTS fin_lines_contact ON fin_lines(contact_id, entry_date);
 CREATE INDEX IF NOT EXISTS fin_line_tags_value ON fin_line_tags(kind, value);
 CREATE INDEX IF NOT EXISTS fin_rollups_account ON fin_rollups(account_id, day);
@@ -540,6 +541,7 @@ ADDED = (
     ("fin_feed_txns", "entry_line_id", "TEXT"),
     # the shared item a bill or invoice line names (migration 76, backend/records)
     ("fin_bill_lines", "item_id", "TEXT"), ("fin_invoice_lines", "item_id", "TEXT"),
+    ("fin_bill_lines", "po_line_id", "TEXT"),
 )
 
 
@@ -556,9 +558,44 @@ CREATE TABLE IF NOT EXISTS fin_tax_seeds (
   key TEXT PRIMARY KEY, rule_id TEXT NOT NULL, created_at TEXT NOT NULL);
 """
 
+# Purchase orders and estimates (backend/finance/store/purchasing.py). An order's line holds budget while it is open;
+# an estimate is invoiced once, so its invoice id is unique.
+PURCHASING = """
+CREATE TABLE IF NOT EXISTS fin_purchase_orders (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), vendor_id TEXT NOT NULL REFERENCES fin_contacts(id),
+  number TEXT NOT NULL DEFAULT '', po_date TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','approved','partial','closed','void')),
+  closed_by TEXT NOT NULL DEFAULT '' CHECK (closed_by IN ('','bills','hand')),
+  currency TEXT NOT NULL, total BIGINT NOT NULL DEFAULT 0, memo TEXT NOT NULL DEFAULT '',
+  sent_at TEXT, approved_by TEXT, approved_at TEXT, closed_at TEXT, voided_at TEXT,
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+
+CREATE TABLE IF NOT EXISTS fin_po_lines (
+  id TEXT PRIMARY KEY, po_id TEXT NOT NULL REFERENCES fin_purchase_orders(id), line_no INTEGER NOT NULL,
+  account_id TEXT REFERENCES fin_accounts(id), item_id TEXT, amount BIGINT NOT NULL CHECK (amount > 0),
+  description TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE (po_id, line_no));
+
+CREATE TABLE IF NOT EXISTS fin_estimates (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), customer_id TEXT NOT NULL REFERENCES fin_contacts(id),
+  number TEXT NOT NULL DEFAULT '', estimate_date TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','accepted','declined','invoiced')),
+  currency TEXT NOT NULL, total BIGINT NOT NULL DEFAULT 0, memo TEXT NOT NULL DEFAULT '',
+  invoice_id TEXT REFERENCES fin_invoices(id), sent_at TEXT, decided_at TEXT,
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+
+CREATE TABLE IF NOT EXISTS fin_estimate_lines (
+  id TEXT PRIMARY KEY, estimate_id TEXT NOT NULL REFERENCES fin_estimates(id), line_no INTEGER NOT NULL,
+  account_id TEXT REFERENCES fin_accounts(id), item_id TEXT, amount BIGINT NOT NULL CHECK (amount > 0),
+  description TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE (estimate_id, line_no));
+
+CREATE UNIQUE INDEX IF NOT EXISTS fin_estimates_invoice ON fin_estimates(invoice_id) WHERE invoice_id IS NOT NULL;
+"""
+
 def table_names() -> list[str]:
     """Every fin_* table the migration makes."""
-    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX)
+    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX + PURCHASING)
 
 
 def statements(script: str) -> list[str]:
@@ -588,7 +625,7 @@ def _add_columns(c: sqlite3.Connection) -> None:
 def create(c: sqlite3.Connection) -> None:
     """Every table, index and trigger, statement by statement inside the caller's transaction (executescript would
     commit it). Idempotent: on an install made before a later phase it adds the new tables and columns too."""
-    for script in (TABLES, TAX):
+    for script in (TABLES, TAX, PURCHASING):
         for statement in statements(script):
             c.execute(statement)
     _add_columns(c)
@@ -719,6 +756,12 @@ def tax(c: sqlite3.Connection) -> None:
     for statement in statements(TAX):
         c.execute(statement)
     _add_columns(c)
+
+
+def purchasing(c: sqlite3.Connection) -> None:
+    """Cloud migration 77: purchase orders and estimates, and the bill line an order line is billed on. Idempotent:
+    `create` makes whatever is missing."""
+    create(c)
 
 
 def catalog(c: sqlite3.Connection, at: str) -> None:

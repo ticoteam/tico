@@ -1,0 +1,206 @@
+"""Purchase orders and estimates: an approved order holds its unbilled lines, a bill takes over the part it bills,
+billing the rest closes the order, closing or voiding releases what is held, a large order asks the owner, and an
+accepted estimate becomes one invoice draft once (a declined one never does)."""
+from backend import hubdb as H
+from backend.finance import actions as FA
+from backend.finance.core import qbo as Q
+from backend.tests.test_finance_fixtures import (  # noqa: F401
+    AT, OWNER, account, act, books, budget, finance_template, store)
+
+EVE = "human:eve"
+
+
+def _vendor(c, name="Acme Supplies") -> str:
+    made = act(c, OWNER, "contact_create", {"name": name, "kind": "vendor"})
+    assert made.status == "committed", made
+    return str(made.result["contact_id"])
+
+
+def _software(c, amount=100_000) -> None:
+    made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": amount,
+                                           "at_limit": "decline", "parent_id": None})
+    assert made.status == "committed", made
+
+
+def _line(c, amount, **more) -> dict[str, object]:
+    return {"account_id": account(c, "6100"), "amount": amount, **more}
+
+
+def _order(c, vendor, lines, who=OWNER, approve=True) -> str:
+    made = act(c, who, "po_create", {"vendor_id": vendor, "po_date": "2026-10-10", "lines": lines})
+    assert made.status == "committed", made
+    po = str(made.result["po_id"])
+    if approve:
+        assert act(c, who, "po_send", {"po_id": po}).status == "committed"
+        assert act(c, OWNER, "po_approve", {"po_id": po}).status == "committed"
+    return po
+
+
+def _po_lines(c, po) -> list[str]:
+    return [str(r[0]) for r in c.execute("SELECT id FROM fin_po_lines WHERE po_id=? ORDER BY line_no", (po,))]
+
+
+def _status(c, po) -> tuple[str, str]:
+    row = c.execute("SELECT status, closed_by FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()
+    return str(row[0]), str(row[1])
+
+
+def _state(c) -> tuple[int, int, int]:
+    s = FA.budget_state(c, budget(c, "Software"), AT)
+    return s.actual, s.held, s.remaining
+
+
+def _bill(c, vendor, lines, who=OWNER):
+    return act(c, who, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10", "lines": lines})
+
+
+def _bill_id(c) -> str:
+    return str(c.execute("SELECT id FROM fin_bills ORDER BY created_at DESC LIMIT 1").fetchone()[0])
+
+
+def test_an_approved_order_holds_its_lines_and_a_partial_bill_takes_over_its_part(books):
+    with books.transaction() as c:
+        _software(c)
+        vendor = _vendor(c)
+        draft = _order(c, vendor, [_line(c, 40_000, tags={"team": "eng"}), _line(c, 30_000)], approve=False)
+        assert _state(c) == (0, 0, 100_000)                                   # a draft holds nothing
+        po = _order(c, vendor, [_line(c, 40_000, tags={"team": "eng"}), _line(c, 30_000)])
+        assert _state(c) == (0, 70_000, 30_000)
+        first, _ = _po_lines(c, po)
+        assert _bill(c, vendor, [{"po_line_id": first, "amount": 30_000}]).status == "committed"
+        assert _status(c, po) == ("partial", "")
+        assert _state(c) == (0, 70_000, 30_000)                               # the bill's 30,000 + the order's 40,000
+        assert act(c, OWNER, "bill_approve", {"bill_id": _bill_id(c)}).status == "committed"
+        assert _state(c) == (30_000, 40_000, 30_000)
+        again = act(c, OWNER, "po_approve", {"po_id": po})                    # approving again changes nothing
+        assert again.status == "committed" and again.result["status"] == "partial"
+        assert _state(c) == (30_000, 40_000, 30_000)
+        assert c.execute("SELECT COUNT(*) FROM fin_holds WHERE source='purchase_order' AND status='held'"
+                         ).fetchone()[0] == 2
+        assert _status(c, draft) == ("draft", "")
+
+
+def test_billing_the_rest_closes_the_order_and_voiding_the_bill_reopens_it(books):
+    with books.transaction() as c:
+        _software(c)
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 40_000, tags={"team": "eng"}), _line(c, 30_000)])
+        first, second = _po_lines(c, po)
+        bill = _bill(c, vendor, [{"po_line_id": first, "amount": 40_000}, {"po_line_id": second, "amount": 30_000}])
+        assert bill.status == "committed", bill
+        assert _status(c, po) == ("closed", "bills")
+        assert _state(c) == (0, 70_000, 30_000)                               # only the bill holds now
+        assert act(c, OWNER, "bill_void", {"bill_id": str(bill.result["bill_id"])}).status == "committed"
+        assert _status(c, po) == ("approved", "")
+        assert _state(c) == (0, 70_000, 30_000)                               # the order holds again
+
+
+def test_a_bill_cannot_bill_more_than_is_left_or_another_vendors_or_a_draft_order(books):
+    with books.transaction() as c:
+        _software(c)
+        vendor, other = _vendor(c), _vendor(c, "Other Supplies")
+        po = _order(c, vendor, [_line(c, 40_000)])
+        line = _po_lines(c, po)[0]
+        draft = _order(c, vendor, [_line(c, 5_000)], approve=False)
+        draft_line = _po_lines(c, draft)[0]
+        over = _bill(c, vendor, [{"po_line_id": line, "amount": 40_001}])
+        assert over.code == "invalid", over
+        wrong = _bill(c, other, [{"po_line_id": line, "amount": 1_000}])
+        assert wrong.code == "invalid", wrong
+        assert _bill(c, vendor, [{"po_line_id": draft_line, "amount": 1_000}]).code == "conflict"
+        assert _bill(c, vendor, [{"po_line_id": "no-such-line", "amount": 1_000}]).code == "not_found"
+        assert c.execute("SELECT COUNT(*) FROM fin_bills").fetchone()[0] == 0
+        assert _state(c) == (0, 40_000, 60_000)
+        assert _bill(c, vendor, [{"po_line_id": line, "amount": 40_000}]).status == "committed"
+        assert _status(c, po) == ("closed", "bills")
+
+
+def test_closing_or_voiding_an_order_releases_what_it_holds(books):
+    with books.transaction() as c:
+        _software(c)
+        vendor = _vendor(c)
+        closed = _order(c, vendor, [_line(c, 40_000)])
+        assert act(c, OWNER, "po_close", {"po_id": closed}).status == "committed"
+        assert _status(c, closed) == ("closed", "hand")
+        assert _state(c) == (0, 0, 100_000)
+        assert act(c, OWNER, "po_approve", {"po_id": closed}).status == "committed"   # a closed order stays closed
+        assert _status(c, closed) == ("closed", "hand") and _state(c) == (0, 0, 100_000)
+        voided = _order(c, vendor, [_line(c, 20_000)])
+        assert act(c, OWNER, "po_void", {"po_id": voided}).status == "committed"
+        assert _status(c, voided) == ("void", "") and _state(c) == (0, 0, 100_000)
+        partly = _order(c, vendor, [_line(c, 20_000), _line(c, 10_000)])
+        first, _ = _po_lines(c, partly)
+        assert _bill(c, vendor, [{"po_line_id": first, "amount": 10_000}]).status == "committed"
+        assert act(c, OWNER, "po_void", {"po_id": partly}).code == "conflict"
+        assert act(c, OWNER, "po_close", {"po_id": partly}).status == "committed"
+        assert _status(c, partly) == ("closed", "hand")
+        assert _state(c) == (0, 10_000, 90_000)                               # the bill's part only
+
+
+def test_a_large_order_asks_the_owner_and_the_owner_approval_runs_it(books):
+    with books.transaction() as c:
+        _software(c, 500_000)
+        vendor = _vendor(c)
+        assert act(c, OWNER, "right_grant", {"teammate": EVE, "right": "finance.ap"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": EVE, "what": "everything", "whose": "company"}).status == \
+            "committed"
+        big = _order(c, vendor, [_line(c, 150_000)], who=EVE, approve=False)
+        assert act(c, EVE, "po_send", {"po_id": big}).status == "committed"
+        asked = act(c, EVE, "po_approve", {"po_id": big})
+        assert (asked.status, asked.approver) == ("needs_approval", OWNER), asked
+        assert _status(c, big) == ("sent", "") and _state(c) == (0, 0, 500_000)
+        H.approval_decide(c, str(asked.approver), str(asked.approval_id), "approved")
+        done = FA.approval_decided(c, str(asked.approval_id), AT)
+        assert done is not None and done.status == "committed", done
+        assert _status(c, big) == ("approved", "") and _state(c) == (0, 150_000, 350_000)
+        small = _order(c, vendor, [_line(c, 50_000)], who=EVE)
+        assert _status(c, small) == ("approved", "") and _state(c) == (0, 200_000, 300_000)
+
+
+def test_an_estimate_becomes_one_invoice_draft_once_and_a_declined_one_never_does(books):
+    with books.transaction() as c:
+        customer = str(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}).result["contact_id"])
+        made = act(c, OWNER, "estimate_create", {"customer_id": customer, "estimate_date": "2026-10-10", "lines": [
+            {"account_id": account(c, "4000"), "amount": 90_000, "description": "Design"}]})
+        assert made.status == "committed", made
+        eid = str(made.result["estimate_id"])
+        assert act(c, OWNER, "estimate_convert", {"estimate_id": eid}).code == "conflict"     # not accepted yet
+        assert act(c, OWNER, "estimate_send", {"estimate_id": eid}).status == "committed"
+        assert act(c, OWNER, "estimate_convert", {"estimate_id": eid}).code == "conflict"     # sent, not accepted
+        assert act(c, OWNER, "estimate_accept", {"estimate_id": eid}).status == "committed"
+        done = act(c, OWNER, "estimate_convert", {"estimate_id": eid})
+        assert done.status == "committed", done
+        invoice = str(done.result["invoice_id"])
+        assert tuple(c.execute("SELECT status, invoice_id FROM fin_estimates WHERE id=?", (eid,)).fetchone()) == \
+            ("invoiced", invoice)
+        assert act(c, OWNER, "estimate_convert", {"estimate_id": eid}).code == "conflict"     # once
+        assert c.execute("SELECT COUNT(*) FROM fin_invoices").fetchone()[0] == 1
+        assert [int(r[0]) for r in c.execute("SELECT amount FROM fin_invoice_lines")] == [90_000]
+
+        declined = act(c, OWNER, "estimate_create", {"customer_id": customer, "estimate_date": "2026-10-10", "lines": [
+            {"account_id": account(c, "4000"), "amount": 5_000}]}).result["estimate_id"]
+        assert act(c, OWNER, "estimate_send", {"estimate_id": str(declined)}).status == "committed"
+        assert act(c, OWNER, "estimate_decline", {"estimate_id": str(declined)}).status == "committed"
+        refused = act(c, OWNER, "estimate_convert", {"estimate_id": str(declined)})
+        assert refused.code == "conflict" and "declined" in refused.reason, refused
+        assert c.execute("SELECT COUNT(*) FROM fin_invoices").fetchone()[0] == 1
+
+
+def test_an_estimate_sent_by_a_teammate_asks_the_owner(books):
+    with books.transaction() as c:
+        customer = str(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}).result["contact_id"])
+        eid = str(act(c, OWNER, "estimate_create", {"customer_id": customer, "estimate_date": "2026-10-10", "lines": [
+            {"account_id": account(c, "4000"), "amount": 9_000}]}).result["estimate_id"])
+        assert act(c, OWNER, "right_grant", {"teammate": EVE, "right": "finance.ar"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": EVE, "what": "everything", "whose": "company"}).status == \
+            "committed"
+        asked = act(c, EVE, "estimate_send", {"estimate_id": eid})
+        assert (asked.status, asked.approver) == ("needs_approval", OWNER), asked
+        assert c.execute("SELECT status FROM fin_estimates WHERE id=?", (eid,)).fetchone()[0] == "draft"
+
+
+def test_a_qbo_invoice_made_from_an_estimate_links_to_it():
+    body = {"day": "2026-10-06", "memo": "", "party": "Customer:4", "number": "", "due": "",
+            "lines": [{"item": "Item:5", "amount": 1500, "description": "work"}]}
+    assert Q.invoice_body({**body, "linked_estimate": "77"}, {})["LinkedTxn"] == [{"TxnId": "77", "TxnType": "Estimate"}]
+    assert "LinkedTxn" not in Q.invoice_body(body, {})

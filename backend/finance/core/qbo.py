@@ -662,6 +662,8 @@ def invoice_body(body: Mapping[str, Any], income: Mapping[str, str]) -> dict[str
         out["DocNumber"] = str(body["number"])
     if body.get("due"):
         out["DueDate"] = str(body["due"])
+    if body.get("linked_estimate"):
+        out["LinkedTxn"] = [{"TxnId": str(body["linked_estimate"]), "TxnType": "Estimate"}]
     return out
 
 

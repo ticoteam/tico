@@ -20,7 +20,7 @@ from .store import ap as SAP
 from .store import budgets as SB
 from .store import ledger as SL
 
-HOLD_SOURCES = ("run", "video", "card", "payment", "bill", "request", "action", "manual")
+HOLD_SOURCES = ("run", "video", "card", "payment", "bill", "request", "action", "manual", "purchase_order")
 TARGET_KINDS = B.TARGETS
 WARN_EVENT, LIMIT_EVENT = "finance.budget.warn", "finance.budget.cutoff"
 

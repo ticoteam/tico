@@ -1799,6 +1799,12 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.catalog(c, H.now())
                     c.execute("INSERT INTO cloud_migrations VALUES(76,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=77").fetchone():
+                    # Purchase orders and estimates (backend/finance/store/purchasing.py), and the bill line an order line
+                    # is billed on. Idempotent like 76.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.purchasing(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(77,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the

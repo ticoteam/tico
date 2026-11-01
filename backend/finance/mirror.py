@@ -44,7 +44,10 @@ TAG_SETTING = "mirror.tags"                 # {"enabled": bool, "map": {tag kind
 # Actions a mirrored book refuses: the provider holds these records, so Tico cannot write them here.
 REFUSED = ("bill_update", "bill_approve", "bill_schedule", "invoice_send",
            "payment_create", "payment_cancel", "recipient_add", "contact_create", "contact_update",
-           "account_create", "account_update", "feed_match")
+           "account_create", "account_update", "feed_match",
+           # purchase orders and estimates are local until the mirror writes them (not built)
+           "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
+           "estimate_accept", "estimate_decline", "estimate_convert")
 
 Record = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Item | M.Place | M.Dimension | M.Project
           | M.Refused | M.Ext)
