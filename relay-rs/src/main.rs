@@ -171,6 +171,7 @@ struct App {
     http: reqwest::Client,
     proxy: reqwest::Client,
     trusted_proxies: Arc<Vec<gateway::Network>>,
+    client_ip_header: gateway::ClientIpHeader,
 }
 impl App {
     fn authorized(&self, headers: &HeaderMap) -> bool {
@@ -819,6 +820,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             &std::env::var("TICO_TRUSTED_PROXIES")
                 .unwrap_or_else(|_| "127.0.0.1/32,::1/128".into()),
         )?),
+        client_ip_header: gateway::client_ip_header(
+            &std::env::var("TICO_CLIENT_IP_HEADER").unwrap_or_default(),
+        )?,
         // The backend closes a keep-alive connection after 5 s idle (backend/server.py). Dropping ours first means no
         // request is sent on a connection the backend is closing, which would come back as a bare 502.
         proxy: tls::http_builder()
