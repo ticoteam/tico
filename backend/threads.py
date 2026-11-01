@@ -1279,7 +1279,7 @@ def _actor_of(principal):
 
 
 def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None, via=None,
-         origin=None, checked=None, attachments=None):
+         origin=None, checked=None, attachments=None, in_reply_to=None):
     """Write a message (contract §3.1). Inside the caller's write transaction; `checked` is the org-rule verdict its
     preflight returned outside it."""
     actor, v = _actor_of(principal)
@@ -1343,7 +1343,7 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
     token = POSTING.set({"origin": origin or {}, "attachments": bool(attachments), "via": via})
     try:
         if target and not str(target).startswith(OUTSIDE_PREFIXES):
-            message = H.say(c, actor, target, text, thread["id"], kind, refs)
+            message = H.say(c, actor, target, text, thread["id"], kind, refs, in_reply_to=in_reply_to)
         else:
             message = _write_open(c, actor, text, thread, kind, refs, target)
     finally:

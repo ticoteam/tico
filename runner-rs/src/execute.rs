@@ -259,11 +259,11 @@ pub fn clear_epoch(attempt: &Value, key: &str) -> Option<(String, i64)> {
     (!conversation_id.is_empty()).then_some((conversation_id, epoch))
 }
 
-/// The message a reply branches from when the message it answers sits in a sub-thread: the reply goes under that same
-/// message, so it stays in the sub-thread (docs/threads.md). None for a message in the main thread, or from a Hub that
-/// sends no parent.
+/// The message a reply goes under when the message it answers sits in a sub-thread: that sub-thread's parent message,
+/// which the Hub sends with the conversation (the message row has no parent). None for a main-thread message, or from a
+/// Hub that sends no parent (docs/threads.md).
 pub fn reply_parent(attempt: &Value) -> Option<String> {
-    let parent = text_of(&attempt["message"]["parent_message_id"]);
+    let parent = text_of(&attempt["conversation"]["parent_message_id"]);
     (!parent.is_empty()).then_some(parent)
 }
 
@@ -2727,11 +2727,12 @@ mod tests {
 
     #[test]
     fn a_reply_to_a_sub_thread_message_goes_under_that_message() {
-        // A message in a sub-thread names the message it sits under; one in the main thread names none.
-        assert_eq!(reply_parent(&json!({"message": {"id": "m2", "parent_message_id": "m1"}})), Some("m1".into()));
-        assert_eq!(reply_parent(&json!({"message": {"id": "m2", "parent_message_id": ""}})), None);
+        // A conversation that is a sub-thread names the message it sits under; the main thread names none.
+        let sub = json!({"conversation": {"id": "c2", "parent_message_id": "m1"}, "message": {"id": "m2"}});
+        assert_eq!(reply_parent(&sub), Some("m1".into()));
+        assert_eq!(reply_parent(&json!({"conversation": {"id": "c1", "parent_message_id": ""}})), None);
         // A Hub from before sub-threads sends no field at all: the reply stays in the main thread, as it always did.
-        assert_eq!(reply_parent(&json!({"message": {"id": "m2"}})), None);
+        assert_eq!(reply_parent(&json!({"conversation": {"id": "c1"}})), None);
     }
 
     #[test]

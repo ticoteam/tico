@@ -4525,6 +4525,23 @@ class Execution:
         self.forget_held_reply(c, row, row["id"], found[0] if found else None, note)
         return note
 
+    def _say_reply(self, c, actor, target, text, conv, msg, refs, parent_id, aid):
+        """The reply to a `say` message: in the main thread (H.say), or under `parent_id` in its sub-thread when the
+        runner names one. The parent is checked as the attempt, whose grant is its own root (threads._bot_grant): it
+        must be a message there that the bot can read, in a thread the bot can post to, reaching a target who can read
+        it too. Anything else keeps the reply where the message was. threads.post makes or finds the sub-thread."""
+        from . import threads
+        v = threads.viewer(None, Identity(actor, "bot", attempt_id=aid)) if (
+            parent_id and text and str(text).strip() and str(target).startswith(("human:", "bot:"))) else None
+        if v is not None:
+            root = threads.root_of(c, conv)
+            parent = H.message(c, parent_id)
+            if (parent and root and parent["conversation_id"] == root["id"] and threads.readable(c, v, parent)
+                    and threads.can_post(c, v, root) and threads.audience_has(c, root, target)):
+                return threads.post(c, v, root["id"], text, refs=refs, parent_message_id=parent_id,
+                                    to_actor=target, in_reply_to=msg["id"])
+        return H.say(c, actor, target, text, conversation_id=conv["id"], in_reply_to=msg["id"], refs=refs)
+
     def complete(self, c, who, aid, body, rule_check=None):
         """`rule_check`: the org rule check of the reply (backend/org_rule_check.py), made before this write."""
         row = self.attempt(c, who, aid, final=True)
@@ -4692,8 +4709,8 @@ class Execution:
                                 sent = reply_answer(c, self.auth, Identity(actor, "bot", attempt_id=aid), msg,
                                                     asked_text, org_rule_check.warn_line(rule_gate))
                             else:
-                                sent = H.say(c, actor, target, text, conversation_id=conv["id"], in_reply_to=msg["id"],
-                                             refs=refs)
+                                sent = self._say_reply(c, actor, target, text, conv, msg, refs, body.parent_message_id,
+                                                       aid)
                             if sent:
                                 self.stamp_reply(c, sent, row, aid, msg)
                             return sent
