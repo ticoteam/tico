@@ -43517,7 +43517,7 @@
                       "open"
                     ]
                   },
-                  "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
+                  "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; a tidy card, POST /api/v2/memory-tidy/cards/{id}/decide; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
                 },
                 "goal_id": {
                   "type": "string"
@@ -47430,7 +47430,7 @@
           },
           "kind": {
             "type": "string",
-            "description": "Needs you: task, question, waiting, declined, ask, approval, stale, setup. Goals: vision, kpi_red, kpi_stale, recovery, proposal, why. Each kind adds the fields its card reads"
+            "description": "Needs you: task, question, waiting, declined, ask, approval, stale, memory_tidy, setup. Goals: vision, kpi_red, kpi_stale, recovery, proposal, why. Each kind adds the fields its card reads"
           },
           "title": {
             "type": "string"
@@ -47489,7 +47489,7 @@
                 "open"
               ]
             },
-            "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
+            "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; a tidy card, POST /api/v2/memory-tidy/cards/{id}/decide; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
           }
         },
         "required": [

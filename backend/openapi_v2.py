@@ -662,7 +662,7 @@ ACTORS = {"type": "object", "additionalProperties": {"type": "string"},
 
 # One item of a person's Needs you, whatever its kind (backend/needs_shape.py).
 NEEDS_ITEM = obj({"id": "s", "kind": {"type": "string", "description": "Needs you: task, question, waiting, "
-                                             "declined, ask, approval, stale, setup. Goals: vision, kpi_red, kpi_stale, "
+                                             "declined, ask, approval, stale, memory_tidy, setup. Goals: vision, kpi_red, kpi_stale, "
                                              "recovery, proposal, why. Each kind adds the fields its card reads"},
                          "title": "s", "body": "n",
                          "subject": {"oneOf": [obj({"type": {"enum": ["task", "message", "approval", "proposal", "kpi",
