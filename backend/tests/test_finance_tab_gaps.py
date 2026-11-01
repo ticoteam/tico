@@ -327,3 +327,42 @@ def test_a_parent_lines_breakdown_projects_each_line_with_its_own_method(books):
         got = FR.line_detail(c, OWNER, account(c, "5000"), *OCT, at=AT)
         assert got["next_month"]["projection"] == 3_100
         assert got["next_by"]["team"] == {"eng": 3_100}
+
+
+def test_a_saved_projection_with_no_weighing_history_lands_on_that_dimensions_rows(books):
+    with books.transaction() as c:
+        spend(c, "6100", 1_000, day="2026-10-02", team="eng", teammate="human:ben", vendor="acme-tools")
+        line = account(c, "6100")
+        for team, amount in (("eng", 9_000), ("sales", 400)):               # Sales has no history at all
+            assert act(c, OWNER, "projection_set", {"account_id": line, "month": "2026-11", "team": team,
+                                                    "amount": amount}).status == "committed"
+        got = FR.line_detail(c, OWNER, line, *OCT, at=AT)
+        assert got["next_month"]["projection"] == 9_400
+        assert got["next_by"]["vendor"] == {"acme-tools": 9_000, "unattributed": 400}
+        assert got["next_by"]["team"] == {"eng": 9_000, "sales": 400}
+        assert got["next_by"]["teammate"] == {"human:ben": 9_000, "unattributed": 400}
+
+
+def test_each_column_of_a_lines_breakdown_adds_up_to_its_projection(books):
+    import random
+    rng = random.Random(7)
+    mates = {"human:eve": "web", "human:fay": "web", "human:gus": "sales", "bot:coder": "web", "": "eng", "human:ben": ""}
+    with books.transaction() as c:
+        for _ in range(60):
+            mate = rng.choice(sorted(mates))
+            code = rng.choice(["4000", "5100", "6100", "6900"])
+            amount = rng.randint(101, 9_999) * (-1 if code == "4000" else 1)
+            spend(c, code, amount, day=f"2026-{rng.randint(4, 10):02d}-{rng.randint(1, 28):02d}",
+                  team=mates[mate], teammate=mate, vendor=rng.choice(["acme-tools", "acme-cloud", ""]))
+        assert act(c, OWNER, "projection_set", {"account_id": account(c, "4000"), "month": "2026-11",
+                                                "teammate": "human:gus", "amount": 9_000}).status == "committed"
+        assert act(c, OWNER, "projection_set", {"account_id": account(c, "6100"), "month": "2026-11",
+                                                "team": "web", "amount": 7_777}).status == "committed"
+        for viewer in (OWNER, "human:ben", "human:cara"):
+            for code in ("4000", "5000", "5100", "6000", "6100", "6900"):
+                if viewer != OWNER and code == "4000":
+                    continue
+                got = FR.line_detail(c, viewer, account(c, code), *OCT, at=AT)
+                total = got["next_month"]["projection"] or 0
+                for by, rows in got["next_by"].items():
+                    assert sum(rows.values()) == total, (viewer, code, by, rows, total)

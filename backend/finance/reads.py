@@ -556,16 +556,40 @@ def spend_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = No
 
 
 # ------------------------------------------------------------------------------------------------ one line
-def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
-    """The line's projection for the month after this one, as far as the viewer sees it and within the org filter
-    (projections are by line, team and teammate; there are none by vendor). Each team and teammate with no stored
-    projection for that month gets its own default from posted history. None on a private line without its detail."""
+_RowKey = tuple[str, str, str, str]        # a breakdown row's history: line, vendor, team, teammate
+
+
+@dataclass(frozen=True)
+class _Atom:
+    """One piece of next month's projection: a saved projection's scope, or a default for a team and teammate (or the
+    whole line, `whole`, when nothing is saved on it)."""
+    account_id: str
+    team: str
+    teammate: str
+    amount: int
+    method: str
+    whole: bool = False
+    saved: bool = False
+
+    def covers(self, cell: VW.Cell) -> bool:
+        if cell.account_id != self.account_id:
+            return False
+        if self.whole:
+            return True
+        if self.saved:                      # a saved projection covers its scope (`_covered`)
+            return _covered([(self.team, self.teammate)], cell.team or "", cell.teammate or "")
+        return (cell.team or "", cell.teammate or "") == (self.team, self.teammate)
+
+
+def _next_atoms(s: _Seen, ids: Sequence[str], f: _Filter | None) -> tuple[date, list[_Atom]] | None:
+    """Next month and the pieces its projection adds up from (the saved projections the viewer sees within the filter,
+    then a default for each scope none covers); None on a private line without its detail. The line's projection and
+    its breakdown both sum these, so they agree to the cent."""
     nxt = dates.month_end(dates.day(s.ctx.today)) + timedelta(days=1)
     month = nxt.isoformat()[:7]
     if any(i in s.private and i not in s.view.full_detail for i in ids):
-        return {"month": month, "projection": None, "projection_method": None}
-    total, found = 0, False
-    methods: set[str] = set()
+        return None
+    atoms: list[_Atom] = []
     stored: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for r in SB.projections(s.ctx.c, s.ctx.book.id, month, month):
         account = s.ctx.accounts.get(r["account_id"])
@@ -573,97 +597,86 @@ def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
                 not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}) or \
                 (f is not None and f.any and not f.keeps(str(r["team"] or ""), str(r["teammate"] or ""))):
             continue
-        stored.setdefault((account.id, month), []).append((str(r["team"] or ""), str(r["teammate"] or "")))
-        methods.add(str(r["method"]))
-        total, found = total + int(r["amount"]), True
+        team, mate = str(r["team"] or ""), str(r["teammate"] or "")
+        stored.setdefault((account.id, month), []).append((team, mate))
+        atoms.append(_Atom(account.id, team, mate, int(r["amount"]), str(r["method"]), saved=True))
     for (account_id, _, team, teammate), (amount, method) in _defaults(s, ids, [nxt], "accrual", f, stored).items():
-        if _covered(stored.get((account_id, month), []), team, teammate):
+        scopes = stored.get((account_id, month), [])
+        if _covered(scopes, team, teammate):
             continue
-        methods.add(method)
-        total, found = total + amount, True
-    return {"month": month, "projection": total if found else None, "projection_method": _method(methods)}
+        atoms.append(_Atom(account_id, team, teammate, amount, method, whole=not scopes))
+    return nxt, atoms
+
+
+def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
+    """The line's projection for the month after this one, as far as the viewer sees it and within the org filter
+    (projections are by line, team and teammate; there are none by vendor). Each team and teammate with no stored
+    projection for that month gets its own default from posted history. None on a private line without its detail."""
+    got = _next_atoms(s, ids, f)
+    if got is None:
+        nxt = dates.month_end(dates.day(s.ctx.today)) + timedelta(days=1)
+        return {"month": nxt.isoformat()[:7], "projection": None, "projection_method": None}
+    nxt, atoms = got
+    return {"month": nxt.isoformat()[:7], "projection": sum(a.amount for a in atoms) if atoms else None,
+            "projection_method": _method({a.method for a in atoms})}
 
 
 def _next_by(s: _Seen, ids: Sequence[str], f: _Filter, vendor: str | None) -> dict[str, dict[str, int]]:
     """Next month's projection for each vendor, team and teammate of a line (`by` -> key -> amount), split as the
-    drill-down's rows are (`_key`, "unattributed" for none). Each line under it projects with its own default method,
-    as the line's projection does. A saved projection (by line, team and teammate, §4.4) replaces the history it
-    covers (`_covered`): it goes to the team or teammate it names, and is shared out over its covered history's
-    defaults for the dimensions it does not name. Empty on a private line without its detail."""
-    if not ids or any(i in s.private and i not in s.view.full_detail for i in ids):
+    drill-down's rows are (`_key`, "unattributed" for none). It shares out the same pieces as the line's projection
+    (`_next_atoms`: saved projections, §4.4, and each line's own default method), so each column adds up to it: a
+    piece goes over the vendor / team / teammate rows of the history it covers, weighted by each row's own default,
+    equally when none has one, and to the piece's own team and teammate (Unattributed or No team) when it covers no
+    history. Amounts are split with the remainder of the rounding on the largest share, never lost. `vendor` keeps
+    that vendor's share. Empty on a private line without its detail."""
+    got = _next_atoms(s, ids, f) if ids else None
+    if got is None:
         return {}
+    nxt, atoms = got
     today = dates.day(s.ctx.today)
     cur = today.replace(day=1)
-    nxt = dates.add_months(cur, 1)
-    month = nxt.isoformat()[:7]
     first = dates.add_months(cur, -PJ.TREND_MONTHS)
     recent_from = today - timedelta(days=PJ.RATE_DAYS - 1)
     days = dates.days(nxt, dates.month_end(nxt))
-    stored: dict[str, list[tuple[str, str, int]]] = {}
-    for r in SB.projections(s.ctx.c, s.ctx.book.id, month, month):
-        account = s.ctx.accounts.get(r["account_id"])
-        if account is None or account.id not in ids or \
-                not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}) or \
-                (f.any and not f.keeps(str(r["team"] or ""), str(r["teammate"] or ""))):
-            continue
-        stored.setdefault(account.id, []).append((str(r["team"] or ""), str(r["teammate"] or ""), int(r["amount"])))
-    cells = _cells(s, first, today, ids)
+    lines = sorted({a.account_id for a in atoms})
+    cells = _cells(s, first, today, lines, "accrual")
     if f.any:
         cells = [x for x in cells if f.keeps(x.team, x.teammate)]
-    sup = _suppress(s, cells, True, first, today)
+    sup = _suppress(s, cells, f.narrow(s.ctx.org), first, today)
     shown = [x for x in sup.cells if x.account_id not in sup.hidden]
-
-    def estimates(group: Sequence[VW.Cell], by: str, method: str) -> dict[str, int]:
-        """Each key's default from the cells' history, and each key's posted total where no default comes out."""
-        monthly: dict[str, list[int]] = {}
-        recent: dict[str, int] = {}
-        for cell in group:
-            key = _key(s, cell, by)
-            if key is None:
-                continue
-            day = dates.day(cell.day)
-            amount = (-1 if s.ctx.accounts[cell.account_id].type == "income" else 1) * cell.amount
-            monthly.setdefault(key or "unattributed", [0] * PJ.TREND_MONTHS)
-            recent[key or "unattributed"] = recent.get(key or "unattributed", 0) + (amount if day >= recent_from else 0)
-            if day < cur:
-                monthly[key or "unattributed"][(day.year - first.year) * 12 + day.month - first.month] += amount
-        return {k: v for k in monthly if (v := PJ.estimate(method, monthly[k], recent[k], days, 2)) is not None}
-
-    def share(amount: int, weights: Mapping[str, int], fallback: str) -> dict[str, int]:
-        """`amount` split over the keys by weight, the remainder of the rounding on the largest; all on `fallback`
-        when nothing weighs."""
-        weights = {k: w for k, w in weights.items() if w > 0}
-        total = sum(weights.values())
-        if not total:
-            return {fallback: amount}
-        parts = {k: amount * w // total for k, w in weights.items()}
-        top = max(weights, key=lambda k: (weights[k], k))
-        parts[top] += amount - sum(parts.values())
-        return parts
+    monthly: dict[_RowKey, list[int]] = {}
+    recent: dict[_RowKey, int] = {}
+    for cell in shown:
+        k = (cell.account_id, cell.vendor or "", cell.team or "", cell.teammate or "")
+        amount = (-1 if s.ctx.accounts[cell.account_id].type == "income" else 1) * cell.amount
+        day = dates.day(cell.day)
+        monthly.setdefault(k, [0] * PJ.TREND_MONTHS)
+        recent[k] = recent.get(k, 0) + (amount if day >= recent_from else 0)
+        if day < cur:
+            monthly[k][(day.year - first.year) * 12 + day.month - first.month] += amount
+    def weight(k: _RowKey) -> int:
+        account = s.ctx.accounts[k[0]]
+        return PJ.estimate(PJ.default_method(account.type, account.subtype), monthly[k], recent[k], days, 2) or 0
 
     out: dict[str, dict[str, int]] = {"vendor": {}, "team": {}, "teammate": {}}
-
-    def add(by: str, parts: Mapping[str, int]) -> None:
-        for k, v in parts.items():
-            out[by][k] = out[by].get(k, 0) + v
-
-    for i in sorted({x.account_id for x in shown} | set(stored)):
-        account = s.ctx.accounts[i]
-        method = PJ.default_method(account.type, account.subtype)
-        mine = [x for x in shown if x.account_id == i]
-        scopes = [(t, m) for t, m, _ in stored.get(i, [])]
-        free = [x for x in mine if not _covered(scopes, x.team, x.teammate)]
-        for by in out:
-            add(by, estimates([x for x in free if vendor is None or x.vendor == vendor], by, method))
-        for team, teammate, amount in stored.get(i, []):
-            covered = [x for x in mine if _covered([(team, teammate)], x.team, x.teammate)]
-            if vendor is not None:      # a saved projection has no vendor: this vendor's share of it
-                amount = share(amount, estimates(covered, "vendor", method), "unattributed").get(vendor or "unattributed", 0)
-                covered = [x for x in covered if x.vendor == vendor]
+    for atom in atoms:
+        mine = sorted({(x.account_id, x.vendor or "", x.team or "", x.teammate or "") for x in shown if atom.covers(x)})
+        weights = {k: max(0, weight(k)) for k in mine}
+        if not any(weights.values()):
+            weights = dict.fromkeys(mine, 1)
+        if not weights:
+            weights = {(atom.account_id, "", atom.team, atom.teammate): 1}
+        total = sum(weights.values())
+        parts = {k: atom.amount * w // total for k, w in weights.items()}
+        top = max(weights, key=lambda k: (weights[k], k))
+        parts[top] += atom.amount - sum(parts.values())
+        for (i, v, team, mate), amount in parts.items():
+            if vendor is not None and v != vendor:
+                continue
+            cell = VW.Cell(account_id=i, day="", team=team, teammate=mate, vendor=v, amount=0)
             for by in out:
-                named = teammate if by == "teammate" else team if by == "team" else ""
-                add(by, {named: amount} if named else
-                    share(amount, estimates(covered, by, method), teammate or team or "unattributed"))
+                key = _key(s, cell, by) or "unattributed"
+                out[by][key] = out[by].get(key, 0) + amount
     return out
 
 
