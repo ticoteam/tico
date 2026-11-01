@@ -481,7 +481,7 @@ Already constrained by a CHECK in the base schema (values unchanged on this bran
 - `fin_actions.status`, `fin_bills.status`, `fin_invoices.status`, `fin_entries.status`, `fin_holds.status`, `fin_outbox.status`
   (pending, sent, failed, withheld), `fin_feed_txns.status`, `fin_periods.status`, `fin_reconciliations.status`,
   `fin_recipients.status`, `fin_view_grants.status`, `fin_money_accounts.kind`, and others in the Finance schema.
-- `strategy_bets.status`, `strategy_versions.status`, `ceo_actions.state`, `tico_storage.state`, `storage_moves.state`,
+- `strategy_bets.status`, `strategy_versions.status`, `tico_storage.state`, `storage_moves.state`,
   `update_archive_overrides.state`, `invite_sends.state`, `blob_media.media_state`, `bot_file_versions.media_state`.
 - `task_links.review_state` and others with a CHECK in the base schema.
 
