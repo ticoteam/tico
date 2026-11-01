@@ -14,9 +14,10 @@ Who reads (C1). Every thread has an `audience`, evaluated on its root (a sub-thr
     participants  the actors in `participants_json`, and the company owner (migrated direct conversations)
     meeting       backend/live_privacy.py, as before (migrated meeting rooms)
 
-A bot in a turn reads the threads whose root its attempt was handed (`attempt_conversations`), the task threads it
-may read and its own open asks to a person; outside a turn (an external agent) it reads what it is a member or
-participant of, and Homes it may read. The same rule is said three times: in Python (`readable`, which
+Every bot reads what it is a member or participant of, Homes it may read, task threads it may read and its own open
+asks to a person. An internal bot (in a turn) also reads, as a person in its seat would, every company thread and its
+group's team threads, plus the tree its attempt was handed (`attempt_conversations`); an external agent never gets
+company or team standing read. The same rule is said three times: in Python (`readable`, which
 `Auth.conversation` calls), as SQL for `hub sql` (`readable_sql`, `message_sql`) and for the SSE stream
 (`readable_ids`). backend/tests/test_threads_privacy.py runs one matrix through all three.
 
@@ -678,21 +679,24 @@ def _legacy_denial(c, v, row, root, index):
 
 
 def _bot_denial(c, v, row, root, audience):
+    """C1 for a bot. Every bot reads by membership, participation, its Home or one it reads, or a task it may read.
+    An internal bot (an AI employee, in a turn) also reads what a person in its seat reads: every company thread and
+    its own group's team threads (nested groups included), and the thread tree its turn was woken for. An external
+    agent (agent token) never gets company or team standing read: there only its participation counts."""
     from .auth import _own_ask_to_a_person
-    if v.runner_turn:
-        if _bot_grant(c, v, row) or _own_ask_to_a_person(v.who, row):
-            return None
-        return _MISSING
-    # An external agent (spec C1, outside a turn): membership, participation, its Home or one it reads, or a task it
-    # may read. A company or team thread reaches it only through a turn's grant: being in a thread's wake audience
-    # (audience_has) is not standing read access.
+    if v.runner_turn and _bot_grant(c, v, row):
+        return None
     if _bot_standing(c, v, root, audience) or _own_ask_to_a_person(v.who, row):
         return None
     return _MISSING
 
 
 def _bot_standing(c, v, root, audience):
-    if audience in ("company", "team"):
+    if audience == "company":
+        return v.runner_turn or v.actor in (root.get("participants") or [])
+    if audience == "team":
+        if v.runner_turn and root.get("audience_group_id") in v.chain(c):
+            return True
         return v.actor in (root.get("participants") or [])
     return audience_has(c, root, v.actor, viewer_=v)
 
@@ -809,9 +813,12 @@ def legacy_hidden(c, v, message):
     if legacy and str(legacy).startswith("shared:"):
         slug = str(legacy)[len("shared:"):]
         if v.is_bot:
-            if v.runner_turn:
+            thread = thread_row(c, message.get("conversation_id"))
+            if thread is None:
+                return True
+            if v.runner_turn and _bot_grant(c, v, thread):
                 return False
-            root = root_of(c, thread_row(c, message.get("conversation_id"))) or {}
+            root = root_of(c, thread) or {}
             return not (v.actor in (root.get("participants") or []) or v.actor == "bot:" + slug)
         return slug not in v.shared_slugs(c, [slug])
     if not v.is_person or not message.get("conversation_id"):
@@ -925,6 +932,13 @@ def can_manage(c, v, thread):
 
 
 # ----------------------------------------------------------------------------- C1 as SQL and for SSE
+def _grant_sql(v, id_sql, root_sql, t):
+    """SQL: the thread is in a tree the bot's turn was granted (_bot_grant)."""
+    return (f"COALESCE({root_sql},{id_sql}) IN (SELECT COALESCE(g.root_id,g.id) FROM {t('attempt_conversations')} "
+            f"ac JOIN {t('conversations')} g ON g.id=ac.conversation_id WHERE ac.attempt_id="
+            f"{_q(getattr(v.who, 'attempt_id', '') or '')})")
+
+
 def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FROM tasks", meeting=None,
                  conversation=None, only=None):
     """A SQL boolean over a conversations row named `alias` (bare columns when alias is ''): the thread is readable.
@@ -942,26 +956,27 @@ def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FR
     me = _q(v.actor)
     fence = f"({x}task_id IS NULL OR {x}task_id IN ({tasks}))"
     if v.is_bot:
-        if v.runner_turn:
-            grant = (f"COALESCE({x}root_id,{x}id) IN (SELECT COALESCE(g.root_id,g.id) FROM {t('attempt_conversations')} "
-                     f"ac JOIN {t('conversations')} g ON g.id=ac.conversation_id WHERE ac.attempt_id="
-                     f"{_q(getattr(v.who, 'attempt_id', '') or '')})")
-        else:
-            grant = "0"
+        internal = v.runner_turn
+        grant = _grant_sql(v, x + "id", x + "root_id", t) if internal else "0"
         terms = f"({grant} OR ({x}kind='task' AND {x}task_id IS NOT NULL))"
-        if not v.runner_turn:
-            names = _qlist(v.member_names(c))
-            slug = _q(H.actor_id(v.actor))
-            hidden = v.hidden_read(c)
-            home_bot = (f"(r.owner_actor IS NOT NULL AND r.owner_actor NOT IN {_qlist(sorted(hidden))})"
-                        if hidden is not None else "0")
-            # A legacy root (no stored audience) reads as _legacy_denial: a participant, or the room's bot.
-            terms = (f"({terms} OR COALESCE({x}root_id,{x}id) IN (SELECT r.id FROM {t('conversations')} r WHERE "
-                     f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='r')} WHERE value={me}) OR "
-                     f"(r.audience IS NULL AND {_LEGACY_ROOM_BOT.format(r='r')}={slug}) OR "
-                     f"(r.audience='home' AND (r.owner_actor={me} OR {home_bot})) "
-                     f"OR (r.audience IN ('members','personal') AND EXISTS (SELECT 1 FROM {t('thread_members')} tm "
-                     f"WHERE tm.thread_id=r.id AND tm.actor IN {names}))))")
+        names = _qlist(v.member_names(c))
+        slug = _q(H.actor_id(v.actor))
+        hidden = v.hidden_read(c)
+        home_bot = (f"(r.owner_actor IS NOT NULL AND r.owner_actor NOT IN {_qlist(sorted(hidden))})"
+                    if hidden is not None else "0")
+        participant = f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='r')} WHERE value={me})"
+        if internal:
+            # An internal bot reads a legacy root (no stored audience) only by its turn's grant (_legacy_denial);
+            # beyond that it reads company threads and its own group's team threads, as a person in its seat.
+            standing = (f"r.audience IS NOT NULL AND ({participant} OR r.audience='company' OR "
+                        f"(r.audience='team' AND r.audience_group_id IN {_qlist(v.chain(c))}))")
+        else:
+            # A legacy root reads as _legacy_denial: a participant, or the room's bot.
+            standing = f"{participant} OR (r.audience IS NULL AND {_LEGACY_ROOM_BOT.format(r='r')}={slug})"
+        terms = (f"({terms} OR COALESCE({x}root_id,{x}id) IN (SELECT r.id FROM {t('conversations')} r WHERE "
+                 f"{standing} OR (r.audience='home' AND (r.owner_actor={me} OR {home_bot})) "
+                 f"OR (r.audience IN ('members','personal') AND EXISTS (SELECT 1 FROM {t('thread_members')} tm "
+                 f"WHERE tm.thread_id=r.id AND tm.actor IN {names}))))")
         out = f"({terms}) AND {fence}"
         return f"({out}) AND {conversation(x + 'id')}" if conversation else out
     names = _qlist(v.member_names(c))
@@ -1006,17 +1021,21 @@ def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FR
     return f"({out}) AND {conversation(x + 'id')}" if conversation else out
 
 
-def message_sql(c, v, alias="messages", *, legacy_slugs=None):
+def message_sql(c, v, alias="messages", *, legacy_slugs=None, inner=None):
     """A SQL boolean over a messages row: its legacy audience admits the viewer. (The thread term and the
     restricted check stay the caller's.) `legacy_slugs` is the viewer's readable shared bots when known."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
+    t = inner or (lambda name: name)
     x = (alias + ".") if alias else ""
     if v.is_bot:
+        # Shared-room history: the room's bot, a participant, or (an internal bot) any thread its turn is granted.
+        granted = ""
         if v.runner_turn:
-            return "1"
+            granted = (f" OR {x}conversation_id IN (SELECT gx.id FROM {t('conversations')} gx WHERE "
+                       f"{_grant_sql(v, 'gx.id', 'gx.root_id', t)})")
         return (f"({x}legacy_audience IS NULL OR substr({x}legacy_audience,8)={_q(H.actor_id(v.actor))} OR EXISTS "
-                f"(SELECT 1 FROM conversations lr, {_PARTICIPANTS.format(r='lr')} WHERE lr.id={x}conversation_id "
-                f"AND value={_q(v.actor)}))")
+                f"(SELECT 1 FROM {t('conversations')} lr, {_PARTICIPANTS.format(r='lr')} WHERE "
+                f"lr.id={x}conversation_id AND value={_q(v.actor)}){granted})")
     slugs = [r[0][len("shared:"):] for r in c.execute(
         "SELECT DISTINCT legacy_audience FROM messages WHERE legacy_audience LIKE 'shared:%'")]
     if legacy_slugs is None:
