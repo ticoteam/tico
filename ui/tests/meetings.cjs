@@ -68,12 +68,17 @@ async function open(browser, viewport, world, options = {}) {
     }
     if (p === '/api/v2/meetings/import' && method === 'POST') { const body = JSON.parse(route.request().postData()); world.imported.push(body); return json({id: 'm9', existing: false}); }
     if (/^\/api\/meetings\/m\d$/.test(p)) return json({...world.meetings.find(m => p.endsWith(m.id)), turns: [], transcript_readable: '', outbox: {doc: [], task: [], feature: []}});
+    if (/^\/api\/meetings\/[^/]+\/items$/.test(p)) return json(world.items || {id: '', can_push: true, sections: {doc: [], task: [], feature: []}, counts: {proposed: 0}});
+    if (/^\/api\/meetings\/[^/]+\/items\/[^/]+\/push$/.test(p)) {
+      world.pushes.push(p);
+      return route.fulfill({status: 422, contentType: 'application/json', body: JSON.stringify({error: {code: 'owner', detail: 'Choose who this doc update is for'}})});
+    }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
   return {page, errors, context};
 }
-const world = (extra = {}) => ({role: 'owner', sources: NONE, meetings: [], importers: structuredClone(IMPORTERS), saved: [], imported: [], ...extra});
+const world = (extra = {}) => ({role: 'owner', sources: NONE, meetings: [], importers: structuredClone(IMPORTERS), saved: [], imported: [], pushes: [], ...extra});
 async function shot(page, name) {
   if (!process.env.TICO_MEETINGS_SCREENSHOTS) return;
   fs.mkdirSync(process.env.TICO_MEETINGS_SCREENSHOTS, {recursive: true});
@@ -218,10 +223,28 @@ async function shot(page, name) {
         assert.deepEqual(errors, []);
         await context.close();
       }
+
+      // A Doc update with no owner to send it to: its Push is refused, and the item opens so its owner can be chosen.
+      {
+        const viewport = {width: 1280, height: 900};
+        const item = {id: 'i1', section: 'doc', text: 'Ship the pricing change', status: 'proposed', quote: '', at_ms: null,
+          detail: {document: 'docs/pricing.md', change: 'Ship on Friday'}};
+        w = world({meetings: [meeting('m5', 'Docs call', 'zoom', 1)],
+          items: {id: 'm5', can_push: true, counts: {proposed: 1}, sections: {doc: [item], task: [], feature: []}}});
+        ({page, errors, context} = await open(browser, viewport, w, {colorScheme: scheme}));
+        await page.goto('https://tico-ui.test/#/meetings');
+        await page.locator('.meet-row .note-title').first().click();
+        await page.locator('#notes-modal[open] [data-act=push]').click();
+        await page.locator('#notes-detail form[data-edit=i1] select[data-field=owner]').waitFor();
+        assert.equal(w.pushes.length, 1, scheme + ': the push was refused once');
+        assert.match(await page.locator('#notes-detail form[data-edit=i1] select[data-field=owner] option').first().innerText(), /Choose who this is for/);
+        assert.deepEqual(errors, []);
+        await context.close();
+      }
     }
     // The native window's shared-meeting entry point belongs to this hosted meeting flow too.
     await recorderLiveSharing(browser);
-    console.log('meetings ok: 4 browser scenarios, including permissions, historical data and mixed-version setup');
+    console.log('meetings ok: 5 browser scenarios, including permissions, historical data, refused pushes and mixed-version setup');
   } finally {
     await browser.close();
   }

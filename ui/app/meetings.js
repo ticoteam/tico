@@ -783,7 +783,7 @@ function meetNotesOpen(state) {
 // its quote and Edit / Delete / Push. Anyone who can read the meeting edits and deletes; Push is
 // the meeting's owner only, which is what `can_push` says, and it makes a hub task.
 const MEET_SECTIONS = [
-  {key: 'doc', title: 'Doc updates', fields: [['document', 'Document, e.g. docs/pricing.md'], ['change', 'What it should say now'], ['why', 'Why']]},
+  {key: 'doc', title: 'Doc updates', fields: [['document', 'Document, e.g. docs/pricing.md'], ['change', 'What it should say now'], ['why', 'Why'], ['owner', 'Owner — who it is for']]},
   {key: 'task', title: 'Tasks', fields: [['owner', 'Owner — human:<id> or bot:<slug>'], ['due', 'Due — 2026-09-18T17:00:00-07:00'], ['priority', 'Priority — p0 to p3']]},
   {key: 'feature', title: 'Feature requests', fields: [['side', 'Product area (optional)'], ['app', 'App (optional)'], ['area', 'Label (optional)']]},
 ];
@@ -796,7 +796,7 @@ const meetItemLine = it => {
     || (botByRef(o) ? botDisplayName(botByRef(o).id) : o);
   if (it.section === 'task') return [d.owner ? who(d.owner) : 'No owner yet', d.due ? 'due ' + String(d.due).slice(0, 10) : '',
     /^p\d$/i.test(d.priority || '') ? 'priority ' + d.priority.toUpperCase() : d.priority || ''].filter(Boolean).join(' · ');
-  if (it.section === 'doc') return [d.document || 'No document named', d.change].filter(Boolean).join(' — ');
+  if (it.section === 'doc') return [d.owner ? 'For ' + who(d.owner) : '', d.document || 'No document named', d.change].filter(Boolean).join(' — ');
   if (it.section === 'feature') return [({B: 'Backend', F: 'Frontend', 'B/F': 'Backend and frontend'})[d.side] || d.side, ({CA: 'Client app', PA: 'Pro app'})[d.app] || d.app, d.area, d.bug ? 'bug' : ''].filter(Boolean).join(' · ');
   return '';
 };
@@ -823,12 +823,15 @@ function meetSeek(ms) {
 const meetFieldValue = f => { const v = f.value.trim(); return f.dataset.field === 'owner' && !v.includes(':') ? 'bot:' + v : v; };
 function meetItemFields(section, detail) {
   const fields = (MEET_SECTIONS.find(s => s.key === section) || {fields: []}).fields;
+  // A doc update with no owner goes to the documentation bot, when this team has one; else someone must be chosen.
+  const docBot = (S.emps || []).some(e => e.name === 'doc-updater' && e.status !== 'archived');
   return fields.map(([name, label]) => {
     if (name === 'owner') {
       // An owner the notes named by slug (or a bare name) is picked by its id.
       const named = String((detail || {}).owner || ''), bot = !named.includes(':') || named.startsWith('bot:') ? botByRef(named) : null;
       const current = bot ? bot.id : named;
-      return `<select data-field="owner" aria-label="${esc(label)}">${taskOwnerOptions(current)}</select>`;
+      const blank = section === 'doc' ? (docBot ? 'The doc-updater bot (default)' : 'Choose who this is for') : undefined;
+      return `<select data-field="owner" aria-label="${esc(label)}">${taskOwnerOptions(current, blank)}</select>`;
     }
     return `<input type="text" data-field="${name}" placeholder="${esc(label)}" aria-label="${esc(label)}" value="${esc((detail || {})[name] || '')}">`;
   }).join('');
@@ -900,6 +903,11 @@ function meetItemsHandlers(state, rec) {
       if (duplicate) {
         state.itemDup = {...(state.itemDup || {}), [item]: duplicate};
         repaint();
+      } else if (e.body?.error?.code === 'owner' && item && path.endsWith('/push')) {
+        // Nobody to send it to yet: open the item's edit form, where its owner is chosen, and push again from there.
+        state.itemEdit = item;
+        repaint();
+        toast(e.message, true);
       } else toast(e.message, true);
       return null;
     }

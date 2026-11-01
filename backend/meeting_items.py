@@ -34,9 +34,13 @@ PROCESS_LABELS = {"blocked", "blocked by specs", "needs architecture review", "n
                   "spec reviewed", "in review", "ready for qa"}
 DUPLICATE_RATIO = 0.8
 DOC_BOT = "doc-updater"
+# A doc update goes to the owner it names, else to DOC_BOT when this team has that bot.
+DOC_OWNER_NAMED = "Choose an owner for this doc update: a person or a bot on this team, as human:<id> or bot:<slug>."
+DOC_OWNER_DEFAULT = ("This team has no " + DOC_BOT + " bot you can send to, so choose who this doc update is for: "
+                     "human:<id> or bot:<slug>.")
 # Only these keys mean anything per section, so anything else is a mistake worth naming.
 DETAIL_KEYS = {
-    "doc": ("document", "change", "why"),
+    "doc": ("document", "change", "why", "owner"),
     "task": ("owner", "due", "priority"),
     "feature": ("side", "app", "area", "bug", "current", "expected", "labels"),
 }
@@ -206,7 +210,25 @@ def push_task(c, settings, task_create, who, record, row, detail):
     return created["task"]["id"]
 
 
-def push_doc(c, settings, task_create, who, record, row, detail):
+def doc_owner(c, auth, who, detail):
+    """Who a doc update is for: the owner the person named, else the documentation bot when this team has it and
+    the person may send it work. Anything else is refused as a choice to make, never as "Unknown recipient"."""
+    named = str(detail.get("owner") or "").strip()
+    if not named:
+        bot = H.resolve_actor(c, DOC_BOT)
+        if not bot or not auth.bot_access(c, who, DOC_BOT)["write"]:
+            raise Problem("owner", DOC_OWNER_DEFAULT, 422)
+        return bot
+    actor = H.resolve_actor(c, named)
+    if not actor or actor == H.KEEPER:
+        raise Problem("owner", DOC_OWNER_NAMED, 422)
+    if actor.startswith("bot:"):
+        auth.require_write(c, who, H.actor_id(actor), missing=DOC_OWNER_NAMED)
+    return actor
+
+
+def push_doc(c, settings, task_create, who, record, row, detail, auth):
+    owner = doc_owner(c, auth, who, detail)
     body = "\n\n".join(part for part in [
         "Document: " + (detail.get("document") or "(the meeting did not name one)"),
         "Change: " + (detail.get("change") or row["text"]),
@@ -214,7 +236,7 @@ def push_doc(c, settings, task_create, who, record, row, detail):
         source(settings, record, row, person_name(c, who)),
     ] if part)
     created = task_create(c, who, M.TaskCreate(title=("Doc update: " + row["text"])[:300], body=body,
-                                               owner="bot:" + DOC_BOT))
+                                               owner=owner))
     return created["task"]["id"]
 
 
@@ -311,7 +333,7 @@ def record_push(c, who, rid, iid, ref):
 
 
 # ----------------------------------------------------------------------------- routes
-def install_meeting_items(app, store, mutate, task_create):
+def install_meeting_items(app, store, mutate, task_create, auth):
     settings = store.settings
 
     @app.get("/api/v2/meetings/{rid}/items")
@@ -374,7 +396,7 @@ def install_meeting_items(app, store, mutate, task_create):
             if row["section"] == "task":
                 result = push_task(c, settings, task_create, who, record, row, detail)
             elif row["section"] == "doc":
-                result = push_doc(c, settings, task_create, who, record, row, detail)
+                result = push_doc(c, settings, task_create, who, record, row, detail, auth)
             else:
                 # a close match on the board is refused; `force` is the person saying they meant it
                 result = push_feature(c, settings, task_create, who, record, row, detail, body.force)

@@ -100,3 +100,37 @@ def test_the_v2_aliases_answer_what_the_old_paths_do(api):
     assert old_push["pushed"] is True and new_push.json()["pushed"] is True
     titles = [get(api, "tasks/" + result["item"]["result_ref"])["task"]["title"] for result in (old_push, new_push.json())]
     assert titles == ["Send the pricing sheet", "Send the pricing deck"]
+
+
+def without_doc_bot(api):
+    """A roster with no `doc-updater` bot, as on most teams."""
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM bot_config WHERE bot='doc-updater'")
+        c.execute("DELETE FROM bots WHERE slug='doc-updater'")
+
+
+def test_a_doc_update_on_a_team_with_no_doc_bot_is_left_for_a_person_to_choose(api):
+    """Without a doc-updater bot the push asks for an owner and the item stays proposed; it never says "Unknown recipient"."""
+    without_doc_bot(api)
+    rid = record(api, {"title": "Docs call"})
+    detail = {"document": "docs/pricing.md", "change": "Ship on Friday"}
+    iid = add(api, rid, {"section": "doc", "text": "Pricing page says Friday", "detail": detail})["item"]["id"]
+    refused = push(api, rid, iid, expected=422)
+    assert refused["error"]["code"] == "owner" and "Unknown recipient" not in refused["error"]["detail"]
+    assert items(api, rid)["sections"]["doc"][0]["status"] == "proposed"
+    # A named owner the roster does not have is refused again, and nothing is created for it.
+    change(api, rid, iid, {"detail": {**detail, "owner": "human:nobody"}})
+    push(api, rid, iid, expected=422)
+    change(api, rid, iid, {"detail": {**detail, "owner": "human:ben"}})
+    pushed = push(api, rid, iid)
+    task = get(api, "tasks/" + pushed["item"]["result_ref"])["task"]
+    assert task["owner_id"] == "human:ben" and "Document: docs/pricing.md" in task["body"]
+
+
+def test_a_doc_update_goes_to_the_doc_bot_unless_the_push_names_someone_else(api):
+    rid = record(api, {"title": "Docs call"})
+    default = add(api, rid, {"section": "doc", "text": "Fix the pricing page"})["item"]["id"]
+    named = add(api, rid, {"section": "doc", "text": "Fix the onboarding page", "detail": {"owner": "human:ben"}})["item"]["id"]
+    owners = {iid: get(api, "tasks/" + push(api, rid, iid)["item"]["result_ref"])["task"]["owner_id"]
+              for iid in (default, named)}
+    assert owners == {default: "bot:doc-updater", named: "human:ben"}

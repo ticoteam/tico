@@ -8333,7 +8333,7 @@ def create_app(settings=None):
     from .team_icon import install_team_icon
     install_team_icon(app, store)
     from .meeting_items import install_meeting_items
-    install_meeting_items(app, store, mutate, task_create)
+    install_meeting_items(app, store, mutate, task_create, auth)
     from .connectors import install_connectors
     install_connectors(app, store, execution, mutate)
     from .imports import install_imports
