@@ -376,7 +376,8 @@ function finTxLineCell(r) {
   if (r.kind !== 'feed') return r.account ? esc(r.account) : '<span class="muted">—</span>';
   if (ids.length > 1) return 'Split';
   const cur = ids[0] || '', name = lines[0]?.account || '';
-  if (!finTxCatOn(r) || !Array.isArray(chart)) return name ? esc(name) : '<span class="muted">—</span>';
+  // A row split across tags (even on one line) is categorized in the panel, so each part keeps its own tags.
+  if (lines.length > 1 || !finTxCatOn(r) || !Array.isArray(chart)) return name ? esc(name) : '<span class="muted">—</span>';
   const opt = (v, l) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`;
   return `<select class="fin-cell-sel" data-fin-tx-line="${esc(finTxKey(r))}" aria-label="Line"${FIN.tx.busy ? ' disabled' : ''}>${cur ? '' : opt('', '—')}${cur && !chart.some(a => a.id === cur) ? opt(cur, name || cur) : ''}${chart.map(a => opt(a.id, a.name)).join('')}</select>`;
 }

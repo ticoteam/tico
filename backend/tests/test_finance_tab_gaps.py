@@ -305,3 +305,25 @@ def test_bills_show_their_line_team_and_when_paid_and_late_keeps_those_past_due(
         assert rows["B-2"]["team"] is None and not rows["B-2"]["split"]
         assert (rows["B-3"]["paid_on"], rows["B-3"]["paid_by"]) == ("2026-10-05", OWNER)
         assert [r["id"] for r in FR.bills(c, OWNER, status="unpaid", late=True, at=AT)["bills"]] == [late]
+
+
+def test_a_lines_breakdown_follows_a_saved_projection(books):
+    with books.transaction() as c:
+        spend(c, "6100", 1_000, day="2026-09-05", team="eng", teammate="human:ben", vendor="acme-tools")
+        spend(c, "6100", 500, day="2026-09-07", team="sales", vendor="acme-cloud")
+        line = account(c, "6100")
+        assert act(c, OWNER, "projection_set", {"account_id": line, "month": "2026-11", "team": "eng",
+                                                "amount": 9_000}).status == "committed"
+        got = FR.line_detail(c, OWNER, line, *OCT, at=AT)
+        assert got["next_month"]["projection"] == 9_500                 # Engineering's saved 9,000 and Sales' 500
+        assert got["next_by"]["team"] == {"eng": 9_000, "sales": 500}
+        assert got["next_by"]["teammate"] == {"human:ben": 9_000, "unattributed": 500}
+        assert got["next_by"]["vendor"] == {"acme-tools": 9_000, "acme-cloud": 500}
+
+
+def test_a_parent_lines_breakdown_projects_each_line_with_its_own_method(books):
+    with books.transaction() as c:
+        spend(c, "5100", 3_100, day="2026-10-10", team="eng")            # AI services runs at its last 30 days
+        got = FR.line_detail(c, OWNER, account(c, "5000"), *OCT, at=AT)
+        assert got["next_month"]["projection"] == 3_100
+        assert got["next_by"]["team"] == {"eng": 3_100}

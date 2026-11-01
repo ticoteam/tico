@@ -326,3 +326,30 @@ def test_a_hidden_payroll_row_shows_no_budget_either(books):
                       at=AT)["rows"]
         (row,) = [r for r in rows if r["account_id"] == pay]
         assert row["private"] and row["budget"] is None and row["actual"] is None
+
+
+def test_a_managers_report_with_no_team_shows_under_no_team(books):
+    with books.transaction() as c:
+        _org(c, PEOPLE + [{"id": "hal", "email": "hal@acme.example", "reports_to": "cara"}], GROUPS)
+        spend(c, "6100", 700, teammate="human:hal")
+        spend(c, "6100", 100, team="web", teammate="human:eve")
+        for by in ("team", "department"):
+            rows = {r["key"]: r for r in FR.expenses(c, "human:cara", by=by, at=AT)["rows"]}
+            assert rows["no_team"]["amount"] == 700 and "unattributed" not in rows
+        assert FR.expenses(c, "human:cara", by="teammate", at=AT)["total"] == 800
+        line = FR.line_detail(c, "human:cara", account(c, "6100"), "2026-10-01", "2026-10-31", at=AT)
+        assert {r["key"]: r["amount"] for r in line["by_team"]} == {"web": 100, "no_team": 700}
+
+
+def test_access_says_where_the_viewer_may_grant(books):
+    with books.transaction() as c:
+        def may(viewer):
+            return {r["teammate"]: r["may_grant"] for r in FT.access(c, viewer, at=AT)["teammates"]}
+        assert may(OWNER)["human:gus"] and not may(OWNER)[OWNER]
+        mine = may("human:cara")
+        assert mine["human:eve"] and mine["bot:coder"] and not mine["human:cara"]
+        assert act(c, OWNER, "view_defaults_set", {"manager": "own_expenses", "member": "own_expenses"}).status \
+            == "committed"
+        assert not any(may("human:cara").values())
+        assert act(c, "human:cara", "view_grant", {"subject": "human:eve", "what": "expenses", "whose": "own"}).code \
+            == "denied"

@@ -8369,7 +8369,7 @@
     },
     "/api/v2/finance/access": {
       "get": {
-        "summary": "Who can see what in Finance: teams, each teammate's default, grants and rights, private lines, the defaults",
+        "summary": "Who can see what in Finance: teams, each teammate's default, grants and rights, whether the caller may grant them more (may_grant), private lines, the defaults",
         "operationId": "getFinanceAccess",
         "responses": {
           "200": {
@@ -38579,12 +38579,16 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "may_grant": {
+                  "type": "boolean"
                 }
               },
               "required": [
                 "default",
                 "grants",
                 "kind",
+                "may_grant",
                 "reports_to",
                 "rights",
                 "team",

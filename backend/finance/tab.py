@@ -771,7 +771,8 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
         teammates.append({"teammate": m, "kind": "bot" if m in org.bots else "person",
                           "team": org.team_of.get(m) or None, "reports_to": org.reports_to.get(m) or None,
                           "default": _default_of(org.manages(m), defaults, bool(org.owner) and m == org.owner),
-                          "grants": [_grant_row(g, ctx) for g in mine], "rights": rights})
+                          "grants": [_grant_row(g, ctx) for g in mine], "rights": rights,
+                          "may_grant": _may_grant(ctx, viewer, m, defaults)})
     teams = [{"id": t.id, "name": t.name, "parent": t.parent or None, "lead": t.lead or None}
              for t in sorted(org.teams.values(), key=lambda x: x.name)
              if admin or t.id in led or t.id in {org.team_of.get(m, "") for m in shown}]
@@ -782,6 +783,17 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
             "defaults": {"manager": defaults.manager, "member": defaults.member,
                          "manager_payroll": defaults.manager_payroll},
             "can_view_as": owner, "can_edit_defaults": owner, "view_version": ctx.view(viewer).version}
+
+
+def _may_grant(ctx: Ctx, viewer: str, subject: str, defaults: VW.Defaults) -> bool:
+    """Whether the viewer may grant this teammate anything (VW.check_grant on the narrowest grant, their own
+    expenses), so the page offers "Grant more" only where a grant would go through."""
+    probe = VW.Grant(id="", subject_kind="teammate", subject=subject, what="expenses", whose="own")
+    try:
+        VW.check_grant(ctx.org, viewer, probe, defaults, ctx.accounts)
+    except FinanceError:
+        return False
+    return True
 
 
 def view_as(c: sqlite3.Connection, viewer: str, target: str, at: str | None = None) -> str:

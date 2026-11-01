@@ -1205,6 +1205,7 @@ export type FinanceAccess = {
   default: "everything" | "team_expenses" | "own_expenses" | "none";
   grants: Array<Record<string, unknown>>;
   kind: string;
+  may_grant: boolean;
   reports_to: string | null;
   rights: Array<string> | null;
   team: string | null;

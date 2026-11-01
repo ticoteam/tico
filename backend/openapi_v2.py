@@ -1446,7 +1446,8 @@ STABLE.extend([
      "Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies, for a finance admin who sees "
      "sources; the ordinary trigger routes refuse them", "FinanceWebhookDeliveries"),
     ("/api/v2/finance/access", "get", "Finance", "getFinanceAccess",
-     "Who can see what in Finance: teams, each teammate's default, grants and rights, private lines, the defaults",
+     "Who can see what in Finance: teams, each teammate's default, grants and rights, whether the caller may grant "
+     "them more (may_grant), private lines, the defaults",
      "FinanceAccess"),
     ("/api/v2/finance/payments", "get", "Finance", "listFinancePayments",
      "Payments the caller made or whose line they see, newest first, with a cursor; errors only for the payer or a "
@@ -1610,7 +1611,8 @@ SCHEMAS.update({
                                 "default": {"type": "string", "enum": ["everything", "team_expenses", "own_expenses",
                                                                        "none"]},
                                 "grants": items({"type": "object", "additionalProperties": True}),
-                                "rights": {"type": ["array", "null"], "items": {"type": "string"}}})),
+                                "rights": {"type": ["array", "null"], "items": {"type": "string"}},
+                                "may_grant": "b"})),
         "private_lines": items(obj({"account_id": "s", "name": "s", "others_see": "s",
                                     "full_detail": {"type": ["array", "null"], "items": {"type": "string"}}})),
         "defaults": obj({"manager": "s", "member": "s", "manager_payroll": "s"}),

@@ -43,12 +43,14 @@ const MATES = [
 function access(viewer, apGrant = false, apRights = []) {
   const base = {teams, private_lines: [{account_id: 'a-6200', name: 'Payroll', others_see: 'totals', full_detail: ['bot:bookkeeper']}],
     defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'}, view_version: 'v1'};
-  if (viewer === 'ana') return {...base, teammates: MATES, can_view_as: true, can_edit_defaults: true};
+  if (viewer === 'ana') return {...base, teammates: MATES.map(m => ({...m, may_grant: m.teammate !== 'human:ana'})), can_view_as: true, can_edit_defaults: true};
   const mine = ['human:cara', 'bot:eng-lead', 'bot:builder'];
   const payables = {id: 'g4', subject_kind: 'teammate', subject: 'human:cara', what: 'payables', whose: 'company', whose_team: null, account_ids: [],
     new_members: false, granted_by: 'human:ana', expires_at: null, status: 'active', live: true};
   return {...base, teams: teams.filter(t => ['eng', 'platform'].includes(t.id)), private_lines: [],
-    teammates: MATES.filter(m => mine.includes(m.teammate)).map(m => apGrant && m.teammate === 'human:cara' ? {...m, grants: [payables], rights: apRights} : m),
+    // may_grant is the server's check_grant verdict; eng-lead's is off here to show the page follows it.
+    teammates: MATES.filter(m => mine.includes(m.teammate)).map(m => ({...m, may_grant: m.teammate === 'bot:builder'}))
+      .map(m => apGrant && m.teammate === 'human:cara' ? {...m, grants: [payables], rights: apRights} : m),
     can_view_as: false, can_edit_defaults: false};
 }
 
@@ -579,6 +581,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await shot(page, 'transactions-desktop');
       // The row's own line picker: a dry run, then categorize to the new line.
       const n0 = writes.length;
+      assert.equal(await page.locator('select[data-fin-tx-line="feed:f4"]').count(), 0, tag + ': a row split by tags on one line has no row picker');
       await page.locator('select[data-fin-tx-line="feed:f1"]').selectOption('a-5100');
       await settled(() => actions(writes.slice(n0)).length >= 2);
       assert.deepEqual(actions(writes.slice(n0)).map(a => [a.kind, a.payload.feed_id, a.payload.account_id, !!a.dry_run]),
@@ -771,6 +774,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
         ['human:ana', '# Engineering', 'human:cara', '# Platform', 'bot:eng-lead', 'bot:builder', '# Web', '# Marketing', 'bot:mkt-lead', '# Content', 'bot:writer', '# Helpers', 'bot:bookkeeper'],
         tag + ': the Access order');
       await page.waitForFunction(() => FIN_ACC.sel === 'human:ana' && document.querySelector('#fin-rail h2'));
+      assert.equal(await page.locator('#fin-rail [data-fin-grant]').count(), 0, tag + ': nobody grants to themselves');
       assert.equal(await page.locator('tr[data-fin-mate="human:cara"] .fin-s.mgr').count(), 1, tag + ': a manager sees team expenses');
       assert.equal(await page.locator('#fin-private .fin-chip').count(), 2, tag + ': payroll by person is private by default, beside the private lines');
       await page.locator('[data-fin-mate="bot:writer"]').click();
@@ -1134,6 +1138,9 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(await page.locator('#fin-rail [data-fin-cat], #fin-rail [data-fin-tag]').count(), 0, tag + ': no line picker without finance.book');
       await go(page, '#/finance/access', READY.access);
       assert.equal(await page.locator('[data-fin-defaults], [data-fin-viewas]').count(), 0, tag + ': no defaults or View as');
+      await page.locator('[data-fin-mate="bot:eng-lead"]').click();
+      await page.waitForFunction(() => FIN_ACC.sel === 'bot:eng-lead' && document.querySelector('#fin-rail h2'));
+      assert.equal(await page.locator('#fin-rail [data-fin-grant]').count(), 0, tag + ': no Grant more where the server would refuse');
       await page.locator('[data-fin-mate="bot:builder"]').click();
       await page.locator('#fin-rail [data-fin-grant]').waitFor();
       await page.locator('#fin-rail select[name="what"]').selectOption('pnl_lines');

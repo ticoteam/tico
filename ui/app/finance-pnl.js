@@ -559,7 +559,7 @@ function finLineKeys() {
 function finLineLabel(key, label) {
   if (key === 'other') return label;
   if (FIN_LINE.by === 'teammate') return finWho(key);
-  if (FIN_LINE.by === 'team') return key === 'unattributed' ? 'Unattributed' : finTeamName(key) || label;
+  if (FIN_LINE.by === 'team') return key === 'unattributed' ? 'Unattributed' : key === 'no_team' ? 'No team' : finTeamName(key) || label;
   // A vendor's label is a contact's name or "" (a contact the viewer can't see), never the key: a bill's key is an id.
   if (FIN_LINE.by === 'vendor') return label || '—';
   return label || key;
@@ -598,7 +598,7 @@ function finLineRail() {
   const pct = amount ? Math.min(100, Math.round(spent / amount * 100)) : null;
   // A vendor's own read (lines/{id}?vendor=): how it was paid, by team, its transactions.
   const one = vendor && row.key !== 'other', got = one ? state.vendors[row.key] : null, d = got?.data || null;
-  const match = e => L.by === 'team' ? (e.tags?.team || 'unattributed') === row.key : (e.tags?.teammate || 'unattributed') === row.key;
+  const match = e => L.by === 'team' ? (e.tags?.team || (e.tags?.teammate ? 'no_team' : 'unattributed')) === row.key : (e.tags?.teammate || 'unattributed') === row.key;
   const entries = one ? (d?.entries || []).slice(0, 5) : row.key === 'other' ? [] : (state.cur.entries || []).filter(match).slice(0, 8);
   const paid = one ? d?.paid_by || [] : [], teams = one ? (d?.by_team || []).filter(r => r.amount) : [];
   const name = finLineLabel(row.key, row.label), lineName = state.cur.account?.name || '';

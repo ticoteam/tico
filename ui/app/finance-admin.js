@@ -347,12 +347,6 @@ function finAccRows(acc) {
   if (helpers.length) out.push({group: 'Helpers', d: 0}, ...helpers.map(t => ({t, d: 0})));
   return out;
 }
-// Everyone who reports to `who`, directly or not (as far as the Access read shows).
-function finReports(acc, who) {
-  const out = new Set(), todo = [who];
-  while (todo.length) { const at = todo.pop(); for (const m of acc.teammates || []) if (m.reports_to === at && !out.has(m.teammate) && m.teammate !== who) { out.add(m.teammate); todo.push(m.teammate); } }
-  return out;
-}
 function finAccessPage() {
   const acc = FIN.acc;
   $('#fin-body').innerHTML = `<div class="fin-bar"><span class="spacer"></span>${acc.can_edit_defaults ? '<button type="button" class="ghost" data-fin-defaults>Edit defaults</button>' : ''}
@@ -397,10 +391,10 @@ function finAccRail() {
     return `<div class="fin-kv"><span data-fin-glabel="${i}">${esc(finGrantLabel(g))}</span><span class="muted fin-small">${g.granted_by ? esc(finWho(g.granted_by)) : ''}${g.expires_at ? ' · until ' + esc(finDayLabel(g.expires_at)) : ' · no end'}${mine
       ? ` <button type="button" class="ghost fin-x" data-fin-revoke="${esc(g.id)}" aria-label="Revoke ${esc(finGrantLabel(g))}">✕</button>` : ''}</span></div>`;
   }).join('');
-  // Owners grant anything; a manager grants to their teams' members and those who report to them (the route checks
-  // either way). No self-grants.
+  // The server says where a grant would go through (may_grant, from check_grant); the Whose list offers the teams
+  // this viewer leads.
   const leads = new Set(teams.filter(x => x.lead === me).flatMap(x => [...finTeamsBelow(x.id)]));
-  const may = t.teammate !== me && (owner || (t.team && leads.has(t.team)) || finReports(acc, me).has(t.teammate));
+  const may = !!t.may_grant;
   const named = (t.grants || []).some(g => (g.account_ids || []).length);
   const L = may || named ? finAccLines() : null;
   // Line names come with the lines read; relabel the grants then (the form keeps what was typed).

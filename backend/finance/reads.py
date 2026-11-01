@@ -39,6 +39,7 @@ from .store import raw_totals as SR
 from .store import tico as ST
 
 UNATTRIBUTED = "Unattributed"
+NO_TEAM = "no_team"                # a teammate's spend with no team on it: the No team group, not Unattributed
 GROUPS = ("department", "team", "teammate", "bot", "person", "vendor", "account")
 MAX_TOP = 200
 Row = dict[str, object]
@@ -465,11 +466,12 @@ def _side_panel(s: _Seen, spent: Mapping[str, int], tops: list[B.Budget], versio
 
 # ------------------------------------------------------------------------------------------------ expenses
 def _key(s: _Seen, cell: VW.Cell, by: str) -> str | None:
-    """The group a cell falls in; "" is Unattributed; None leaves it out (a person's line in a by-bot read)."""
-    if by == "department":
-        return s.ctx.org.department(cell.team) if cell.team else ""
-    if by == "team":
-        return cell.team
+    """The group a cell falls in; "" is Unattributed (no team and no teammate); NO_TEAM is a teammate's spend with no
+    team; None leaves it out (a person's line in a by-bot read)."""
+    if by in ("department", "team"):
+        if not cell.team:
+            return NO_TEAM if cell.teammate else ""
+        return s.ctx.org.department(cell.team) if by == "department" else cell.team
     if by == "teammate":
         return cell.teammate
     if by == "bot":
@@ -491,6 +493,8 @@ def _label(s: _Seen, key: str, by: str) -> str:
     if not key:
         return UNATTRIBUTED if by != "vendor" else "No vendor"
     if by in ("department", "team"):
+        if key == NO_TEAM:
+            return "No team"
         team = s.ctx.org.teams.get(key)
         return team.name if team else key
     if by == "account":
@@ -581,44 +585,85 @@ def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
 
 
 def _next_by(s: _Seen, ids: Sequence[str], f: _Filter, vendor: str | None) -> dict[str, dict[str, int]]:
-    """Next month's default projection for each vendor, team and teammate of a line (`by` -> key -> amount), from the
-    history this viewer sees split as the drill-down's rows are (`_key`, "" for none), with the line's default method.
-    Stored projections are by line, team and teammate, so these are always the defaults. Empty on a private line
-    without its detail."""
+    """Next month's projection for each vendor, team and teammate of a line (`by` -> key -> amount), split as the
+    drill-down's rows are (`_key`, "unattributed" for none). Each line under it projects with its own default method,
+    as the line's projection does. A saved projection (by line, team and teammate, §4.4) replaces the history it
+    covers (`_covered`): it goes to the team or teammate it names, and is shared out over its covered history's
+    defaults for the dimensions it does not name. Empty on a private line without its detail."""
     if not ids or any(i in s.private and i not in s.view.full_detail for i in ids):
         return {}
     today = dates.day(s.ctx.today)
     cur = today.replace(day=1)
     nxt = dates.add_months(cur, 1)
+    month = nxt.isoformat()[:7]
     first = dates.add_months(cur, -PJ.TREND_MONTHS)
     recent_from = today - timedelta(days=PJ.RATE_DAYS - 1)
-    account = s.ctx.accounts[ids[0]]
-    method = PJ.default_method(account.type, account.subtype)
+    days = dates.days(nxt, dates.month_end(nxt))
+    stored: dict[str, list[tuple[str, str, int]]] = {}
+    for r in SB.projections(s.ctx.c, s.ctx.book.id, month, month):
+        account = s.ctx.accounts.get(r["account_id"])
+        if account is None or account.id not in ids or \
+                not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}) or \
+                (f.any and not f.keeps(str(r["team"] or ""), str(r["teammate"] or ""))):
+            continue
+        stored.setdefault(account.id, []).append((str(r["team"] or ""), str(r["teammate"] or ""), int(r["amount"])))
     cells = _cells(s, first, today, ids)
-    if vendor is not None:
-        cells = [x for x in cells if x.vendor == vendor]
     if f.any:
         cells = [x for x in cells if f.keeps(x.team, x.teammate)]
     sup = _suppress(s, cells, True, first, today)
-    out: dict[str, dict[str, int]] = {}
-    for by in ("vendor", "team", "teammate"):
+    shown = [x for x in sup.cells if x.account_id not in sup.hidden]
+
+    def estimates(group: Sequence[VW.Cell], by: str, method: str) -> dict[str, int]:
+        """Each key's default from the cells' history, and each key's posted total where no default comes out."""
         monthly: dict[str, list[int]] = {}
         recent: dict[str, int] = {}
-        for cell in sup.cells:
-            if cell.account_id in sup.hidden:
-                continue
+        for cell in group:
             key = _key(s, cell, by)
             if key is None:
                 continue
             day = dates.day(cell.day)
             amount = (-1 if s.ctx.accounts[cell.account_id].type == "income" else 1) * cell.amount
-            monthly.setdefault(key, [0] * PJ.TREND_MONTHS)
-            recent[key] = recent.get(key, 0) + (amount if day >= recent_from else 0)
+            monthly.setdefault(key or "unattributed", [0] * PJ.TREND_MONTHS)
+            recent[key or "unattributed"] = recent.get(key or "unattributed", 0) + (amount if day >= recent_from else 0)
             if day < cur:
-                monthly[key][(day.year - first.year) * 12 + day.month - first.month] += amount
-        days = dates.days(nxt, dates.month_end(nxt))
-        found = {k or "unattributed": PJ.estimate(method, monthly[k], recent[k], days, 2) for k in monthly}
-        out[by] = {k: v for k, v in found.items() if v is not None}
+                monthly[key or "unattributed"][(day.year - first.year) * 12 + day.month - first.month] += amount
+        return {k: v for k in monthly if (v := PJ.estimate(method, monthly[k], recent[k], days, 2)) is not None}
+
+    def share(amount: int, weights: Mapping[str, int], fallback: str) -> dict[str, int]:
+        """`amount` split over the keys by weight, the remainder of the rounding on the largest; all on `fallback`
+        when nothing weighs."""
+        weights = {k: w for k, w in weights.items() if w > 0}
+        total = sum(weights.values())
+        if not total:
+            return {fallback: amount}
+        parts = {k: amount * w // total for k, w in weights.items()}
+        top = max(weights, key=lambda k: (weights[k], k))
+        parts[top] += amount - sum(parts.values())
+        return parts
+
+    out: dict[str, dict[str, int]] = {"vendor": {}, "team": {}, "teammate": {}}
+
+    def add(by: str, parts: Mapping[str, int]) -> None:
+        for k, v in parts.items():
+            out[by][k] = out[by].get(k, 0) + v
+
+    for i in sorted({x.account_id for x in shown} | set(stored)):
+        account = s.ctx.accounts[i]
+        method = PJ.default_method(account.type, account.subtype)
+        mine = [x for x in shown if x.account_id == i]
+        scopes = [(t, m) for t, m, _ in stored.get(i, [])]
+        free = [x for x in mine if not _covered(scopes, x.team, x.teammate)]
+        for by in out:
+            add(by, estimates([x for x in free if vendor is None or x.vendor == vendor], by, method))
+        for team, teammate, amount in stored.get(i, []):
+            covered = [x for x in mine if _covered([(team, teammate)], x.team, x.teammate)]
+            if vendor is not None:      # a saved projection has no vendor: this vendor's share of it
+                amount = share(amount, estimates(covered, "vendor", method), "unattributed").get(vendor or "unattributed", 0)
+                covered = [x for x in covered if x.vendor == vendor]
+            for by in out:
+                named = teammate if by == "teammate" else team if by == "team" else ""
+                add(by, {named: amount} if named else
+                    share(amount, estimates(covered, by, method), teammate or team or "unattributed"))
     return out
 
 
