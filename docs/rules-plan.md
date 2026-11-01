@@ -158,7 +158,8 @@ Adding a document opens a task for Counsel (a hidden helper, §5) with its own b
    - if the text has a date, the date stays in the sentence ("…every year by Nov 15"). Counsel doesn't suggest a
      routine (Later #13); a person sets one on the Due tab.
 
-   At most about 10 per document. The rest go in a one-line "read, nothing else for us" note.
+   No cap on the count: each one that binds us gets a suggestion. A document with none gets a one-line "read, nothing
+   else for us" note. A resumed run skips what a suggestion for the same version already states.
 3. **Suggest.** Rows go in as `suggested`. A person taps Add (or Add all on screen).
 4. **Re-read** (phase 2). Register each fetched page as a page monitor (`market_watch` path: daily read, hash, diff,
    first read as baseline). A real change files a "changed" suggestion against the rule. A failed or partial read
