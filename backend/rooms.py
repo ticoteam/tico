@@ -179,10 +179,6 @@ def sync_shared_room(c, auth, bot, actor=None, create=False):
         return H.conversation(c, row["id"])
     if not create:
         return None
-    from . import threads
-    home = threads.home(c, "bot:" + bot, create=False)
-    if home is not None:
-        return H.conversation(c, home["id"])
 
     # Old CPO chats were private pairs. Archive them intact; never merge private human
     # context into the new group room.
@@ -199,12 +195,9 @@ def sync_shared_room(c, auth, bot, actor=None, create=False):
                 (humans[0], f"{bot}:legacy:{old['id']}", H.now(), old["id"]))
             H.event(c, H.KEEPER, "conversation.archived_for_shared_room", old["id"], {"bot": bot})
     opener = actor or next((p for p in participants if p.startswith("human:")), H.KEEPER)
-    room = H.open_conversation(c, opener, participants, kind="chat",
+    return H.open_conversation(c, opener, participants, kind="chat",
                                subject=(H.bot(c, bot) or {}).get("display_name", bot) + " shared room",
                                scope=SHARED, room_key=bot, allow_held=H.is_human(opener))
-    # A shared room is its bot's Home (backend/threads.py): read by the bot's Read audience.
-    threads._store_shared_homes(c, bot)
-    return H.conversation(c, room["id"])
 
 
 def chat_room(c, auth, who, bot, subject=None):

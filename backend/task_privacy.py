@@ -386,6 +386,15 @@ def message_readable(c, actor, message, current=False):
     from . import threads
     if not threads.legacy_gate(c, actor, message):
         return False
+    carried = (message.get("refs") or H._json(message.get("refs_json"), {}) or {})
+    if isinstance(carried, dict) and carried.get("carries") and message.get("from_actor") == H.KEEPER:
+        # A carrier (threads._carrier) copies the words of the message it carries: it is read as that message.
+        source = H.message(c, carried["carries"], include_deleted=True)
+        source_refs = (source or {}).get("refs") or {}
+        if (not source or source.get("conversation_id") != message.get("conversation_id")
+                or (isinstance(source_refs, dict) and source_refs.get("carries"))):
+            return False
+        return message_readable(c, actor, source)
     try:
         return (meeting_sources(c).message_readable(actor, message)
                 and readable(c, actor, message_tasks(c, message, current=bool(stored))))
