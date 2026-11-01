@@ -1581,3 +1581,15 @@ def test_a_line_ending_only_edit_to_a_conflicted_file_is_kept(trees, tmp_path):
         W.act(workspace, row, 'remove', os.environ.copy())
     git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
     assert b'\r\n' in (path / 'file').read_bytes()
+
+
+def test_a_staged_mode_change_on_a_path_the_merge_touched_is_kept(trees, tmp_path):
+    """The abort resets the index to HEAD, so a staged executable bit would be lost."""
+    workspace, base, remote, row, client = trees
+    path = _merge_in_progress(trees, tmp_path)
+    git(path, 'update-index', '--chmod=+x', 'mainonly')
+    (path / 'mainonly').chmod(0o755)  # the disk agrees, so only the staged mode is in question
+    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
+        W.act(workspace, row, 'remove', os.environ.copy())
+    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
+    assert 'mode 100755' in git(path, 'diff', '--cached', '--summary')

@@ -1223,9 +1223,10 @@ async fn clear_merge(path: &Path, release: bool, env: &Env) -> R<()> {
     // The index must hold git's own merge result for every path the merge touched, conflicts aside. Any other entry is
     // a resolution, which the abort would discard. Equal blobs prove nothing: a resolution can select either side.
     for name in touched.iter().filter(|name| !unmerged.contains(*name)) {
-        let ours = git(path, env, &["rev-parse", "--verify", "-q", &format!(":{name}")], false).await?.stdout;
-        let expected = git(path, env, &["rev-parse", "--verify", "-q", &format!("{tree}:{name}")], false).await?.stdout;
-        if ours.trim() != expected.trim() {
+        // Mode and blob both: a staged mode change on a path the merge touched would otherwise be reset by the abort.
+        let ours: Vec<String> = git(path, env, &["ls-files", "-s", "--", name], false).await?.stdout.split_whitespace().take(2).map(str::to_string).collect();
+        let expected: Vec<String> = git(path, env, &["ls-tree", &tree, "--", name], false).await?.stdout.split_whitespace().enumerate().filter(|(i, _)| *i != 1).take(2).map(|(_, t)| t.to_string()).collect();
+        if ours != expected {
             return Err(WtErr::msg(UNRESOLVED));
         }
     }
@@ -2178,5 +2179,20 @@ mod tests {
         assert_eq!(err.text(), UNRESOLVED);
         sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
         assert!(std::fs::read(m.path.join("file")).unwrap().windows(2).any(|w| w == b"\r\n"));
+    }
+
+    #[tokio::test]
+    async fn a_staged_mode_change_on_a_path_the_merge_touched_is_kept() {
+        let folder = temp_folder("mode");
+        let mut m = merge_in_progress(&folder.0, &["file"], &[]);
+        sh(&m.path, &["update-index", "--chmod=+x", "mainonly"]);
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(m.path.join("mainonly"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert!(sh(&m.path, &["diff", "--cached", "--summary"]).contains("mode 100755"));
     }
 }

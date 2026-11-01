@@ -978,8 +978,9 @@ def _clear_merge(path, row, env):
     # The index must hold git's own merge result for every path the merge touched, conflicts aside. Any other entry is
     # a resolution, which the abort would discard. Equal blobs prove nothing: a resolution can select either side.
     for name in touched - unmerged:
-        ours = git(path, 'rev-parse', '--verify', '-q', ':' + name, env=env, check=False).stdout.strip()
-        expected = git(path, 'rev-parse', '--verify', '-q', f'{tree}:{name}', env=env, check=False).stdout.strip()
+        # Mode and blob both: a staged mode change on a path the merge touched would otherwise be reset by the abort.
+        ours = git(path, 'ls-files', '-s', '--', name, env=env, check=False).stdout.split()[:2]
+        expected = git(path, 'ls-tree', tree, '--', name, env=env, check=False).stdout.split()[:3:2]
         if ours != expected:
             raise ValueError(unresolved)
     git(path, 'merge', '--abort', env=env)
