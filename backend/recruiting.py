@@ -85,7 +85,13 @@ def _name_words(text):
     """(stem, word) for each word of a job's name, two letters and up: "QA", "HR" and "UX" name the work."""
     text = str(text or "").lower().replace("'", "")
     # What follows the job says how it is held, not what it is: "UX Designer (Contract)", "Rust engineer - remote".
-    text = re.split(r"\s+[-\u2013\u2014|]\s+|,|\|", re.sub(r"\([^)]*\)", " ", text))[0]
+    # A title written backwards names the work after its comma: "Manager, Engineering" is the Engineering Manager.
+    parts = re.split(r"\s+[-\u2013\u2014|]\s+|,|\|", re.sub(r"\([^)]*\)", " ", text))
+    first = re.findall(r"[a-z0-9]+", parts[0])
+    if len(parts) > 1 and first and all(word in ROLE_WORDS or R._stem(word) in RANKS for word in first):
+        text = parts[1] + " " + parts[0]
+    else:
+        text = parts[0]
     for full, short in SHORT:
         text = re.sub(rf"\b{full}\b", lambda found, short=short: f"{short} {found.group(0)}", text)
     text = re.sub(r"\baccounting\b", "bookkeeping", text)      # the books, not a client account ("Account Manager")

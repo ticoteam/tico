@@ -113,7 +113,9 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
                             ("Site Reliability Manager", "incident-scribe"),
                             ("Sales Development Specialist", "sdr-research"), ("Public relations manager", "pr"),
                             ("Senior Software Developer", "pr-reviewer"), ("QA engineer (contract)", "issue-triage"),
-                            ("Security engineer - remote", "security-engineer")):
+                            ("Security engineer - remote", "security-engineer"),
+                            ("Manager, Engineering", "engineering-manager"), ("Engineer, Security", "security-engineer"),
+                            ("Manager, Customer Success", "customer-success")):
         assert recruiting._best_card(cards, title)["template"] == template, title
     # A title ending in a kind of job wants that kind: a designer is not the UX Writer, an assistant not the Account
     # Executive, a machine learning engineer not the Learning and Development Specialist.
