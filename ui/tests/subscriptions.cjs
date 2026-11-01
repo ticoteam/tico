@@ -402,6 +402,23 @@ async function connectPlan(browser) {
   release(); data.connectHeld = null;
   await until(page, () => writes.at(-1).p.endsWith('/cancel'), 'the cancel');
   assert.equal(data.login.state, 'cancelled');
+  // The same for Try again after a failure.
+  await page.locator('#subs-add').click();
+  const retrying = page.locator('dialog.subs-dialog[open]');
+  await retrying.locator('input[name=name]').fill('Retried');
+  await retrying.locator('[data-subs-connect]').click();
+  await retrying.locator('[data-link]').waitFor();
+  Object.assign(data.login, {state: 'failed', url: '', message: 'The sign-in command stopped without signing in'});
+  await retrying.locator('[data-retry]').waitFor();
+  const failedLogin = data.login.id;
+  data.connectHeld = new Promise(done => { release = done; });
+  await retrying.locator('[data-retry]').click();
+  await until(page, () => writes.filter(w => w.body?.name === 'Retried').length === 2, 'the second start');
+  await retrying.locator('[data-close]').first().click();
+  await retrying.waitFor({state: 'detached'});
+  release(); data.connectHeld = null;
+  await until(page, () => writes.at(-1).p.endsWith('/cancel') && data.login.id !== failedLogin, 'the cancel of the retry');
+  assert.equal(data.login.state, 'cancelled');
   assert.deepEqual(errors, []);
   await page.close();
   // No computer can run it right now: the button says so and paste still works.

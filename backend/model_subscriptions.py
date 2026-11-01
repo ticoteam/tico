@@ -799,29 +799,34 @@ def connect(c, settings, who, body):
         raise Problem("name", "Enter a name", 422)
     elif c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] >= MAX_SUBSCRIPTIONS:
         raise Problem("limit", f"The company has {MAX_SUBSCRIPTIONS} subscriptions; remove one first", 422)
+    def answer(login, runner):
+        return {**model_login.view(login), "computer": runner["label"],
+                "not_yours": runner["operator"] != H.actor_id(who.actor)}
+
+    # Asked again (a reloaded page): the sign-in already going picks back up, wherever it runs.
+    model_login.sweep(c)
+    going = c.execute(f"SELECT l.* FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
+                      f"WHERE l.kind='connect' AND l.requested_by=? AND s.kind=? AND s.name=? AND s.subscription_id=? "
+                      f"AND {model_login.ACTIVE_SQL}", (who.actor, kind, name, sid)).fetchone()
+    if going:
+        return answer(going, model_login._runner(c, going["runner_id"]))
     computers = _connect_computers(c, spec["runtime"], who)
     if not computers:
         raise Problem("offline", "Connect needs a computer online, on the latest Tico, with "
                       f"{RUNTIME_LABELS[spec['runtime']]} installed. Paste instead, or start one", 409)
     runner = computers[0]
     login, new = model_login._queue(c, who, runner, spec["runtime"], "", "connect", "connect a subscription")
+    # The job going there is for something else: its result must not land on this one.
     if not new and login["requested_by"] != who.actor:
         raise Problem("state", f"Someone else is connecting a subscription on {runner['label']}; try again in a minute",
                       409)
-    if new:
-        c.execute("INSERT INTO subscription_connects(login_id,kind,name,subscription_id) VALUES(?,?,?,?)",
-                  (login["id"], kind, name, sid))
-        H.event(c, who.actor, "subscription.connect", sid or login["id"], {"kind": kind, "runner": runner["id"]})
-    else:
-        # The job running is theirs. Asking for the same thing again picks it back up; anything else must not take
-        # over its result, which would land on what they asked for second.
-        running = c.execute("SELECT kind,name,subscription_id FROM subscription_connects WHERE login_id=?",
-                            (login["id"],)).fetchone()
-        if not running or tuple(running) != (kind, name, sid):
-            raise Problem("state", f"You are connecting another subscription on {runner['label']}; finish or cancel "
-                          "that first", 409)
-    return {**model_login.view(login), "computer": runner["label"],
-            "not_yours": runner["operator"] != H.actor_id(who.actor)}
+    if not new:
+        raise Problem("state", f"You are connecting another subscription on {runner['label']}; finish or cancel that "
+                      "first", 409)
+    c.execute("INSERT INTO subscription_connects(login_id,kind,name,subscription_id) VALUES(?,?,?,?)",
+              (login["id"], kind, name, sid))
+    H.event(c, who.actor, "subscription.connect", sid or login["id"], {"kind": kind, "runner": runner["id"]})
+    return answer(login, runner)
 
 
 def connected(c, vault, settings, who, login_id, body):

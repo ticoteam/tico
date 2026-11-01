@@ -177,6 +177,19 @@ def test_a_second_connect_does_not_take_over_the_first_ones_result(api):
     assert len(get(api, "model-subscriptions")["subscriptions"]) == 2
 
 
+def test_asking_again_picks_the_sign_in_back_up_even_with_another_computer_free(api):
+    setup(api)
+    company(api)
+    computer(api, label="One")
+    computer(api, label="Two")
+    start = {"kind": "claude_token", "name": "Max"}
+    first = post(api, "model-subscriptions/connect", start)
+    again = post(api, "model-subscriptions/connect", start)
+    assert (again["id"], again["runner_id"]) == (first["id"], first["runner_id"])
+    # Something else goes to the free one.
+    assert post(api, "model-subscriptions/connect", {**start, "name": "Other"})["runner_id"] != first["runner_id"]
+
+
 def test_someone_elses_connect_is_not_taken_over(api):
     setup(api)
     company(api)

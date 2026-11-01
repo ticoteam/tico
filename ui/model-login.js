@@ -205,6 +205,8 @@
           login = first || await connect.start();
           first = null;
           runnerId = login.runner_id; machine = login.computer || machine; elsewhere = Boolean(login.not_yours);
+          // Closed while Try again was on its way: nobody is left to finish the sign-in it started.
+          if (closed) { await post(`${base()}/${encodeURIComponent(login.id)}/cancel`, {}).catch(() => {}); return; }
         } else login = await post(base(), {runtime, ...(profile ? {profile} : {}), ...(toSubscription ? {to: 'subscription'} : switchAccount ? {switch: true} : {})});
       } catch (error) { status.textContent = error.message; actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; return; }
       draw();
