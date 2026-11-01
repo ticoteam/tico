@@ -32487,7 +32487,7 @@
     },
     "/api/v2/threads": {
       "get": {
-        "summary": "The viewer's sidebar: needs attention, threads (recent first) and DMs they may read, one page (`cursor`); with `with=<actor>`, only the threads that teammate is a member of",
+        "summary": "The viewer's sidebar, threads and DMs they may read: needs attention, then unread, then recent, one page (`cursor`); a root's row sums its sub-threads for the viewer; with `with=<actor>`, only the threads that teammate is a member of",
         "operationId": "listThreads",
         "parameters": [
           {

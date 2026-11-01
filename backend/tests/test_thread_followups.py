@@ -214,7 +214,9 @@ def test_a_manager_hears_once_about_a_closed_history_in_their_dm_with_the_bot_an
                          "JOIN conversations cv ON cv.id=m.conversation_id "
                          "WHERE m.kind='notice' AND m.refs_json LIKE '%earlier_messages%'").fetchall()
         assert len(rows) == 1 and rows[0]["conversation_id"] != home, "the Home's readers do not get this notice"
-        assert rows[0]["audience"] == "personal" and rows[0]["from_actor"] == H.KEEPER
+        # Their own chat with the bot, a stored DM or the older personal room already there.
+        assert threads.audience_of(threads.thread_row(c, rows[0]["conversation_id"])) == "personal"
+        assert rows[0]["from_actor"] == H.KEEPER
         assert H._json(rows[0]["refs_json"], {})["earlier_messages"]["thread_id"] == home
         woken = c.execute("SELECT COUNT(*) FROM message_deliveries WHERE message_id IN (SELECT id FROM messages "
                           "WHERE refs_json LIKE '%earlier_messages%') AND recipient LIKE 'bot:%' AND mode<>'none'").fetchone()[0]

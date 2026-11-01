@@ -15,7 +15,7 @@ from fastapi import Query, Request
 from pydantic import BaseModel, Field
 
 from . import org_rule_check, teammate_access, thread_search, threads
-from .store import H, Problem, encode
+from .store import H, Problem
 
 
 class Nothing(BaseModel):
