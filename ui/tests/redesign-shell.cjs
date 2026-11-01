@@ -92,7 +92,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       // The goals tree answers slowly: #/goals/g-1 is left before it arrives, as a person tapping on would.
       const {page, errors, goals} = await open(browser, {goalsDelay: 400});
       await page.locator('#tree li').first().waitFor();
-      assert.deepEqual(await railKeys(page), ['side-update', 'overview', 'welcome', 'strategy', 'growth', 'updates', 'tasks', 'automations',
+      assert.deepEqual(await railKeys(page), ['side-update', 'overview', 'welcome', 'strategy', 'growth', 'operations', 'updates', 'tasks', 'automations',
         'library', 'rd-lib', 'rules', 'rd-rules', 'nav-pins', 'side-section', 'nav-inboxes-section'], tag + ': the order');
       assert.equal(await page.getAttribute('a[data-nav="automations"]', 'href'), '#/automations', tag + ': Automations');
       for (const helper of ['b:mail-sorter', 'b:botops', 'b:librarian'])

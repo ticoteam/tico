@@ -315,7 +315,7 @@ def _price_detail(p: Mapping[str, Any]) -> dict[str, object]:
     """What a Stripe price is for the books: its currency, its amount in minor units (null when the customer names it),
     its type, its recurring interval (month or year; "" for a one-time price) and whether Stripe has it active."""
     raw = p.get("recurring")
-    recurring: Mapping[str, Any] = raw if isinstance(raw, dict) else {}
+    recurring: Mapping[str, Any] = cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
     amount = p.get("unit_amount")
     return {"active": p.get("active") is True, "currency": str(p.get("currency") or "").upper(),
             "amount": amount if isinstance(amount, int) and not isinstance(amount, bool) else None,
