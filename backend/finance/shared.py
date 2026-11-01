@@ -1,4 +1,4 @@
-"""Shared records as Finance's lines use them: a line's place, project and class tags must name an active record, and
+"""Shared records as Finance's lines use them: a line's location, project and class tags must name an active record, and
 an item a line names must be live (backend/records). Checked where lines are written, so a stale id never reaches the
 books. A tag never widens who sees a line: view checks stay with the caller."""
 from collections.abc import Mapping
@@ -9,11 +9,11 @@ from .context import Ctx
 from .core.errors import NOT_FOUND, FinanceError, invalid
 from .store import catalog as SC
 
-RECORD_TABLES = {"place": "places", "project": "projects"}
+RECORD_TABLES = {"location": "locations", "project": "projects"}
 
 
 def check_tags(ctx: Ctx, tags: Mapping[str, str]) -> None:
-    """Refuse a place, project or class tag that names no active record."""
+    """Refuse a location, project or class tag that names no active record."""
     for kind, value in tags.items():
         if kind == "class":
             found = SC.class_active(ctx.c, value)

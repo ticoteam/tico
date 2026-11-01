@@ -105,10 +105,11 @@ def _settle(ctx: Ctx, who: str, po_id: str, force: bool = False) -> list[str]:
     return refused
 
 
-def sync_orders(ctx: Ctx, who: str, po_ids: Sequence[str]) -> None:
-    """After a bill links to, or stops linking to, these orders: their holds and status follow the billing."""
+def sync_orders(ctx: Ctx, who: str, po_ids: Sequence[str], force: bool = False) -> None:
+    """After a bill links to, or stops linking to, these orders: their holds and status follow the billing. `force` is
+    for a bill that stops billing (its order's holds come back as they were approved, past an ask or hold_payment)."""
     for po_id in po_ids:
-        _settle(ctx, who, po_id)
+        _settle(ctx, who, po_id, force=force)
 
 
 def bill_orders(ctx: Ctx, bill_id: str) -> list[str]:
@@ -142,7 +143,9 @@ def link_bill_lines(ctx: Ctx, who: str, vendor_id: str,
             raise invalid("a bill line on a purchase order line takes that line's tags")
         if not may_write(ctx, who, account, tags):
             raise denied("the purchase order's line is outside your view")
-        room = int(row["amount"]) - SP.billed(ctx.c, x.po_line_id) - taken.get(x.po_line_id, 0)
+        # A bill written and not yet sent takes its share of the line as well: two bills cannot each take the same room.
+        room = (int(row["amount"]) - SP.billed(ctx.c, x.po_line_id) - SP.queued_for_line(ctx.c, x.po_line_id)
+                - taken.get(x.po_line_id, 0))
         if x.amount > room:
             raise invalid(f"only {_money(max(room, 0))} is left to bill on that purchase order line")
         taken[x.po_line_id] = taken.get(x.po_line_id, 0) + x.amount
@@ -198,26 +201,24 @@ def po_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def _budget_gate(ctx: Ctx, po: Any, lines: Sequence[Any]) -> K.Gate:
     """What the budgets the order's expense lines meet ask of approving it, the check a card or a bill makes. The lines
-    are checked together: each budget in a line's chain is charged the order's spend under it, so lines that each fit
-    a budget are refused when their sum does not. Decline refuses the order, ask routes it to a finance admin, and warn
-    or hold_payment goes ahead (approval holds the spend; a hold_payment bill waits for its payment)."""
+    are checked together: every line that lands in a budget (through its chain) is summed into that budget, so lines
+    that each fit it are refused when their sum does not. Decline refuses the order, ask routes it to a finance admin,
+    and warn or hold_payment goes ahead (approval holds the spend; a hold_payment bill waits for its payment)."""
     budgets = ctx.budgets()
-    spend: dict[tuple[str, str], int] = {}
+    spend: dict[str, int] = {}
     for line in lines:
         account = ctx.accounts.get(str(line["account_id"] or ""))
         if account is None or account.type != "expense":
             continue
         tags = cast(dict[str, str], SK.loads(line["tags_json"]))
-        teammate = tags.get("teammate", "")
-        target = f"teammate:{teammate}" if teammate else ""
-        leaf = budgeting.leaf(ctx, account.id, tags.get("team", ""), teammate, str(po["vendor_id"]))
+        leaf = budgeting.leaf(ctx, account.id, tags.get("team", ""), tags.get("teammate", ""), str(po["vendor_id"]))
         if leaf is None:
             continue
         for bid in budgeting.chain_of(ctx, leaf.id):
-            spend[(bid, target)] = spend.get((bid, target), 0) + int(line["amount"])
+            spend[bid] = spend.get(bid, 0) + int(line["amount"])
     worst: tuple[int, str, str] = (-1, "", "")
-    for (bid, target), amount in spend.items():
-        d = budgeting.decide(ctx, bid, amount, target)
+    for bid, amount in spend.items():
+        d = budgeting.decide(ctx, bid, amount)
         if d.action in ("ok", "warn"):
             continue
         if B.STRICTNESS[d.action] > worst[0]:

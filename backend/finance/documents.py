@@ -311,15 +311,21 @@ def doc_lines_of(ctx: Ctx, kind: str, doc_id: str) -> list[AP.DocLine]:
 
 def _hold(ctx: Ctx, bill_id: str, vendor_id: str, lines: Sequence[AP.DocLine], who: str) -> list[str]:
     """Each expense line of a draft bill holds budget until it is entered. A budget at its limit holds nothing: the bill
-    is owed whatever the budget says, so it is recorded and the crossing is raised (budgeting.place)."""
+    is owed whatever the budget says, so it is recorded and the crossing is raised (budgeting.place). A line that bills
+    an order line takes over that line's hold rather than being checked again: the order's hold shrinks by the amount
+    as the bill's grows, so the commitment is the same before and after."""
     refused: list[str] = []
     for n, x in enumerate(lines):
         account = ctx.accounts[x.account_id]
         if account.type != "expense":
             continue
+        moved = None
+        if x.po_line_id:
+            row = SP.po_line(ctx.c, x.po_line_id)
+            moved = ("purchase_order", f"{row['po_id']}:{int(row['line_no'])}") if row is not None else None
         d = budgeting.place(ctx, budget_scope={"account_id": account.id, **scope_tags(x.tags), "vendor": vendor_id},
                             amount=x.amount, currency=ctx.book.base_currency, source="bill",
-                            source_id=f"{bill_id}:{n}", expires_at=None, by=who)
+                            source_id=f"{bill_id}:{n}", expires_at=None, by=who, moved_from=moved)
         if not d.allowed:
             refused.append(d.reason)
     return refused
@@ -382,10 +388,11 @@ def bill_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "currency": ctx.book.base_currency, "total": total, "commitment_id": bid, "origin": origin,
             "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
         SAP.replace_lines(ctx.c, "bill", bid, _line_rows(lines, who, ctx.at))
-        PU.sync_orders(ctx, who, orders)
         SAP.attach(ctx.c, ctx.book.id, "bill", bid, files, who, ctx.at)
         SAP.drop_unmatched(ctx.c, ctx.book.id, files)
+        # The holds come first: a line's hold moves to this bill before the order's holds follow its billing.
         refused = _hold(ctx, bid, str(vendor["id"]), lines, who)
+        PU.sync_orders(ctx, who, orders)
         _event(ctx, RECEIVED, bid, {"bill_id": bid, "origin": origin})
         out: Result = {"bill_id": bid, "status": "draft", "total": total}
         if asked:
@@ -574,7 +581,8 @@ def bill_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         SAP.update(ctx.c, "fin_bills", str(bill["id"]), {"status": "void", "pay_on": None, "voided_at": ctx.at,
                                                          "updated_at": ctx.at})
         from . import purchasing as PU
-        PU.sync_orders(ctx, who, PU.bill_orders(ctx, str(bill["id"])))
+        # The orders the bill billed hold what it had taken again: approved holds come back past an ask or hold_payment.
+        PU.sync_orders(ctx, who, PU.bill_orders(ctx, str(bill["id"])), force=True)
         return {"bill_id": str(bill["id"]), "status": "void"}
     return Plan(K.default_gate(ctx.org, who, "bill_void"), f"Void bill {bill['number'] or bill['id']}", apply,
                 facts={"amount": int(bill["total"]), "counterparty": str(bill["contact_name"] or "")})

@@ -41,8 +41,8 @@ from .store import catalog as SC
 from .store import raw_totals as SR
 
 UNATTRIBUTED = "Unattributed"
-PLACED = ("place", "class", "project", "place_class", "place_project", "class_project")
-GROUPS = ("department", "team", "teammate", "bot", "person", "vendor", "account", *PLACED)
+LOCATED = ("location", "class", "project", "location_class", "location_project", "class_project")
+GROUPS = ("department", "team", "teammate", "bot", "person", "vendor", "account", *LOCATED)
 MAX_TOP = 200
 Row = dict[str, object]
 
@@ -89,24 +89,26 @@ def _cells(s: _Seen, a: date, z: date, account_ids: Iterable[str] | None = None,
             account = s.ctx.accounts.get(r["account_id"])
             if account is None or not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}):
                 continue
-            place, klass, project = _placed(str(r["tagset"]))
+            location, klass, project = _located(str(r["tagset"]))
             out.append(VW.Cell(account_id=r["account_id"], day=r["day"], team=r["team"], teammate=r["teammate"],
                                vendor=_vendor(s, vendors, str(r["vendor"])), amount=int(r["amount"]),
-                               place=place, class_id=klass, project=project))
+                               location=location, class_id=klass, project=project))
     return _without_settled(s, vendors, out, tab.settled_lines(s.ctx, s.view, a, z, plain, basis))
 
 
 _Key = tuple[str, str, str, str, str, str, str, str]
 
 
-def _placed(tagset: str) -> tuple[str, str, str]:
-    """A rollup row's place, class and project values, read from its tag set (core/ledger.tagset writes kind=value)."""
+def _located(tagset: str) -> tuple[str, str, str]:
+    """A rollup row's location, class and project values, read from its tag set (core/ledger.tagset writes
+    kind=value)."""
     got = dict(part.split("=", 1) for part in tagset.split("|") if "=" in part)
-    return got.get("place", ""), got.get("class", ""), got.get("project", "")
+    return got.get("location", ""), got.get("class", ""), got.get("project", "")
 
 
 def _cell_key(cell: VW.Cell) -> _Key:
-    return (cell.account_id, cell.day, cell.team, cell.teammate, cell.vendor, cell.place, cell.class_id, cell.project)
+    return (cell.account_id, cell.day, cell.team, cell.teammate, cell.vendor, cell.location, cell.class_id,
+    cell.project)
 
 
 def _without_settled(s: _Seen, vendors: dict[str, str], cells: list[VW.Cell], lines: list[Any]) -> list[VW.Cell]:
@@ -124,7 +126,7 @@ def _without_settled(s: _Seen, vendors: dict[str, str], cells: list[VW.Cell], li
         if account is None or not s.view.sees(account, {"team": team, "teammate": teammate}):
             continue
         key: _Key = (str(r["account_id"]), str(r["entry_date"]), team, teammate,
-                     _vendor(s, vendors, str(r["contact_id"] or "")), mine.get("place", ""),
+                     _vendor(s, vendors, str(r["contact_id"] or "")), mine.get("location", ""),
                      mine.get("class", ""), mine.get("project", ""))
         removed[key] = removed.get(key, 0) + int(r["amount"])
     if not removed:
@@ -138,9 +140,9 @@ def _without_settled(s: _Seen, vendors: dict[str, str], cells: list[VW.Cell], li
         else:
             kept.append(cell)
     for key, amount in removed.items():
-        account_id, day, team, teammate, vendor, place, klass, project = key
+        account_id, day, team, teammate, vendor, location, klass, project = key
         kept.append(VW.Cell(account_id=account_id, day=day, team=team, teammate=teammate, vendor=vendor,
-                            amount=left.get(key, 0) - amount, linked=True, place=place, class_id=klass,
+                            amount=left.get(key, 0) - amount, linked=True, location=location, class_id=klass,
                             project=project))
     return kept
 
@@ -411,11 +413,12 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
 
 def pnl_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = None, end: str | None = None, *,
            basis: str | None = None, top_n: int = 20, at: str | None = None) -> Row:
-    """The P&L over a window split by place, class, project or a pair of them (`by`): income, expense and net per group.
+    """The P&L over a window split by location, class, project or a pair of them (`by`): income, expense and net per
+    group.
     Lines with none of those tags form the Unattributed group. The totals are summed on their own, so the groups adding
     up to them is a check, not a restatement."""
-    if by not in PLACED:
-        raise invalid(f"by is {'|'.join(PLACED)}")
+    if by not in LOCATED:
+        raise invalid(f"by is {'|'.join(LOCATED)}")
     if basis not in (None, "cash", "accrual"):
         raise invalid("basis is cash|accrual")
     s = _open(c, viewer, at)
@@ -432,10 +435,10 @@ def pnl_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = None
             continue
         income = account.type == "income"
         value = -cell.amount if income else cell.amount    # income is posted as credits
-        groups.setdefault(_placed_key(cell, by), [0, 0])[0 if income else 1] += value
+        groups.setdefault(_located_key(cell, by), [0, 0])[0 if income else 1] += value
         totals[0 if income else 1] += value
-    named = _placed_names(s.ctx.c, by)
-    rows: list[Row] = [{"key": k or "unattributed", "label": _placed_label(named, by, k), "income": v[0],
+    named = _located_names(s.ctx.c, by)
+    rows: list[Row] = [{"key": k or "unattributed", "label": _located_label(named, by, k), "income": v[0],
                         "expense": v[1], "net": v[0] - v[1]} for k, v in groups.items()]
     rows.sort(key=lambda r: (-abs(cast(int, r["net"])), str(r["label"])))
     top = max(1, min(int(top_n), MAX_TOP))
@@ -524,23 +527,25 @@ def _side_panel(s: _Seen, spent: Mapping[str, int], tops: list[B.Budget], versio
 
 
 # ------------------------------------------------------------------------------------------------ expenses
-def _placed_key(cell: VW.Cell, by: str) -> str:
-    """The group a cell falls in by place, class, project or a pair: its values joined with | ("x|" when only one is
+def _located_key(cell: VW.Cell, by: str) -> str:
+    """The group a cell falls in by location, class, project or a pair: its values joined with | ("x|" when only one is
     set), "" when it has none of them."""
-    values = [{"place": cell.place, "class": cell.class_id, "project": cell.project}[kind] for kind in by.split("_")]
+    values = [{"location": cell.location, "class": cell.class_id, "project": cell.project}[kind] for kind in
+    by.split("_")]
     return "|".join(values) if any(values) else ""
 
 
-def _placed_names(c: sqlite3.Connection, by: str) -> dict[str, dict[str, str]]:
-    """Each place, class or project's name by id, for the kinds a group names (history keeps names of inactive ones)."""
+def _located_names(c: sqlite3.Connection, by: str) -> dict[str, dict[str, str]]:
+    """Each location, class or project's name by id, for the kinds a group names (history keeps names of inactive
+    ones)."""
     names: dict[str, dict[str, str]] = {}
     for kind in by.split("_"):
-        names[kind] = RR.names(c, "places") if kind == "place" else \
+        names[kind] = RR.names(c, "locations") if kind == "location" else \
             RR.names(c, "projects") if kind == "project" else SC.class_names(c)
     return names
 
 
-def _placed_label(names: Mapping[str, Mapping[str, str]], by: str, key: str) -> str:
+def _located_label(names: Mapping[str, Mapping[str, str]], by: str, key: str) -> str:
     if not key:
         return UNATTRIBUTED
     parts = key.split("|") if "_" in by else [key]
@@ -550,8 +555,8 @@ def _placed_label(names: Mapping[str, Mapping[str, str]], by: str, key: str) -> 
 
 def _key(s: _Seen, cell: VW.Cell, by: str) -> str | None:
     """The group a cell falls in; "" is Unattributed; None leaves it out (a person's line in a by-bot read)."""
-    if by in PLACED:
-        return _placed_key(cell, by)
+    if by in LOCATED:
+        return _located_key(cell, by)
     if by == "department":
         return s.ctx.org.department(cell.team) if cell.team else ""
     if by == "team":
@@ -569,9 +574,9 @@ def _key(s: _Seen, cell: VW.Cell, by: str) -> str | None:
 
 def _labels(s: _Seen, keys: Iterable[str], by: str) -> dict[str, str]:
     """Each group's label; a vendor group's from tab_ap.vendor_labels (a contact's name, never its id)."""
-    if by in PLACED:
-        named = _placed_names(s.ctx.c, by)
-        return {k: _placed_label(named, by, k) for k in keys}
+    if by in LOCATED:
+        named = _located_names(s.ctx.c, by)
+        return {k: _located_label(named, by, k) for k in keys}
     names = tab_ap.vendor_labels(s.ctx, s.view, keys) if by == "vendor" else {}
     return {k: names.get(k, k) if by == "vendor" and k else _label(s, k, by) for k in keys}
 
@@ -625,9 +630,9 @@ def _grouped(s: _Seen, a: date, z: date, by: str, account_id: str | None, team: 
 def expenses(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str | None = None,
              by: str = "department", *, account_id: str | None = None, team: str | None = None,
              teammate: str | None = None, top_n: int = 20, at: str | None = None) -> Row:
-    """Expenses grouped by department, team, teammate, bot, person, vendor, line, place, class, project or a pair of
-    those (place_project and so on). Unattributed (no team or teammate) shows only to viewers who see company-wide
-    expenses; a placed group's Unattributed is the lines with none of those tags."""
+    """Expenses grouped by department, team, teammate, bot, person, vendor, line, location, class, project or a pair of
+    those (location_project and so on). Unattributed (no team or teammate) shows only to viewers who see company-wide
+    expenses; a located group's Unattributed is the lines with none of those tags."""
     s = _open(c, viewer, at)
     a, z = _window(start, end, s.ctx)
     return _grouped(s, a, z, by, account_id, team, teammate, top_n)
@@ -1226,8 +1231,10 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
            period: str = "month", basis: str | None = None, compare: str | None = None, top_n: int = 20,
            by: str | None = None, at: str | None = None) -> Row:
     """One report (§7.1): pnl (accrual or cash), balance_sheet (as of `end`), cash_flow, budget_vs_actual, ap_aging,
-    ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|place|class|project or a pair) or pnl_by
-    (`by` place|class|project or a pair). `compare=prior` adds the window before it. Payloads are capped: `top_n` rows
+    ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|location|class|project or a pair) or
+    pnl_by
+    (`by` location|class|project or a pair). `compare=prior` adds the window before it. Payloads are capped: `top_n`
+    rows
     and one "Other · n"."""
     if kind not in REPORTS:
         raise invalid(f"a report is {'|'.join(REPORTS)}")
@@ -1245,7 +1252,7 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
         if kind == "pnl":
             return _fold_pnl(pnl(c, viewer, p.isoformat(), q.isoformat(), period, basis or ctx.book.basis, at), top)
         if kind == "pnl_by":
-            return pnl_by(c, viewer, by or "place", p.isoformat(), q.isoformat(), basis=basis, top_n=top, at=at)
+            return pnl_by(c, viewer, by or "location", p.isoformat(), q.isoformat(), basis=basis, top_n=top, at=at)
         if kind == "cash_flow":
             return _cash_flow(c, viewer, p, q, period, at)
         if kind == "budget_vs_actual":
@@ -1259,9 +1266,9 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 
 
 # ------------------------------------------------------------------------------------------------ search
-SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "place", "project", "po",
+SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project", "po",
               "estimate")
-RECORD_KINDS = {"item": "items", "place": "places", "project": "projects"}
+RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
 SEARCH_EACH = 10            # results per kind when no kind is named
 
 
@@ -1296,23 +1303,66 @@ def _record_row(kind: str, r: Any) -> Row:
     if kind == "item":
         row["item_kind"] = str(r["kind"])
         row["sku"] = str(r["sku"])
-    elif kind == "place":
-        row["place_kind"] = str(r["kind"])
+    elif kind == "location":
+        row["location_kind"] = str(r["kind"])
     else:
         row["status"] = str(r["status"])
     return row
 
 
+RECORD_TABLE = {"location": "locations", "item": "items", "project": "projects"}
+RECORD_PLURAL = {"location": "locations", "item": "items", "project": "projects"}
+
+
+def _record_out(kind: str, r: Any) -> Row:
+    """A record as the records API shows it. An item's accounts stay out: they are the books', not the catalog's."""
+    out: Row = {"id": str(r["id"]), "name": str(r["name"]), "archived_at": r["archived_at"]}
+    if kind == "location":
+        out.update(kind=str(r["kind"]), parent_id=r["parent_id"], address=json.loads(r["address"] or "{}"))
+    elif kind == "item":
+        out.update(sku=str(r["sku"]), kind=str(r["kind"]), unit=str(r["unit"]), price=r["price"],
+                   currency=str(r["currency"]))
+    else:
+        out.update(customer_id=r["customer_id"], status=str(r["status"]))
+    return out
+
+
+def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archived: str = "hide",
+            cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
+    """Locations, items or projects by name (an item also by sku), past `cursor`. `archived` is hide, only or all.
+    Records carry no amounts, so the same viewers who may search them may list them."""
+    ctx = load(c, at)
+    ctx.view(viewer)
+    parts = tab.decode_cursor(cursor)
+    after = (parts[0], parts[1]) if len(parts) == 2 else None
+    active = {"hide": True, "only": False, "all": None}[archived]
+    most = tab.page_size(limit)
+    rows = RR.search(c, RECORD_TABLE[kind], (q or "").strip()[:100], active=active, after=after, most=most + 1)
+    shown = rows[:most]
+    nxt = tab.encode_cursor([str(shown[-1]["name"]), str(shown[-1]["id"])]) if len(rows) > most else None
+    return {RECORD_PLURAL[kind]: [_record_out(kind, r) for r in shown], "next_cursor": nxt}
+
+
+def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at: str | None = None) -> Row:
+    """One location, item or project, archived or not, by its id or an id it was merged under."""
+    load(c, at).view(viewer)
+    row = RR.get(c, RECORD_TABLE[kind], record_id)
+    if row is None:
+        raise FinanceError(NOT_FOUND, f"no such {kind}")
+    return {kind: _record_out(kind, row)}
+
+
 def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
            filters: Mapping[str, object] | None = None, limit: int = 50, cursor: str | None = None,
            at: str | None = None) -> Row:
-    """Search entries' lines, feed rows, bills, invoices, contacts, rules, cards (§7.1) and items, places and projects
+    """Search entries' lines, feed rows, bills, invoices, contacts, rules, cards (§7.1) and items, locations and
+    projects
     the viewer may see (records carry no amounts). With a `kind` it pages (`next_cursor`); without one it returns the
     first few of each kind it can show. Filters per kind: entry/feed: account_id, money_account_id, status (feed),
     start, end; bill/invoice: status, contact_id, start, end, aging; contact: kind, active; rule: kind (gate|posting);
     card: status, vendor (the cards saved on that vendor, so `vendor` answers "which of my cards works at X");
     po/estimate: status, contact_id, and a search over number, memo and contact name;
-    item/place/project: active (1 keeps only active records)."""
+    item/location/project: active (1 keeps only active records)."""
     if kind is not None and kind not in SEARCH_KINDS:
         raise invalid(f"kind is {'|'.join(SEARCH_KINDS)}")
     if cursor and kind is None:

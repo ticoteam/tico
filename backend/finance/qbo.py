@@ -40,7 +40,7 @@ TRANSACTIONS = {"bill.create": "Bill", "invoice.create": "Invoice", "journal.cre
                 "payment.bill": "BillPayment", "payment.invoice": "Payment", "writeoff.create": "CreditMemo",
                 "credit.apply": "Payment"}
 # A shared record found by its name: the entity it is read from, and the field its name is in.
-NAMED = {"item.create": ("Item", "Name"), "place.create": ("Department", "Name"),
+NAMED = {"item.create": ("Item", "Name"), "location.create": ("Department", "Name"),
          "project.create": ("Customer", "DisplayName")}
 # The provider kind a write's record is kept under when it differs from the QuickBooks entity (a job is a Project).
 SENT_AS = {"project.create": "Project"}
@@ -341,7 +341,8 @@ class QuickBooks:
             row = Q.as_map(raw) or {}
             if not mark or mark in str(row.get("PrivateNote") or ""):
                 return Sent(True, kind=SENT_AS.get(op, entity), external_id=str(row.get("Id") or ""),
-                            revision=str(row.get("SyncToken") or ""))
+                            revision=str(row.get("SyncToken") or ""),
+                            lines=Q.line_ids(row) if op == "bill.create" else ())
         if len(rows) >= 1000:
             return Sent(False, error="UNKNOWN: too many writes that day to tell", final=True, unknown=True)
         return None
@@ -378,7 +379,8 @@ class QuickBooks:
         made: dict[str, Any] = Q.as_map(reply.body.get(kind)) or {}
         if 200 <= reply.status < 300 and made:
             return Sent(True, kind=SENT_AS.get(op, kind), external_id=str(made.get("Id") or ""),
-                        revision=str(made.get("SyncToken") or ""))
+                        revision=str(made.get("SyncToken") or ""),
+                        lines=Q.line_ids(made) if op == "bill.create" else ())
         final = reply.status == 400 and "Fault" in reply.body      # a validation refusal: a retry says the same thing
         if final and op == "invoice.create" and body.get("linked_estimate"):
             # The estimate link is best effort: a refusal sends the invoice again without it, under its own request.
@@ -414,8 +416,8 @@ def _write_of(op: str, body: Mapping[str, Any],
         return "Invoice", "invoice", Q.delete_body(str(body["ext"]), str(body["revision"])), {"operation": "void"}
     if op in ("item.create", "item.update"):
         return "Item", "item", Q.item_write(body, update=op.endswith("update")), {}
-    if op in ("place.create", "place.update"):
-        return "Department", "department", Q.place_write(body, update=op.endswith("update")), {}
+    if op in ("location.create", "location.update"):
+        return "Department", "department", Q.location_write(body, update=op.endswith("update")), {}
     if op == "project.create":
         return "Customer", "customer", Q.job_write(body), {}
     if op == "writeoff.create":

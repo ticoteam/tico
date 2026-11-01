@@ -299,7 +299,7 @@ class Cell:
     vendor: str
     amount: int
     linked: bool = False            # settled private payroll lines were netted out of it (reads._cells); totals say so
-    place: str = ""                 # the place, class and project tag values of its lines ("" when none)
+    location: str = ""                 # the location, class and project tag values of its lines ("" when none)
     class_id: str = ""
     project: str = ""
 

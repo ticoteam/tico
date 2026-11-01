@@ -108,7 +108,7 @@ def test_an_order_and_an_estimate_are_stored_with_their_location_class_and_item(
     _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
     client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
     line = {"account": "Account:12", "amount": 150_000, "description": "work", "item": "Item:40",
-            "place": "Department:20", "class": "30", "project": ""}
+            "location": "Department:20", "class": "30", "project": ""}
     order = client.send("purchaseorder.create", {"party": "Vendor:60", "number": "PO-1", "day": "2026-10-10", "due": "",
                                                  "memo": "", "lines": [{**line, "account": "Account:13"}]},
                         "purchaseorder:one")
@@ -134,16 +134,16 @@ def test_a_connected_book_backfills_from_quickbooks_and_its_pnl_reads_by_locatio
     _mirror(books, cid)
     assert _drain(books, client, cid) == []
     with books.read() as c:
-        assert [str(r[0]) for r in c.execute("SELECT name FROM places")] == ["Denver"]
+        assert [str(r[0]) for r in c.execute("SELECT name FROM locations")] == ["Denver"]
         assert [str(r[0]) for r in c.execute("SELECT name FROM items")] == ["Widget"]
         assert [(str(r[0]), str(r[1])) for r in c.execute(
             "SELECT p.name, k.name FROM projects p JOIN fin_contacts k ON k.id=p.customer_id")] == \
             [("Job 12", "Acme Retail")]
         assert [str(r[0]) for r in c.execute("SELECT name FROM fin_dimensions WHERE kind='class'")] == ["Web"]
-        by_place = FR.pnl_by(c, OWNER, "place", *WINDOW, basis="accrual", top_n=50, at=AT)
+        by_location = FR.pnl_by(c, OWNER, "location", *WINDOW, basis="accrual", top_n=50, at=AT)
         plain = FR.pnl(c, OWNER, *WINDOW, basis="accrual", at=AT)
-        assert by_place["expense"] == sum(plain["expense"]) == 100_000       # QuickBooks says 1000.00 dollars
-        assert {str(r["label"]): int(r["expense"]) for r in by_place["rows"]}["Denver"] == 100_000
+        assert by_location["expense"] == sum(plain["expense"]) == 100_000       # QuickBooks says 1000.00 dollars
+        assert {str(r["label"]): int(r["expense"]) for r in by_location["rows"]}["Denver"] == 100_000
         refused = act(c, OWNER, "po_close", {"po_id": "x"})
         assert refused.status == "denied" and refused.code == NOT_AVAILABLE, refused
     calls = _fake(fake_quickbooks, "GET", "/_fake/calls")["calls"]

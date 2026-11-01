@@ -23,8 +23,8 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "feed_match", "mirror_start", "mirror_stop", "mirror_tags", "mirror_xero_location", "tax_jurisdiction_add",
        "tax_remit",
        "import_raw_totals",
-       # shared records (backend/records): items, places and projects
-       "item_create", "item_update", "place_create", "place_update", "project_create", "project_update",
+       # shared records (backend/records): items, locations and projects
+       "item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
        # purchase orders and estimates (backend/finance/purchasing.py)
        "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
        "estimate_accept", "estimate_decline", "estimate_convert")
@@ -49,8 +49,8 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         "tax_jurisdiction_add", "tax_remit",
         # history imports: a spreadsheet's totals as raw totals (finance/raw_totals.py)
         "import_raw_totals",
-        # shared records (backend/records): items, places and projects
-        "item_create", "item_update", "place_create", "place_update", "project_create", "project_update",
+        # shared records (backend/records): items, locations and projects
+        "item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
         # purchase orders and estimates
         "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
         "estimate_accept", "estimate_decline", "estimate_convert")
@@ -71,7 +71,7 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
          "feed_match": (R.AP, R.AR), "mirror_start": R.BOOK, "mirror_stop": R.BOOK, "mirror_tags": R.BOOK, "mirror_xero_location": R.BOOK,
          "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP, "import_raw_totals": R.BOOK,
-         "item_create": R.BOOK, "item_update": R.BOOK, "place_create": R.BOOK, "place_update": R.BOOK,
+         "item_create": R.BOOK, "item_update": R.BOOK, "location_create": R.BOOK, "location_update": R.BOOK,
          "project_create": R.BOOK, "project_update": R.BOOK,
          "po_create": R.AP, "po_send": R.AP, "po_approve": R.AP, "po_close": R.AP, "po_void": R.AP,
          "estimate_create": R.AR, "estimate_send": R.AR, "estimate_accept": R.AR, "estimate_decline": R.AR,
@@ -216,7 +216,8 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "mirror_stop": (),
     "mirror_tags": (("enabled", "bool", "send tags as provider classes"),
                     ("map?", "obj", "{tag kind: {tag value: provider class id}}")),
-    "mirror_xero_location": (("category_id", "str", "the Xero tracking category whose options are places ('' for none)"),),
+    "mirror_xero_location": (("category_id", "str",
+                              "the Xero tracking category whose options are locations ('' for none)"),),
     "view_defaults_set": (("manager?", "str", ""), ("member?", "str", ""), ("manager_payroll?", "totals|hidden", "")),
     "right_grant": (("teammate", "str", ""), ("right", "str", "finance.book|ap|ar|pay|cards|budgets|rules|admin"),
                     ("expires_at?", "str", "")),
@@ -336,9 +337,10 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                     ("sku?", "str", ""), ("unit?", "str", ""), ("price?", "minor", "a change asks for approval"),
                     ("income_account_id?", "str", ""), ("expense_account_id?", "str", ""),
                     ("asset_account_id?", "str", ""), ("active?", "bool", "")),
-    "place_create": (("name", "str", ""), ("kind?", "location", ""), ("parent_id?", "str", "the place it sits under"),
-                     ("address?", "obj", "up to 10 text fields")),
-    "place_update": (("place_id", "str", ""), ("name?", "str", ""), ("kind?", "location", ""),
+    "location_create": (("name", "str", ""), ("kind?", "location", ""),
+                        ("parent_id?", "str", "the location it sits under"),
+                        ("address?", "obj", "up to 10 text fields")),
+    "location_update": (("location_id", "str", ""), ("name?", "str", ""), ("kind?", "location", ""),
                      ("parent_id?", "str", "empty to clear"), ("address?", "obj", ""), ("active?", "bool", "")),
     "project_create": (("name", "str", ""), ("customer_id?", "str", "a customer contact"),
                        ("status?", "open|closed", "")),
@@ -405,8 +407,8 @@ WORDS: dict[str, str] = {
     "import_raw_totals": "Import a spreadsheet's history as raw totals: one balanced entry per month.",
     "item_create": "Add a product or service that lines and documents name.",
     "item_update": "Rename, re-account, deactivate, or change the price of an item (a price change asks first).",
-    "place_create": "Add a location that lines can be tagged with.",
-    "place_update": "Rename, move, or deactivate a location.",
+    "location_create": "Add a location that lines can be tagged with.",
+    "location_update": "Rename, move, or deactivate a location.",
     "project_create": "Add a project that lines can be tagged with.",
     "project_update": "Rename, re-status, or deactivate a project.",
     "po_create": "Draft a purchase order: its lines are what the vendor will bill.",

@@ -846,11 +846,11 @@ def test_a_categorized_bank_row_is_sent_as_a_bank_transaction_in_its_direction()
         X.bank_body({"date": "2026-10-05", "memo": "", "marker": "", "lines": lines(-1500, other=-1000)})
 
 
-def test_a_journal_or_bank_line_sends_the_place_it_was_for_as_a_tracking_option():
-    place = "TrackingOption:cat-loc/opt-austin"
+def test_a_journal_or_bank_line_sends_the_location_it_was_for_as_a_tracking_option():
+    location = "TrackingOption:cat-loc/opt-austin"
     journal = X.journal_body({"date": "2026-10-05", "memo": "", "marker": "[tico:x]", "lines": [
-        {"account": "Account:acct-1000", "amount": 1500, "description": "", "place": place, "classes": {}},
-        {"account": "Account:acct-6100", "amount": -1500, "description": "", "place": place,
+        {"account": "Account:acct-1000", "amount": 1500, "description": "", "location": location, "classes": {}},
+        {"account": "Account:acct-6100", "amount": -1500, "description": "", "location": location,
          "classes": {"class": "cat-team/opt-field"}}]})
     assert journal["JournalLines"][0]["Tracking"] == [
         {"TrackingCategoryID": "cat-loc", "TrackingOptionID": "opt-austin"}]
@@ -859,12 +859,12 @@ def test_a_journal_or_bank_line_sends_the_place_it_was_for_as_a_tracking_option(
         {"TrackingCategoryID": "cat-loc", "TrackingOptionID": "opt-austin"}]
     bank = X.bank_body({"date": "2026-10-05", "memo": "", "marker": "[tico:x]", "lines": [
         {"account": "Account:acct-1000", "amount": -1500, "role": L.MONEY_ROLE},
-        {"account": "Account:acct-6100", "amount": 1500, "role": "", "description": "tool", "place": place,
+        {"account": "Account:acct-6100", "amount": 1500, "role": "", "description": "tool", "location": location,
          "party": "Contact:contact-1"}]})
     assert bank["LineItems"][0]["Tracking"] == [{"TrackingCategoryID": "cat-loc", "TrackingOptionID": "opt-austin"}]
 
 
-def test_an_archived_tracking_option_comes_in_inactive_and_archiving_or_renaming_it_is_a_new_revision():
+def test_an_archived_tracking_option_comes_in_inactive_and_archiving_or_renaming_it_changes_its_content():
     def category(status: str) -> dict[str, Any]:
         return {"TrackingCategoryID": "cat-1", "Name": "Team", "Status": "ACTIVE",
                 "Options": [{"TrackingOptionID": "opt-1", "Name": "Field", "Status": status},
@@ -873,8 +873,8 @@ def test_an_archived_tracking_option_comes_in_inactive_and_archiving_or_renaming
     live = {r.ext.external_id: r for r in X.tracking_records(category("ACTIVE"), lambda key: "")}
     archived = {r.ext.external_id: r for r in X.tracking_records(category("ARCHIVED"), lambda key: "")}
     assert archived["cat-1/opt-1"].active is False and archived["cat-1/opt-2"].active is True
-    assert archived["cat-1/opt-1"].ext.revision != live["cat-1/opt-1"].ext.revision
-    assert archived["cat-1/opt-2"].ext.revision == live["cat-1/opt-2"].ext.revision
+    assert archived["cat-1/opt-1"].ext.content != live["cat-1/opt-1"].ext.content
+    assert archived["cat-1/opt-2"].ext.content == live["cat-1/opt-2"].ext.content
 
 
 def test_a_payment_keeps_the_kind_its_type_names_even_once_deleted():
@@ -1904,7 +1904,7 @@ def _tracked_chart(xbooks: XeroBooks) -> None:
          "Options": [{"TrackingOptionID": "opt-field", "Name": "Field", "Status": "ACTIVE"}]}]
 
 
-def test_xero_items_and_tracking_options_come_in_and_a_line_takes_its_place_and_class(books):
+def test_xero_items_and_tracking_options_come_in_and_a_line_takes_its_location_and_class(books):
     xbooks = XeroBooks()
     _tracked_chart(xbooks)
     tracked = [{"Name": "Location", "Option": "Austin"}, {"Name": "Team", "Option": "Field"}]
@@ -1920,10 +1920,37 @@ def test_xero_items_and_tracking_options_come_in_and_a_line_takes_its_place_and_
         item = c.execute("SELECT name, sku, price, income_account_id FROM items").fetchone()
         assert item[:3] == ("Consulting", "CONSULT", 15000)
         assert item[3] == _local(c, "Account:acct-4000", "fin_accounts")
-        place = _local(c, "TrackingOption:cat-loc/opt-austin", "places")
+        location = _local(c, "TrackingOption:cat-loc/opt-austin", "locations")
         clazz = _local(c, "TrackingOption:cat-team/opt-field", "fin_dimensions")
         assert {(str(k), str(v)) for k, v in c.execute("SELECT kind, value FROM fin_line_tags")} == {
-            ("place", place), ("class", clazz)}
+            ("location", location), ("class", clazz)}
+
+
+def test_a_renamed_xero_location_option_is_taken_in_as_a_newer_revision_and_an_unchanged_one_keeps_its_revision(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    options = xbooks.rows["TrackingCategories"][0]["Options"]
+    options[0] = {"TrackingOptionID": "opt-austin", "Name": "West", "Status": "ACTIVE"}
+    cid = _connection(books)
+    _mirror(books, cid)
+    with books.transaction() as c:
+        SL.set_setting(c, mirror.XERO_LOCATION_SETTING, "cat-loc", by=OWNER, at=AT)
+    client = xero.Xero(TENANT, lambda force: "token-1", base=BASE, transport=xbooks, sleep=lambda s: None,
+                       location="cat-loc")
+    assert _drain(books, client, cid) == []
+    with books.read() as c:
+        location = _local(c, "TrackingOption:cat-loc/opt-austin", "locations")
+        first = SX.ref(c, cid, "locations", "TrackingOption:cat-loc/opt-austin")["revision"]
+        assert c.execute("SELECT name FROM locations WHERE id=?", (location,)).fetchone()[0] == "West"
+    options[0] = {"TrackingOptionID": "opt-austin", "Name": "East", "Status": "ACTIVE"}
+    assert _drain(books, client, cid, now=LATER) == []
+    with books.read() as c:
+        renamed = SX.ref(c, cid, "locations", "TrackingOption:cat-loc/opt-austin")["revision"]
+        assert c.execute("SELECT name FROM locations WHERE id=?", (location,)).fetchone()[0] == "East"
+    assert renamed > first
+    assert _drain(books, client, cid, now=LATER2, passes=1) == []
+    with books.read() as c:
+        assert SX.ref(c, cid, "locations", "TrackingOption:cat-loc/opt-austin")["revision"] == renamed
 
 
 def test_xero_takes_an_item_by_its_account_codes_and_a_bill_line_by_its_tracking_options():
@@ -1934,7 +1961,7 @@ def test_xero_takes_an_item_by_its_account_codes_and_a_bill_line_by_its_tracking
                     "PurchaseDetails": {"AccountCode": "6100"}}
     bill = X.document_body({"party": "Contact:contact-1", "day": "2026-10-05", "memo": "", "lines": [
         {"account": "Account:acct-6100", "amount": 1500, "description": "seats",
-         "place": "TrackingOption:cat-loc/opt-austin", "class": "cat-team/opt-field"}]}, "Bill")
+         "location": "TrackingOption:cat-loc/opt-austin", "class": "cat-team/opt-field"}]}, "Bill")
     assert bill["Invoices"][0]["LineItems"][0]["Tracking"] == [
         {"TrackingCategoryID": "cat-loc", "TrackingOptionID": "opt-austin"},
         {"TrackingCategoryID": "cat-team", "TrackingOptionID": "opt-field"}]
@@ -1976,6 +2003,6 @@ def test_a_location_or_job_made_here_in_a_xero_book_is_refused_since_xero_keeps_
     _mirror(books, cid)
     assert _drain(books, _client(xbooks), cid) == []
     with books.transaction() as c:
-        assert act(c, OWNER, "place_create", {"name": "Dallas"}).code == "invalid"
+        assert act(c, OWNER, "location_create", {"name": "Dallas"}).code == "invalid"
         customer = _local(c, "Contact:contact-1", "fin_contacts")
         assert act(c, OWNER, "project_create", {"name": "Deck", "customer_id": customer}).code == "invalid"

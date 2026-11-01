@@ -32,6 +32,8 @@ PAYMENTS = ("BillPayment", "Payment")
 # A document line's detail. Its account is its own (a purchase on an account) or its item's: income for a sale, expense
 # for a purchase on an item.
 LINE_DETAILS = ("AccountBasedExpenseLineDetail", "ItemBasedExpenseLineDetail", "SalesItemLineDetail")
+# The lines a bill carries as expenses: each one is a line the bill sent, with its own id.
+EXPENSE_LINES = ("AccountBasedExpenseLineDetail", "ItemBasedExpenseLineDetail")
 # QuickBooks AccountType -> Tico (type, subtype). Subtypes are only the ones the default chart uses.
 TYPES: dict[str, tuple[str, str]] = {
     "Bank": ("asset", "bank"), "Accounts Receivable": ("asset", "receivable"), "Other Current Asset": ("asset", ""),
@@ -51,7 +53,7 @@ _OUT: dict[tuple[str, str], str] = {("asset", "bank"): "Bank", ("income", "other
                                     ("asset", "receivable"): "Accounts Receivable"}
 _DEFAULT_OUT = {"asset": "Other Current Asset", "liability": "Other Current Liability", "equity": "Equity",
                 "income": "Income", "expense": "Expense"}
-Made = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Item | M.Place | M.Dimension | M.Project
+Made = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Item | M.Location | M.Dimension | M.Project
         | M.Ext | M.Refused)
 
 
@@ -149,9 +151,9 @@ def item_record(row: dict[str, Any]) -> M.Item | None:
                   asset=_account_key(row, "AssetAccountRef"), active=_active(row))
 
 
-def place_record(row: dict[str, Any]) -> M.Place:
-    """A QuickBooks Department (a location) as a place."""
-    return M.Place(M.Ext("Department", _id(row.get("Id")), _id(row.get("SyncToken"))), name=_id(row.get("Name")),
+def location_record(row: dict[str, Any]) -> M.Location:
+    """A QuickBooks Department as a location."""
+    return M.Location(M.Ext("Department", _id(row.get("Id")), _id(row.get("SyncToken"))), name=_id(row.get("Name")),
                    active=_active(row))
 
 
@@ -203,13 +205,13 @@ def journal_record(row: dict[str, Any]) -> M.Journal:
     return M.Journal(ext, _id(row.get("TxnDate")), _memo(row), "sync", tuple(lines))
 
 
-def _dims(detail: Mapping[str, Any], place: str = "") -> M.Tags:
-    """A line's place, class and project as provider keys: its own DepartmentRef (a journal line's), else the
-    transaction's (`place`), its ClassRef, and the job it is billed to (its CustomerRef)."""
+def _dims(detail: Mapping[str, Any], location: str = "") -> M.Tags:
+    """A line's location, class and project as provider keys: its own DepartmentRef (a journal line's), else the
+    transaction's (`location`), its ClassRef, and the job it is billed to (its CustomerRef)."""
     out: list[tuple[str, str]] = []
-    where = _ref(detail, "DepartmentRef") or place
+    where = _ref(detail, "DepartmentRef") or location
     if where:
-        out.append(("place", f"Department:{where}"))
+        out.append(("location", f"Department:{where}"))
     cls = _ref(detail, "ClassRef")
     if cls:
         out.append(("class", f"Class:{cls}"))
@@ -219,10 +221,10 @@ def _dims(detail: Mapping[str, Any], place: str = "") -> M.Tags:
     return tuple(out)
 
 
-def _doc_line(raw: object, items: Mapping[str, Mapping[str, str]], place: str = "") -> M.EntryLine | None:
+def _doc_line(raw: object, items: Mapping[str, Mapping[str, str]], location: str = "") -> M.EntryLine | None:
     """One document line as an entry line on its account. None for a line that carries no money (a description, a
     subtotal). Tax and discount lines are not taken in, so a document that has them does not add up to its total and
-    waits as unmapped (the mirror says so). `place` is the transaction's location, which each line inherits."""
+    waits as unmapped (the mirror says so). `location` is the transaction's location, which each line inherits."""
     line = as_map(raw)
     if line is None:
         return None
@@ -242,7 +244,7 @@ def _doc_line(raw: object, items: Mapping[str, Mapping[str, str]], place: str = 
     item = _ref(detail, "ItemRef")
     return M.EntryLine(account=f"Account:{account}" if account else "", amount=units,
                        description=_id(line.get("Description")), key=_id(line.get("Id")),
-                       tags=_dims(detail, place), item=f"Item:{item}" if item else "")
+                       tags=_dims(detail, location), item=f"Item:{item}" if item else "")
 
 
 def document_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[str, str]]) -> M.Document:
@@ -253,8 +255,8 @@ def document_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[
     ext = M.Ext(kind, _id(row.get("Id")), _id(row.get("SyncToken")))
     party_kind = "Vendor" if kind == "Bill" else "Customer"
     party_value = _ref(row, "VendorRef" if kind == "Bill" else "CustomerRef")
-    place = _ref(row, "DepartmentRef")
-    lines = tuple(x for x in (_doc_line(raw, items, place) for raw in as_list(row.get("Line"))) if x is not None)
+    location = _ref(row, "DepartmentRef")
+    lines = tuple(x for x in (_doc_line(raw, items, location) for raw in as_list(row.get("Line"))) if x is not None)
     control = _ref(row, "APAccountRef" if kind == "Bill" else "ARAccountRef")
     return M.Document(ext, party=f"{party_kind}:{party_value}" if party_value else "",
                       number=_id(row.get("DocNumber")), day=_id(row.get("TxnDate")), due=_id(row.get("DueDate")),
@@ -345,7 +347,7 @@ def _one(entity: str, row: dict[str, Any], items: Mapping[str, Mapping[str, str]
     if entity == "Item":
         return item_record(row)
     if entity == "Department":
-        return place_record(row)
+        return location_record(row)
     if entity == "Class":
         return dimension_record(row)
     if entity not in ENTITIES:
@@ -452,8 +454,8 @@ def posted_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[st
     refund, so its entry is reversed. Lines that do not add up to the total are refused, so nothing is posted short."""
     ext = M.Ext(kind, _id(row.get("Id")), _id(row.get("SyncToken")))
     total = _units(row.get("TotalAmt")) or 0
-    place = _ref(row, "DepartmentRef")
-    doc_lines = [x for x in (_doc_line(raw, items, place) for raw in as_list(row.get("Line"))) if x is not None]
+    location = _ref(row, "DepartmentRef")
+    doc_lines = [x for x in (_doc_line(raw, items, location) for raw in as_list(row.get("Line"))) if x is not None]
     doc_sign = -1 if kind in ("SalesReceipt", "VendorCredit") else 1
     if kind == "Transfer":
         amount = _units(row.get("Amount")) or 0
@@ -508,8 +510,8 @@ def journal_body(body: Mapping[str, Any]) -> dict[str, Any]:
         classes = as_map(x.get("classes"))
         if classes:
             detail["ClassRef"] = {"value": str(next(iter(classes.values())))}
-        if x.get("place"):
-            detail["DepartmentRef"] = {"value": _keyed(x["place"], "Department")}
+        if x.get("location"):
+            detail["DepartmentRef"] = {"value": _keyed(x["location"], "Department")}
         lines.append({"DetailType": "JournalEntryLineDetail", "Amount": decimal_text(units),
                       "Description": str(x.get("description") or ""), "JournalEntryLineDetail": detail})
     return {"TxnDate": str(body["date"]), "PrivateNote": _note(body), "Line": lines}
@@ -598,6 +600,18 @@ def _header(body: Mapping[str, Any]) -> dict[str, Any]:
     return {"TxnDate": str(body["day"]), "PrivateNote": _note(body)}
 
 
+def line_ids(made: Mapping[str, Any]) -> tuple[str, ...]:
+    """The provider's id for each expense line of a bill it holds, in the order the lines are stored. Lines that carry
+    no
+    money (a description) have none and are left out, so the ids line up with the lines Tico sent."""
+    out: list[str] = []
+    for raw in as_list(made.get("Line")):
+        line = as_map(raw)
+        if line is not None and _id(line.get("DetailType")) in EXPENSE_LINES:
+            out.append(_id(line.get("Id")))
+    return tuple(out)
+
+
 def _applied(links: Sequence[Sequence[Any]]) -> list[dict[str, Any]]:
     """Each applied amount as a line linked to the bill or invoice it pays."""
     out: list[dict[str, Any]] = []
@@ -624,9 +638,9 @@ def bill_body(body: Mapping[str, Any]) -> dict[str, Any]:
             lines.append({"DetailType": "AccountBasedExpenseLineDetail", "Amount": decimal_text(int(x["amount"])),
                           "Description": description, "AccountBasedExpenseLineDetail": detail})
     out: dict[str, Any] = {**_header(body), "VendorRef": {"value": _party_id(body["party"], "Vendor")}, "Line": lines}
-    place = _single((str(x.get("place") or "") for x in body["lines"]), "location")
-    if place:
-        out["DepartmentRef"] = {"value": _keyed(place, "Department")}
+    location = _single((str(x.get("location") or "") for x in body["lines"]), "location")
+    if location:
+        out["DepartmentRef"] = {"value": _keyed(location, "Department")}
     if body.get("number"):
         out["DocNumber"] = str(body["number"])
     if body.get("due"):
@@ -657,9 +671,9 @@ def invoice_body(body: Mapping[str, Any], income: Mapping[str, str]) -> dict[str
     jobs = _single((str(x.get("project") or "") for x in body["lines"]), "job")
     customer = _keyed(jobs, "Customer") if jobs else _party_id(body["party"], "Customer")
     out: dict[str, Any] = {**_header(body), "CustomerRef": {"value": customer}, "Line": lines}
-    place = _single((str(x.get("place") or "") for x in body["lines"]), "location")
-    if place:
-        out["DepartmentRef"] = {"value": _keyed(place, "Department")}
+    location = _single((str(x.get("location") or "") for x in body["lines"]), "location")
+    if location:
+        out["DepartmentRef"] = {"value": _keyed(location, "Department")}
     if body.get("number"):
         out["DocNumber"] = str(body["number"])
     if body.get("due"):
@@ -735,7 +749,7 @@ def item_write(body: Mapping[str, Any], *, update: bool = False) -> dict[str, An
     return out
 
 
-def place_write(body: Mapping[str, Any], *, update: bool = False) -> dict[str, Any]:
+def location_write(body: Mapping[str, Any], *, update: bool = False) -> dict[str, Any]:
     """A location as a QuickBooks department: its name and whether it is active."""
     out: dict[str, Any] = {"Name": str(body["name"])[:100], "Active": bool(body.get("active", True))}
     return {**out, **_head(body, "Department")} if update else out

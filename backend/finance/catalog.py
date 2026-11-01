@@ -1,4 +1,5 @@
-"""Shared records as Finance writes them (backend/records): items, places and projects. Each planner checks the payload
+"""Shared records as Finance writes them (backend/records): items, locations and projects. Each planner checks the
+payload
 and the asker's right, then writes the record when the action commits. In a mirrored book the write goes to the provider
 first (mirror.queue_record) and the local record changes when the provider confirms it. The gate for an item's price
 change asks a finance admin, since a price changes what every new line posts."""
@@ -19,7 +20,7 @@ from .store import ap as SAP
 from .store import ledger as SL
 
 ITEM_FIELDS = ("name", "sku", "kind", "unit", "price", "income_account_id", "expense_account_id", "asset_account_id")
-PLACE_FIELDS = ("name", "kind", "parent_id", "address")
+LOCATION_FIELDS = ("name", "kind", "parent_id", "address")
 PROJECT_FIELDS = ("name", "customer_id", "status")
 
 
@@ -71,16 +72,16 @@ def _item_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
     return out
 
 
-def _place_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
+def _location_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
     out: dict[str, object] = {}
     if create or "name" in p:
         out["name"] = RC.name(V.text(p, "name", RC.MAX_NAME))
     if create or "kind" in p:
-        out["kind"] = RC.choice(V.opt_text(p, "kind", 40) or "location", RC.PLACE_KINDS, "a place kind")
+        out["kind"] = RC.choice(V.opt_text(p, "kind", 40) or "location", RC.LOCATION_KINDS, "a location kind")
     if create or "parent_id" in p:
         parent = V.opt_text(p, "parent_id", 80) or ""
-        if parent and not RR.is_active(ctx.c, "places", parent):
-            raise FinanceError(NOT_FOUND, "no such place to sit under")
+        if parent and not RR.is_active(ctx.c, "locations", parent):
+            raise FinanceError(NOT_FOUND, "no such location to sit under")
         out["parent_id"] = parent or None
     if create or "address" in p:
         address = V.obj(p.get("address") or {}, "an address")
@@ -167,34 +168,34 @@ def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     return Plan(gate, f"Change item {old['name']}"[:200], apply)
 
 
-def place_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    V.only(p, PLACE_FIELDS)
-    f = _shape(lambda: _place_fields(ctx, p, create=True))
+def location_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    V.only(p, LOCATION_FIELDS)
+    f = _shape(lambda: _location_fields(ctx, p, create=True))
     if _mirrored(ctx):
         mirror.provider_takes_records(ctx, "a location")
-    place_id = SL.new_id()
+    location_id = SL.new_id()
 
     def apply(aid: str) -> Result:
-        return _create(ctx, who, aid, "place.create", "places", place_id, f, "place_id")
-    return Plan(K.default_gate(ctx.org, who, "place_create"), f"Add place {f['name']}"[:200], apply)
+        return _create(ctx, who, aid, "location.create", "locations", location_id, f, "location_id")
+    return Plan(K.default_gate(ctx.org, who, "location_create"), f"Add location {f['name']}"[:200], apply)
 
 
-def place_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    V.only(p, ("place_id", *PLACE_FIELDS, "active"))
-    place_id = V.text(p, "place_id", 80)
-    old = RR.get(ctx.c, "places", place_id)
+def location_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    V.only(p, ("location_id", *LOCATION_FIELDS, "active"))
+    location_id = V.text(p, "location_id", 80)
+    old = RR.get(ctx.c, "locations", location_id)
     if old is None:
-        raise FinanceError(NOT_FOUND, "no such place")
-    if p.get("parent_id") == place_id:
-        raise invalid("a place cannot sit under itself")
-    f = _shape(lambda: _place_fields(ctx, p, create=False))
+        raise FinanceError(NOT_FOUND, "no such location")
+    if p.get("parent_id") == location_id:
+        raise invalid("a location cannot sit under itself")
+    f = _shape(lambda: _location_fields(ctx, p, create=False))
     if _mirrored(ctx):
         mirror.provider_takes_records(ctx, "a location")
-        mirror.record_in_provider(ctx, "places", place_id)
+        mirror.record_in_provider(ctx, "locations", location_id)
 
     def apply(aid: str) -> Result:
-        return _update(ctx, who, aid, "place.update", "places", place_id, f, old, "place_id")
-    return Plan(K.default_gate(ctx.org, who, "place_update"), f"Change place {place_id}"[:200], apply)
+        return _update(ctx, who, aid, "location.update", "locations", location_id, f, old, "location_id")
+    return Plan(K.default_gate(ctx.org, who, "location_update"), f"Change location {location_id}"[:200], apply)
 
 
 def project_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -225,6 +226,6 @@ def project_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 PLANNERS: dict[str, Planner] = {
-    "item_create": item_create, "item_update": item_update, "place_create": place_create,
-    "place_update": place_update, "project_create": project_create, "project_update": project_update,
+    "item_create": item_create, "item_update": item_update, "location_create": location_create,
+    "location_update": location_update, "project_create": project_create, "project_update": project_update,
 }

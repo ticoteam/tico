@@ -149,8 +149,8 @@ KEEP = frozenset((
     "fin_view_defaults", "fin_view_grants", "fin_view_versions",
     "fin_raw_imports", "fin_close_snapshots", "fin_tax_jurisdictions", "fin_tax_seeds",
     "fin_purchase_orders", "fin_po_lines", "fin_estimates", "fin_estimate_lines",
-    # Shared records (backend/records): places, items and projects
-    "items", "places", "projects",
+    # Shared records (backend/records): locations, items and projects
+    "items", "locations", "projects",
     # Growth, brand and go-to-market (backend/growth.py, backend/brand_gtm.py)
     "brand_drafts", "brand_versions", "gtm_drafts", "gtm_versions", "gtm_sources", "growth_channels", "growth_ideas",
     "growth_idea_channels", "growth_cohorts", "growth_settings",

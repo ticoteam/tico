@@ -2,7 +2,7 @@
 error."""
 from collections.abc import Sequence
 
-PLACE_KINDS = ("location",)
+LOCATION_KINDS = ("location",)
 ITEM_KINDS = ("service", "inventory", "non_inventory", "bundle", "category")
 PROJECT_STATUSES = ("open", "closed")
 MAX_NAME = 200

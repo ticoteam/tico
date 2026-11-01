@@ -17,7 +17,7 @@ from . import mirror as M
 from .qbo import as_list, as_map, minor
 
 Record = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Refused | M.Ext | M.Item
-          | M.Place | M.Dimension)
+          | M.Location | M.Dimension)
 Built = list[Record]
 # A Xero key by a name, "" when Xero holds none: a system account by its role ("DEBTORS"), an account by its code
 # ("code:200"), a tracking option by its names ("option:Region/East"), or the location's tracking category ("location").
@@ -139,7 +139,7 @@ def _option(key: object) -> str:
 
 
 def _tags(item: Mapping[str, Any], system: System | None) -> tuple[tuple[str, str], ...]:
-    """A line's tracking options as tags: the location's option is a place, any other option is a class."""
+    """A line's tracking options as tags: the location's option is a location, any other option is a class."""
     if system is None:
         return ()
     out: list[tuple[str, str]] = []
@@ -147,7 +147,7 @@ def _tags(item: Mapping[str, Any], system: System | None) -> tuple[tuple[str, st
         option = as_map(raw) or {}
         key = system(f"option:{option.get('Name') or ''}/{option.get('Option') or ''}")
         if key:
-            out.append(("place" if _option(key).partition("/")[0] == system("location") else "class", key))
+            out.append(("location" if _option(key).partition("/")[0] == system("location") else "class", key))
     return tuple(out)
 
 
@@ -440,14 +440,14 @@ def _code(code: object, system: System) -> str:
 
 
 def tracking_records(j: Mapping[str, Any], system: System) -> list[Record]:
-    """A tracking category's options: the location category's options are places, the other categories' are classes.
-    Each option is keyed by its category and its id, so a place and a class never share a key. An archived option is
+    """A tracking category's options: the location category's options are locations, the other categories' are classes.
+    Each option is keyed by its category and its id, so a location and a class never share a key. An archived option is
     kept as inactive, and its revision follows its name and status, so a rename or an archive is a change the books
     take."""
     category = str(j.get("TrackingCategoryID") or "")
     if not category or _status(j) != "ACTIVE":
         return []
-    as_place = system("location") == category
+    as_location = system("location") == category
     out: list[Record] = []
     for raw in as_list(j.get("Options")):
         option = as_map(raw) or {}
@@ -456,9 +456,11 @@ def tracking_records(j: Mapping[str, Any], system: System) -> list[Record]:
             continue
         name = str(option.get("Name") or "")
         live = str(option.get("Status") or "ACTIVE") == "ACTIVE"
-        revision = hashlib.sha256(f"{name}|{'ACTIVE' if live else 'ARCHIVED'}".encode()).hexdigest()[:16]
-        ext = M.Ext("TrackingOption", f"{category}/{option_id}", revision)
-        out.append(M.Place(ext, name, active=live) if as_place else M.Dimension(ext, name, active=live))
+        # Xero gives an option no revision, so the books make one from this digest when they take the option in.
+        digest = hashlib.sha256(f"{name}|{'ACTIVE' if live else 'ARCHIVED'}".encode()).hexdigest()[:16]
+        when = stamp(option.get("UpdatedDateUTC"))
+        ext = M.Ext("TrackingOption", f"{category}/{option_id}", when, content="" if when else digest)
+        out.append(M.Location(ext, name, active=live) if as_location else M.Dimension(ext, name, active=live))
     return out
 
 
@@ -540,7 +542,7 @@ def journal_body(body: Mapping[str, Any]) -> dict[str, Any]:
         row: dict[str, Any] = {"LineAmount": amount_text(int(line["amount"])),
                                "AccountID": _ref(line.get("account"), "Account"),
                                "Description": str(line.get("description") or "")[:4000]}
-        tracking = _tracking({**(as_map(line.get("classes")) or {}), "place": _option(line.get("place"))})
+        tracking = _tracking({**(as_map(line.get("classes")) or {}), "location": _option(line.get("location"))})
         if tracking:
             row["Tracking"] = tracking
         lines.append(row)
@@ -569,7 +571,7 @@ def bank_body(body: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("a bank transaction's two lines do not mirror each other")
     row: dict[str, Any] = {"AccountID": _ref(item.get("account"), "Account"), "LineAmount": amount_text(abs(amount)),
                            "Description": str(item.get("description") or "")[:4000]}
-    tracking = _tracking({**(as_map(item.get("classes")) or {}), "place": _option(item.get("place"))})
+    tracking = _tracking({**(as_map(item.get("classes")) or {}), "location": _option(item.get("location"))})
     if tracking:
         row["Tracking"] = tracking
     party = str(item.get("party") or "")
@@ -590,7 +592,8 @@ def void_body(ident: str) -> dict[str, Any]:
 
 def document_body(body: Mapping[str, Any], kind: str) -> dict[str, Any]:
     """A bill or an invoice as Xero takes it: an authorised document on its contact, each line on its account at its amount
-    (a quantity of one, so the line amount is the amount), tagged with its place and class when it names them. The lines
+    (a quantity of one, so the line amount is the amount), tagged with its location and class when it names them. The
+    lines
     are sent without tax, as the books hold them."""
     lines: list[dict[str, Any]] = []
     for raw in as_list(body.get("lines")):
@@ -598,7 +601,7 @@ def document_body(body: Mapping[str, Any], kind: str) -> dict[str, Any]:
         row: dict[str, Any] = {"AccountID": _ref(line.get("account"), "Account"),
                                "Description": str(line.get("description") or "")[:4000], "Quantity": 1,
                                "UnitAmount": amount_text(int(line["amount"]))}
-        tracking = _tracking({"place": _option(line.get("place")), "class": _option(line.get("class"))})
+        tracking = _tracking({"location": _option(line.get("location")), "class": _option(line.get("class"))})
         if tracking:
             row["Tracking"] = tracking
         lines.append(row)

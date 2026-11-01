@@ -2,6 +2,7 @@
 lines bill against an order line, and the one-time link from an estimate to its invoice. Callers check rights, views
 and states; this module writes rows and reads sums. A stored status is what was done to a document. The status a
 reader sees can be derived: an approved order billed in part is partial, and an estimate with an invoice is invoiced."""
+import json
 import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -81,6 +82,23 @@ def billed(c: sqlite3.Connection, po_line_id: str) -> int:
     row = c.execute("SELECT COALESCE(SUM(bl.amount), 0) FROM fin_bill_lines bl JOIN fin_bills b ON b.id=bl.bill_id "
                     "WHERE bl.po_line_id=? AND b.status!='void'", (po_line_id,)).fetchone()
     return int(row[0])
+
+
+def line_room(c: sqlite3.Connection, po_line_id: str) -> int:
+    """What an order line has left to bill: its amount less what its bills bill, or none when it is not there."""
+    row = c.execute("SELECT amount FROM fin_po_lines WHERE id=?", (po_line_id,)).fetchone()
+    return 0 if row is None else int(row[0]) - billed(c, po_line_id)
+
+
+def queued_for_line(c: sqlite3.Connection, po_line_id: str) -> int:
+    """What the bill writes still waiting to be sent bill on an order line, from their payloads."""
+    total = 0
+    for row in c.execute("SELECT payload_json FROM fin_outbox WHERE op='bill.create' AND status='pending' AND "
+                         "instr(payload_json, ?) > 0", (po_line_id,)):
+        for line in json.loads(str(row[0])).get("lines", []):
+            if line.get("po_line_id") == po_line_id:
+                total += int(line["amount"])
+    return total
 
 
 def billed_total(c: sqlite3.Connection, po_id: str) -> int:

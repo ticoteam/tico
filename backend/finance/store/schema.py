@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS fin_dimensions (
 
 CREATE TABLE IF NOT EXISTS fin_line_tags (
   line_id TEXT NOT NULL REFERENCES fin_lines(id),
-  kind TEXT NOT NULL CHECK (kind IN ('team','teammate','budget','project','custom','place','class')), value TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('team','teammate','budget','project','custom','location','class')), value TEXT NOT
+  NULL,
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY (line_id, kind));
 
 CREATE TABLE IF NOT EXISTS fin_rollups (
@@ -765,14 +766,15 @@ def purchasing(c: sqlite3.Connection) -> None:
 
 
 def catalog(c: sqlite3.Connection, at: str) -> None:
-    """Cloud migration 76: the shared records (backend/records) and the place, class and item tags Finance's lines take.
+    """Cloud migration 76: the shared records (backend/records) and the location, class and item tags Finance's lines
+    take.
     SQLite cannot widen a CHECK in place, so fin_dimensions and fin_line_tags are rebuilt keeping their rows, and each
     project dimension moves to projects under its value. A project tag holds the project's id, which is the legacy
     value, so no line's tags change and a closed month keeps its lines as they were. Idempotent."""
     from ...records import store as RS
     RS.create(c)
     _widen(c, "fin_dimensions", "'class'")
-    _widen(c, "fin_line_tags", "'place'")
+    _widen(c, "fin_line_tags", "'location'")
     create(c)
     _move_projects(c, at)
 

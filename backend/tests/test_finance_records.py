@@ -1,10 +1,10 @@
 """Shared records (backend/records) as Finance uses them: migration 76 keeps every project tag and moves the project
-dimension to a record, a bill line's item supplies its account and an inactive item is refused, a line's place or
+dimension to a record, a bill line's item supplies its account and an inactive item is refused, a line's location or
 project tag must name an active record, and a price change asks before it takes effect."""
 from backend.finance.store import schema as FS
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
-# The line tags and dimensions tables as migration 75 left them: kinds without place, class, or item.
+# The line tags and dimensions tables as migration 75 left them: kinds without location, class, or item.
 OLD_LINE_TAGS = """CREATE TABLE fin_line_tags (
   line_id TEXT NOT NULL REFERENCES fin_lines(id),
   kind TEXT NOT NULL CHECK (kind IN ('team','teammate','budget','project','custom')), value TEXT NOT NULL,
@@ -51,7 +51,7 @@ def test_a_legacy_project_tag_keeps_its_value_and_the_project_dimension_becomes_
         assert c.execute("SELECT COUNT(*) FROM fin_dimensions WHERE kind='project'").fetchone()[0] == 0
         assert sorted(str(r[0]) for r in c.execute("SELECT value FROM fin_line_tags WHERE kind='project'")) == \
             ["Bldg 7", "site"]
-        assert "'place'" in str(c.execute("SELECT sql FROM sqlite_master WHERE name='fin_line_tags'").fetchone()[0])
+        assert "'location'" in str(c.execute("SELECT sql FROM sqlite_master WHERE name='fin_line_tags'").fetchone()[0])
         assert c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_line_tags_value'").fetchone() is not None
         before = _projects(c)
         FS.catalog(c, AT)                                  # a second run changes nothing
@@ -77,22 +77,22 @@ def test_a_bill_line_naming_an_item_takes_its_expense_account_and_an_inactive_it
         assert refused.code == "invalid"
 
 
-def test_a_line_tag_must_name_an_active_place_or_project(books):
+def test_a_line_tag_must_name_an_active_location_or_project(books):
     with books.transaction() as c:
-        place = act(c, OWNER, "place_create", {"name": "Main St"})
-        assert place.status == "committed", place.reason
-        place_id = str(place.result["place_id"])
+        location = act(c, OWNER, "location_create", {"name": "Main St"})
+        assert location.status == "committed", location.reason
+        location_id = str(location.result["location_id"])
 
         def journal(tags: dict[str, str]):
             return act(c, OWNER, "journal", {"date": "2026-10-10", "memo": "Tagged", "lines": [
                 {"account_id": account(c, "5100"), "amount": 700, "tags": tags},
                 {"account_id": account(c, "1000"), "amount": -700}]})
-        assert journal({"place": place_id}).status == "committed"
-        assert journal({"place": "missing"}).code == "invalid"
+        assert journal({"location": location_id}).status == "committed"
+        assert journal({"location": "missing"}).code == "invalid"
         assert journal({"project": "nope"}).code == "invalid"
-        assert act(c, OWNER, "place_update", {"place_id": place_id, "active": False}).status == "committed"
-        assert journal({"place": place_id}).code == "invalid"
-        assert [str(r[0]) for r in c.execute("SELECT value FROM fin_line_tags WHERE kind='place'")] == [place_id]
+        assert act(c, OWNER, "location_update", {"location_id": location_id, "active": False}).status == "committed"
+        assert journal({"location": location_id}).code == "invalid"
+        assert [str(r[0]) for r in c.execute("SELECT value FROM fin_line_tags WHERE kind='location'")] == [location_id]
 
 
 def test_a_price_change_asks_a_finance_admin_unless_the_owner_makes_it(books):

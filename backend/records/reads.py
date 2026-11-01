@@ -1,22 +1,22 @@
-"""Reads of the places, items and projects tables on the caller's connection. Rows only: who may see them is the
+"""Reads of the locations, items and projects tables on the caller's connection. Rows only: who may see them is the
 caller's question."""
 import sqlite3
 from typing import Any
 
-from .store import ROW_TABLES
+from .store import ROW_TABLES, resolve
 
-SEARCH_COLUMNS = {"places": ("name",), "items": ("name", "sku"), "projects": ("name",)}
+SEARCH_COLUMNS = {"locations": ("name",), "items": ("name", "sku"), "projects": ("name",)}
 
 
 def get(c: sqlite3.Connection, table: str, row_id: str) -> Any:
     assert table in ROW_TABLES
-    return c.execute(f"SELECT * FROM {table} WHERE id=?", (row_id,)).fetchone()
+    return c.execute(f"SELECT * FROM {table} WHERE id=?", (resolve(c, table, row_id),)).fetchone()
 
 
 def is_active(c: sqlite3.Connection, table: str, row_id: str) -> bool:
     """A row that exists and is not archived."""
     assert table in ROW_TABLES
-    row = c.execute(f"SELECT archived_at FROM {table} WHERE id=?", (row_id,)).fetchone()
+    row = c.execute(f"SELECT archived_at FROM {table} WHERE id=?", (resolve(c, table, row_id),)).fetchone()
     return row is not None and row[0] is None
 
 

@@ -38,13 +38,16 @@ BOOK_ENTITIES = {  # what a provider's backfill reads, in the order the books ta
 @dataclass(frozen=True)
 class Ext:
     """A provider record's identity: its entity kind, its id within that kind, and its revision (a counter the provider
-    bumps on each change). `reference` is the write reference the provider holds on the record, when it holds one."""
+    bumps on each change). A provider that gives no revision gives a `content` digest instead, and the books make the
+    revision from it (`content_revision`). `reference` is the write reference the provider holds on the record, when it
+    holds one."""
     kind: str
     external_id: str
     revision: str
     deleted: bool = False
     reference: str = ""
     currency: str = ""      # the record's currency code ("" when the provider names none)
+    content: str = ""       # a digest of the record's content, for a record whose revision the books make
 
     @property
     def key(self) -> str:
@@ -87,8 +90,8 @@ class Item:
 
 
 @dataclass(frozen=True)
-class Place:
-    """A provider location (a department): what a line is tagged with for the place it was for."""
+class Location:
+    """A provider location (a department): what a line is tagged with for the location it was for."""
     ext: Ext
     name: str
     active: bool = True
@@ -112,7 +115,7 @@ class Project:
     active: bool = True
 
 
-Tags = tuple[tuple[str, str], ...]     # a provider line's tags: (kind, provider key), kind place | class | project
+Tags = tuple[tuple[str, str], ...]     # a provider line's tags: (kind, provider key), kind location | class | project
 
 
 @dataclass(frozen=True)
@@ -123,7 +126,7 @@ class EntryLine:
     description: str = ""
     rounding: bool = False  # the provider's rounding on a document: the one line that may be negative
     key: str = ""       # the provider's id for the line: it stays the same when the line's amount changes
-    tags: Tags = ()     # the line's place, class and project (provider keys), a transaction's header ones included
+    tags: Tags = ()     # the line's location, class and project (provider keys), a transaction's header ones included
     item: str = ""      # the provider's key for the product or service the line sells or buys ("Item:5"), "" for none
 
 
@@ -194,6 +197,14 @@ def revision_order(a: str, b: str) -> int:
     if a.isdigit() and b.isdigit():
         return (int(a) > int(b)) - (int(a) < int(b))
     return (a > b) - (a < b)
+
+
+def content_revision(stored: str, at: str, digest: str) -> str:
+    """The revision a record takes when the provider gives it none: the time the books first see its content, so a
+    change
+    sorts after the revision it replaces. The stored revision stays while the content is the same, so an unchanged
+    record is not a new revision on every read."""
+    return stored if stored.endswith(f"-{digest}") else f"{at}-{digest}"
 
 
 def decide(have: tuple[str, str] | None, ext: Ext) -> str:
@@ -286,7 +297,7 @@ def class_refs(tags: Mapping[str, str], mapping: Mapping[str, Mapping[str, str]]
 
 
 # ------------------------------------------------------------------------------------------------ parked records
-Record = ChartAccount | Party | Journal | Document | Settlement | Item | Place | Dimension | Project | Ext | Refused
+Record = ChartAccount | Party | Journal | Document | Settlement | Item | Location | Dimension | Project | Ext | Refused
 
 
 def encode(r: Record) -> dict[str, Any]:
@@ -296,7 +307,7 @@ def encode(r: Record) -> dict[str, Any]:
 
 def _ext(d: Mapping[str, Any]) -> Ext:
     return Ext(str(d["kind"]), str(d["external_id"]), str(d["revision"]), bool(d.get("deleted", False)),
-               str(d.get("reference", "")), str(d.get("currency", "")))
+               str(d.get("reference", "")), str(d.get("currency", "")), str(d.get("content", "")))
 
 
 def _lines(raw: Any) -> tuple[EntryLine, ...]:
@@ -340,8 +351,8 @@ def decode(d: Mapping[str, Any]) -> Record:
         return Item(ext, str(d["name"]), str(d.get("sku", "")), str(d.get("kind", "service")),
                     None if price is None else int(price), str(d.get("income", "")), str(d.get("expense", "")),
                     str(d.get("asset", "")), bool(d.get("active", True)))
-    if kind == "Place":
-        return Place(ext, str(d["name"]), bool(d.get("active", True)))
+    if kind == "Location":
+        return Location(ext, str(d["name"]), bool(d.get("active", True)))
     if kind == "Dimension":
         return Dimension(ext, str(d["name"]), bool(d.get("active", True)))
     if kind == "Project":

@@ -485,9 +485,10 @@ def would_place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: i
 
 def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, currency: str, source: str,
           source_id: str, expires_at: str | None, target: str = "", by: str = SYSTEM,
-          force: bool = False) -> HoldDecision:
+          force: bool = False, moved_from: tuple[str, str] | None = None) -> HoldDecision:
     """A hold for a spend. `force` holds it past an ask or hold_payment limit, for a spend someone approved; decline
-    still refuses."""
+    still refuses. `moved_from` names a hold the spend takes over part of (an order line a bill bills): that hold
+    shrinks by the amount and the new hold takes it in the same step, without a fit check."""
     money.minor(amount)
     if amount <= 0:
         raise invalid("a hold is for a positive amount")
@@ -502,10 +503,14 @@ def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, cu
     if source_id:
         prior = SB.hold_for_source(ctx.c, source, source_id)
         if prior is not None:
-            return _again(ctx, prior, amount, target, by)
+            return _again(ctx, prior, amount, target, by, force)
     b = _scope(ctx, budget_scope)
     if b is None:
         return HoldDecision(allowed=True, action="ok", reason="no budget covers this spend")
+    if moved_from is not None:
+        moved = _move(ctx, b, moved_from, amount, source, source_id, expires_at, by)
+        if moved is not None:
+            return moved
     verdict = decide(ctx, b.id, amount, target)
     if not verdict.allowed and not (force and verdict.action in ("ask", "hold_payment")):
         crossings(ctx, [verdict.limit_budget], by)
@@ -520,10 +525,33 @@ def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, cu
                         warn_budget_ids=verdict.warn_budgets, remaining=left)
 
 
-def _again(ctx: Ctx, prior: Mapping[str, object], amount: int, target: str, by: str) -> HoldDecision:
+def _move(ctx: Ctx, b: B.Budget, moved_from: tuple[str, str], amount: int, source: str, source_id: str,
+          expires_at: str | None, by: str) -> HoldDecision | None:
+    """A spend that takes over `amount` of another hold on the same budget: that hold shrinks (or is released when
+    it empties) and the new hold takes the amount, in one step. None when the hold is not there, is on another budget,
+    or is smaller than the amount, so the spend is fit-checked like any other."""
+    src = SB.hold_for_source(ctx.c, *moved_from)
+    if src is None or str(src["budget_id"]) != b.id or int(src["amount"]) < amount:
+        return None
+    left = int(src["amount"]) - amount
+    if left:
+        SB.resize_hold(ctx.c, str(src["id"]), left)
+    else:
+        SB.release(ctx.c, str(src["id"]), ctx.at)
+    hid = SB.insert_hold(ctx.c, budget_id=b.id, amount=amount, currency=ctx.book.base_currency, source=source,
+                         source_id=source_id, target=str(src["target"] or ""), held_on=ctx.today,
+                         expires_at=expires_at, by=by, at=ctx.at)
+    crossings(ctx, chain_of(ctx, b.id), by)
+    return HoldDecision(allowed=True, action="ok", hold_id=hid, budget_id=b.id,
+                        remaining=state(ctx, b.id, dates.day(ctx.today), "", chain_of(ctx, b.id)).remaining,
+                        reason=f"moved {amount} from {moved_from[0]} {moved_from[1]}")
+
+
+def _again(ctx: Ctx, prior: Mapping[str, object], amount: int, target: str, by: str,
+           force: bool = False) -> HoldDecision:
     """The same (source, source_id) asked again. The same amount returns the live hold; a smaller one shrinks it; a
-    larger one grows it only if the increase passes a fresh budget check, else the hold stays as it was and the
-    decision says so."""
+    larger one grows it only if the increase passes a fresh budget check (or is forced past an ask or hold_payment
+    limit, as a new hold is), else the hold stays as it was and the decision says so."""
     hid, bid, was = str(prior["id"]), str(prior["budget_id"]), int(str(prior["amount"]))
     target = target or str(prior["target"] or "")
     path = chain_of(ctx, bid)
@@ -531,7 +559,7 @@ def _again(ctx: Ctx, prior: Mapping[str, object], amount: int, target: str, by: 
         return HoldDecision(allowed=True, action="ok", hold_id=hid, budget_id=bid, reason="already held")
     if amount > was:
         verdict = decide(ctx, bid, amount - was, target)
-        if not verdict.allowed:
+        if not verdict.allowed and not (force and verdict.action in ("ask", "hold_payment")):
             crossings(ctx, [verdict.limit_budget], by)
             limit = ctx.budgets()[verdict.limit_budget]
             return HoldDecision(allowed=False, action=verdict.action, hold_id=hid, budget_id=bid,

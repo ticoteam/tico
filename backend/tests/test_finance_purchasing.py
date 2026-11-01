@@ -472,6 +472,37 @@ def test_orders_page_by_cursor_without_skipping_or_repeating(books):
         assert sorted(ids) == sorted(pos) and second["next_cursor"] is None
 
 
+def test_estimates_page_by_cursor_without_skipping_or_repeating(books):
+    with books.transaction() as c:
+        customer = str(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind":
+        "customer"}).result["contact_id"])
+        made = []
+        for n in range(3):
+            done = act(c, OWNER, "estimate_create", {"customer_id": customer, "estimate_date": "2026-10-10", "lines": [
+                {"account_id": account(c, "4000"), "amount": 1_000 + n, "description": "Design"}]})
+            assert done.status == "committed", done.reason
+            made.append(str(done.result["estimate_id"]))
+        first = FR.estimates(c, OWNER, limit=2)
+        assert len(first["estimates"]) == 2 and first["next_cursor"]
+        second = FR.estimates(c, OWNER, limit=2, cursor=first["next_cursor"])
+        ids = [e["id"] for e in first["estimates"]] + [e["id"] for e in second["estimates"]]
+        assert sorted(ids) == sorted(made) and second["next_cursor"] is None
+
+
+def test_estimate_search_matches_the_memo_and_the_customer_name(books):
+    with books.transaction() as c:
+        acme = str(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}).result["contact_id"])
+        beta = str(act(c, OWNER, "contact_create", {"name": "Beta Client", "kind": "customer"}).result["contact_id"])
+        kitchen = str(act(c, OWNER, "estimate_create", {"customer_id": acme, "estimate_date": "2026-10-10",
+                                                        "memo": "Kitchen remodel", "lines": [
+            {"account_id": account(c, "4000"), "amount": 90_000, "description": "Design"}]}).result["estimate_id"])
+        deck = str(act(c, OWNER, "estimate_create", {"customer_id": beta, "estimate_date": "2026-10-10",
+                                                     "memo": "Deck", "lines": [
+            {"account_id": account(c, "4000"), "amount": 40_000, "description": "Build"}]}).result["estimate_id"])
+        assert [r["id"] for r in FR.search(c, OWNER, kind="estimate", q="kitchen")["results"]] == [kitchen]
+        assert [r["id"] for r in FR.search(c, OWNER, kind="estimate", q="beta")["results"]] == [deck]
+
+
 def test_order_search_matches_the_memo_and_not_only_the_number(books):
     with books.transaction() as c:
         vendor = _vendor(c)
@@ -481,3 +512,40 @@ def test_order_search_matches_the_memo_and_not_only_the_number(books):
         act(c, OWNER, "po_create", {"vendor_id": vendor, "po_date": "2026-10-10", "memo": "Seats",
                                     "lines": [_line(c, 6_000)]})
         assert [r["id"] for r in FR.search(c, OWNER, kind="po", q="lumber")["results"]] == [lumber]
+
+
+def test_order_lines_that_each_fit_a_budget_are_refused_together_whatever_their_teammates(books):
+    with books.transaction() as c:
+        _software(c, amount=50_000)
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 40_000, tags={"teammate": "ana"}),
+                                _line(c, 40_000, tags={"teammate": "ben"})], approve=False)
+        assert act(c, OWNER, "po_send", {"po_id": po}).status == "committed"
+        refused = act(c, OWNER, "po_approve", {"po_id": po})
+        assert refused.status == "denied" and "Software" in str(refused.reason), refused
+        assert _status(c, po) == ("sent", "") and _state(c) == (0, 0, 50_000)
+
+
+def test_a_bill_on_an_order_line_takes_over_that_lines_hold_in_one_step(books):
+    with books.transaction() as c:
+        _budget_at(c, 50_000, "hold_payment")
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 40_000), _line(c, 40_000)])
+        assert _state(c) == (0, 80_000, -30_000)
+        assert _bill(c, vendor, [{"po_line_id": _po_lines(c, po)[0], "amount": 10_000}]).status == "committed"
+        # The order's 30,000 and the bill's 10,000 are the same 40,000 the first line held: nothing is checked again.
+        assert _state(c) == (0, 80_000, -30_000)
+        assert [a for _, a in _holds(c, po)] == [30_000, 40_000]
+        assert c.execute("SELECT COUNT(*) FROM fin_holds WHERE source='bill' AND status='held' AND amount=10000"
+                         ).fetchone()[0] == 1
+
+
+def test_a_bill_line_on_an_order_line_with_other_tags_is_refused_and_one_with_none_is_not(books):
+    with books.transaction() as c:
+        _software(c)
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 40_000, tags={"team": "eng"})])
+        line = _po_lines(c, po)[0]
+        other = _bill(c, vendor, [{"po_line_id": line, "amount": 10_000, "tags": {"team": "ops"}}])
+        assert other.code == "invalid" and "tags" in str(other.reason), other
+        assert _bill(c, vendor, [{"po_line_id": line, "amount": 10_000}]).status == "committed"

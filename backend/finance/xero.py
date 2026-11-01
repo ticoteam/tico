@@ -259,7 +259,7 @@ class Xero:
         self.transport = transport or _urllib
         self.sleep = sleep
         self.hold = 0.0                   # seconds the books wait before the next pass: the Retry-After that stopped this one
-        self._location = location         # the tracking category whose options are places ("" for none)
+        self._location = location         # the tracking category whose options are locations ("" for none)
         self._roles: dict[str, str] | None = None
         self._codes: dict[str, str] = {}  # an account's key to its code, for the items that name it
         self._contact = ""
@@ -390,7 +390,9 @@ class Xero:
             if entity not in since:
                 continue
             if entity in UNPAGED:
-                got = self._read(entity, 1, format_datetime(M.parse(since[entity]), usegmt=True))  # an HTTP date
+                # A tracking category has no change time of its own (its options have none), so it is read whole.
+                ims = "" if entity == "tracking" else format_datetime(M.parse(since[entity]), usegmt=True)
+                got = self._read(entity, 1, ims)  # an HTTP date
                 if not got.ok:
                     return got
                 out += got.records
