@@ -12,7 +12,7 @@ from .core import budgets as B
 from .core import dates, money
 from .core import validate as V
 from .core import view as VW
-from .core.errors import FinanceError, NOT_FOUND, invalid
+from .core.errors import CONFLICT, FinanceError, NOT_FOUND, invalid
 from .core.ledger import descendants, vendor_text
 from .core.org import SYSTEM
 from .store import access as SA
@@ -570,6 +570,55 @@ def _again(ctx: Ctx, prior: Mapping[str, object], amount: int, target: str, by: 
     return HoldDecision(allowed=True, action="ok", hold_id=hid, budget_id=bid,
                         remaining=state(ctx, bid, dates.day(ctx.today), target, path).remaining,
                         reason=f"resized the hold from {was} to {amount}")
+
+
+def held_amount(ctx: Ctx, source: str, source_id: str) -> int:
+    """What the hold for a source holds now: 0 when it holds nothing."""
+    row = SB.hold_for_source(ctx.c, source, source_id)
+    return 0 if row is None else int(row["amount"])
+
+
+def transfer(ctx: Ctx, *, amount: int, currency: str, source: str, source_id: str, expires_at: str | None,
+             by: str = SYSTEM, budget_scope: str | Mapping[str, object] | None = None,
+             moved_from: tuple[str, str] | None = None) -> None:
+    """An amount of commitment going back to the hold it was taken from: a bill voided or billed for less gives its
+    order line its room back. With `moved_from`, the amount comes off that hold (it is released when it empties) and
+    goes onto the hold for `source` and `source_id`, on the same budget. Without it, the amount goes onto that hold
+    with nothing taken from another, since the spend it stood for has been reversed in the books. Neither is
+    fit-checked: the room was the commitment's own already, and a refusal on the way back could leave it with
+    no hold."""
+    money.minor(amount)
+    if amount <= 0:
+        return
+    if money.currency(currency) != ctx.book.base_currency:
+        raise invalid(f"holds are in the book's currency ({ctx.book.base_currency})")
+    src = None
+    if moved_from is not None:
+        src = SB.hold_for_source(ctx.c, *moved_from)
+        if src is None or int(src["amount"]) < amount:
+            raise FinanceError(CONFLICT, "the hold this moves from does not hold that much")
+        bid, target = str(src["budget_id"]), str(src["target"] or "")
+    else:
+        b = None if budget_scope is None else _scope(ctx, budget_scope)
+        if b is None:
+            return
+        bid, target = b.id, ""
+    if src is not None:
+        left = int(src["amount"]) - amount
+        if left:
+            SB.resize_hold(ctx.c, str(src["id"]), left)
+        else:
+            SB.release(ctx.c, str(src["id"]), ctx.at)
+    prior = SB.hold_for_source(ctx.c, source, source_id)
+    if prior is None:
+        SB.insert_hold(ctx.c, budget_id=bid, amount=amount, currency=ctx.book.base_currency, source=source,
+                       source_id=source_id, target=target, held_on=ctx.today, expires_at=expires_at, by=by,
+                       at=ctx.at)
+    elif str(prior["budget_id"]) == bid:
+        SB.resize_hold(ctx.c, str(prior["id"]), int(prior["amount"]) + amount)
+    else:
+        raise FinanceError(CONFLICT, "that hold is on another budget")
+    crossings(ctx, chain_of(ctx, bid), by)
 
 
 def settle(ctx: Ctx, hold_id: str, actual_amount: int, entry_id: str | None, by: str = SYSTEM) -> bool:

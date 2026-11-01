@@ -419,8 +419,11 @@ def _location(c: sqlite3.Connection, ctx: Ctx, cid: str, p: M.Location, at: str)
     ext = _content(c, cid, "locations", p.ext, at)
     if M.decide(_have(SX.ref(c, cid, "locations", ext.key)), ext) in (M.SAME, M.OLDER, M.GONE):
         return
-    _record_write(c, cid, "locations", ext, {"name": p.name, "kind": "location",
-                                          "archived_at": None if p.active else at}, at)
+    fields: dict[str, object] = {"name": p.name, "archived_at": None if p.active else at}
+    if not _local_record(c, cid, "locations", ext):
+        # The books hold no kind for a department, so the kind Tico sets afterwards survives every later import.
+        fields["kind"] = "other"
+    _record_write(c, cid, "locations", ext, fields, at)
 
 
 def _dimension(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Dimension, at: str) -> None:
@@ -800,8 +803,8 @@ def _void(c: sqlite3.Connection, ctx: Ctx, cid: str, table: str, local: str, key
     orders = SP.bill_orders(c, local) if table == "fin_bills" else []
     SAP.update(c, table, local, {"status": "void", "updated_at": at})
     if orders:
-        # The orders the bill billed hold what it had taken again, past an ask or hold_payment as they were approved.
-        PU.sync_orders(ctx, SYSTEM, orders, force=True)
+        PU.give_back(ctx, SYSTEM, local, posted=bool(entry))
+        PU.sync_orders(ctx, SYSTEM, orders)
 
 
 def _retire_entry_only(c: sqlite3.Connection, ctx: Ctx, cid: str, entry_id: str, key: str, at: str) -> None:
@@ -913,10 +916,12 @@ def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, ve
     control = _mapped(c, cid, "fin_accounts", d.control) if d.control else ""
     settled: list[Any] = []
     old_orders: list[str] = []
+    old_billed: dict[str, int] = {}
     if verdict == M.REPLACE and row is not None and row["local_id"]:
         local = str(row["local_id"])
         settled = [s for s in SAP.settlements_to(c, kind, local) if str(s["from_kind"]) != "credit"]
         old_orders = SP.bill_orders(c, local) if kind == "bill" else []
+        old_billed = _billed_by_order_line(c, local) if kind == "bill" else {}
         for s in settled:
             documents.unsettle(ctx, s)
         doc = SAP.get(c, table, local)
@@ -936,19 +941,31 @@ def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, ve
     if dims is not None:
         line_tags = _with_dims(line_tags, dims)
     SAP.replace_lines(c, kind, local, _line_rows(rows, at, line_tags, keys, items, po_lines))
-    if kind == "bill":
-        PU.sync_orders(ctx, SYSTEM, sorted({*old_orders, *SP.bill_orders(c, local)}))
     new_entry = _book(c, ctx, cid, d.ext, verdict, old_entry, d.day,
                       lambda when: _doc_entry(ctx, control_kind=kind, sign=sign, source=kind, source_id=local,
                                               contact=contact, rows=rows, memo=_doc_label(d), day=when,
                                               tags=line_tags, control_id=control, keys=keys), at)
     SAP.update(c, table, local, {"entry_id": new_entry, "updated_at": at})
+    if kind == "bill":
+        new_billed = _billed_by_order_line(c, local)
+        PU.restore_lines(ctx, SYSTEM, {po: amount - new_billed.get(po, 0) for po, amount in old_billed.items()})
+        PU.sync_orders(ctx, SYSTEM, sorted({*old_orders, *SP.bill_orders(c, local)}))
     for s in settled:
         documents.settle(ctx, kind, local, amount=int(s["amount"]), day=str(s["settled_on"]),
                          from_kind=str(s["from_kind"]), from_id=str(s["from_id"]),
                          entry_id=str(s["entry_id"] or ""), by=SYSTEM)
     _bind(c, cid, table, local, d.ext, at)
     return local
+
+
+def _billed_by_order_line(c: sqlite3.Connection, doc_id: str) -> dict[str, int]:
+    """What a bill bills on each order line it names, by the order line's id."""
+    out: dict[str, int] = {}
+    for x in SAP.lines(c, "bill", [doc_id])[doc_id]:
+        if x["po_line_id"]:
+            po = str(x["po_line_id"])
+            out[po] = out.get(po, 0) + int(x["amount"])
+    return out
 
 
 def _carried_order_lines(c: sqlite3.Connection, doc_id: str, keys: Sequence[str],
@@ -1431,11 +1448,27 @@ def _customer_key(project: str) -> str:
     return f"Customer:{_bare(project)}" if project else ""
 
 
+def _kept_local(c: sqlite3.Connection, table: str, local_id: str, key: str | None) -> bool:
+    """Whether a record is kept in Tico only: a location the books never take has no provider key and no create still
+    to reach them, so a line naming it sends none."""
+    if key is not None or table != "locations":
+        return False
+    return not SK.record_write_open(c, "location.create", RS.resolve(c, table, local_id))
+
+
+def kept_local(ctx: Ctx, table: str, local_id: str) -> bool:
+    """Whether a shared record is kept in Tico only (see _kept_local): its changes are made here, not queued."""
+    return _kept_local(ctx.c, table, local_id, _key(ctx.c, _cid(ctx), table, local_id))
+
+
 def _tag_need(c: sqlite3.Connection, cid: str, table: str, local_id: str) -> str:
     """The provider key of a record a line names, "" for none. Waits when the record is not in the provider yet."""
     if not local_id:
         return ""
-    return _need(_key(c, cid, table, local_id), f"{table} {local_id}")
+    key = _key(c, cid, table, local_id)
+    if _kept_local(c, table, local_id, key):
+        return ""
+    return _need(key, f"{table} {local_id}")
 
 
 def _tag_key(c: sqlite3.Connection, cid: str, table: str, local_id: str, export: bool) -> str:
@@ -1444,6 +1477,8 @@ def _tag_key(c: sqlite3.Connection, cid: str, table: str, local_id: str, export:
     if not local_id:
         return ""
     key = _key(c, cid, table, local_id)
+    if _kept_local(c, table, local_id, key):
+        return ""
     if key is None and not export:
         raise _Missing(f"{table} {local_id} is not in the provider yet")
     return key or ""
@@ -1524,7 +1559,7 @@ def _record_out(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, An
         customer = str(local.get("customer_id") or "")
         out["customer"] = _need(_key(c, cid, "fin_contacts", customer), f"contact {customer}") if customer else ""
     if verb == "update":
-        ref = SX.ref_for_local(c, cid, table, str(local["local_id"]))
+        ref = SX.ref_for_local(c, cid, table, RS.resolve(c, table, str(local["local_id"])))
         if ref is None or str(ref["status"]) != "active":
             raise _Missing(f"{table} {local['local_id']} is not in the provider yet")
         out.update({"ext": str(ref["external_id"]), "revision": str(ref["revision"])})
@@ -1540,6 +1575,7 @@ def _confirm_record(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str
     local_id = str(local["local_id"])
     fields = {k: local[k] for k in RECORD_COLUMNS[kind] if k in local}
     if op.endswith(".update"):
+        local_id = RS.resolve(c, table, local_id)
         RS.update(c, table, local_id, {**fields, "updated_at": now, "updated_by_id": SYSTEM})
     else:
         row = SX.ref(c, cid, table, ext.key)
@@ -1558,6 +1594,7 @@ def _adopt_record(c: sqlite3.Connection, cid: str, table: str, held_id: str, loc
     with becomes an alias of the row, so the id resolves to it on every read and write."""
     if RR.get(c, table, local_id) is None:
         RS.alias(c, table, local_id, held_id, now)
+        SK.outbox_repoint(c, local_id, held_id)
 
 
 def _translate(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any]) -> dict[str, Any]:

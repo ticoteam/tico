@@ -256,7 +256,8 @@ def resolve_lines(ctx: Ctx, who: str, kind: str, contact: Any,
     from .posting_rules import first_for
     out: list[AP.DocLine] = []
     asked = 0
-    for x in lines:
+    for raw in lines:
+        x = replace(raw, item_id=shared.canonical_item_id(ctx, raw.item_id)) if raw.item_id else raw
         item_account = _item_account(ctx, kind, x)
         if item_account and x.account_id and x.account_id != item_account:
             raise invalid("a line's item posts to its own account: name that account or leave the account out")
@@ -287,8 +288,7 @@ def resolve_lines(ctx: Ctx, who: str, kind: str, contact: Any,
         account = ctx.accounts.get(x.account_id)
         if account is None or not account.active or account.id == ctl or not _line_type_ok(kind, account):
             raise FinanceError(NOT_FOUND, f"no such {'/'.join(LINE_TYPES[kind])} account for a {kind} line")
-        tags = posting.with_team(ctx, x.tags)
-        shared.check_tags(ctx, tags)
+        tags = shared.check_tags(ctx, posting.with_team(ctx, x.tags))
         if not may_write(ctx, who, account.id, tags):
             raise denied("a line's account or tags are outside your view")
         checked.append(replace(x, tags=tags))
@@ -571,18 +571,22 @@ def bill_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         from .banking import open_day
-        _unhold(ctx, str(bill["id"]), len(doc_lines_of(ctx, "bill", str(bill["id"]))))
+        from . import purchasing as PU
+        bill_id = str(bill["id"])
+        posted = False
         if bill["entry_id"]:
             entry = SL.entry_row(ctx.c, str(bill["entry_id"]))
             if entry is not None and str(entry["status"]) == "posted":
                 posting.reverse(ctx, str(bill["entry_id"]), day=open_day(ctx, ctx.today),
                                 memo=f"Void bill {bill['number'] or bill['id']}: {reason}"[:200], by=who,
                                 action_id=aid)
-        SAP.update(ctx.c, "fin_bills", str(bill["id"]), {"status": "void", "pay_on": None, "voided_at": ctx.at,
-                                                         "updated_at": ctx.at})
-        from . import purchasing as PU
-        # The orders the bill billed hold what it had taken again: approved holds come back past an ask or hold_payment.
-        PU.sync_orders(ctx, who, PU.bill_orders(ctx, str(bill["id"])), force=True)
+                posted = True
+        # The orders the bill billed take back their room first, so the holds the bill still has move back to them.
+        PU.give_back(ctx, who, bill_id, posted=posted)
+        _unhold(ctx, bill_id, len(doc_lines_of(ctx, "bill", bill_id)))
+        SAP.update(ctx.c, "fin_bills", bill_id, {"status": "void", "pay_on": None, "voided_at": ctx.at,
+                                                 "updated_at": ctx.at})
+        PU.sync_orders(ctx, who, PU.bill_orders(ctx, bill_id))
         return {"bill_id": str(bill["id"]), "status": "void"}
     return Plan(K.default_gate(ctx.org, who, "bill_void"), f"Void bill {bill['number'] or bill['id']}", apply,
                 facts={"amount": int(bill["total"]), "counterparty": str(bill["contact_name"] or "")})

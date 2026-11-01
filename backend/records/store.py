@@ -9,13 +9,15 @@ ROW_TABLES = ("locations", "items", "projects")
 TABLES = """
 CREATE TABLE IF NOT EXISTS locations (
   id TEXT PRIMARY KEY, name TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'location' CHECK (kind IN ('location')),
+  kind TEXT NOT NULL DEFAULT 'other' CHECK (kind IN ('store','office','warehouse','plant','customer_site','vehicle',
+                                                       'other')),
   parent_id TEXT REFERENCES locations(id), address TEXT NOT NULL DEFAULT '{}', archived_at TEXT,
   created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT);
 
 CREATE TABLE IF NOT EXISTS items (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, sku TEXT NOT NULL DEFAULT '',
-  kind TEXT NOT NULL CHECK (kind IN ('service','inventory','non_inventory','bundle','category')),
+  kind TEXT NOT NULL CHECK (kind IN ('service','inventory','non_inventory','bundle','category',
+    'raw_material','assembly')),
   unit TEXT NOT NULL DEFAULT '', price BIGINT, currency TEXT NOT NULL DEFAULT '',
   income_account_id TEXT REFERENCES fin_accounts(id), expense_account_id TEXT REFERENCES fin_accounts(id),
   asset_account_id TEXT REFERENCES fin_accounts(id), archived_at TEXT,

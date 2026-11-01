@@ -1,7 +1,7 @@
 """Purchase orders and estimates (spec §4.4, §4.5). An approved order's unbilled lines hold budget; a bill that
 bills one of its lines takes that part of the hold over; an accepted estimate becomes one invoice draft, once. Each
 planner checks the payload, the asker's view and the document's state; the writes run when the action commits."""
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from . import budgeting
@@ -105,11 +105,49 @@ def _settle(ctx: Ctx, who: str, po_id: str, force: bool = False) -> list[str]:
     return refused
 
 
-def sync_orders(ctx: Ctx, who: str, po_ids: Sequence[str], force: bool = False) -> None:
-    """After a bill links to, or stops linking to, these orders: their holds and status follow the billing. `force` is
-    for a bill that stops billing (its order's holds come back as they were approved, past an ask or hold_payment)."""
+def sync_orders(ctx: Ctx, who: str, po_ids: Sequence[str]) -> None:
+    """After a bill links to, or stops linking to, these orders: their holds and status follow the billing."""
     for po_id in po_ids:
-        _settle(ctx, who, po_id, force=force)
+        _settle(ctx, who, po_id)
+
+
+def _restore(ctx: Ctx, who: str, line: Any, amount: int) -> None:
+    """An order line gets back `amount` of room: its hold grows by it with nothing taken from another hold, since the
+    spend it stood for is already reversed in the books. A line that posts to no expense account holds nothing."""
+    account = ctx.accounts.get(str(line["account_id"] or ""))
+    if account is None or account.type != "expense":
+        return
+    tags = cast(dict[str, str], SK.loads(line["tags_json"]))
+    budgeting.transfer(ctx, budget_scope={"account_id": account.id, **DOC.scope_tags(tags),
+                                          "vendor": str(line["vendor_id"])},
+                       amount=amount, currency=ctx.book.base_currency, source="purchase_order",
+                       source_id=f"{line['po_id']}:{int(line['line_no'])}", expires_at=None, by=who)
+
+
+def restore_lines(ctx: Ctx, who: str, amounts: Mapping[str, int]) -> None:
+    """Order lines a bill billed less of, once the provider has changed it: each gets back the difference."""
+    for po_line_id, amount in amounts.items():
+        line = SP.po_line(ctx.c, po_line_id)
+        if line is not None and amount > 0:
+            _restore(ctx, who, line, amount)
+
+
+def give_back(ctx: Ctx, who: str, bill_id: str, *, posted: bool) -> None:
+    """A bill that stops billing gives each order line it billed its room back. A bill still holding a line moves that
+    hold back to the line; a posted bill's spend has been reversed in the books by now, so the line takes the amount
+    back with nothing moved from a hold. Neither is fit-checked."""
+    for n, row in enumerate(SAP.lines(ctx.c, "bill", [bill_id])[bill_id]):
+        po_line = str(row["po_line_id"] or "")
+        line = SP.po_line(ctx.c, po_line) if po_line else None
+        if line is None:
+            continue
+        held = budgeting.held_amount(ctx, "bill", f"{bill_id}:{n}")
+        if held:
+            budgeting.transfer(ctx, amount=held, currency=ctx.book.base_currency, source="purchase_order",
+                               source_id=f"{line['po_id']}:{int(line['line_no'])}", expires_at=None, by=who,
+                               moved_from=("bill", f"{bill_id}:{n}"))
+        elif posted:
+            _restore(ctx, who, line, int(row["amount"]))
 
 
 def bill_orders(ctx: Ctx, bill_id: str) -> list[str]:

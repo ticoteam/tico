@@ -706,6 +706,39 @@ def outbox_due(c: sqlite3.Connection, at: str, most: int, connection_id: str | N
                      (at, *([connection_id] if connection_id else []), most)).fetchall()
 
 
+def record_write_open(c: sqlite3.Connection, op: str, local_id: str) -> bool:
+    """Whether a shared record's write is still to reach the provider or may have reached it: held, or unknown. The
+    write names its record by the local id in its payload."""
+    for row in c.execute("SELECT payload_json FROM fin_outbox WHERE op=? AND "
+                         "NOT (status='sent' OR (status='failed' AND unknown=0)) AND instr(payload_json, ?) > 0",
+                         (op, local_id)):
+        if loads(row[0]).get("local_id") == local_id:
+            return True
+    return False
+
+
+def outbox_repoint(c: sqlite3.Connection, local_id: str, record_id: str) -> None:
+    """Name a record by the row it is an alias of in every write not yet sent, so a write queued under the alias sends
+    what a write queued under the row would."""
+    for row in c.execute("SELECT id, payload_json FROM fin_outbox WHERE status!='sent' AND instr(payload_json, ?) > 0",
+                         (local_id,)).fetchall():
+        body = loads(row[1])
+        fixed = _named(body, local_id, record_id)
+        if fixed != body:
+            c.execute("UPDATE fin_outbox SET payload_json=? WHERE id=?", (dump(fixed), row[0]))
+
+
+def _named(value: Any, old: str, new: str) -> Any:
+    """The value with each string equal to `old` replaced by `new`, in any nested object or list."""
+    if isinstance(value, str):
+        return new if value == old else value
+    if isinstance(value, dict):
+        return {k: _named(v, old, new) for k, v in cast(dict[str, Any], value).items()}
+    if isinstance(value, list):
+        return [_named(v, old, new) for v in cast(list[Any], value)]
+    return value
+
+
 def outbox_claim(c: sqlite3.Connection, outbox_id: str, at: str) -> bool:
     """Take one write for one call: only one worker wins it. A card's writes go one at a time across workers: a write
     for a card whose other write is at Mercury right now waits until that one is recorded."""

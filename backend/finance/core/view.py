@@ -117,6 +117,11 @@ class View:
             return self.balance_sheet or account.id in self.bs_lines
         return any(s.covers_account(account) for s in self.slices)
 
+    def sees_anything(self) -> bool:
+        """Whether the viewer has a finance view at all: some P&L slice, balance sheet lines, or a side or source."""
+        return bool(self.everything or self.slices or self.balance_sheet or self.bs_lines or self.payables
+                    or self.receivables or self.sources)
+
     def company_wide(self, account: Account) -> bool:
         """Whether this viewer sees every line on `account`, unattributed ones included."""
         if self.everything:

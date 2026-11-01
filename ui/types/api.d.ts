@@ -2474,8 +2474,11 @@ export type InternalDocVersions = {
 
 export type Item = {
   archived_at?: string | null;
+  asset_account_id?: string | null;
   currency: string;
+  expense_account_id?: string | null;
   id: string;
+  income_account_id?: string | null;
   kind: "service" | "inventory" | "non_inventory" | "bundle" | "category";
   name: string;
   price?: number | null;

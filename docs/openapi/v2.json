@@ -16201,7 +16201,7 @@
     },
     "/api/v2/items": {
       "get": {
-        "summary": "Products and services by name or sku; q searches both, archived hides them (default), shows only them or both; with a cursor. Their accounts are not shown",
+        "summary": "Products and services by name or sku; q searches both, archived hides them (default), shows only them or both; with a cursor. An item's accounts show to viewers who see them; its price shows with its income account",
         "operationId": "listItems",
         "parameters": [
           {
@@ -16315,7 +16315,7 @@
     },
     "/api/v2/items/{item_id}": {
       "get": {
-        "summary": "One product or service, archived or not, without the accounts it posts to",
+        "summary": "One product or service, archived or not; its accounts show to viewers who see them",
         "operationId": "getItem",
         "parameters": [
           {
@@ -45818,6 +45818,24 @@
             "type": "string"
           },
           "archived_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "income_account_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expense_account_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "asset_account_id": {
             "type": [
               "string",
               "null"

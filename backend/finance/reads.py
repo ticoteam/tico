@@ -25,7 +25,7 @@ from .core import projections as PJ
 from .core import view as VW
 from .core import watch as W
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
-from .core.ledger import PNL_TYPES, descendants, pnl_section
+from .core.ledger import PNL_TYPES, Account, descendants, pnl_section
 from .tax import form_1099_csv as form_1099_csv
 from .tax import form_1099_report as form_1099_report
 from .tax import sales_tax_csv as sales_tax_csv
@@ -1314,14 +1314,35 @@ RECORD_TABLE = {"location": "locations", "item": "items", "project": "projects"}
 RECORD_PLURAL = {"location": "locations", "item": "items", "project": "projects"}
 
 
-def _record_out(kind: str, r: Any) -> Row:
-    """A record as the records API shows it. An item's accounts stay out: they are the books', not the catalog's."""
+ITEM_ACCOUNTS = ("income_account_id", "expense_account_id", "asset_account_id")
+
+
+def _in_view_or_refuse(view: VW.View) -> None:
+    """Records are for viewers with a finance view at all, as the other reads are."""
+    if not view.sees_anything():
+        raise denied("records are not in your view")
+
+
+def _account_shown(view: VW.View, accounts: Mapping[str, Account], account_id: object) -> bool:
+    """Whether a record's account may show: an unset one always (it reveals nothing), a set one when the viewer sees
+    that account."""
+    if not account_id:
+        return True
+    account = accounts.get(str(account_id))
+    return account is not None and view.sees_account(account)
+
+
+def _record_out(kind: str, r: Any, accounts: Mapping[str, Account], view: VW.View) -> Row:
+    """A record as the records API shows it. An item's accounts show to the viewers who see them, and its price shows
+    to the viewers who see its income account: the price is what that account books."""
     out: Row = {"id": str(r["id"]), "name": str(r["name"]), "archived_at": r["archived_at"]}
     if kind == "location":
         out.update(kind=str(r["kind"]), parent_id=r["parent_id"], address=json.loads(r["address"] or "{}"))
     elif kind == "item":
-        out.update(sku=str(r["sku"]), kind=str(r["kind"]), unit=str(r["unit"]), price=r["price"],
-                   currency=str(r["currency"]))
+        out.update(sku=str(r["sku"]), kind=str(r["kind"]), unit=str(r["unit"]), currency=str(r["currency"]))
+        if _account_shown(view, accounts, r["income_account_id"]):
+            out["price"] = r["price"]
+        out.update({key: r[key] for key in ITEM_ACCOUNTS if _account_shown(view, accounts, r[key])})
     else:
         out.update(customer_id=r["customer_id"], status=str(r["status"]))
     return out
@@ -1330,9 +1351,10 @@ def _record_out(kind: str, r: Any) -> Row:
 def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archived: str = "hide",
             cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
     """Locations, items or projects by name (an item also by sku), past `cursor`. `archived` is hide, only or all.
-    Records carry no amounts, so the same viewers who may search them may list them."""
+    A viewer with no finance view is refused; an item's accounts and price are cut to what the viewer sees."""
     ctx = load(c, at)
-    ctx.view(viewer)
+    view = ctx.view(viewer)
+    _in_view_or_refuse(view)
     parts = tab.decode_cursor(cursor)
     after = (parts[0], parts[1]) if len(parts) == 2 else None
     active = {"hide": True, "only": False, "all": None}[archived]
@@ -1340,16 +1362,18 @@ def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archi
     rows = RR.search(c, RECORD_TABLE[kind], (q or "").strip()[:100], active=active, after=after, most=most + 1)
     shown = rows[:most]
     nxt = tab.encode_cursor([str(shown[-1]["name"]), str(shown[-1]["id"])]) if len(rows) > most else None
-    return {RECORD_PLURAL[kind]: [_record_out(kind, r) for r in shown], "next_cursor": nxt}
+    return {RECORD_PLURAL[kind]: [_record_out(kind, r, ctx.accounts, view) for r in shown], "next_cursor": nxt}
 
 
 def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at: str | None = None) -> Row:
     """One location, item or project, archived or not, by its id or an id it was merged under."""
-    load(c, at).view(viewer)
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    _in_view_or_refuse(view)
     row = RR.get(c, RECORD_TABLE[kind], record_id)
     if row is None:
         raise FinanceError(NOT_FOUND, f"no such {kind}")
-    return {kind: _record_out(kind, row)}
+    return {kind: _record_out(kind, row, ctx.accounts, view)}
 
 
 def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
@@ -1422,6 +1446,7 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                             for r in cast(list[Row], found["cards"])]
                 nxt = cast(str | None, found["next"])
             elif k in RECORD_KINDS:
+                _in_view_or_refuse(view)
                 parts = tab.decode_cursor(cursor)
                 active = _filter(f, "active")
                 rows = RR.search(c, RECORD_KINDS[k], text, active=None if active is None else

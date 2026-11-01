@@ -2,8 +2,10 @@
 error."""
 from collections.abc import Sequence
 
-LOCATION_KINDS = ("location",)
-ITEM_KINDS = ("service", "inventory", "non_inventory", "bundle", "category")
+LOCATION_KINDS = ("store", "office", "warehouse", "plant", "customer_site", "vehicle", "other")
+ITEM_KINDS = ("service", "inventory", "non_inventory", "bundle", "category", "raw_material", "assembly")
+# Item kinds QuickBooks and Xero have no item type for: a mirrored book does not take them.
+TICO_ONLY_ITEM_KINDS = ("raw_material", "assembly")
 PROJECT_STATUSES = ("open", "closed")
 MAX_NAME = 200
 

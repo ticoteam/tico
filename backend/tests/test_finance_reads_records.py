@@ -5,7 +5,7 @@ cannot hold the rollup key's separator, and search finds items, locations and pr
 import pytest
 
 from backend.finance import reads as FR
-from backend.finance.core.errors import NOT_FOUND, FinanceError
+from backend.finance.core.errors import DENIED, NOT_FOUND, FinanceError
 from backend.finance.store import catalog as SC
 from backend.records import store as RS
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
@@ -144,7 +144,7 @@ def test_record_lists_page_by_name_and_hide_archived_by_default(books):
         assert len(FR.records(c, OWNER, kind="location", archived="all", at=AT)["locations"]) == 2
 
 
-def test_item_records_are_found_by_sku_and_leave_out_the_accounts_they_post_to(books):
+def test_item_records_are_found_by_sku_and_show_their_accounts_to_the_owner(books):
     with books.transaction() as c:
         _records(c)
         made = act(c, OWNER, "item_create", {"name": "Gadget", "kind": "service", "sku": "GDG-9", "price": 2500,
@@ -153,8 +153,50 @@ def test_item_records_are_found_by_sku_and_leave_out_the_accounts_they_post_to(b
         found = FR.records(c, OWNER, kind="item", q="gdg", at=AT)["items"]
         assert [r["name"] for r in found] == ["Gadget"]
         assert found[0]["price"] == 2500 and found[0]["sku"] == "GDG-9"
-        assert not {"income_account_id", "expense_account_id", "asset_account_id"} & set(found[0])
-        assert "income_account_id" not in FR.record(c, OWNER, kind="item", record_id=found[0]["id"], at=AT)["item"]
+        assert found[0]["income_account_id"] == account(c, "4000") and found[0]["expense_account_id"] is None
+        shown = FR.record(c, OWNER, kind="item", record_id=found[0]["id"], at=AT)["item"]
+        assert shown["income_account_id"] == account(c, "4000")
+
+
+def test_a_viewer_sees_an_items_price_and_accounts_only_where_they_see_the_accounts(books):
+    with books.transaction() as c:
+        _records(c)
+        made = act(c, OWNER, "item_create", {"name": "Gadget", "kind": "service", "price": 2500,
+                                             "income_account_id": account(c, "4000"),
+                                             "expense_account_id": account(c, "5100")})
+        assert made.status == "committed", made.reason
+        assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "payables"}).status == "committed"
+        gadget = {r["name"]: r for r in FR.records(c, "human:eve", kind="item", at=AT)["items"]}["Gadget"]
+        assert gadget["kind"] == "service"
+        assert not {"price", "income_account_id", "expense_account_id"} & set(gadget)
+        assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "expenses"}).status == "committed"
+        gadget = {r["name"]: r for r in FR.records(c, "human:eve", kind="item", at=AT)["items"]}["Gadget"]
+        assert gadget["expense_account_id"] == account(c, "5100") and "price" not in gadget
+        assert "income_account_id" not in gadget
+
+
+def test_a_viewer_with_no_finance_view_is_refused_the_records_and_their_search(books):
+    with books.transaction() as c:
+        locations = _records(c)["location"]
+        assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
+        for call in (lambda: FR.records(c, "human:eve", kind="location", at=AT),
+                     lambda: FR.record(c, "human:eve", kind="location", record_id=locations["Denver"], at=AT),
+                     lambda: FR.search(c, "human:eve", kind="item", q="wid", at=AT)):
+            with pytest.raises(FinanceError) as refused:
+                call()
+            assert refused.value.code == DENIED
+        across = FR.search(c, "human:eve", kind=None, q="den", at=AT)["results"]
+        assert all(r["kind"] not in ("location", "item", "project") for r in across)
+
+
+def test_a_line_tagged_with_a_record_by_its_alias_is_stored_under_the_row_it_is(books):
+    with books.transaction() as c:
+        denver = _records(c)["location"]["Denver"]
+        RS.alias(c, "locations", "loc-merged-away", denver, AT)
+        _post(c, 1_000, {"location": "loc-merged-away"})
+        assert [str(r[0]) for r in c.execute("SELECT value FROM fin_line_tags WHERE kind='location'")] == [denver]
+        assert _amounts(FR.spend_by(c, OWNER, "location", *WINDOW, top_n=50, at=AT))["Denver"] == 1_000
 
 
 def test_a_record_read_by_an_id_it_was_merged_under_resolves_to_the_row_kept(books):

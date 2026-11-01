@@ -1,7 +1,12 @@
 """Shared records (backend/records) as Finance uses them: migration 76 keeps every project tag and moves the project
 dimension to a record, a bill line's item supplies its account and an inactive item is refused, a line's location or
 project tag must name an active record, and a price change asks before it takes effect."""
+import sqlite3
+
+import pytest
+
 from backend.finance.store import schema as FS
+from backend.records import store as RS
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 # The line tags and dimensions tables as migration 75 left them: kinds without location, class, or item.
@@ -103,3 +108,22 @@ def test_a_price_change_asks_a_finance_admin_unless_the_owner_makes_it(books):
         assert c.execute("SELECT price FROM items WHERE id=?", (item_id,)).fetchone()[0] == 1_000
         assert act(c, OWNER, "item_update", {"item_id": item_id, "price": 1_200}).status == "committed"
         assert c.execute("SELECT price FROM items WHERE id=?", (item_id,)).fetchone()[0] == 1_200
+
+
+def test_a_location_takes_a_listed_kind_and_refuses_an_unlisted_one(books):
+    with books.transaction() as c:
+        made = RS.insert(c, "locations", {"name": "Dock", "kind": "warehouse", "created_at": AT,
+                                          "created_by_id": OWNER})
+        assert c.execute("SELECT kind FROM locations WHERE id=?", (made,)).fetchone()[0] == "warehouse"
+    with pytest.raises(sqlite3.IntegrityError):
+        with books.transaction() as c:
+            RS.insert(c, "locations", {"name": "Lot", "kind": "location", "created_at": AT, "created_by_id": OWNER})
+
+
+def test_an_item_takes_a_raw_material_or_assembly_kind_and_refuses_an_unlisted_one(books):
+    with books.transaction() as c:
+        for kind in ("raw_material", "assembly"):
+            RS.insert(c, "items", {"name": kind, "kind": kind, "created_at": AT, "created_by_id": OWNER})
+    with pytest.raises(sqlite3.IntegrityError):
+        with books.transaction() as c:
+            RS.insert(c, "items", {"name": "Bolt", "kind": "gizmo", "created_at": AT, "created_by_id": OWNER})

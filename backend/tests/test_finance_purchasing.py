@@ -13,6 +13,7 @@ from backend.finance.core import qbo as Q
 from backend.finance.core.errors import NOT_FOUND, FinanceError
 from backend.finance.store import ap as SAP
 from backend.finance.store import banking as SK
+from backend.records import store as RS
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, OWNER, FakeMercury, account, act, books, budget, connect, finance_template, store)
 
@@ -549,3 +550,36 @@ def test_a_bill_line_on_an_order_line_with_other_tags_is_refused_and_one_with_no
         other = _bill(c, vendor, [{"po_line_id": line, "amount": 10_000, "tags": {"team": "ops"}}])
         assert other.code == "invalid" and "tags" in str(other.reason), other
         assert _bill(c, vendor, [{"po_line_id": line, "amount": 10_000}]).status == "committed"
+
+
+def test_voiding_a_draft_bill_gives_its_order_line_its_hold_back_even_once_the_budget_is_full(books):
+    with books.transaction() as c:
+        _budget_at(c, 10_000, "decline")
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 10_000)])
+        bill = _bill(c, vendor, [{"po_line_id": _po_lines(c, po)[0], "amount": 10_000}])
+        assert bill.status == "committed", bill
+        assert _holds(c, po) == []                                              # the bill holds the line's budget
+        other = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 2_000}])
+        assert other.status == "committed", other
+        assert act(c, OWNER, "bill_approve", {"bill_id": str(other.result["bill_id"])}).status == "committed"
+        assert act(c, OWNER, "bill_void", {"bill_id": str(bill.result["bill_id"])}).status == "committed"
+        # The budget now has 2,000 spent, which a fresh check would refuse 10,000 on top of; the line's own hold
+        # returns.
+        assert _status(c, po) == ("approved", "")
+        assert [amount for _, amount in _holds(c, po)] == [10_000]
+
+
+def test_a_bill_line_naming_an_item_by_an_alias_stores_the_item_and_posts_its_account(books):
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        made = act(c, OWNER, "item_create", {"name": "Seats", "kind": "service",
+                                             "expense_account_id": account(c, "6100")})
+        assert made.status == "committed", made
+        item = str(made.result["item_id"])
+        RS.alias(c, "items", "item-merged-away", item, AT)
+        billed = _bill(c, vendor, [{"item_id": "item-merged-away", "amount": 2_000}])
+        assert billed.status == "committed", billed
+        row = c.execute("SELECT item_id, account_id FROM fin_bill_lines WHERE bill_id=?",
+                        (billed.result["bill_id"],)).fetchone()
+        assert (row[0], row[1]) == (item, account(c, "6100"))

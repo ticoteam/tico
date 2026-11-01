@@ -1531,9 +1531,10 @@ STABLE.extend([
      "One location, archived or not", "LocationOne"),
     ("/api/v2/items", "get", "Finance", "listItems",
      "Products and services by name or sku; q searches both, archived hides them (default), shows only them or both; "
-     "with a cursor. Their accounts are not shown", "Items"),
+     "with a cursor. An item's accounts show to viewers who see them; its price shows with its income account",
+     "Items"),
     ("/api/v2/items/{item_id}", "get", "Finance", "getItem",
-     "One product or service, archived or not, without the accounts it posts to", "ItemOne"),
+     "One product or service, archived or not; its accounts show to viewers who see them", "ItemOne"),
     ("/api/v2/projects", "get", "Finance", "listProjects",
      "Projects by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
      "Projects"),
@@ -1784,7 +1785,8 @@ SCHEMAS.update({
     "ItemOne": obj({"item": ref("Item")}, required=["item"]),
     "Item": obj({"id": "s", "name": "s", "sku": "s", "kind": {"type": "string", "enum": [
         "service", "inventory", "non_inventory", "bundle", "category"]}, "unit": "s",
-        "price": {"type": ["integer", "null"]}, "currency": "s", "archived_at": "n"},
+        "price": {"type": ["integer", "null"]}, "currency": "s", "archived_at": "n", "income_account_id": "n",
+        "expense_account_id": "n", "asset_account_id": "n"},
         required=["id", "name", "sku", "kind", "unit", "currency"]),
     "Projects": obj({"projects": items(ref("Project")), "next_cursor": "n"}, required=["projects", "next_cursor"]),
     "ProjectOne": obj({"project": ref("Project")}, required=["project"]),

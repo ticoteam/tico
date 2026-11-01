@@ -84,21 +84,40 @@ def billed(c: sqlite3.Connection, po_line_id: str) -> int:
     return int(row[0])
 
 
-def line_room(c: sqlite3.Connection, po_line_id: str) -> int:
-    """What an order line has left to bill: its amount less what its bills bill, or none when it is not there."""
-    row = c.execute("SELECT amount FROM fin_po_lines WHERE id=?", (po_line_id,)).fetchone()
-    return 0 if row is None else int(row[0]) - billed(c, po_line_id)
+# A bill write held against an order line's room until it is refused outright or confirmed. Confirmed writes are in
+# billed(); a write refused outright (failed, not unknown) bills nothing.
+_HELD_WRITES = ("SELECT payload_json FROM fin_outbox WHERE op='bill.create' AND "
+                "NOT (status='sent' OR (status='failed' AND unknown=0)) AND instr(payload_json, ?) > 0")
+# The writes that may already have reached the books before a write is sent: an unknown answer, or a retry that is
+# sent again without a check. A write still waiting for its first try has taken no room, so of two that wait the one
+# sent first keeps it and the second is refused when its turn comes.
+_LANDED_WRITES = ("SELECT payload_json FROM fin_outbox WHERE op='bill.create' AND "
+                  "((status='failed' AND unknown=1) OR (status IN ('pending','withheld') AND attempts>0)) "
+                  "AND instr(payload_json, ?) > 0")
 
 
-def queued_for_line(c: sqlite3.Connection, po_line_id: str) -> int:
-    """What the bill writes still waiting to be sent bill on an order line, from their payloads."""
+def _billed_on(c: sqlite3.Connection, query: str, po_line_id: str) -> int:
     total = 0
-    for row in c.execute("SELECT payload_json FROM fin_outbox WHERE op='bill.create' AND status='pending' AND "
-                         "instr(payload_json, ?) > 0", (po_line_id,)):
+    for row in c.execute(query, (po_line_id,)):
         for line in json.loads(str(row[0])).get("lines", []):
             if line.get("po_line_id") == po_line_id:
                 total += int(line["amount"])
     return total
+
+
+def line_room(c: sqlite3.Connection, po_line_id: str) -> int:
+    """What an order line has left to bill when a write is sent: its amount less what its bills bill and the writes
+    that may already have landed on it, or none when it is not there."""
+    row = c.execute("SELECT amount FROM fin_po_lines WHERE id=?", (po_line_id,)).fetchone()
+    if row is None:
+        return 0
+    return int(row[0]) - billed(c, po_line_id) - _billed_on(c, _LANDED_WRITES, po_line_id)
+
+
+def queued_for_line(c: sqlite3.Connection, po_line_id: str) -> int:
+    """What the bill writes still held bill on an order line, from their payloads: every write but one refused outright
+    and one confirmed."""
+    return _billed_on(c, _HELD_WRITES, po_line_id)
 
 
 def billed_total(c: sqlite3.Connection, po_id: str) -> int:
