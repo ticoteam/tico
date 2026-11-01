@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from backend import sidebar
 from backend.app import create_app
+from backend.finance.store import mirror as SX
 from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)
 from backend.tests.test_mcp import call as mcp
 
@@ -131,6 +132,22 @@ def test_a_stripe_connection_shows_products_and_services_only(api):
 def test_a_disconnected_books_connection_counts_for_nothing(api):
     cfg = upgrade(api, BOOKS.replace("'active'", "'disconnected'"))
     assert cfg["hidden_sections"] == ["operations"]
+
+
+def test_a_books_connection_with_records_waiting_to_come_in_shows_locations_and_products(api):
+    """X7 with pending imports: a books connection still holding provider records to take in (the mirror's `pending`)
+    keeps Locations and Products & services on, though its sync has written no rows yet. Once it is disconnected, its
+    waiting records count for nothing."""
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (sidebar.KEY,))
+        c.execute(BOOKS)
+        SX.set_mirror_state(c, "conn-books", {"pending": {"Item:9": {"kind": "Item", "id": "9"}}})
+        assert sidebar._connections(c) == (True, True, False)
+        sidebar.ensure(c)
+    assert config(api)["hidden_sections"] == ["operations.projects", "operations.equipment"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE fin_connections SET status='disconnected' WHERE id='conn-books'")
+        assert sidebar._connections(c) == (False, False, False)
 
 
 def test_setup_that_completes_without_an_answer_keeps_what_its_records_show(api):

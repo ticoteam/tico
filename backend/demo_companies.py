@@ -7,6 +7,7 @@ Finance and shared-record actions a person would use, and its business type is s
 backend/demo_data/<company>/."""
 import dataclasses
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 COMPANIES = {"heating-air": "Acme Heating & Air", "kitchen": "Acme Kitchen", "works": "Acme Works"}
@@ -71,8 +72,22 @@ def populate(settings, company):
         with store.transaction() as c:
             _documents(c, company, contacts, key)
             sidebar.set_business_type(c, OWNER_ACTOR, BUSINESS[company])
+            _onboarded(c, settings, company)
     for name in skipped:
         print(f"  {name}.csv not loaded: this build does not have that record type yet", flush=True)
+
+
+def _onboarded(c, settings, company):
+    """The first-run wizard is done for a demo company, which is set up from its files: onboarding.needed would
+    otherwise send its owner through the wizard. The tour is over, as in backend/demo_seed.py."""
+    from .store import H, encode
+    names = {"company_name": COMPANIES[company], "app_name": settings.app_name,
+             "assistant_name": settings.assistant_name}
+    done = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('onboarding',?)",
+              (encode({"names": names, "answers": {}, "completed": done, "selected": {}}),))
+    c.execute("INSERT OR REPLACE INTO preferences VALUES(?,'onboarding.progress',?,?)",
+              (OWNER_ACTOR, encode({"tour": True, "checklist": False, "skipped": []}), H.now()))
 
 
 def _committed(done, what):

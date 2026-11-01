@@ -168,6 +168,16 @@ def _release(c: sqlite3.Connection, name: str) -> None:
     c.execute(f"RELEASE SAVEPOINT {name}")
 
 
+def savepoint(c: sqlite3.Connection, name: str) -> int:
+    """Opens a savepoint that `undo` rolls back: a preview stages a row's customer for real, checks the row, undoes it."""
+    return _savepoint(c, name)
+
+
+def undo(c: sqlite3.Connection, name: str, mark: int) -> None:
+    """Rolls back to a savepoint `savepoint` opened, with the after-commit hooks queued since, and releases it."""
+    _rollback(c, name, mark)
+
+
 def _requester(c: sqlite3.Connection, who: str) -> str:
     """Who the Tico approval is asked by: the teammate, or the keeper for system work."""
     return who if who != O.SYSTEM and tico.known_actor(c, who) else "keeper"
