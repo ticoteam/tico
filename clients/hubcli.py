@@ -526,7 +526,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub health-monitor findings            the Health Monitor: what the last hourly scan found
     hub health-monitor report <key> | --process process:<name> --cpu N --mb N
                                            report a finding as a Tico bug, one ticket per signature
-    hub finance search [--kind entry|feed|bill|invoice|contact|rule|card] [--q words] [--status S] [--vendor V]
+    hub finance search [--kind entry|feed|bill|invoice|contact|rule|card|po|estimate|item|location|project|equipment|due_date] [--q words] [--status S] [--vendor V]
                     [--start D] [--end D] [--cursor C] [--limit N]   the books you may see; name a kind to page
     hub finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|close> [--start D]
                     [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor] [--month YYYY-MM]
@@ -3369,8 +3369,10 @@ def parser():
     s.set_defaults(fn="health-monitor report")
     fin = sub.add_parser("finance", help="the books, as you: search, reports, metrics, actions, your work queue "
                          "(docs/finance-tools.md)").add_subparsers(dest="sub")
-    s = fin.add_parser("search", help="entries, bank and card rows, bills, invoices, contacts and rules you may see")
-    s.add_argument("--kind", choices=["entry", "feed", "bill", "invoice", "contact", "rule", "card"])
+    s = fin.add_parser("search", help="entries, bank and card rows, bills, invoices, contacts, rules, purchase orders, "
+                       "estimates and records (items, locations, projects, equipment, due dates) you may see")
+    s.add_argument("--kind", choices=["entry", "feed", "bill", "invoice", "contact", "rule", "card", "po", "estimate",
+                                      "item", "location", "project", "equipment", "due_date"])
     s.add_argument("--q")
     for flag in ("--status", "--contact-id", "--vendor", "--account-id", "--money-account-id", "--start", "--end",
                  "--cursor"):
@@ -3378,7 +3380,8 @@ def parser():
     s.add_argument("--aging", choices=["current", "1_30", "31_60", "61_90", "over_90"])
     s.add_argument("--contact-kind", choices=["vendor", "customer", "both"])
     s.add_argument("--rule-kind", choices=["gate", "posting"])
-    s.add_argument("--active", type=lambda v: v.lower() in ("1", "true", "yes", "on"), help="contacts: true or false")
+    s.add_argument("--active", type=lambda v: v.lower() in ("1", "true", "yes", "on"),
+                   help="contacts and records: true (active only) or false (archived only)")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="finance search")
     s = fin.add_parser("report", help="one report cut to your view; rows past --top-n fold into Other")

@@ -158,7 +158,7 @@ def test_item_records_are_found_by_sku_and_show_their_accounts_to_the_owner(book
         assert shown["income_account_id"] == account(c, "4000")
 
 
-def test_a_viewer_sees_an_items_price_and_accounts_only_where_they_see_the_accounts(books):
+def test_a_teammate_sees_an_items_price_and_its_accounts_only_where_they_see_the_accounts(books):
     with books.transaction() as c:
         _records(c)
         made = act(c, OWNER, "item_create", {"name": "Gadget", "kind": "service", "price": 2500,
@@ -168,25 +168,25 @@ def test_a_viewer_sees_an_items_price_and_accounts_only_where_they_see_the_accou
         assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
         assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "payables"}).status == "committed"
         gadget = {r["name"]: r for r in FR.records(c, "human:eve", kind="item", at=AT)["items"]}["Gadget"]
-        assert gadget["kind"] == "service"
-        assert not {"price", "income_account_id", "expense_account_id"} & set(gadget)
+        assert gadget["kind"] == "service" and gadget["price"] == 2500      # a teammate sees the sale price
+        assert not {"income_account_id", "expense_account_id"} & set(gadget)
         assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "expenses"}).status == "committed"
         gadget = {r["name"]: r for r in FR.records(c, "human:eve", kind="item", at=AT)["items"]}["Gadget"]
-        assert gadget["expense_account_id"] == account(c, "5100") and "price" not in gadget
+        assert gadget["expense_account_id"] == account(c, "5100") and gadget["price"] == 2500
         assert "income_account_id" not in gadget
 
 
-def test_a_viewer_with_no_finance_view_is_refused_the_records_and_their_search(books):
+def test_a_guest_is_refused_the_records_and_their_search(books):
     with books.transaction() as c:
         locations = _records(c)["location"]
         assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
-        for call in (lambda: FR.records(c, "human:eve", kind="location", at=AT),
-                     lambda: FR.record(c, "human:eve", kind="location", record_id=locations["Denver"], at=AT),
-                     lambda: FR.search(c, "human:eve", kind="item", q="wid", at=AT)):
+        for call in (lambda: FR.records(c, "human:stranger", kind="location", at=AT),
+                     lambda: FR.record(c, "human:stranger", kind="location", record_id=locations["Denver"], at=AT),
+                     lambda: FR.search(c, "human:stranger", kind="item", q="wid", at=AT)):
             with pytest.raises(FinanceError) as refused:
                 call()
             assert refused.value.code == DENIED
-        across = FR.search(c, "human:eve", kind=None, q="den", at=AT)["results"]
+        across = FR.search(c, "human:stranger", kind=None, q="den", at=AT)["results"]
         assert all(r["kind"] not in ("location", "item", "project") for r in across)
 
 

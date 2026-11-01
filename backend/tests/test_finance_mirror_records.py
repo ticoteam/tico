@@ -305,7 +305,7 @@ def test_an_item_change_in_a_mirrored_book_leaves_the_row_as_it_was_until_the_pr
     assert _drain(books, fake, cid) == []
     with books.transaction() as c:
         item = _local(c, "Item:5", "items")
-        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.records"}).status == "committed"
         # Dan sees the item's accounts, so a price change of his is asked of an admin rather than found missing.
         assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything",
                                             "whose": "company"}).status == "committed"
