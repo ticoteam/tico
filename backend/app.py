@@ -7765,7 +7765,7 @@ def create_app(settings=None):
         as the completion would post it, to whom it would post it. None when there is nothing to check."""
         if body.outcome != "completed" or not body.text:
             return None
-        from .execution import reply_target, split_runner_notices, work_task_id
+        from .execution import reply_source, reply_target, split_runner_notices, work_task_id
         with store.read() as c:
             if not org_rule_check.R.any_active(c):
                 return None             # no rule in force: the completion reads nothing more for its check
@@ -7774,6 +7774,10 @@ def create_app(settings=None):
             row = c.execute("SELECT a.bot, j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
                             (aid,)).fetchone()
             msg = H.message(c, row["message_id"], include_deleted=True) if row else None
+            if not msg or msg["deleted_at"] is not None:
+                return None
+            # A carrier-started turn answers the message it carries, so its reply is checked as going to that sender.
+            msg = reply_source(c, msg)
             if not msg or msg["deleted_at"] is not None:
                 return None
             conv = H.conversation(c, msg["conversation_id"])
