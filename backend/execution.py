@@ -3423,7 +3423,9 @@ class Execution:
         """The preparation of the job a claim hands out: its turn, attempt, inputs and hand-out. The claim runs it in a
         savepoint of its own (claim), so an error here rolls back only this job's writes."""
         msg = H.message(c, row["message_id"])
-        if not privacy.message_readable(c, "bot:" + row["bot"], msg):
+        from . import threads
+        if (not privacy.message_readable(c, "bot:" + row["bot"], msg)
+                or ((msg or {}).get("refs") or {}).get("carries") and not threads.carrier_current(c, msg, "bot:" + row["bot"])):
             c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["id"],))
             H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
             return {"attempt": None}
