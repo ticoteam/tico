@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const zlib = require('node:zlib');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 // A 1x1 PNG carrying a private ancillary chunk (decoders skip it) that takes it past the 64 MB budget.
 const chunk = (type, data) => {
   const head = Buffer.alloc(8); head.writeUInt32BE(data.length); head.write(type, 4, 'latin1');
@@ -26,6 +27,8 @@ const files = {
     const page = await browser.newPage({viewport:{width:1200,height:800},serviceWorkers:'block'});
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
+    const threads = threadsFake({bot: 'legal', messages: [{id: 'm-legal', from_actor: 'bot:legal',
+      body: 'The [poster](https://tico-ui.test/api/v2/files/file-big-0001) and the [lease](https://tico-ui.test/api/v2/files/file-pdf-0001).'}]});
     await page.context().route('**/*', route => {
       const url = new URL(route.request().url()), p = url.pathname;
       const json = body => route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
@@ -42,17 +45,15 @@ const files = {
       const file = p.match(/^\/api\/v2\/files\/([^/]+)(\/meta)?$/), known = file && files[file[1]];
       if (known && file[2]) return json({id:file[1],name:known[0],size:known[1].length,content_type:'application/octet-stream'});
       if (known) return route.fulfill({contentType:'application/octet-stream',headers:{'content-disposition':`attachment; filename*=UTF-8''${known[0]}`},body:known[1]});
-      if (p === '/api/v2/conversations') return json({conversations:url.searchParams.get('chat_with') ? [{id:'c-legal',kind:'chat',scope:'personal',participants:['human:ana','bot:legal']}] : []});
-      if (p === '/api/v2/conversations/c-legal/snapshot') return json({messages:[{id:'m-legal',from_actor:'bot:legal',
-        body:'The [poster](https://tico-ui.test/api/v2/files/file-big-0001) and the [lease](https://tico-ui.test/api/v2/files/file-pdf-0001).',
-        created:new Date().toISOString()}],execution:null});
+      const answer = threads(p, url, route.request().method());
+      if (answer !== undefined) return json(answer);
       return json(unrouted(p));
     });
     // In the page: whether a blob: URL still reads, and the width a picture at that URL decodes to (0 when it can't).
     const reads = url => page.evaluate(u => fetch(u).then(r => r.ok, () => false), url);
     const width = url => page.evaluate(u => { const i = new Image(); i.src = u; return i.decode().then(() => i.naturalWidth, () => 0); }, url);
     const viewerImg = page.locator('#doc-viewer[open] .viewer-img');
-    await page.goto('https://tico-ui.test/#/bot/legal/chat');
+    await page.goto('https://tico-ui.test/#/bot/legal/dm');
     // The poster on its own is over the budget (too big for a thumbnail), and opens in the viewer.
     await page.getByRole('link',{name:'poster'}).click();
     await viewerImg.waitFor();

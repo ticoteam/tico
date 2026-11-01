@@ -1,19 +1,20 @@
 // Signed out mid-session (ui/app/session.js): every sign-in ends in one banner, and the live stream stops retrying.
 //  - a proxy (Cloudflare Access) answers the API and the event stream with a 302 to its login on another origin: the
-//    banner shows, the stream stops reconnecting, the chat draft and the page's place are kept through the sign-in;
+//    banner shows, the stream stops reconnecting, the Assistant chat draft and the page's place are kept through the sign-in;
 //  - the same for a 401 carrying `WWW-Authenticate: Cloudflare-Access`;
 //  - built-in sign-in's 401 naming its login page: the banner, and its button goes to that page and back here;
 //  - Tico's own 401 `identity`, with no login page and no proxy header: the banner, the stream stopped;
 //  - a task open in its dialog (on a computer and as the phone's sheet): the banner's button is inside the dialog, by
 //    pointer and by keyboard, the comment stays; back from the login the task opens again with its comment;
 //  - a comment in a closed task: another task opened first gets none of it, the task opened later gets all of it;
-//  - the network down (nothing answers, the browser still online): no banner, the chat says Reconnecting, and the
-//    stream comes back when the network does; the same when the sign-in check itself gets no answer.
+//  - the network down (nothing answers, the browser still online): no banner, the
+//    stream keeps retrying and comes back when the network does; the same when the sign-in check itself gets no answer.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs');
 const path = require('node:path');
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
@@ -61,15 +62,15 @@ async function scenario(browser, name, down, check, viewport = {width: 1300, hei
       if (state.mode !== 'ok') return down(route, state.mode);
     }
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, registered: true});
-    if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
+    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
     if (p === '/api/issues') return json([]);
     if (p === '/api/v2/events') return;          // held open, as the server does between changes
-    if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with')
-      ? [{id: 'c-ops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:ops']}] : []});
-    if (p === '/api/v2/conversations/c-ops/snapshot') return json({
+    const room = {
       messages: [{id: 'm1', from_actor: 'human:ana', body: 'Draft the release notes', created: now}],
-      execution: {id: 'x1', state: 'running', bot: 'ops', conversation_id: 'c-ops', text: 'Working on it', started: now}});
+      execution: {id: 'x1', state: 'running', bot: 'coo', conversation_id: 'c-coo', text: 'Working on it', started: now}};
+    if (p === '/api/v2/assistant') return json(assistantView('c-coo', room));
+    if (p === '/api/v2/conversations/c-coo/snapshot') return json(room);
     if (p === '/api/v2/tasks') return json({tasks: [], next_offset: null, cursor: '1.a'});
     const one = p.match(/^\/api\/v2\/tasks\/(t-[ab])$/);
     if (one) return json({task: task(one[1]), comments: [], events: [], can_comment: true, children: []});
@@ -78,10 +79,10 @@ async function scenario(browser, name, down, check, viewport = {width: 1300, hei
     return json(unrouted(p));
   });
   try {
-    await page.goto('https://tico-ui.test/#/bot/ops/chat');
+    await page.goto('https://tico-ui.test/#/assistant');
     await until('the stream opens', () => seen.streams >= 1);
     await page.waitForSelector('.p-text:visible');
-    await page.fill('.p-text', 'Half-written reply to Ops');
+    await page.fill('.p-text', 'Half-written reply to the Assistant');
     await check({page, state, seen});
     assert.deepEqual(errors, [], name);
     console.log('ok -', name);
@@ -120,7 +121,7 @@ async function signInAndReturn(page, state, seen, press) {
   await until('the visit leaves for the login', () => !page.url().startsWith('https://tico-ui.test/'));
   state.mode = 'ok';
   await page.goto('https://tico-ui.test/');
-  await page.waitForFunction(() => location.hash === '#/bot/ops/chat');
+  await page.waitForFunction(() => location.hash === '#/assistant');
 }
 
 (async () => {
@@ -138,7 +139,7 @@ async function signInAndReturn(page, state, seen, press) {
         await signedOutAndStill(page, seen);
         // Sign in again: a top-level visit to this address, which the proxy sends to its login, then back.
         await signInAndReturn(page, state, seen, () => page.click('#signed-out button'));
-        await page.waitForFunction(() => document.querySelector('.p-text')?.value === 'Half-written reply to Ops');
+        await page.waitForFunction(() => document.querySelector('.p-text')?.value === 'Half-written reply to the Assistant');
         await box();
         await page.waitForFunction(() => document.querySelector('textarea[aria-label="Message"]').value === 'A comment on the task');
         assert.equal(await page.isHidden('#signed-out'), true);
@@ -162,7 +163,7 @@ async function signInAndReturn(page, state, seen, press) {
         await signedOutAndStill(page, seen);
         await page.click('#signed-out button');
         await page.waitForURL('**/auth/login**');
-        assert.equal(new URLSearchParams(seen.login).get('next'), '/#/bot/ops/chat');
+        assert.equal(new URLSearchParams(seen.login).get('next'), '/#/assistant');
       });
 
     const identity401 = route => route.fulfill({status: 401, contentType: 'application/json',
@@ -217,7 +218,6 @@ async function signInAndReturn(page, state, seen, press) {
         state.mode = 'down';
         await page.evaluate(() => LIVE.es.close() || LIVE.es.onerror());
         await until('the probe asked and found no answer', () => seen.me >= 1);
-        await page.waitForFunction(() => /Reconnecting/.test(document.querySelector('#conv-state')?.textContent || ''), null, {timeout: t(10000)});
         const streams = seen.streams;
         await until('the stream keeps retrying', () => seen.streams >= streams + 1);
         assert.equal(await page.isHidden('#signed-out'), true);

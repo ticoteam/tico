@@ -51,65 +51,9 @@ function v2TaskGroups(list, slug, statuses) {
   }).filter(Boolean).join('');
   return out;
 }
-// The Chat tab is where a human works through one bot's requests. Keep every active team task
-// that needs the signed-in person directly above that conversation. Attention order leads, then
-// the bot's queue rank. Tasks that do not need this person stay out of the way; Done stays in Tasks.
-const BOT_CHAT_ACTIVE = new Set(['open', 'doing', 'waiting', 'declined']);
-let BOT_CHAT_TASKS = new Map(), BOT_CHAT_TASK_LOAD = 0;
 function taskNeedsMe(task) {
   const me = myActor();
   return !!me && (task?.owner === me || (task?.ask?.to_actor === me && !task?.ask?.older) || taskWaitingOn(task) === me);
-}
-function botChatTasksRender(slug, rows) {
-  const host = $('#bot-chat-tasks');
-  if (!host || BOT?.slug !== slug) return;
-  const needOrder = new Map((S.v2.needs || []).map((item, index) => [String(item.id), index]));
-  const needById = new Map((S.v2.needs || []).map(item => [String(item.id), item]));
-  BOT_CHAT_TASKS = new Map();
-  const ordered = rows.map(task => ({task, need: needById.get(String(task.id))})).sort((a, b) =>
-    (needOrder.get(String(a.task.id)) ?? Infinity) - (needOrder.get(String(b.task.id)) ?? Infinity)
-    || (a.task.rank == null ? Infinity : Number(a.task.rank)) - (b.task.rank == null ? Infinity : Number(b.task.rank))
-    || String(a.task.created || '').localeCompare(String(b.task.created || '')));
-  for (const {task} of ordered) BOT_CHAT_TASKS.set(String(task.id), task);
-  // Just what needs you, about two lines, scrolling inside, and an X. No heading,
-  // pill, age or "all tasks" link. Dismissed stays dismissed for this bot until the items change.
-  const key = 'tico.needs.dismissed.' + slug, items = ordered.map(({task}) => String(task.id)).sort().join(',');
-  let dismissed = '';
-  try { dismissed = localStorage.getItem(key) || ''; } catch {}
-  if (!ordered.length || dismissed === items) { host.hidden = true; host.innerHTML = ''; return; }
-  host.setAttribute('aria-label', 'What needs you');
-  host.innerHTML = `<div class="bot-chat-task-groups">${ordered.map(({task}) =>
-      `<button class="bot-chat-task-row" type="button" data-bot-chat-task="${esc(task.id)}">${esc(task.title || 'Untitled task')}</button>`).join('')}</div>
-    <button class="bot-chat-tasks-x" type="button" aria-label="Dismiss" title="Dismiss">×</button>`;
-  host.hidden = false;
-  host.onclick = event => {
-    if (event.target.closest('.bot-chat-tasks-x')) {
-      try { localStorage.setItem(key, items); } catch {}
-      host.hidden = true;
-      return;
-    }
-    const button = event.target.closest('[data-bot-chat-task]');
-    if (!button) return;
-    // The task's own thread, not the full task: what is said there goes to the task, and Back is the main chat again.
-    const task = BOT_CHAT_TASKS.get(button.dataset.botChatTask);
-    if (task) void taskThreadShow(task);
-  };
-}
-async function loadBotChatTasks(slug) {
-  const host = $('#bot-chat-tasks');
-  if (!host) return;
-  const load = ++BOT_CHAT_TASK_LOAD;
-  // Only active company rows, without their text: the server filters, and an unchanged list is a 304.
-  const active = `status=${[...BOT_CHAT_ACTIVE].join(',')}&lane=company&brief=true`;
-  const [owned, asked] = await Promise.all([
-    v2Get(`/v2/tasks?owner=${encodeURIComponent(slug)}&${active}`),
-    v2Get(`/v2/tasks?requester=${encodeURIComponent(slug)}&${active}`)]);
-  if (load !== BOT_CHAT_TASK_LOAD || BOT?.slug !== slug || !$('#bot-chat-tasks')) return;
-  const unique = new Map();
-  for (const task of [...(owned?.tasks || []), ...(asked?.tasks || [])]) {
-    if (BOT_CHAT_ACTIVE.has(String(task.status)) && (task.lane || 'company') === 'company' && taskNeedsMe(task)) unique.set(String(task.id), task);
-  }
-  botChatTasksRender(slug, [...unique.values()]);
 }
 // The server counts editable filters for the viewer; Needs You also keeps questions and approvals.
 // Done Recently uses the bot’s finished work. A failed task load is retried, never shown as an empty list.
@@ -458,7 +402,6 @@ async function v2PillTask(P, text) {
     await v2Refresh();
     if (BOT?.slug === P.slug) {
       void loadBotTasksV2(P.slug);
-      void loadBotChatTasks(P.slug);
     }
   } catch (e) { toast(e.message, true); }
   P.sending = false;

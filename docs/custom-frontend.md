@@ -297,7 +297,7 @@ data: {"seq": 4121, "attempt_id": "a1", "conversation_id": "c1", "bot": "ops", "
   opens each one with where the log stands. Reconnect with `after` set to the last `id` you saw (or let `EventSource` send
   `Last-Event-ID`); `event: cursor` moves it past changes you were not sent. Back off (0.5 s, 1 s, 2 s ... up to 15 s)
   while the network is down.
-- **`event: reset`** means you were further behind than the server keeps (a day): read your page in full, then carry on
+- **`event: reset`** means you were further behind than the server keeps (a day, or more than 5,000 changes): read your page in full, then carry on
   from the `seq` it gives. **`event: expired`** means the session ended: sign in again.
 - **Do not use `EventSource` with a bearer session:** it cannot send an `Authorization` header. Read the stream with
   `fetch` and a `ReadableStream`, as `watch()` in [`examples/custom-frontend/app.js`](../examples/custom-frontend/app.js)

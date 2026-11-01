@@ -63,7 +63,7 @@ EVENTS_DESCRIPTION = (
     "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
     "`base`. `ready` then carries `needs_version`.\n"
     "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
-    "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours: read in full), "
+    "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "
     "`event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. "
     "Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the "
     "browser's own `Last-Event-ID`). People only: a bot is refused with 403."

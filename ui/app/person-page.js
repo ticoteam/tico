@@ -79,6 +79,7 @@ function pagePerson(id, tab) {
       <div id="person-id">${p.title || p.team ? `<div class="meta">${esc([...new Set([p.title, p.team ? teamLabel(p.team) : ''].filter(Boolean))].join(' · '))}</div>` : ''}
         ${p.about ? `<div class="role">${esc(about.lead)}${about.rest ? `<span id="goal-rest" hidden> ${esc(about.rest)}</span> <button class="linkish" type="button" id="goal-more" aria-expanded="false">more</button>` : ''}</div>`
           : edit && !p.title ? '<div class="muted">No title or description yet.</div>' : ''}</div></section>` : ''}
+    <section class="card home-card" id="person-home"><header><h2>Home</h2></header><div id="person-home-thread"></div></section>
     <section class="card tasks" id="person-tasks-card"><header><h2>Tasks</h2>
         <button class="ghost" type="button" id="person-task-add" aria-haspopup="dialog">+ Add task</button></header>
       <div id="person-tasks">Loading…</div></section>
@@ -193,6 +194,9 @@ function pagePerson(id, tab) {
     };
   };
   githubPaint(false);
+  // Their Home under the profile: their posts and update cards, never an empty timeline.
+  threadMount($('#person-home-thread'), {home: 'human:' + p.id, card: true, header: false, hideGone: $('#person-home'),
+    empty: 'Nothing posted yet'});
   const cards = $('#pane-profile').querySelectorAll('section.card');
   const goalsCard = [...cards].find(el => el.querySelector('h2')?.textContent === 'Goals');
   const notesCard = [...cards].find(el => el.querySelector('h2')?.textContent === 'Notes');

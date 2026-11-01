@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 // Offline stand-in for marked (a CDN script): headings, lists, bold and [text](url) links.
 const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\n+/).map(block => {
   const inline = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
@@ -22,6 +23,8 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
     page.on('pageerror',e=>{if(!/Service worker is disabled because the context is sandboxed/i.test(e.message))errors.push(e.message);});
     const bot=(name,display_name)=>({name,display_name,host:'keeper',status:'active',can_chat:true,schedules:[]});
     const bots=[bot('legal','Legal'),bot('seo','AI SEO'),bot('cmo','AI CMO'),bot('finance','Finance'),bot('sales-ops','Sales Ops'),bot('designer','Designer')];
+    const said=bot=>bot==='legal'?'I need your **review** of these:\n\n- [review packet](https://tico-ui.test/api/v2/files/file-md-0001)\n- [storyboard](https://tico-ui.test/api/v2/files/file-png-0001)\n- [cover photo](https://tico-ui.test/assets/cover.png)\n- [walkthrough](https://youtu.be/dQw4w9WgXcQ)\n- [lease](https://tico-ui.test/api/v2/files/file-pdf-0001)':bot==='designer'?'Here is the [launch page](https://tico-ui.test/api/v2/files/file-html-0001); the [style guide](https://evil.test/guide.html) is on the web.':bot==='finance'?'I gave Inbox [quote instructions](https://tico-ui.test/tasks/979a861b-a309-43db-a443-732a3674de81). See [goals](https://tico-ui.test/#/goals) and [the lender](https://lender.example/).':'Hello from '+bot;
+    const fakes=Object.fromEntries(bots.map(b=>[b.name,threadsFake({bot:b.name,messages:[{id:'m-'+b.name,from_actor:'bot:'+b.name,body:said(b.name)}]})]));
     await page.context().route('**/*',route=>{
       const url=new URL(route.request().url()),p=url.pathname;
       if(url.hostname==='evil.test'){outside.push(url.href);return route.fulfill({contentType:'text/html',body:'<p>outside</p>'});}
@@ -53,11 +56,9 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
       if(p==='/assets/cover.png')return route.fulfill({contentType:'image/png',body:Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000'+'1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082','hex')});
       if(p==='/api/v2/files/file-pdf-0001')return route.fulfill({contentType:'application/octet-stream',headers:{'content-disposition':"attachment; filename*=UTF-8''lease.pdf"},body:'%PDF-1.4 fixture'});
       if(/youtube-nocookie\.com$/.test(url.hostname))return route.fulfill({contentType:'text/html',body:'<p>player</p>'});
-      if(p==='/api/v2/conversations'){const bot=url.searchParams.get('chat_with');
-        return json({conversations:bot?[{id:'c-'+bot,kind:'chat',scope:'personal',participants:['human:ana','bot:'+bot]}]:[]});}
-      if(p.startsWith('/api/v2/conversations/c-')&&p.endsWith('/snapshot')){const bot=p.split('/')[4].slice(2);
-        const body=JSON.stringify({messages:[{id:'m-'+bot,from_actor:'bot:'+bot,body:bot==='legal'?'I need your **review** of these:\n\n- [review packet](https://tico-ui.test/api/v2/files/file-md-0001)\n- [storyboard](https://tico-ui.test/api/v2/files/file-png-0001)\n- [cover photo](https://tico-ui.test/assets/cover.png)\n- [walkthrough](https://youtu.be/dQw4w9WgXcQ)\n- [lease](https://tico-ui.test/api/v2/files/file-pdf-0001)':bot==='designer'?'Here is the [launch page](https://tico-ui.test/api/v2/files/file-html-0001); the [style guide](https://evil.test/guide.html) is on the web.':bot==='finance'?'I gave Inbox [quote instructions](https://tico-ui.test/tasks/979a861b-a309-43db-a443-732a3674de81). See [goals](https://tico-ui.test/#/goals) and [the lender](https://lender.example/).':'Hello from '+bot,created:new Date().toISOString()}],execution:null});
-        return setTimeout(()=>route.fulfill({contentType:'application/json',body}),slow);}
+      const who=decodeURIComponent(url.pathname+url.search).match(/t-(?:dm|home)-([\w-]+)|bot:([\w-]+)/);
+      const answer=(fakes[who?.[1]||who?.[2]]||fakes.legal)(p,url,route.request().method());
+      if(answer!==undefined)return json(answer);
       if(p==='/api/v2/tasks/979a861b-a309-43db-a443-732a3674de81')return json({task:{id:'979a861b-a309-43db-a443-732a3674de81',title:'Seek written financing quotes',owner:'bot:inbox',requester:'bot:finance',status:'todo',lane:'company',labels:[],links:[],parts:{total:0,done:0},version:1,updated:new Date().toISOString()},children:[]});
       if(p==='/api/v2/tasks'){const owner=url.searchParams.get('owner');
         const body=JSON.stringify({tasks:owner?[{id:'t-'+owner,title:'Task for '+owner,owner:'bot:'+owner,requester:'human:ana',status:'doing',lane:'company',labels:[],links:[],parts:{total:0,done:0},version:1,updated:new Date().toISOString()}]:[]});
@@ -75,7 +76,7 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
       return json(unrouted(p));
     });
     await page.setViewportSize({width:1200,height:800});
-    await page.goto('https://tico-ui.test/#/bot/legal/chat');
+    await page.goto('https://tico-ui.test/#/bot/legal/dm');
     await page.getByRole('link',{name:'review packet'}).click();
     await page.locator('#doc-viewer[open] h1').waitFor();
     assert.equal(await page.locator('#doc-viewer h1').innerText(),'Review packet');
@@ -136,7 +137,7 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
     // An HTML file shows as it looks, in a sandboxed frame: its styles and embedded pictures, but no script,
     // nothing fetched from the network, no refresh away and no form; its links open in a new tab.
     await page.setViewportSize({width:1200,height:800});
-    await page.goto('https://tico-ui.test/#/bot/designer/chat');
+    await page.goto('https://tico-ui.test/#/bot/designer/dm');
     assert.equal(await page.getByRole('link',{name:'style guide'}).getAttribute('data-media'),null,'a web page stays a link');
     await page.waitForFunction(()=>document.querySelector('a[href$="file-html-0001"]')?.dataset.media==='HTML');
     await page.getByRole('link',{name:'launch page'}).click();
@@ -173,14 +174,14 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
     assert.equal(saved2.suggestedFilename(),'launch.html');
     await page.locator('#doc-viewer [data-doc-close]').click();
     // A task link in a message opens the task pop-up in place.
-    await page.goto('https://tico-ui.test/#/bot/finance/chat');
+    await page.goto('https://tico-ui.test/#/bot/finance/dm');
     // Links into the hub open in place (no new window, which the desktop app drops); others still open outside.
     assert.equal(await page.getByRole('link',{name:'goals'}).getAttribute('target'),null);
     assert.equal(await page.getByRole('link',{name:'quote instructions'}).getAttribute('target'),null);
     assert.equal(await page.getByRole('link',{name:'the lender'}).getAttribute('target'),'_blank');
     await page.getByRole('link',{name:'quote instructions'}).click();
     await page.locator('#task-modal[open]').getByText('Seek written financing quotes').first().waitFor();
-    assert.equal(new URL(page.url()).hash,'#/bot/finance/chat');
+    assert.equal(new URL(page.url()).hash,'#/bot/finance/dm');
     assert.deepEqual(errors,[]);
     console.log('doc-viewer: ok (Markdown formatted; images, the thumbnail, YouTube and PDF in the one viewer with arrows; HTML in a sandboxed frame)');
   } finally { await browser.close(); }

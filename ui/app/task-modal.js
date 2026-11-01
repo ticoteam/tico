@@ -477,7 +477,6 @@ async function taskSave(d, id, body, then, field) {
     if (here() && then !== false && data.task) void taskModalShow(data.task, d);       // the server's answer, at once
     if (BOT) {
       if (isKeeper(BOT.slug)) void loadBotTasksV2(BOT.slug);
-      void loadBotChatTasks(BOT.slug);
     }
     void personTasksReload();
     // The list reloads behind it. If the task left the view (done, closed, handed on, declined), the list and the
