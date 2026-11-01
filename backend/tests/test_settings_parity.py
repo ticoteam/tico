@@ -39,6 +39,7 @@ SAMPLES = {
     "sleep.hours": 2,
     "bot.fallback": "",
     "bot.task_model": "",
+    "bot.browser_exit": {"runner_id": None},       # back to its own internet; a computer must first share with the bot
     "bot.change": {"kind": "model", "target": {}},
     "bot.restore": {},
     "bots.create": {"slug": "parity-bot", "display_name": "Parity Bot"},
