@@ -212,3 +212,24 @@ def test_a_run_still_heartbeating_past_its_limit_is_left_to_the_runner(api):
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'running'
     assert not listed(api, a['id'])['stalled']
+
+
+def test_a_server_capped_run_does_not_come_back_on_renewal_and_its_late_result_is_still_filed(api):
+    """The computer comes back after the cap with the same assignment: its renewal is refused, the run stays ended,
+    and a late result from the turn is still filed as the turn's outcome."""
+    machine, _, a = start(api)
+    post(api, f"attempts/{a['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'exec_command', 'status': 'started'}}]}, machine['token'])
+    t0 = H.now()
+    silent_since(api, a['id'], H.shift(t0, minutes=-70))
+    tick(api, t0)
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'expired'
+    renewal = api.post(f"/api/v2/attempts/{a['id']}/renew", json={}, headers=headers(machine['token']))
+    assert renewal.status_code == 409
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'expired'
+    late = api.post(f"/api/v2/attempts/{a['id']}/complete", json={'outcome': 'completed', 'last_seq': 1},
+                    headers=headers(machine['token']))
+    assert late.status_code == 200
+    assert listed(api, a['id'])['end_reason'] == 'Finished'

@@ -52,8 +52,9 @@ def computer_hold(c, runner_id, now=None, status=None):
     """Why this computer holds a bot's new start, as (wait reason, words for people), or None. Diagnostics on only.
 
     - Sustained CPU or memory overload (performance.load_status): "computer busy", as before.
-    - The latest sample older than two minutes: "computer not reporting". A frozen computer stops sampling, so a
-      silent one admits no work. A computer that has never sampled is not held: older runners never sent samples.
+    - The latest sample older than two minutes, or none in the retention window after one was ever kept:
+      "computer not reporting". A frozen computer stops sampling, so a silent one admits no work. A computer that
+      has never sampled is not held: older runners never sent samples.
     - Memory at 85% or more: "computer busy: memory N%". It is admitted again below 80%; between the two it keeps
       the state its newest sample set (performance.ingest), so the queue does not flap.
     A person's own message skips this at each caller, as it skips the overload hold."""
@@ -64,7 +65,9 @@ def computer_hold(c, runner_id, now=None, status=None):
         status = load_status(c, runner_id, now)
     latest = status['latest_sample']
     if latest is None:
-        return None
+        # Samples past retention are gone, but a computer that reported before still reports nothing now.
+        seen = c.execute("SELECT last_sampled_at FROM runners WHERE id=?", (runner_id,)).fetchone()
+        return (NOT_REPORTING, NOT_REPORTING) if seen and seen[0] else None
     if latest['stale']:
         return NOT_REPORTING, NOT_REPORTING
     if status['overloaded']:

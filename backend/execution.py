@@ -3824,6 +3824,7 @@ class Execution:
         Mac never stopped, so its result is worth more than a review of a phantom interruption. Neither the computer's
         capacity nor the bot's Turns at once is checked: refusing would not stop the turn on the Mac, only discard
         its result, so a turn claimed while this one lapsed briefly runs beside it."""
+        from .run_diagnostics import CAP_EVENT
         now = H.now()
         job = c.execute("SELECT state,message_id FROM jobs WHERE id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
         if (not row["finished"] or row["finished"] <= H.shift(now, seconds=-STALL_MAX)
@@ -3831,6 +3832,8 @@ class Execution:
                 # A Stop recorded after the lease lapsed stands over whatever the turn reports next: nothing brings
                 # it back, and `complete` files its result.
                 or row["stop_requested"]
+                # The server ended this run past its limit (run_diagnostics.cap): a renewal does not bring it back.
+                or c.execute("SELECT 1 FROM events WHERE target=? AND action=? LIMIT 1", (row["id"], CAP_EVENT)).fetchone()
                 or c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
                 or c.execute("SELECT 1 FROM attempts WHERE bot=? AND lane=? AND state IN ('leased','running')",
                              (row["bot"], row["lane"])).fetchone()):

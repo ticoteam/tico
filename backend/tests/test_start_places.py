@@ -559,3 +559,49 @@ def test_a_computer_that_never_reported_is_not_held(api):
     """Older runners never sent samples; holding them for silence would stop every start on them."""
     computer = bot_waiting_for_finance(api)
     assert claim(api, computer, 'finance') is not None
+
+
+def batch(api, computer, readings):
+    """One delivery of samples [(minute offset in seconds from now, memory fraction)], as the runner posts them."""
+    import time
+    now = int(time.time()) // 60 * 60
+    post(api, 'runners/performance', {'samples': [point(now + off, cpu=20, mem=mem) for off, mem in readings]},
+         computer['token'])
+
+
+def test_a_batch_that_climbs_through_85_then_82_holds_from_clear(api):
+    """A recovered delivery of readings is replayed in order: 86% then 82% holds, though the last one is in the band."""
+    computer = bot_waiting_for_finance(api)
+    batch(api, computer, [(-60, .86), (0, .82)])
+    assert claim(api, computer, 'finance') is None
+
+
+def test_a_batch_that_falls_to_79_then_rises_to_82_releases_a_held_computer(api):
+    computer = bot_waiting_for_finance(api)
+    import time
+    now = int(time.time()) // 60 * 60
+    memory(api, computer, .86, at=now - 120)
+    batch(api, computer, [(-60, .79), (0, .82)])
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_an_older_delivery_cannot_move_a_hold_set_by_a_newer_reading(api):
+    """A late batch from before the newest stored reading is ignored, as the per-minute upsert already ignores it."""
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .3)
+    batch(api, computer, [(-300, .9)])
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_a_computer_that_reported_then_went_silent_past_retention_is_not_reporting_until_it_samples_again(api):
+    """Samples past the 48-hour window are pruned, but the computer still reported before: it stays held until it
+    sends a fresh sample, and a computer that never reported is not held (above)."""
+    import time
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .3)
+    with api.app.state.store.transaction() as c:
+        c.execute('DELETE FROM runner_load_samples WHERE runner_id=?', (computer['runner_id'],))
+        c.execute('UPDATE runners SET last_sampled_at=? WHERE id=?', (int(time.time()) - 200000, computer['runner_id']))
+    assert claim(api, computer, 'finance') is None
+    memory(api, computer, .3)
+    assert claim(api, computer, 'finance') is not None
