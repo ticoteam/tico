@@ -290,7 +290,9 @@ threads.update(c, principal, thread_id, *, title=None, archived=None)
 ```
 - Posting, being mentioned or owning the thread's task sets `following=1` (reason posted|mentioned|task).
 - **Mentions and following never grant access.** A mention outside the audience writes `in_audience=0`, no
-  delivery, and returns `warnings: [{"rule": "mention_outside", "actor": ...}]` to the author.
+  delivery, and returns `warnings: [{"rule": "mention_outside", "actor": ...}]` to the author: on the result of
+  `threads.post`, `hubdb.say` and every route built on them (REST answers the dict as is; CLI/MCP print it), beside
+  any writing-lint warnings.
 
 ### 3.4 Edit and delete (§3.5)
 

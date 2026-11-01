@@ -80,7 +80,8 @@ def test_a_members_thread_reaches_only_its_members_and_a_mention_grants_nothing(
         member, outsider = [a for a in people(who) if a != owner.actor][:2]
         tid = threads.create(c, owner, title="Pricing", audience="members", members=[member])["id"]
         name = H.human(c, H.actor_id(outsider))["name"] or H.actor_id(outsider)
-        threads.post(c, owner, tid, f"cc @{H.actor_id(outsider)} @{name}")
+        sent = threads.post(c, owner, tid, f"cc @{H.actor_id(outsider)} @{name}")
+        assert {(w["rule"], w["actor"]) for w in sent.get("warnings") or []} == {("mention_outside", outsider)}
     with store.read_transaction() as c:
         assert threads.readable(c, threads.viewer(auth, who[member]), tid)
         assert not threads.readable(c, threads.viewer(auth, who[outsider]), tid)
