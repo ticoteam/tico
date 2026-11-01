@@ -18,7 +18,7 @@ from backend.tests.test_onboarding import draft, environment, machine, signed_in
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "bookkeeper"
 DIGEST = "a" * 64
-DEFAULT_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards"}
+DEFAULT_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards", "finance.records"}
 PDF = b"%PDF-1.4 Acme invoice 1042"
 
 

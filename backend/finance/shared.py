@@ -1,6 +1,6 @@
 """Shared records as Finance's lines use them: a line's location, project and class tags must name an active record, and
-an item a line names must be live (backend/records). Checked where lines are written, so a stale id never reaches the
-books. A tag never widens who sees a line: view checks stay with the caller."""
+an item a line names must be live and not a category (backend/records). Checked where lines are written, so a stale id
+never reaches the books. A tag never widens who sees a line: view checks stay with the caller."""
 from collections.abc import Mapping
 from typing import Any
 
@@ -44,4 +44,6 @@ def live_item(ctx: Ctx, item_id: str) -> Any:
         raise FinanceError(NOT_FOUND, "no such item")
     if row["archived_at"] is not None:
         raise invalid("that item is inactive")
+    if row["kind"] == "category":
+        raise invalid("a category cannot go on a line: name a product or service instead")
     return row

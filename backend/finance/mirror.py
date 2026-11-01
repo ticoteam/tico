@@ -1014,6 +1014,8 @@ def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, ve
         state = _doc_state(kind, total, int(doc["amount_paid"]), written_off)
         SAP.update(c, table, local, _doc_update(kind, contact, d, total, state, at))
         line_tags = _carry_lines(c, kind, local, old_entry, keys, rows, sign)
+        if _provider(ctx) == "xero":
+            items = _carried_items(c, kind, local, rows, items)
         if kind == "bill" and not po_lines:
             po_lines, retained = _carried_order_lines(c, local, keys, rows)
     else:
@@ -1190,6 +1192,19 @@ def _carry_lines(c: sqlite3.Connection, kind: str, doc_id: str, old_entry: str, 
     fallback = _carried(_entry_tags(c, old_entry),
                         [(account, sign * amount, key) for (account, amount, _), key in zip(rows, marks, strict=True)])
     return [by_key[key] if key and key in by_key else mark for key, mark in zip(marks, fallback, strict=True)]
+
+
+def _carried_items(c: sqlite3.Connection, kind: str, doc_id: str, rows: Sequence[tuple[str, int, str]],
+                   items: Sequence[str]) -> list[str]:
+    """Each line's item where the provider names none: the item the line held at the same position on the same account.
+    Xero's lines say which account they post to but not which item they sell, so a revision keeps the item of each line
+    it still matches (a line that moved, or changed its account, has none)."""
+    held = SAP.lines(c, kind, [doc_id])[doc_id]
+    out: list[str] = []
+    for i, ((account, _, _), item) in enumerate(zip(rows, list(items) or [""] * len(rows), strict=True)):
+        same = i < len(held) and str(held[i]["account_id"] or "") == account
+        out.append(item or (str(held[i]["item_id"] or "") if same else ""))
+    return out
 
 
 def _settle_target(c: sqlite3.Connection, cid: str, key: str) -> tuple[str, str]:
@@ -1531,6 +1546,19 @@ def _need(key: str | None, what: str) -> str:
     return key
 
 
+def _item_code(c: sqlite3.Connection, local_id: str) -> str:
+    """The code an item is held by at the provider, its SKU else its name, which is how a line names the item it sells
+    (Xero). Empty for no item, and while a change to the item waits to reach the provider: the code it holds is then
+    not known."""
+    if not local_id:
+        return ""
+    item = RS.resolve(c, "items", local_id)
+    row = c.execute("SELECT name, sku FROM items WHERE id=?", (item,)).fetchone()
+    if row is None or SK.record_write_open(c, "item.update", item):
+        return ""
+    return str(row[1] or row[0])
+
+
 def _doc_out(c: sqlite3.Connection, cid: str, local: Mapping[str, Any]) -> dict[str, Any]:
     """A bill, invoice, purchase order or estimate as the provider takes it: its party and each line's account by their
     provider keys. An invoice made from an estimate names that estimate."""
@@ -1541,6 +1569,7 @@ def _doc_out(c: sqlite3.Connection, cid: str, local: Mapping[str, Any]) -> dict[
             "account": _need(_key(c, cid, "fin_accounts", str(x["account_id"])), f"account {x['account_id']}"),
             "amount": x["amount"], "description": x["description"],
             "item": _tag_need(c, cid, "items", str(x.get("item_id") or "")),
+            "item_code": _item_code(c, str(x.get("item_id") or "")),
             "location": _tag_need(c, cid, "locations", tags.get("location", "")),
             "class": _bare(_tag_need(c, cid, "fin_dimensions", tags.get("class", ""))),
             "project": _customer_key(_tag_need(c, cid, "projects", tags.get("project", "")))})

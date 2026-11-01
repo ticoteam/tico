@@ -429,7 +429,7 @@ def test_defaults_are_seeded_once_stay_as_edited_and_guard_bots(books):
         assert "1000000" in c.execute("SELECT when_json FROM fin_rules WHERE id='rule:bot-books-over-5000'"
                                       ).fetchone()[0]
         assert FA.grant_defaults(c, "bot:coder", at=AT) == ["finance.book", "finance.ap", "finance.ar", "finance.pay",
-                                                            "finance.cards"]
+                                                            "finance.cards", "finance.records"]
         assert FA.grant_defaults(c, "bot:coder", at=AT) == []
         entry = {"date": "2026-10-10", "lines": [{"account_id": account(c, "6100"), "amount": 900_000,
                                                   "tags": {"team": "web"}},

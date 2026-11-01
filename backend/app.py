@@ -7912,6 +7912,8 @@ def create_app(settings=None):
     from . import rules as wake_rules_api
     wake_rules_api.install(app, store, auth)                # the event catalog; wake rules are automations now
     turn_budgets.install(app, store, auth, mutate, settings_admin)
+    from . import sidebar
+    sidebar.install(app, store, auth, mutate)
     from . import automations
     automations.install(app, store, auth, mutate)
     from . import audit_log

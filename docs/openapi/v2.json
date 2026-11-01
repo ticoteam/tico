@@ -6208,6 +6208,175 @@
         ]
       }
     },
+    "/api/v2/customers": {
+      "get": {
+        "summary": "Active customers by name for pickers: id and name only, to every teammate; q matches a name, and an email for a viewer of receivables; with a cursor",
+        "operationId": "listCustomers",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Customers"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/customers/{contact_id}": {
+      "get": {
+        "summary": "A customer's panel: the contact, its active locations, and its open estimates and unpaid invoices where the caller sees receivables (null where not)",
+        "operationId": "getCustomer",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerPanel"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/deleted-tasks": {
       "get": {
         "summary": "Deleted tasks this person may restore, newest first",
@@ -7330,6 +7499,228 @@
         },
         "tags": [
           "Docs"
+        ]
+      }
+    },
+    "/api/v2/due-dates": {
+      "get": {
+        "summary": "Due dates by name: what each falls on, its repeat, the next day due and its teammate; q searches names, archived hides them (default), shows only them or both; subject_type with subject_id narrows to one record; with a cursor",
+        "operationId": "listDueDates",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "hide",
+                "only",
+                "all"
+              ],
+              "type": "string",
+              "default": "hide",
+              "title": "Archived"
+            }
+          },
+          {
+            "name": "subject_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "location",
+                    "equipment",
+                    "contact"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Type"
+            }
+          },
+          {
+            "name": "subject_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DueDates"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/due-dates/{due_date_id}": {
+      "get": {
+        "summary": "One due date, archived or not, with its days newest first and the task that carried each",
+        "operationId": "getDueDate",
+        "parameters": [
+          {
+            "name": "due_date_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "title": "Due Date Id"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DueDateOne"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
         ]
       }
     },
@@ -11399,7 +11790,7 @@
     },
     "/api/v2/finance/reports/{kind}": {
       "get": {
-        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
+        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or revenue_by_item (posted invoices by the item each line names; receivables view), cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
         "operationId": "getFinanceReport",
         "parameters": [
           {
@@ -11415,7 +11806,8 @@
                 "budget_vs_actual",
                 "ap_aging",
                 "ar_aging",
-                "spend_by"
+                "spend_by",
+                "revenue_by_item"
               ],
               "type": "string",
               "title": "Kind"
@@ -11690,7 +12082,8 @@
                     "location",
                     "project",
                     "po",
-                    "estimate"
+                    "estimate",
+                    "due_date"
                   ],
                   "type": "string"
                 },
@@ -38139,6 +38532,23 @@
             "type": "string",
             "description": "Signed-in callers: the Tico file hosting origin pages and SVG show from when there is no visual address, else empty; grants no native IPC permission."
           },
+          "business_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The company's business type (field_service, restaurant, retail, manufacturer, construction, multi_location_services, software, other), or null until one is set."
+          },
+          "hidden_sections": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Sidebar sections and Operations tabs the company hides; null when nothing is stored (distinct from [], which shows everything). Display only: data, rights and the API are unchanged."
+          },
           "s3_view_urls": {
             "type": "object",
             "additionalProperties": {
@@ -38266,6 +38676,88 @@
         "required": [
           "actor",
           "conversations"
+        ],
+        "additionalProperties": true
+      },
+      "CustomerPanel": {
+        "type": "object",
+        "properties": {
+          "contact": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": true
+          },
+          "locations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Location"
+            }
+          },
+          "estimates": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "invoices": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "contact",
+          "estimates",
+          "invoices",
+          "locations"
+        ],
+        "additionalProperties": true
+      },
+      "Customers": {
+        "type": "object",
+        "properties": {
+          "customers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "customers",
+          "next_cursor"
         ],
         "additionalProperties": true
       },
@@ -38936,6 +39428,144 @@
           "owner"
         ],
         "title": "DueAdd"
+      },
+      "DueDate": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "subject_type": {
+            "type": "string"
+          },
+          "subject_id": {
+            "type": "string"
+          },
+          "subject_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repeats": {
+            "type": "string"
+          },
+          "every_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "starts_on": {
+            "type": "string"
+          },
+          "next_due_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lead_days": {
+            "type": "integer"
+          },
+          "assignee_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "archived_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DueDay"
+            }
+          }
+        },
+        "required": [
+          "assignee_id",
+          "id",
+          "lead_days",
+          "name",
+          "repeats",
+          "starts_on",
+          "status",
+          "subject_id",
+          "subject_type"
+        ],
+        "additionalProperties": true
+      },
+      "DueDateOne": {
+        "type": "object",
+        "properties": {
+          "due_date": {
+            "$ref": "#/components/schemas/DueDate"
+          }
+        },
+        "required": [
+          "due_date"
+        ],
+        "additionalProperties": true
+      },
+      "DueDates": {
+        "type": "object",
+        "properties": {
+          "due_dates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DueDate"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "due_dates",
+          "next_cursor"
+        ],
+        "additionalProperties": true
+      },
+      "DueDay": {
+        "type": "object",
+        "properties": {
+          "due_on": {
+            "type": "string"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completed_by_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "due_on"
+        ],
+        "additionalProperties": true
       },
       "DueEdit": {
         "properties": {
@@ -42437,7 +43067,8 @@
               "budget_vs_actual",
               "ap_aging",
               "ar_aging",
-              "spend_by"
+              "spend_by",
+              "revenue_by_item"
             ]
           },
           "prior": {
@@ -47659,6 +48290,18 @@
               "string",
               "null"
             ]
+          },
+          "customer_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -49835,6 +50478,12 @@
             "type": "string"
           },
           "customer_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customer_name": {
             "type": [
               "string",
               "null"

@@ -44,7 +44,9 @@ FIND_PAGES = 50                       # a lookup for a write reads this many pag
 CHANGE_EVERY = 240                    # seconds between change-feed reads: a change is seen within five minutes (§10)
 ORDER = "UpdatedDateUTC DESC"         # newest first, so rows edited during a read move to the front (re-read, not skipped)
 CHANGE_ORDER = "UpdatedDateUTC ASC"   # oldest first: a list cut at the cap is complete to its last row read
-EXTRA = {"parties": {"includeArchived": "true"}, "bank_transfers": {"includeDeleted": "true"}}
+EXTRA = {"parties": {"includeArchived": "true"}, "bank_transfers": {"includeDeleted": "true"},
+         # archived options are listed too: a bill or journal line on one still names it, and its archive is a change
+         "tracking": {"includeArchived": "true"}}
 UNPAGED = ("accounts", "bank_transfers", "tracking")   # Xero returns these whole, with no page parameter
 ENDPOINTS = {"accounts": "Accounts", "parties": "Contacts", "items": "Items", "tracking": "TrackingCategories",
              "invoices": "Invoices", "credit_notes": "CreditNotes",

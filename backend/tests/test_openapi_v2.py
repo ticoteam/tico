@@ -229,6 +229,9 @@ def test_the_finance_record_and_order_answers_match_the_live_ones(api):
     call("getPurchaseOrder", "/api/v2/purchase-orders/" + po)
     call("listEstimates", "/api/v2/estimates")
     call("getEstimate", "/api/v2/estimates/" + estimate)
+    call("listCustomers", "/api/v2/customers", {"q": "acme"})
+    call("getCustomer", "/api/v2/customers/" + customer)
+    call("getFinanceReport", "/api/v2/finance/reports/revenue_by_item", {"start": "2026-10-01", "end": "2026-10-31"})
 
 
 def test_closed_status_uses_close_permissions_and_rejects_combined_edits(api):
