@@ -312,12 +312,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS credential_grant_active ON credential_grants(c
 CREATE TABLE IF NOT EXISTS archives(
  source TEXT PRIMARY KEY, digest TEXT NOT NULL, imported TEXT NOT NULL,
  owner TEXT, kind TEXT NOT NULL, payload_json TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS documents(
- id TEXT PRIMARY KEY, visibility TEXT NOT NULL, collection TEXT NOT NULL,
- payload_json TEXT NOT NULL, digest TEXT NOT NULL, updated TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS document_versions(
- id TEXT NOT NULL, digest TEXT NOT NULL, payload_json TEXT NOT NULL, imported TEXT NOT NULL,
- PRIMARY KEY(id,digest));
 CREATE TABLE IF NOT EXISTS blobs(
  id TEXT PRIMARY KEY, owner TEXT NOT NULL, digest TEXT NOT NULL, size INTEGER NOT NULL,
  name TEXT NOT NULL, content_type TEXT NOT NULL, created TEXT NOT NULL);

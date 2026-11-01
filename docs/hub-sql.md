@@ -119,7 +119,6 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `linked_docs` | `id, title, url, kind, description, added_by, created, updated` | linked Docs |
 | `bot_files` | `id, bot, scope, identity, title, kind, locator, current_version, task_id, conversation_id` | Files, with the same task, conversation or bot visibility as their APIs |
 | `bot_file_versions`, `bot_file_activity` | `file_id, version` or `file_id, action, actor, created` | versions and activity of visible Files |
-| `documents`, `document_versions` | legacy mirror fields | compatibility tables for the older docs mirror |
 | `learnings` | `id, integration, actor, text, created, deleted_at` | Tools: what bots and humans learned about a tool (`integration` is the stored column; `integrations/`, `hub tool learn`) |
 | `assistant_action_weekly`, `mcp_call_weekly` | `week, proposer, status, actions, share_pct` and `week, bot, tool, calls, errors, error_pct, avg_ms, max_ms` | read-only totals for the owner and a bot the owner grants them (API only: `PUT /api/v2/outcome-stats/readers/<slug>`; revoke with `read: false`): how Assistant and BotOps proposals settled (`status`: done, failed, cancelled, expired ...) and how bot MCP tool calls went, per week. No row, text, id or person is in them; the underlying `assistant_actions` stays unreadable to a bot. The same bot may call `hub mcp stats` (no `--via`) |
 

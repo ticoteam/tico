@@ -148,7 +148,7 @@ def test_the_upgrade_drops_the_retired_send_table_and_the_log_keeps_counting(tmp
         conn.execute("CREATE TABLE task_cap_sends(task_id TEXT PRIMARY KEY, sender TEXT, receiver TEXT, sent_at TEXT)")
         conn.execute("INSERT INTO task_cap_sends(task_id, sender, receiver, sent_at) VALUES('t0','bot:ops','human:ana',?)",
                      (H.now(),))
-        conn.execute(f"PRAGMA user_version={len(H.MIGRATIONS) - 1}")
+        conn.execute("PRAGMA user_version=71")         # the version before the task_cap_sends drop
         H.migrate(conn)
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "task_cap_sends" not in tables and "task_cap_log" in tables

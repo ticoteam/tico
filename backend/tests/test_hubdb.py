@@ -13,6 +13,7 @@ import unittest.mock
 from pathlib import Path
 
 from backend import hubdb as H
+from backend import market as MK
 from backend import task_relations as TR
 
 EMPLOYEES = {
@@ -1257,7 +1258,8 @@ class WaitingWithDependency(HubCase):
 # ----------------------------------------------------------------------------- the Strategy Bot's old names, dropped
 class StrategyOldNamesDropped(HubCase):
     """Installs from before v0.5.0 renamed the Strategy Bot's tables (ceo_* -> strategy_*) and kept the old names as
-    mirrors of the new ones. Migration 73 drops the mirrors and their triggers; the new tables keep every row."""
+    mirrors of the new ones. The upgrade to user_version 73 drops the mirrors and their triggers; the new tables keep
+    every row."""
 
     def install_as_v050_left_it(self):
         """The old-named twins and the triggers that mirrored writes to them, as the v0.5.0 schema had them."""
@@ -1284,7 +1286,7 @@ class StrategyOldNamesDropped(HubCase):
         self.conn.execute("INSERT INTO strategy_merges(merged_into,original,person,asker,created) "
                           "VALUES('t1','t2','human:ana','bot:coo',?)", (H.now(),))
         self.install_as_v050_left_it()
-        self.conn.execute(f"PRAGMA user_version={len(H.MIGRATIONS) - 1}")
+        self.conn.execute("PRAGMA user_version=72")     # the version before the ceo_* drop
         self.conn.commit()
         H.migrate(self.conn)
         self.assertFalse({"ceo_actions", "ceo_merges"} & self.names())
@@ -1296,7 +1298,7 @@ class StrategyOldNamesDropped(HubCase):
 
     def test_writes_after_the_upgrade_go_to_the_new_tables_without_mirrors(self):
         self.install_as_v050_left_it()
-        self.conn.execute(f"PRAGMA user_version={len(H.MIGRATIONS) - 1}")
+        self.conn.execute("PRAGMA user_version=72")     # the version before the ceo_* drop
         self.conn.commit()
         H.migrate(self.conn)
         self.act("a2", "done")
@@ -1306,7 +1308,7 @@ class StrategyOldNamesDropped(HubCase):
     def test_a_second_start_changes_nothing(self):
         self.act("a1", "done")
         self.install_as_v050_left_it()
-        self.conn.execute(f"PRAGMA user_version={len(H.MIGRATIONS) - 1}")
+        self.conn.execute("PRAGMA user_version=72")     # the version before the ceo_* drop
         self.conn.commit()
         H.migrate(self.conn)
         H.migrate(self.conn)
@@ -1334,3 +1336,53 @@ class WalLeftForLitestream(unittest.TestCase):
             control.execute("CREATE TABLE probe(x)")
             control.close()
             self.assertFalse(Path(f"{plain}-wal").exists())
+
+
+class MarketNotesMoved(HubCase):
+    """Installs from before the market pages had their own table kept them in `documents`, the repository mirror's
+    table, with the mirror's versions beside it. The upgrade to user_version 75 copies the market notes into
+    market_pages and drops both tables. The mirror's other rows were never shown anywhere, so they go too."""
+
+    def install_as_before_it_moved(self):
+        self.conn.execute("DROP TABLE market_pages")
+        self.conn.execute("CREATE TABLE documents(id TEXT PRIMARY KEY, visibility TEXT NOT NULL, collection TEXT NOT NULL, "
+                          "payload_json TEXT NOT NULL, digest TEXT NOT NULL, updated TEXT NOT NULL)")
+        self.conn.execute("CREATE TABLE document_versions(id TEXT NOT NULL, digest TEXT NOT NULL, "
+                          "payload_json TEXT NOT NULL, imported TEXT NOT NULL, PRIMARY KEY(id,digest))")
+        overview = {"id": "market/overview", "title": "Overview", "content": "The market is small.", "category": "Market",
+                    "collection": "market", "search": "The market is small.", "format": "markdown",
+                    "owner": MK.CURATOR, "fetched": "2026-10-01T00:00:00.000000Z", "seeded": True}
+        raw = json.dumps(overview)
+        self.conn.execute("INSERT INTO documents VALUES(?,?,?,?,?,?)",
+                          ("market/overview", "external", "market", raw, "d1", "2026-10-01T00:00:00.000000Z"))
+        self.conn.execute("INSERT INTO document_versions VALUES(?,?,?,?)",
+                          ("market/overview", "d1", raw, "2026-10-01T00:00:00.000000Z"))
+        self.conn.execute("INSERT INTO documents VALUES(?,?,?,?,?,?)",
+                          ("repo/readme.md", "internal", "repo", json.dumps({"title": "Readme", "content": "x"}),
+                           "d2", "2026-10-01T00:00:00.000000Z"))
+        self.conn.execute("PRAGMA user_version=72")     # the version before the ceo_* drop
+        self.conn.commit()
+
+    def test_the_upgrade_copies_the_market_notes_and_drops_the_mirror_tables(self):
+        self.install_as_before_it_moved()
+        H.migrate(self.conn)
+        names = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertNotIn("documents", names)
+        self.assertNotIn("document_versions", names)
+        self.assertEqual([tuple(r) for r in self.conn.execute(
+            "SELECT id, title, category, body, seeded, updated_at FROM market_pages")],
+            [("market/overview", "Overview", "Market", "The market is small.", 1, "2026-10-01T00:00:00.000000Z")])
+
+    def test_the_pages_still_read_list_and_write_after_the_upgrade(self):
+        self.install_as_before_it_moved()
+        H.migrate(self.conn)
+        page = MK.read_page(self.conn, "market/overview")
+        self.assertEqual((page["content"], page["seeded"], page["collection"]),
+                         ("The market is small.", True, "market"))
+        self.assertIsNone(MK.read_page(self.conn, "repo/readme.md"))
+        MK.write_page(self.conn, MK.SEED_ACTOR, "market/theses", "Theses", "Our bet.", "Market", record=False)
+        rewritten = MK.write_page(self.conn, MK.SEED_ACTOR, "market/overview", "Overview", "Rewritten.", "Market",
+                                  replace=True, record=False)
+        self.assertEqual([p["id"] for p in MK.list_pages(self.conn)], ["market/overview", "market/theses"])
+        self.assertEqual((rewritten["content"], rewritten["seeded"]), ("Rewritten.", True))   # the seed's own write
+        self.assertEqual(MK.read_page(self.conn, "market/theses")["content"], "Our bet.")

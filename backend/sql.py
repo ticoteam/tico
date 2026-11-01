@@ -419,8 +419,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         "meeting_versions": by_meeting, "meeting_deliveries": by_meeting, "media_assets": by_meeting, "media_control": by_meeting,
         "meeting_items": by_meeting, "meeting_brain": by_meeting, "meeting_comments": by_meeting,
         "import_refs": by_meeting,
-        "documents": "1" if owner else "visibility='external'",
-        "document_versions": "id IN (SELECT id FROM documents)",
+        "market_pages": "1",
         "docs": "id IS NOT NULL", "doc_versions": "doc_id IN (SELECT id FROM docs)",
         "linked_docs": "id IS NOT NULL",
         "bot_files": (file_gate + " AND " + (f"bot={q(H.actor_id(who.actor))} AND " if bot else "")
@@ -451,7 +450,7 @@ def guarded(c, auth, who, inner, function, columns=None):
                          " t WHERE (t.owner='bot:'||bot OR t.requester='bot:'||bot) "
                          "AND (t.private IS NULL OR t.private<>0) AND NOT " +
                          function("task") + "(t.id))")
-    for table in ("docs", "doc_versions", "linked_docs", "documents", "document_versions"):
+    for table in ("docs", "doc_versions", "linked_docs", "market_pages"):
         cols = columns.get(table, ()) if columns is not None else [r[1] for r in c.execute(f'PRAGMA table_info("{table}")')]
         rules[table] = "(" + rules[table] + ") AND " + content_gate(cols)
     rules["task_file_reviews"] = "file_id IN (SELECT id FROM bot_files) OR file_id IN (SELECT id FROM blobs)"

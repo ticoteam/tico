@@ -22,7 +22,7 @@ from fastapi import Query, Request
 
 from . import hubdb as H
 from . import models as M
-from .store import Problem, digest, encode
+from .store import Problem
 
 # The Librarian builds the first map from what the owner gave (playbooks/market-setup.md) and keeps it
 # current from the insights everyone else reports (playbooks/curate-the-market.md).
@@ -478,12 +478,11 @@ def retrieve(conn, question, limit=8):
                          "text": "\n".join(p for p in (row.get("quote") or "", row.get("our_read") or "") if p)})
     tokens = [t.lower() for t in re.findall(r"[A-Za-z0-9.]{3,}", str(question or ""))[:8]]
     if tokens:
-        for doc in conn.execute("SELECT id, payload_json FROM documents WHERE collection='market' ORDER BY id"):
-            payload = json.loads(doc["payload_json"])
-            haystack = (payload.get("title", "") + "\n" + payload.get("content", "")).lower()
+        for page in conn.execute("SELECT id, title, body FROM market_pages ORDER BY id"):
+            haystack = (page["title"] + "\n" + page["body"]).lower()
             if any(token in haystack for token in tokens):
-                excerpts.append({"kind": "document", "id": doc["id"], "title": payload.get("title") or doc["id"],
-                                 "text": str(payload.get("content") or "")[:1500]})
+                excerpts.append({"kind": "document", "id": page["id"], "title": page["title"] or page["id"],
+                                 "text": page["body"][:1500]})
     return excerpts[: limit + 9]
 
 
@@ -817,8 +816,8 @@ def cite(conn, actor, claim_kind, claim_id, evidence_id_, insight_id=None):
     elif claim_kind == "evidence" and not evidence(conn, claim_id):
         H.refuse(conn, actor, "not-found", f"no evidence {claim_id}")
     elif claim_kind == "document":
-        doc = conn.execute("SELECT collection FROM documents WHERE id=?", (claim_id,)).fetchone()
-        if not doc:
+        page = conn.execute("SELECT 1 FROM market_pages WHERE id=?", (claim_id,)).fetchone()
+        if not page:
             H.refuse(conn, actor, "not-found", f"no document {claim_id}")
     _cite(conn, actor, claim_kind, claim_id, [evidence_id_], insight_id)
     return {"claim_kind": claim_kind, "claim_id": claim_id, "evidence_id": evidence_id_}
@@ -1165,37 +1164,43 @@ def sweep(conn, actor, unverified, *, today=None, owner_email=None):
 
 # ----------------------------------------------------------------------------- narrative pages
 def read_page(conn, doc_id):
-    row = conn.execute("SELECT payload_json FROM documents WHERE id=? AND collection='market'", (doc_id,)).fetchone()
-    return json.loads(row["payload_json"]) if row else None
+    row = conn.execute("SELECT * FROM market_pages WHERE id=?", (doc_id,)).fetchone()
+    return page_payload(row) if row else None
+
+
+def list_pages(conn):
+    return [page_payload(row) for row in conn.execute("SELECT * FROM market_pages ORDER BY id")]
+
+
+def page_payload(row):
+    """A narrative page as the Market page and the ask read it: the shape the company-docs routes serve."""
+    payload = {"id": row["id"], "title": row["title"], "content": row["body"], "category": row["category"],
+               "collection": "market", "search": row["body"], "format": "markdown", "owner": CURATOR,
+               "fetched": row["updated_at"]}
+    if row["seeded"]:
+        payload["seeded"] = True    # the seed's own text: the Market page hides it while the graph is empty
+    return payload
 
 
 def write_page(conn, actor, doc_id, title, body, category, *, replace=False, insight_id=None, record=True):
     if actor != SEED_ACTOR:
         H._writer(conn, actor)
-    existing = conn.execute("SELECT payload_json FROM documents WHERE id=?", (doc_id,)).fetchone()
+    existing = conn.execute("SELECT * FROM market_pages WHERE id=?", (doc_id,)).fetchone()
     if existing and not replace:
-        return json.loads(existing["payload_json"])
-    previous = json.loads(existing["payload_json"]).get("content") if existing else None
-    if previous == body:
-        return json.loads(existing["payload_json"])
+        return page_payload(existing)
+    if existing and existing["body"] == body:
+        return page_payload(existing)
     now = H.now()
-    payload = {"id": doc_id, "title": title, "content": body, "category": category, "collection": "market",
-               "search": body, "format": "markdown", "owner": CURATOR, "fetched": now}
-    if actor == SEED_ACTOR:
-        payload["seeded"] = True    # the seed's own text: the Market page hides it while the graph is empty
-    raw = encode(payload)
-    hashed = digest(raw)
-    conn.execute("INSERT OR IGNORE INTO document_versions VALUES(?,?,?,?)", (doc_id, hashed, raw, now))
-    conn.execute("INSERT INTO documents VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
-                 "visibility=excluded.visibility, collection=excluded.collection, payload_json=excluded.payload_json, "
-                 "digest=excluded.digest, updated=excluded.updated",
-                 (doc_id, "external", "market", raw, hashed, now))
+    conn.execute("INSERT INTO market_pages(id,title,category,body,seeded,updated_at) VALUES(?,?,?,?,?,?) "
+                 "ON CONFLICT(id) DO UPDATE SET title=excluded.title, category=excluded.category, "
+                 "body=excluded.body, seeded=excluded.seeded, updated_at=excluded.updated_at",
+                 (doc_id, title, category, body, 1 if actor == SEED_ACTOR else 0, now))
     # The weekly delta is a projection of market_events. Recording that write would make the
     # next Monday refresh see a new event and rewrite the page again.
     if record:
         _event(conn, "document", doc_id, actor, "created" if not existing else "body", None, title, insight_id,
                "" if not existing else "body changed")
-    return payload
+    return page_payload(conn.execute("SELECT * FROM market_pages WHERE id=?", (doc_id,)).fetchone())
 
 
 def _listed(conn, kind):
@@ -1300,16 +1305,16 @@ def mark_seeded_pages(conn):
     outgrown, is left alone. Returns the ids it marked; a second run marks none."""
     marked = []
     weekly = re.compile(r"^# Weekly delta\n\nChanges since (\d{4}-\d{2}-\d{2})\.")
-    rows = conn.execute("SELECT id, payload_json FROM documents WHERE collection='market' AND id IN (%s)"
+    rows = conn.execute("SELECT * FROM market_pages WHERE id IN (%s)"
                         % ",".join("?" * len(PAGES)), [page[0] for page in PAGES]).fetchall()
-    documents = {row["id"]: json.loads(row["payload_json"]) for row in rows}
-    if not documents:
+    pages = {row["id"]: row for row in rows}
+    if not pages:
         return marked
     fresh = narrative(conn, datetime.now(timezone.utc).date())
-    for doc_id, payload in documents.items():
-        if payload.get("seeded") or not isinstance(payload.get("content"), str):
+    for doc_id, row in pages.items():
+        if row["seeded"]:
             continue
-        body = payload["content"]
+        body = row["body"]
         if doc_id == "market/weekly-delta":
             since = weekly.match(body)
             if not since:
@@ -1318,12 +1323,7 @@ def mark_seeded_pages(conn):
             fresh[doc_id] = f"# Weekly delta\n\nChanges since {since.group(1)}.\n\nNo market changes in this week."
         if body != fresh.get(doc_id):
             continue
-        payload["seeded"] = True
-        raw = encode(payload)
-        hashed = digest(raw)
-        now = H.now()
-        conn.execute("INSERT OR IGNORE INTO document_versions VALUES(?,?,?,?)", (doc_id, hashed, raw, now))
-        conn.execute("UPDATE documents SET payload_json=?, digest=? WHERE id=?", (raw, hashed, doc_id))
+        conn.execute("UPDATE market_pages SET seeded=1 WHERE id=?", (doc_id,))
         marked.append(doc_id)
     return marked
 
@@ -1942,11 +1942,9 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            row = c.execute("SELECT payload_json FROM documents WHERE id=? AND collection='market'",
-                            ("market/" + name,)).fetchone()
-        if not row:
+            page = read_page(c, "market/" + name)
+        if not page:
             raise Problem("not_found", f"There is no market page {name}", 404)
-        page = json.loads(row["payload_json"])
         return {"name": name, "title": page.get("title") or name, "body": page.get("content") or ""}
 
     @app.post("/api/v2/market/pages/{name}")

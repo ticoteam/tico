@@ -980,7 +980,12 @@ DROP TABLE IF EXISTS ceo_merges;
 DROP TABLE IF EXISTS ceo_actions;""",
               # user_version 74: the redesign's cutover record table (its state is in registry_metadata) and the
               # accepts table nothing writes. redesign_migrated, which holds() reads, stays.
-              "DROP TABLE IF EXISTS redesign_migrations;\nDROP TABLE IF EXISTS redesign_migration_accepts;"]
+              "DROP TABLE IF EXISTS redesign_migrations;\nDROP TABLE IF EXISTS redesign_migration_accepts;",
+              # user_version 75: the market notes, in their own table. _market_pages_from_documents copies them out
+              # of the repository mirror's `documents` table, then drops that table and its versions.
+              "CREATE TABLE IF NOT EXISTS market_pages (id TEXT PRIMARY KEY, title TEXT NOT NULL, "
+              "category TEXT NOT NULL, body TEXT NOT NULL, seeded INTEGER NOT NULL DEFAULT 0, "
+              "updated_at TEXT NOT NULL)"]
 
 
 class Refused(Exception):
@@ -1177,6 +1182,22 @@ def _statements(script):
         yield buffer.strip()
 
 
+def _market_pages_from_documents(conn):
+    """Move the market notes out of `documents` (the repository mirror's table) into market_pages, then drop
+    `documents` and its versions. The mirror's other rows were never shown anywhere, so they are not copied."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='documents'").fetchone():
+        return
+    rows = conn.execute("SELECT id, payload_json, updated FROM documents WHERE collection='market'").fetchall()
+    for doc_id, raw, updated in rows:
+        page = json.loads(raw)
+        conn.execute("INSERT OR REPLACE INTO market_pages(id,title,category,body,seeded,updated_at) "
+                     "VALUES(?,?,?,?,?,?)",
+                     (doc_id, page.get("title") or "", page.get("category") or "", page.get("content") or "",
+                      1 if page.get("seeded") else 0, updated))
+    conn.execute("DROP TABLE IF EXISTS document_versions")
+    conn.execute("DROP TABLE IF EXISTS documents")
+
+
 def _apply(conn, script):
     for statement in _statements(script):
         match = ADD_COLUMN.fullmatch(statement)
@@ -1263,6 +1284,9 @@ def migrate(conn, adopt_legacy=False):
             elif i == 39:
                 _apply(conn, MIGRATIONS[i])
                 RT.backfill(conn)
+            elif i == 74:
+                _apply(conn, MIGRATIONS[i])
+                _market_pages_from_documents(conn)
             else:
                 _apply(conn, MIGRATIONS[i])
             conn.execute(f"PRAGMA user_version={i + 1}")

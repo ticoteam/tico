@@ -79,18 +79,15 @@ def install_context_search(app, store, auth):
                         found.append({"kind": "linked_doc", "id": hit["id"], "title": hit["title"], "collection": "docs",
                                       "url": hit["url"], "excerpt": hit["description"], "score": hit["score"]})
             if source in ("all", "market"):
-                for row in c.execute("SELECT * FROM documents WHERE collection='market' ORDER BY id"):
-                    if not documents.visible(who, row):
-                        continue
-                    doc = json.loads(row["payload_json"])
+                for doc in market.list_pages(c):
                     if not privacy.content_readable(c, privacy.actor(who), doc):
                         continue
                     title, content = doc.get("title", ""), doc.get("content", "")
                     body = "\n".join((content, str(doc.get("search", ""))))
                     if all(word in (title + " " + body).casefold() for word in words):
-                        found.append({"kind": "document", "id": row["id"], "title": title,
-                                      "collection": row["collection"], "updated": row["updated"],
-                                      "url": doc.get("url") or "#/strategy/market?note=" + quote(row["id"], safe=""),
+                        found.append({"kind": "document", "id": doc["id"], "title": title,
+                                      "collection": doc["collection"], "updated": doc["fetched"],
+                                      "url": "#/strategy/market?note=" + quote(doc["id"], safe=""),
                                       "excerpt": excerpt(body, words),
                                       "score": sum(10 if w in title.casefold() else 1 for w in words)})
             if source in ("all", "market"):

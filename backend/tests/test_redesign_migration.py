@@ -351,7 +351,7 @@ def test_the_upgrade_drops_the_cutover_record_and_accepts_tables_and_holds_still
         conn.execute("CREATE TABLE redesign_migration_accepts(flag TEXT PRIMARY KEY, accepted_by TEXT NOT NULL, "
                      "at TEXT NOT NULL)")
         conn.execute("INSERT INTO redesign_migrated(kind, id, migration, automation) VALUES('routine','sch_1','mig_1','a1')")
-        conn.execute(f"PRAGMA user_version={len(H.MIGRATIONS) - 1}")
+        conn.execute("PRAGMA user_version=73")         # the version before the redesign drop
         conn.commit()
         H.migrate(conn)
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
