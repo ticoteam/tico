@@ -11,14 +11,18 @@ A pin puts a page (`page:<file id>`) or a card (`card:<id>`) at a place, in orde
 - `bot:<slug>`, the bot's sidebar: its rows follow the page and card widgets saved with the sidebar
   (backend/bot_task_tabs.py), which keeps their order.
 - `task:<id>`, the top of a task, for whoever may read the task.
+- `person:<id>`, a person's My dashboard (the landing page): theirs alone. Only they read and arrange it, BotOps and
+  the Assistant only when acting for them; an admin has no way in, and a card pinned there is known to no one else.
+  `person:me` is the caller's own. Its cards are cards they made.
 
-A Dashboard or team page nobody saved shows its default cards (DEFAULTS) as pins without ids; saving it (PUT) makes
-them real, and every write saves it first.
+A Dashboard, team page or My dashboard nobody saved shows its default cards (DEFAULTS) as pins without ids; saving it
+(PUT) makes them real, and every write saves it first.
 
 The pinning rule keeps a page's data from spreading on its own: a bot pins only its own pages and cards, to its own
 sidebar or a task it holds or asked for. A page a person pins to the Dashboard or a team page is readable by that place's
 audience (`widened`, read by backend/files.py file_visible), so a private task's file is never pinned there, and every
-pin and unpin of a page is in the file's activity.
+pin and unpin of a page is in the file's activity. A pin on My dashboard widens nothing: its owner is its only reader,
+and each card and page there is still read with their own rights.
 """
 
 import json
@@ -61,10 +65,16 @@ TEMPLATES = {
     "kpi": {"name": "KPI", "fields": {"kpi": "kpi"}},
     "automation_runs": {"name": "Automation runs", "fields": {"team": "team"}},
     "latest_pages": {"name": "Latest pages", "fields": {"team": "team", "count": (1, 10, 5)}},
+    "needs_attention": {"name": "Needs attention", "fields": {}},
+    "unread_threads": {"name": "Unread threads", "fields": {"count": (1, 10, 5)}},
+    "my_tasks": {"name": "My tasks", "fields": {"count": (1, 10, 5)}},
+    "updates": {"name": "Updates", "fields": {"count": (1, 10, 5)}},
 }
 DEFAULTS = {"dashboard": [("tasks_by_status", "medium"), ("done_per_week", "medium"), ("needs_you", "medium"),
                           ("latest_pages", "medium")],
-            "team": [("tasks_by_status", "medium"), ("done_per_week", "medium"), ("needs_you", "medium")]}
+            "team": [("tasks_by_status", "medium"), ("done_per_week", "medium"), ("needs_you", "medium")],
+            "person": [("needs_attention", "medium"), ("unread_threads", "medium"), ("my_tasks", "medium"),
+                       ("updates", "medium"), ("latest_pages", "medium")]}
 WIDENING = ("dashboard", "team")
 
 
@@ -264,19 +274,80 @@ def done_per_week(ctx, s):
     return {"weeks": [{"week": w, "done": n} for w, n in out.items()]}
 
 
+def needs_list(ctx):
+    from . import views
+    return ctx.memo("needs", lambda: views.needs_items(ctx.c, ctx.auth, ctx.who, ctx.task_view))
+
+
+def needs_brief(items, n):
+    return [{"id": it.get("id"), "kind": it.get("kind"), "title": it.get("title") or "",
+             "task_id": it.get("task_id") or (it.get("id") if it.get("kind") in ("task", "question", "waiting") else None)}
+            for it in items[:n]]
+
+
 def needs_you(ctx, s):
     """The reader's own Needs you; with a team, the items its bots are behind."""
     if not ctx.person or not ctx.task_view:
         return None
     from . import views
-    items = ctx.memo("needs", lambda: views.needs_items(ctx.c, ctx.auth, ctx.who, ctx.task_view))
+    items = needs_list(ctx)
     if s["team"]:
         bots = {"bot:" + b for b in ctx.team_bots(s["team"])}
         items = [it for it in items if views.needs_actor(it, ctx.who.actor) in bots]
-    top = [{"id": it.get("id"), "kind": it.get("kind"), "title": it.get("title") or "",
-            "task_id": it.get("task_id") or (it.get("id") if it.get("kind") in ("task", "question", "waiting") else None)}
-           for it in items[:3]]
-    return {"count": len(items), "items": top}
+    return {"count": len(items), "items": needs_brief(items, 3)}
+
+
+def needs_attention(ctx, s):
+    """The reader's own Needs you list, its first five: what waits on them, wherever it came from."""
+    if not ctx.person or not ctx.task_view:
+        return None
+    items = needs_list(ctx)
+    return {"count": len(items), "items": needs_brief(items, 5)}
+
+
+def thread_rows(ctx, limit):
+    """The reader's unread threads as the sidebar lists them (`GET /threads`, docs/dev/threads-contract.md), newest
+    first: [{id, title, unread, attention, updated}]. Until the threads store is on this install there are none."""
+    return []
+
+
+def unread_threads(ctx, s):
+    """Threads with something for the reader: a human message or one addressed to them (bot activity is not unread)."""
+    if ctx.who.role not in ("owner", "human", "bot"):
+        return None
+    rows = thread_rows(ctx, s["count"])
+    return {"count": len(rows), "threads": rows[:s["count"]]}
+
+
+OPEN_STATUSES = H.ACTIVE_STATUSES
+
+
+def my_tasks(ctx, s):
+    """The open tasks the reader owns and may read, the soonest due first."""
+    if ctx.who.role not in ("owner", "human", "bot"):
+        return None
+    marks = ",".join("?" * len(OPEN_STATUSES))
+    where = f"({ctx.visible()}) AND owner=? AND status IN ({marks})"
+    args = (ctx.who.actor, *OPEN_STATUSES)
+    count = ctx.c.execute(f"SELECT count(*) FROM tasks WHERE {where}", args).fetchone()[0]
+    rows = ctx.c.execute(f"SELECT id, title, status, due, updated FROM tasks WHERE {where} "
+                         "ORDER BY due IS NULL, due, updated DESC, id LIMIT ?", (*args, s["count"])).fetchall()
+    return {"count": count, "tasks": [{"id": r["id"], "title": r["title"] or "", "status": r["status"], "due": r["due"],
+                                       "updated": r["updated"]} for r in rows]}
+
+
+def updates_card(ctx, s):
+    """The newest updates the reader may read (backend/updates.py visible_authors) and how many they have not read."""
+    from . import updates as U
+    if ctx.who.role not in ("owner", "human", "bot"):
+        return None
+    readable = U.visible_authors(ctx.c, ctx.auth, ctx.who)
+    found = U.listing(ctx.c, ctx.who.actor, readable, limit=s["count"], may_read=readable,
+                      meetings=U.meeting_reader(ctx.who))
+    return {"unread": found["unread"],
+            "updates": [{"id": u["id"], "author": u["bot"], "kind": u["kind"], "day": u["day"],
+                         "headline": u["headline"], "created": u["created"], "read": u["read"]}
+                        for u in found["updates"][:s["count"]]]}
 
 
 def spend(ctx, s):
@@ -389,6 +460,8 @@ def pinned_places(ctx, fid):
             label = ctx.groups[ident].get("name") or ident
         elif kind == "bot":
             label = names.lookup(ctx.c, {"bot:" + ident}).get("bot:" + ident) or ident
+        elif kind == "person":
+            label = "My dashboard"
         else:
             label = (H.task(ctx.c, ident) or {}).get("title") or "Task"
         out.append({"place": place, "label": label})
@@ -400,7 +473,9 @@ def latest_pages(ctx, s):
 
 
 DATA = {"tasks_by_status": tasks_by_status, "done_per_week": done_per_week, "needs_you": needs_you, "spend": spend,
-        "kpi": kpi, "automation_runs": automation_runs, "latest_pages": latest_pages}
+        "kpi": kpi, "automation_runs": automation_runs, "latest_pages": latest_pages,
+        "needs_attention": needs_attention, "unread_threads": unread_threads, "my_tasks": my_tasks,
+        "updates": updates_card}
 
 
 def card_view(ctx, row):
@@ -436,7 +511,13 @@ def parse(ctx, place):
         return kind, ident
     if kind == "task" and ident and H.task(ctx.c, ident):
         return kind, ident
-    raise Problem("not_found", "No such place: places are dashboard, team:<group>, bot:<slug> and task:<id>", 404)
+    if kind == "person" and ident:
+        if ident == "me" and ctx.person:
+            ident = H.actor_id(ctx.who.actor)
+        if ident != "me" and H.human(ctx.c, ident):
+            return kind, ident
+    raise Problem("not_found", "No such place: places are dashboard, team:<group>, bot:<slug>, task:<id> and "
+                  "person:me", 404)
 
 
 def place_row(c, place):
@@ -448,12 +529,29 @@ def audience_of(c, place):
     return A.audience(json.loads(row["audience_json"]) if row and row["audience_json"] else {"everyone": True})
 
 
+def own_person(ctx, ident):
+    """Whether `person:<ident>` is the reader's own My dashboard: the person, or BotOps or the Assistant acting for
+    them (both carry the person's actor)."""
+    return ctx.person and ctx.who.actor == H.human_actor(ident)
+
+
+def someone_elses(ctx, places):
+    """Whether any of these places is another person's My dashboard, which no admin right reaches."""
+    for place in places:
+        kind, _, ident = place.partition(":")
+        if kind == "person" and not own_person(ctx, ident):
+            return True
+    return False
+
+
 def may_view(ctx, kind, ident):
     who = ctx.who
     if who.role not in ("owner", "human", "bot"):
         return False
     if kind == "dashboard":
         return True
+    if kind == "person":
+        return own_person(ctx, ident)
     if kind == "team":
         if may_manage(ctx, kind, ident):
             return True
@@ -475,6 +573,8 @@ def may_manage(ctx, kind, ident):
     who = ctx.who
     if kind == "dashboard":
         return ctx.admin
+    if kind == "person":
+        return own_person(ctx, ident)
     if kind == "team":
         return ctx.admin or (ctx.person and ident in ctx.led())
     if kind == "bot":
@@ -495,6 +595,8 @@ def require_view(ctx, place):
     if not may_view(ctx, kind, ident):
         if kind == "task":
             raise Problem("not_found", "Task not found", 404)
+        if kind == "person":
+            raise Problem("not_found", "No such place", 404)
         raise Problem("forbidden", "Not shared with you", 403)
     return kind, ident
 
@@ -506,7 +608,8 @@ def require_manage(ctx, place):
             "dashboard": "The owner and admins arrange the Dashboard",
             "team": "The owner, admins and the team's leads arrange a team page",
             "bot": "The bot and the people who manage it arrange its sidebar",
-            "task": "A task's people arrange what is pinned to it"}[kind], 403)
+            "task": "A task's people arrange what is pinned to it",
+            "person": "Only its person arranges My dashboard"}[kind], 403)
     return kind, ident
 
 
@@ -523,10 +626,15 @@ def card_row(c, cid):
     return dict(row) if row else None
 
 
+def default_settings(kind, ident, template):
+    """A default card's settings: a team page's cards are its team's; the rest are the company's or the reader's."""
+    return {"team": ident if kind == "team" else ""} if "team" in TEMPLATES[template]["fields"] else {}
+
+
 def default_pins(kind, ident):
     return [{"id": None, "place": canonical(kind, ident), "item": None, "position": i, "size": size, "made_by": None,
-             "card": {"id": None, "template": t, "settings_json": json.dumps({"team": ident}), "title": "",
-                      "made_by": None}}
+             "card": {"id": None, "template": t, "settings_json": json.dumps(default_settings(kind, ident, t)),
+                      "title": "", "made_by": None}}
             for i, (t, size) in enumerate(DEFAULTS.get(kind, []))]
 
 
@@ -571,7 +679,7 @@ def ensure(ctx, kind, ident):
     ctx.c.execute("INSERT INTO pin_places(place, audience_json, saved, saved_by) VALUES(?,?,?,?)",
                   (place, None, now, ctx.who.actor))
     for pin in default_pins(kind, ident):
-        cid = make_card(ctx, pin["card"]["template"], "", {"team": ident} if ident else {})
+        cid = make_card(ctx, pin["card"]["template"], "", json.loads(pin["card"]["settings_json"]))
         insert_pin(ctx, place, "card:" + cid, pin["size"], pin["position"])
 
 
@@ -609,6 +717,10 @@ def check_item(ctx, kind, item):
             raise Problem("not_found", "No such card", 404)
         if who.role == "bot" and row["made_by"] != who.actor:
             raise Problem("forbidden", "A bot pins only cards it made", 403)
+        if not card_readable(ctx, row):
+            raise Problem("not_found", "No such card", 404)
+        if kind == "person" and row["made_by"] != who.actor:
+            raise Problem("forbidden", "My dashboard holds only cards you made", 403)
         return
     if what != "page":
         raise bad("An item is page:<file id> or card:<id>")
@@ -746,11 +858,16 @@ def readable_item(ctx, item):
     return bool(row) and F.file_visible(ctx.c, ctx.auth, ctx.who, row, ctx.memo("file_cache", dict))
 
 
+def card_places(ctx, row):
+    return [r[0] for r in ctx.c.execute("SELECT place FROM pins WHERE item=?", ("card:" + row["id"],))]
+
+
 def may_edit_card(ctx, row):
-    """The owner and admins; else whoever may arrange every place it is pinned to (its maker when it is nowhere)."""
-    if ctx.admin:
+    """The owner and admins, unless it is on another person's My dashboard; else whoever may arrange every place it is
+    pinned to (its maker when it is nowhere)."""
+    places = card_places(ctx, row)
+    if ctx.admin and not someone_elses(ctx, places):
         return True
-    places = [r[0] for r in ctx.c.execute("SELECT place FROM pins WHERE item=?", ("card:" + row["id"],))]
     if not places:
         return row["made_by"] == ctx.who.actor
     for place in places:
@@ -771,10 +888,12 @@ def card_or_404(ctx, cid):
 
 
 def card_readable(ctx, row):
-    """A card is known to whoever made it, may edit it, or sees a place it is pinned to."""
-    if row["made_by"] == ctx.who.actor or ctx.admin:
+    """A card is known to whoever made it, may edit it, or sees a place it is pinned to. Another person's My dashboard
+    is no way in, an admin's included."""
+    places = card_places(ctx, row)
+    if row["made_by"] == ctx.who.actor or (ctx.admin and not someone_elses(ctx, places)):
         return True
-    for (place,) in ctx.c.execute("SELECT place FROM pins WHERE item=?", ("card:" + row["id"],)):
+    for place in places:
         try:
             if may_view(ctx, *parse(ctx, place)):
                 return True
@@ -819,10 +938,12 @@ def remove_card(ctx, cid):
 def save_place(ctx, place, audience=None):
     kind, ident = require_manage(ctx, place)
     if kind not in DEFAULTS:
-        raise bad("Only the Dashboard and team pages are saved whole")
+        raise bad("Only the Dashboard, team pages and My dashboard are saved whole")
     ensure(ctx, kind, ident)
     place = canonical(kind, ident)
     if audience is not None:
+        if kind == "person":
+            raise bad("My dashboard is yours alone")
         if kind != "team":
             raise bad("Everyone sees the Dashboard")
         level = A.audience(audience.model_dump())
@@ -873,13 +994,15 @@ def install(app, store, auth, mutate, settings, task_view):
     @app.get("/api/v2/places/{place}")
     def place_show(request: Request, place: str):
         """A place's pins in order, each card with what it shows the caller; pages the caller may not read are left
-        out. A Dashboard or team page nobody saved shows its default cards, pins without ids (`saved` false)."""
+        out. A Dashboard, team page or My dashboard nobody saved shows its default cards, pins without ids (`saved`
+        false)."""
         with store.read_transaction() as c:
             return place_view(context(c, request), place)
 
     @app.put("/api/v2/places/{place}")
     def place_save(request: Request, place: str, body: PlaceSave):
-        """Save a Dashboard or team page (its default cards become real pins) and, for a team page, who sees it."""
+        """Save a Dashboard, team page or My dashboard (its default cards become real pins) and, for a team page, who
+        sees it."""
         def work(c):
             ctx = context(c, request)
             return place_view(ctx, save_place(ctx, place, body.audience))
