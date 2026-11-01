@@ -1,5 +1,5 @@
 """Ask ingest: what a bot may put on a person's Needs you (`questions/person-ask-ingest.json`, asked through the
-server's Decide engine, `backend/judge.py` `server_engine`; spec: Tasks Owner, ask-ingest.md v1).
+server's Decide engine, `backend/judge.py` `server_engine`; spec: Tasks Owner, ask-ingest.md v2).
 
 Gated: a bot's write that would put something on a person's Needs you, today a task filed with the person as its
 owner (`app.task_create`). Not gated: anything a person writes (their Assistant included), approvals, the keeper's own
@@ -13,7 +13,7 @@ on their Needs you, snoozed ones left out), in this order:
   - a hands-only chore: Hands needed, a group of its own with its own budget (default 5);
   - the bot's own work, or not clear: sent back;
   - otherwise the budget B (default 10): under B clear; B to 3B also meets one of the person's criteria; 3B to 10B
-    also recommends and urgency 2 or more; 10B or more urgency 3. Urgency 3 always passes.
+    also meets one of the criteria and recommends; 10B or more urgency 3. Urgency 3 always passes.
 
 Sent back means the write succeeds but the item stays with the bot that filed it: the reply says why, with the fix
 and the bot's manager from the org chart. It is never a refusal and counts toward no quarantine. Mode Off asks
@@ -393,7 +393,7 @@ def decide(answers, budget, chores_budget, decisions, chores):
     elif decisions < 3 * budget:
         ok, band = _all(clear, meets), "criteria"
     elif decisions < 10 * budget:
-        ok, band = _all(meets, answers["recommends"], None if urgency is None else urgency >= 2), "recommends"
+        ok, band = _all(meets, answers["recommends"]), "recommends"
     else:
         ok, band = (None if urgency is None else False), "urgent_only"
     if ok is None:
@@ -406,8 +406,7 @@ REASONS = {
     "own_work": "it is work you can do yourself",
     "chores_full": "{name} already has {chores} hands-only chores waiting",
     "criteria": "{name} has {load} open items and this doesn't meet their criteria",
-    "recommends": "{name} has {load} open items: at this load an ask needs one of their criteria, your recommendation "
-                  "and a reason it can't wait past today",
+    "recommends": "{name} has {load} open items: at this load an ask needs one of their criteria and your recommendation",
     "urgent_only": "{name} has {load} open items: at this load only something that can't wait (an outage, a security "
                    "exposure, money being lost) reaches them",
 }
@@ -422,8 +421,7 @@ def message(reason, name, load_now, chores, manager_name):
     elif reason == "own_work":
         fix = f"Do it yourself, {ask}or hand it to a bot that can."
     else:
-        fix = (f"Decide it yourself, {ask}or ask again with your recommendation, what you do if there is no answer by "
-               "a date, and the line of their criteria it meets.")
+        fix = f"Decide it yourself, {ask}or ask again with the line of their criteria it meets and your recommendation."
     return f"Not sent to {name}: {why}. {fix} It stays on your task; nothing was refused."
 
 
