@@ -9601,7 +9601,13 @@
                 "bot",
                 "person",
                 "vendor",
-                "account"
+                "account",
+                "place",
+                "class",
+                "project",
+                "place_class",
+                "place_project",
+                "class_project"
               ],
               "type": "string",
               "default": "department",
@@ -11162,6 +11168,7 @@
             "schema": {
               "enum": [
                 "pnl",
+                "pnl_by",
                 "balance_sheet",
                 "cash_flow",
                 "budget_vs_actual",
@@ -11285,7 +11292,13 @@
                 "bot",
                 "person",
                 "vendor",
-                "account"
+                "account",
+                "place",
+                "class",
+                "project",
+                "place_class",
+                "place_project",
+                "class_project"
               ],
               "type": "string",
               "default": "vendor",
@@ -11425,7 +11438,10 @@
                     "invoice",
                     "contact",
                     "rule",
-                    "card"
+                    "card",
+                    "item",
+                    "place",
+                    "project"
                   ],
                   "type": "string"
                 },
@@ -41095,6 +41111,7 @@
             "type": "string",
             "enum": [
               "pnl",
+              "pnl_by",
               "balance_sheet",
               "cash_flow",
               "budget_vs_actual",
@@ -41293,7 +41310,11 @@
                     "bill",
                     "invoice",
                     "contact",
-                    "rule"
+                    "rule",
+                    "card",
+                    "item",
+                    "place",
+                    "project"
                   ]
                 },
                 "id": {

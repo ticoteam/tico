@@ -23,10 +23,11 @@ from .store import Problem
 
 STATUS = {"not_found": 404, "denied": 403, "invalid": 422, "conflict": 409, "not_available": 409,
           "period_closed": 409, "unbalanced": 422}
-Group = Literal["department", "team", "teammate", "bot", "person", "vendor", "account"]
+Group = Literal["department", "team", "teammate", "bot", "person", "vendor", "account", "place", "class", "project",
+                "place_class", "place_project", "class_project"]
 DAY = r"^\d{4}-\d{2}-\d{2}$"
 Aging = Literal["current", "1_30", "31_60", "61_90", "over_90"]
-Report = Literal["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by"]
+Report = Literal["pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by"]
 Metric = Literal["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
                  "ar_overdue", "uncategorized_count", "unreconciled_days"]
 
@@ -369,7 +370,8 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/finance/search")
     def finance_search(request: Request,
-                       kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule", "card"] | None = None,
+                       kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "place",
+                                     "project"] | None = None,
                        q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
                        vendor: str | None = Query(None, max_length=120),
                        contact_id: str | None = Query(None, max_length=80),

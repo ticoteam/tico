@@ -1735,7 +1735,7 @@ export type FinanceReport = {
 };
 
 export type FinanceReportOf = {
-  kind: "pnl" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
+  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
   prior?: Record<string, unknown>;
 };
 
@@ -1782,7 +1782,7 @@ export type FinanceSearch = {
   next_cursor: string | null;
   results: Array<{
   id: string;
-  kind: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule";
+  kind: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "place" | "project";
   label: string;
 }>;
   view_version: number;
@@ -5853,7 +5853,7 @@ export type GetFinanceCloseChecklistResponse = FinanceCloseChecklist;
 /** GET /api/v2/finance/expenses */
 export type GetFinanceExpensesParams = {
   account_id?: string | null;
-  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account";
+  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account" | "place" | "class" | "project" | "place_class" | "place_project" | "class_project";
   end?: string | null;
   start?: string | null;
   team?: string | null;
@@ -5936,10 +5936,10 @@ export type GetFinancePnlResponse = FinancePnl;
 /** GET /api/v2/finance/reports/{kind} */
 export type GetFinanceReportParams = {
   basis?: "cash" | "accrual" | null;
-  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account";
+  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account" | "place" | "class" | "project" | "place_class" | "place_project" | "class_project";
   compare?: "prior" | null;
   end?: string | null;
-  kind: "pnl" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
+  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
   period?: "day" | "week" | "month" | "quarter" | "year";
   start?: string | null;
   top_n?: number;
@@ -7859,7 +7859,7 @@ export type SearchFinanceParams = {
   contact_kind?: "vendor" | "customer" | "both" | null;
   cursor?: string | null;
   end?: string | null;
-  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | null;
+  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "place" | "project" | null;
   limit?: number;
   money_account_id?: string | null;
   q?: string;

@@ -18,13 +18,27 @@ def is_active(c: sqlite3.Connection, table: str, row_id: str) -> bool:
     return row is not None and bool(row[0])
 
 
-def search(c: sqlite3.Connection, table: str, text: str = "", *, active_only: bool = True,
-           most: int = 200) -> list[Any]:
-    """Rows whose name (or sku, for items) contains the text, by name. An empty text lists every row."""
+def names(c: sqlite3.Connection, table: str) -> dict[str, str]:
+    """Every row's name by id, active or not: a line keeps naming the record it was tagged with."""
+    assert table in ROW_TABLES
+    return {str(r[0]): str(r[1]) for r in c.execute(f"SELECT id, name FROM {table}")}
+
+
+def search(c: sqlite3.Connection, table: str, text: str = "", *, active: bool | None = True,
+           after: tuple[str, str] | None = None, most: int = 200) -> list[Any]:
+    """Rows whose name (or sku, for items) contains the text, by name then id, past the cursor `after`. `active` None
+    lists inactive rows too; an empty text lists every row."""
     assert table in ROW_TABLES
     columns = SEARCH_COLUMNS[table]
     needle = text.strip().lower()
     clause = " OR ".join(f"instr(lower({column}), ?) > 0" for column in columns)
-    sql = f"SELECT * FROM {table} WHERE ({clause})" + (" AND active=1" if active_only else "") + \
-        " ORDER BY name LIMIT ?"
-    return c.execute(sql, [*([needle] * len(columns)), most]).fetchall()
+    where = f"({clause})"
+    args: list[object] = [*([needle] * len(columns))]
+    if active is not None:
+        where += " AND active=?"
+        args.append(int(active))
+    if after is not None:
+        where += " AND (name, id) > (?, ?)"
+        args += list(after)
+    args.append(most)
+    return c.execute(f"SELECT * FROM {table} WHERE {where} ORDER BY name, id LIMIT ?", args).fetchall()

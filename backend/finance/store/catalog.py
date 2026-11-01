@@ -26,3 +26,8 @@ def class_update(c: sqlite3.Connection, dimension_id: str, *, name: str, active:
 
 def class_set_active(c: sqlite3.Connection, dimension_id: str, active: bool) -> None:
     c.execute("UPDATE fin_dimensions SET active=? WHERE id=? AND kind='class'", (int(active), dimension_id))
+
+
+def class_names(c: sqlite3.Connection) -> dict[str, str]:
+    """Every class's name by id, active or not: a line keeps naming the class it was tagged with."""
+    return {str(r[0]): str(r[1]) for r in c.execute("SELECT id, name FROM fin_dimensions WHERE kind='class'")}
