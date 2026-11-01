@@ -3,6 +3,8 @@ checkpoint starts no run (backend/wake_rules.py same_state). Anything that diffe
 
 import json
 
+import pytest
+
 from backend import hubdb as H
 from backend import wake_rules as W
 from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
@@ -272,8 +274,9 @@ def test_scheduler_skips_never_become_retries_or_diagnostics(api, monkeypatch):
             if spot_only:
                 c.execute("UPDATE tasks SET next_run=0 WHERE id=?", (tid,))
                 monkeypatch.setattr(H, "stalled_tasks", lambda *a, **k: [])
+                c.execute("DELETE FROM events WHERE action='task.stall_quiet' AND target=?", (tid,))
             next_run = H.task(c, tid)["next_run"]
-            for minutes in (31, 62, 93, 124):
+            for minutes in (31, 62, 123, 244):      # each clears the back-off the one before it left
                 at = H.shift(start, seconds=minutes * 60)
                 monkeypatch.setattr(H, "now", lambda: at)
                 candidates = H.spot_check_tasks(c, at) if spot_only else H.stalled_tasks(c, at)
@@ -287,6 +290,34 @@ def test_scheduler_skips_never_become_retries_or_diagnostics(api, monkeypatch):
                          "('task.stall_wake','task.stuck_retry','task.stuck','task.stall_escalated')",
                          (tid,)).fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Find why %'").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("spot_only", [False, True])
+def test_held_stall_notices_keep_the_back_off_instead_of_repeating_every_pass(api, monkeypatch, spot_only):
+    """A wake rule holds the notice, so no stall wake is recorded; the minute-by-minute sweep must not write another."""
+    from backend.execution import LANES
+    r = setup(api)
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capabilities": [LANES],
+                                  "readiness": {"cpo": True, "ops": True}}, token=r["token"])
+    tid = checkpointed(api, r)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        if spot_only:
+            c.execute("UPDATE tasks SET next_run=0 WHERE id=?", (tid,))
+            monkeypatch.setattr(H, "stalled_tasks", lambda *a, **k: [])
+        start, written = H.now(), []
+        for minutes in range(1, 241):
+            at = H.shift(start, seconds=minutes * 60)
+            monkeypatch.setattr(H, "now", lambda: at)
+            before = len(skips(c))
+            assert not any(H.wake_stalled(c, at).values())
+            if len(skips(c)) > before:
+                written.append(minutes)
+        assert [b - a for a, b in zip(written, written[1:])] == [30, 60, 120], written
+        assert jobs(c, "cpo") == 0
+        # Spacing the notices is not trying a wake: no retry, stuck report or escalation counts them.
+        assert c.execute("SELECT count(*) FROM events WHERE target=? AND action IN ('task.stall_wake',"
+                         "'task.stuck_retry','task.stuck','task.stall_escalated')", (tid,)).fetchone()[0] == 0
 
 
 def test_a_second_active_turn_keeps_status_retry_and_diagnostic_recovery(api, monkeypatch):
