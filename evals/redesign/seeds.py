@@ -227,3 +227,43 @@ def counsel(world):
     _ok(world.api("post", "/api/v2/runners/heartbeat", {
         "version": "test", "platform": "test",
         "readiness": {slug: True for slug in [*world.bot_slugs, H.COUNSEL]}}, who=world.runner["token"]), "heartbeat")
+
+
+@seed("roster")
+def roster(world):
+    """A fourth person, Gina, on the roster and the sign-in list (as an invite leaves her), with the test token "gina".
+    She reports to Dana, a plain member with no task of her own: the e2e role journeys make her the one guest of a
+    private bot-only task (ui/tests/e2e-roles.cjs), so she sees that task and nothing else of the private ones."""
+    from backend.access import ACCESS, _load_json, _store
+    from backend.auth import Identity
+    from backend.store import H, encode
+    from .harness import DANA_ID
+    gina = {"id": "gina", "name": "Gina", "email": "gina@acme.example", "reports_to": DANA_ID, "primary_for": []}
+    world.app.state.auth.settings.test_identities["gina-test"] = Identity("human:gina", "human", email="gina@acme.example")
+    with world.store.transaction() as c:
+        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])["people"]
+        people = [*people, gina]
+        H.sync_registry(c, {}, {"people": people})
+        c.execute("DELETE FROM registry_metadata WHERE key='people'")
+        c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": people}),))
+        access = _load_json(c, ACCESS) or {}
+        _store(c, ACCESS, {**access, "allowed": sorted(set(access.get("allowed") or []) | {"gina@acme.example"})})
+
+
+@seed("finance")
+def finance(world):
+    """Finance set up on the install, as every install has it. The app sets it up at start (backend/app.py), but only
+    once an owner exists, and the scenario's people are written after start, so it is set up here once they are."""
+    from backend.finance import jobs as finance_jobs
+    with world.store.transaction() as c:
+        if not finance_jobs.ensure_setup(c, "dana@acme.example"):
+            raise RuntimeError("finance setup found no owner on the scenario org")
+
+
+@seed("priya-leads")
+def priya_leads(world):
+    """Priya is the engineering manager on the chart: engineering-lead reports to her, so she is above the bots under it
+    (builder-claude, builder-openai) and reads their private tasks, as a manager does (docs/tasks.md). Written the way the
+    harness places bots on the chart (harness.py), since the bot definition route does not take a hand-set reports_to."""
+    with world.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='priya' WHERE bot='engineering-lead'")
