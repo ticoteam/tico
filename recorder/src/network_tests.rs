@@ -1514,3 +1514,170 @@ fn remote_pause_scrubs_pending_turns_chunks_and_corrections_before_resume() {
     assert!(requests[0].1.to_string().contains("public resumed"));
     assert_eq!(store.get(id).unwrap().chunks[0].text, "secret finished");
 }
+
+#[test]
+fn item_send_refuses_paused_and_discarded_even_with_confirmation() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Synthetic item guards");
+    let (tico, seen, worker) = server(vec![]);
+    for discarded in [false, true] {
+        store
+            .update_context(&record.id, |c| {
+                c.live_state = if discarded { "ended" } else { "paused" }.into();
+                c.live_discarded = discarded;
+                Ok(())
+            })
+            .unwrap();
+        for confirmed in [false, true] {
+            let error = tico
+                .send_task_confirmed(
+                    &store,
+                    &record.id,
+                    "item",
+                    "bot:fixture",
+                    "Fixture",
+                    true,
+                    confirmed,
+                )
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(if discarded { "discarded" } else { "Resume" }),
+                "{error}"
+            );
+        }
+    }
+    worker.join().unwrap();
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "state fences precede all HTTP"
+    );
+    assert!(!store.get(&record.id).unwrap().chunks.is_empty());
+}
+
+#[test]
+fn item_send_requires_quote_review_and_filters_the_surrounding_transcript() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Synthetic item excerpt");
+    store
+        .save_audio(
+            &record.id,
+            crate::audio::Channel::Microphone,
+            5000,
+            6000,
+            &vec![0.2; 16000],
+            16000,
+        )
+        .unwrap();
+    let claimed = store.claim_transcription().unwrap().unwrap();
+    store
+        .transcription_result(&claimed, "SECRET_PAUSED", "", json!({}))
+        .unwrap();
+    store
+        .update_context(&record.id, |c| {
+            c.paused_windows = vec![(5000, Some(6000))];
+            c.items = vec![crate::workspace::Item {
+                id: "item".into(),
+                title: "Follow up".into(),
+                quote: "SECRET_PAUSED".into(),
+                at_ms: 5500,
+                ..Default::default()
+            }];
+            Ok(())
+        })
+        .unwrap();
+    let who = json!({"actor":"human:fixture","name":"Fixture"});
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(who),
+        Some(json!({"task":{"id":"synthetic-task"}})),
+    ]);
+    let error = tico
+        .send_task(&store, &record.id, "item", "bot:fixture", "Fixture", true)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("may quote paused speech"), "{error}");
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|r| !r.0.starts_with("POST"))
+    );
+    store
+        .update_context(&record.id, |c| {
+            c.items[0].quote = "I will send the proposal".into();
+            c.items[0].at_ms = 0;
+            Ok(())
+        })
+        .unwrap();
+    tico.send_task_confirmed(
+        &store,
+        &record.id,
+        "item",
+        "bot:fixture",
+        "Fixture",
+        true,
+        true,
+    )
+    .unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    let tasks: Vec<_> = requests
+        .iter()
+        .filter(|r| r.0.starts_with("POST /api/v2/tasks "))
+        .collect();
+    assert_eq!(tasks.len(), 1);
+    let body = tasks[0].1["body"].as_str().unwrap();
+    assert!(body.contains("I will send the proposal"), "{body}");
+    assert!(!body.contains("SECRET_PAUSED"), "{body}");
+    assert!(
+        store
+            .get(&record.id)
+            .unwrap()
+            .chunks
+            .iter()
+            .any(|c| c.text.contains("SECRET_PAUSED"))
+    );
+}
+
+#[test]
+fn item_send_discovers_a_remote_pause_before_export() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Remote item pause");
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:fixture"})),
+        Some(json!({"state":"paused"})),
+    ]);
+    store
+        .update_context(&record.id, |c| {
+            c.live_id = "live-fixture".into();
+            c.live_destination = tico.destination.id.clone();
+            c.live_state = "live".into();
+            Ok(())
+        })
+        .unwrap();
+    let error = tico
+        .send_task_confirmed(
+            &store,
+            &record.id,
+            "item",
+            "bot:fixture",
+            "Fixture",
+            true,
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Resume"), "{error}");
+    worker.join().unwrap();
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|r| !r.0.starts_with("POST"))
+    );
+    assert!(!store.context(&record.id).unwrap().paused_windows.is_empty());
+}

@@ -529,7 +529,7 @@ impl Tico {
 
 /// Saves the meeting's state as Tico reports it, so new text stops while it is paused and
 /// starts again once it is resumed there. An ended meeting stays ended.
-fn note_state(store: &Store, id: &str, view: &Value) -> Result<()> {
+pub(crate) fn note_state(store: &Store, id: &str, view: &Value) -> Result<()> {
     let state = match view["state"].as_str() {
         Some(state @ ("live" | "paused" | "ended")) => state,
         _ => return Ok(()),
@@ -678,7 +678,7 @@ fn excluded(windows: &[(u64, Option<u64>)], start: u64, end: u64) -> bool {
 }
 /// Make a network-only copy. Without word timings, omit an overlapping chunk in full: guessing
 /// a partial text boundary could disclose private speech. The stored recording is never edited.
-fn shareable(record: &Recording, windows: &[(u64, Option<u64>)]) -> Recording {
+pub(crate) fn shareable(record: &Recording, windows: &[(u64, Option<u64>)]) -> Recording {
     let mut shared = record.clone();
     for chunk in &mut shared.chunks {
         if chunk.words.is_empty() {
@@ -699,6 +699,17 @@ fn shareable(record: &Recording, windows: &[(u64, Option<u64>)]) -> Recording {
     }
     shared
 }
+/// Every task export shares the meeting's privacy and discard fences.
+pub fn item_send_blocked(context: &crate::workspace::Context) -> Option<&'static str> {
+    if context.live_discarded {
+        Some("This meeting was discarded; its recording stays local")
+    } else if context.live_state == "paused" || context.locally_paused {
+        Some("Resume sharing before sending an action item")
+    } else {
+        None
+    }
+}
+
 /// Exact text cannot reliably identify a reworded or number-normalized quote. Require
 /// review of any kept quote when the recording contains paused speech.
 pub fn paused_review_required(context: &crate::workspace::Context) -> bool {

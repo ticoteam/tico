@@ -383,7 +383,7 @@
       : `<button class="owner empty" data-act="pop" data-pop="owner" data-id="${id}">Who gets it?</button>`;
     const send = it.sending
       ? `<span class="spin" style="margin:7px 8px"></span>`
-      : `<button class="btn small primary" data-act="send-item" data-id="${id}" ${it.can_send ? '' : 'disabled'} title="${it.can_send ? 'Send as a private Tico task' : it.owner ? '' : 'Choose who gets it'}">Send</button>`;
+      : `<button class="btn small primary" data-act="send-item" data-id="${id}" ${it.can_send ? '' : 'disabled'} title="${it.can_send ? 'Send as a private Tico task' : it.send_blocked ? esc(it.send_blocked) : it.owner ? '' : 'Choose who gets it'}">Send</button>`;
     return `<li class="item ${picking ? 'picking' : ''} ${it.sending ? 'busy' : ''}">
       <span class="bullet"><i></i></span>
       <div class="content"><div class="line1"><span class="title" contenteditable="true" data-defer data-edit-item="${id}" data-key="item-${id}" spellcheck="false" role="textbox" aria-label="Action item">${esc(it.title)}</span>${owner}</div>${detail}${it.error ? `<div class="error selectable">${esc(it.error)}</div>` : ''}</div>
@@ -674,6 +674,7 @@
     let body = '';
     let cls = '';
     if (pop.kind === 'send') body = sendPop(pop);
+    else if (pop.kind === 'send-item') body = `<div class="pop-title">Review action item</div><div class="pop-text">This quote may include paused speech. Review or dismiss it before sending. The surrounding transcript excludes paused words.</div><button class="menu-item" data-act="confirm-item-send" data-id="${esc(pop.id)}">Send reviewed quote</button>`;
     else if (pop.kind === 'discard') body = `<div class="pop-title">Discard shared meeting?</div><div class="pop-text">End this meeting in Tico without filing it? Your recording stays on this computer.</div><div class="pop-foot"><button class="btn small quiet" data-act="close-pop">Cancel</button><button class="btn small danger" data-act="discard-live">Discard</button></div>`;
     else if (pop.kind === 'more') body = morePop(pop);
     else if (pop.kind === 'owner') body = ownerPop(pop);
@@ -1147,7 +1148,14 @@
     'toggle-private': () => act('set_chat_private', { private: !S.meeting.chat.private }),
     'send-item': (el) => {
       const it = S.meeting.actions.items.find((i) => i.id === el.dataset.id);
-      if (it) act('send_item', { id: it.id, owner: it.owner });
+      if (!it?.can_send) return;
+      if (it.paused_warning) openPop('send-item', el, { id: it.id });
+      else act('send_item', { id: it.id, owner: it.owner });
+    },
+    'confirm-item-send': (el) => {
+      const it = S.meeting.actions.items.find((i) => i.id === el.dataset.id);
+      S.ui.pop = null;
+      if (it?.can_send) act('send_item', { id: it.id, owner: it.owner, pausedConfirmed: true });
     },
     'remove-item': (el) => act('remove_item', { id: el.dataset.id }),
     'set-owner': (el) => { S.ui.pop = null; act('set_owner', { id: el.dataset.id, owner: el.dataset.actor }); },

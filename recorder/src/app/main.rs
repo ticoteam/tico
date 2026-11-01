@@ -72,7 +72,7 @@ commands! {
     edit_item(id: String, title: String) => |app| app.edit_item(&id, &title);
     set_owner(id: String, owner: String) => |app| app.set_owner(&id, &owner);
     remove_item(id: String) => |app| app.remove_item(&id);
-    send_item(id: String, owner: String) => |app| app.send_item(&id, &owner);
+    send_item(id: String, owner: String, paused_confirmed: Option<bool>) => |app| if paused_confirmed.unwrap_or(false) { app.send_item_confirmed(&id, &owner, true) } else { app.send_item(&id, &owner) };
     choose_org(id: String) => |app| app.choose_org(&id);
     change_org() => |app| app.change_org();
     load_roster() => |app| app.load_roster();

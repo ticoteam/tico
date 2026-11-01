@@ -1414,6 +1414,29 @@ impl Recorder {
     }
     /// Sends one action item to `owner` as a private Tico task with its quote and the meeting link.
     pub fn send_item(&mut self, item_id: &str, owner: &str) {
+        self.send_item_confirmed(item_id, owner, false);
+    }
+    pub fn send_item_confirmed(&mut self, item_id: &str, owner: &str, paused_confirmed: bool) {
+        // Check durable state as well as the displayed snapshot; sync may have changed it.
+        if let Some(id) = &self.meeting {
+            match self.store.context(id) {
+                Ok(context) => {
+                    let reason = tico_recorder_native::live::item_send_blocked(&context)
+                        .map(str::to_owned)
+                        .or_else(|| (!paused_confirmed && !context.paused_windows.is_empty()
+                            && context.items.iter().any(|i| i.id == item_id && !i.quote.trim().is_empty()))
+                            .then(|| "This action item may quote paused speech. Review its quote before sending".into()));
+                    if let Some(reason) = reason {
+                        self.item_error = Some((item_id.to_owned(), reason));
+                        return;
+                    }
+                }
+                Err(error) => {
+                    self.item_error = Some((item_id.to_owned(), error.to_string()));
+                    return;
+                }
+            }
+        }
         if self.updating {
             self.error = UPDATING.into();
             return;
@@ -1456,8 +1479,15 @@ impl Recorder {
         let (config, store, destination) = (self.config.clone(), self.store.clone(), self.router());
         let (item_id, owner) = (item_id.to_owned(), owner.to_owned());
         self.job_for("task", Some(id.clone()), move || {
-            Tico::saved(&config, &destination)?
-                .send_task(&store, &id, &item_id, &owner, &name, private)?;
+            Tico::saved(&config, &destination)?.send_task_confirmed(
+                &store,
+                &id,
+                &item_id,
+                &owner,
+                &name,
+                private,
+                paused_confirmed,
+            )?;
             Ok(json!({"message":format!("Sent to {name}")}))
         });
     }
@@ -2320,7 +2350,8 @@ impl Recorder {
         // Bots first: most action items go to one.
         let mut owners = self.roster.clone();
         owners.sort_by_key(|row| !row.0.starts_with("bot:"));
-        let can_send = mode == "ready" && self.sending.is_none();
+        let send_blocked = tico_recorder_native::live::item_send_blocked(&self.context);
+        let can_send = mode == "ready" && self.sending.is_none() && send_blocked.is_none();
         let items = &self.context.items;
         let order = items
             .iter()
@@ -2355,6 +2386,8 @@ impl Recorder {
                     "sent_to": item.sent_to,
                     "task_url": item.task_url,
                     "sending": self.sending.as_deref() == Some(item.id.as_str()),
+                    "send_blocked": send_blocked,
+                    "paused_warning": !self.context.paused_windows.is_empty() && !item.quote.trim().is_empty(),
                     "can_send": can_send && !chosen.is_empty() && !item.title.trim().is_empty(),
                     "error": error,
                 })

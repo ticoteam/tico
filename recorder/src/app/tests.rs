@@ -1068,3 +1068,55 @@ fn send_requires_review_of_paused_quotes_and_discard_keeps_the_local_recording()
             .any(|r| r["id"] == id && r["status"]["label"] == "Discard pending · saved locally")
     );
 }
+
+#[test]
+fn individual_item_send_uses_durable_pause_discard_and_quote_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Synthetic item guards").unwrap();
+    store
+        .update_context(&record.id, |c| {
+            c.paused_windows = vec![(5000, Some(10000))];
+            c.items = vec![Item {
+                id: "item".into(),
+                title: "Follow up".into(),
+                quote: "Reworded paused quote".into(),
+                owner: "bot:fixture".into(),
+                ..Default::default()
+            }];
+            Ok(())
+        })
+        .unwrap();
+    let mut app = app(store.clone(), dir.path());
+    app.open(&record.id).unwrap();
+    app.send_item("item", "bot:fixture");
+    assert!(
+        app.item_error
+            .as_ref()
+            .unwrap()
+            .1
+            .contains("may quote paused speech")
+    );
+    assert!(app.sending.is_none());
+    // The displayed context stays stale: the durable guard must still refuse a direct command.
+    for discarded in [false, true] {
+        store
+            .update_context(&record.id, |c| {
+                c.live_state = "paused".into();
+                c.live_discarded = discarded;
+                Ok(())
+            })
+            .unwrap();
+        app.send_item_confirmed("item", "bot:fixture", true);
+        assert!(app.item_error.as_ref().unwrap().1.contains(if discarded {
+            "discarded"
+        } else {
+            "Resume"
+        }));
+        assert!(app.sending.is_none());
+        app.context = store.context(&record.id).unwrap();
+        let view = app.actions_view("Fixture");
+        assert_eq!(view["items"][0]["can_send"], false);
+        assert!(view["items"][0]["send_blocked"].as_str().is_some());
+    }
+}

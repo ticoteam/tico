@@ -716,6 +716,25 @@ impl Tico {
         owner_name: &str,
         private: bool,
     ) -> Result<()> {
+        self.send_task_confirmed(store, id, item_id, owner, owner_name, private, false)
+    }
+    /// Explicit review can include the selected quote; surrounding transcript always excludes pauses.
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_task_confirmed(
+        &self,
+        store: &Store,
+        id: &str,
+        item_id: &str,
+        owner: &str,
+        owner_name: &str,
+        private: bool,
+        paused_confirmed: bool,
+    ) -> Result<()> {
+        let _guard = store.live_lock();
+        let context = store.context(id)?;
+        if let Some(reason) = crate::live::item_send_blocked(&context) {
+            anyhow::bail!(reason);
+        }
         let who = self.verify()?;
         let record = store.get(id)?;
         let context = store.context(id)?;
@@ -723,6 +742,20 @@ impl Tico {
             context.live_destination.is_empty() || context.live_destination == self.destination.id,
             "This meeting belongs to another Tico"
         );
+        // A remote control can have changed since the window last refreshed. Discover it
+        // before constructing an export from local speech, under the same control lock.
+        if !context.live_id.is_empty() {
+            let view = self.call(
+                &format!("/api/v2/live-meetings/{}", context.live_id),
+                None,
+                "",
+            )?;
+            crate::live::note_state(store, id, &view)?;
+        }
+        let context = store.context(id)?;
+        if let Some(reason) = crate::live::item_send_blocked(&context) {
+            anyhow::bail!(reason);
+        }
         let item = context
             .items
             .iter()
@@ -732,6 +765,11 @@ impl Tico {
         if !item.task_id.is_empty() {
             return Ok(());
         }
+        ensure!(
+            paused_confirmed || context.paused_windows.is_empty() || item.quote.trim().is_empty(),
+            "This action item may quote paused speech. Review its quote before sending"
+        );
+        let record = crate::live::shareable(&record, &context.paused_windows);
         ensure!(
             owner.starts_with("bot:") || owner.starts_with("human:"),
             "Choose who gets it"
