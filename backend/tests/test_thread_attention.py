@@ -5,7 +5,7 @@ the people who can manage it."""
 from backend import threads
 from backend.auth import Identity
 from backend import hubdb as H
-from backend.tests.test_api import api, get, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, as_member, get, setup_attempt  # noqa: F401
 
 
 def members_thread(api, members=("human:ana",), title="Launch"):
@@ -44,9 +44,9 @@ def test_a_question_is_listed_until_the_person_answers_in_the_thread(api):
     assert needs(api, "thread_ask") == []
 
 
-def test_a_thread_outside_the_person_audience_is_not_listed(api):
+def test_a_mention_from_outside_the_audience_reaches_no_one(api):
     tid = members_thread(api, members=())          # cara alone: a mention of ana does not add her
-    say(api, tid, "Ana, see this.", to_actor="human:ana")
+    say(api, tid, "@ana see this.")
     assert all(i["conversation_id"] != tid for i in needs(api))
 
 
@@ -76,11 +76,12 @@ def test_a_held_message_replaces_the_mention_until_released(api):
 
 
 def test_a_paused_thread_is_listed_to_its_manager_only(api):
-    tid = members_thread(api)
+    as_member(api, "ben@acme.example")          # the fixture makes Ben an admin, and an admin manages every thread
+    tid = members_thread(api, members=("human:ana", "human:ben"))
     with api.app.state.store.transaction() as c:
         now = H.now()
         c.execute("INSERT INTO message_deliveries(id, message_id, recipient, thread_id, root_id, mode, reason, cause, "
                   "state, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                   (H.new_id(), H.new_id(), "bot:finance", tid, tid, "queue", "mention", "bot", "capped", now, now))
     assert [i["conversation_id"] for i in needs(api, "thread_capped", token="cara-test")] == [tid]
-    assert needs(api, "thread_capped") == []
+    assert needs(api, "thread_capped", token="ben-test") == []     # reads the thread, does not manage it

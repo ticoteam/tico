@@ -96,11 +96,11 @@ def _held(c, me):
     return [dict(r) for r in c.execute(
         "SELECT d.id, d.message_id, m.conversation_id, m.created FROM message_deliveries d "
         "JOIN messages m ON m.id=d.message_id WHERE d.recipient=? AND d.state='held' "
-        "ORDER BY d.created LIMIT ?", (me, ITEM_LIMIT)).fetchall()]
+        "ORDER BY d.created_at LIMIT ?", (me, ITEM_LIMIT)).fetchall()]
 
 
 def _capped(c):
     """Threads whose bot wakes the loop guard held back, one row per thread (its oldest held wake)."""
     return [dict(r) for r in c.execute(
-        "SELECT d.root_id, MIN(d.created) AS since FROM message_deliveries d WHERE d.state='capped' "
+        "SELECT d.root_id, MIN(d.created_at) AS since FROM message_deliveries d WHERE d.state='capped' "
         "AND d.root_id IS NOT NULL GROUP BY d.root_id ORDER BY since LIMIT ?", (ITEM_LIMIT,)).fetchall()]

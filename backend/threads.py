@@ -1291,9 +1291,10 @@ def _insert_thread(c, actor, *, title, audience, audience_group_id=None, owner_a
     else:
         path, root_id = f"/{tid}/", tid
     people = list(dict.fromkeys([actor] + [p for p in participants if p != actor])) if participants else [actor]
+    # scope is left to its column default ('direct'): the table is NOT NULL, and the readers coalesce it to 'direct'.
     c.execute("INSERT INTO conversations(id,kind,subject,task_id,participants_json,created,last_message_at,closed_at,"
-              "scope,owner_actor,room_key,audience,audience_group_id,parent_id,parent_message_id,root_id,path,"
-              "last_seq,last_unread_seq,archived_at,updated_at) VALUES(?,?,?,?,?,?,NULL,NULL,NULL,?,NULL,?,?,?,?,?,?,"
+              "owner_actor,room_key,audience,audience_group_id,parent_id,parent_message_id,root_id,path,"
+              "last_seq,last_unread_seq,archived_at,updated_at) VALUES(?,?,?,?,?,?,NULL,NULL,?,NULL,?,?,?,?,?,?,"
               "0,0,NULL,?)",
               (tid, kind, str(title or "")[:MAX_TITLE], task_id, H._dump(people), now, owner_actor, audience,
                audience_group_id, parent["id"] if parent is not None else None, parent_message_id, root_id, path, now))

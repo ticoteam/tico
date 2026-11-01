@@ -44,13 +44,17 @@ def test_an_edit_the_same_day_keeps_the_one_card(api):
         assert len(home_cards(c, "human:ana")) == 1
 
 
-def test_the_card_is_in_the_authors_home_only(api):
+def test_the_card_is_readable_exactly_where_its_home_is(api):
+    """The card has no audience of its own: whoever reads the author's Home reads the card, and nobody else does."""
     store = api.app.state.store
     with store.transaction() as c:
         updates.post(c, "human:ana", "- Signed the office lease.", kind="daily", day=DAY)
+        home = threads.home(c, "human:ana")["id"]
         card = home_cards(c, "human:ana")[0]["id"]
+        for who in (ANA, CARA):
+            viewer = threads.viewer(api.app.state.auth, who)
+            assert threads.readable(c, viewer, card) == threads.readable(c, viewer, home)
         assert threads.readable(c, threads.viewer(api.app.state.auth, ANA), card)
-        assert not threads.readable(c, threads.viewer(api.app.state.auth, CARA), card)
 
 
 def test_a_bots_card_never_wakes_the_bot(api):
