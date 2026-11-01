@@ -12,6 +12,8 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import Any, Protocol, cast
 
+from ..records import reads as RR
+from ..records import store as RS
 from . import banking, documents, handlers, posting
 from .context import Ctx, load
 from .core import ap as AP
@@ -26,6 +28,7 @@ from .core.org import SYSTEM
 from .store import access as SA
 from .store import ap as SAP
 from .store import banking as SK
+from .store import catalog as SC
 from .store import ledger as SL
 from .store import mirror as SX
 from .store import tico
@@ -36,23 +39,26 @@ CLAIM_MINUTES = 10                          # a write claimed this long ago with
 MATCH_MOST = 500                            # bank rows looked at in one pass to find their provider entry
 PENDING_MOST = 500                          # provider records the books could not take in, kept to be read again
 # In the order the books take them in: documents need the parties and accounts, payments need the documents.
-ENTITIES = ("accounts", "parties", "documents", "payments", "entries")   # the groups, in the order the books take them
+ENTITIES = ("accounts", "parties", "records", "documents", "payments", "entries")   # the groups, in the order the books
 TAG_SETTING = "mirror.tags"                 # {"enabled": bool, "map": {tag kind: {tag value: provider class id}}}
 # Actions a mirrored book refuses: the provider holds these records, so Tico cannot write them here.
 REFUSED = ("bill_update", "bill_approve", "bill_schedule", "invoice_send",
            "payment_create", "payment_cancel", "recipient_add", "contact_create", "contact_update",
            "account_create", "account_update", "feed_match")
 
-Record = M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Refused | M.Ext
+Record = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Item | M.Place | M.Dimension | M.Project
+          | M.Refused | M.Ext)
 DOC_TABLES = {"Bill": "fin_bills", "Invoice": "fin_invoices"}   # a document kind with a row of its own
 POSTED = ("Purchase", "Deposit", "Transfer", "SalesReceipt", "RefundReceipt", "VendorCredit")   # posted entries
 JOURNAL_KINDS = ("ManualJournal", "BankTransaction", "BankTransfer", "Overpayment", "Prepayment")   # posted as journals
 TABLE_OF = {"Account": "fin_accounts", "JournalEntry": "fin_entries", "CreditMemo": "fin_entries",
             "BillPayment": "fin_entries", "Payment": "fin_entries", "Bill": "fin_bills", "Invoice": "fin_invoices",
+            "Item": "rec_items", "Department": "rec_places", "Class": "fin_dimensions", "Project": "rec_projects",
             **{kind: "fin_entries" for kind in POSTED + JOURNAL_KINDS}}
 GROUP_OF = {"Account": "accounts", "Vendor": "parties", "Customer": "parties", "Bill": "documents",
             "Invoice": "documents", "CreditMemo": "documents", "BillPayment": "payments", "Payment": "payments",
-            "JournalEntry": "entries", **{kind: "entries" for kind in POSTED + JOURNAL_KINDS}}
+            "JournalEntry": "entries", "Item": "records", "Department": "records", "Class": "records",
+            "Project": "records", **{kind: "entries" for kind in POSTED + JOURNAL_KINDS}}
 # A payment that only applies credit memos (no money in it) keeps its settlements as its ref's local id, comma-separated
 APPLICATION_TABLE = "fin_settlements"
 FOREIGN_CURRENCY = "a record in another currency: the books hold one currency"
@@ -112,6 +118,8 @@ def _group(r: Record) -> str:
         return "documents"
     if isinstance(r, M.Settlement):
         return "payments"
+    if isinstance(r, (M.Item, M.Place, M.Dimension, M.Project)):
+        return "records"
     if isinstance(r, M.Refused):
         return GROUP_OF.get(r.ext.kind, "parties")
     return GROUP_OF.get(r.kind, "parties")
@@ -245,6 +253,14 @@ def _do(c: sqlite3.Connection, ctx: Ctx, cid: str, r: Record, at: str) -> None:
         _document(c, ctx, cid, r, at)
     elif isinstance(r, M.Settlement):
         _settlement(c, ctx, cid, r, at)
+    elif isinstance(r, M.Item):
+        _item(c, ctx, cid, r, at)
+    elif isinstance(r, M.Place):
+        _place(c, ctx, cid, r, at)
+    elif isinstance(r, M.Dimension):
+        _dimension(c, ctx, cid, r, at)
+    elif isinstance(r, M.Project):
+        _project(c, ctx, cid, r, at)
     elif isinstance(r, M.Refused):
         raise FinanceError(NOT_AVAILABLE, r.why)
     else:
@@ -336,6 +352,77 @@ def _party(c: sqlite3.Connection, ctx: Ctx, cid: str, p: M.Party, at: str) -> No
     _bind(c, cid, "fin_contacts", local, p.ext, at)
 
 
+# The shared records a provider's items, departments and jobs are kept as. A class is a class dimension (fin_dimensions).
+RECORD_TABLES = ("rec_items", "rec_places", "rec_projects")
+PLACED = ("place", "class", "project")      # the tags a provider record sets on its lines: where, which class, which job
+
+
+def _local_record(c: sqlite3.Connection, cid: str, table: str, ext: M.Ext) -> str:
+    """The local record a provider record is bound to, or "" when it has none yet."""
+    row = SX.ref(c, cid, table, ext.key)
+    return str(row["local_id"]) if row is not None and str(row["status"]) != "unmapped" else ""
+
+
+def _record_write(c: sqlite3.Connection, cid: str, table: str, ext: M.Ext, fields: Mapping[str, object], at: str) -> str:
+    """Update the local record a provider record is bound to, or insert it; either way it is bound to the provider's id."""
+    local = _local_record(c, cid, table, ext)
+    if local:
+        RS.update(c, table, local, {**fields, "updated_at": at, "updated_by": SYSTEM})
+    else:
+        local = RS.insert(c, table, {**fields, "created_at": at, "created_by": SYSTEM, "updated_at": at,
+                                     "updated_by": SYSTEM})
+    _bind(c, cid, table, local, ext, at)
+    return local
+
+
+def _item(c: sqlite3.Connection, ctx: Ctx, cid: str, i: M.Item, at: str) -> None:
+    """A provider item as a product or service, with the accounts it sells and buys on. Nothing is posted by an item, so
+    a change to it is a rename or a price or account change, never a reversal."""
+    if M.decide(_have(SX.ref(c, cid, "rec_items", i.ext.key)), i.ext) in (M.SAME, M.OLDER, M.GONE):
+        return
+    fields: dict[str, object] = {
+        "name": i.name, "sku": i.sku, "kind": i.kind, "price": i.price, "currency": ctx.book.base_currency,
+        "income_account_id": _account_ref(c, cid, i.income), "expense_account_id": _account_ref(c, cid, i.expense),
+        "asset_account_id": _account_ref(c, cid, i.asset), "active": int(i.active)}
+    _record_write(c, cid, "rec_items", i.ext, fields, at)
+
+
+def _account_ref(c: sqlite3.Connection, cid: str, key: str) -> str | None:
+    """The local account a provider item names, or None when it names none."""
+    return _mapped(c, cid, "fin_accounts", key) if key else None
+
+
+def _place(c: sqlite3.Connection, ctx: Ctx, cid: str, p: M.Place, at: str) -> None:
+    if M.decide(_have(SX.ref(c, cid, "rec_places", p.ext.key)), p.ext) in (M.SAME, M.OLDER, M.GONE):
+        return
+    _record_write(c, cid, "rec_places", p.ext, {"name": p.name, "kind": "location", "active": int(p.active)}, at)
+
+
+def _dimension(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Dimension, at: str) -> None:
+    """A provider class as a class dimension, kept under the provider's key so the value is unique among classes."""
+    if M.decide(_have(SX.ref(c, cid, "fin_dimensions", d.ext.key)), d.ext) in (M.SAME, M.OLDER, M.GONE):
+        return
+    local = _local_record(c, cid, "fin_dimensions", d.ext)
+    if local and SC.class_exists(c, local):
+        SC.class_update(c, local, name=d.name, active=d.active)
+    else:
+        local = SL.new_id()
+        SC.class_insert(c, dimension_id=local, value=d.ext.key, name=d.name, active=d.active, at=at, by=SYSTEM)
+    _bind(c, cid, "fin_dimensions", local, d.ext, at)
+
+
+def _project(c: sqlite3.Connection, ctx: Ctx, cid: str, p: M.Project, at: str) -> None:
+    """A provider job as a project under its parent customer. The parent must already be a contact, so a job whose
+    customer is not in the books yet waits."""
+    if M.decide(_have(SX.ref(c, cid, "rec_projects", p.ext.key)), p.ext) in (M.SAME, M.OLDER, M.GONE):
+        return
+    if not p.customer:
+        raise FinanceError(NOT_AVAILABLE, "the job names no customer")
+    fields: dict[str, object] = {"name": p.name, "customer_id": _mapped(c, cid, "fin_contacts", p.customer),
+                                 "active": int(p.active)}
+    _record_write(c, cid, "rec_projects", p.ext, {**fields, "status": "open"}, at)
+
+
 def _gone(c: sqlite3.Connection, ctx: Ctx, cid: str, ext: M.Ext, at: str) -> None:
     """A record deleted at the provider: an entry is reversed; an account or party is made inactive; a bill or invoice is
     voided. A record the books never took in has nothing to undo."""
@@ -343,6 +430,10 @@ def _gone(c: sqlite3.Connection, ctx: Ctx, cid: str, ext: M.Ext, at: str) -> Non
         _gone_payment(c, ctx, cid, ext, at)
         return
     row = SX.ref(c, cid, _table(ext.kind), ext.key)
+    if row is None and ext.kind == "Customer":
+        # A deleted job is a project, not a contact: the project is the record that goes.
+        _gone(c, ctx, cid, M.Ext("Project", ext.external_id, ext.revision, True), at)
+        return
     if row is None or M.decide(_have(row), ext) != M.DELETE:
         return
     table, local = str(row["local_table"]), str(row["local_id"])
@@ -354,6 +445,10 @@ def _gone(c: sqlite3.Connection, ctx: Ctx, cid: str, ext: M.Ext, at: str) -> Non
             SL.update_account(c, replace(account, active=False), at)
     elif table in ("fin_bills", "fin_invoices"):
         _void(c, ctx, cid, table, local, ext.key, at)
+    elif table == "fin_dimensions":
+        SC.class_set_active(c, local, False)
+    elif table in RECORD_TABLES:
+        RS.update(c, table, local, {"active": 0, "updated_at": at, "updated_by": SYSTEM})
     else:
         SX.contact_deactivate(c, local, at)
     _bind(c, cid, table, local, ext, at, status="deleted")
@@ -426,11 +521,80 @@ def _carried(old: Sequence[Carry], new: Sequence[tuple[str, int, str]]) -> list[
     return [mark or {} for mark in out]
 
 
+def _project_key(key: str) -> str:
+    """The provider key a job is kept under, for its customer's key ("Customer:4" is "Project:4")."""
+    return f"Project:{key.partition(':')[2]}"
+
+
+def _party_of(c: sqlite3.Connection, cid: str, key: str) -> tuple[str, str]:
+    """A provider document's party as its contact, and the job it is for when the party is a job: a job's customer is its
+    parent, so the books take the contact from the project, and the project is the job's. Raises when neither is held."""
+    row = SX.ref(c, cid, "fin_contacts", key)
+    if row is None or str(row["status"]) == "unmapped":
+        found = SX.ref(c, cid, "rec_projects", _project_key(key))
+        if found is not None and str(found["status"]) != "unmapped" and str(found["local_id"]):
+            project = RR.get(c, "rec_projects", str(found["local_id"]))
+            return str(project["customer_id"] or ""), str(project["id"])
+    return _mapped(c, cid, "fin_contacts", key), ""
+
+
+def _project_of(c: sqlite3.Connection, cid: str, key: str) -> str:
+    """The local project a line's job is, or "" when the line's customer is not a job (it is billed to a customer, which
+    is not a project). Raises when the customer is not in the books yet, since it may be a job still to come."""
+    found = SX.ref(c, cid, "rec_projects", _project_key(key))
+    if found is not None and str(found["status"]) != "unmapped" and str(found["local_id"]):
+        return str(found["local_id"])
+    if SX.ref(c, cid, "fin_contacts", key) is not None:
+        return ""
+    raise FinanceError(NOT_FOUND, f"{key} is not in the books")
+
+
+def _provider_marks(c: sqlite3.Connection, cid: str, lines: Sequence[M.Tags], job: str = "") -> list[dict[str, str]]:
+    """Each line's local place, class and project from the provider tags it carries. A line with no job of its own is
+    for the document's job (`job`, a local project id) when the document's party is one. Raises when a place, class or
+    job is not in the books yet, so the record waits for it."""
+    out: list[dict[str, str]] = []
+    for tags in lines:
+        mark: dict[str, str] = {}
+        for kind, key in tags:
+            if kind == "place":
+                mark["place"] = _mapped(c, cid, "rec_places", key)
+            elif kind == "class":
+                mark["class"] = _mapped(c, cid, "fin_dimensions", key)
+            elif kind == "project":
+                found = _project_of(c, cid, key)
+                if found:
+                    mark["project"] = found
+        if job and "project" not in mark:
+            mark["project"] = job
+        out.append(mark)
+    return out
+
+
+def _with_dims(marks: Sequence[Mapping[str, str]], dims: Sequence[Mapping[str, str]]) -> list[dict[str, str]]:
+    """Each line's tags with the provider's place, class and job in place of the ones it carried: the provider's record
+    is what the books take, so a line the provider no longer places loses its place. The other tags carry on."""
+    return [{**{k: v for k, v in mark.items() if k not in PLACED}, **dim}
+            for mark, dim in zip(marks, dims, strict=True)]
+
+
+def _line_items(d: M.Document) -> list[str]:
+    """The provider's item for each row `_doc_lines` makes: the lines, then the tax line, which has none."""
+    return [x.item for x in d.lines] + ([""] if d.tax else [])
+
+
+def _line_tags(d: M.Document) -> list[M.Tags]:
+    """The provider's tags for each row `_doc_lines` makes: the lines', then the tax line's (none)."""
+    return [x.tags for x in d.lines] + ([()] if d.tax else [])
+
+
 def _entry(c: sqlite3.Connection, cid: str, ctx: Ctx, j: M.Journal, day: str, old: Sequence[Carry] = ()) -> L.Entry:
     """A provider entry as the books post it. A replaced entry's tags carry to the lines with the same provider line id,
-    else to the lines on the same account and amount."""
+    else to the lines on the same account and amount; the provider's place, class and job then replace the place, class
+    and job the line carried."""
     accounts = [_account_of(c, cid, ctx, x.account) for x in j.lines]
-    tags = _carried(old, [(account, x.amount, x.key) for account, x in zip(accounts, j.lines, strict=True)])
+    tags = _with_dims(_carried(old, [(account, x.amount, x.key) for account, x in zip(accounts, j.lines, strict=True)]),
+                      _provider_marks(c, cid, [x.tags for x in j.lines]))
     lines = tuple(L.Line(account_id=account, amount=x.amount, currency=ctx.book.base_currency,
                          original_amount=x.amount, fx_rate=Decimal(1),
                          contact_id=_mapped(c, cid, "fin_contacts", x.party) if x.party else "",
@@ -688,15 +852,18 @@ def _document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str)
             _bind(c, cid, table, local, d.ext, at, status="deleted")
         return
     _currency(ctx, d.currency)
-    contact = _mapped(c, cid, "fin_contacts", d.party)
+    contact, job = _party_of(c, cid, d.party)
     rows = _doc_lines(c, ctx, cid, d)
     keys = _line_keys(d)
-    _write_document(c, ctx, cid, d, verdict, row, contact, rows, at, keys=keys)
+    items = [_mapped(c, cid, "rec_items", x) if x else "" for x in _line_items(d)]
+    dims = _provider_marks(c, cid, _line_tags(d), job)
+    _write_document(c, ctx, cid, d, verdict, row, contact, rows, at, keys=keys, items=items, dims=dims)
 
 
 def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, verdict: str, row: Any, contact: str,
                     rows: Sequence[tuple[str, int, str]], at: str, tags: Sequence[Mapping[str, str]] = (),
-                    keys: Sequence[str] = ()) -> str:
+                    keys: Sequence[str] = (), items: Sequence[str] = (),
+                    dims: Sequence[Mapping[str, str]] | None = None) -> str:
     """A bill or invoice's row, lines and entry, from its rows (local account ids). A replaced document keeps its row
     and id: its entry is reversed and posted again. Each line keeps the tags of the provider line it replaces (by its
     line id, else by account and amount). The cash payments that settled it are undone before the lines change and
@@ -725,7 +892,9 @@ def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, ve
         old_entry = ""
         local = SAP.insert(c, table, _doc_row(ctx, kind, contact, d, total, _doc_state(kind, total, 0, 0), at))
         line_tags = [dict(mark) for mark in tags] or [{} for _ in rows]
-    SAP.replace_lines(c, kind, local, _line_rows(rows, at, line_tags, keys))
+    if dims is not None:
+        line_tags = _with_dims(line_tags, dims)
+    SAP.replace_lines(c, kind, local, _line_rows(rows, at, line_tags, keys, items))
     new_entry = _book(c, ctx, cid, d.ext, verdict, old_entry, d.day,
                       lambda when: _doc_entry(ctx, control_kind=kind, sign=sign, source=kind, source_id=local,
                                               contact=contact, rows=rows, memo=_doc_label(d), day=when,
@@ -750,12 +919,14 @@ def _credit(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str) -
     if verdict not in (M.CREATE, M.REPLACE):
         return
     _currency(ctx, d.currency)
-    contact = _mapped(c, cid, "fin_contacts", d.party)
+    contact, job = _party_of(c, cid, d.party)
     rows = _doc_lines(c, ctx, cid, d)
     keys = _line_keys(d)
     old = str(row["local_id"]) if verdict == M.REPLACE and row is not None and row["local_id"] else ""
-    carry = _carried(_entry_tags(c, old),
-                     [(account, sign * amount, key) for (account, amount, _), key in zip(rows, keys, strict=True)])
+    carry = _with_dims(_carried(_entry_tags(c, old),
+                                [(account, sign * amount, key) for (account, amount, _), key in zip(rows, keys,
+                                                                                                    strict=True)]),
+                       _provider_marks(c, cid, _line_tags(d), job))
     control = _mapped(c, cid, "fin_accounts", d.control) if d.control else ""
     new_id = _book(c, ctx, cid, d.ext, verdict, old, d.day,
                    lambda when: _doc_entry(ctx, control_kind=side, sign=sign, source=side,
@@ -799,12 +970,15 @@ def _doc_row(ctx: Ctx, kind: str, contact: str, d: M.Document, total: int, state
 
 
 def _line_rows(rows: Sequence[tuple[str, int, str]], at: str, tags: Sequence[Mapping[str, str]],
-               keys: Sequence[str] = ()) -> list[dict[str, object]]:
-    """A document's line rows, each with the tags it carries and the provider's id for it (empty for a line Tico wrote)."""
+               keys: Sequence[str] = (), items: Sequence[str] = ()) -> list[dict[str, object]]:
+    """A document's line rows, each with the tags it carries, the item it sells or buys (a local id, or none), and the
+    provider's id for it (empty for a line Tico wrote)."""
     marks = list(keys) or [""] * len(rows)
+    ids = list(items) or [""] * len(rows)
     return [{"account_id": account, "amount": amount, "description": description[:200],
-             "tags_json": SK.dump(dict(mark)), "external_line": key, "created_at": at, "created_by": SYSTEM}
-            for (account, amount, description), mark, key in zip(rows, tags, marks, strict=True)]
+             "tags_json": SK.dump(dict(mark)), "external_line": key, "item_id": item or None,
+             "created_at": at, "created_by": SYSTEM}
+            for (account, amount, description), mark, key, item in zip(rows, tags, marks, ids, strict=True)]
 
 
 def _carry_lines(c: sqlite3.Connection, kind: str, doc_id: str, old_entry: str, keys: Sequence[str],
@@ -1160,10 +1334,46 @@ def _need(key: str | None, what: str) -> str:
 
 def _doc_out(c: sqlite3.Connection, cid: str, local: Mapping[str, Any]) -> dict[str, Any]:
     """A bill or invoice as the provider takes it: its party and each line's account by their provider keys."""
-    lines = [{"account": _need(_key(c, cid, "fin_accounts", str(x["account_id"])), f"account {x['account_id']}"),
-              "amount": x["amount"], "description": x["description"]} for x in local["lines"]]
+    lines: list[dict[str, Any]] = []
+    for x in cast(list[dict[str, Any]], local["lines"]):
+        tags = cast(dict[str, str], x.get("tags") or {})
+        lines.append({
+            "account": _need(_key(c, cid, "fin_accounts", str(x["account_id"])), f"account {x['account_id']}"),
+            "amount": x["amount"], "description": x["description"],
+            "item": _tag_need(c, cid, "rec_items", str(x.get("item_id") or "")),
+            "place": _tag_need(c, cid, "rec_places", tags.get("place", "")),
+            "class": _bare(_tag_need(c, cid, "fin_dimensions", tags.get("class", ""))),
+            "project": _customer_key(_tag_need(c, cid, "rec_projects", tags.get("project", "")))})
     return {"party": _need(_key(c, cid, "fin_contacts", str(local["party"])), f"contact {local['party']}"),
             "number": local["number"], "day": local["day"], "due": local["due"], "memo": local["memo"], "lines": lines}
+
+
+def _bare(key: str) -> str:
+    """A provider key's id ("Class:7" is "7"): what a class is sent as."""
+    return key.partition(":")[2]
+
+
+def _customer_key(project: str) -> str:
+    """A job's provider key as its customer's ("Project:12" is "Customer:12"): what a line's job is sent as."""
+    return f"Customer:{_bare(project)}" if project else ""
+
+
+def _tag_need(c: sqlite3.Connection, cid: str, table: str, local_id: str) -> str:
+    """The provider key of a record a line names, "" for none. Waits when the record is not in the provider yet."""
+    if not local_id:
+        return ""
+    return _need(_key(c, cid, table, local_id), f"{table} {local_id}")
+
+
+def _tag_key(c: sqlite3.Connection, cid: str, table: str, local_id: str, export: bool) -> str:
+    """The provider key of a record a journal line names, "" for none. An export sends the line without a record the
+    provider does not hold; any other write waits for it."""
+    if not local_id:
+        return ""
+    key = _key(c, cid, table, local_id)
+    if key is None and not export:
+        raise _Missing(f"{table} {local_id} is not in the provider yet")
+    return key or ""
 
 
 def _void_out(c: sqlite3.Connection, cid: str, table: str, local: Mapping[str, Any]) -> dict[str, Any]:
@@ -1223,8 +1433,13 @@ def _translate(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any
             party = _key(c, cid, "fin_contacts", str(x["contact_id"])) or ""
             if not party and not export:
                 raise _Missing(f"contact {x['contact_id']} is not in the provider yet")
+        tags = dict(x["tags"])
+        own = _bare(_tag_key(c, cid, "fin_dimensions", str(tags.get("class") or ""), export))
         lines.append({"account": account, "party": party, "amount": x["amount"], "description": x["description"],
-                      "role": x["role"], "classes": M.class_refs(x["tags"], mapping)})
+                      "role": x["role"], "classes": M.class_refs(tags, mapping, own),
+                      "place": _tag_key(c, cid, "rec_places", str(tags.get("place") or ""), export),
+                      "project": _customer_key(_tag_key(c, cid, "rec_projects", str(tags.get("project") or ""),
+                                                        export))})
     return {"date": local["date"], "memo": local["memo"], "source": local["source"], "lines": lines,
             "export": export, "feed": bool(local.get("feed_id"))}
 
@@ -1348,7 +1563,8 @@ def _confirm_document(c: sqlite3.Connection, cid: str, sent: Sent, local: Mappin
     head = M.Document(ext, party="", number=str(local["number"]), day=str(local["day"]), due=str(local["due"]),
                       total=sum(amount for _, amount, _ in rows), lines=(), memo=str(local["memo"]))
     tags = [dict(x.get("tags") or {}) for x in local["lines"]]
-    _write_document(c, load(c, now), cid, head, M.CREATE, row, str(local["party"]), rows, now, tags)
+    items = [str(x.get("item_id") or "") for x in local["lines"]]
+    _write_document(c, load(c, now), cid, head, M.CREATE, row, str(local["party"]), rows, now, tags, items=items)
 
 
 def _confirm_void(c: sqlite3.Connection, cid: str, table: str, local: Mapping[str, Any], sent: Sent, now: str) -> None:
@@ -1769,7 +1985,7 @@ def _create_planner(kind: str) -> handlers.Planner:
         body = {"party": str(contact["id"]), "number": number, "day": day, "due": due or "",
                 "memo": V.opt_text(p, "memo", 500) or "",
                 "lines": [{"account_id": x.account_id, "amount": x.amount, "description": x.description,
-                           "tags": dict(x.tags)} for x in lines]}
+                           "item_id": x.item_id, "tags": dict(x.tags)} for x in lines]}
 
         def apply(aid: str) -> handlers.Result:
             oid = _queue(ctx.c, cid, f"{kind}.create", body, by=who, action_id=aid, at=ctx.at)
