@@ -14,7 +14,7 @@ from clients import gateway, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
-from . import claim_holds, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, turn_budgets
+from . import browser_exit, claim_holds, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import reports_tool_calls
@@ -2567,6 +2567,9 @@ class Execution:
         return {"server_time": H.now(), "start_places": True, "runtime_credential_source": True, "subscription_accounts": True, "worktree_record_stamp": True, "worktree_actions": sendable,
                 # Whether the runner samples its performance (backend/performance.py).
                 "performance": bool(restart) and restart["performance"] != "off",
+                # Whether this computer's owner shares its internet with bots: the runner holds its exit link open
+                # (backend/browser_exit.py).
+                "browser_exit": browser_exit.sharing(c, who.runner_id),
                 # The owner's "Turns at once" (null: automatic). Only a runner with turns_at_once_v1 takes a raised one.
                 "turns_at_once": restart["turns_at_once"] if restart else None,
                 **({"worktree_actions_skipped": skipped} if skipped else {}),
@@ -3670,6 +3673,8 @@ class Execution:
                                 "SELECT 1 FROM attempts WHERE id=? AND state='expired' AND thread_id IS NOT NULL",
                                 (row["attempt_id"],)).fetchone())} if recovery else None,
                             "computer_label": runner["label"], "computer_logins_v1": True,
+                            # The computer the bot's browser reaches the web through, or None (backend/browser_exit.py).
+                            "browser_exit": browser_exit.for_turn(c, row["bot"]),
                             # A starter bot's chat while it is `needs_setup` is its setup (runner prompt).
                             "onboarding": (parked["onboarding_state"] if parked else "") or "",
                             # The mailboxes an inbox bot's turn may ask its runner for mail access to: the one it declares

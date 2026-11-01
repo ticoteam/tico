@@ -262,7 +262,8 @@ TRIGGERS = [
 # at most a bot slug (or, for `screen_open`, the session's id), never a value (`GET /api/v2/runners/me/events`,
 # runner-rs/src/events.rs).
 RUNNER_KINDS = ("work", "assignments", "credentials", "config", "repositories", "worktrees", "restart",
-                "logins", "harness_actions", "credential_imports", "subscription_refresh", "screen_open")
+                "logins", "harness_actions", "credential_imports", "subscription_refresh", "screen_open",
+                "browser_exit")
 _BOT_RUNNER = "SELECT runner_id AS rid FROM assignments WHERE bot={bot}"
 # Credentials and repositories are rare company-wide changes: every computer re-reads its share.
 _ALL_RUNNERS = "SELECT id AS rid FROM runners WHERE revoked_at IS NULL"

@@ -2597,6 +2597,24 @@ class PerformanceMode(Contract):
     mode: Literal["off", "on"]
 
 
+class BrowserExitPolicy(Contract):
+    """A computer's internet shared with bots (backend/browser_exit.py). Omitted bots or cap keep what is stored."""
+    sharing: bool
+    bots: list[Annotated[str, Field(min_length=1, max_length=128)]] | None = Field(default=None, max_length=500)
+    daily_cap_bytes: Annotated[int, Field(strict=True, ge=100_000_000, le=10_000_000_000_000)] | None = None
+
+
+class BotBrowserExit(Contract):
+    """The computer a bot's browser reaches the web through; null is its own."""
+    runner_id: Annotated[str, Field(min_length=1, max_length=128)] | None
+
+
+class BrowserExitTunnel(Contract):
+    bot: Annotated[str, Field(min_length=1, max_length=128)]
+    host: Annotated[str, Field(min_length=1, max_length=253)]
+    port: int
+
+
 class _Sampled(BaseModel):
     """A newer runner's extra fields are ignored, never refused: samples are diagnostics, not a contract."""
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)

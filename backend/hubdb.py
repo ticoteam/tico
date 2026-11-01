@@ -869,6 +869,20 @@ CREATE TABLE IF NOT EXISTS task_run_models (
   harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', set_by TEXT, set_at TEXT);
 """
 
+# Browser exits (backend/browser_exit.py): a computer's owner shares its internet with chosen bots under a daily byte
+# cap; a bot browses through one such computer; what went through, per day, bot and hostname, is kept 30 days.
+BROWSER_EXITS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS browser_exits (
+  runner_id TEXT PRIMARY KEY, sharing INTEGER NOT NULL DEFAULT 0, bots_json TEXT NOT NULL DEFAULT '[]',
+  daily_cap_bytes INTEGER NOT NULL DEFAULT 5000000000, changed_by TEXT, changed_at TEXT);
+CREATE TABLE IF NOT EXISTS bot_browser_exits (
+  bot TEXT PRIMARY KEY, runner_id TEXT NOT NULL, set_by TEXT, set_at TEXT);
+CREATE TABLE IF NOT EXISTS browser_exit_usage (
+  runner_id TEXT NOT NULL, day TEXT NOT NULL, bot TEXT NOT NULL, host TEXT NOT NULL,
+  bytes INTEGER NOT NULL DEFAULT 0, tunnels INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(runner_id, day, bot, host));
+CREATE INDEX IF NOT EXISTS browser_exit_usage_day ON browser_exit_usage(day);
+"""
+
 
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
@@ -890,7 +904,8 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               TASK_CAPS_SCHEMA, TASK_CAP_LOG_SCHEMA, TASK_LINK_ACTIVITY_SCHEMA,
               RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA,
               LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA, LIVE_MEETING_TURN_RETRY_SCHEMA,
-              POSTAL_MAIL_SCHEMA, POSTAL_MAIL_V2_SCHEMA, POSTAL_MAIL_V3_SCHEMA, TRIGGERS_CONSUMER_SCHEMA]
+              POSTAL_MAIL_SCHEMA, POSTAL_MAIL_V2_SCHEMA, POSTAL_MAIL_V3_SCHEMA, TRIGGERS_CONSUMER_SCHEMA,
+              BROWSER_EXITS_SCHEMA]
 
 
 class Refused(Exception):

@@ -609,6 +609,21 @@ def test_computer_turns_at_once_cli_sends_automatic_as_null(monkeypatch):
     assert all(row['computer'] == 'rig-1' for row in sent)
 
 
+def test_browser_exit_cli_sends_none_as_null_and_on_off_as_booleans(monkeypatch):
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+    sent = []
+    for name in ('hub_bot_browser_exit', 'hub_computer_browser_exit'):
+        monkeypatch.setitem(BY_NAME[name], 'fn', lambda api, args: sent.append(args))
+    for argv in (['bot', 'browser-exit', 'ops'], ['bot', 'browser-exit', 'ops', 'none'],
+                 ['bot', 'browser-exit', 'ops', 'rig-1'], ['computer', 'browser-exit', 'rig-1', 'on', '--bots', 'ops,cpo'],
+                 ['computer', 'browser-exit', 'rig-1']):
+        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+    assert ['computer' in row for row in sent[:3]] == [False, True, True]
+    assert [row.get('computer') for row in sent[1:3]] == [None, 'rig-1']
+    assert (sent[3]['sharing'], sent[3]['bots']) == (True, ['ops', 'cpo']) and 'sharing' not in sent[4]
+
+
 def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_path):
     from clients import remotecli
     calls = []
