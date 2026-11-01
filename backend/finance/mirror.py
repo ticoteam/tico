@@ -1239,6 +1239,33 @@ def _later(c: sqlite3.Connection, o: Any, why: str, now: str) -> None:
                                               "last_error": why[:300], "updated_at": now})
 
 
+# The writes that take a document's balance before the provider holds them: a payment, and a write-off with the credit
+# that applies it to its invoice. Each holds its amount against what is left until it is sent or refused.
+BALANCE_OPS = {"bill": ("payment.bill",), "invoice": ("payment.invoice", "writeoff.create", "credit.apply")}
+RECHECKED = tuple(op for ops in BALANCE_OPS.values() for op in ops)
+
+
+def _held(c: sqlite3.Connection, cid: str, kind: str, doc_id: str, *, skip: str = "") -> int:
+    """What the open writes against this document hold back from its balance. `skip` is the write asking, which
+    does not hold against itself."""
+    held = 0
+    for o in SK.open_writes(c, cid, BALANCE_OPS[kind]):
+        local = SK.loads(o["payload_json"])
+        if str(o["id"]) != skip and doc_id in (str(local.get("doc_id", "")), str(local.get("invoice_id", ""))):
+            held += int(local["amount"])
+    return held
+
+
+def _still_owed(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any]) -> bool:
+    """Whether the document still has the amount this unsent write asks for, not counting the write itself."""
+    kind = "bill" if str(o["op"]) == "payment.bill" else "invoice"
+    doc_id = str(local.get("doc_id") or local.get("invoice_id") or "")
+    doc = SAP.doc_with_contact(c, kind, doc_id)
+    if doc is None:
+        return False
+    return int(local["amount"]) <= documents.left_of(kind, doc) - _held(c, cid, kind, doc_id, skip=str(o["id"]))
+
+
 def _prepare(c: sqlite3.Connection, cid: str, o: Any, now: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
     local = SK.loads(o["payload_json"])
     feed = str(local.get("feed_id") or "")
@@ -1251,6 +1278,11 @@ def _prepare(c: sqlite3.Connection, cid: str, o: Any, now: str) -> tuple[dict[st
             # The provider's entries are not all in yet: a match against them must not be missed.
             _later(c, o, "the provider's books are still being read", now)
             return None
+    # A write never sent is checked against its document again: a sync may have taken the balance since it was queued.
+    # A write tried before keeps its identity and goes out as it is, the provider keeps its key.
+    if int(o["attempts"]) == 0 and str(o["op"]) in RECHECKED and not _still_owed(c, cid, o, local):
+        _finish(c, o, "the balance was taken before this went out", now, "failed")
+        return None
     try:
         provider = _translate(c, cid, str(o["op"]), local)
     except _Missing as e:
@@ -1795,7 +1827,7 @@ def _payment_planner(kind: str) -> handlers.Planner:
         ref = SX.ref_for_local(ctx.c, cid, table, str(doc["id"]))
         if ref is None or str(ref["status"]) != "active":
             raise FinanceError(CONFLICT, "that is not in the provider yet")
-        left = documents.left_of(kind, doc)
+        left = documents.left_of(kind, doc) - _held(ctx.c, cid, kind, str(doc["id"]))
         given = V.opt_amount(p)
         amount = left if given is None else given     # 0 is refused below, never read as the balance left
         if not 0 < amount <= left:
@@ -1862,7 +1894,7 @@ def _writeoff_planner(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     ref = SX.ref_for_local(ctx.c, cid, "fin_invoices", str(inv["id"]))
     if ref is None or str(ref["status"]) != "active":
         raise FinanceError(CONFLICT, "that is not in the provider yet")
-    left = documents.left_of("invoice", inv)
+    left = documents.left_of("invoice", inv) - _held(ctx.c, cid, "invoice", str(inv["id"]))
     given = V.opt_amount(p)
     amount = left if given is None else given     # 0 is refused below, never read as the balance left
     if not 0 < amount <= left:

@@ -750,6 +750,14 @@ def card_create_payload(c: sqlite3.Connection, card_id: str) -> dict[str, Any]:
     return loads(row[0]) if row is not None else {}
 
 
+def open_writes(c: sqlite3.Connection, connection_id: str, ops: Sequence[str]) -> list[Any]:
+    """Writes of these kinds the provider does not hold yet: pending ones, and failed ones it could not rule out. A
+    write it refused gives its amount back."""
+    return c.execute(f"SELECT * FROM fin_outbox WHERE connection_id=? AND op IN ({_marks(ops)}) AND "
+                     "(status='pending' OR (status='failed' AND unknown=1)) ORDER BY created_at, id",
+                     (connection_id, *ops)).fetchall()
+
+
 def outbox_stuck(c: sqlite3.Connection, before: str, connection_id: str) -> list[Any]:
     """Writes claimed before `before` and never recorded: the worker stopped mid-call."""
     return c.execute("SELECT * FROM fin_outbox WHERE status='pending' AND claimed_at IS NOT NULL AND claimed_at<? AND "

@@ -1621,3 +1621,104 @@ def test_a_revised_journal_with_two_equal_legs_gives_each_bank_row_its_own_repla
             "SELECT entry_line_id FROM fin_feed_txns WHERE status='matched'").fetchall())
         assert len(legs) == 2 and matched == legs                         # each row on its own leg, none shared
         assert [str(r[0]) for r in c.execute("SELECT status FROM fin_feed_txns WHERE status='new'").fetchall()] == ["new"]
+
+
+def _invoice_mirror(books: Any, total: int) -> tuple[FakeBooks, str, str]:
+    """A mirrored book holding one invoice to Customer:4, sent to the provider; its connection and local id."""
+    fake = FakeBooks()
+    _chart(fake)
+    _customer(fake)
+    fake.records["documents"] = [_invoice(12, 1, total)]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        inv = _local(c, "Invoice:12", "fin_invoices")
+    return fake, cid, inv
+
+
+def test_two_payment_requests_before_a_sync_cannot_both_take_the_same_invoice_balance(books):
+    fake, cid, inv = _invoice_mirror(books, 2000)
+    with books.transaction() as c:
+        first = act(c, OWNER, "invoice_record_payment", {"invoice_id": inv, "account_id": account(c, "1000")})
+        second = act(c, OWNER, "invoice_record_payment", {"invoice_id": inv, "account_id": account(c, "1000")})
+    assert first.status == "committed"
+    assert (second.status, second.code) == ("failed", "invalid")
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert [body["total"] for name, body, _ in fake.sent if name == "payment.invoice"] == [2000]
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE id=?", (inv,)).fetchone()) == (
+            "paid", 2000)
+
+
+def test_two_partial_payments_before_a_sync_cannot_take_more_than_the_invoice_owes(books):
+    fake, cid, inv = _invoice_mirror(books, 2000)
+    with books.transaction() as c:
+        bank = account(c, "1000")
+        first = act(c, OWNER, "invoice_record_payment", {"invoice_id": inv, "account_id": bank, "amount": 1200})
+        over = act(c, OWNER, "invoice_record_payment", {"invoice_id": inv, "account_id": bank, "amount": 1200})
+        rest = act(c, OWNER, "invoice_record_payment", {"invoice_id": inv, "account_id": bank, "amount": 800})
+    assert [first.status, over.status, rest.status] == ["committed", "failed", "committed"]
+    assert over.code == "invalid"
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert sorted(body["total"] for name, body, _ in fake.sent if name == "payment.invoice") == [800, 1200]
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE id=?", (inv,)).fetchone()) == (
+            "paid", 2000)
+
+
+def test_a_write_off_holds_its_amount_against_a_payment_requested_before_it_is_sent(books):
+    fake, cid, inv = _invoice_mirror(books, 2000)
+    with books.transaction() as c:
+        off = act(c, OWNER, "invoice_write_off", {"invoice_id": inv, "amount": 1200, "account_id": account(c, "6100")})
+        over = act(c, OWNER, "invoice_record_payment", {"invoice_id": inv, "account_id": account(c, "1000"),
+                                                        "amount": 1000})
+        rest = act(c, OWNER, "invoice_record_payment", {"invoice_id": inv, "account_id": account(c, "1000"),
+                                                        "amount": 800})
+    assert [off.status, over.status, rest.status] == ["committed", "failed", "committed"]
+    assert over.code == "invalid"
+
+
+def test_a_queued_payment_the_balance_no_longer_covers_when_it_goes_out_is_refused_and_never_sent(books):
+    fake, cid, inv = _invoice_mirror(books, 2000)
+    with books.transaction() as c:
+        assert act(c, OWNER, "invoice_record_payment", {"invoice_id": inv, "account_id": account(c, "1000")}
+                   ).status == "committed"
+    with books.transaction() as c:      # a sync takes the balance meanwhile
+        SAP.update(c, "fin_invoices", inv, {"amount_paid": 2000, "status": "paid"})
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert [name for name, _, _ in fake.sent if name == "payment.invoice"] == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, unknown FROM fin_outbox WHERE op='payment.invoice'").fetchone()) == (
+            "failed", 0)
+
+
+def test_a_payment_the_provider_refused_gives_its_amount_back(books):
+    fake, cid, inv = _invoice_mirror(books, 2000)
+    with books.transaction() as c:
+        assert act(c, OWNER, "invoice_record_payment", {"invoice_id": inv, "account_id": account(c, "1000")}
+                   ).status == "committed"
+    fake.replies.append(mirror.Sent(False, final=True, error="the provider refused the payment"))
+    assert _drain(books, fake, cid, now=LATER) == ["payment.invoice: the provider refused the payment"]
+    with books.transaction() as c:
+        again = act(c, OWNER, "invoice_record_payment", {"invoice_id": inv, "account_id": account(c, "1000")})
+    assert again.status == "committed"
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE id=?", (inv,)).fetchone()) == (
+            "paid", 2000)
+
+
+def test_a_payment_the_provider_could_not_rule_out_keeps_its_amount_held(books):
+    fake, cid, inv = _invoice_mirror(books, 2000)
+    with books.transaction() as c:
+        assert act(c, OWNER, "invoice_record_payment", {"invoice_id": inv, "account_id": account(c, "1000")}
+                   ).status == "committed"
+    fake.replies.append(mirror.Sent(False, final=True, unknown=True, error="the provider did not answer"))
+    assert _drain(books, fake, cid, now=LATER) == ["payment.invoice: the provider did not answer"]
+    with books.transaction() as c:
+        again = act(c, OWNER, "invoice_record_payment", {"invoice_id": inv, "account_id": account(c, "1000")})
+    assert (again.status, again.code) == ("failed", "invalid")
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, unknown FROM fin_outbox WHERE op='payment.invoice'").fetchone()) == (
+            "failed", 1)
