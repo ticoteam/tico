@@ -3548,6 +3548,23 @@ def mark_delivered(conn, actor, message_id):
     return message(conn, message_id)
 
 
+def asks_seen(conn, actor, ids, read=False):
+    """`actor`, a person, has the questions `ids` asked of them on their Needs you (delivered) or opened them there or on
+    their task (`read`, delivered too). Only open questions to them change, each once: a withdrawn question then says
+    whether they had seen it (backend/task_holds.py). Returns the ids that changed."""
+    at, out = now(), []
+    for mid in list(dict.fromkeys(str(i) for i in ids if i))[:200]:
+        cur = conn.execute(
+            "UPDATE messages SET delivered_at=coalesce(delivered_at,?)" + (", read_at=coalesce(read_at,?)" if read else "")
+            + " WHERE id=? AND to_actor=? AND kind='ask' AND deleted_at IS NULL AND id IN (SELECT m.id FROM messages m "
+            "WHERE m.id=messages.id AND " + OPEN_ASK_SQL + ") AND (delivered_at IS NULL" + (" OR read_at IS NULL)" if read else ")"),
+            (at, at, mid, actor) if read else (at, mid, actor))
+        if cur.rowcount:
+            out.append(mid)
+            event(conn, actor, "message.read" if read else "message.delivered", mid)
+    return out
+
+
 def mark_read(conn, actor, message_id):
     conn.execute("UPDATE messages SET read_at=? WHERE id=? AND read_at IS NULL",
                  (now(), message_id))

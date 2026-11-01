@@ -109,9 +109,28 @@ function v2NeedsOne(id) {
   return NEEDS_ONE.get(key).read;
 }
 const needsOneHeld = id => NEEDS_ONE.get(String(id))?.it || null;
+// A question to the person is delivered once their Needs you holds it, and read once they open its card or its task
+// (POST /v2/needs-you/seen, /v2/tasks/{id}/seen): a question withdrawn later tells its bot whether they had seen it.
+// Each is sent once per page load; one that fails is sent again with the next list.
+const ASKS_SENT = {seen: new Set(), read: new Set()};
+const askToMe = a => a?.id && actorPerson(a.to_actor || '') === S.me?.id;
+function needsSeen(items) {
+  const ids = (items || []).map(it => it.ask).filter(a => askToMe(a) && !a.delivered_at && !ASKS_SENT.seen.has(a.id))
+    .map(a => a.id).slice(0, 200);
+  if (!ids.length) return;
+  ids.forEach(id => ASKS_SENT.seen.add(id));
+  post('/v2/needs-you/seen', {asks: ids}).catch(() => ids.forEach(id => ASKS_SENT.seen.delete(id)));
+}
+function taskAsksRead(id) {
+  const key = String(id);
+  if (!key || ASKS_SENT.read.has(key)) return;
+  ASKS_SENT.read.add(key);
+  post(`/v2/tasks/${encodeURIComponent(key)}/seen`, {}).catch(() => ASKS_SENT.read.delete(key));
+}
 function needsTake(needs) {
   NEEDS_ONE.clear();
   S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null;
+  needsSeen(S.v2.needs);
   S.v2.needsCount = needs.count ?? S.v2.needs.length; S.v2.needsNext = needs.next || null; S.v2.needsBots = needs.bots || null;
 }
 let NEEDS_READ = 0, NEEDS_KEPT = 0;
@@ -138,6 +157,7 @@ function v2NeedsMore() {
       if (!r || S.v2.needsNext !== cursor) return false;        // a read or a live event moved the list meanwhile
       if (r.restart || r.version !== S.v2.needsVersion) { await v2NeedsRead(); return true; }
       S.v2.needs = [...S.v2.needs, ...(r.items || [])];
+      needsSeen(r.items);
       S.v2.needsCount = r.count ?? S.v2.needs.length; S.v2.needsNext = r.next || null; S.v2.needsBots = r.bots || null;
       return true;
     } finally { NEEDS_MORE = null; }
@@ -172,6 +192,7 @@ async function v2NeedsMend(d) {
   if (all ? items.length !== d.count : items.length > d.count) return whole();
   NEEDS_ONE.clear();
   S.v2.needs = items; S.v2.needsVersion = d.version; S.v2.needsCount = d.count;
+  needsSeen(items);
   S.v2.needsNext = all || items.length >= d.count ? null : needsCursor(d.version, items.length);
   if (d.bots) S.v2.needsBots = d.bots;
   return true;
