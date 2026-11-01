@@ -19,7 +19,8 @@ from backend.finance.store import budgets as SB
 from backend.finance.store import schema as FS
 from backend.tests.test_api import api, headers  # noqa: F401
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
+    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, set_manager, spend, store,
+    sync_once)
 from clients import hubtools
 from clients.tico import APIError
 
@@ -665,6 +666,38 @@ def test_a_child_with_no_amount_today_that_comes_back_active_fits_its_later_vers
         assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": True}).status == "committed"
 
 
+def test_a_card_on_an_ended_child_budget_is_refused_and_nothing_is_queued(books):
+    """Eng tools (100.00) ends under Tools (100.00). A 200.00 card on it reserves nothing against Tools, since an ended
+    budget reserves nothing, so it used to pass and queue Mercury at 200.00 while Tools stayed at 100.00 free. Now it is
+    refused and nothing is queued or reserved."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        line = _budget(c, amount=10_000)                                 # Tools: 100.00 a month, decline
+        eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=line)
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": False}).status == "committed"
+        refused = _bot_card(c, eng, "bot:coder", amount=20_000)
+        assert refused.code == "invalid" and "has ended" in refused.reason, refused
+        assert c.execute("SELECT COUNT(*) FROM fin_cards WHERE holder='bot:coder'").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op='card_create'").fetchone()[0] == 0
+        assert FA.budget_state(c, line, AT).remaining == 10_000
+
+
+def test_ending_a_child_keeps_its_card_reserve_against_the_parent(books):
+    """Eng tools (100.00) has a 50.00 card under Tools (100.00), so Tools has 50.00 left. Ending Eng tools frees nothing:
+    the card keeps its Mercury limit until it is lowered or cancelled. Tools' remaining must not rise."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        line = _budget(c, amount=10_000)
+        eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=line)
+        assert _bot_card(c, eng, "bot:coder", amount=5_000).status == "committed"
+        before = FA.budget_state(c, line, AT).remaining
+        assert before == 5_000
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": False}).status == "committed"
+        assert FA.budget_state(c, line, AT).remaining == before
+
+
 def test_a_warn_budget_at_zero_does_not_hold_a_card_back_from_the_sweep(books):
     fake = FakeMercury()
     budget, _, _ = _world(books, fake)
@@ -966,3 +999,58 @@ def test_a_hold_inside_a_child_counts_once_against_the_parents_teammate_allocati
         assert lowered.status == "committed", (lowered.status, lowered.code, lowered.reason)
         refused = act(c, OWNER, "budget_update", {"budget_id": parent, "amount": 59_900}, key="child-hold-599")
         assert (refused.status, refused.code) == ("failed", "invalid"), (refused.status, refused.code, refused.reason)
+
+
+def test_lowering_a_parent_below_an_ended_childs_card_reserve_is_refused(books):
+    """Eng tools (100.00) carries an 80.00 card under Tools (100.00). Ending Eng tools keeps that card reserved against
+    Tools (spec 4.4), so Tools cannot drop to 10.00; it can go down to the 80.00 it reserves and no lower."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        line = _budget(c, amount=10_000)
+        eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=line)
+        assert _bot_card(c, eng, "bot:coder", amount=8_000).status == "committed"
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": False}).status == "committed"
+        lowered = act(c, OWNER, "budget_update", {"budget_id": line, "amount": 1_000})
+        assert lowered.code == "invalid" and "reserve 80.00" in lowered.reason, lowered
+        assert FA.budget_state(c, line, AT).amount == 10_000
+        assert act(c, OWNER, "budget_update", {"budget_id": line, "amount": 8_000}).status == "committed"
+
+
+def test_a_card_limit_request_the_requester_cannot_see_goes_to_their_manager(books):
+    """Cara leads Web (she reports to Ben) and has finance.cards only. She sees Web but not the company Tools budget above
+    it, so her request to raise Web's card limit goes to Ben under the budget-request rule, not to the install owner."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        line = _budget(c, amount=10_000)
+        web = _budget(c, name="Web tools", amount=10_000, team="web", parent_id=line)
+        card = _bot_card(c, web, "bot:coder", amount=5_000)
+        assert card.status == "committed", card
+        assert act(c, OWNER, "right_grant", {"teammate": "human:cara", "right": "finance.cards"}).status == "committed"
+        asked = act(c, "human:cara", "card_update_limit", {"card_id": str(card.result["card_id"]), "amount": 6_000})
+        assert (asked.status, asked.approver, asked.rule) == ("needs_approval", "human:ben", "default:budget-request"), \
+            (asked.code, asked.reason, asked.approver, asked.rule)
+
+
+def test_a_manager_routed_card_limit_is_not_committed_by_the_old_manager_after_a_change(books):
+    """Cara's card-limit request is routed to Ben, her manager. Before Ben decides, her manager becomes Dan. Ben's approval
+    must not commit: the request is asked again of Dan, and the card keeps its 5,000 limit. It used to commit, because
+    while an approval is decided the figure route is dropped, so the manager was never checked again."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        line = _budget(c, amount=10_000)
+        web = _budget(c, name="Web tools", amount=10_000, team="web", parent_id=line)
+        card = _bot_card(c, web, "bot:coder", amount=5_000)
+        assert card.status == "committed", card
+        card_id = str(card.result["card_id"])
+        assert act(c, OWNER, "right_grant", {"teammate": "human:cara", "right": "finance.cards"}).status == "committed"
+        asked = act(c, "human:cara", "card_update_limit", {"card_id": card_id, "amount": 6_000})
+        assert (asked.status, asked.approver) == ("needs_approval", "human:ben"), (asked.code, asked.reason)
+        set_manager(c, "cara", "dan")
+        H.approval_decide(c, "human:ben", asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert (done.status, done.approver) == ("needs_approval", "human:dan"), (done.status, done.code, done.reason)
+        limits = {str(r["target_id"]): int(r["amount"]) for r in SB.allocations(c, [web])}
+        assert limits[card_id] == 5_000

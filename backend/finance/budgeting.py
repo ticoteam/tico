@@ -248,43 +248,129 @@ def _amount(ctx: Ctx, b: B.Budget, versions: Sequence[B.Version], period: tuple[
     return base + B.carry(history)
 
 
-def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, read: Netted | None = None,
-             overlay: tuple[str, str, str, int] | None = None) -> list[tuple[str, str, int]]:
-    """What allocations on these budgets still reserve, as (budget id, target, amount): each one's amount less what its
-    target used under it, never below zero. A target's use (its holds, settled holds, for a teammate their posted
-    lines, for a card its entries in the ledger) draws down only the nearest allocation for that target above it,
-    never every one up the tree. `overlay` (budget id, target kind, target id, amount) reads one allocation as it would
-    stand: it replaces the stored row or adds one, and 0 is no row (reserve_growth)."""
+def _precedes(x: B.Budget, y: B.Budget) -> bool:
+    """Whether budget x takes posted lines that x and y could both carry, before y: an active budget before an ended one,
+    then the newer. A replacement takes the spend its ended predecessor used to carry."""
+    return (x.active, x.created_at, x.id) > (y.active, y.created_at, y.id)
+
+
+def _covers(scope: tuple[frozenset[str], frozenset[str] | None, frozenset[str] | None], account: str, team: str,
+            vendor: str) -> bool:
+    """Whether an allocation's scope (accounts, teams, vendor keys; None: any) takes a posted line on this account, team
+    and vendor: the same cut `actual` makes."""
+    accounts, teams, vendors = scope
+    return account in accounts and (teams is None or team in teams) and (vendors is None or vendor in vendors)
+
+
+def _owned(ctx: Ctx, group: Sequence[str], tid: str, start: str, end: str, read: Netted | None) -> dict[str, int]:
+    """One teammate's posted lines in the window, each counted once (spec 4.4). A line belongs to the nearest allocation in
+    `group` whose scope takes it (none of its own sub-allocations takes it too), and among equally near ones to the one
+    that takes precedence (`_precedes`): an active budget before an ended one, then the newer. So two allocations whose
+    scopes overlap draw each line once, and an allocation's use is the lines assigned to it. Returns each allocation's own
+    lines, its children's not included."""
+    budgets = ctx.budgets()
+    scopes: dict[str, tuple[frozenset[str], frozenset[str] | None, frozenset[str] | None]] = {}
+    for bid in group:
+        b = budgets[bid]
+        keys = SAP.vendor_keys(ctx.c, ctx.book.id, b.vendor)
+        scopes[bid] = (frozenset(scope_accounts(ctx, b)), frozenset(ctx.org.below(b.team)) if b.team else None,
+                       frozenset(keys) if keys else None)
+    owned = dict.fromkeys(group, 0)
+    accounts: list[str] = sorted({a for bid in group for a in scopes[bid][0]})
+    if not accounts:
+        return owned
+    below = {bid: frozenset(subtree(ctx, bid)[1:]) for bid in group}
+    for row in SL.rollup_lines(ctx.c, ctx.book.id, start, end, accounts, tid):
+        account, team, vendor = str(row["account_id"]), str(row["team"]), str(row["vendor"])
+        covering = [bid for bid in group if _covers(scopes[bid], account, team, vendor)]
+        if not covering:
+            continue
+        amount = int(row["amount"])
+        if read is not None:
+            # Netted under this group's own vendor key only: each hidden line sits in one group, so it comes out once.
+            amount -= _cut_in(ctx, read, start, end, [account], [team], tid, [vendor])
+        near = [x for x in covering if not any(y in below[x] for y in covering)]
+        owner = near[0]
+        for x in near[1:]:
+            if _precedes(budgets[x], budgets[owner]):
+                owner = x
+        owned[owner] += amount
+    return owned
+
+
+def _reserve_detail(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, read: Netted | None = None,
+                    overlay: tuple[str, str, str, int] | None = None, posted: bool = False
+                    ) -> list[tuple[str, str, int, int, int]]:
+    """Each allocation on these budgets as (budget id, target, reserve, own, spent). `own` is what its target used under it
+    and not under a nearer allocation for the target: its holds (settled ones as the target counts them) and, for a
+    teammate, the posted lines `_owned` assigns to it. `reserve` is its amount less `own`, never below zero. `spent` is the
+    posted part of `own` (what was spent, not held); it is worked out only when `posted` is asked for. Every allocation is
+    read, since a line's owner can sit outside `budget_ids`. `overlay` (budget id, target kind, target id, amount) reads one
+    allocation as it would stand: it replaces the stored row or adds one, and 0 is no row (reserve_growth)."""
     budgets = ctx.budgets()
     allocs = [(str(r["budget_id"]), str(r["target_kind"]), str(r["target_id"]), int(r["amount"]))
-              for r in SB.allocations(ctx.c, budget_ids)]
-    if overlay is not None and overlay[0] in budget_ids:
+              for r in SB.allocations(ctx.c, list(budgets))]
+    if overlay is not None:
         allocs = [r for r in allocs if r[:3] != overlay[:3]] + ([overlay] if overlay[3] > 0 else [])
     by_target: dict[str, list[tuple[str, int]]] = {}
     for bid, kind, tid, amount in allocs:
-        b = budgets.get(bid)
-        if b is not None and b.active:
-            by_target.setdefault(f"{kind}:{tid}", []).append((b.id, amount))
-    out: list[tuple[str, str, int]] = []
+        # An ended budget's allocations still reserve against its parents: its cards keep their Mercury limits until they
+        # are lowered or cancelled (spec 4.4). Only a new set-aside on an ended budget is refused (allocation_plan).
+        if bid in budgets:
+            by_target.setdefault(f"{kind}:{tid}", []).append((bid, amount))
+    wanted = set(budget_ids)
+    out: list[tuple[str, str, int, int, int]] = []
     for target, rows in by_target.items():
+        if not any(bid in wanted for bid, _ in rows):
+            continue
         kind, _, tid = target.partition(":")
-        on = {bid for bid, _ in rows}
+        on = [bid for bid, _ in rows]
+        absorbed = kind != "teammate"
+        owned = _owned(ctx, on, tid, start, end, read) if kind == "teammate" else {}
         used: dict[str, int] = {}
+        held: dict[str, int] = {}
 
-        def usage(bid: str, used: dict[str, int] = used, target: str = target, kind: str = kind, tid: str = tid) -> int:
+        def usage(bid: str, used: dict[str, int] = used, owned: dict[str, int] = owned, target: str = target,
+                  absorbed: bool = absorbed) -> int:
             if bid not in used:
                 tree = subtree(ctx, bid)
-                total = SB.target_used(ctx.c, tree, start, end, target, absorbed=kind != "teammate")
+                total = SB.target_used(ctx.c, tree, start, end, target, absorbed=absorbed)
                 if read is not None:
-                    total -= settled_used(ctx, read, tree, start, end, target, absorbed=kind != "teammate")
-                used[bid] = total + (actual(ctx, budgets[bid], start, end, teammate=tid, read=read)
-                                     if kind == "teammate" else 0)
+                    total -= settled_used(ctx, read, tree, start, end, target, absorbed=absorbed)
+                used[bid] = total + sum(owned.get(x, 0) for x in tree)
             return used[bid]
+
+        def holds(bid: str, held: dict[str, int] = held, target: str = target) -> int:
+            if bid not in held:
+                held[bid] = SB.held(ctx.c, subtree(ctx, bid), start, end, target)
+            return held[bid]
         for bid, amount in rows:
+            if bid not in wanted:
+                continue
             under = [x for x in subtree(ctx, bid)[1:] if x in on]
             nearest = [x for x in under if not any(y != x and x in subtree(ctx, y) for y in under)]
-            out.append((bid, target, max(0, amount - usage(bid) + sum(usage(x) for x in nearest))))
+            own = usage(bid) - sum(usage(x) for x in nearest)
+            spent = own - (holds(bid) - sum(holds(x) for x in nearest)) if posted else 0
+            out.append((bid, target, max(0, amount - own), own, spent))
     return out
+
+
+def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, read: Netted | None = None,
+             overlay: tuple[str, str, str, int] | None = None) -> list[tuple[str, str, int]]:
+    """What allocations on these budgets still reserve, as (budget id, target, amount): each one's amount less what its
+    target used under it, never below zero (`_reserve_detail`)."""
+    return [(bid, target, reserve) for bid, target, reserve, _, _ in
+            _reserve_detail(ctx, budget_ids, start, end, read, overlay)]
+
+
+def retained(ctx: Ctx, budget_id: str, start: str, end: str) -> int:
+    """What an ended budget still holds against its parents in the window (spec 4.4): the holds on it and its children
+    with no target, and each allocation in its subtree at the larger of its amount and what its target used (holds and
+    posted spend). The allocations keep their whole amount against the parent until they are lowered or cancelled, as a
+    live child's amount counts, so a parent cannot be lowered under them."""
+    tree = subtree(ctx, budget_id)
+    return SB.held(ctx.c, tree, start, end) + sum(reserve + spent for _, _, reserve, _, spent
+                                                  in _reserve_detail(ctx, tree, start, end, posted=True))
 
 
 def reserve_growth(ctx: Ctx, budget_id: str, allocation_on: str, target_kind: str, target_id: str, amount: int,

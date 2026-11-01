@@ -5,16 +5,19 @@ import json
 import random
 import threading
 from dataclasses import replace
+from datetime import date
 
 import pytest
 
 from backend import hubdb as H
 from backend.finance import actions as FA
+from backend.finance import budgeting
 from backend.finance import reads as FR
 from backend.finance.context import load
 from backend.finance.core import budgets as B
 from backend.finance.core.errors import FinanceError
 from backend.finance.store import budgets as SB
+from backend.finance.store import ledger as SL
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, budget, finance_template, spend, store  # noqa: F401
 
 
@@ -32,6 +35,13 @@ def _tree(c, parent_amount=10_000, kids=(("web", 6_000), ("sales", 4_000)), unde
         assert r.status == "committed", r
         out[team] = str(r.result["budget_id"])
     return pid, out
+
+
+def _sees_parent(c, who: str) -> None:
+    """Give `who` the company's expenses, so the parent budget's figures are true for them. A change that passes the
+    parent then asks the parent's owner (§4.4). Without the view, figure_route hides the fit and the install owner
+    decides every amount."""
+    assert act(c, OWNER, "view_grant", {"subject": who, "what": "expenses", "whose": "company"}).status == "committed"
 
 
 def test_children_never_pass_the_parent_and_siblings_never_overlap(books):
@@ -103,6 +113,7 @@ def test_a_parent_raise_asks_the_parent_owner_over_the_asker_s_manager(books):
     # Cara lacks finance.budgets, so her manager (Ben) would decide the change; the raise it needs is Dan's to approve.
     with books.transaction() as c:
         pid, kids = _tree(c)
+        _sees_parent(c, "human:cara")
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:dan"}).status == "committed"
         grow = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert (grow.status, grow.approver) == ("needs_approval", "human:dan")
@@ -116,6 +127,7 @@ def test_a_requester_who_owns_the_parent_is_asked_their_manager_not_themselves(b
     # Cara owns Software and lacks finance.budgets: she cannot approve her own raise, so Ben (her manager) decides it.
     with books.transaction() as c:
         pid, kids = _tree(c)
+        _sees_parent(c, "human:cara")
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:cara"}).status == "committed"
         grow = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert (grow.status, grow.approver) == ("needs_approval", "human:ben")
@@ -173,6 +185,7 @@ def test_a_raise_asked_for_one_total_is_judged_again_when_the_total_has_moved(bo
 def test_a_raise_that_no_longer_fits_is_asked_again_of_the_manager_not_the_parent_owner(books):
     with books.transaction() as c:
         pid, kids = _tree(c)
+        _sees_parent(c, "human:cara")
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:dan"}).status == "committed"
         grow = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert (grow.status, grow.approver) == ("needs_approval", "human:dan")
@@ -190,6 +203,7 @@ def test_a_raise_that_no_longer_fits_is_asked_again_of_the_manager_not_the_paren
 def test_a_raise_that_grows_while_it_waits_is_asked_again_for_the_larger_raise(books):
     with books.transaction() as c:
         pid, kids = _tree(c)
+        _sees_parent(c, "human:cara")
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:dan"}).status == "committed"
         web = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert (web.status, web.approver) == ("needs_approval", "human:dan")
@@ -225,10 +239,31 @@ def test_a_grandparent_refusal_names_no_budget_a_scoped_asker_cannot_see(books):
         company = act(c, OWNER, "budget_create", {"name": "Company", "account_id": account(c, "6000"),
                                                   "amount": 10_000, "at_limit": "decline"})
         pid, kids = _tree(c, under=str(company.result["budget_id"]))
-        refused = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
-        assert refused.status == "failed" and "Company" not in refused.reason
+        # Company is outside Cara's view, so her change gets the one outcome for any amount (no refusal that names it).
+        asked = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
+        assert asked.status == "needs_approval" and "Company" not in repr(asked)
         owner = act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert owner.status == "failed" and "raise Company first" in owner.reason
+
+
+def test_a_manager_gets_one_outcome_for_every_set_aside_under_a_parent_they_cannot_see(books):
+    """Web (100.00) is Cara's under Software (100.00), which covers Sales too and which she cannot see. Sales has spent
+    40.00 on Software's line, so Software has 60.00 left for the owner. Her set-asides of 60.00 and 60.01 used to differ:
+    the first fit and the second was refused, which gave Software's 60.00 away. Now both wait for an approver with no
+    amount, and the owner still sees the refusal of 60.01."""
+    with books.transaction() as c:
+        pid, kids = _tree(c, parent_amount=10_000, kids=(("web", 10_000),))
+        spend(c, "6100", 4_000, team="sales")
+        assert act(c, OWNER, "right_grant", {"teammate": "human:cara", "right": "finance.budgets"}).status == "committed"
+        ask = {"budget_id": kids["web"], "target_kind": "gateway_key", "target_id": "gw-1"}
+        six = act(c, "human:cara", "allocation_set", {**ask, "amount": 6_000}, "dry-6000", dry_run=True)
+        seven = act(c, "human:cara", "allocation_set", {**ask, "amount": 6_001}, "dry-6001", dry_run=True)
+        owner_six = act(c, OWNER, "allocation_set", {**ask, "amount": 6_000}, "owner-6000", dry_run=True)
+        owner_seven = act(c, OWNER, "allocation_set", {**ask, "amount": 6_001}, "owner-6001", dry_run=True)
+    assert (six.status, seven.status) == ("needs_approval", "needs_approval"), (six, seven)
+    assert (six.approver, seven.approver) == (OWNER, OWNER)
+    assert owner_six.status == "committed"
+    assert (owner_seven.code, owner_seven.reason) == ("invalid", "it does not fit: Software has 6000 left")
 
 
 def test_a_grandparent_hidden_by_private_lines_is_not_named_when_the_rest_is_visible(books):
@@ -395,9 +430,10 @@ def test_impacts_and_errors_show_only_numbers_the_actor_may_see(books):
             {"account_id": account(c, "6100"), "amount": 100, "tags": {"team": "web"}},
             {"account_id": account(c, "1000"), "amount": -100}]}, dry_run=True)
         assert [b["budget_id"] for b in dry.impact["budgets"]] == [kids["eng"]]       # not company-wide Software
+        # Software is outside Ben's view, so his set-aside over what Software has left is asked, with no amount.
         over = act(c, "human:ben", "allocation_set", {"budget_id": kids["eng"], "target_kind": "teammate",
                                                       "target_id": "bot:coder", "amount": 5_500})
-        assert over.code == "invalid" and not any(ch.isdigit() for ch in over.reason)
+        assert over.status == "needs_approval" and over.approver == OWNER
         assert "5000" in act(c, OWNER, "allocation_set", {"budget_id": kids["eng"], "target_kind": "teammate",
                                                          "target_id": "bot:coder", "amount": 5_500}).reason
 
@@ -511,6 +547,7 @@ def test_a_rule_that_names_the_finance_approver_never_lets_them_approve_their_ow
     # goes to the owner, the finance admin who is not the requester, and nothing moves until the owner decides.
     with books.transaction() as c:
         pid, kids = _tree(c)
+        _sees_parent(c, "human:cara")
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:cara"}).status == "committed"
         FA.setup(c, OWNER, AT, finance_approver="human:cara")
         rule = act(c, OWNER, "rule_create", {"name": "Budget changes", "when": {"kind": "budget_update"},
@@ -572,3 +609,147 @@ def test_a_set_aside_on_a_parent_counts_a_child_hold_once(books):
         assert (s.held, s.remaining) == (7_000, 3_000), s
         over = act(c, OWNER, "allocation_set", {**ask, "amount": 10_001}, dry_run=True)
         assert over.code == "invalid" and "3000 left" in over.reason, over
+
+
+def test_one_expense_draws_one_allocation_when_a_child_is_replaced(books):
+    """Eve has 5,000 set aside on Software's Web child; that child ends and a replacement Web child sets aside 5,000 for her
+    too. Her 5,000 Web expense is one spend, so it draws one of the two set-asides: Software has 0 left (10,000 = 5,000
+    spent + 5,000 set aside). It used to draw both, and Software showed 5,000 left."""
+    with books.transaction() as c:
+        pid, kids = _tree(c, 10_000, (("web", 5_000),))
+        assert act(c, OWNER, "allocation_set", {"budget_id": kids["web"], "target_kind": "teammate",
+                                                 "target_id": "human:eve", "amount": 5_000}).status == "committed"
+        assert act(c, OWNER, "budget_update", {"budget_id": kids["web"], "active": False}).status == "committed"
+        new = act(c, OWNER, "budget_create", {"name": "Software web", "account_id": account(c, "6100"), "amount": 5_000,
+                                               "team": "web", "parent_id": pid, "at_limit": "decline"})
+        assert new.status == "committed", new
+        assert act(c, OWNER, "allocation_set", {"budget_id": str(new.result["budget_id"]), "target_kind": "teammate",
+                                                 "target_id": "human:eve", "amount": 5_000}).status == "committed"
+        spend(c, "6100", 5_000, team="web", teammate="human:eve")
+        assert FA.budget_state(c, pid, AT).remaining == 0
+
+
+def _child(c, pid, name, amount, team="", vendor=""):
+    """A child of `pid` on account 6100, optionally scoped to a team or a vendor; its id."""
+    body = {"name": name, "account_id": account(c, "6100"), "amount": amount, "parent_id": pid, "at_limit": "decline"}
+    made = act(c, OWNER, "budget_create", {**body, **({"team": team} if team else {}), **({"vendor": vendor} if vendor else {})})
+    assert made.status == "committed", made
+    return str(made.result["budget_id"])
+
+
+def _allot(c, budget_id, amount):
+    """Set Eve's allocation on a budget."""
+    made = act(c, OWNER, "allocation_set", {"budget_id": budget_id, "target_kind": "teammate",
+                                             "target_id": "human:eve", "amount": amount})
+    assert made.status == "committed", made
+
+
+def test_a_line_one_teammate_posts_is_drawn_once_across_three_generations(books):
+    """The reviewer's chain under Software (20,000): Eve's 10,000 on an ended Engineering child, 5,000 on an ended Web child
+    and 5,000 on that Web child's active replacement. Her Web line (5,000) is drawn by the replacement, which takes precedence
+    over the ended Web child; her Engineering line (5,000) by Engineering, the only child whose scope takes it. Software:
+    actual 10,000, held 10,000 (Engineering keeps 5,000 unused, the ended Web child 5,000), remaining 0. Subtracting each
+    rival's whole actual drew the Web line twice (held 15,000, remaining -5,000)."""
+    with books.transaction() as c:
+        pid, _ = _tree(c, 20_000, ())
+        eng = _child(c, pid, "Engineering", 10_000, team="eng")
+        _allot(c, eng, 10_000)
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": False}).status == "committed"
+        old = _child(c, pid, "Web old", 5_000, team="web")
+        _allot(c, old, 5_000)
+        assert act(c, OWNER, "budget_update", {"budget_id": old, "active": False}).status == "committed"
+        new = _child(c, pid, "Web new", 5_000, team="web")
+        _allot(c, new, 5_000)
+        spend(c, "6100", 5_000, team="web", teammate="human:eve")
+        spend(c, "6100", 5_000, team="eng", teammate="human:eve")
+        state = FA.budget_state(c, pid, AT)
+        assert (state.actual, state.held, state.remaining) == (10_000, 10_000, 0), state
+
+
+def test_a_line_an_ended_budget_shares_goes_to_the_active_one_on_the_same_account(books):
+    """Codex's case under Opex (20,000, on account 6000): Eve's 5,000 on an ended Software child (account 6100, any vendor) and 5,000 on an
+    active Slack child (the same account, vendor Slack). Her GitHub line is Software's alone; her Slack line is the active
+    Slack child's, which takes precedence. Software has nothing left to reserve, so Opex has 10,000 left and a 7,500 spend
+    fits. Subtracting Slack's whole actual from Software left a phantom 5,000 reserve (remaining 5,000)."""
+    with books.transaction() as c:
+        pid = str(act(c, OWNER, "budget_create", {"name": "Opex", "account_id": account(c, "6000"),
+                                                  "amount": 20_000, "at_limit": "decline"}).result["budget_id"])
+        soft = _child(c, pid, "Software", 5_000)
+        _allot(c, soft, 5_000)
+        assert act(c, OWNER, "budget_update", {"budget_id": soft, "active": False}).status == "committed"
+        slack = _child(c, pid, "Slack", 5_000, vendor="Slack")
+        _allot(c, slack, 5_000)
+        spend(c, "6100", 5_000, teammate="human:eve", vendor="GitHub")
+        spend(c, "6100", 5_000, teammate="human:eve", vendor="Slack")
+        state = FA.budget_state(c, pid, AT)
+        assert (state.actual, state.remaining) == (10_000, 10_000), state
+
+
+def test_lowering_a_parent_below_an_ended_childs_retained_allocation_is_refused(books):
+    """A 10,000 parent with a 10,000 Web child that holds Eve's 8,000 and has spent 5,000 for her. Ending Web keeps the whole
+    8,000 against the parent (its unused 3,000 and the 5,000 spent), so lowering the parent to 3,000 is refused ("reserve
+    80.00"); lowering it to 8,000 commits. Only the unused 3,000 used to count, so 3,000 was allowed."""
+    with books.transaction() as c:
+        pid, kids = _tree(c, 10_000, (("web", 10_000),))
+        _allot(c, kids["web"], 8_000)
+        spend(c, "6100", 5_000, team="web", teammate="human:eve")
+        assert act(c, OWNER, "budget_update", {"budget_id": kids["web"], "active": False}).status == "committed"
+        lowered = act(c, OWNER, "budget_update", {"budget_id": pid, "amount": 3_000})
+        assert lowered.code == "invalid" and "reserve 80.00" in lowered.reason, lowered
+        assert FA.budget_state(c, pid, AT).amount == 10_000
+        assert act(c, OWNER, "budget_update", {"budget_id": pid, "amount": 8_000}).status == "committed"
+
+
+def _checking(c) -> str:
+    """A checking account on the 1000 line; its id."""
+    money = SL.new_id()
+    c.execute("INSERT INTO fin_money_accounts(id, book_id, kind, name, provider, account_id, created_at, created_by) "
+              "VALUES(?,?,?,?,?,?,?,?)", (money, SL.book(c).id, "bank", "Checking", "mercury", account(c, "1000"), AT, OWNER))  # type: ignore[union-attr]
+    return money
+
+
+def _feed_row(c, money: str, amount: int, counterparty: str) -> str:
+    """A bank feed row (what the bank brings in) on that checking account; its id."""
+    fid = SL.new_id()
+    c.execute("INSERT INTO fin_feed_txns(id, money_account_id, provider_id, txn_date, amount, currency, counterparty, "
+              "status, created_at, created_by) VALUES(?,?,?,?,?,?,?,?,?,?)",
+              (fid, money, f"txn-{fid[:8]}", "2026-10-10", amount, SL.book(c).base_currency, counterparty,  # type: ignore[union-attr]
+               "new", AT, OWNER))
+    return fid
+
+
+def _private_bank_entry(c, fid: str, vendor: str) -> None:
+    """The bank entry a feed row posts: 1,000 of Software under `vendor`, 1,000 on a private payroll account (so the row
+    stands for a private line), and 2,000 out of the bank. The row is linked to the entry as posted."""
+    entry = FA.post_entry(c, {"date": "2026-10-10", "source": "bank", "source_id": f"{fid}:1", "lines": [
+        {"account_id": account(c, "6100"), "amount": 1_000, "contact_id": vendor, "tags": {"teammate": "human:eve"}},
+        {"account_id": account(c, "6200"), "amount": 1_000},
+        {"account_id": account(c, "1000"), "amount": -2_000}]}, at=AT)
+    c.execute("UPDATE fin_feed_txns SET entry_id=?, status='posted' WHERE id=?", (entry["entry_id"], fid))
+
+
+def test_a_vendor_under_its_old_name_and_its_contact_id_nets_each_private_line_once(books):
+    """Codex's case: two private bank entries, each with 1,000 of Software and a 1,000 payroll line. One posts the vendor
+    under its old name (posted before the contact took the name), the other under its contact id. A 5,000 teammate
+    allocation on a Software budget scoped to the vendor. The owner sees 2,000 spent and 3,000 held. A reader without
+    payroll detail sees nothing spent and 5,000 held. Netting each vendor group under every one of its keys took each
+    hidden line out twice (held 7,000, remaining 3,000), which exposed the 2,000 that is not theirs to see."""
+    with books.transaction() as c:
+        pay = str(act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                                   "parent_id": account(c, "6000")}).result["account_id"])
+        assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
+        money = _checking(c)
+        _private_bank_entry(c, _feed_row(c, money, -2_000, "Acme Cloud"), "Acme Cloud")
+        contact = str(act(c, OWNER, "contact_create", {"name": "Acme Cloud", "kind": "vendor"}).result["contact_id"])
+        assert act(c, OWNER, "contact_update", {"contact_id": contact, "name": "Acme Hosting"}).status == "committed"
+        _private_bank_entry(c, _feed_row(c, money, -2_000, "Acme Hosting"), contact)
+        root = act(c, OWNER, "budget_create", {"name": "Cloud", "account_id": account(c, "6100"), "amount": 10_000,
+                                               "at_limit": "decline"})
+        assert root.status == "committed", root
+        bid = _child(c, str(root.result["budget_id"]), "Software", 10_000, vendor=contact)
+        _allot(c, bid, 5_000)
+        owner = budgeting.state(load(c, AT), bid, date(2026, 10, 15))
+        gus = load(c, AT).view("human:gus")
+        seen = budgeting.state(load(c, AT), bid, date(2026, 10, 15), read=budgeting.Netted(gus))
+        assert (owner.actual, owner.held) == (2_000, 3_000), owner
+        assert (seen.actual, seen.held, seen.remaining) == (0, 5_000, 5_000), seen

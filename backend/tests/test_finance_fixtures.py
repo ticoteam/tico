@@ -106,6 +106,13 @@ def set_lead(c: sqlite3.Connection, team: str, lead: str) -> None:
               (json.dumps({"people": PEOPLE, "org_groups": groups, "default_user": "ana"}),))
 
 
+def set_manager(c: sqlite3.Connection, person: str, manager: str) -> None:
+    """Change who a person reports to on the org chart ("" for nobody)."""
+    people = [{**p, "reports_to": manager} if p["id"] == person else p for p in PEOPLE]
+    c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
+              (json.dumps({"people": people, "org_groups": GROUPS, "default_user": "ana"}),))
+
+
 # ------------------------------------------------------------------------------------------------ a fake Mercury
 MERCURY = json.loads((Path(__file__).parent / "fixtures" / "mercury" / "responses.json").read_text())
 
