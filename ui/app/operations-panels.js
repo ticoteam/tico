@@ -21,6 +21,14 @@ function opsSelect() {
   panel.innerHTML = `<div class="ops-panel-head"><span class="spacer"></span><a class="ghost ops-x" href="${opsHref(state.tab)}" aria-label="Close">✕</a></div>${skelRows(4, {dot: false})}`;
   void (state.customer ? opsCustomerLoad(state, load) : opsPanelLoad(state, load));
 }
+// A due date moved: the table's Next due catches up, the open panel and any More pages stay.
+async function opsRowRefresh(state, id) {
+  const one = OPS_ONE[state.tab], read = await get(`/v2/${state.tab}/${encodeURIComponent(id)}`, {fresh: true}).catch(() => null), row = read?.[one] || read;
+  if (OPS !== state || !row?.id) return;
+  state.rows = state.rows.map(r => r.id === id ? {...r, ...row} : r);
+  opsTable(state);
+  document.querySelector(`#ops-table tr[data-ops-row="${CSS.escape(state.sel || '')}"]`)?.classList.add('ops-on');
+}
 const opsLive = (state, load) => OPS === state && state.panelLoad === load && !!$('#ops-panel');
 async function opsPanelLoad(state, load) {
   const one = OPS_ONE[state.tab], listed = state.rows.find(r => r.id === state.sel);
@@ -99,7 +107,7 @@ function opsPanelMore(state, load, r) {
     opsDueMount('ops-m-due', 'location', r.id, {onLoad: dues => opsPanelTasks(state, load, dues)});
   } else if (state.tab === 'equipment') {
     more.innerHTML = '<div id="ops-m-due"></div>';
-    opsDueMount('ops-m-due', 'equipment', r.id);
+    opsDueMount('ops-m-due', 'equipment', r.id, {onWrite: () => void opsRowRefresh(state, r.id)});
   } else if (state.tab === 'projects') {
     more.innerHTML = hosts;
     void opsPanelPnl(state, load, r, 'project', 'ops-m-pnl');
@@ -154,8 +162,8 @@ async function opsCustomerLoad(state, load) {
   const c = read.contact || {}, emails = (c.emails || []).map(m => `<a href="mailto:${esc(m)}">${esc(m)}</a>`).join('<br>');
   const list = (title, rows, row) => rows?.length ? opsSec(title, opsLinks(rows.map(row))) : '';
   const estimates = read.estimates || [], invoices = read.invoices?.invoices || [];
-  $('#ops-panel').innerHTML = `<div class="ops-panel-head"><h2>${esc(c.name || '')}</h2><span class="spacer"></span>${close}</div>
-    <div class="ops-facts" data-ops-customer-panel>${opsKv('Email', emails)}</div>
+  $('#ops-panel').innerHTML = `<div class="ops-panel-head"><h2 data-ops-customer-panel>${esc(c.name || '')}</h2><span class="spacer"></span>${close}</div>
+    ${emails ? `<div class="ops-facts">${opsKv('Email', emails)}</div>` : ''}
     ${list('Locations', read.locations, l => [opsHref('locations', l.id), l.name, esc(opsLabel(OPS_LOCATION_KINDS, l.kind))])}
     ${list('Equipment', read.equipment, x => [opsHref('equipment', x.id), x.name, esc([x.make, x.model].filter(Boolean).join(' '))])}
     ${list('Due dates', read.due_dates, opsCustomerDue)}

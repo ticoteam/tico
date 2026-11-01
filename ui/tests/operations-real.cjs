@@ -11,8 +11,8 @@ const path = require('node:path');
 const {startHub, pageAs} = require('./support/real-hub.cjs');
 const {t} = require('./support/load.cjs');
 const SHOTS = process.env.TICO_UI_SHOTS || '';
-// One real 1x1 PNG, scaled up on screen: the approval's image must decode, not merely be asked for.
-const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+// A drawn data plate, a real PNG: the approval's image must decode, not merely be asked for.
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAPAAAAB4CAIAAABD1OhwAAABSUlEQVR42u3boQ0AIAxFwQ6GRrM4BsE8WCQSyiU3AXnulyi1QRrhCRA0CBoEDYJG0Js+JjxB0AgaBA2CBkEjaEEjaBA0CBoEjaAFjaBB0HBr0A4UbyNoQQta0IIWtKARtKARtKAFLWhBC1rQgha0oBG0oBG06RtBCxpBg6BB0CBoBC1oBA2CBkGDoBG0oBE0CBqcj+LkVdAIWtAIGgSNoAWNoAWNoAVN9qDBUgiCBkEjaEEjaBA0CBoEjaAFjR8rGKgFjaAFjaAFjaAFjaARtKARtKARtGEFwwoIGgQNggZBI2gQNAgaBI2gTd9mZEELWtCCRtCCFjSCFrSgBS1oQQta0IJG0IYVEDSCFjSCBkGDoEHQCFrQCBoEDYIGQSNoQSNoEDQIGgSNoL0UggZBg6BB0AgaBA2CBkHDWdDwLkEjaBA0CBoEzccWLR2RxPPNFDsAAAAASUVORK5CYII=', 'base64');
 
 const shot = async (page, name) => {
   if (!SHOTS) return;
@@ -34,7 +34,7 @@ async function clear(page, key) { await page.locator(`[data-ops-f="${key}"]`).se
 const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).first().waitFor({timeout: t(20000)});
 
 (async () => {
-  const hub = await startHub({seeds: ['org', 'operations']});
+  const hub = await startHub({seeds: ['org', 'toured', 'operations']});
   let browser;
   const api = async (who, method, route, body) => {
     const res = await fetch(hub.url + '/api' + route, {method, headers: {Authorization: 'Bearer ' + hub.tokens[who], 'Content-Type': 'application/json',
@@ -181,19 +181,19 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       assert.deepEqual(errors, [], 'teammate page errors');
     }
 
-    // H7: the photo comes in on a task, as + Add from photo sends it; the bot files equipment_create; the owner sees the photo.
+    // H7: the bot saves the plate as a Library file and files equipment_create with it; the owner sees the photo on the approval.
     {
-      const form = new FormData();
-      form.append('title', 'Draft equipment from a photo'); form.append('body', 'Read the plate.'); form.append('owner', 'engineering-lead');
-      form.append('files', new Blob([PNG], {type: 'image/png'}), 'plate.png');
-      const up = await fetch(hub.url + '/api/v2/uploads/tasks', {method: 'POST', headers: {Authorization: 'Bearer ' + hub.tokens.dana, 'Idempotency-Key': 'ops-photo-task'}, body: form});
-      const task = await up.json();
-      assert.ok(up.ok, JSON.stringify(task));
-      const attachment = (task.message || task.task?.message || task).refs?.attachments?.[0] || task.task?.refs?.attachments?.[0];
-      assert.ok(attachment?.id, 'the task carries the photo: ' + JSON.stringify(task).slice(0, 300));
+      // equipment_create takes a Library file its asker can read (backend/files.py readable_by), so the bot saves the plate there.
+      assert.equal((await api('dana', 'POST', '/v2/finance/actions', {kind: 'right_grant', payload: {teammate: 'bot:engineering-lead', right: 'finance.records'}})).body.status, 'committed');
+      const up = await fetch(hub.url + '/api/v2/files/uploads?name=plate.png&title=Data%20plate&scope=bot', {method: 'POST', body: PNG,
+        headers: {Authorization: 'Bearer ' + hub.tokens['engineering-lead'], 'Content-Type': 'image/png', 'Idempotency-Key': 'ops-photo-file'}});
+      const file = await up.json();
+      assert.ok(up.ok, JSON.stringify(file));
+      const attachment = file.file || file;
+      assert.ok(attachment.id, JSON.stringify(file).slice(0, 300));
       const asked = await api('engineering-lead', 'POST', '/v2/finance/actions', {kind: 'equipment_create', payload: {name: 'Rooftop unit 9', kind: 'owned', make: 'Trane', serial: 'SN-9', photo_file_id: attachment.id}});
       assert.equal(asked.status < 300, true, JSON.stringify(asked.body));
-      assert.equal(asked.body.status, 'needs_approval', 'a bot photo waits for a person');
+      assert.equal(asked.body.status, 'needs_approval', 'a bot photo waits for a person: ' + JSON.stringify(asked.body));
       const none = (await api('dana', 'GET', '/v2/equipment?q=Rooftop%20unit%209')).body.equipment;
       assert.deepEqual(none, [], 'not saved before a person confirms');
 
@@ -201,16 +201,23 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       const errors = []; page.on('pageerror', e => errors.push(String(e)));
       await go(page, '#/tasks');
       await page.locator('#task-view [data-view="foryou"]').click();
-      await page.locator('[data-needs-row], .needs-row, .row', {hasText: 'Rooftop unit 9'}).first().click();
+      await page.locator('[data-need-card^="approval:"]').first().click({timeout: t(20000)});
       const img = page.locator('.approval-photo img').first();
       await img.waitFor({timeout: t(20000)});
       await img.scrollIntoViewIfNeeded();
       await page.waitForFunction(() => { const i = document.querySelector('.approval-photo img'); return i?.complete && i.naturalWidth > 0; }, null, {timeout: t(15000)});
+      await page.waitForTimeout(400);   // the viewer's link thumbnails come on a timer
+      assert.equal(await page.locator('#need-card .approval-payload img').count(), 1, 'the photo shows once');
       await shot(page, 'real-desktop-approval-photo');
-      await page.locator('.approval-payload').first().locator('xpath=ancestor-or-self::*[.//button[contains(., "Approve")]][1]').locator('button', {hasText: 'Approve'}).first().click();
-      await page.waitForFunction(async () => (await (await fetch('/api/v2/equipment?q=Rooftop%20unit%209')).json()).equipment?.length === 1, null, {timeout: t(15000)}).catch(() => {});
-      const saved = (await api('dana', 'GET', '/v2/equipment?q=Rooftop%20unit%209')).body.equipment;
-      assert.equal(saved.length, 1, 'approving saves it');
+      assert.match(await page.locator('#need-card .dc-card').innerText(), /Rooftop unit 9/);
+      await page.locator('#need-card button', {hasText: 'Approve'}).first().click();
+      await page.locator('#need-card .dc-card .approval-photo').waitFor({state: 'detached', timeout: t(15000)});
+      let saved = [];
+      for (let i = 0; i < 40 && !saved.length; i++) {   // the approved action runs just after the decision answers
+        saved = (await api('dana', 'GET', '/v2/equipment?q=Rooftop%20unit%209')).body.equipment;
+        if (!saved.length) await new Promise(r => setTimeout(r, 250));
+      }
+      assert.equal(saved.length, 1, 'approving saves it: ' + JSON.stringify((await api('dana', 'GET', '/v2/finance/actions/' + asked.body.action_id)).body).slice(0, 400));
       assert.equal(saved[0].photo_file_id, attachment.id);
       assert.deepEqual(errors, [], 'approval page errors');
       await page.context().close();

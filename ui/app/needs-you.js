@@ -226,6 +226,7 @@ function approvalFacts(what, p, it = {}) {
     if (photo) {
       const href = `${API}/v2/files/${encodeURIComponent(photo)}`, link = document.createElement('a'), img = document.createElement('img');
       link.href = href; link.target = '_blank'; link.rel = 'noopener'; link.className = 'approval-photo';
+      link.dataset.mi = '1';   // already a picture: the viewer's file-link thumbnail would show it twice
       img.src = href; img.alt = 'Equipment photo'; img.loading = 'lazy';
       link.append(img);
       rows.push(['Photo', link]);

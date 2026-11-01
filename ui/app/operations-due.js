@@ -9,8 +9,8 @@ const opsRepeatLabel = d => d.repeats === 'every_days' ? `Every ${d.every_count}
 const opsAssignees = () => [...(S.emps || []).filter(e => e.status !== 'archived').map(e => ['bot:' + e.name, e.display_name || e.name]),
   ...(S.people || []).filter(p => !p.hidden).map(p => ['human:' + p.id, p.name || p.id])];
 
-function opsDueMount(hostId, subjectType, subjectId, {onLoad} = {}) {
-  const box = {hostId, subjectType, subjectId, onLoad, open: new Set(), load: 0};
+function opsDueMount(hostId, subjectType, subjectId, {onLoad, onWrite} = {}) {
+  const box = {hostId, subjectType, subjectId, onLoad, onWrite, open: new Set(), load: 0};
   void opsDueLoad(box);
 }
 async function opsDueLoad(box) {
@@ -41,7 +41,7 @@ function opsDueDraw(box, failed = null) {
       : hit.matches('[data-due-reopen]') ? ['due_date_occurrence_reopen', {due_date_id: hit.dataset.dueReopen, due_on: hit.dataset.on}, 'Reopened']
       : ['due_date_update', {due_date_id: hit.dataset.dueStop, active: false}, 'Stopped'];
     hit.disabled = true;
-    void finAct(write[0], write[1]).then(() => { toast(write[2]); return opsDueLoad(box); }).catch(e => { toast(e.message || 'Not saved', true); hit.disabled = false; });
+    void finAct(write[0], write[1]).then(() => { toast(write[2]); box.onWrite?.(); return opsDueLoad(box); }).catch(e => { toast(e.message || 'Not saved', true); hit.disabled = false; });
   };
   host.querySelectorAll('details[data-due-history]').forEach(el => {
     el.ontoggle = () => { if (el.open) box.open.add(el.dataset.dueHistory); else box.open.delete(el.dataset.dueHistory); };
@@ -65,7 +65,7 @@ function opsDueAdd(box) {
     <label data-due-every hidden><span>Every</span><input name="every_count" type="number" min="1" max="3650" value="90"></label>
     ${opsInput('First due', 'starts_on', finToday(), 'type="date" required')}
     ${opsInput('Days ahead', 'lead_days', '30', 'type="number" min="0" max="3650"')}
-    ${opsPick('Assigned to', 'assignee_id', opsAssignees(), '', '—')}`;
+    ${opsPick('Assigned to', 'assignee_id', opsAssignees(), finMe(), null)}`;
   const dlg = finDialog('New due date', body, 'Add', async form => {
     const v = n => form.elements[n].value.trim();
     if (!v('name')) throw new Error('A name');
@@ -77,8 +77,9 @@ function opsDueAdd(box) {
       if (!Number.isInteger(count) || count < 1) throw new Error('How often, as a whole number');
       payload.every_count = count;
     }
-    if (v('assignee_id')) payload.assignee_id = v('assignee_id');
+    payload.assignee_id = v('assignee_id');
     await finAct('due_date_create', payload);
+    box.onWrite?.();
     await opsDueLoad(box);
   });
   const form = dlg.querySelector('form'), every = form.querySelector('[data-due-every]');

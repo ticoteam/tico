@@ -28,17 +28,17 @@ function world() {
   return {
     hidden: [], business: 'field_service', actions: [], uploads: [], sidebarPuts: [], imports: [],
     locations: [
-      {id: 'loc-1', name: 'Acme North Store', kind: 'store', parent_id: null, in_books: true, address: {line1: '1 Main St', city: 'Portland', state: 'OR'}, source: 'quickbooks', archived_at: null},
-      {id: 'loc-2', name: 'Acme Old Depot', kind: 'warehouse', parent_id: null, in_books: true, address: {city: 'Salem', state: 'OR'}, source: 'tico', archived_at: '2026-10-01T00:00:00Z'},
-      {id: 'loc-3', name: 'Beta Foods Site', kind: 'customer_site', parent_id: null, in_books: false, customer_id: 'c-1', customer_name: 'Beta Foods', address: {city: 'Bend', state: 'OR'}, source: 'csv', archived_at: null}],
+      {id: 'loc-1', name: 'Acme North Store', kind: 'store', parent_id: null, address: {street: '1 Main St', city: 'Portland', state: 'OR'}, source: 'quickbooks', archived_at: null},
+      {id: 'loc-2', name: 'Acme Old Depot', kind: 'warehouse', parent_id: null, address: {city: 'Salem', state: 'OR'}, source: 'tico', archived_at: '2026-10-01T00:00:00Z'},
+      {id: 'loc-3', name: 'Beta Foods Site', kind: 'customer_site', parent_id: null, customer_id: 'c-1', customer_name: 'Beta Foods', address: {city: 'Bend', state: 'OR'}, source: 'csv', archived_at: null}],
     items: [{id: 'it-1', name: 'Filter change', sku: 'SVC-10', kind: 'service', unit: 'each', currency: 'USD', price: 8900, source: 'stripe', archived_at: null},
       {id: 'it-2', name: 'Air filter 20x20', sku: 'PRT-20', kind: 'inventory', quantity_on_hand: 14, source: 'quickbooks', archived_at: null}],
     projects: [{id: 'pr-1', name: 'North Store refit', customer_id: 'c-1', customer_name: 'Beta Foods', status: 'open', source: 'tico', archived_at: null}],
     equipment: [{id: 'eq-1', name: 'Rooftop unit 3', kind: 'customer', customer_id: 'c-1', customer_name: 'Beta Foods', location_id: 'loc-3', location_name: 'Beta Foods Site', make: 'Trane', model: 'XR-16',
       serial: 'SN-4471', installed_on: '2024-05-01', warranty_ends_on: iso(40), next_due_on: iso(-3), source: 'tico', archived_at: null},
       {id: 'eq-2', name: 'Walk-in cooler', kind: 'owned', location_id: 'loc-1', location_name: 'Acme North Store', make: 'Hussmann', serial: 'HU-88', next_due_on: iso(200), source: 'tico', archived_at: null}],
-    due_dates: [{id: 'dd-1', name: 'Filter change', subject_type: 'equipment', subject_id: 'eq-1', repeats: 'quarterly', starts_on: '2026-01-01', next_due_on: iso(-3), lead_days: 14, archived_at: null,
-      occurrences: [{id: 'o-1', due_date_id: 'dd-1', due_on: '2026-07-01', completed_at: '2026-07-02T10:00:00Z', completed_by_id: 'human:ana', task_id: null}]}],
+    due_dates: [{id: 'dd-1', name: 'Filter change', subject_type: 'equipment', subject_id: 'eq-1', repeats: 'quarterly', starts_on: '2026-01-01', next_due_on: iso(-3), status: 'overdue', lead_days: 14, archived_at: null,
+      history: [{due_on: '2026-07-01', completed_at: '2026-07-02T10:00:00Z', completed_by_id: 'human:ana', task_id: null}]}],
   };
 }
 const filterRows = (rows, sp) => {
@@ -72,7 +72,7 @@ async function open(browser, who, w, hash, viewport = DESKTOP) {
     if (p === '/api/v2/needs-you') return json({items: [], version: 'v0', count: 0, next: null});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p === '/api/v2/finance/access') return json(accessFor(who));
-    if (p === '/api/v2/finance/contacts') return who === 'ana' ? json({contacts: [{id: 'c-1', name: 'Beta Foods', kind: 'customer'}]}) : json({error: {message: 'No'}}, 403);
+    if (p === '/api/v2/customers') return json({customers: [{id: 'c-1', name: 'Beta Foods'}], next_cursor: null});
     if (p === '/api/v2/finance/reports/pnl_by') {
       if (who === 'ana') return json({rows: [{key: 'pr-1', label: 'North Store refit', income: 500000, expense: 320000, net: 180000}, {key: 'loc-1', label: 'Acme North Store', income: 900000, expense: 400000, net: 500000}], income: 0, expense: 0, net: 0});
       return json({error: {message: 'No'}}, 403);
@@ -88,15 +88,15 @@ async function open(browser, who, w, hash, viewport = DESKTOP) {
       const body = req.postDataJSON(); w.actions.push(body);
       const load = body.payload || {};
       if (body.kind === 'location_update' && 'active' in load) w.locations.find(l => l.id === load.location_id).archived_at = load.active ? null : '2026-11-01T00:00:00Z';
-      if (body.kind === 'due_date_create') w.due_dates.push({id: 'dd-new', archived_at: null, occurrences: [], next_due_on: load.starts_on, ...load});
+      if (body.kind === 'due_date_create') w.due_dates.push({id: 'dd-new', archived_at: null, history: [], next_due_on: load.starts_on, status: 'upcoming', ...load});
       if (body.kind === 'due_date_occurrence_complete') {
         const d = w.due_dates.find(x => x.id === load.due_date_id);
-        d.occurrences.push({id: 'o-new', due_date_id: d.id, due_on: load.due_on, completed_at: '2026-11-01T10:00:00Z', completed_by_id: 'human:ana'});
+        d.history.push({due_on: load.due_on, completed_at: '2026-11-01T10:00:00Z', completed_by_id: 'human:ana', task_id: null});
         d.next_due_on = iso(87);
       }
       if (body.kind === 'due_date_occurrence_reopen') {
         const d = w.due_dates.find(x => x.id === load.due_date_id);
-        d.occurrences = d.occurrences.filter(o => o.due_on !== load.due_on);
+        d.history = d.history.filter(o => o.due_on !== load.due_on);
       }
       return json({status: 'committed', result: {}});
     }
@@ -110,8 +110,10 @@ async function open(browser, who, w, hash, viewport = DESKTOP) {
       w.uploads.push({type: req.headers()['content-type'] || ''});
       return json({task: {id: 't-9'}});
     }
-    const dates = p === '/api/v2/due-dates';
-    if (dates) return json({due_dates: w.due_dates.filter(d => d.subject_id === url.searchParams.get('subject_id')), next_cursor: null});
+    // The list has no history; the detail does.
+    if (p === '/api/v2/due-dates') return json({due_dates: w.due_dates.filter(d => d.subject_id === url.searchParams.get('subject_id')).map(({history, ...d}) => d), next_cursor: null});
+    const date = p.match(/^\/api\/v2\/due-dates\/([^/]+)$/);
+    if (date) return json({due_date: w.due_dates.find(d => d.id === date[1])});
     const m = p.match(/^\/api\/v2\/(locations|items|projects|equipment)(?:\/([^/]+))?$/);
     if (m && req.method() === 'GET') {
       const rows = w[m[1]];

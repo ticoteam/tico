@@ -329,7 +329,8 @@ const OPS_PHOTO_BODY = `Draft equipment from the data plate in the attached phot
 
 1. Read the make, model and serial from the plate. If it can't be read, say so here and ask for another photo; save nothing.
 2. Find the customer and site this task names or the photo shows. If you can't tell, ask here.
-3. Create it with \`hub_finance_act\`, kind \`equipment_create\`: name, kind (owned or customer), customer_id, location_id, make, model, serial, and photo_file_id set to this photo's file id.
+3. Save the photo to your files with \`hub_file_publish\` (the id it returns is what the record takes; this task's attachment id is not).
+4. Create it with \`hub_finance_act\`, kind \`equipment_create\`: name, kind (owned or customer), customer_id, location_id, make, model, serial, and photo_file_id set to that file's id.
 
 A person confirms the draft on the approval. Don't mark this done until they have.`;
 // The task and its photo arrive together, so the bot's first look already has the plate.

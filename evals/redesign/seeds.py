@@ -207,8 +207,10 @@ def operations(world):
     with world.store.transaction() as c:
         FA.setup(c, "human:dana")
 
-    def act(kind, **payload):
-        reply = _ok(world.api("post", "/api/v2/finance/actions", {"kind": kind, "payload": payload}), kind)
+    def act(action, **payload):
+        reply = _ok(world.api("post", "/api/v2/finance/actions", {"kind": action, "payload": payload}), action)
+        if reply.get("status") in ("failed", "denied"):   # a refused action still answers 200
+            raise RuntimeError(f"{action}: {reply}")
         return reply.get("result") or {}
     soon = (date.fromisoformat(H.now()[:10]) + timedelta(days=40)).isoformat()
     customer = act("contact_create", name="Beta Foods", kind="customer")["contact_id"]
@@ -225,9 +227,9 @@ def operations(world):
                make="Trane", model="XR-16", serial="SN-4471", warranty_ends_on=soon)["equipment_id"]
     act("equipment_create", name="Walk-in cooler", kind="owned", make="Hussmann", serial="HU-88")
     act("due_date_create", name="Filter change", subject_type="equipment", subject_id=unit, repeats="quarterly",
-        starts_on="2020-01-01", lead_days=14)
+        starts_on="2020-01-01", lead_days=14, assignee_id="human:dana")
     act("due_date_create", name="Fire inspection", subject_type="location", subject_id=site, repeats="yearly",
-        starts_on="2099-01-01", lead_days=30)
+        starts_on="2099-01-01", lead_days=30, assignee_id="human:dana")
 
 
 @seed("counsel")
