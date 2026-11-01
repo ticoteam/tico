@@ -387,7 +387,7 @@ session, given the conversation's latest messages, up to about 16,000 tokens, ma
 person's private Assistant chat) and
 reports `fallback` as that harness, which **Settings → History → Runs** shows beside the model.
 Tico is seeded with Gemini CLI as its fallback from Antigravity, so a usage limit uses
-a stored `GEMINI_API_KEY` Credential granted to the bot. **None (fail)** means no hop:
+a stored `GEMINI_API_KEY` Credential granted to the bot. **None** means no hop:
 the cloud cooldown applies.
 
 A bot with no fallback of its own still gets one on a usage limit (a spend cap such as "monthly spend

@@ -1,7 +1,7 @@
 # People and access
 
 Who is on the team, who may sign in and who owns the environment are settings in the app, not
-files on the server. The owner manages them in **Settings > People**; nothing needs a restart.
+files on the server. The owner manages them in **Settings > People**, and admins open the same tab to add people, send invites, create passwords, restore people and set the bot limit. Only the owner changes roles, makes an owner, marks someone as left, removes people, sets team rules and the sign-in domain. Nothing needs a restart.
 
 ![People tab with Add and send invite and Add buttons](images/settings-stage1/settings-people-add-and-send-invite.png)
 

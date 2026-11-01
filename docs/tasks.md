@@ -1198,7 +1198,7 @@ Changed state or a missing checkpoint leaves the check eligible under the usual 
 wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)). A running session is not sent status
 checks or retries; they resume once its turn ends without progress.
 
-With the team's **Stalled task check** switched on (Settings > System routines, on by default, needs Tico Decide), a
+With the team's **Stalled task check** switched on (Settings → System, card **What Tico runs on its own**, on by default, needs Tico Decide), a
 stalled task that stands as at its owner's last checkpoint is no longer left silent. Decide reads its last six messages
 once for that state and answers one of four things. *Waiting on someone*: the wait it names is set (a task the messages
 mention as a blocker, a date they mention as a snooze, or a person they name as the owner's own waiting-on, with a
