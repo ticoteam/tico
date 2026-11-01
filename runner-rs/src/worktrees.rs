@@ -1913,7 +1913,14 @@ mod tests {
 
     /// Whether a git command in `dir` succeeds (a merge that conflicts exits 1).
     fn sh_ok(dir: &Path, args: &[&str]) -> bool {
-        std::process::Command::new("git").arg("-C").arg(dir).args(args).output().unwrap().status.success()
+        std::process::Command::new("git")
+            .arg("-C").arg(dir)
+            .args(["-c", "user.name=Sam", "-c", "user.email=sam@example.com"])
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success()
     }
 
     struct Merge {
