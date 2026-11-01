@@ -24,15 +24,24 @@ code then applies the verdict inside the write (`apply`). Nothing here calls an 
   (`_person_reviewer`). Send anyway replays the normal write once, as the principal (`replay_identity`: the person,
   rebuilt with their own permissions, or the bot), with a one-shot nonce and no second Decide call. A held write's
   author may withdraw it (Edit and resend: the new send is a new check).
-- The API, stable for core's `threads.post`: `preflight(store, primary, who, operation, output, recipients=(),
-  context=None, obj="", draft=False, skip=(), place=None)` checks one write made by an identity; `check_as(store,
-  primary, principal, sender, via, operation, output, recipients, ...)` checks one output held as a teammate;
-  `inbound(store, primary, principal, operation, output, recipients, source=, authenticated=, origin=, place=)` checks
-  a message from outside this server (a Slack message, a message from another Tico) with its provenance. `apply`
-  writes the verdict inside the write, and `changed` answers a write whose destination moved. `place` is a dict, or a
-  function of (c, principal, recipients) that reads it inside the check (`place_for`).
+- The API, stable for core's `threads.post` (backend/threads.py) and its outside callers:
+  `preflight(store, primary, who, operation, output, recipients=(), context=None, obj="", draft=False, skip=(),
+  place=None)` checks one write one identity makes; it reads the principal, the authenticated actor and the route from
+  `who` (`checked_as`: a person's Assistant or BotOps writes are checked as the person, with `via` set).
+  `check_as(store, primary, principal, sender, via, operation, output, recipients=(), *, context=None, obj="",
+  draft=False, skip=(), place=None, attempt_id="", origin=None)` checks one output held as `principal`, sent by
+  `sender` by route `via`. `inbound(store, primary, principal, operation, output, recipients=(), *, source,
+  authenticated="", origin="", place=None, context=None, obj="")` checks a message from outside this server (a Slack
+  message, or one from another Tico): `principal` is the teammate it is held for (or None, and then it is held as
+  `source:origin`), `source` names the route (`slack`, `federation`), `authenticated` is the actor the caller proved,
+  and `origin` the message's id on its side. `apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None)`
+  writes the verdict inside the write and returns None (deliver), `{"warn": line}` (deliver with the line), or
+  `{"held": view}` (write nothing); `answer(gate)` is what the write answers with. `changed(...)` answers a write whose
+  destination moved. `place` is a dict, or a function of (c, principal, recipients) that reads it inside the check
+  (`place_for`: the thread, its root and audience, kind, teams and outside members).
 - Where: a rule's `where:` (`thread:<id>`, `team:<group>`, `kind:dm`, `has_outside_members`) is matched on the place.
-  A write with no place (a task, a comment, a mail) meets no `where` rule.
+  Messages and task comments have a place through their thread (a task comment's is its task's conversation). Mail and
+  drafts have none, so a `where` rule never meets them.
 - Fails open: checks Off, no engine, the rules budget, the day's call cap, the deadline, an error or a malformed
   answer let the output through with a `rules.unchecked` event. Events never carry the text.
 - Bounded: at most `rule_check_concurrency` calls run at once in this process (`call_slots.Calls`); with every slot in
@@ -60,6 +69,7 @@ from . import judge as B
 from . import org_rules as R
 from . import groups as G
 from . import team_rules
+from . import threads as T
 from .call_slots import NEUTRAL, Calls
 from .store import H, Problem
 
@@ -330,21 +340,33 @@ def _ask(calls, engine, state, questions, label, level):
 
 
 def place_for(c, author, recipients=(), conversation_id=""):
-    """Where a write happens, as `where:` reads it: the conversation's id (`thread`), its kind (`dm` for a direct chat,
-    or a write with no conversation; `thread` otherwise), the groups the sender and the conversation's owner are in
-    (`teams`), and whether anyone in it is outside the roster (`outside`: an outside person, or a Slack or federated
-    actor)."""
+    """Where a write happens, as `where:` reads it. `thread`: the conversation's id, which is the thread's id (core's
+    threads are rows of `conversations`). `root` and `audience`: the thread's root and the audience its root names
+    (backend/threads.py), so a sub-thread has its root's. `kind`: `dm` for a direct chat, a personal thread (a DM under
+    core's audiences) or a write with no conversation, else `thread`. `teams`: the groups the sender and the thread's
+    owner are in, and the team an audience names. `outside`: someone in it is outside the roster, or a Slack or
+    federated actor. A write with no conversation (a direct message) has an empty `thread` and `root`."""
     conv = H.conversation(c, conversation_id) if conversation_id else None
-    members = list((conv or {}).get("participants") or []) if conv else list(recipients or ())
+    row = T.thread_row(c, conversation_id) if conv is not None else None
+    root = T.root_of(c, row) if row is not None else None
+    root_id = (root or {}).get("id") or str(conversation_id or "")
+    audience = T.audience_of(root) if root is not None else ""
+    members = list(recipients or ())
+    if conv is not None:
+        members += list((conv or {}).get("participants") or [])
+        members += [r["actor"] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (root_id,))]
     roster = {p.get("id") for p in (G._roster(c).get("people") or []) if p.get("id")}
     teams = set()
     for actor in (author, (conv or {}).get("owner_actor")):
         if actor:
             teams |= set(R.who_key(c, actor)["chain"])
+    if root is not None and root.get("audience_group_id"):
+        teams.add(root["audience_group_id"])
     outside = any((H.is_human(a) and H.actor_id(a) not in roster) or (a and not H.is_human(a) and not H.is_bot(a))
                   for a in members)
-    return {"thread": str(conversation_id or ""), "kind": "dm" if conv is None or conv.get("scope") == "direct"
-            else "thread", "teams": sorted(teams), "outside": bool(outside)}
+    dm = conv is None or conv.get("scope") == "direct" or audience == "personal"
+    return {"thread": str(conversation_id or ""), "root": root_id if conv is not None else "", "audience": audience,
+            "kind": "dm" if dm else "thread", "teams": sorted(teams), "outside": bool(outside)}
 
 
 def _place_now(c, place, author, recipients):
@@ -381,6 +403,8 @@ def check_as(store, primary, principal, sender, via, operation, output, recipien
             rules = [r for r in rules if (r["id"], r["version"]) not in skip]
             if not rules:
                 return None
+            if where is None and callable(place):
+                where = place(c, author, recipients)     # a held write keeps its place, whether or not a rule reads it
             output = output if isinstance(output, str) else json.dumps(output, sort_keys=True, default=str)
             level = store.settings.rule_check_level or "medium"
             qset = J.load_set(QUESTION_SET)

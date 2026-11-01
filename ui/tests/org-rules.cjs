@@ -67,6 +67,22 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     assert.equal(rule.with.groups.length, 1);
     assert.ok(rule.can_edit);
 
+    // Where: a thread the viewer can read is in the picker, and the rule keeps it.
+    const thread = await ok(page, 'POST', '/v2/conversations', {kind: 'chat', participants: ['bot:engineering-lead'], subject: 'Deploy talk'});
+    await go(page, '#/rules');
+    await page.locator('.ru-ph [data-ru-add]').click();
+    const threaded = page.locator('#ru-add');
+    await threaded.locator('textarea[name=text]').fill('Post deploy notes in the thread');
+    await threaded.locator('[data-scope="who"] [data-seg="bots"]').click();
+    await threaded.locator('[data-scope="who"] .ru-addsel').selectOption('engineering-lead');
+    await threaded.locator('input[name=where_kind][value=thread]').check();
+    await threaded.locator('select[name=where_thread]').selectOption(thread.id);
+    await threaded.locator('button[type=submit]').click();
+    const threadRow = page.locator('.ru-int a.ru-row', {hasText: 'Post deploy notes in the thread'});
+    await threadRow.waitFor({timeout: t(10000)});
+    const threadRule = await ok(page, 'GET', '/v2/rules/' + (await threadRow.getAttribute('data-rule')));
+    assert.deepEqual(threadRule.where, ['thread:' + thread.id]);
+
     // Edit it in the side panel.
     const side = page.locator('#ru-side');
     await page.waitForFunction(id => document.querySelector(`#ru-side form[data-rule="${id}"]`), ruleId, {timeout: t(10000)});

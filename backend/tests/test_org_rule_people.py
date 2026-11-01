@@ -8,10 +8,11 @@ import pytest
 
 from backend import org_rule_check as K
 from backend import org_rules as R
+from backend import views
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_api import get, headers, post  # noqa: F401
-from backend.tests.test_org_rule_check import COLOR, bodies, color_rule, events, hold_row, ruled  # noqa: F401
+from backend.tests.test_org_rule_check import COLOR, bodies, chat, color_rule, events, hold_row, ruled  # noqa: F401
 from backend.tests.test_org_rules import api, as_bot, org, rule  # noqa: F401
 
 EVERYONE = {"everyone": True}
@@ -61,6 +62,33 @@ def test_a_persons_message_is_held_by_a_block_rule_and_its_author_reads_it_with_
     assert get(api, f"rule-holds/{hold['id']}", token="ben-test")["can_send"]
     add_fay(api)
     assert status(api, f"rule-holds/{hold['id']}", "fay-test") == 404
+
+
+def test_a_persons_chat_message_held_in_their_direct_chat_is_listed_by_that_thread(ruled):
+    api, _ = ruled
+    chat(api, "Hello there.", to="finance", token="cara-test")          # the direct chat exists before the rule does
+    block_everyone(api)
+    hold_id = chat(api, "Our favorite color is gold.", to="finance", token="cara-test")["held"]["id"]
+    with api.app.state.store.read() as c:
+        thread = views.direct_chat(c, "human:cara", "finance")["id"]
+    place = json.loads(hold_row(api, hold_id)["payload_json"])["provenance"]["place"]
+    assert place["thread"] == thread                                    # the place names the chat
+    listed = get(api, f"rule-holds?thread={thread}", token="cara-test")
+    assert [h["id"] for h in listed["holds"]] == [hold_id]
+    assert get(api, "rule-holds?thread=some-other-chat", token="cara-test")["holds"] == []
+
+
+def test_a_where_thread_rule_holds_a_task_comment_in_that_task_and_not_in_another(ruled):
+    api, _ = ruled
+    task = post(api, "tasks", {"owner": "ops", "title": "Write the launch note", "body": "Draft it."})
+    other = post(api, "tasks", {"owner": "ops", "title": "Write the other note", "body": "Draft it."})
+    thread = sql(api, "SELECT conversation_id FROM tasks WHERE id=?", (task["id"],))[0]["conversation_id"]
+    rule(api, {"kind": "internal", "text": COLOR, "who": EVERYONE, "where": [f"thread:{thread}"]})
+    held = post(api, f"tasks/{task['id']}/comments", {"text": "Our favorite color is red."}, token="ops-test")
+    assert held["held"], held
+    assert bodies(api, "favorite color is red") == []
+    post(api, f"tasks/{other['id']}/comments", {"text": "Our favorite color is red."}, token="ops-test")
+    assert len(bodies(api, "favorite color is red")) == 1          # the other task's thread is not the rule's
 
 
 def test_send_anyway_is_for_the_rule_author_and_refused_to_the_author_and_to_others(ruled):

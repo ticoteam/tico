@@ -154,7 +154,7 @@ async function pageRules() {
       <header class="ru-ph"><h1>Rules</h1><nav class="ru-tabs" aria-label="Rules"></nav><span class="spacer"></span><span class="ru-acts"></span></header>
       <div class="ru-body"><aside class="ru-filters" aria-label="Filters"></aside><section class="ru-list" aria-live="polite">${skelRows(6)}</section>
         <aside class="ru-side" id="ru-side" hidden></aside></div></div>`;
-    RU = {root: $('#ru-root'), tab: null, counts: null, rules: {internal: [], external: []}, suggested: [], due: [], sources: [],
+    RU = {root: $('#ru-root'), tab: null, counts: null, rules: {internal: [], external: []}, suggested: [], due: [], sources: [], threads: null,
           settings: [], settingsBy: new Map(), settingsLeft: 0, filter: {q: '', who: '', with: '', from: '', due: false, status: '', routine: '', settings: false, moreFrom: false},
           seq: 0, loaded: new Set(), error: ''};
     ruWire();
@@ -565,6 +565,49 @@ function ruQuoteHTML(cite) {
 }
 const ruPanelHead = (title, close) => `<div class="ru-side-h"><h2>${esc(title)}</h2><span class="spacer"></span><a class="ru-x" href="${close}" aria-label="Close">✕</a></div>`;
 
+// The Where a rule keeps, as the panel offers it: anywhere, direct chats, someone outside the company, one team, or one
+// thread. A rule that holds another term (several, or one the picker does not offer) shows as "Other" and keeps it
+// unless the person picks one here.
+function ruWhereKind(where) {
+  const t = where[0] || '';
+  if (!t) return {kind: 'any', team: '', thread: ''};
+  if (t === 'kind:dm') return {kind: 'dm', team: '', thread: ''};
+  if (t === 'has_outside_members') return {kind: 'outside', team: '', thread: ''};
+  if (t.startsWith('team:')) return {kind: 'team', team: t.slice(5), thread: ''};
+  if (t.startsWith('thread:')) return {kind: 'thread', team: '', thread: t.slice(7)};
+  return {kind: 'other', team: '', thread: ''};
+}
+// The threads the viewer can read, newest first, for the Where picker. The conversations list checks each one.
+const RU_THREADS = 200;
+async function ruThreadList() {
+  const page = await get('/v2/conversations', {fresh: true}).catch(() => null);
+  return (page?.conversations || []).slice(0, RU_THREADS);
+}
+function ruThreadOptions(thread) {
+  const list = (RU?.threads || []).slice();
+  if (thread && !list.some(t => t.id === thread)) list.unshift({id: thread, subject: ''});
+  return `<option value="">Pick a thread</option>${list.map(t =>
+    `<option value="${esc(t.id)}"${t.id === thread ? ' selected' : ''}>${esc(t.subject || t.id)}</option>`).join('')}`;
+}
+function ruWhereHTML(where, disabled) {
+  const was = ruWhereKind(where);
+  const radio = (value, label) => `<label><input type="radio" name="where_kind" value="${value}"${was.kind === value ? ' checked' : ''}${disabled}> ${label}</label>`;
+  return `${radio('any', 'Anywhere')}${radio('dm', 'Direct chats only')}${radio('outside', 'Someone outside the company is in it')}
+    <div class="ru-where-pick">${radio('team', 'In team')}<select name="where_team" aria-label="Team"${disabled}><option value="">Pick a team</option>${ruGroups().map(g =>
+      `<option value="${esc(g.id)}"${g.id === was.team ? ' selected' : ''}>${esc(g.name || g.id)}</option>`).join('')}</select></div>
+    <div class="ru-where-pick">${radio('thread', 'In thread')}<select name="where_thread" aria-label="Thread"${disabled}>${ruThreadOptions(was.thread)}</select></div>`;
+}
+function ruWhereValue(form, where) {
+  const pick = form.elements.where_kind.value, was = ruWhereKind(where);
+  // A team or thread keeps the stored term unless the person picks another; no pick keeps the rule's Where.
+  const id = pick === 'team' ? form.elements.where_team.value : pick === 'thread' ? form.elements.where_thread.value : '';
+  if (!pick || (pick === was.kind && (!id || id === was[pick]))) return where;
+  if (pick === 'any') return [];
+  if (pick === 'dm') return ['kind:dm'];
+  if (pick === 'outside') return ['has_outside_members'];
+  return id ? [pick + ':' + id] : where;
+}
+
 async function ruRulePanel(side, id, note = '') {
   const want = side.dataset.open;
   side.innerHTML = ruPanelHead('Rule', ruHref(RU.tab)) + skelRows(4);
@@ -574,6 +617,7 @@ async function ruRulePanel(side, id, note = '') {
   if (side.dataset.open !== want) return;
   const edit = !!r.can_edit, dis = edit ? '' : ' disabled', internal = r.kind === 'internal';
   if (!internal && !RU.sources.length) RU.sources = await ruAll('/v2/rule-sources').catch(() => []);
+  RU.threads = await ruThreadList();
   const dues = ruDueSorted(r);
   const quote = ruQuoteHTML(r.cite);
   const suggested = r.status === 'suggested';
@@ -582,6 +626,7 @@ async function ruRulePanel(side, id, note = '') {
       <label class="ru-fl"><span class="ru-lbl">Rule</span><textarea name="text" rows="2" maxlength="1000" required${dis}>${esc(r.text)}</textarea></label>
       <label class="ru-fl"><span class="ru-lbl">Description</span><textarea name="description" rows="2" maxlength="2000"${dis}>${esc(r.description || '')}</textarea></label>
       <div class="ru-fl"><span class="ru-lbl">Who</span><div data-scope="who"></div></div>
+      <div class="ru-fl"><span class="ru-lbl">Where <span class="ru-opt">(optional)</span></span><div class="ru-where">${ruWhereHTML(r.where || [], dis)}</div></div>
       ${internal ? '<div class="ru-fl"><span class="ru-lbl">With <span class="ru-opt">(optional)</span></span><div data-scope="with"></div></div>'
         : `<label class="ru-fl"><span class="ru-lbl">From</span><select name="source"${dis}>${ruSourceOptions(RU.sources, r.source?.id)}</select></label>`}
       <div class="ru-fl"><span class="ru-lbl">If broken</span>${ruSegHTML('if_broken', RU_BROKEN, r.if_broken, !edit)}
@@ -614,6 +659,8 @@ async function ruRulePanel(side, id, note = '') {
     if (text !== r.text) body.text = text;
     if (description !== (r.description || '')) body.description = description;
     if (!ruSameScope(who.value(), r.who)) body.who = who.value();
+    const where = ruWhereValue(form, r.where || []);
+    if (JSON.stringify([...where].sort()) !== JSON.stringify([...(r.where || [])].sort())) body.where = where;
     if (withEd && !ruSameScope(withEd.value(), r.with)) body.with = withEd.value();
     if (!internal && form.elements.source.value !== r.source?.id) body.source_id = form.elements.source.value;
     const broken = ruSegValue(form, 'if_broken');
@@ -808,11 +855,13 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
     document.body.appendChild(dlg);
   }
   const sources = await ruAll('/v2/rule-sources').catch(() => []);
-  dlg.innerHTML = `<form class="ru-form" method="dialog">
+  RU.threads = await ruThreadList();
+  dlg.innerHTML =`<form class="ru-form" method="dialog">
       <div class="ru-side-h"><h2>Add rule</h2><span class="spacer"></span><button class="ghost tmodal-x" type="button" data-ru-close aria-label="Close">✕</button></div>
       ${ruSegHTML('kind', [['internal', 'Internal'], ['external', 'External']], kind)}
       <label class="ru-fl"><span class="ru-lbl">Rule</span><textarea name="text" rows="2" maxlength="1000" required></textarea></label>
       <div class="ru-fl"><span class="ru-lbl">Who</span><div data-scope="who"></div></div>
+      <div class="ru-fl"><span class="ru-lbl">Where <span class="ru-opt">(optional)</span></span><div class="ru-where">${ruWhereHTML([], '')}</div></div>
       <div class="ru-fl" data-for="internal"><span class="ru-lbl">With <span class="ru-opt">(optional)</span></span><div data-scope="with"></div></div>
       <div class="ru-fl" data-for="external"><span class="ru-lbl">From</span>
         <select name="source"><option value="">Pick one</option>${ruSourceOptions(sources, '')}<option value="new">New…</option></select>
@@ -832,7 +881,7 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
   form.onsubmit = async ev => {
     ev.preventDefault();
     const k = ruSegValue(form, 'kind'), f = form.elements, button = form.querySelector('[type=submit]');
-    const body = {kind: k, text: f.text.value.trim(), who: whoEd.value()};
+    const body = {kind: k, text: f.text.value.trim(), who: whoEd.value(), where: ruWhereValue(form, [])};
     if (k === 'internal') body.with = withEd.value();
     button.disabled = true; status.textContent = 'Saving…';
     try {
