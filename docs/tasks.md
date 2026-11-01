@@ -394,7 +394,7 @@ something. Plain code then decides from the answers, your settings and your open
 | A progress note | FYI: stays with the bot; no wait is set. |
 | A hands-only chore (grant access, merge, add a key) | **Hands needed**, its own group, up to its own budget (5). |
 | Work the bot could do itself, or unclear | Sent back to the bot. |
-| Anything else, with B open items as your budget (10) | Under B: reaches you. B to 3B: also meets one of your lines. 3B to 10B: also recommends something and can't wait past today. 10B or more: only something that can't wait at all. |
+| Anything else, with B open items as your budget (10) | Under B: reaches you. B to 3B: also meets one of your lines. 3B to 10B: also meets one of your lines and recommends something. 10B or more: only something that can't wait at all. |
 
 Something urgent (an outage, a security exposure, money being lost) always reaches you, unless it is only a progress
 note: that is FYI however urgent, and a repeat still joins your open item. Sent back is never a
