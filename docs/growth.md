@@ -98,11 +98,14 @@ Each Monday the Growth Lead (the Head of Marketing template) runs the weekly gro
 1. Reads the week: readings, tests due, top ideas, verdicts and breaches, from `hub growth week`.
 2. Writes the verdicts that are due, and scores new ideas that have no score.
 3. Picks tests to start, within a capacity rule its playbook sets (how many run at once, and per channel owner).
-4. Asks the owner one multi-pick question, with the recommended picks ticked. A pick with money names it, so ticking it
-   also approves that spend. Picks the owner does not answer go ahead only when they cost nothing.
+4. Asks the owner one multi-pick question, with the recommended picks ticked. `--spend` names one pick: ticking that option
+   approves its money, and no other option does. Any other paid pick needs its own approval before it starts. Picks start
+   after the owner's answer, or on the reversible default the question names, never before. Picks the owner does not
+   answer go ahead only when they cost nothing.
 5. Starts each picked idea, files the channel owners' subtasks, and waits for the owner's answer on the question.
 
-The owner's week is one question. Both routines are off until setup turns them on.
+The owner's week is one question. The Head of Marketing's three routines are on after setup: the weekly summary by setup
+itself, and the two growth routines by its onboarding playbook (step 6, `hub automation update <id> --enable`).
 
 ## The monthly report
 
@@ -121,8 +124,8 @@ Two cards on the Strategy page feed Growth and every bot that writes outward.
 
 **Brand** is the brand book: the positioning line, voice traits (each with a do and a don't), tone by situation, the
 words to use and to avoid, naming rules, claims and proof, visual files (as links to Library Files) and examples.
-`hub brand check` runs the cheap checks on a draft: avoided words, naming, and claims that are not on the list. It runs
-no model.
+`hub brand check` runs the cheap checks on a draft: avoided words, naming, and `claims.never` phrases. It runs no model
+and does not detect claims missing from the allowed list, so a bot checks those against the claims list itself.
 
 **GTM** is the go-to-market card: the motion (self-serve, sales-led, partner, marketplace, local, community or
 e-commerce), the buyer and deal size, the objections, the **sources** (which system holds each number), and the **wishes**.
@@ -163,7 +166,7 @@ The API is under `/api/v2/growth`, `/api/v2/brand` and `/api/v2/gtm`.
 | Owner and admins | everything | none needed | everything, including publishing Brand and GTM, channels, sources and settings |
 | Brand Manager, Strategy Bot | published Brand and GTM | Brand and GTM changes | nothing |
 | Growth Lead | everything | none | ideas it owns, scores, verdicts and cohorts |
-| Channel owner bot | published Brand and GTM; its channel | its channel's stage and budget | its channel's last value and why; its own ideas and subtasks |
+| Channel owner bot | published Brand and GTM; its channel | none | its channel's `why`, stage and budget; its measurements as KPI readings; its own ideas and subtasks |
 | Any other bot, person, or external agent with hub access | published Brand and GTM | ideas (filed as `idea`) | its own ideas only |
 
 Brand and GTM are read by anyone with hub access, bots and external agents included. A change to either is the owner's to

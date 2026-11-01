@@ -18,7 +18,9 @@ Check in this order. The first rule that applies gives the verdict.
 Example: the prediction was "bookings from price requests up 8 a week". The baseline is 14 a week. The window averages 19 a
 week. Change is 5, which is 5 ÷ 8 = 62%: Won.
 
-`dropped` and `paused` are not verdicts. Use them when the owner stops a test for another reason; they set no verdict date.
+`paused` is not a verdict: the owner pauses a test for now. It sets no verdict date and leaves the task open. `dropped` is
+the owner stopping a test for a reason outside the rule. It sets the verdict date and closes the task, and it says nothing
+about the bet, so use `--bet-effect none`.
 
 ## Steps
 
@@ -34,7 +36,7 @@ week. Change is 5, which is 5 ÷ 8 = 62%: Won.
          --learning "<one sentence on what we now believe about the customer>" \
          --bet-effect supports --confidence high
 
-   `--bet-effect` is `supports` for Won, `weakens` for Lost and `none` for Inconclusive or an idea with no bet.
+   `--bet-effect` is `supports` for Won, `weakens` for Lost and `none` for Inconclusive, Dropped or an idea with no bet.
    `--confidence` is `low`, `medium` or `high`. Brand-track ideas always carry it. For performance tests, give it when you have one.
 
 6. Cohort numbers that the result rests on (booked, cancelled, retained) come from the source of record, with the view or

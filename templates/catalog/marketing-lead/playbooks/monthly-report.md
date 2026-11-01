@@ -12,7 +12,7 @@ computed number, and you never change a formula.
 
 Cohorts are the inputs to the economics. Read the sources first:
 
-    hub gtm sources                 which system and field holds each truth: spend, customers, retention
+    hub gtm sources --json          which system and field holds each truth: spend, customers, retention
     hub growth channel list         the channels Tico has; nothing else exists
 
 For each channel, and for the Unknown row, set the month (`YYYY-MM`) once:
@@ -31,20 +31,21 @@ For each channel, and for the Unknown row, set the month (`YYYY-MM`) once:
 
 ## 2. Read the economics
 
-    hub growth economics --month <YYYY-MM>
+    hub growth economics --month <YYYY-MM> --json
 
-Read the rows, the total, the `settings` (revenue, margin, win share) and the `guardrails`. Check that the Unknown row is
+Read the rows (with `--json`: quality, retention and sources for each row), the total, the `settings` (revenue, margin,
+win share) and the `guardrails`. Check that the Unknown row is
 there; a large Unknown share goes on the page as the first learning, not as a footnote.
 
 ## 3. Read what was learned and what the bets did
 
-    hub growth idea list --status won
-    hub growth idea list --status lost
-    hub growth idea list --status inconclusive
+    hub growth idea list --status won --json
+    hub growth idea list --status lost --json
+    hub growth idea list --status inconclusive --json
     hub growth evidence
     hub growth kpis
 
-Take only ideas whose verdict date is in the month. For each bet: supports, weakens and none, and the bet's goal status
+Take only ideas whose verdict date (in the JSON) is in the month. For each bet: supports, weakens and none, and the bet's goal status
 from `hub strategy show`.
 
 ## 4. Write the Page

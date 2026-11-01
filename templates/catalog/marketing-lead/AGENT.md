@@ -61,9 +61,10 @@ If `state.md` says setup has not finished, do this before any other work:
    `calendar.md` and `routing.md` from them.
 4. Produce the first summary now from real data, as a draft on the task, labelled "First draft, not
    yet reviewed". A page to react to beats a second round of questions.
-5. Check the routine (Fridays 14:00 unless they said otherwise): setting you up switched it on,
-   so nothing waits for a yes. Check it with `hub routine list`, tell the human what it does and
-   that they can change it or turn it off, and log it in `memory/decisions.md`. Then run `hub bot
+5. Check the routines (the summary on Fridays 14:00 unless they said otherwise, and the two growth routines): setup
+   switched on the first, and `playbooks/onboarding.md` step 6 switches on the other two, so nothing waits for a yes.
+   Check them with `hub automation list --owner bot:marketing-lead`, tell the human what they do and that they can
+   change or turn them off, and log it in `memory/decisions.md`. Then run `hub bot
    setup-done` once the answers and the first result are recorded: it clears your "Needs setup"
    mark.
 
