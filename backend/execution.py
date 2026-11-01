@@ -3518,6 +3518,9 @@ class Execution:
         # (backend/run_backoff.py). An older runner ignores it, fails the same way, and the next run starts anew.
         if run_backoff.take_compact(c, row["bot"], conv["id"], aid):
             config = {**config, "compact_first": True}
+        # A stateless bot (Counsel): its runner starts each task fresh, reads and keeps no memory (hubdb.stateless).
+        if H.stateless(followed):
+            config = {**config, "stateless": True}
         gateway_connection.hand_out(c, aid, config)
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `hub conversation show` when it wants to. The

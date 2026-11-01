@@ -7,6 +7,10 @@ reads: []                        # other bot repositories this one may clone rea
 reasoning_effort: high
 # Counsel's tasks are private (its requester and Counsel only); matches the server's default for this template.
 private_tasks_default: true
+
+# Each task is judged on its own: no session carries over to the next task, no memory/ or state.md is read or kept, and
+# nightly learnings skip it (backend/hubdb.py stateless, STATELESS_BY_TEMPLATE).
+stateless: true
 max_run_minutes: 30
 
 # Counsel sends nothing. It answers the person or bot that asked, on its task, and suggests rules.

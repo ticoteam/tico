@@ -208,8 +208,10 @@ pub fn prompt_head(attempt: &Value, lines: &mut Vec<(Part, String)>) {
             text_of(&session["path"])
         )));
     } else if session.is_object() {
+        // A stateless bot's memory/ and knowledge/ are not committed for it (`finish`), so the line does not say they are.
+        let kept = if crate::continuity::stateless(config) { "" } else { " What you leave uncommitted in memory/ or knowledge/ is committed for you when the turn ends." };
         let mut line = format!(
-            "This task has its own checkout of your repository, `{}` on branch `{}`; your other tasks run at the same time in theirs. Commit here, then `git pull --rebase` and `git push`, which sends to `{}`. What you leave uncommitted in memory/ or knowledge/ is committed for you when the turn ends.",
+            "This task has its own checkout of your repository, `{}` on branch `{}`; your other tasks run at the same time in theirs. Commit here, then `git pull --rebase` and `git push`, which sends to `{}`.{kept}",
             text_of(&session["path"]),
             text_of(&session["branch"]),
             text_of(&session["upstream"])
@@ -419,13 +421,14 @@ pub async fn ensure(main: &Path, path: &Path, task: &str, turn: &Env) -> (String
     made.unwrap_or_else(|f| (String::new(), fault_name(&f)))
 }
 
-/// After a completed turn: commit memory/ and knowledge/ (not `skip`), stamp this lane's unpushed commits with
-/// the run and rebase them onto the upstream. "" or the problem; on a problem the commits stay for the next turn.
-pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String]) -> String {
+/// After a completed turn: commit memory/ and knowledge/ (not `skip`, and only when `memory` is set: a stateless bot's are
+/// left as they are), stamp this lane's unpushed commits with the run and rebase them onto the upstream. "" or the
+/// problem; on a problem the commits stay for the next turn.
+pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory: bool) -> String {
     let env = crate::safegit::committing_environment(turn);
     let timeout = 45;
     let done: Result<String, Fault> = async {
-        let folders: Vec<&str> = MEMORY_FOLDERS.iter().copied().filter(|f| path.join(f).is_dir()).collect();
+        let folders: Vec<&str> = MEMORY_FOLDERS.iter().copied().filter(|f| memory && path.join(f).is_dir()).collect();
         if !folders.is_empty() {
             let mut add = vec!["add", "-A", "--"];
             add.extend(folders.iter());
@@ -1156,7 +1159,7 @@ impl Runner {
         };
         !secret && {
             let _git = self.lanes.git_lock(&place.main_path).lock_owned().await;
-            let problem = finish(session, &aid, env, skipped).await;
+            let problem = finish(session, &aid, env, skipped, !crate::continuity::stateless(&attempt["config"])).await;
             if !problem.is_empty() {
                 log(&format!("Tico runner: {}: task {}'s commits stay in {} ({problem})", place.bot, place.task, session.display()));
             }

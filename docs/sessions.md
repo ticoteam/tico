@@ -62,6 +62,11 @@ interrupted turn, and after a turn that did not complete; the repo rules go agai
 not complete. A resumed session that turns out to be missing starts again with what a replacing session gets: the
 repo rules, the checkpoint and the room since its last turn. Other harnesses get the whole prompt every turn.
 
+A stateless bot (`stateless` in its config; Counsel by its template) keeps no session across tasks. Each task starts its
+own session and resumes only that task's, and a chat message to it starts a new session that is not saved. It gets the
+whole prompt every turn and is never told to read `memory/` or `state.md`. A new session for a task still starts from
+the task's checkpoint, as above.
+
 A turn that was cut off (a restart's drain, a **Stop**) leaves its session in place. The next turn resumes it and is
 told to check what the interrupted turn already did before repeating a step.
 

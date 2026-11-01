@@ -4780,6 +4780,21 @@ def _demote_sessions(conn, task_id, owner=None):
             conn.execute("UPDATE task_links SET detail_json=?,updated=? WHERE id=?", (json.dumps(detail), now(), link["id"]))
 
 
+# Bots that keep nothing from one task to the next (Counsel): each task is judged on its own. Their runner starts a
+# session for every task and never resumes one across tasks, reads and keeps no memory/ or state.md, copies no harness
+# memory into the repository, and gets no nightly learnings (backend/learnings.py roster). A bot's config says
+# `stateless: true`; a template listed here makes its bots stateless too, so bots built before the flag are.
+STATELESS_BY_TEMPLATE = ("tico-counsel",)
+
+
+def stateless(config):
+    """Whether a bot keeps nothing from one task to the next. An explicit `stateless` in its config wins."""
+    config = config or {}
+    if "stateless" in config:
+        return config["stateless"] is True
+    return config.get("template") in STATELESS_BY_TEMPLATE
+
+
 # How far up a session root is looked for: deeper trees are rare, and the cap bounds the walk.
 SESSION_ROOT_DEPTH = 20
 
@@ -4793,8 +4808,9 @@ def session_root(conn, bot, task_id, config=None):
     A parent with another owner, or one whose readers differ, ends the walk: a bot-owned subtask under a
     person's task is its own root, and a session never carries one task's words to people who cannot read it.
     `subtask_session: own` in the bot's config keeps every subtask its own session (clients/sessions.py), and a
-    subtask on a check model (backend/check_models.py) is always its own: it reads the subtask, not the parent's thread."""
-    if not task_id or (config or {}).get("subtask_session") == "own" or check_model(conn, task_id, bot):
+    subtask on a check model (backend/check_models.py) is always its own: it reads the subtask, not the parent's thread.
+    A stateless bot (`stateless`) has no shared session at all: every task is its own."""
+    if not task_id or (config or {}).get("subtask_session") == "own" or stateless(config) or check_model(conn, task_id, bot):
         return task_id
     root, seen = task_id, {task_id}
     current = _one(conn, "SELECT id,owner,requester,private FROM tasks WHERE id=?", (task_id,))

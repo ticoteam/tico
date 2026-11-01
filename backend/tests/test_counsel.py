@@ -188,6 +188,14 @@ def test_counsel_has_no_credentials_and_sends_nothing(api):
         assert c.execute("SELECT COUNT(*) FROM credential_grants WHERE subject='bot:tico-counsel'").fetchone()[0] == 0
 
 
+def test_counsel_is_stateless_by_its_template_and_an_explicit_flag_wins():
+    card = Path(counsel.__file__).resolve().parents[1] / "templates" / "catalog" / "tico-counsel" / "bot.yaml"
+    assert yaml.safe_load(card.read_text())["stateless"] is True
+    assert H.stateless({"template": "tico-counsel"}) and H.stateless({"stateless": True})
+    assert not H.stateless({"template": "ops"}) and not H.stateless(None)
+    assert not H.stateless({"template": "tico-counsel", "stateless": False})
+
+
 def test_a_reader_without_the_file_sees_the_sentence_but_not_the_quote(api, monkeypatch):
     org(api)
     counsel_on(api)

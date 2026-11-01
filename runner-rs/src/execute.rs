@@ -399,7 +399,8 @@ pub struct Fresh {
 pub(crate) fn replacement_prompt(attempt: &Value, names: &crate::prompt::Names, after: Option<&str>, bot: &str, key: &str) -> String {
     let mut text = crate::prompt::prompt(attempt, names, after, false);
     let checkpoint = truthy(Some(&attempt["task"]["checkpoint"]));
-    if let Some(note) = crate::continuity::Session::new(crate::continuity::NOT_FOUND, None).prompt_note(checkpoint) {
+    let stateless = crate::continuity::stateless(&attempt["config"]);
+    if let Some(note) = crate::continuity::Session::new(crate::continuity::NOT_FOUND, None).prompt_note(checkpoint, stateless) {
         text = format!("{text}\n\n{note}");
     }
     if let Some(line) = crate::afterwatch::still_running(bot, key) {
@@ -1228,6 +1229,10 @@ impl Runner {
         let persistent = crate::harness_tools::caps_of(&config).persistent_session;
         let session_runtime = thread_runtime(&runtime, &text_of(&config["harness"]));
         let mut conv = key.clone();
+        // A stateless bot (Counsel) keeps nothing from one task to the next: a task resumes only its own session, and a
+        // chat turn (no task) starts a new session each time and saves none (crate::continuity::stateless).
+        let stateless = crate::continuity::stateless(&config);
+        let fresh_chat = stateless && !key.starts_with("task:");
         let owner = format!("{bot}\n{key}");
         let effort = Some(text_of(&config["reasoning_effort"])).filter(|e| !e.is_empty());
         let model = Some(text_of(&config["model"])).filter(|m| !m.is_empty());
@@ -1444,8 +1449,8 @@ impl Runner {
             execution_path = p.execution_path.clone();
             memory_before = redact::head(&execution_path);
             // What the bot kept in its AI tool's own memory moves into its repository, in whichever checkout the
-            // turn runs: the bot's own or a task's worktree (crate::harness_memory).
-            if !p.private && crate::harness_memory::is_checkout(&execution_path) {
+            // turn runs: the bot's own or a task's worktree (crate::harness_memory). A stateless bot keeps none.
+            if crate::harness_memory::copies_into(p.private, stateless, &execution_path) {
                 // A Gateway turn's HOME is its own empty one (turn_users::Lease::private_home); the tools' memory is in the real one.
                 let own = env.get("HOME").filter(|h| !h.is_empty() && turn_identity.is_none()).cloned();
                 let home = own.or_else(|| std::env::var("HOME").ok()).unwrap_or_default();
@@ -1475,7 +1480,7 @@ impl Runner {
             side_run = key.starts_with("task:") && truthy(config.get("task_model_fallback"));
             let binding_changed = source_resume.as_ref().is_some_and(|s|
                 s.profile != selected.as_ref().map_or("", |p| p.name.as_str()) || s.epoch != clear_epoch(&attempt, &key));
-            let previous = if side_run || binding_changed { None } else { self.state.session(&bot, &conv, &session_runtime)? };
+            let previous = if side_run || binding_changed || fresh_chat { None } else { self.state.session(&bot, &conv, &session_runtime)? };
             let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
             prepared = true;
             if busy.is_some() || held.is_some() {
@@ -1581,7 +1586,7 @@ impl Runner {
             // A new thread on a host that says when its session is up is kept only then (Fresh): until it is, the
             // thread it replaces stays this conversation's, here and on the task, so a session that never comes up
             // leaves the next turn the old one.
-            fresh = (!resumed && !side_run && continuing.is_empty() && h.confirms_threads()).then(|| Fresh {
+            fresh = (!resumed && !side_run && continuing.is_empty() && !fresh_chat && h.confirms_threads()).then(|| Fresh {
                 bot: bot.clone(),
                 conversation: conv.clone(),
                 runtime: session_runtime.clone(),
@@ -1591,7 +1596,7 @@ impl Runner {
                 confirmed: Mutex::new(None),
                 source: None,
             });
-            if fresh.is_none() && !side_run && continuing.is_empty() {
+            if fresh.is_none() && !side_run && continuing.is_empty() && !fresh_chat {
                 self.state.save_session(&bot, &conv, &session_runtime, &th)?;
                 if let Some(old) = left.as_deref().filter(|old| *old != th) {
                     self.state.forget_session(&bot, &conv, &session_runtime, old)?;
@@ -1658,7 +1663,8 @@ impl Runner {
             // are under 60% of Compact at. Should it compact anyway, the host gives the turn what it left out.
             let prompt_turn = !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
             let last_context = self.state.repo_rules(&crate::continuity::context_key(&th), None)?.and_then(|c| c.parse::<i64>().ok());
-            let seen = if prompt_turn && resumed && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
+            // A stateless bot gets its whole prompt each turn: the short form points at state.md, which it does not keep.
+            let seen = if !stateless && prompt_turn && resumed && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
                 crate::prompt::Seen {
                     standing: self.state.repo_rules(&crate::continuity::standing_key(&th), None)?.unwrap_or_default(),
                     task: self.state.repo_rules(&crate::continuity::task_key(&th), None)?.unwrap_or_default(),
@@ -1679,7 +1685,7 @@ impl Runner {
                 built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, "", &crate::prompt::Seen::default(), &context);
             }
             let mut tail = String::new();
-            if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])))) {
+            if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])), stateless)) {
                 tail = format!("{tail}\n\n{note}");
             }
             if side_ran {
