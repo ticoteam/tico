@@ -19,13 +19,13 @@ def rows(api, token="ana-test"):
     return {job["key"]: job for job in data["jobs"]}, data
 
 
-def test_every_built_in_job_is_listed_with_its_group_word_and_six_are_marked_controllable(api):
+def test_every_built_in_job_is_listed_with_its_group_word_and_control_availability(api):
     jobs, data = rows(api, token="ben-test")     # a member, not only the owner, sees the list
     assert "groups" not in data, "one flat list; a group is a word search finds, not a heading"
     assert [j["key"] for j in data["jobs"]] == [job.key for job in SR.JOBS] + ["task-rule-close-after-done"]
     assert {k for k, j in jobs.items() if j["controllable"]} == {
         "stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-        "stall_triage", "engineering_exceptions", "bookkeeper_check"}
+        "stall_triage", "engineering_exceptions", "bookkeeper_check", "memory_tidy"}
     assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings", "stall_triage"}
     assert all(j["needed"] == (j["group"] == "housekeeping") for j in jobs.values())
     assert jobs["stale_review"]["schedule"] == "Hourly" and jobs["learnings"]["schedule"] == "Nightly at 03:00"

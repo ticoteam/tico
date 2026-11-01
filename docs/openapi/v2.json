@@ -39620,6 +39620,12 @@
                     "none"
                   ]
                 },
+                "default_team": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "grants": {
                   "type": "array",
                   "items": {
@@ -39642,6 +39648,7 @@
               },
               "required": [
                 "default",
+                "default_team",
                 "grants",
                 "kind",
                 "may_grant",
@@ -47675,6 +47682,35 @@
         ],
         "additionalProperties": true
       },
+      "MemoryTidyPilot": {
+        "properties": {
+          "bot": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Bot"
+          },
+          "model": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Model"
+          },
+          "effort": {
+            "type": "string",
+            "const": "low",
+            "title": "Effort",
+            "default": "low"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bot",
+          "model"
+        ],
+        "title": "MemoryTidyPilot"
+      },
       "Message": {
         "type": "object",
         "properties": {
@@ -53814,6 +53850,21 @@
       },
       "SystemRoutineUpdate": {
         "properties": {
+          "pilots": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MemoryTidyPilot"
+                },
+                "type": "array",
+                "maxItems": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pilots"
+          },
           "on": {
             "anyOf": [
               {
