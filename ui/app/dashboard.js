@@ -98,6 +98,7 @@ async function pageDashboard(place) {
   const main = $('#main'); main.classList.add('dash-layout');
   main.innerHTML = `<div class="dash" id="dash-root"><header class="dash-head">
       <h1>${team ? '' : 'Overview'}</h1>${team ? '' : dashTabsHTML('dashboard')}<span class="spacer"></span>
+      ${team ? '<button type="button" class="ghost" data-dash-access hidden aria-haspopup="dialog">Access</button>' : ''}
       <span class="dash-actions" hidden>${team ? '<button type="button" class="ghost dash-audience" data-dash-audience></button>' : ''}
         <button type="button" class="ghost" data-dash-add="card"><span class="dash-plus" aria-hidden="true">+</span>Card</button>
         <button type="button" class="ghost" data-dash-add="page"><span class="dash-plus" aria-hidden="true">+</span>Page</button></span></header>
@@ -106,6 +107,7 @@ async function pageDashboard(place) {
   const state = DASH = {place, view: null, choices: null, root: $('#dash-root'), menu: null};
   dashWire(state);
   if (kept) { state.view = kept; dashDraw(state); }
+  if (team) void dashAccessLoad(state);
   let view;
   try { view = await get(dashApi(place)); }
   catch (e) {
@@ -122,6 +124,14 @@ async function pageDashboard(place) {
   if (kept && sameData(view, kept)) return;
   state.view = view;
   dashDraw(state);
+}
+// A group's See, Read and Write (backend/teammate_access.py): the button shows only for its leads and the admins.
+async function dashAccessLoad(state) {
+  const data = await teammateAccessRead('group', state.place.slice(5));
+  const button = DASH === state && state.root.querySelector('[data-dash-access]');
+  if (!button) return;
+  button.hidden = !data;
+  if (data) button.title = accessSummary(data);
 }
 function dashDraw(state) {
   const v = state.view, root = state.root;
@@ -247,6 +257,7 @@ function dashWire(state) {
     const add = ev.target.closest('[data-dash-add]');
     if (add) return void (add.dataset.dashAdd === 'card' ? dashCardForm(state, -1) : dashPageForm(state));
     if (ev.target.closest('[data-dash-audience]')) return void dashAudienceForm(state);
+    if (ev.target.closest('[data-dash-access]')) return void teammateEditAccess('group', state.place.slice(5), state.view?.name || teamLabel(state.place.slice(5)), () => dashAccessLoad(state));
   });
   root.addEventListener('keydown', ev => {
     const grip = ev.target.closest('[data-dash-grip]'); if (!grip) return;

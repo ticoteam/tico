@@ -14,7 +14,7 @@ is back, except that a bot's send is refused as `queue_full` once the queue held
 repeat; [How it works](how-it-works.md)); a new task or hand-off to it, or a message to a bot not started yet, is refused as `target_inactive`, which
 never counts as a repeat against the sender ([How it works](how-it-works.md), rule 8).
 
-An audience is **Everyone**, or a list of **humans**, **groups** and **bots**. Naming a group names everyone in it and in the groups nested in it. Anyone who may read or write a bot can also see it, whatever its See list says.
+An audience is **Everyone**, or a list of **humans**, **groups** and **bots**. Naming a group names everyone in it and in the groups nested in it, humans and bots. People and groups have the same three levels ([People and groups](#people-and-groups)). Anyone who may read or write a bot can also see it, whatever its See list says.
 
 New bots, and every bot after an upgrade, start **Open**: Everyone for all three.
 
@@ -52,6 +52,62 @@ A bot above another in the `reports_to` chain also reads that bot's runs (`hub_r
 estimated cost) and their steps: its task and routine runs, and the wake-ups the hub posts into its chat room. A run a
 human started by chatting with the bot stays with that chat, and private tasks stay with their parties. Peers and
 the bots below keep the usual conversation rule, so they never read a manager's chat-room runs.
+
+## People and groups
+
+People and groups have the same three levels, with the same audiences (Everyone, or humans, groups and bots).
+
+| Level | A person | A group |
+| --- | --- | --- |
+| **See** | Them in the team chart, the people lists, the @ picker, their page and photo, and `hub sql`. | It in the team chart, the group lists, team pages and `hub sql`. |
+| **Read** | Their Home. | Its Home. |
+| **Write** | DMs to them, and adding them to a thread. | Posting to it, and adding it to a thread. |
+
+Defaults:
+
+| | See | Read | Write |
+| --- | --- | --- | --- |
+| A person | Everyone | Everyone | Everyone |
+| A group | Everyone | Everyone | its members |
+| A bot | Everyone | Everyone | Everyone (unchanged) |
+
+How the levels relate, for people, groups and bots alike:
+
+| Has | Also has |
+| --- | --- |
+| Manage | See, Read and Write |
+| Read | See |
+| Write | See (Write without Read is allowed: you can DM someone whose Home you cannot read) |
+
+Who manages:
+
+- **a person**: themselves, everyone they report up to on the chart, the admins and the owner;
+- **a group**: its leads and the leads of the groups above it, the admins and the owner;
+- **a bot**: its owners, as in [Always full access](#always-full-access).
+
+Whoever manages someone always has all three levels and edits their access: **Access** on a person's page, the
+**Access** button on a group's team page, both with the same editor as a bot's.
+
+A group names the **people and bots** in it and in the groups nested in it. That holds in every audience: a bot in
+Contracts, nested under Legal, is in an audience that names Legal, for a bot, a person or a group.
+
+Hidden means hidden: someone you may not see is left out of the chart (the ones under them hang from the nearest
+shown row above), the people and group lists, the @ picker and `hub sql` (`humans` rows, `humans.teams`,
+`bot_config.team`, `conversations.participants` and messages they wrote), and their page, photo and access answer
+`404`. A hidden group's people and bots are shown under the nearest group above it. Inside a conversation you are in,
+everyone in it stays known to you. The owner, the admins and whoever manages them always see them.
+
+```
+GET  /api/v2/humans/cara/access          GET  /api/v2/groups/legal/access
+PUT  /api/v2/humans/cara/access          PUT  /api/v2/groups/legal/access
+{"see": {"everyone": true}, "read": {"teams": ["legal"]}, "write": {"everyone": true}, "revision": 0}
+```
+
+The GET answers `{target, see, read, write, default, revision, you, teams}`; `revision` is `0` until the first save,
+and a stale one answers `409 version_conflict`. `hub human access <id>` and `hub group access <id>` (with `--see`,
+`--read`, `--write`, each `everyone` or `ben,group:legal,bot:analyst`), and the MCP tools `hub_human_access` and
+`hub_group_access`, do the same; BotOps uses them with the rights of the person who asked. Each save writes an audit row
+(`human:<id>:access`, `group:<id>:access`) and a `person.access_changed` or `group.access_changed` event.
 
 ## Roles, and what a member may do
 
