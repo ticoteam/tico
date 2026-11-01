@@ -433,11 +433,17 @@ def test_cli_read_back_and_cited_save_use_the_server_agreement(api, monkeypatch,
 
 def test_read_back_refuses_goals_measures_and_suggestions_the_strategy_bot_cannot_read(api):
     from backend.tests.test_goal_cards import propose
+    from backend.tests.test_groups_leads import as_bot
     hidden = goal(api, "Private inbox objective", owner="inbox")
     public = goal(api, "Publish the guide")
     kpi = post(api, f"goals/{hidden['id']}/kpis", {"name": "Private inbox measure"})["kpi"]
     suggestion = propose(api, "goal_kpi", {"kpi_id": kpi["id"]}, public["id"])
     strategy_bot(api)
+    as_bot(api, "goal-manager", "strategy-test")
+    # The Strategy Bot itself is refused the private bot's work; the owner's
+    # Assistant must preserve that boundary when it asks Tico for a read-back.
+    get(api, "status?bot=inbox", "strategy-test", expected=404)
+    get(api, "status?bot=ops", "strategy-test")
     _, attempt = turn(api, "coo", "ana-test", "Go through suggestions")
     changes = [
         {"kind": "goal_update", "goal_id": hidden["id"], "title": "Changed"},
@@ -462,8 +468,10 @@ def test_a_yes_saves_a_goal_without_optional_measures_and_later_sync_does_not_na
     r, attempt = turn(api, "coo", "ana-test", "Publish the guide")
     back = read_back(api, attempt, {"kind": "goal_create", "title": "Publish the guide", "owner": "ops"})
     assert "warning" not in back["text"].lower()
+    step = back["changes"][0]["steps"][0]
+    assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed"
     attempt = reply(api, r, attempt, "yes")
-    made = save(api, attempt, back["changes"][0]["steps"][0])["goal"]
+    made = save(api, attempt, step)["goal"]
     assert made["kpis"] == []
     with api.app.state.store.transaction() as c:
         GA.sync(c, "ana", at=H.shift(H.now(), seconds=40 * 86400))

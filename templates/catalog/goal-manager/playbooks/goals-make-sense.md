@@ -8,9 +8,10 @@ For each live goal:
   meant, flag it as `vague` instead.
 - **Duplicate**: two goals say the same thing under different owners or words. Flag it on the newer one as
   `duplicate`, and name the other goal in the note.
-- **Optional measures**: a goal may have no KPI, number or date. Never warn, flag or remind the owner merely
-  because any of these is absent, including after 30 days. Propose a measure or target only when the owner asks
-  for one or the goal's own words state the number. Never invent a number or date. File a proposal card;
+- **Optional measures**: a goal may have no KPI, number or date. You may suggest a measure once; the owner may
+  turn it down. Never warn, flag or remind the owner merely because any of these is absent, including after
+  30 days. Read rejected suggestions and their reasons before proposing, as below. A target must come from the
+  owner's words; never invent a number or date. File a proposal card;
   never create or edit a goal or set its target directly in this unattended pass.
 
 - **Not tied to a bet**: a live goal with no `bet_id` while the strategy has active bets (`hub strategy show`).
