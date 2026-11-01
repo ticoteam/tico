@@ -9,21 +9,25 @@ def segments(api, token="ana-test"):
     return {s["id"]: s for s in get(api, "market/spend", token=token)["segments"]}
 
 
-def test_one_segment_is_us_and_one_next_and_a_click_moves_them(api):
+def test_several_segments_are_us_or_next_and_each_click_moves_only_its_own(api):
     first, second, sub = defined(api)
     post(api, "market/segments/target", {"id": first, "target": "ours"})
     seen = segments(api)
     assert seen[first]["self"] and not seen[first]["next"] and not seen[second]["self"]
     post(api, "market/segments/target", {"id": second, "target": "ours"})
+    seen = segments(api)
+    assert seen[first]["self"] and seen[second]["self"]                               # several Us
     post(api, "market/segments/target", {"id": first, "target": "next"})
+    post(api, "market/segments/target", {"id": sub, "target": "next"})
     seen = segments(api)
     assert (seen[first]["self"], seen[first]["next"]) == (False, True)
-    assert (seen[second]["self"], seen[second]["next"]) == (True, False)
-    post(api, "market/segments/target", {"id": sub, "target": "next"})               # one Next at a time
-    seen = segments(api)
-    assert [k for k, s in seen.items() if s["next"]] == [sub] and [k for k, s in seen.items() if s["self"]] == [second]
+    assert sorted(k for k, s in seen.items() if s["next"]) == sorted([first, sub])      # several Next
+    assert [k for k, s in seen.items() if s["self"]] == [second]
+    # Growth follows each click: Us is serving, Next next, and neither drops it.
+    status = lambda: {s["segment_id"]: s["status"] for s in get(api, "growth/segments")["segments"]}  # noqa: E731
+    assert status() == {first: "next", second: "serving", sub: "next"}
     post(api, "market/segments/target", {"id": second, "target": "none"})
-    assert not any(s["self"] for s in segments(api).values())
+    assert not any(s["self"] for s in segments(api).values()) and status()[second] == "dropped"
     post(api, "market/segments/target", {"id": "company/northwind", "target": "ours"}, expected=404)
     post(api, "market/segments/target", {"id": first, "target": "ours"}, token="cara-test", expected=403)
 
