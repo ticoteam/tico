@@ -3441,6 +3441,85 @@ def trigger_list(api, args):
             for t in api.get("triggers")["triggers"]]
 
 
+# ----------------------------------------------------------------------------- federation: peers and shared threads
+PEERING = {"peering": _s("The peering's id from hub_peer_list")}
+PEER_INSTALL = {"install": _s("The other install's id: gi_ and 24 hex digits")}
+PEER_THREAD = {"thread": _s("The thread's id: a thread this install owns")}
+
+
+@tool("hub_peer_list", "This install's federation with other Tico installs: its key id (no key material), the Gateway it goes "
+      "through, its peerings (newest first) and the threads it shares or was given (members listed for the ones it owns). "
+      "Owner only.", {})
+def peer_list(api, args):
+    return api.get("federation")
+
+
+@tool("hub_peer_key", "Make this install's federation key and register it with Tico HQ. Does nothing when the install has "
+      "one. Owner only.", {}, writes=True)
+def peer_key(api, args):
+    return api.post("federation/keys", {}, key=_key(args))
+
+
+@tool("hub_peer_rotate_key", "Give this install a new federation key and retire the old one. Every peering needs approving "
+      "again, on both sides. Owner only.", {}, writes=True)
+def peer_rotate_key(api, args):
+    return api.post("federation/keys/rotate", {}, key=_key(args))
+
+
+@tool("hub_peer_request", "Ask another install to peer with this one. It approves on its side; then you approve here. "
+      "Owner only.", PEER_INSTALL, required=("install",), writes=True)
+def peer_request(api, args):
+    return api.post("federation/peerings", {"peer": args["install"]}, key=_key(args))
+
+
+@tool("hub_peer_approve", "Approve a peering, having checked the other install's key: from now on its envelopes must be signed "
+      "with that key. The peering is active once both installs approve. Owner only.", PEERING, required=("peering",), writes=True)
+def peer_approve(api, args):
+    return api.post(f"federation/peerings/{args['peering']}/approve", {}, key=_key(args))
+
+
+@tool("hub_peer_pause", "The kill switch: pause a peering. While it is paused nothing crosses it, in either direction. "
+      "Owner only.", PEERING, required=("peering",), writes=True)
+def peer_pause(api, args):
+    return api.post(f"federation/peerings/{args['peering']}/pause", {"paused": True}, key=_key(args))
+
+
+@tool("hub_peer_resume", "Resume a paused peering. What was missed while it was paused is caught up. Owner only.",
+      PEERING, required=("peering",), writes=True)
+def peer_resume(api, args):
+    return api.post(f"federation/peerings/{args['peering']}/pause", {"paused": False}, key=_key(args))
+
+
+@tool("hub_peer_revoke", "End a peering. Nothing more crosses it; a new request starts over and needs both approvals again. "
+      "Owner only.", PEERING, required=("peering",), writes=True)
+def peer_revoke(api, args):
+    return api.post(f"federation/peerings/{args['peering']}/revoke", {}, key=_key(args))
+
+
+@tool("hub_peer_share", "Share a thread this install owns with an install it has an active peering with. That install gets "
+      "the thread from now on, not its history. Owner only.", {**PEER_THREAD, **PEER_INSTALL},
+      required=("thread", "install"), writes=True)
+def peer_share(api, args):
+    return api.post(f"federation/threads/{quote(str(args['thread']), safe='')}/installs", {"install": args["install"]},
+                    key=_key(args))
+
+
+@tool("hub_peer_unshare", "Take an install out of a thread this install owns. It gets the removal and nothing after. Owner only.",
+      {**PEER_THREAD, **PEER_INSTALL}, required=("thread", "install"), writes=True)
+def peer_unshare(api, args):
+    return _as_person(api).call("DELETE", f"federation/threads/{quote(str(args['thread']), safe='')}/installs/"
+                                          f"{quote(str(args['install']), safe='')}", None, _key(args))
+
+
+@tool("hub_peer_add_reader", "Let a person on this install read a shared copy of a thread. Until an admin adds them, "
+      "only the accepting admin reads a copy. Owner only.",
+      {"thread": _s("The thread's id on this install (a shared copy)"), "actor": _s("The person, as human:<name>")},
+      required=("thread", "actor"), writes=True)
+def peer_add_reader(api, args):
+    return api.post(f"federation/threads/{quote(str(args['thread']), safe='')}/readers", {"actor": args["actor"]},
+                    key=_key(args))
+
+
 TRIGGER = {"id": _s("The trigger's id from hub_trigger_list")}
 
 

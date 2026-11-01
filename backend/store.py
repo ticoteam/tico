@@ -2117,6 +2117,9 @@ class Store:
             # What each message's and run's readability depends on (backend/read_deps.py); settled beside the server.
             from . import read_deps
             read_deps.ensure(c)
+            # Federation between installs (backend/federation_schema.py): its own tables, kept beside the threads.
+            from . import federation_schema
+            federation_schema.ensure(c)
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
