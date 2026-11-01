@@ -68,7 +68,7 @@ function opsLocationFacts(r) {
   const parent = r.parent_id && (OPS_REFS?.locations || []).find(l => l.id === r.parent_id);
   return opsKv('Kind', esc(opsLabel(OPS_LOCATION_KINDS, r.kind))) + opsKv('Address', address)
     + opsKv('Parent', parent ? `<a href="${opsHref('locations', parent.id)}">${esc(parent.name)}</a>` : '')
-    + opsKv('Customer', opsCustomerFact('locations', r));
+    + opsKv('Customer', opsCustomerFact('locations', r)) + opsKv('In books', r.in_books == null ? '' : r.in_books ? 'Yes' : 'No');
 }
 function opsItemFacts(r) {
   const named = id => (OPS_REFS?.accounts || []).find(a => a.id === id)?.name || '';
@@ -118,15 +118,18 @@ function opsPut(state, load, id, html) { if (opsLive(state, load)) { const el = 
 // This month on a location, all time on a project, from the same cut of the books the P&L reads; nothing when it is refused.
 async function opsPanelPnl(state, load, r, by, host) {
   const window_ = by === 'project' ? {start: '2000-01-01', end: finToday()} : {};
-  const report = await get('/v2/finance/reports/pnl_by?' + opsQs({by, top_n: 200, ...window_}), {fresh: true}).catch(() => null);
+  const [report, byAccount] = await Promise.all([get('/v2/finance/reports/pnl_by?' + opsQs({by, top_n: 200, ...window_}), {fresh: true}).catch(() => null),
+    by === 'project' ? get('/v2/finance/reports/pnl_by_account?' + opsQs({by, id: r.id, ...window_}), {fresh: true}).catch(() => null) : null]);
   if (!report) return;
   const row = (report.rows || []).find(x => x.key === r.id);
   const your = opsPartial(report) ? ' <span class="pill" data-ops-your-view>Your view</span>' : '';
   const open = `<a href="${FIN_ROUTE}/pnl?split=${by}" data-ops-pnl>Open in P&amp;L</a>`;
   const title = by === 'project' ? 'P&L' : 'P&L this month';
   opsPut(state, load, host, `<section class="ops-sec"><header class="ops-sec-h"><h3>${esc(title)}</h3>${your}<span class="spacer"></span>${open}</header>
-    ${finKv('Income', finUsd(row?.income ?? 0))}${finKv(by === 'project' ? 'Costs' : 'Expenses', finUsd(row?.expense ?? 0))}${finKv(by === 'project' ? 'Profit' : 'Net', finUsd(row?.net ?? 0))}</section>`);
+    ${finKv('Income', finUsd(row?.income ?? 0))}${finKv(by === 'project' ? 'Costs' : 'Expenses', finUsd(row?.expense ?? 0))}${finKv(by === 'project' ? 'Profit' : 'Net', finUsd(row?.net ?? 0))}${opsPnlAccounts(byAccount)}</section>`);
 }
+const opsPnlAccounts = report => report?.rows?.length ? `<table class="fin-t ops-pnl-accounts" data-ops-pnl-accounts><tbody>${report.rows.map(x =>
+  `<tr><td>${esc(x.label)}</td><td class="fin-n">${finUsd(x.amount)}</td></tr>`).join('')}</tbody></table>` : '';
 // The open purchase orders, estimates and invoices that name this record on a line. A refused read shows nothing.
 async function opsPanelDocs(state, load, kind, key, id) {
   const [title, host, path, list, params, open, href] = OPS_DOC_READS[kind];

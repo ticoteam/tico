@@ -463,6 +463,42 @@ def pnl_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = None
             "snapshot": snap, "view_version": s.view.version}
 
 
+def pnl_by_account(c: sqlite3.Connection, viewer: str, by: str, record_id: str | None, start: str | None = None,
+                   end: str | None = None, *, basis: str | None = None, at: str | None = None) -> Row:
+    """One location's or project's row of pnl_by, account by account: `rows` of {account_id, label, type, amount}, an
+    income amount as income, an expense as spend. It reads what pnl_by reads, so what the viewer's view leaves out of
+    that row is left out here, and its income, expense and net are that row's. One row per account: the chart caps it."""
+    if by not in ("location", "project"):
+        raise invalid("by is location|project")
+    if not record_id:
+        raise invalid("id names the location or project")
+    if basis not in (None, "cash", "accrual"):
+        raise invalid("basis is cash|accrual")
+    s = _open(c, viewer, at)
+    a, z = _window(start, end, s.ctx)
+    s, snap = _closed(s, viewer, a, z)
+    basis = basis or s.ctx.book.basis
+    wanted = RR.ids_of(c, f"{by}s", record_id)
+    ids = [x.id for x in s.ctx.accounts.values() if x.type in PNL_TYPES and s.view.sees_account(x)]
+    sup = _suppress(s, _cells(s, a, z, ids, basis), False, a, z)
+    amounts: dict[str, int] = {}
+    for cell in sup.cells:
+        account = s.ctx.accounts.get(cell.account_id)
+        if account is None or account.type not in PNL_TYPES or cell.account_id in sup.hidden:
+            continue
+        if _located_key(cell, by) in wanted:
+            value = -cell.amount if account.type == "income" else cell.amount    # income is posted as credits
+            amounts[cell.account_id] = amounts.get(cell.account_id, 0) + value
+    rows: list[Row] = [{"account_id": i, "label": s.ctx.accounts[i].name, "type": s.ctx.accounts[i].type, "amount": v}
+                       for i, v in amounts.items()]
+    rows.sort(key=lambda r: (r["type"] != "income", -abs(cast(int, r["amount"])), str(r["label"])))
+    income = sum(cast(int, r["amount"]) for r in rows if r["type"] == "income")
+    expense = sum(cast(int, r["amount"]) for r in rows if r["type"] != "income")
+    return {"by": by, "id": record_id, "start": a.isoformat(), "end": z.isoformat(), "basis": basis, "rows": rows,
+            "income": income, "expense": expense, "net": income - expense, "excluded": sup.excluded, "snapshot": snap,
+            "view_version": s.view.version}
+
+
 def _closed(s: _Seen, viewer: str, a: date, z: date) -> tuple[_Seen, Row | None]:
     """A window inside one closed month reads through that month's snapshot tree: the accounts as they stood when it
     closed. Amounts still come from the posted rows the viewer may see. Also the month's snapshot marker."""
@@ -1379,14 +1415,14 @@ def _cash_flow(c: sqlite3.Connection, viewer: str, a: date, z: date, period: str
 
 def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None = None, end: str | None = None,
            period: str = "month", basis: str | None = None, compare: str | None = None, top_n: int = 20,
-           by: str | None = None, at: str | None = None) -> Row:
+           by: str | None = None, record_id: str | None = None, at: str | None = None) -> Row:
     """One report (§7.1): pnl (accrual or cash), balance_sheet (as of `end`), cash_flow, budget_vs_actual, ap_aging,
     ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|location|class|project or a pair),
-    pnl_by (`by` location|class|project or a pair) or revenue_by_item (posted invoices by the item each line names;
-    receivables view). `compare=prior` adds the window before it. Payloads are capped: `top_n` rows and one
+    pnl_by (`by` location|class|project or a pair), pnl_by_account (one location's or project's row by account: `by`
+    and `record_id`) or revenue_by_item (posted invoices by the item each line names; receivables view). `compare=prior` adds the window before it. Payloads are capped: `top_n` rows and one
     "Other · n"."""
-    if kind not in REPORTS:
-        raise invalid(f"a report is {'|'.join(REPORTS)}")
+    if kind not in REPORTS and kind != "pnl_by_account":   # it names one record, so it is not a report of the whole book
+        raise invalid(f"a report is {'|'.join(REPORTS)}|pnl_by_account")
     if compare not in (None, "", "prior"):
         raise invalid("compare is prior")
     top = max(1, min(int(top_n), MAX_TOP))
@@ -1402,6 +1438,8 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
             return _fold_pnl(pnl(c, viewer, p.isoformat(), q.isoformat(), period, basis or ctx.book.basis, at), top)
         if kind == "pnl_by":
             return pnl_by(c, viewer, by or "location", p.isoformat(), q.isoformat(), basis=basis, top_n=top, at=at)
+        if kind == "pnl_by_account":
+            return pnl_by_account(c, viewer, by or "location", record_id, p.isoformat(), q.isoformat(), basis=basis, at=at)
         if kind == "cash_flow":
             return _cash_flow(c, viewer, p, q, period, at)
         if kind == "budget_vs_actual":
@@ -1560,17 +1598,29 @@ def _customer_out(customer_id: object, names: Mapping[str, str]) -> Row:
     return {"customer_id": key, "customer_name": names.get(key) if key else None}
 
 
+def _in_books(ctx: Ctx, kind: str, rows: Sequence[Any]) -> set[str] | None:
+    """On a mirrored book, the locations the provider's books hold or are about to (mirror.kept_local's opposite, for a
+    page at once); None elsewhere, where a location has no such thing to say."""
+    if kind != "location" or ctx.book.mode != "mirror" or not ctx.book.mirror_connection_id:
+        return None
+    ids = [str(r["id"]) for r in rows]
+    return SM.mapped_refs(ctx.c, ctx.book.mirror_connection_id, "locations", ids) | SK.record_writes_open(ctx.c, "location.create", ids)
+
+
 def _record_out(ctx: Ctx, kind: str, r: Any, view: VW.View, source: str, names: Mapping[str, str],
-                due: Mapping[str, str] | None = None) -> Row:
+                due: Mapping[str, str] | None = None, books: set[str] | None = None) -> Row:
     """A record as the records API shows it, to a teammate: an item's sale price and description whatever the viewer's
     Finance view; an item's accounts show to the viewers who see them. A location's, equipment's or project's customer
     shows by id and name. A location's or equipment's next due day comes from `due` (records/due_dates.next_due_for),
-    null when none is open. Only teammates reach this (see _teammate_or_refuse)."""
+    null when none is open. On a mirrored book a location says whether it is `in_books` (see _in_books). An item carries
+    its last synced quantity, null on books that keep none. Only teammates reach this (see _teammate_or_refuse)."""
     out: Row = {"id": str(r["id"]), "name": str(r["name"]), "archived_at": r["archived_at"], "source": source,
                 "as_of": ctx.at}
     if kind == "location":
         out.update(kind=str(r["kind"]), parent_id=r["parent_id"], address=json.loads(r["address"] or "{}"),
                    next_due_on=(due or {}).get(str(r["id"])))
+        if books is not None:
+            out["in_books"] = str(r["id"]) in books
         out.update(_customer_out(r["customer_id"], names))
     elif kind == "equipment":
         out.update(kind=str(r["kind"]), location_id=r["location_id"], make=str(r["make"]), model=str(r["model"]),
@@ -1579,7 +1629,8 @@ def _record_out(ctx: Ctx, kind: str, r: Any, view: VW.View, source: str, names: 
         out.update(_customer_out(r["customer_id"], names))
     elif kind == "item":
         out.update(sku=str(r["sku"]), kind=str(r["kind"]), unit=str(r["unit"]), currency=str(r["currency"]),
-                   description=str(r["description"]), taxable=bool(r["taxable"]), price=r["price"])
+                   description=str(r["description"]), taxable=bool(r["taxable"]), price=r["price"],
+                   quantity_on_hand=r["quantity_on_hand"], quantity_synced_at=r["quantity_synced_at"])
         out.update({key: r[key] for key in ITEM_ACCOUNTS if _account_shown(view, ctx.accounts, r[key])})
     else:
         out.update(status=str(r["status"]))
@@ -1610,7 +1661,8 @@ def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archi
     sources = SM.record_providers(c, RECORD_TABLE[kind], [str(r["id"]) for r in shown])
     names = _customer_names(ctx, kind, shown)
     due = RD.next_due_for(c, kind, [str(r["id"]) for r in shown]) if kind in ("location", "equipment") else {}
-    return {RECORD_PLURAL[kind]: [_record_out(ctx, kind, r, view, sources.get(str(r["id"]), "tico"), names, due=due)
+    books = _in_books(ctx, kind, shown)
+    return {RECORD_PLURAL[kind]: [_record_out(ctx, kind, r, view, sources.get(str(r["id"]), "tico"), names, due=due, books=books)
                                   for r in shown], "next_cursor": nxt}
 
 
@@ -1624,7 +1676,8 @@ def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at:
         raise FinanceError(NOT_FOUND, f"no such {kind}")
     source = SM.record_providers(c, RECORD_TABLE[kind], [str(row["id"])]).get(str(row["id"]), "tico")
     due = RD.next_due_for(c, "equipment", [str(row["id"])]) if kind == "equipment" else {}
-    return {kind: _record_out(ctx, kind, row, view, source, _customer_names(ctx, kind, [row]), due=due)}
+    return {kind: _record_out(ctx, kind, row, view, source, _customer_names(ctx, kind, [row]), due=due,
+                              books=_in_books(ctx, kind, [row]))}
 
 
 def customer_extras(c: sqlite3.Connection, viewer: str, customer_id: str, at: str | None = None) -> Row:

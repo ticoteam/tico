@@ -9,6 +9,8 @@ import pytest
 
 from backend.finance import mirror
 from backend.finance import qbo as QC
+from backend.finance import reads as FR
+from backend.finance.context import load
 from backend.finance.core import mirror as M
 from backend.finance.core import qbo as Q
 from backend.finance.core import xero as X
@@ -1146,6 +1148,30 @@ def test_a_bill_the_provider_bills_for_less_keeps_its_order_line_billed_until_th
     assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z", passes=1) == []
     with books.read() as c:
         assert SP.line_room(c, line) == 10_000
+
+
+def test_a_location_row_says_in_books_as_kept_local_does_and_an_item_carries_its_quantity(books):
+    with books.read() as c:
+        assert "in_books" not in str(FR.records(c, OWNER, kind="location", at=AT))        # a native book says nothing
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "location_create", {"name": "Acme Site", "kind": "customer_site"})
+        assert made.status == "committed", made
+        c.execute("UPDATE items SET quantity_on_hand=14, quantity_synced_at=? WHERE name='Consulting'", (AT,))
+    with books.read() as c:
+        rows = {r["name"]: r for r in FR.records(c, OWNER, kind="location", at=AT)["locations"]}
+        assert (rows["Austin"]["in_books"], rows["Acme Site"]["in_books"]) == (True, False)
+        ctx = load(c, AT)
+        for row in rows.values():
+            assert row["in_books"] == (not mirror.kept_local(ctx, "locations", row["id"]))
+            one = FR.record(c, OWNER, kind="location", record_id=row["id"], at=AT)["location"]
+            assert one["in_books"] == row["in_books"]
+        item = FR.records(c, OWNER, kind="item", q="Consulting", at=AT)["items"][0]
+        assert (item["quantity_on_hand"], item["quantity_synced_at"]) == (14, AT)
 
 
 def test_a_line_tagged_to_a_site_kept_in_tico_keeps_the_site_when_the_provider_revises_the_bill(books):
