@@ -170,12 +170,38 @@ def runner_memory_default():
 
 
 def env_file_sets(name):
-    """Whether the install's .env has the key at all: its value wins over the default, and an empty value counts."""
+    """Whether the install's .env sets the key, with or without spaces around the `=`: its value wins over the default,
+    and an empty value counts. A commented line does not."""
+    pattern = re.compile(r"[ \t]*%s[ \t]*=" % re.escape(name))
     try:
         with open(os.path.join(PROJECT, ".env")) as f:
-            return any(line.startswith(name + "=") for line in f)
+            return any(pattern.match(line) for line in f)
     except OSError:
         return False
+
+
+def cap_running_runner():
+    """A runner recreated by an older updater, which knows nothing of the default, has no memory limit. Give it the default
+    live: `docker update` sets the limit of the running container, and the container keeps it on its own restarts. Only a
+    runner with no limit is changed, so a limit someone set stays. Failures are logged and ignored."""
+    if MODE != "runner" or env_file_sets("TICO_RUNNER_MEMORY"):
+        return
+    cap = runner_memory_default()
+    if not cap:
+        return
+    try:
+        ids = compose("ps", "-q", SERVICE, timeout=INSPECT_SECONDS).split()
+        if not ids:
+            return
+        limit = docker_run(["docker", "inspect", "--format", "{{.HostConfig.Memory}}", ids[0]], capture_output=True,
+                           text=True, check=True, timeout=INSPECT_SECONDS).stdout.strip()
+        if limit != "0":
+            return
+        docker_run(["docker", "update", "--memory", cap, "--memory-swap", cap, ids[0]], capture_output=True, text=True,
+                   check=True, timeout=INSPECT_SECONDS)
+        print("tico-updater: capped the runner's memory at %s, the default for this computer" % cap, flush=True)
+    except Exception as exc:
+        print("tico-updater: could not cap the runner's memory (%s); leaving it as it is" % exc, flush=True)
 
 
 def compose(*args, tag=None, timeout=600, extra_env=None):
@@ -1187,4 +1213,5 @@ if __name__ == "__main__":
         sys.exit(replace_self())
     load_status()
     ensure_token()
+    threading.Thread(target=cap_running_runner, daemon=True).start()   # not in front of the server: a slow docker waits here
     ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()

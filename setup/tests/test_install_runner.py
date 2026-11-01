@@ -108,6 +108,36 @@ def test_the_default_memory_cap_is_the_host_less_a_reserve_and_a_setting_in_env_
     env.write_text(env.read_text() + "TICO_RUNNER_MEMORY=0\n")
     assert "memory unset" in run(33554432, "--runner")            # what .env says wins, and 0 is no limit
     assert env.read_text().endswith("TICO_RUNNER_MEMORY=0\n")
+    env.write_text("TICO_TAG=v0.2.0\nTICO_RUNNER_MEMORY = 2g\n")
+    assert "memory unset" in run(33554432, "--runner")            # spaces around the = still make a setting
+    env.write_text("TICO_TAG=v0.2.0\n# TICO_RUNNER_MEMORY=0\n")
+    assert "memory 28g\n" in run(33554432, "--runner")           # a commented line is no setting
+
+
+def test_a_bundle_from_before_the_memory_rule_still_installs_and_just_has_no_default_cap(box):
+    import hashlib
+    import tarfile
+    release = box["rel"] / "download" / "v0.2.0"
+    bundle = release / "tico-bundle-v0.2.0.tar.gz"
+    old = box["tmp"] / "old-bundle.tar.gz"
+    with tarfile.open(bundle) as src, tarfile.open(old, "w:gz") as dst:
+        for member in src.getmembers():
+            if member.name == "docker/runner-memory.sh":
+                continue
+            dst.addfile(member, src.extractfile(member) if member.isfile() else None)
+    bundle.write_bytes(old.read_bytes())
+    sums = release / "SHA256SUMS"                                                 # the installer checks the bundle against it
+    lines = [f"{hashlib.sha256(bundle.read_bytes()).hexdigest()}  {l.split()[1].lstrip('*')}" if l.split()[-1] == bundle.name else l
+             for l in sums.read_text().splitlines()]
+    sums.write_text("\n".join(lines) + "\n")
+    meminfo = box["tmp"] / "meminfo-32g"
+    meminfo.write_text("MemTotal:       33554432 kB\n")
+    box["log"].write_text("")
+    result = install(box, *JOIN, TICO_INSTALL_MEMINFO=str(meminfo))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "memory unset" in box["log"].read_text()                               # no rule, so no default
+    assert "TICO_RUNNER_MEMORY" not in (box["dir"] / ".env").read_text()
+    assert (box["dir"] / "runner.compose.yaml").exists()
 
 
 def test_a_new_code_url_or_label_replaces_only_those_keys_of_an_existing_env(box):
