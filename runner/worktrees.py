@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import threading
 from urllib.parse import quote
 import uuid
@@ -906,6 +907,64 @@ def build_file(name):
 
 _SECRET = ('.env*', '*.pem', '*.key', 'id_rsa*', 'credentials*', '*.p12')
 
+# Conflict markers with their labels dropped, so git's text and the file compare equal whatever the labels say.
+_MARKER_LABEL = re.compile(r'^(<{7}|\|{7}|>{7})(?: .*)?$', re.M)
+
+
+def _untouched_conflict(path, gitdir, name, env):
+    """True when a conflicted file is still exactly git's own conflicted text for its stages: nothing resolved or edited."""
+    try:
+        text = (path / name).read_text()
+    except (OSError, UnicodeDecodeError):
+        return False
+    stages = {}
+    for stage in ('1', '2', '3'):
+        shown = git(path, 'show', f':{stage}:{name}', env=env, check=False)
+        if shown.returncode == 0:
+            stages[stage] = shown.stdout
+    if '2' not in stages or '3' not in stages:
+        return False
+    with tempfile.TemporaryDirectory(dir=gitdir) as scratch:
+        files = {}
+        for stage, content in stages.items():
+            files[stage] = Path(scratch) / ('stage' + stage)
+            files[stage].write_text(content)
+        if '1' not in files:
+            files['1'] = Path(scratch) / 'stage1'
+            files['1'].write_text('')
+        for flags in ([], ['--diff3']):
+            merged = git(path, 'merge-file', '-p', *flags, str(files['2']), str(files['1']), str(files['3']), env=env, check=False)
+            if 1 <= merged.returncode <= 127 and _MARKER_LABEL.sub(r'\1', merged.stdout) == _MARKER_LABEL.sub(r'\1', text):
+                return True
+    return False
+
+
+def _clear_merge(path, row, env):
+    """Abort a merge this removal finds abandoned in its own tree, before any switch, add or commit. Only the removal
+    calls it. Anything not provably abandoned is kept untouched: a release tree, another operation in progress, a
+    conflict resolved or edited by hand, or a staged change that is not main's."""
+    gitdir = Path(git(path, 'rev-parse', '--path-format=absolute', '--git-dir', env=env).stdout.strip())
+    if not (gitdir / 'MERGE_HEAD').exists():
+        return
+    if row.get('release'):
+        raise ValueError('kept: merge in progress; finish or abort it to free this worktree')
+    unresolved = 'kept: merge in progress with resolved or unrecognised conflicts; commit or abort it to free this worktree'
+    if any((gitdir / name).exists() for name in ('CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply')):
+        raise ValueError(unresolved)
+    listed = git(path, 'ls-files', '-u', '-z', env=env).stdout.split('\0')
+    unmerged = {entry.split('\t', 1)[1] for entry in listed if '\t' in entry}
+    if not unmerged or not all(_untouched_conflict(path, gitdir, name, env) for name in unmerged):
+        raise ValueError(unresolved)
+    # Every other staged path must already hold main's version: a clean merge's change, never the bot's own resolution.
+    for name in filter(None, git(path, 'diff', '--cached', '--name-only', '-z', env=env).stdout.split('\0')):
+        if name in unmerged:
+            continue
+        ours = git(path, 'rev-parse', '--verify', '-q', ':' + name, env=env, check=False).stdout.strip()
+        theirs = git(path, 'rev-parse', '--verify', '-q', 'MERGE_HEAD:' + name, env=env, check=False).stdout.strip()
+        if ours != theirs:
+            raise ValueError(unresolved)
+    git(path, 'merge', '--abort', env=env)
+
 
 def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: True):
     env = safe_git.environment(env)
@@ -939,6 +998,7 @@ def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: Tru
         if not defaults:
             raise ValueError('Repository default branch is unknown; refresh Repositories before cleanup')
         git(base, 'worktree', 'prune', '--expire', 'now', env=env)
+        _clear_merge(path, row, env)
         ignored = git(path, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z', env=env).stdout.split('\0')
         if any(name and not build_file(name) for name in ignored):
             raise ValueError('kept: ignored files')
