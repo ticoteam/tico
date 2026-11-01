@@ -63,7 +63,7 @@ RUNNER_FALLBACK_SECONDS = 5  # the same for computers' streams: work another pro
 BACKLOG_MAX = 5000        # changes a stream may fall behind before it is reset rather than replayed (a slow consumer)
 POLL_THREADS = 4          # threads serving rounds of people's streams: one at a time per store (Rounds)
 ROUND_MAX = 512           # streams one round's snapshot serves; the rest wait for the next round
-ROUND_ROWS = 32           # changes one stream reads in a round, so one catching up holds no one else's next round
+ROUND_ROWS = 128          # changes one stream reads in a round, so one catching up holds no one else's next round
                           # and each holds a database connection the store's pool would close and open again
 GONE_SECONDS = 1.0        # a stream asks whether its client hung up at most this often
 STALL_SECONDS = 5.0       # a read's frames the client took longer than this to take: a slow consumer, reset rather than replayed

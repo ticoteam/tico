@@ -164,8 +164,6 @@ def serve():
         setattr(importlib.import_module(module), attr, type(getattr(importlib.import_module(module), attr))(value))
     with tempfile.TemporaryDirectory(prefix="threads-benchmark-") as directory:
         generator, server, thread, port, app = boot(directory)
-        if os.environ.get("BENCH_SWITCH"):                 # seconds: the interpreter lock's switch interval, for one run
-            sys.setswitchinterval(float(os.environ["BENCH_SWITCH"]))
         profile = Profile(sys.modules["backend.store"]) if os.environ.get("BENCH_PROFILE") else None
         print(json.dumps({"port": port, "db": str(app.state.store.settings.db_path)}), flush=True)
         sys.stdin.read()                                   # the load generator closes stdin when the run ends
@@ -396,7 +394,7 @@ def scenario(args, port, db):
     room_writers = [{} for _ in range(args.writers)]
     big_writer = {}
     threads = [start(writer, port, people[i % len(people)], post_path, f"{room[:8]}-{i}", args.seconds, args.rate,
-                     state, i / len(room_writers)) for i, state in enumerate(room_writers)]
+                     state, 0.0 if args.same_instant else i / len(room_writers)) for i, state in enumerate(room_writers)]
     if big_path:
         threads.append(start(writer, port, "ana-test", big_path, "big", args.seconds, args.rate, big_writer))
 
@@ -460,6 +458,7 @@ def main():
     parser.add_argument("--rate", type=float, default=5.0)
     parser.add_argument("--followers", type=int, default=500)
     parser.add_argument("--burst", type=int, default=200)
+    parser.add_argument("--same-instant", action="store_true", help="every writer posts at the start of its period")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--serve", action="store_true", help=argparse.SUPPRESS)
     preset = parser.parse_known_args()[0].preset
