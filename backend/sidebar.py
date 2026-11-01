@@ -184,23 +184,27 @@ def _past_setup(c):
 
 
 def _connections(c):
-    """Whether a books connection (QuickBooks or Xero) and a Stripe connection exist and are not disconnected. A table
-    this install has not created yet holds none."""
+    """Whether a books connection (QuickBooks or Xero) exists, whether one still has provider records waiting to come in,
+    and whether a Stripe connection exists. Disconnected connections count for nothing; a table this install has not
+    created yet holds none. The waiting read is the books mirror's `pending` (backend/finance/store/mirror.py)."""
+    from .finance.store import mirror as SX
     try:
-        rows = c.execute("SELECT provider, purpose FROM fin_connections WHERE status != 'disconnected'").fetchall()
+        books = SX.books_connections(c)
+        stripe = c.execute("SELECT 1 FROM fin_connections WHERE provider='stripe' AND status!='disconnected' LIMIT 1"
+                           ).fetchone() is not None
     except sqlite3.OperationalError:
-        return False, False
-    books = any(str(purpose) == "books" for _, purpose in rows)
-    stripe = any(str(provider) == "stripe" for provider, _ in rows)
-    return books, stripe
+        return False, False, False
+    waiting = any(bool(SX.mirror_state(c, cid).get("pending")) for cid, _, _ in books)
+    return bool(books), waiting, stripe
 
 
 def _shown(c):
-    """The Operations tabs the company's records and connections need: a tab whose table holds a row, a books
-    connection's Locations and Products & services, and a Stripe connection's Products & services."""
+    """The Operations tabs the company's records and connections need: a tab whose table holds a row; a books connection,
+    or one with records waiting to come in, shows Locations and Products & services; a Stripe connection shows Products &
+    services."""
     shown = {tab for tab, table in RECORD_TABS if _has_rows(c, table)}
-    books, stripe = _connections(c)
-    if books:
+    books, waiting, stripe = _connections(c)
+    if books or waiting:
         shown |= {"operations.locations", "operations.products"}
     if stripe:
         shown.add("operations.products")
