@@ -1,0 +1,25 @@
+{
+  "created": [
+    {
+      "name": "Failed payment from the billing webhook becomes a task",
+      "owner": "person:dana",
+      "enabled": false,
+      "trigger": {
+        "type": "webhook",
+        "id": "trg_billing"
+      },
+      "steps": [
+        {
+          "id": "task",
+          "type": "action",
+          "enabled": true,
+          "do": "create_task",
+          "args": {
+            "owner": "person:omar",
+            "title": "Call the customer: payment failed"
+          }
+        }
+      ]
+    }
+  ]
+}

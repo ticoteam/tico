@@ -164,3 +164,14 @@ def test_rollback_restores_image_and_bundle(monkeypatch, tmp_path, release_serve
     assert (project / ".env").read_text() == "TICO_TAG=v0.1.0\nTICO_COMPANY_NAME=Acme\n"
     assert ["docker", "tag", "sha256:old", "ghcr.io/ticoteam/tico:v0.1.0"] in docker.calls
     assert docker.compose_at_up[-1] == "old compose\n"            # the old image came back on the old file
+
+
+def test_a_runner_update_never_asks_compose_about_the_tunnel(monkeypatch, tmp_path, release_server):
+    base, _, publish = release_server
+    publish("v0.2.0", NEW)
+    updater = load(monkeypatch, tmp_path, base, mode="runner")
+    install(tmp_path / "project", mode="runner")
+    docker = Docker(updater, monkeypatch, [True])
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "healthy", updater.status
+    assert not any("cloudflared" in call for call in docker.calls)   # runner.compose.yaml has no such service

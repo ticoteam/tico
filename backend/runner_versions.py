@@ -15,7 +15,7 @@ stuck gets a nudge.
 from . import releases
 from .store import H
 
-MIN_RUNNER_RELEASE = "0.1.0"
+MIN_RUNNER_RELEASE = "0.4.0"
 NUDGE_AFTER_S = 3600
 KINDS = ("mac", "linux", "docker")
 LABELS = {"current": "Up to date", "updating": "Updating", "needs_update": "Needs update",

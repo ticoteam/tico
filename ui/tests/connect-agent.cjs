@@ -78,8 +78,11 @@ const shot = (page, name) => shots ? page.screenshot({path: path.join(shots, `co
         const bypass = device === 'phone';
         const {page, context, state} = await open(browser, viewport, scheme, bypass);
         await page.goto('https://tico-ui.test/#/tasks');
-        await page.waitForFunction(() => typeof connectAgent === 'function' && document.querySelector('#connect-agent'));
-        if (device === 'desktop') { await page.locator('#connect-agent').waitFor(); await page.locator('#connect-agent').click(); }
+        await page.waitForFunction(() => typeof connectAgent === 'function');
+        if (device === 'desktop') {
+          await page.locator('#org-add-group').click();
+          await page.getByRole('menuitem', {name: 'Add existing bot', exact: true}).click();
+        }
         else await page.evaluate(() => connectAgent());
         const dialog = page.locator('dialog.connect-agent[open]');
         await dialog.waitFor();
@@ -156,8 +159,7 @@ const shot = (page, name) => shots ? page.screenshot({path: path.join(shots, `co
         assert.equal(await page.evaluate(secret => document.body.innerHTML.includes(secret), SECRET), false);
         if (device === 'desktop') {
           await page.clock.fastForward(300000);
-          // one read on close, for the team chart's Connect button; then nothing
-          assert.equal(state.urls.filter(u => u.endsWith('/api/v2/me/tokens')).length, polls + 1, 'polling stops on close');
+          assert.equal(state.urls.filter(u => u.endsWith('/api/v2/me/tokens')).length, polls, 'polling stops on close');
         }
         await context.close();
       }

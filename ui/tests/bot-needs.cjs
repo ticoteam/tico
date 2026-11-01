@@ -116,9 +116,9 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     const tab = key => rail.locator(`#bot-tab-t-${key}`);
     await rail.locator('#t-needs .trow').first().waitFor();
 
-    // One Tasks section with its tabs and their counts, before Updates, Files and Routines; no folded section after it.
+    // One Tasks section with its tabs and their counts, before Updates and Files; no folded section after it.
     const order = await rail.evaluate(el => [...el.querySelectorAll(':scope>.bot-w>.rail-sec')].map(c => c.id));
-    assert.deepEqual(order, ['bot-tasks', 'bot-latest', 'bot-files', 'bot-recurring'], JSON.stringify(order));
+    assert.deepEqual(order, ['bot-tasks', 'bot-latest', 'bot-files'], JSON.stringify(order));
     assert.equal(await rail.locator('#bot-assigned').count(), 0);
     assert.equal(await rail.locator('#bot-tasks .rail-h').innerText().then(s => s.trim().toLowerCase()), 'tasks');
     await page.waitForFunction(() => document.querySelector('#cnt-c4')?.textContent.trim() === '1'
@@ -128,8 +128,8 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     assert.equal(await tab('needs').getAttribute('aria-selected'), 'true', 'Needs You leads while it has rows');
 
     // Needs You keeps matching waits, questions and approvals; ordinary assigned tasks obey its conditions.
-    const rows = await rail.locator('#t-needs .trow .ttl, #t-needs .req-text').allInnerTexts();
-    assert.deepEqual(rows.map(r => r.trim()).sort(), ['Head of Engineering: Is Friday fine for the summary?', 'Head of Engineering: Approve the announcement',
+    const rows = await rail.locator('#t-needs .trow .ttl').allInnerTexts();
+    assert.deepEqual(rows.map(r => r.trim()).sort(), ['Is Friday fine for the summary?', 'Approve the announcement',
       'Support access fixes', 'Turn on the screen default', 'Pick the release day'].sort(), JSON.stringify(rows));
     assert.equal(await rail.locator('#bot-active').isHidden(), true, 'one tab at a time');
     const badge = page.locator('#tree a[href="#/bot/lead"] .cnt.needs');
@@ -139,6 +139,13 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     assert.ok(!(await titles('#t-open')).includes('Pick the release day'));
     assert.ok(!(await titles('#t-blocked')).includes('Pick the release day'));
     assert.ok(!(await titles('#t-c4')).includes('Pick the release day'));
+    // An approval or a question opens its Needs you card over the rail; nothing unfolds in the rail.
+    assert.equal(await rail.locator('#t-needs details').count(), 0);
+    await rail.locator('#t-needs .trow', {hasText: 'Approve the announcement'}).locator('.ttl').click();
+    await page.locator('#need-card .dc-card[data-key="approval:approval-1"]').waitFor();
+    assert.equal(await page.evaluate(() => location.hash), '#/bot/lead/tasks', 'the rail stays where it was');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('#need-card')?.open);
 
     // Editing Needs You changes its task filter, while the org number stays a fixed attention count.
     await rail.locator('#bot-sidebar-edit').click();
@@ -210,14 +217,16 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     assert.equal(await rail.locator('#bot-needs').isHidden(), true);
     await page.evaluate(() => { const r = document.querySelector('#pane-tasks'); r.style.height = r.style.overflowY = ''; r.scrollTop = 0; });
 
-    // A half-typed answer to the question outside any task survives a redraw of the list, and the picked tab stays.
+    // A half-typed answer on the card of the question outside any task survives a redraw of the rail, and the picked
+    // tab stays.
     await tab('needs').click();
-    const loose = rail.locator('#t-needs details[data-ask="m-loose"]');
-    await loose.locator('summary').click();
-    await loose.locator('textarea').fill('Friday works');
+    await rail.locator('#t-needs [data-need-card="ask:m-loose"] .ttl').click();
+    await page.locator('#need-card .dc-note textarea').fill('Friday works');
     await page.evaluate(() => botNeedsChanged('lead'));
-    assert.equal(await rail.locator('#t-needs details[data-ask="m-loose"] textarea').inputValue(), 'Friday works');
+    assert.equal(await page.locator('#need-card .dc-note textarea').inputValue(), 'Friday works');
     assert.equal(await tab('needs').getAttribute('aria-selected'), 'true');
+    await page.locator('#need-card [data-dc="close"]').click();
+    await page.waitForFunction(() => !document.querySelector('#need-card')?.open);
 
     // A supplemental question matching a later task-filter page is counted once, even before that page loads.
     await page.evaluate(() => {
@@ -232,7 +241,7 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     await page.evaluate(async () => { await v2Refresh(); renderTree(); });
     await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '2');
     assert.equal((await badge.innerText()).trim(), '2');
-    assert.equal(await rail.locator('#t-needs .trow, #t-needs [data-ask]').count(), 2);
+    assert.equal(await rail.locator('#t-needs .trow').count(), 2);
 
     // Nothing needs Ana: the tab says so, and the tree's number goes.
     needs = [];

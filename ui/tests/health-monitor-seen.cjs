@@ -61,7 +61,7 @@ const shots = process.env.TICO_SHOTS || '';
     const row = key => page.locator(`#hl-page [data-hl-finding="${key}"]`);
     await row('computer_silent:r1').waitFor({timeout: t(5000)});
     const text = async key => (await row(key).innerText()).replace(/\s+/g, ' ').trim();
-    assert.match(await text('computer_silent:r1'), /^Studio Mac has not checked in for 40 minutes BotOps fixes it · since 5h ago · seen 6 times, last 3m ago$/);
+    assert.match(await text('computer_silent:r1'), /^Studio Mac has not checked in for 40 minutes being fixed · since 5h ago · seen 6 times, last 3m ago$/);
     assert.match(await text('server_cpu'), /· seen 1 time, last 2h ago$/);
     assert.match(await page.locator('#hl-page [data-hl-monitor]').innerText(), /seeing a problem again only adds to its count/);
     for (const mode of ['dark', 'light']) { await theme(mode); await shot(`health-monitor-seen-${mode}`); }

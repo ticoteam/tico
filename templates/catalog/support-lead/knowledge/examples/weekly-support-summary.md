@@ -5,23 +5,26 @@ A sample of excellent output for a fictional team. Every name in it is a stand-i
 
 Sample output for Acme, a fictional team. Every figure, ticket and name below is invented.
 
-**Headline: replies were on target (median first reply 2h10m against 4h), but the backlog aged: 6 tickets are older than 7 days and 2 have no owner.**
+**Headline: replies were on target (median first reply 2h10m against a 4 business hour target), but the backlog aged: 6 tickets are older than 7 days and 2 have no owner.**
 
 ## Decisions needed
-1. **Who owns T-2011 and T-2019?** Both are 9 days old with no owner since Dana Okoye went on leave on 2026-09-16.
-   Proposed: Ben Okafor takes both. Requested routing uses a task with this evidence.
-2. **Weekend cover on 2026-10-10 and 2026-10-11**: nobody is listed in the rota. Proposed: ask Cara Mendes.
+1. **Who owns T-2011 and T-2019?** Both are 9 days old with no owner since the billing owner went on leave on 2026-09-16.
+   Proposed: the named cover in `knowledge/team.md` takes both. Requested routing uses a task with this evidence.
+2. **Weekend cover on 2026-10-10 and 2026-10-11**: nobody is listed in the rota. Proposed: the on-call owner names someone.
 
 ## Against target
 | Measure | This week | Last week | Target |
 |---|---|---|---|
 | New requests | 74 | 61 | none |
-| First reply, median / slowest tenth | 2h10m / 7h40m | 2h30m / 6h05m | 4h |
+| First reply, median / slowest tenth | 2h10m / 7h40m | 2h30m / 6h05m | 4 business hours |
 | Time to resolution, median | 1.4 days | 1.1 days | 3 days |
 | Open, at end of week | 31 | 22 | none |
 
 Source: queue digests 2026-09-21 to 2026-09-27 and the support mailbox count on 2026-09-28. Times run from the
-customer's first email.
+customer's first email. Counts: first reply 58 tickets, resolution 44.
+
+## Backlog by age (31 open)
+0 to 2 days: 14. 3 to 7 days: 11. 8 to 14 days: 4. 15 days or more: 2.
 
 ## Oldest waiting
 T-2011 (9 days, no owner, waiting on us), T-2019 (9 days, no owner), T-2024 (8 days, waiting on the customer), T-2027

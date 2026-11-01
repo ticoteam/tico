@@ -53,14 +53,18 @@ class PlanS3:
         return [kw for n, kw in self.calls if n == name]
 
 
-@pytest.mark.parametrize("seats", [73, 300])
+# The blank chart is the model every new install starts from: its seat count is whatever the catalog holds now.
+MODEL_SEATS = len(C.Turn(C.blank()).finish()["bots"])
+
+
+@pytest.mark.parametrize("seats", [MODEL_SEATS, 300])
 def test_self_aws_carries_full_chart_without_a_bucket_flag_and_retries_without_the_file(seats, request, tmp_path):
     path = tmp_path / "model.yaml"
     if seats == 300:
         path.write_text(request.getfixturevalue("big").read_text())
-    if seats == 73:
+    else:
         draft = C.Turn(C.blank()).finish()
-        assert len(draft["bots"]) == 73  # model A, not a shortened test chart
+        assert len(draft["bots"]) == seats  # the whole model chart, not a shortened test chart
         draft["company"]["name"] = "Acme Finance"
         path = tmp_path / "model-a.yaml"
         path.write_text(C.to_yaml(draft))
@@ -104,7 +108,7 @@ def test_self_aws_carries_full_chart_without_a_bucket_flag_and_retries_without_t
 @pytest.mark.parametrize("target", ["aws", "ssh"])
 def test_301_seats_gets_the_plain_300_error_before_any_cloud_or_ssh_write(target, big, tmp_path):
     path = tmp_path / "over.yaml"
-    path.write_text(big.read_text().replace("employees:\n", "employees:\n  - id: too-many\n    template: bookkeeping\n    title: Extra\n", 1))
+    path.write_text(big.read_text().replace("employees:\n", "employees:\n  - id: too-many\n    template: revenue-accountant\n    title: Extra\n", 1))
     d, ec2, _, ssm, _ = world()
     d.ssh_shell = lambda *a: pytest.fail("must validate before connecting")
     args = self_args() if target == "aws" else ["--target", "ssh", "--domain", DOMAIN]

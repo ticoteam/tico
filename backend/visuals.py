@@ -21,6 +21,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
+from .live_blocks import LIVE_ATTRS, fill as fill_live, has_live
+
 # What may show inline, by stored type; anything else, or bigger, is a normal file chip.
 KINDS = {"image/png": "image", "image/jpeg": "image", "image/gif": "image", "image/webp": "image",
          "image/svg+xml": "svg", "text/html": "page",
@@ -139,6 +141,14 @@ class _Cleaner(HTMLParser):
                 self.skip.append(lowered)
             return
         if lowered == "meta" and re.search(r"http-equiv\s*=\s*['\"]?\s*refresh", raw, re.I):
+            return
+        if lowered in LIVE_ATTRS:
+            # A live block keeps only its own attributes; the server fills it in for each viewer when it is shown.
+            body = raw[len(name) + 1:].rstrip()
+            end = "/>" if body.endswith("/>") else ">"
+            kept = "".join(f"{space}{key}{eq}{value}" for space, key, eq, value in ATTR.findall(body[:-len(end)])
+                           if key.lower() in LIVE_ATTRS[lowered])
+            self.out.append("<" + name + kept + end)
             return
         body = raw[len(name) + 1:].rstrip()
         end = "/>" if body.endswith("/>") else ">"
@@ -369,8 +379,14 @@ def read(key, token, now=None):
 
 def ancestors(settings):
     """The frame-ancestors sources of a visual's content policy: the visual address itself, the app's own address and
-    its CORS origins (where the app's pages that frame it are)."""
-    return list(dict.fromkeys(["'self'", origin_of(settings.public_url), *settings.cors_origins]))
+    its CORS origins (where the app's pages that frame it are). On a loopback address the other loopback spelling
+    too: a local install opened at localhost instead of 127.0.0.1 (or the desktop app pointed at it) is the same app."""
+    own = origin_of(settings.public_url)
+    twin = {"127.0.0.1": "localhost", "localhost": "127.0.0.1"}.get(hostname(own))
+    if twin:
+        parts = urlsplit(own)
+        twin = f"{parts.scheme}://{twin}" + (f":{parts.port}" if parts.port else "")
+    return list(dict.fromkeys(["'self'", own, *([twin] if twin else []), *settings.cors_origins]))
 
 
 def origin_of(url):
@@ -412,6 +428,29 @@ def mode(settings):
     return "full" if getattr(settings, "visual_origin", "") else "media"
 
 
+def shown(settings, c):
+    """What Settings and the clients are told (config `visuals`): "full" with a visual address; "hosted" without one
+    while Tico file hosting takes new files, so new pages and SVG show inline from the company's files address
+    (tico_storage.visual_ready); "media" otherwise (pages and SVG are Open cards)."""
+    if mode(settings) == "full":
+        return "full"
+    from .tico_storage import visual_address
+    return "hosted" if visual_address(c)[1] else "media"
+
+
+def src_for(app, settings, c, who, fid, version):
+    """A fresh `src` for one version of a file, as `for_reader` gives a message's visual (same reader check, same
+    address rules), or None: a type that doesn't show inline, a file `who` may not read, or a page or SVG this install
+    can't show inline (an Open card). A page held in Tico file hosting gets a `src` on the app's own route, which
+    checks the reader on every load and sends them on to a short link on the company's files address (`serve`)."""
+    v = c.execute("SELECT mime, size FROM bot_file_versions WHERE file_id=? AND version=?", (fid, int(version))).fetchone()
+    kind = kind_of(v["mime"], v["size"]) if v else "file"
+    if kind not in INLINE:
+        return None
+    message = {"refs": {"attachments": [{"file_id": fid, "version": int(version), "kind": kind}]}}
+    return for_reader(app, settings, c, who, [message])[0]["refs"]["attachments"][0].get("src")
+
+
 # What the fallback serves from the app's own address: kinds that a browser only ever shows as media.
 MEDIA = ("image", "video", "audio")
 
@@ -437,8 +476,10 @@ def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
     Each is a version of a file on that task (task_review.comment_file's rule) or in that conversation. A page or SVG
     whose bytes would still load something from elsewhere gets a cleaned new version, and that version is the one
     posted. Over a size limit or of another type it is attached as a plain file (kind "file"), never a visual."""
+    from .counsel import no_attachments
     from .store import H, Problem
     from .task_review import comment_file
+    no_attachments(who, items)
     out, report = [], []
     for item in items:
         fid, number, title = parse(item)
@@ -506,23 +547,38 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     # bare bot does not, a chat's file among them, gets no address: a file chip, not a link that always 404s.
     # A token names one reader: the caller itself, even when it acts for someone else (task_privacy.actor is then a pair).
     route = token_reader(c, files.auth, who.actor) if who.role == "bot" else who
+    # Counsel sees each file a message carries as its plain ref, never an address or what the file is: what it reads is
+    # the one version its run was asked to read (backend/counsel.py run_read), through its own tool.
+    from .counsel import is_counsel
+    plain = is_counsel(who)
     for message in messages:
         items = ((message or {}).get("refs") or {}).get("attachments") or []
-        if not any(isinstance(a, dict) and a.get("kind") in INLINE for a in items):
+        if not any(isinstance(a, dict) and a.get("file_id") for a in items):
             continue
         fresh = []
         for a in items:
-            if not isinstance(a, dict) or a.get("kind") not in INLINE or not a.get("file_id"):
+            if not isinstance(a, dict) or not a.get("file_id"):
                 fresh.append(a)
                 continue
-            fid, number = a["file_id"], int(a["version"])
+            if plain:
+                fresh.append({k: a[k] for k in ("id", "file_id", "version", "ref", "kind") if k in a})
+                continue
+            fid, number = a["file_id"], int(a.get("version") or 0)
             if fid not in rows:
                 rows[fid] = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             row = rows[fid]
-            removed = not row or bool(row["archived"]) or not files.visible(c, who, row, cache)
+            hidden = bool(row) and not row["archived"] and not files.visible(c, who, row, cache)
+            if a.get("kind") not in INLINE and not hidden:
+                fresh.append(a)                  # a file kind with no address here: shown as stored, when it may be seen
+                continue
+            removed = not row or bool(row["archived"]) or hidden
             v = None if removed else c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?",
                                                (fid, number)).fetchone()
-            view = {**a, "removed": removed or v is None,
+            # A file this reader may not open says nothing of itself: not its name, title, type or size, whatever its
+            # kind. A message can show a file from elsewhere (a review question's, backend/file_reviews.py) to a reader
+            # of its task.
+            shown = {k: a[k] for k in ("id", "file_id", "version", "ref", "kind") if k in a} if hidden else a
+            view = {**shown, "removed": removed or v is None,
                     "current_version": None if removed else row["current_version"]}
             if v is not None:
                 actor = who.actor
@@ -598,8 +654,8 @@ def token_reader(c, auth, actor):
     run (a token outlives the turn it was minted in), or None when neither exists."""
     from .auth import Identity
     from .store import H, Problem
-    if not isinstance(actor, str):
-        return None
+    if not isinstance(actor, str) or actor == H.bot_actor(H.COUNSEL):
+        return None             # Counsel reads no visual: its grant is its run's, which a token does not carry
     try:
         if actor.startswith("human:"):
             return auth.identity_for_actor(c, actor)
@@ -614,7 +670,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
     came in on the visual address (`visual_origin`, in full mode); anywhere else, the app's own address and the whole
     fallback (`full` False), the route serves media only. A poster or preview that is not a picture is refused.
     A page or SVG held in Tico file hosting's bucket is never served from here, in either mode: once the reader is
-    checked, they are sent (302) to a five-minute link to its cleaned copy on the company's address
+    checked, they are sent (302) to a four-minute link to its cleaned copy on the company's address
     (tico_storage.visual_link)."""
     from fastapi.responses import Response
     from .file_delivery import serve as deliver
@@ -651,6 +707,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             blob = {"digest": v["digest"], "size": v["size"], "name": v["name"], "content_type": mime}
     if kind in ("page", "svg") and not part:
         from .tico_storage import visual_link
+        # A page with live blocks never has a hosted copy (tico_storage.make_visual), so it is filled in below.
         link = visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
         if link:
             return Response(status_code=302, headers={"Location": link, "Cache-Control": "private, no-store",
@@ -659,7 +716,12 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             return gone
     rule = policy(kind, ancestors)
     if kind in ("page", "svg"):
-        data, _ = clean(blobs.get(blob["digest"]), kind)
+        data = blobs.get(blob["digest"])
+        if kind == "page" and not part and has_live(text := data.decode("utf-8", errors="replace")):
+            # Filled in for this reader alone, with what they may see now.
+            with store.read() as c:
+                data = fill_live(text, c, who, auth, files).encode("utf-8")
+        data, _ = clean(data, kind)
         if kind == "page":
             data = with_reporter(data)
         response = Response(data if request.method != "HEAD" else b"", media_type=mime,

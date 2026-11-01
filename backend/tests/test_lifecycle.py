@@ -1,14 +1,30 @@
 """A bot's stages, Recruiting -> Onboarding -> Active (backend/lifecycle.py): bot-lifecycle-spec.md section 3,
 acceptance tests 5 and 10 to 14."""
-from backend import routines
+from backend import automations
 from backend.store import H
 from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
-from backend.tests.test_ceo_bot import as_bot as bot_headers
+from backend.tests.test_strategy_bot import as_bot as bot_headers
 
 
 def as_bot(api, slug):
     return bot_headers(api, slug)["Authorization"].split()[-1]
-from backend.tests.test_routines import DEBRIEF, create, setup
+
+
+def debrief(api):
+    """An automation that gives ops a turn on each shared meeting."""
+    return post(api, "automations", {"name": "Meeting debrief", "owner": "person:ana",
+                                     "trigger": {"type": "event", "name": "meeting.ready"},
+                                     "steps": [{"id": "turn", "type": "bot_turn", "bot": "bot:ops",
+                                                "prompt": "Pull the product asks out of this meeting."}]})["id"]
+
+
+def meeting(api, aid, rid):
+    """A meeting shared: the debrief tasks ops got for it."""
+    with api.app.state.store.transaction() as c:
+        automations.on_event(c, "meeting.ready", rid, {"id": rid, "title": "Planning"}, "keeper")
+    api.app.state.store.automations.drain()
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT count(*) FROM tasks WHERE owner='bot:ops' AND title='Meeting debrief'").fetchone()[0]
 
 
 def onboarding(api, *slugs, manager="human:ben"):
@@ -82,9 +98,8 @@ def test_an_onboarding_bot_learns_only_and_every_other_attempt_is_refused_plainl
     assert mail["outbound_send"] is False and mail["onboarding"] is True
 
 
-def test_a_person_above_marks_onboarding_complete_and_its_routines_start(api):
-    setup(api)
-    create(api, "ops", DEBRIEF)
+def test_a_person_above_marks_onboarding_complete_and_its_automation_turns_start(api):
+    aid = debrief(api)
     onboarding(api, "ops")
     as_member(api, "ben@acme.example")
     token = as_bot(api, "ops")
@@ -94,8 +109,7 @@ def test_a_person_above_marks_onboarding_complete_and_its_routines_start(api):
     post(api, "bots/ops/onboarded", {}, token="cara-test", expected=403)
     ready = post(api, "bots/ops/onboarded", {"summary": "I know the audit checklist."}, token=token)
     assert ready["stage"] == "onboarding" and ready["ready"]["summary"] == "I know the audit checklist."
-    with api.app.state.store.transaction() as c:
-        assert routines.emit(c, "meeting.ready", "rec-1", title="Planning") == []
+    assert meeting(api, aid, "rec-1") == 0
 
     shown = get(api, "bots/ops", token="ben-test")
     assert shown["can_complete_onboarding"] is True and shown["onboarding_ready"]["summary"] == "I know the audit checklist."
@@ -103,8 +117,7 @@ def test_a_person_above_marks_onboarding_complete_and_its_routines_start(api):
     done = post(api, "bots/ops/onboarded", {}, token="ben-test")
     assert done["stage"] == "active" and done["changed"] is True
     assert get(api, "bots/ops")["stage"] == "active"
-    with api.app.state.store.transaction() as c:
-        assert len(routines.emit(c, "meeting.ready", "rec-2", title="Planning")) == 1
+    assert meeting(api, aid, "rec-2") == 1
 
 
 def test_any_number_onboard_at_once_and_an_upgrade_maps_set_up_to_onboarding(api):

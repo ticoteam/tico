@@ -1,6 +1,6 @@
 // The Meetings page (ui/app/meetings.js pageNotes, ui/meeting-importers.js): a header with search and one
 // "Add notes" button, a strip of source tiles (Granola, Zoom, Google Meet, Close) that each say
-// Connect or Connected, an empty state that offers both ways in, filters and rows only once there is a
+// Connect or Connected, an empty state of those tiles alone, filters and rows only once there is a
 // meeting, setup in a dialog, and a transcript upload inside Add notes. Light and dark, desktop and phone.
 // Fixtures only, no network.
 const {chromium} = require('playwright');
@@ -84,13 +84,15 @@ async function shot(page, name) {
   try {
     {
       const scheme = 'dark';
-      // ---- nothing yet, nothing connected: the empty state offers both ways in
+      // ---- nothing yet, nothing connected: the empty state is the source tiles alone; Add notes is the header's
       let w = world();
       let {page, errors, context} = await open(browser, {width: 1280, height: 900}, w, {colorScheme: scheme});
       await page.goto('https://tico-ui.test/#/meetings');
       await page.locator('.meet-blank').waitFor();
       assert.equal(await page.locator('#notes-import').count(), 0, scheme + ': no Import button under the title');
       assert.equal(await page.locator('[data-gs-card=meetings]').count(), 0, scheme + ': no intro banner');
+      assert.equal(await page.getByRole('button', {name: 'Add notes', exact: true}).count(), 1, scheme + ': one Add notes button');
+      assert.equal(await page.locator('.meet-blank h2, .meet-blank .meet-or').count(), 0, scheme + ': no heading over the tiles');
       await shot(page, 'empty-desktop-' + scheme);
       assert.equal(await page.locator('#meet-sources').isHidden(), true, scheme + ': the large tiles stand in for the strip');
       assert.equal(await page.locator('#notes-filters').isHidden(), true, scheme + ': no filters without a meeting');

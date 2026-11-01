@@ -11,7 +11,8 @@ MODELS = {"deepseek-v4.1-flash": "deepseek/deepseek-v4.1-flash",
           "kimi-k2.7-code": "moonshotai/kimi-k2.7-code",
           "llama-4-maverick": "meta-llama/llama-4-maverick",
           "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
-          "devstral-2512": "mistralai/devstral-2512"}
+          "devstral-2512": "mistralai/devstral-2512",
+          "mercury-3": "inception/mercury-3"}
 DEFAULT = "deepseek-v4.1-flash"
 
 

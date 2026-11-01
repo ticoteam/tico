@@ -116,10 +116,10 @@ def test_a_review_gate_refusal_is_dropped_once_the_ticket_has_moved(api):
         old, kept = (c.execute("SELECT * FROM messages WHERE json_extract(refs_json,'$.task')=? "
                                "AND json_extract(refs_json,'$.review_gate') IS NOT NULL", (t["id"],)).fetchone()
                      for t in (moved, still))
-        # The refusal held both (a step move to Blocked) before it told the Builder.
+        # The refusal held both (the ticket keeps its step) before it told the Builder.
         c.execute("UPDATE task_events SET ts=? WHERE task_id IN (?,?)", (H.shift(H.now(), minutes=-10), moved["id"], still["id"]))
         c.execute("UPDATE messages SET created=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-5), old["id"], kept["id"]))
-        H._task_event(c, moved["id"], H.KEEPER, "step", step["Blocked"], step["Pending Release"])
+        H._task_event(c, moved["id"], H.KEEPER, "step", step["In Progress"], step["Pending Release"])
     claim(api, r)
     with api.app.state.store.read() as c:
         assert queued(c, old) == "cancelled"

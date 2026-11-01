@@ -23,15 +23,19 @@ The other seven are on the task. Scored 1 (needs work): only T-2041, next step.
 
 ## Pattern
 **Refund replies do not say who decides or when** (2 of 2 refund replies, also last week). T-2041: "We are looking into
-it" with no owner or date. Proposed for the docs: a one-line refund status template, sent to the Librarian as a task for
-Cara Mendes to confirm.
+it" with no owner or date. Proposed for the docs: a one-line refund status template, sent to the Librarian as a task, with the
+refund owner named to confirm.
+
+## Critical misses
+None this week. The policy scores of 2 on T-2038 and T-2041 are not critical: no promise or disclosure went beyond
+policy.
 
 ## Excellent
 T-2038 answered the question in the first sentence and named the exact menu: "Open Settings, then Calendar, and
 choose Reset link". Worth using as the example for new hires.
 
 ## Coaching drafts (for the owner only, on the task)
-One note for the reply on T-2041: strength, the warm opening; change, end with "Ben Okafor will confirm by Friday",
+One note for the reply on T-2041: strength, the warm opening; change, end with "The refund owner will confirm by Friday",
 using the wording in the refund template.
 
 ## Unscored

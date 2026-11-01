@@ -85,3 +85,14 @@ def test_the_bot_list_says_the_effort_a_bot_runs_at_and_nothing_when_it_has_none
     put(api, "providers", {"enabled": [], "runtime": "", "model": "", "expected_revision": 1})
     rows = {row["name"]: row for row in api.get("/api/employees", headers={"Authorization": "Bearer ana-test"}).json()}
     assert (rows["cpo"]["resolved_runtime"], rows["cpo"]["resolved_effort"], rows["inbox"]["resolved_effort"]) == ("", "", "")
+
+
+def test_mercury_on_openrouter_is_offered_only_as_a_meeting_model_and_priced():
+    from clients import openrouter
+    assert P.OPENROUTER_MEETING_MODEL == "mercury-3"
+    assert "mercury-3" in [row["id"] for row in P.provider_models("openrouter", meeting=True)]
+    assert "mercury-3" not in [row["id"] for row in P.provider_models("openrouter")]
+    row = P.MODEL_BY_ID["mercury-3"]
+    assert (row["runtime"], row["default_effort"], row["efforts"][0]) == ("pi", "low", "low")
+    assert P.PRICES["mercury-3"] == (0.20, 0.02, 0.70)
+    assert openrouter.MODELS["mercury-3"] == "inception/mercury-3"

@@ -21,6 +21,8 @@ import ipaddress
 import logging
 import os
 import re
+import shutil
+import signal
 import socket
 import sys
 import tempfile
@@ -125,12 +127,25 @@ def network_blocked():
 
 
 # ----------------------------------------------------------------------------- the running demo
-async def keep_alive(store, stop):
+async def keep_alive(store, stop, vault=None):
     """What a real install's scheduler and a runner's heartbeat would keep true: the computers look
     online, the scheduler looks alive, and a message to a bot is answered (once) that this is a demo."""
+    # The demo's scheduler is off, so Finance's bank worker would never sync. With TICO_MERCURY_BASE set (a local
+    # fake Mercury: scripts/finance_e2e.sh), the worker runs and reads only that base. Without it, nothing starts.
+    # The same override runs Finance's short jobs every tick (waiting events, bills due, reminders), so payments and
+    # approvals can be tested without the scheduler.
+    finance_jobs = False
+    if vault is not None:
+        from .finance import actions as finance
+        from .finance import mercury
+        if mercury.base_url() != mercury.BASE:
+            finance.banking_start(store, vault)
+            finance_jobs = True
     while not stop.is_set():
         try:
             await asyncio.to_thread(tick, store)
+            if finance_jobs:
+                await asyncio.to_thread(finance_tick, store)
         except Exception as exc:
             log.error("Demo tick failed: %s", type(exc).__name__)
         try:
@@ -154,6 +169,16 @@ def tick(store):
                           conversation_id=job["conversation_id"], in_reply_to=job["message"])
                 except H.Refused:
                     pass
+
+
+def finance_tick(store):
+    from .finance import actions as finance, reads as finance_reads
+    with store.read() as c:
+        if not finance_reads.is_set_up(c):
+            return
+    for step in (finance.drain_events, finance.watch_documents):
+        with store.transaction() as c:
+            step(c)
 
 
 def avatar(pid):
@@ -271,16 +296,23 @@ def main(argv=None):
     prepare_relay()
     directory = Path(args.data_dir or tempfile.mkdtemp(prefix="tico-demo-"))
     directory.mkdir(parents=True, exist_ok=True)
-    print("Building the Acme demo ...", flush=True)
-    with network_blocked():
-        settings = build(directory, url=args.url, public=args.public_demo)
-        if args.port != DEFAULT_PORT and not args.public_demo and not args.url:
-            settings.public_url = settings.runner_url = f"http://127.0.0.1:{args.port}"
-        browser_url = args.url.rstrip("/") if args.url else f"http://localhost:{args.port}"
-        print(f"\nTico demo is ready: open {browser_url}\n"
-              "It is fictional sample data (acme.example); bots do not run and nothing leaves this computer.\n"
-              "Press Ctrl+C to stop; everything is discarded.\n", flush=True)
-        run(settings=settings, host=host, port=args.port, log_level="warning")
+    # SIGTERM (docker stop, a supervisor) ends the demo the way Ctrl+C does, so the folder below still goes.
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))
+    try:
+        print("Building the Acme demo ...", flush=True)
+        with network_blocked():
+            settings = build(directory, url=args.url, public=args.public_demo)
+            if args.port != DEFAULT_PORT and not args.public_demo and not args.url:
+                settings.public_url = settings.runner_url = f"http://127.0.0.1:{args.port}"
+            browser_url = args.url.rstrip("/") if args.url else f"http://localhost:{args.port}"
+            print(f"\nTico demo is ready: open {browser_url}\n"
+                  "It is fictional sample data (acme.example); bots do not run and nothing leaves this computer.\n"
+                  "Press Ctrl+C to stop; everything is discarded.\n", flush=True)
+            run(settings=settings, host=host, port=args.port, log_level="warning")
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        if not args.data_dir:          # a folder the person named with --data-dir is theirs to keep
+            shutil.rmtree(directory, ignore_errors=True)
 
 
 if __name__ == "__main__":

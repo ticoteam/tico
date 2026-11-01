@@ -145,34 +145,40 @@ hub trigger delivery github <delivery> --part 2
 A bot may read a delivery only if it manages the webhook, a task made from the call is its own, or a notice from Tico naming the
 call went to it. People who manage the webhook read the whole body.
 
+Before a bot gets a task or turn from a call, Tico's [screening](permissions.md#screening) checks the call's text for a prompt
+injection. A possible one reaches the bot with a warning line on top. At Hold, a likely one is held: the task goes to a
+person titled `Held: ...`, and handing it to the bot releases it. Settings → System → Screening sets this per door
+(Warn by default); it fails open.
+
 ### Who may do what
 
 Anyone, person or bot, can add a webhook. The owner, an admin, whoever added it and BotOps can replace its secret, change its settings,
 set or stop signing, run a call again and delete it. BotOps manages every webhook only in its own runs: asked by a person, it has that
-person's rights, so a member can't change someone else's webhook through it. Deleting one removes its kept calls and leaves its routines in place, silent,
-until a webhook with the same id is added again. See [Permissions](permissions.md#incoming-webhooks).
+person's rights, so a member can't change someone else's webhook through it. Deleting one removes its kept calls. See [Permissions](permissions.md#incoming-webhooks).
 
 ### Starting work from a call
 
 Two things listen to a webhook:
 
-- **A routine** set to *On an event* (`hub routine set <key> --on webhook.<id> ...`). Each call opens one task per listening
-  routine: the routine's text, the webhook's name and the call's type, then the body. See [Routines](routines.md). A routine has
-  no filter on type, so every call opens a task. The routine's text can read the call with `{{...}}`: for example
-  `Order {{payload.order}} ({{type}}) from {{trigger.name}}` ([the names are below](#rules-on-webhookreceived)). A text without
-  `{{` is used as it is, and a name that is not in the call becomes empty.
+- **An automation** with a Webhook trigger (Automations → New automation, or `hub automation create`; see
+  [Routines](routines.md)). It runs on each call; `filters` on the trigger (such as `webhook.type`) keep it to some calls.
+  Its steps read the call as `{{webhook.data}}`, `{{webhook.type}}` and `{{webhook.name}}`.
 - **A rule** on the event `webhook.received`, next.
 
 ## Rules on webhook.received
 
-A rule can act on a call without opening a task. It answers three questions: which webhook, which type, and what to do. Add one
-in Settings → Rules, or:
+A rule can act on a call without opening a task. It answers three questions: which webhook, which type, and what to do. Rules
+made before Automations keep running from the **What wakes** automations, and the rest of this section describes them. To act on
+a call now, make an automation with a Webhook trigger, a filter on `webhook.type` and an action:
 
 ```
-hub rule set --scope-kind team --event webhook.received \
-  --when '{"trigger":"github","type":"opened"}' \
-  --then action \
-  --params '{"action":"wake_bot","bot":"ops","text":"New issue: {{data.issue.title}} ({{data.issue.html_url}})"}'
+hub automation create --file - <<'EOF'
+{"name": "New GitHub issue", "owner": "bot:ops", "enabled": true,
+ "trigger": {"type": "webhook", "id": "github",
+             "filters": [{"field": "webhook.type", "op": "is", "value": "opened"}]},
+ "steps": [{"id": "wake", "type": "action", "enabled": true, "do": "wake_bot",
+            "args": {"bot": "ops", "text": "New issue: {{webhook.data.issue.title}} ({{webhook.data.issue.html_url}})"}}]}
+EOF
 ```
 
 **When.** `trigger` is the webhook id. `type` is a word, a list of words, or a word ending in `*`. Leave `type` out to match every
@@ -189,7 +195,8 @@ call. A rule can match only on these two things, never on a field inside the bod
   receiver knows which webhook it came through. It works only on `webhook.received`.
 - `create_task {owner, title, body}` files a task for the bot `owner`, in the rule maker's name. `title` and `body` are templates.
   The body ends with the call's content, fenced as data. Nothing is filed twice for one call, and the maker must be allowed to
-  give that bot tasks.
+  give that bot tasks. With [screening](permissions.md#screening) on, a long call's task opens a few seconds after the call is
+  answered, once the check is in, and a held one goes to the rule's maker.
 
 Rules also have the ordinary outcomes: *ignore*, *note*, *wake* and *ask*.
 
@@ -222,7 +229,7 @@ on the webhook still runs, and the failure is in History as `rule.event_error`.
 
 **Who may write them.** The owner and admins write team rules; a bot's owners, its operator and BotOps write that bot's rules.
 `wake_bot` needs rights over the bot it wakes. `send_webhook` is written by a person, or by a bot with its outbound send switch on.
-The CEO Bot never writes one. Tico checks this when the rule is saved: the endpoint must exist and its maker must be allowed to send
+The Strategy Bot never writes one. Tico checks this when the rule is saved: the endpoint must exist and its maker must be allowed to send
 to it (they own it, or are an admin), or the save is refused with the reason. When the rule runs, the same test is made again, and a
 bot's rule reaches only an endpoint that listens for the type.
 
@@ -430,7 +437,7 @@ is refused (`hub webhook example` too); turn the endpoint back on first.
   call. The approver then owns the endpoint.
 - Bots can list endpoints without the full address. They cannot read send logs.
 - A bot sends a custom event only while its **outbound send** switch is on (Settings → Bots → Mail sending, or
-  `hub bot mail <slug> --send`), and only to an endpoint that listens for it. The CEO Bot sends nothing.
+  `hub bot mail <slug> --send`), and only to an endpoint that listens for it. The Strategy Bot sends nothing.
 - An endpoint hears about a task, approval or bot only if its owner could read it. Health, inbound and webhook events go only to
   owner and admin endpoints.
 - A person can have 50 endpoints.
@@ -491,7 +498,7 @@ Rules see each as the event `tico.notice`, with `type` set to `info`, `security`
 - **info**: leave BotOps a note.
 - **billing**: ask the owner.
 
-The owner can edit or switch these off in Settings → Rules, but not delete them. `hub notice list` shows the notices. See also
+They are built in. `hub notice list` shows the notices. See also
 [Tico HQ](tico-hq.md).
 
 ## The commands
@@ -505,7 +512,7 @@ The owner can edit or switch these off in Settings → Rules, but not delete the
 | Incoming: log, one call, run again | `hub trigger deliveries`, `delivery [--part n]`, `replay` | `hub_trigger_deliveries`, `hub_trigger_delivery`, `hub_trigger_replay` |
 | Incoming: run refused calls again | `hub trigger recover [--since hours]` | `hub_trigger_recover` |
 | Through Tico Gateway | `hub trigger relay create`, `rotate`, `delete`; `hub relay status`; `hub relay set --wake on\|off` | `hub_trigger_relay_create`, `hub_trigger_relay_rotate`, `hub_trigger_relay_delete`, `hub_relay_status`, `hub_relay_set` |
-| Rules | `hub rule list`, `set`, `update`, `delete` | `hub_rule_list`, `hub_rule_set`, `hub_rule_update`, `hub_rule_delete` |
+| Automations on a webhook | `hub automation list`, `create`, `update`, `delete` | `hub_automation_list`, `hub_automation_create`, `hub_automation_update`, `hub_automation_delete` |
 | Outgoing: endpoints | `hub webhook list`, `create`, `show`, `update`, `rotate`, `pause`, `resume`, `delete` | `hub_webhook_list`, `hub_webhook_create`, `hub_webhook_show`, `hub_webhook_update`, `hub_webhook_rotate`, `hub_webhook_pause`, `hub_webhook_resume`, `hub_webhook_delete` |
 | Outgoing: send, log, retry, example | `hub webhook send`, `sends`, `retry`, `example` | `hub_webhook_send`, `hub_webhook_sends`, `hub_webhook_retry`, `hub_webhook_example` |
 | Outgoing: turn on, recover, replay | `hub webhook enable`, `recover --since`, `replay --since` | `hub_webhook_enable`, `hub_webhook_recover`, `hub_webhook_replay` |

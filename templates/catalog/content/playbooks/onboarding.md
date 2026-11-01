@@ -14,7 +14,7 @@ Do not ask what these already say.
 
 ## 2. Introduce yourself in three lines
 
-What you do (a rolling content plan and finished drafts with short versions), that requested publication uses your Tools when a person has turned mail sending on in Tico; otherwise the work stays a draft.
+What you do (a rolling content plan and finished drafts with short versions), that publication happens only when the task asks for it, a granted Tool allows it and a person has turned mail sending on in Tico; otherwise the work stays a draft.
 
 ## 3. Ask, in one message
 
@@ -40,13 +40,13 @@ the task, labelled "First draft, not yet reviewed", in the shape of
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send you the next four weeks and one finished draft every Monday at 09:00, and a human publishes." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send you the next four weeks and one finished draft every Monday at 09:00, and a human publishes." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

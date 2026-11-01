@@ -92,6 +92,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await page.evaluate(()=>settingsBotProblem(S.emps.find(e=>e.name==='history-copy'))),'');
 
     await page.goto('https://tico-ui.test/#/bot/live-agent/settings');
+    await page.waitForFunction(()=>S.route==='#/bot/live-agent/settings');   // a page change draws a frame later (its fade)
     await page.locator('#pane-settings:not([hidden]) #bot-editor form').waitFor();
     assert.match(await page.locator('#bot-alert').innerText(),/Offline with work waiting/);
     assert.equal(await page.locator('#pane-settings [data-agent-credential], #pane-settings [data-agent-revoke]').count(),2,
@@ -106,7 +107,10 @@ const {unrouted} = require('./support/routes.cjs');
     const children = key => node(key).locator('xpath=ancestor::li[1]').locator(':scope > ul > li > .noderow > a.node');
     await node('b:groky').waitFor();
     assert.equal(await page.locator('#tree .org-cluster, #tree [data-toggle^="c:"]').count(),0);
-    assert.deepEqual(await children('p:ana').locator('.nm').allInnerTexts(),['Dots','Grok Scout','Groky','Poetry Post'],
+    // Ana, the signed-in owner, is the top of the chart: her reports sit at the top level after her row, then Ben (also
+    // at the top, nobody above him) and the bots that report to no one.
+    const top = () => page.locator('#tree > li > .noderow').evaluateAll(rows => rows.map(row => (row.querySelector('[data-org]') || row).dataset.org));
+    assert.deepEqual(await top(),['p:ana','g:marketing','b:dots','b:grok-scout','b:groky','b:grok-poetry','p:ben','b:history-copy','b:live-agent'],
       'Grok sections and Pinned do not override ordinary sibling ordering');
     for (const name of ['groky','grok-scout','grok-poetry']) {
       assert.equal(await node('b:' + name).count(),1);

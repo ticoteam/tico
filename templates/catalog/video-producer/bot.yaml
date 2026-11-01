@@ -1,0 +1,29 @@
+name: video-producer             # the slug: it matches the repository bot-video-producer and the label owner:video-producer
+display_name: "Video Producer"
+labels: [owner:video-producer]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# Nothing addressed to anyone outside the team leaves until an owner turns this on, and a finished video is published
+# only after the owner approves the exact file (playbooks/publish.md).
+outbound_send: false
+
+# No routines: it never makes video on a schedule. Each project starts when a person asks for it on a task.
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential arrives in, never the
+# value. Store a Credential in Tico and grant it to this bot; the runner delivers it during a run. Declaring access
+# here does not create a grant. Both are optional: without them the bot says what a person must record or pick instead.
+tools:
+  - service: elevenlabs
+    identity: "the team's ElevenLabs account"
+    can: [use]
+    env: ELEVENLABS_API_KEY
+    note: "optional: voice-over for an approved script. Not granted until the owner grants it; without it a person records the voice"
+  - service: heygen
+    identity: "the team's HeyGen account"
+    can: [use]
+    env: HEYGEN_API_KEY
+    note: "optional: avatar talking heads from an approved script. Not granted until the owner grants it; without it there is no avatar video"

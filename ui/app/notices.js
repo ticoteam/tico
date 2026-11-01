@@ -179,7 +179,8 @@ function renderOnboardingNav() {
   renderUsageNotice();
 }
 // "New version" in the sidebar: quiet, only when the server says a newer release exists. Anyone
-// may read the changelog; only the owner may start an update. Dismissal is per person and version.
+// may read the changelog; only the owner may start an update, unless Tico runs this server's updates
+// (`managed`, a cloud company: backend/releases.py). Dismissal is per person and version.
 const NV_KEY = 'tico.new-version.dismissed';
 const nvDismissedKey = () => NV_KEY + ':' + (S.me?.id || S.me?.email || '');
 const nvDismissed = v => { try { return localStorage.getItem(nvDismissedKey()) === v; } catch { return false; } };
@@ -198,7 +199,7 @@ function renderNewVersion() {
 }
 function setNewVersionPop(open) {
   const pop = $('#new-version-pop'), btn = $('#new-version');
-  if (!pop) return;
+  if (!pop || pop.hidden !== open) return;       // every click elsewhere lands here: no `hidden` write unless it changes
   pop.hidden = !open;
   btn.setAttribute('aria-expanded', String(open));
 }
@@ -207,8 +208,9 @@ function nvRenderPop() {
   const owner = S.me?.role === 'owner';
   const safeUrl = /^https:\/\//.test(u.url || '') ? u.url : '';
   pop.innerHTML = `${u.available ? `<p><strong>Update available.</strong> ${esc(appName())} ${esc(nvVersion(u.latest))} is out. You are on ${esc(nvVersion(u.current))}.</p>` : ''}${u.scheduled ? `
-    <p class="nv-status" id="nv-scheduled">Tico will update this server to ${esc(nvVersion(u.scheduled))} when idle.</p>` : ''}
-    <div class="nv-actions">${safeUrl ? `<a class="ghost btnlike" id="nv-changelog" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">View changelog</a>` : ''}${owner ? '<button class="primary" id="nv-update" type="button">Update now</button>' : ''}</div>
+    <p class="nv-status" id="nv-scheduled">Tico will update this server to ${esc(nvVersion(u.scheduled))} when idle.</p>` : ''}${u.managed ? `
+    <p class="nv-status" id="nv-managed">Tico updates this server.</p>` : ''}
+    <div class="nv-actions">${safeUrl ? `<a class="ghost btnlike" id="nv-changelog" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">View changelog</a>` : ''}${owner && !u.managed ? '<button class="primary" id="nv-update" type="button">Update now</button>' : ''}</div>
     <div id="nv-out"></div>
     <button class="nv-dismiss" id="nv-dismiss" type="button">Dismiss for this version</button>`;
 }
@@ -285,9 +287,9 @@ document.addEventListener('visibilitychange', () => {
 // The main assistant is shown under the environment's assistant name, never its slug.
 // The built-in assistant reads as what it is (assistantName, ui/app/state.js).
 const assistantShownName = () => assistantName();
-// The CEO Bot's old name never shows (state.js `ceoBotName`), wherever the roster is read.
+// The Strategy Bot's old name never shows (state.js `strategyBotName`), wherever the roster is read.
 const namedRoster = rows => rows.map(e => e.name === assistantBot() ? {...e, display_name: assistantShownName()}
-  : e.name === 'goal-manager' && ['', 'Goal Manager'].includes(String(e.display_name || '').trim()) ? {...e, display_name: 'CEO Bot'} : e);
+  : e.name === 'goal-manager' && strategyDefaultish(String(e.display_name || '').trim()) ? {...e, display_name: strategyDefaultName()} : e);
 // Small compatibility hook for separately loaded UI modules. It exposes only deployment mode,
 // never identity or credentials.
 window.ticoIsCloud = () => !!S.me?.cloud;

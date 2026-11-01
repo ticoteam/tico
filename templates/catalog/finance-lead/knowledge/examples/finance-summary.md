@@ -16,8 +16,8 @@ the 0.6M minimum; runway 16 months. 3 decisions need you this week.**
 ## 13-week outlook (knowledge/cash-forecast.md, rolled 2026-09-28)
 | Week of | Opening | In | Out | Closing |
 |---|---|---|---|---|
-| 2026-10-05 | 1.42M | 96k | 41k | 1.47M |
-| 2026-10-12 | 1.47M | 58k | 219k | 1.31M |
+| 2026-09-28 | 1.42M | 96k | 64k (payment run 10-01) | 1.45M |
+| 2026-10-05 | 1.45M | 58k | 260k (payroll 214k on 10-09, other 46k) | 1.25M |
 | 2026-11-30 | 1.26M | 44k | 93k | 1.21M (lowest) |
 Assumption to check: the annual insurance premium (48k) is in week of 2026-11-02 from last year's date.
 

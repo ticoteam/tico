@@ -845,3 +845,34 @@ def test_a_task_done_post_without_a_visual_result_has_no_line(gateway, hub):
     assert gateway.task_completions() == 1
     gateway.deliver()
     assert "visual" not in gateway.slack.posts[0]["text"]
+
+
+def test_a_stored_channel_message_reaches_a_message_automation_once_and_only_after_it_was_made(readers, monkeypatch):
+    """The readers' copy of a channel message is what a message automation on that channel hears: offered once, only
+    while the redesign is on, and never the backlog from before the automation existed. The row stays `stored`, so
+    the readers, the edit path and an @-mention that promotes it are unchanged."""
+    from backend import automations
+    gw, hub = readers, readers.store
+    heard = []
+    monkeypatch.setattr(automations, "on_slack", lambda c, event, person, channel, settings=None: (
+        heard.append((event["text"], person["id"], channel["name"])) or ["run_1"]))
+    with hub.transaction() as c:
+        c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('redesign',?)", ('{"enabled": true}',))
+    assert gw.receive(channel_message("Before the automation")) == "stored"
+    gw.clock.advance(60)
+    with hub.transaction() as c:
+        c.execute("INSERT INTO automations(id,name,owner,grp,trigger_type,enabled,builtin,flow_json,version,created,"
+                  "created_by,updated) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
+                  ('{"trigger": {"type": "message", "inbox": "slack:#marketing"}}', gw.clock(), gw.clock()))
+    gw.clock.advance(60)
+    assert gw.receive(channel_message("After the automation")) == "stored"
+    out = gw.tick()["events"]
+    after = rows(hub, "SELECT event_id FROM slack_events WHERE text=?", "After the automation")[0]["event_id"]
+    assert out == [{"event_id": after, "state": "stored", "reason": "automation"}]
+    assert heard == [("After the automation", "ana", "#marketing")]
+    gw.clock.advance(60)
+    assert gw.tick()["events"] == [] and len(heard) == 1, "offered once, never again"
+    states = rows(hub, "SELECT text,state,processed FROM slack_events ORDER BY received")
+    assert [s["state"] for s in states] == ["stored", "stored"], "the readers keep the row as it was"
+    assert states[0]["processed"] is None, "the backlog is not offered"
+    assert states[1]["processed"] is not None

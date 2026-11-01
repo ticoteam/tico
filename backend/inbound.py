@@ -20,6 +20,7 @@ from pydantic import ConfigDict, Field, ValidationError
 from clients.gateway import user_agent
 
 from .auth import validate_identity
+from . import outbound_tls
 from .models import Contract
 from .store import H, Problem, encode
 
@@ -125,6 +126,9 @@ def connection_json(raw):
 class Inbound:
     def __init__(self, store, settings, auth):
         self.store,self.settings,self.auth = store,settings,auth
+        self.judge = lambda: None                  # the app's decision model, set by install
+        self.wake_mail = lambda: None              # the physical-mail drain's kick, set by install
+        self.blobs = self.files = lambda: None     # the blob store and Library, for the bills address; set by install
         self.key = os.environ.get('TICO_INBOUND_KEY','').strip()
         from .support import hq_url
         self.url = (os.environ.get('TICO_INBOUND_URL','').strip() or hq_url()).rstrip('/')
@@ -139,7 +143,7 @@ class Inbound:
         if self.off:
             raise Problem('inbound_unconfigured','Email & Phone is not connected. Ask your owner to set it up.',409)
         try:
-            with httpx.Client(transport=TRANSPORT,timeout=35,follow_redirects=False) as client:
+            with httpx.Client(transport=TRANSPORT,timeout=35,follow_redirects=False,verify=outbound_tls.context()) as client:
                 response = client.request(method,self.url+'/v1/inbound/'+path,json=body,
                                           headers={"Authorization":"Bearer "+self.key,"User-Agent": user_agent()})
                 if not response.is_success:
@@ -369,7 +373,22 @@ class Inbound:
         cursor = result[-1]['seq'] if ascending and more and result else current
         return {'messages':result,'next':result[-1]['seq'] if more and result else None,'cursor':cursor}
 
+    def screen(self,who,ident):
+        """The screening verdict on a message a bot reads (backend/screening.py), outside the write: it may wait on the
+        decision model. Kept per message, so another read or part costs nothing. None when there is nothing to read."""
+        from . import screening
+        with self.store.read() as c:
+            permit(c,who)
+            row = c.execute('SELECT subject,body,retention_removed FROM inbound_messages WHERE message_id=?',(ident,)).fetchone()
+        if not row or row['retention_removed'] or not row['body']:return None
+        # The subject too: an injection can start in the subject and go on in the body.
+        text = f"{row['subject']}\n\n{row['body']}" if row['subject'] else row['body']
+        found = screening.screen(self.store,'mail',text,H.actor_id(who.actor),key=ident,primary=self.judge())
+        return {**found,'action':'warn'} if found['action']=='hold' else found   # mail is marked, never held
+
     def read(self,who,ident,offset=0,max_chars=32768,code=False):
+        # Mail is never hidden: a bot's read carries the verdict, and at warn or hold the text starts with the warning.
+        screened = None if code or who.role!='bot' else self.screen(who,ident)
         def run(c):
             permit(c,who)
             row = c.execute('SELECT * FROM inbound_messages WHERE message_id=?',(ident,)).fetchone()
@@ -382,8 +401,15 @@ class Inbound:
             # max_chars also observes a byte cap for multibyte text.
             text = body[offset:offset+max_chars].encode()[:32768].decode(errors='ignore')
             end = offset+len(text)
-            return {'message_id':ident,'inbox_id':row['inbox_id'],'text':text,'untrusted':True,
-                    'next_offset':end if end<len(body) else None,'truncated':bool(row['truncated'])}
+            result = {'message_id':ident,'inbox_id':row['inbox_id'],'text':text,'untrusted':True,
+                      'next_offset':end if end<len(body) else None,'truncated':bool(row['truncated'])}
+            if screened is not None:
+                from . import screening
+                result['screening'] = screening.public(screened)
+                if offset==0 and screened['action']!='pass':
+                    result['text'] = screening.warning_line(screened)+'\n\n'+text
+                screening.note(c,screened,'mail',ident,once=True,bot=H.actor_id(who.actor))
+            return result
         def audited(c):
             try:
                 result = run(c)
@@ -409,6 +435,8 @@ class Inbound:
         deliveries = page.get('deliveries',[])
         if len(deliveries)>50 or len(encode(page).encode())>1024*1024:
             raise ValueError('invalid_delivery_page')
+        from . import bills_address, postal_mail
+        kicked = False
         with self.store.transaction() as c:
             cursor = c.execute('SELECT cursor FROM inbound_sync WHERE singleton=1').fetchone()[0]
             through = page['cursor']
@@ -427,17 +455,19 @@ class Inbound:
                              str(item.get('subject',''))[:300].replace(code,'••••••') if code else str(item.get('subject',''))[:300],
                              text[:300].replace(code,'••••••') if code else text[:300],text,code,bool(item.get('spam')),bool(item.get('truncated'))))
                 if inserted.rowcount:
-                    from .routines import emit
-                    emit(c,'inbound.received',item['delivery_id'],{'message_id':item['delivery_id'],'inbox_id':item['inbox_id'],
-                                                                'kind':item['kind'],'has_code':bool(code)})
                     H.hook(c,'inbound.received',item['delivery_id'],lambda: {'message_id':item['delivery_id'],'inbox_id':item['inbox_id'],
                                                                            'kind':item['kind']},'keeper',revision=0)
+                    # A scan another mail provider emailed to the mail-intake inbox becomes a letter (backend/postal_mail.py).
+                    if postal_mail.emailed(c,item):kicked = True
+                    # A bill emailed to the bills address waits for the drain below (backend/bills_address.py).
+                    bills_address.emailed(c,item)
             # Keep cumulative gap summaries; the cursor commit and gap update are atomic with messages.
             old = json.loads(c.execute('SELECT gaps_json FROM inbound_sync WHERE singleton=1').fetchone()[0])
             gaps = {(g['inbox_id'],g['from'],g['to']):g for g in old+page.get('gaps',[])}
             c.execute("UPDATE inbound_sync SET cursor=?,last_sync=?,error='',gaps_json=? WHERE singleton=1",
                       (through,time.time(),encode(list(gaps.values())[-100:])))
             self.expire(c)
+        if kicked:self.wake_mail()
 
     def sync(self):
         if self.off or not self.sync_lock.acquire(blocking=False):return
@@ -469,6 +499,9 @@ class Inbound:
         if now()-self.purged_at>=PURGE_EVERY:
             self.expire()
         self.sync()
+        # Bills from the bills address: their bytes come from HQ like the messages, then become draft bills.
+        from . import bills_address
+        bills_address.drain(self,self.store,self.blobs(),self.files())
 
     async def loop(self,stop):
         while not stop.is_set():
@@ -480,6 +513,10 @@ class Inbound:
 
 def install(app,store,settings,auth):
     service = Inbound(store,settings,auth)
+    service.judge = lambda: getattr(app.state,'judge',None)
+    service.wake_mail = lambda: getattr(app.state,'postal_mail',None) and app.state.postal_mail.kick()
+    service.blobs = lambda: getattr(app.state,'blobs',None)
+    service.files = lambda: getattr(app.state,'files',None)
     app.state.inbound = service
 
     @app.post('/api/v2/inbound/company-connection')

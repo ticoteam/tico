@@ -7,7 +7,7 @@ typical payload, in Acme's words. "Send example" posts it and the docs show it. 
 
 `aliases` are spellings that came before the catalog and still work (`release_published`). `sourceless` marks events
 that are not a message to a bot and have no task, so a rule judges them with `rules.judge_event` (scopes team,
-department and bot only). `outbound=False` marks the two only rules see: an outgoing webhook cannot subscribe to them.
+department and bot only). `outbound=False` marks those only rules see: an outgoing webhook cannot subscribe to them.
 `webhook.<id>` (one incoming webhook) and `custom.<x>` (anything a bot or rule sends) are not listed one by one:
 `canonical` lets them through.
 
@@ -84,6 +84,16 @@ def _build():
     add("bot.held", "A bot was held: it hit a limit or kept failing.",
         {"bot": "ops", "reason": "budget", "window": "1h", "runs": 40, "budget": 30, "task": _TASK})
     add("bot.released", "A held bot was released.", {"bot": "ops", "reason": "budget", "released_by": "human:ana"})
+    add("org_rule.retired", "A rule was retired and no longer applies to anyone.",
+        {"id": "r1", "kind": "internal", "text": "Send a status note by Friday.", "source_id": None,
+         "retired_by": "human:ana"})
+    checked = {"hold": "h1", "operation": "message", "rules": ["r1"], "cached": False, "reviewer": "human:ana"}
+    add("rules.blocked", "A bot's output broke a rule and was held.", checked)
+    add("rules.escalated", "A bot's output broke a rule and was held for a person to review.", {**checked, "task": _TASK})
+    add("rules.warned", "A bot's output broke a rule and went through with a warning.",
+        {"operation": "message", "rules": ["r1"], "cached": False})
+    add("rules.unchecked", "A bot's output went through without a rule check.",
+        {"operation": "message", "reason": "deadline", "rules": ["r1"]})
 
     add("release.published", "A Tico release was published.",
         {"release": "v1.4.0", "url": "https://github.com/acme/app/releases/tag/v1.4.0", "tickets": [_TASK]},
@@ -93,6 +103,12 @@ def _build():
         aliases=("recording.ready",))
     add("strategy.published", "A new version of the strategy was published.",
         {"version": 3, "note": "Focus on Acme's renewals.", "published_by": "human:ana"})
+    add("brand.published", "A new version of the brand page was published.",
+        {"version": 2, "note": "Warmer voice for Acme's home visits.", "published_by": "human:ana"})
+    add("gtm.published", "A new version of the go-to-market page was published.",
+        {"version": 2, "note": "Referrals move to scaling.", "published_by": "human:ana"})
+    add("growth.verdict", "A growth idea's test got a verdict.",
+        {"task_id": "t1", "title": "Show prices on the booking page", "status": "won", "verdict_by": "bot:growth"})
     add("market.insight.urgent", "An urgent market insight was reported.",
         {"id": "i1", "about": "Rival Co", "reported_by": "bot:market-analyst"})
     add("market.briefing", "The weekly market briefing is ready.",
@@ -108,6 +124,40 @@ def _build():
          "payload": {"order": 42, "total": "120.00"}, "via": "direct"}, sourceless=True, outbound=False)
     add("tico.notice", "A notice from the Tico team reached this install.",
         {"id": "tn1", "kind": "info", "body": "Version 1.4.1 fixes a mail sync bug.", "url": "https://tico.team/notices/1"},
+        sourceless=True, outbound=False)
+    # Finance's budget crossings (backend/finance/jobs.py): ids only, so whoever acts reads the budget in their own view.
+    add("finance.budget.warn", "A Finance budget reached its warning level this period.",
+        {"budget_id": "b1", "event_id": "e1", "period": "2026-10-01"}, sourceless=True, outbound=False)
+    add("finance.budget.cutoff", "A Finance budget reached its limit this period.",
+        {"budget_id": "b1", "event_id": "e2", "period": "2026-10-01"}, sourceless=True, outbound=False)
+    # Finance's bank feed, payments, cards and sync (backend/finance/banking.py, payments.py, sync.py): ids only too.
+    add("finance.feed.new", "A new bank or card transaction arrived in Finance.",
+        {"feed_id": "f1", "event_id": "e3"}, sourceless=True, outbound=False)
+    add("finance.feed.needs_category", "A bank transaction needs a category before it can be posted.",
+        {"feed_id": "f1", "event_id": "e4"}, sourceless=True, outbound=False)
+    add("finance.payment.sent", "A Finance payment settled at the bank.",
+        {"payment_id": "p1", "event_id": "e5"}, sourceless=True, outbound=False)
+    add("finance.payment.failed", "A Finance payment failed, was returned or was rejected at the bank.",
+        {"payment_id": "p1", "why": "returned", "event_id": "e6"}, sourceless=True, outbound=False)
+    add("finance.card.declined", "A card charge was declined.",
+        {"card_id": "c1", "feed_id": "f2", "event_id": "e7"}, sourceless=True, outbound=False)
+    add("finance.sync.failed", "Finance could not sync a bank connection.",
+        {"connection_id": "n1", "event_id": "e8"}, sourceless=True, outbound=False)
+    # Finance's payables, receivables, cash alert and close (backend/finance/documents.py, jobs.py): ids only.
+    add("finance.bill.received", "A bill was recorded in Finance (by hand, upload or the bills address).",
+        {"bill_id": "bl1", "origin": "email", "event_id": "e9"}, sourceless=True, outbound=False)
+    add("finance.bill.due_soon", "An unpaid Finance bill is due in 7 days, in 1 day or today.",
+        {"bill_id": "bl1", "stage": "due_in_7", "due_date": "2026-11-07", "event_id": "e10"}, sourceless=True,
+        outbound=False)
+    add("finance.invoice.overdue", "A Finance invoice is 1, 7, 30, 60 or 90 days overdue.",
+        {"invoice_id": "in1", "stage": "overdue_7", "due_date": "2026-10-24", "event_id": "e11"}, sourceless=True,
+        outbound=False)
+    add("finance.cash.below", "The company's cash dropped under the owner's alert amount (read the cash metric for amounts).",
+        {"metric": "cash", "crossing": 1, "event_id": "e12"}, sourceless=True, outbound=False)
+    add("finance.period.ready", "A month is ready to close in Finance.",
+        {"month": "2026-10", "event_id": "e13"}, sourceless=True, outbound=False)
+    add("finance.vendor.renewal_due", "A vendor's renewal is 30 or 7 days away (its date is on the vendor).",
+        {"contact_id": "c1", "stage": "renewal_in_7", "renewal_on": "2026-11-07", "event_id": "e14"},
         sourceless=True, outbound=False)
     add("custom.*", "Anything a bot or rule sends: custom.<name>.",
         {"note": "custom.<name> carries whatever its sender puts in data."})

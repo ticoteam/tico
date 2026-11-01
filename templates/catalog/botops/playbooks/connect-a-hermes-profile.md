@@ -87,3 +87,7 @@ the profile will stop, and keep the default that revokes its credential.
 ## Close
 
 Close any task you filed about this bot once its heartbeat is recent (`hub task close <id> --note "Connected: last heard from a minute ago."`).
+
+## Checks and the Gateway
+For a Hermes or OpenClaw profile's questions: it checks Tico hourly by default (`--sync 15m` for faster checks), and its
+profile's Gateway must be running for scheduled checks.

@@ -117,23 +117,25 @@ def test_the_job_reads_the_site_and_writes_unconfirmed_sections_and_proposed_bet
 
 
 def fixture_answer():
-    """The model's answer for the shared fixture company (fictional Acme Build): the strategy block's summary, vision,
-    four sections and bets, as the prompt asks for them."""
+    """The model's answer for the shared fixture company (fictional Acme Build): the strategy block's summary, four
+    sections and bets, as the prompt asks for them (it asks for no vision)."""
     block = json.loads((Path(__file__).parent / "fixtures" / "company_strategy" / "draft.json").read_text())["strategy"]
-    return {"summary": block["summary"], "vision": block["vision"], **block["sections"],
+    return {"summary": block["summary"], **block["sections"],
             "bets": [{k: b[k] for k in SP.BET_FIELDS} for b in block["bets"]]}
 
 
-def test_the_shared_prompt_drafts_summary_vision_four_sections_and_three_bets(api, research):
+def test_the_shared_prompt_drafts_summary_four_sections_and_three_bets_and_no_vision(api, research):
     answer = fixture_answer()
-    assert set(SP.SCHEMA["required"]) == set(answer) == set(SS.draft(lambda s, u: answer, {"text": "", "url": ""}, []))
+    found = SS.draft(lambda s, u: {**answer, "vision": "Ignored."}, {"text": "", "url": ""}, [])
+    assert set(SP.SCHEMA["required"]) == set(answer) == set(found) - {"vision"} and found["vision"] == ""
+    assert "vision" not in SP.FIELDS and "vision" not in SP.INSTRUCTIONS
     assert SS.INSTRUCTIONS == SP.INSTRUCTIONS and "Never invent a number" in SP.INSTRUCTIONS
     research.state["write"] = lambda system, user: answer if system == SP.INSTRUCTIONS else pytest.fail(system)
     job = get(api, "strategy/draft-from/" + post(api, "strategy/draft-from", {"text": "Schedules for field crews"})["id"])
-    assert job["state"] == "done" and job["written"]["fields"] == ["summary", "vision"], job
+    assert job["state"] == "done" and job["written"]["fields"] == ["summary"], job
     assert job["written"]["sections"] == ["know", "not", "sell", "serve"] and len(job["written"]["bets"]) == 3
     draft = get(api, "strategy")["draft"]
-    assert draft["summary"] == answer["summary"] and draft["vision"] == answer["vision"]
+    assert draft["summary"] == answer["summary"] and draft["vision"] == ""
     for key in ("serve", "sell", "know", "not"):
         assert draft["sections"][key] == SS.unconfirmed(answer[key], "your description")
     assert {b["status"] for b in get(api, "strategy")["bets"]} == {"proposed"}

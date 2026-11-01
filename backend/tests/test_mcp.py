@@ -1,13 +1,18 @@
 """The hub's MCP door: same tools as the `hub` CLI, same rules, no privileged path."""
 
+import asyncio
 import base64
 import hashlib
 import json
+import threading
+from urllib.parse import urlencode
 
 import pytest
 
+from backend.mcp import ApiProblem, InProcessApi
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, restrict, runner, setup_attempt  # noqa: F401
-from clients import hubcli, hubtools
+from clients import bot_files as BF, hubcli, hubtools
+from clients.tico import MultipartBody
 
 
 def rpc(api, method, params=None, token="ana-test", rid=1):
@@ -89,6 +94,38 @@ def test_task_update_status_choices_follow_the_api_and_bot_restrictions():
     assert schema["properties"]["status"]["enum"] == list(hubtools.TASK_UPDATE_STATUSES)
     assert "ready" not in OWNER_STATUSES
     assert set(OWNER_STATUSES) <= set(hubtools.TASK_UPDATE_STATUSES)
+
+
+def test_renamed_task_flags_still_take_their_older_names():
+    """`brief` (update, done) and `wake: false` (close) were both `quiet`; an older caller's `quiet` still sends the
+    same request, through the MCP schema check and the CLI."""
+    class Api:
+        def __init__(self):
+            self.bodies = []
+
+        def get(self, path, **query):
+            return {"actor": "human:ana", "role": "human"} if path == "me" else {"task": {"version": 3}}
+
+        def post(self, path, body=None, key=None):
+            self.bodies.append(body)
+            return {"task": {"id": "t1"}}
+
+    def sent(name, args):
+        args = {"id": "t1", **args}
+        assert hubtools.argument_error(args, hubtools.BY_NAME[name]["inputSchema"]) is None, args
+        api = Api()
+        hubtools.BY_NAME[name]["fn"](api, args)
+        return api.bodies[-1].get("quiet", False)
+
+    for name in ("hub_task_update", "hub_task_done"):
+        assert sent(name, {"brief": True}) is sent(name, {"quiet": True}) is True
+        assert sent(name, {}) is False
+    assert sent("hub_task_close", {"wake": False}) is sent("hub_task_close", {"quiet": True}) is True
+    assert sent("hub_task_close", {"wake": True}) is sent("hub_task_close", {}) is False
+    cli = hubcli.parser()
+    assert cli.parse_args(["task", "update", "t1", "--quiet"]).brief is True
+    assert cli.parse_args(["task", "done", "t1", "--quiet"]).brief is True
+    assert cli.parse_args(["task", "create", "--owner", "ops", "--title", "T", "--quiet"]).next_run is True
 
 
 def test_tools_write_through_the_same_rules_as_http(api):
@@ -300,7 +337,7 @@ SUMMARY_FIELDS = {"id", "label", "online", "last_seen", "operator", "release", "
                   "readiness", "warnings", "errors"}
 
 
-def heavy_heartbeat(api, r, bots, n, release="0.3.56", update=None, huge=""):
+def heavy_heartbeat(api, r, bots, n, release="0.4.56", update=None, huge=""):
     """What a busy computer reports: runtime catalogs, every bot's readiness with instruction warnings, a long error
     history and its repositories (synthetic, at the sizes the models allow)."""
     models = ["model-" + str(m) for m in range(30)]
@@ -350,15 +387,15 @@ def eleven_computers(api):
         mine = slugs[n * 3:n * 3 + 3]
         for bot in mine:
             assign(api, r, bot)
-        heavy_heartbeat(api, r, mine, n, release="0.3.50" if n == 1 else "0.3.56",
+        heavy_heartbeat(api, r, mine, n, release="0.4.50" if n == 1 else "0.4.56",
                         update={"state": "failed", "error": "download refused"} if n == 2 else
-                        {"state": "updating", "target": "0.3.56"} if n == 3 else None, huge="bot-13")
+                        {"state": "updating", "target": "0.4.56"} if n == 3 else None, huge="bot-13")
         computers.append(r)
     return computers
 
 
 def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_pages(api, monkeypatch):
-    monkeypatch.setenv("TICO_VERSION", "0.3.56")
+    monkeypatch.setenv("TICO_VERSION", "0.4.56")
     computers = eleven_computers(api)
     add_bots(api, [f"helper-with-a-long-name-{k:03d}" for k in range(300)], computers[5]["runner_id"])
     assert len(json.dumps(get(api, "computers"))) > 200_000                 # the Computers page keeps everything
@@ -425,3 +462,112 @@ def test_a_member_reads_neither_a_computer_nor_a_bot_they_cannot_see_in_the_summ
     assert call(api, "hub_computer_list", {"computer": "Ana Mac"}, token="ben-test")[0]
     err, everything = call(api, "hub_computer_list", {"computer": "Shared Mac"})
     assert not err and set(everything["readiness"]["bots"]) == {"ops", "finance"}         # the owner still reads it
+
+
+@pytest.fixture
+def door(api):
+    """The server's own MCP door for a caller: an InProcessApi on a loop of its own, the app answering through it."""
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    yield lambda token: InProcessApi(api.app, loop, "Bearer " + token, "http://testserver")
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join()
+    loop.close()
+
+
+def test_a_bot_sends_raw_bodies_through_the_door_and_they_arrive_as_sent(api, door, monkeypatch, tmp_path):
+    """The tools that send a file as its own body (publish a file or a page, attach it to a task, import it) run on the
+    server's door as they do from the CLI: the bytes and name arrive unchanged, under the bot's own rights."""
+    _, _, attempt = setup_attempt(api)
+    bot, token = door(attempt["token"]), attempt["token"]
+    monkeypatch.setattr(BF, "checkout_root", lambda cwd=None: tmp_path)
+    text = "# Pipeline\n\nAcme grew 12%.\n".encode()
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "pipeline.md").write_bytes(text)
+
+    made = hubtools.files_publish_path(bot, {"path": "reports/pipeline.md", "operation_id": "op-read-1"})
+    assert api.get("/api/v2/files/" + made["file"]["id"], headers=headers(token)).content == text
+    assert "pipeline.md" in api.get("/api/v2/bots/ops/files", headers=headers("ana-test")).text
+
+    # A streamed file (a file object, read a block at a time) is the same file.
+    with (tmp_path / "reports" / "pipeline.md").open("rb") as stream:
+        copy = bot.request("POST", "/api/v2/files/uploads?" + urlencode({"name": "pipeline-copy.md"}), raw=stream,
+                           key="op-stream-1")
+    assert api.get("/api/v2/files/" + copy["file"]["id"], headers=headers(token)).content == text
+
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "pages" / "weekly.html").write_text("<h1>Weekly</h1><p>Pipeline grew to 42 deals.</p>")
+    shown = hubtools.pages_publish_path(bot, {"path": "pages/weekly.html", "title": "Weekly", "cadence": "weekly"})
+    assert shown["page"]["title"] == "Weekly"
+    assert "42 deals" in api.get("/api/v2/files/" + shown["page"]["file_id"], headers=headers(token)).text
+
+    # An import is copied from S3 by the bot's computer; the server stores the bytes it is sent with their source.
+    source = "s3://acme-exports/q3/pipeline.md"
+    imported = bot.request("POST", "/api/v2/files/imports?" + urlencode({"source": source, "etag": "etag-1",
+                                                                       "name": "pipeline.md"}),
+                           raw=b"# From S3\n", key="op-import-1")
+    assert api.get("/api/v2/files/" + imported["file"]["id"], headers=headers(token)).content == b"# From S3\n"
+
+    # Several files in one multipart body, as a task attachment sends them.
+    task = post(api, "tasks", {"owner": "ops", "title": "Plan", "body": "Write the plan."})
+    (tmp_path / "notes.txt").write_bytes(b"Notes for the plan.\n")
+    attached = bot.request("POST", f"/api/v2/tasks/{task['id']}/files",
+                           raw=MultipartBody({"file": tmp_path / "notes.txt"}, {"name": "notes.txt"}),
+                           key="op-multi-1")
+    assert api.get("/api/v2/files/" + attached["file_id"], headers=headers(token)).content == b"Notes for the plan.\n"
+
+
+def test_a_raw_body_gets_the_callers_own_rights_as_over_http(api, door):
+    http = api.post("/api/v2/files/uploads?name=plan.md", content=b"# Plan",
+                    headers={**headers("ana-test"), "Content-Type": "application/octet-stream"})
+    assert http.status_code == 403
+    with pytest.raises(ApiProblem) as refused:
+        door("ana-test").request("POST", "/api/v2/files/uploads?name=plan.md", raw=b"# Plan", key="op-person-1")
+    assert refused.value.status == 403
+
+
+def test_a_raw_file_over_the_servers_limit_is_refused_before_it_is_sent(api, door, tmp_path):
+    _, _, attempt = setup_attempt(api)
+    big = tmp_path / "big.md"
+    with big.open("wb") as stream:
+        stream.truncate(27_000_001)              # a bot's raw upload stops at 27 MB (backend/app.py: published)
+    with big.open("rb") as stream, pytest.raises(ApiProblem) as refused:
+        door(attempt["token"]).request("POST", "/api/v2/files/uploads?name=big.md", raw=stream, key="op-big-1")
+    assert refused.value.status == 413 and refused.value.code == "too_large"   # the Content-Length check, up front
+
+
+def test_raw_file_position(api, door, tmp_path):
+    """A file passed after its header was read is sent whole: its Content-Length is the file's size, so its bytes are
+    too (as Client.request rewinds a file before sending it)."""
+    _, _, attempt = setup_attempt(api)
+    path = tmp_path / "plan.md"
+    expected = b"# Plan\nComplete document.\n"
+    path.write_bytes(expected)
+    with path.open("rb") as source:
+        source.read(7)
+        made = door(attempt["token"]).request(
+            "POST", "/api/v2/files/uploads?name=plan.md",
+            raw=source, key="repro-file-position",
+        )
+    response = api.get(
+        "/api/v2/files/" + made["file"]["id"],
+        headers=headers(attempt["token"]),
+    )
+    assert response.status_code == 200
+    assert response.content == expected
+
+
+def test_a_raw_body_and_a_json_body_are_one_or_the_other():
+    with pytest.raises(ValueError):
+        InProcessApi(None, None, "Bearer unused", "http://testserver").request(
+            "POST", "/api/v2/files/uploads", body={"name": "plan.md"}, raw=b"# Plan")
+
+
+def test_a_query_field_named_path_reaches_the_query_string(api, door):
+    """`get(path, **query)` takes the URL path positionally, so a query field may be called `path` (`hub file approved
+    <path>` asks file-approvals that way). The server answers from the query: no file has these bytes, so not approved,
+    with the digest echoed back. A path it did not receive would be a 422 instead."""
+    _, _, attempt = setup_attempt(api)
+    answer = door(attempt["token"]).get("file-approvals", path="reports/pipeline.md", digest="0" * 64)
+    assert answer["approved"] is False and answer["digest"] == "0" * 64

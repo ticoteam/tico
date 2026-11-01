@@ -3,6 +3,11 @@
 Triggered by a task that says a request is stuck, misrouted or has no owner, or by step 4 of the weekly
 summary. Budget 10 minutes. The outcome is a routed task naming who should take it, and why.
 
+Inputs: the stuck or misrouted task with its history, and `knowledge/team.md`.
+
+Done when: one owner is named with its reason, the ticket is linked from the routed task, and any routing lesson is in
+`memory/learnings.md`. A proposal from the weekly summary is done when it is listed with its evidence.
+
 ---
 
 ## 1. Read the request and its history
@@ -14,7 +19,7 @@ Read `knowledge/team.md` for who owns what and who is covering today.
 
 ## 2. Pick the owner by what the work is
 
-- Answering a customer: the Support Agent (`support`) prepares the reply, send within the requested work when a person has turned mail sending on in Tico.
+- Answering a customer: the Support Agent (`support`) prepares the reply. Customer mail goes out only when a person has turned mail sending on and the task asks for it.
 - A repeated question the docs do not answer: the Librarian (`librarian`), as a task naming the question and the tickets.
 - A reply that already went out and may be wrong: the Support Quality Analyst (`support-qa`).
 - A technical problem that needs reproducing: the Technical Support Engineer (`technical-support`).

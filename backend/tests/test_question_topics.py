@@ -146,7 +146,8 @@ def test_a_folded_question_gives_the_person_the_teams_days_from_the_latest_wordi
         later = H.shift(H.now(), days=team_rules.load(c)["go_ahead_days"], hours=1)
         done = ask_deadlines.sweep(c, at=later)
         assert first["question"]["id"] in done["went_ahead"], "due at the team's days from the latest wording"
-        assert quiet["question"]["id"] not in done["went_ahead"] + done["expired"], "the person spoke after it"
+        assert quiet["question"]["id"] in done["expired"], "a note leaves the decision open until its deadline"
+        assert quiet["question"]["id"] not in done["went_ahead"], "a note never selects the fallback action"
 
 
 def test_an_answer_picked_on_the_earlier_wording_does_not_settle_the_new_one(api):

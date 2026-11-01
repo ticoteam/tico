@@ -35,6 +35,8 @@ import threading
 import time
 import traceback
 
+from . import hubdb
+
 LOG = logging.getLogger("tico.flight")
 
 SCHEMA = """
@@ -71,7 +73,9 @@ MINUTE_DAYS = 2                 # request minutes older than this become hours
 SHORT_DAYS = 14                 # requests, slow requests, process minutes
 LONG_DAYS = 90                  # SQL hours, database sizes, events
 SQL_TOP = 100                   # query shapes kept per hour; the rest are one "(other)" row
-DBSTAT_EVERY = 86400            # minimum interval between table/index page scans
+SIZES_EVERY = 86400             # minimum interval between table/index size estimates
+SAMPLE_WINDOWS = 3              # runs of rows sampled per table for its record size, spread over its rowid range
+SAMPLE_ROWS = 100              # rows per sampled run
 BUFFER = 200_000                # samples waiting for the background thread, at most
 # The tables that grow, counted each hour; with the column that dates their oldest row, read by rowid or an index.
 BIG = {"events": "ts", "messages": "created", "attempt_events": "created", "attempts": "created", "jobs": "created",
@@ -249,6 +253,8 @@ class Recorder:
         self.holding = {}           # write locks held now: token -> (monotonic start, route, thread id)
         self.wait_total = 0.0       # write-lock wait finished since the start, ms
         self.slow_file = []         # slow requests not yet in the file
+        self._drainer = None        # the thread that drains `samples` (start_drain)
+        self._drain_halt = None
 
     def _reset(self):
         self.requests = {}          # (route, caller) -> [n, errors, bytes, total, max, hist, bytes_max, sql, wait]
@@ -307,7 +313,7 @@ class Recorder:
         hour = int((now or time.time()) // 3600 * 3600)
         edges, fingerprints, find = EDGES, self.fingerprints, bisect.bisect_left
         with self.lock:
-            shapes = self.sql.setdefault(hour, {})
+            shapes = None           # this hour's shapes, once a query sample lands in it (an empty hour is not kept)
             while True:
                 try:
                     s = self.samples.popleft()
@@ -316,6 +322,8 @@ class Recorder:
                 kind = s[0]
                 if kind == "q":
                     _, sql, ms, locked = s
+                    if shapes is None:
+                        shapes = self.sql.setdefault(hour, {})
                     fp = fingerprints.get(sql)
                     if fp is None:
                         if len(fingerprints) > 5000:
@@ -374,6 +382,30 @@ class Recorder:
                     _add(self.lag, s[1])
                     self.lag_max = max(self.lag_max, s[1])
 
+    def start_drain(self, every=TICK):
+        """Drains `samples` on a thread of its own, every `every` seconds, so nothing that waits on the database (a
+        flush, a stall's record, the hourly size pass) can leave the buffer to fill and drop samples. Idempotent."""
+        if self._drainer is not None:
+            return
+        halt = self._drain_halt = threading.Event()
+
+        def loop():
+            while not halt.wait(every):
+                try:
+                    self.drain()
+                except Exception as exc:
+                    LOG.warning("Flight recorder drain failed: %s", type(exc).__name__)
+
+        self._drainer = threading.Thread(target=loop, name="tico-flight-drain", daemon=True)
+        self._drainer.start()
+
+    def stop_drain(self):
+        if self._drainer is None:
+            return
+        self._drain_halt.set()
+        self._drainer.join(timeout=5)
+        self._drainer = None
+
     def pop_slow(self):
         with self.lock:
             out, self.slow_file = self.slow_file, []
@@ -395,6 +427,7 @@ class Recorder:
 
     def take(self, minute):
         """The minute's rows, and the SQL hours, ready to write; the minute's counters start again."""
+        self.drain()                # everything recorded so far is in this minute, drained or not
         with self.lock:
             requests, slow, lag, lag_max = self.requests, self.slow, self.lag, self.lag_max
             long_holds = self.long_holds + self.open_holds()
@@ -704,7 +737,10 @@ def _rows(c, table):
     return 0 if high is None else high - low + 1
 
 
-def db_stats(store, use_dbstat=True):
+def db_stats(store, sizes=True):
+    """The database's size and the detail `size_db` keeps. Every read is its own short snapshot, so none holds a read
+    open for minutes, which stopped WAL checkpoints. Object sizes are estimated from sampled rows (`_object_sizes`); no
+    page is walked, where dbstat walked every page of the file once a day."""
     path = str(store.settings.db_path)
     size = os.path.getsize(path) if os.path.exists(path) else 0
     wal = os.path.getsize(path + "-wal") if os.path.exists(path + "-wal") else 0
@@ -712,22 +748,63 @@ def db_stats(store, use_dbstat=True):
     with store.read() as c:
         page_size = c.execute("PRAGMA page_size").fetchone()[0]
         free = c.execute("PRAGMA freelist_count").fetchone()[0] * page_size
-        present = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if use_dbstat:
-            try:
-                objects = c.execute("SELECT name, pgsize FROM dbstat WHERE aggregate=TRUE ORDER BY pgsize DESC LIMIT 40"
-                                    ).fetchall()
-                detail["objects"] = {r[0]: r[1] for r in objects}
-            except sqlite3.OperationalError:
-                detail["objects"] = None            # dbstat or its aggregate mode is unavailable
-        for table, column in BIG.items():
-            if table not in present:
-                continue
+        objects = c.execute("SELECT name, type, tbl_name FROM sqlite_master WHERE type IN ('table','index')").fetchall()
+    present = {name for name, kind, _ in objects if kind == "table"}
+    if sizes:
+        detail["objects"] = _object_sizes(store, page_size, objects)
+    for table, column in BIG.items():
+        if table not in present:
+            continue
+        with store.read() as c:
             detail["rows"][table] = _rows(c, table)
             if column:
                 row = c.execute(f"SELECT {column} FROM {table} ORDER BY rowid LIMIT 1").fetchone()
                 detail["oldest"][table] = row[0] if row else None
     return size, wal, free, detail
+
+
+def _quote(name):
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _sample(c, table):
+    """`(rows, {column: average bytes})` for `table`: `rows` as `_rows` counts them, and the averages from SAMPLE_WINDOWS
+    runs of SAMPLE_ROWS rows spread over its rowid range. Only the values' lengths are read, never sent anywhere."""
+    cols = [r[1] for r in c.execute(f"PRAGMA table_info({_quote(table)})")]
+    rows = _rows(c, table)
+    q = _quote(table)
+    exprs = ", ".join(f"coalesce(length(CAST({_quote(col)} AS BLOB)), 0)" for col in cols)
+    sample = []
+    if rows and cols:
+        try:
+            low, high = c.execute(f"SELECT (SELECT min(rowid) FROM {q}), (SELECT max(rowid) FROM {q})").fetchone()
+            for i in range(SAMPLE_WINDOWS):
+                start = low + (high - low) * i // SAMPLE_WINDOWS
+                sample += c.execute(f"SELECT {exprs} FROM {q} WHERE rowid >= ? ORDER BY rowid LIMIT ?",
+                                    (start, SAMPLE_ROWS)).fetchall()
+        except sqlite3.OperationalError:                # a table without rowids: its first rows
+            sample = c.execute(f"SELECT {exprs} FROM {q} LIMIT ?", (SAMPLE_ROWS * SAMPLE_WINDOWS,)).fetchall()
+    averages = {col: sum(r[i] for r in sample) / len(sample) if sample else 0.0 for i, col in enumerate(cols)}
+    return rows, averages
+
+
+def _object_sizes(store, page_size, objects):
+    """Estimated bytes of the 40 largest tables and indexes, `{name: bytes}`. A table is its rows times its record size
+    (the column averages from `_sample`, plus a few header bytes per row). An index is its table's rows times its
+    columns' averages and a rowid, 8 bytes for an expression. Partial indexes count every row, so they read high.
+    Every object is at least one page, as a b-tree always is. Each table and its indexes are one short read."""
+    sizes = {}
+    tables = [("sqlite_schema", "table", "sqlite_schema")] + [obj for obj in objects if obj[1] == "table"]
+    for name, _, _ in tables:
+        with store.read() as c:
+            rows, averages = _sample(c, name)
+            sizes[name] = rows * (len(averages) + 3 + sum(averages.values()))
+            for index, kind, table in objects:
+                if kind == "index" and table == name:
+                    columns = [r[2] for r in c.execute(f"PRAGMA index_info({_quote(index)})")]
+                    sizes[index] = rows * (5 + sum(averages.get(col, 8) for col in columns))
+    sizes = {name: max(page_size, round(size)) for name, size in sizes.items()}
+    return dict(sorted(sizes.items(), key=lambda kv: -kv[1])[:40])
 
 
 # ---------------------------------------------------------------------------- retention
@@ -808,6 +885,7 @@ class Flight(threading.Thread):
     def run(self):
         from . import releases
         self.file.start()
+        self.recorder.start_drain(self.tick_s)
         self.file.put({"kind": "start", "pid": os.getpid(), "version": releases.version(),
                        "commit": self.settings.release_commit, "python": sys.version.split()[0],
                        "sqlite": sqlite3.sqlite_version, "platform": sys.platform})
@@ -824,6 +902,7 @@ class Flight(threading.Thread):
                     self.size_db(now)
             except Exception as exc:
                 LOG.warning("Flight recorder pass failed: %s", type(exc).__name__)
+        self.recorder.stop_drain()
         try:
             self.recorder.drain()
             self.flush(minute)
@@ -840,7 +919,6 @@ class Flight(threading.Thread):
             LOG.warning("Flight recorder start event failed: %s", type(exc).__name__)
 
     def step(self):
-        self.recorder.drain()
         self.usage.sample(self.recorder.wait_total)
         for record in self.recorder.pop_slow():
             self.file.put(record)
@@ -889,7 +967,8 @@ class Flight(threading.Thread):
         goes unwritten is named in a `recorder_gap` event, so the tables never lose a minute silently."""
         self.pending.append((minute, work))
         try:
-            c = sqlite3.connect(str(self.settings.db_path), timeout=self.db_wait, isolation_level=None)
+            c = hubdb.leave_wal_for_litestream(
+                sqlite3.connect(str(self.settings.db_path), timeout=self.db_wait, isolation_level=None))
         except sqlite3.Error:
             self.db_failed += 1
             self._trim()
@@ -949,8 +1028,8 @@ class Flight(threading.Thread):
         previous = json.loads(latest["detail_json"] or "{}") if latest else {}
         # The original scan timestamp travels with each hourly sample, including across recorder restarts.
         objects_at = previous.get("objects_at", latest["ts"] if latest else None)
-        scan = objects_at is None or now - objects_at >= DBSTAT_EVERY
-        size, wal, free, detail = db_stats(self.store, use_dbstat=scan)
+        scan = objects_at is None or now - objects_at >= SIZES_EVERY
+        size, wal, free, detail = db_stats(self.store, sizes=scan)
         detail["objects_at"] = int(now) if scan else objects_at
         if not scan:
             detail["objects"] = previous.get("objects")

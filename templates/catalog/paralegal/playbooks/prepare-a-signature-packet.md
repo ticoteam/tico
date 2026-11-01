@@ -22,7 +22,7 @@ The packet uses the exact version requested on the task: name the file and its d
 
 ## 3. Ask for the send
 
-Put the packet on the task. Send requested packets with the file, recipient and cover note using your Tools when a person has turned mail sending on in Tico; otherwise keep the draft. Record who actually sent it.
+Put the packet on the task. A requested packet goes out with its file, recipient and cover note only when a person has turned mail sending on in Tico and the task asks for it, using your Tools. Otherwise it stays a draft on the task. Record who actually sent it.
 
 ## 4. File the signed copy
 
@@ -30,3 +30,8 @@ When the fully signed copy comes back on the task: check every signature block i
 filled; list anything missing instead of filing. Then add a row to `knowledge/executed-index.md` (parties, kind,
 date signed, confidentiality period and its end date, where the file lives), commit, and
 `hub task update <id> --status done --note`.
+
+## Done when
+- The packet is saved in `reports/packets/`, published, and on the task, with the exact version named.
+- Every signer, title and legal name is copied from the document, not guessed.
+- Once signed, the copy is filed only when complete, and the task is closed with the row added.

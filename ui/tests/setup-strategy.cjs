@@ -1,9 +1,9 @@
 // Setup's first two steps (ui/setup-strategy.js, ui/app/welcome.js) against a stand-in for the setup record, the
 // research job (POST /api/v2/strategy/draft-from, polled) and the strategy draft (fixtures only, the Acme example).
 // What are you building saves the website and the line, then starts the research once (Back and Next again starts no
-// second one). Your bets polls it, then shows the proposed bets as claims: Keep makes one active (or opens its form
-// saying what is missing), Strike retires it, and the draft fills in beside them; Next stays off with its reason until
-// one bet is active with Rules out and Wrong if and What we won't do has a line, then saves that line with the
+// second one). Your bets polls it, then shows the proposed bets as claims: Keep makes one active (Rules out and Wrong
+// if are optional), Strike retires it, and the draft fills in beside them; Next stays off with its reason until
+// one bet is active and What we won't do has a line, then saves that line with the
 // draft's revision. Without a model, or when the research fails, the step is a plain form; when it gave up, what it
 // found can be added by hand; an internal address keeps the owner on the first step.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots at desktop and phone width.
@@ -178,7 +178,7 @@ async function building(page, website, text) {
       assert.match(await side.innerText(), /Who we serve\s+Unconfirmed: drafted from acme\.example\.\s+Busy households/i);
       assert.equal(await side.locator('em').first().innerText(), 'Unconfirmed: drafted from acme.example.');
       assert.match(await side.innerText(), /None kept yet/);
-      assert.equal(await status(page), 'Needs an active bet with Rules out and Wrong if');
+      assert.equal(await status(page), 'Needs an active bet');
       await shot(page, '3-bets');
 
       await page.click('li[data-ss-bet="b-1"] [data-ss-keep]');
@@ -192,17 +192,10 @@ async function building(page, website, text) {
       await page.locator('li[data-ss-bet="b-2"]').waitFor({state: 'detached'});
       assert.deepEqual(sent.at(-1), ['POST', '/bets/b-2', {status: 'retired'}]);
 
-      // Keep without Rules out opens the Strategy page's form, set to Active, saying what is missing.
+      // Keep without Rules out keeps it too: Rules out and Wrong if are optional.
       await page.click('li[data-ss-bet="b-3"] [data-ss-keep]');
-      const form = page.locator('[data-bet-form="b-3"]');
-      await form.waitFor();
-      assert.equal(await form.locator('[data-bet-why-not]').innerText(), 'An active bet needs Rules out');
-      assert.equal(await form.locator('[name="status"]').inputValue(), 'active');
-      assert.equal(await page.evaluate(() => document.activeElement?.name), 'rules_out');
-      await form.locator('[name="rules_out"]').fill('One-off deep cleans.');
-      await form.locator('button[type="submit"]').click();
-      await form.waitFor({state: 'detached'});
-      assert.deepEqual(sent.at(-1), ['POST', '/bets/b-3', {rules_out: 'One-off deep cleans.', status: 'active'}]);
+      await page.locator('li[data-ss-bet="b-3"] .pill.ok').waitFor();
+      assert.deepEqual(sent.at(-1), ['POST', '/bets/b-3', {status: 'active'}]);
       assert.equal(await side.locator('.ss-side-bets li').count(), 2);
 
       await page.fill('#ss-not', 'No custom quotes, no phone line.');
@@ -230,7 +223,7 @@ async function building(page, website, text) {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // No model: the same fields as a plain form, the new bet's form open; Active without Rules out and Wrong if says so.
+    // No model: the same fields as a plain form, the new bet's form open; a statement alone is enough to keep it.
     {
       const {page, errors, sent} = await open(browser, {mode: 'no_model'});
       await building(page, '', 'A booking app for cleaners.');
@@ -241,9 +234,6 @@ async function building(page, website, text) {
       await form.waitFor();
       await shot(page, '5-bets-plain');
       await form.locator('[name="statement"]').fill('Cleaners pay for bookings, not seats.');
-      await form.locator('button[type="submit"]').click();
-      assert.equal(await form.locator('[data-bet-why-not]').innerText(), 'An active bet needs Rules out and Wrong if');
-      assert.equal(posts(sent, '/bets').length, 0);
       await form.locator('[name="rules_out"]').fill('Per-seat pricing.');
       await form.locator('[name="wrong_text"]').fill('Fewer than 20 paying cleaners by March');
       await form.locator('button[type="submit"]').click();

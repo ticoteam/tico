@@ -1,0 +1,14 @@
+{
+  "id": "27-listening-vendor-promo",
+  "kind": "listening",
+  "questions": "listening-item",
+  "level": "low",
+  "state": {
+    "source": "social",
+    "url": "https://social.example/p/9921",
+    "author": "@trackflow_official",
+    "published_at": "2026-10-27T09:05:00Z",
+    "content": "Tired of tracking sprints in spreadsheets? TrackFlow gives small teams one board in two minutes. Book a demo at trackflow.example. How are you tracking sprint work?"
+  },
+  "note": "A vendor's pitch phrased as a question: vendor pitch yes, lead no."
+}

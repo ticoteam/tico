@@ -69,10 +69,10 @@ def tunnel_route_hint(domain: str) -> str:
     """What to do when the tunnel is connected but sends nothing to Tico: cloudflared has no route for the hostname."""
     d = contract.REMOTE_DIR
     return (f"The tunnel is connected but has no route to Tico. The compose file gives cloudflared a route from TICO_DOMAIN "
-            f"({domain} -> http://{contract.SERVICE_SERVER}:{contract.SERVER_PORT}): on the server run `cd {d} && docker compose pull "
+            f"({domain} -> http://{contract.TUNNEL_ORIGIN}): on the server run `cd {d} && docker compose pull "
             f"&& docker compose up -d` (a Tico older than that needs the update first). If the tunnel is managed in Cloudflare, add the "
             f"route there instead: Zero Trust > Networks > Tunnels > your tunnel > Public Hostname > {domain}, HTTP, "
-            f"{contract.SERVICE_SERVER}:{contract.SERVER_PORT}; cloudflared uses the route Cloudflare holds over the local file.")
+            f"{contract.TUNNEL_ORIGIN}; cloudflared uses the route Cloudflare holds over the local file.")
 
 
 def check_health(domain: str, get=_get, front_door: str = "") -> Check:

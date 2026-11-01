@@ -89,12 +89,12 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   await page.waitForFunction(() => TASKS_ST.since === '12.a' && TASKS_ST.fullAt > 0);
   await settled();
 
-  // A question asked outside any task sits folded on For you with its answer form inside; the poll still reads.
-  assert.equal(await page.locator('#task-body details.req:not([open]) form.issue-compose[data-ask-answer]').count(), 1);
+  // A question asked outside any task is one line on Needs you (its answer is on its card); the poll still reads.
+  assert.equal(await page.locator('#task-body [data-need-card="ask:m-loose"]').count(), 1);
   let delta = reads.delta;
   await page.evaluate(() => refresh(false));
   await page.waitForFunction(() => TASKS_ST.since === '13.a', null, {timeout: t(5000)});
-  assert.equal(reads.delta, delta + 1, 'the 2-minute refresh reads what changed while a question is folded on the page');
+  assert.equal(reads.delta, delta + 1, 'the 2-minute refresh reads what changed with a question on the page');
 
   // The task changed in a way the delta read does not bring: the list still shows the old copy.
   server.title = 'Draft the final release notes';
@@ -249,18 +249,16 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   await shows('Draft the release notes, fourth pass');
   await settled();
 
-  // The 15-minute clock: a list read in full that long ago is read again, but not while an answer is being written.
+  // The 15-minute clock: a list read in full that long ago is read again. An answer half written on the question's
+  // card, over the list, keeps its words.
   server.title = 'Draft the release notes, fifth pass';
   full = reads.full.length;
-  await page.locator('#task-body details.req[data-ask] summary').click();
-  await page.locator('#task-body form[data-ask-answer] textarea').fill('Friday is fine');
+  await page.locator('#task-body [data-need-card="ask:m-loose"] .tl-title').click();
+  await page.locator('#need-card .dc-note textarea').fill('Friday is fine');
   await page.evaluate(() => { TASKS_ST.fullAt = Date.now() - 16 * 60e3; tasksTick(); });
-  await page.waitForTimeout(t(500));
-  assert.equal(reads.full.length, full, 'no full read while an answer is half written');
-  await page.locator('#task-body form[data-ask-answer] textarea').fill('');
-  await page.evaluate(() => { document.activeElement?.blur(); tasksTick(); });
   await shows('Draft the release notes, fifth pass');
   await settled();
+  assert.equal(await page.locator('#need-card .dc-note textarea').inputValue(), 'Friday is fine', 'the half-written answer stays');
   await page.evaluate(() => tasksTick());
   await page.waitForTimeout(t(300));
   assert.equal(reads.full.length, full + 1, 'a list just read in full is not read again on the next tick');

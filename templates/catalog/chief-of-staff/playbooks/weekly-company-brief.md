@@ -42,8 +42,8 @@ For each stalled item find who owns the next step (`hub goal show`, `hub task sh
 1. Check `knowledge/open-loops.md`. If you already asked this week, do not ask again; say so.
 2. Draft one nudge of one or two sentences that names the item, what has been quiet and for how long,
    and the specific thing you need. Put it in the brief under the item.
-3. Send requested nudges with your Tools (`hub message send --fyi <person> "..."`) and it is within the
-   limit of ten unsolicited messages to a human a day. Otherwise it stays a draft.
+3. Send a nudge only when the task asks for it and a granted Tool allows it (`hub message send --fyi <person> "..."`),
+   and within the limit of ten unsolicited messages to a human a day. Otherwise it stays a draft under the item.
 4. Add the loop to `knowledge/open-loops.md` with today's date.
 
 ## 5. Draft Monday's agenda

@@ -4,6 +4,13 @@ Schedule: Mondays at 08:30 team time (routine `weekly-ops-checklist`), after set
 what is overdue, what is due, what is blocked, what the Operations bots produced, and what to route. Nothing
 is sent, assigned or changed.
 
+Inputs: `knowledge/rhythm.md`, `knowledge/duties.md`, `knowledge/vendors.md`, last week's page in `reports/`,
+the open tasks, the calendar for the next 7 days, and the reports the Operations bots published since last Monday.
+
+Done when: every register row has a state (or "needs a date" or "needs an owner"); the checklist has five to nine
+items; each quiet vendor has a follow-up attached or is named with the reason it has none; the page is published;
+the recipient has its one-line message; and the task is done with its counts.
+
 ---
 
 ## 1. Read where things stand
@@ -23,10 +30,11 @@ Skim the reports the Operations bots published since last Monday (`meeting-notes
 
 ## 2. Sort every duty
 
-For each row in the register decide one of: **overdue** (past its date with no proof of completion),
-**in its lead window** (notice period or lead time has opened), **due this week**, **blocked** (waiting on a
-named human or vendor for more than the agreed wait), **fine**. A duty you cannot date is "needs a date",
-and one with no owner is "needs an owner". Neither is ever guessed.
+Run `skills/run-a-duty-register-check/SKILL.md` on each row. For each row decide one of: **overdue** (past its date
+with no proof of completion), **in its lead window** (notice period or lead time has opened), **due this week**,
+**blocked** (waiting on a named human or vendor for more than the agreed wait), **fine**. A duty you cannot date is
+"needs a date", and one with no owner is "needs an owner". Neither is ever guessed. A contract whose notice window
+has opened goes through `skills/check-a-renewal-deadline/SKILL.md`.
 
 ## 3. Choose the checklist items
 
@@ -44,9 +52,10 @@ the drafts to the task. Never more than three in one page; the rest are listed b
 
 One line per sibling bot: what it produced this week, with the report path, and what is waiting on a
 human. Bots with nothing to report say "quiet" once, not a paragraph. Route work as proposals only:
-"Ask `vendor-manager` to review the cleaning contract before its renewal on 2026-10-31" is a line on the
-page, and becomes a task only within the requested work it. Work for another group goes to its head
-(`finance-lead`, `general-counsel`, `people-lead`) as a proposal, never to its workers directly.
+"Ask `vendor-manager` to review the cleaning contract before its notice deadline" is a line on the
+page. A proposal becomes a task only when the requester asks for it and a granted Tool allows it. Work for
+another group goes to its head (`finance-lead`, `general-counsel`, `people-lead`) as a proposal, never to its
+workers directly.
 
 ## 6. Hiring check
 

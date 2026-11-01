@@ -2,7 +2,10 @@
 
 Triggered by a task or message asking marketing for something ("we need a case study", "can we
 announce this?"). Budget 10 minutes. The outcome is a routing proposal on the task that a human can
-use in one pass. Route requested work by creating a task for the matching owner; do not take over their specialist work.
+use in one pass. Route a request by proposing the matching owner on the task; do not take over their specialist work.
+
+Inputs: the task, `knowledge/routing.md`, `knowledge/calendar.md` and the owner's open tasks.
+Done when: the proposal is on the task in under 100 words; if the task asked for routing and a granted Tool allows it, the owner's task exists and is linked to this one; any rule the request taught is in `knowledge/routing.md`.
 
 ---
 
@@ -37,6 +40,6 @@ live page is marked "draft until a person turns mail sending on in Tico".
 
 ## 5. Finish
 
-For requested routing, run `hub task create --owner <slug>` with the brief, link it to this
+When the task asks for routing and a granted Tool allows it, run `hub task create --owner <slug>` with the brief, link it to this
 task, and log the routing in `knowledge/routing.md` if it teaches a rule. Then
 `hub task update <id> --status done --note`. A no or a change is recorded and nothing is created.

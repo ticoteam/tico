@@ -1,0 +1,236 @@
+{
+  "_days": "daily[].ago and recent[].agoDays are days before today (UTC, at noon), recent[].agoHours hours before now; the fake turns them into the `day` and `at` the hub sends",
+  "stats": {
+    "coverage": {
+      "x": {
+        "seen": 182
+      },
+      "reddit": {
+        "seen": 96
+      },
+      "hackernews": {
+        "seen": 41
+      },
+      "news": {
+        "seen": 22
+      }
+    },
+    "destinations": {
+      "leads": 7,
+      "content": 12,
+      "creators": 3
+    },
+    "saved": 19,
+    "routed": 22,
+    "daily": [
+      {
+        "ago": 13,
+        "sources": {
+          "x": 6,
+          "reddit": 3,
+          "hackernews": 1
+        }
+      },
+      {
+        "ago": 12,
+        "sources": {
+          "x": 5,
+          "reddit": 4,
+          "news": 1
+        }
+      },
+      {
+        "ago": 11,
+        "sources": {
+          "x": 7,
+          "reddit": 2,
+          "hackernews": 2
+        }
+      },
+      {
+        "ago": 10,
+        "sources": {
+          "x": 4,
+          "reddit": 3
+        }
+      },
+      {
+        "ago": 9,
+        "sources": {
+          "x": 6,
+          "reddit": 5,
+          "news": 2
+        }
+      },
+      {
+        "ago": 8,
+        "sources": {
+          "x": 5,
+          "reddit": 2,
+          "hackernews": 1
+        }
+      },
+      {
+        "ago": 7,
+        "sources": {
+          "x": 8,
+          "reddit": 4,
+          "hackernews": 2,
+          "news": 1
+        }
+      },
+      {
+        "ago": 6,
+        "sources": {
+          "x": 31,
+          "reddit": 14,
+          "hackernews": 9,
+          "news": 4
+        }
+      },
+      {
+        "ago": 5,
+        "sources": {
+          "x": 9,
+          "reddit": 5,
+          "hackernews": 2
+        }
+      },
+      {
+        "ago": 4,
+        "sources": {
+          "x": 6,
+          "reddit": 3,
+          "news": 1
+        }
+      },
+      {
+        "ago": 3,
+        "sources": {
+          "x": 7,
+          "reddit": 4,
+          "hackernews": 1
+        }
+      },
+      {
+        "ago": 2,
+        "sources": {
+          "x": 5,
+          "reddit": 3
+        }
+      },
+      {
+        "ago": 1,
+        "sources": {
+          "x": 6,
+          "reddit": 2,
+          "hackernews": 2,
+          "news": 1
+        }
+      },
+      {
+        "ago": 0,
+        "sources": {
+          "x": 3,
+          "reddit": 1
+        }
+      }
+    ],
+    "recent": [
+      {
+        "item_id": "li_9",
+        "source": "reddit",
+        "url": "https://reddit.example/r/devops/acme-1",
+        "author": "ops_jo",
+        "agoHours": 1,
+        "text": "Anyone moved their release checks to Acme? Looking at it for a 40-person team.",
+        "destinations": [
+          "leads"
+        ]
+      },
+      {
+        "item_id": "li_8",
+        "source": "x",
+        "url": "https://x.example/sam/acme-2",
+        "author": "sam",
+        "agoHours": 3,
+        "text": "Acme's new runner cut our build time in half. Writing it up this week.",
+        "destinations": [
+          "content",
+          "creators"
+        ]
+      },
+      {
+        "item_id": "li_7",
+        "source": "hackernews",
+        "url": "https://news.example/item?id=7",
+        "author": "kel",
+        "agoHours": 26,
+        "text": "Show HN: an open checklist for release managers (works with Acme and others)",
+        "destinations": [
+          "content"
+        ]
+      },
+      {
+        "item_id": "li_6",
+        "source": "x",
+        "url": "https://x.example/ria/acme-3",
+        "author": "ria",
+        "text": "Acme pricing changed again? Our invoice doubled overnight, looking for options.",
+        "destinations": [
+          "leads"
+        ],
+        "agoDays": 6
+      },
+      {
+        "item_id": "li_5",
+        "source": "news",
+        "url": "https://news.example/acme-raises",
+        "author": "",
+        "text": "Acme raises a Series B to grow its release tooling",
+        "destinations": [
+          "content"
+        ],
+        "agoDays": 6
+      }
+    ]
+  },
+  "destinations": {
+    "destinations": [
+      {
+        "key": "leads",
+        "category": "leads",
+        "threshold": 0.75,
+        "receiver": "bot:sdr",
+        "source": "settings"
+      },
+      {
+        "key": "content",
+        "category": "content",
+        "threshold": 0.6,
+        "receiver": "bot:release",
+        "source": "settings"
+      }
+    ],
+    "categories": [
+      {
+        "id": "leads",
+        "label": "Leads"
+      },
+      {
+        "id": "content",
+        "label": "Content"
+      }
+    ],
+    "receivers": [
+      {
+        "actor": "bot:sdr",
+        "name": "SDR"
+      },
+      {
+        "actor": "bot:release",
+        "name": "Release Manager"
+      }
+    ]
+  }
+}

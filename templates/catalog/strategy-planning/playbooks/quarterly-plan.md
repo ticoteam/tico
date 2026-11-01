@@ -1,8 +1,12 @@
 # Quarterly plan and OKR draft
 
-Schedule: the first of each month at 09:00 team time (routine `quarterly-plan`), after setup. Also run by hand. Budget 45 minutes. The outcome is one report for the
-owner: in the last month of a quarter, last quarter graded and next quarter drafted; in the other
-months, a mid-quarter check-in. Nothing in Tico changes.
+Schedule: the first of each month at 09:00 team time (routine `quarterly-plan`), after setup. Also run by hand. Budget 45 minutes.
+
+Inputs: `hub strategy show`, `hub goal list --all`, the KPI readings for the live goals, the weekly updates and imported meetings since the quarter started, `knowledge/rhythm.md`, `knowledge/scorecard.md`, and last quarter's report in `reports/`.
+
+Outcome: one report for the owner. In the last month of a quarter, last quarter graded and next quarter drafted; in the other months, a mid-quarter check-in. Nothing in Tico changes.
+
+Done when: the report is written and published, every source that could not be read is named in it, and the task is closed with the headline and the report path.
 
 ---
 
@@ -30,6 +34,9 @@ report. A source you cannot read is named in the closing line.
 Follow `playbooks/grade-a-quarter.md`. Write the result into the report and `knowledge/scorecard.md`.
 
 ## 4. Draft next quarter
+
+Use `skills/draft-an-objective-from-a-bet/SKILL.md` for each objective and `skills/write-a-measurable-key-result/SKILL.md`
+for each key result.
 
 1. Pick the one focus: the single outcome that would make the quarter a success, from the strategy's active
    bets (`hub strategy show`) and the goals still live. Name the bet it serves.

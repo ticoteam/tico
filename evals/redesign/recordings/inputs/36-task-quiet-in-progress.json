@@ -1,0 +1,23 @@
+{
+  "id": "36-task-quiet-in-progress",
+  "kind": "task",
+  "questions": "stale-review",
+  "level": "low",
+  "state": {
+    "task": {
+      "title": "Draft the onboarding email sequence",
+      "status": "doing",
+      "step": "Writing the day 3 email",
+      "owner": "sales-ops",
+      "created": "2026-10-20",
+      "updated": "2026-10-23",
+      "parent": null,
+      "reason": "Quiet for five days",
+      "comments": [
+        "Days 1 and 2 drafted",
+        "Waiting on the pricing line from Dana"
+      ]
+    }
+  },
+  "note": "Quiet but still wanted, waiting on a named person: leave."
+}

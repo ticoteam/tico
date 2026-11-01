@@ -22,7 +22,7 @@ Settings card writes to a route no entry covers.
   public(e, base)                what a caller sees of an entry, with its card's full link
   plan(c, auth, who, e, value, target)  {"run": {method, path, body}}, the Confirm card, or a refusal naming who may
   matched(method, path, body)    the entry and target a request is exactly the body of, and its class
-  stored_class(c, method, path, body)  `matched`, a wake-rule update classed with the stored rule it keeps
+  stored_class(c, method, path, body)  `matched`, a repository change classed with the stored state it keeps
 """
 import json
 import re
@@ -235,7 +235,7 @@ def _held(body, dotted):
 def kind_for(e, body):
     """The entry's class for this body: a direct entry is `when_held` when the body holds one of its `confirm_when`
     values."""
-    if (e.kind == "direct" and (e.key != "rules.wake" or body.get("then") == "action")
+    if (e.kind == "direct"
             and any(value is not None and value in values
                     for place, values in e.confirm_when for value in _held(body, place))):
         return e.when_held
@@ -286,7 +286,7 @@ def refusal(e, base=""):
                    f"({e.where}): ask one of them, or open {link}", 403, extra={"link": link, "who_may": who_text(e)})
 
 
-def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_update=None, card_direct=False,
+def plan(c, auth, who, e, value, target=None, base="", propose=None, card_direct=False,
          can_card=None, card_words=None):
     """The exact request that sets `e` to `value` for `target`, after the entry's own checks: `{"run": {...}}` to
     make with the caller's rights; for BotOps or the Assistant acting for a person, a confirm entry's Confirm card
@@ -317,16 +317,7 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_u
     else:
         raise Problem("validation", f"{e.name} takes a JSON object", 422)
     request = {"method": e.method, "path": path_for(e, target), "body": body}
-    class_body = body
-    if e.key == "rules.wake" and target and target.get("id"):
-        # A partial update inherits its action and params from the stored rule. The catalogue must classify what
-        # the route will save, not only the fields the caller happened to include.
-        if effective_update is None:
-            if acting_for and ("then" not in body or "params" not in body):
-                raise person_only()
-        else:
-            class_body = effective_update(c, auth, who, target["id"], body)
-    kind = kind_for(e, class_body)
+    kind = kind_for(e, body)
     if kind == "person" and (acting_for or who.role not in ("owner", "human")):
         raise person_only()
     tried = card_words(c, auth, who, e, body, target) if card_words and acting_for else None
@@ -415,35 +406,23 @@ def matched(method, path, body):
                 continue
         elif any(body.get(k) != v for k, v in e.extra.items()):
             continue
-        if e.key in ("rules.wake", "bot.repositories"):
+        if e.key == "bot.repositories":
             # Classed by what the change does to stored state, which this body alone does not show (`stored_class`):
-            # a wake-rule update keeps the stored action and params wherever it leaves them out or sends null
-            # (rules.update); a repository change can keep a Run workflows tick or take access away.
+            # a repository change can keep a Run workflows tick or take access away.
             return e, target, "stored"
         return e, target, kind_for(e, body)
     return None
 
 
-def merged_wake(row, update):
-    """A wake-rule update as the route will save it: its action and params, where it leaves them out or sends null,
-    the stored rule's."""
-    params = update.get("params") if update.get("params") is not None else json.loads(row["params_json"])
-    return {**update, "then": update.get("then") or row["then_outcome"], "params": params}
-
-
 def stored_class(c, method, path, body, trial=None):
-    """`matched`, with a change classed by what it does to stored state, as `plan` classes it: turning on or editing
-    a stored wake rule that sends outside is person-only however little the body says, and a repository change is a
+    """`matched`, with a change classed by what it does to stored state, as `plan` classes it: a repository change is a
     card when `trial(e, target, body)` (the change tried as the person's own click, `repositories.card_words`) says
     the route would make one; with no trial, always."""
     found = matched(method, path, body)
     if not found or found[2] != "stored":
         return found
     e, target, _ = found
-    if e.key == "bot.repositories":
-        return e, target, "direct" if trial and not trial(e, target, body) else e.when_held
-    row = c.execute("SELECT then_outcome, params_json FROM rules WHERE id=?", (target["id"],)).fetchone()
-    return e, target, kind_for(e, merged_wake(row, body) if row else body)
+    return e, target, "direct" if trial and not trial(e, target, body) else e.when_held
 
 
 def install(app, store, auth, settings):
@@ -496,15 +475,6 @@ def install(app, store, auth, settings):
             propose = made and (lambda c, who, method, path, data, summary, what=None:
                                 made(c, who, method, path, data, summary[:300], what=what))
         with store.transaction() as c:
-            def effective_wake_update(c, auth, who, rule_id, update):
-                from . import rules
-                row = rules.get(c, rule_id)
-                rules._require(c, settings, auth, who, row["scope_kind"], row["scope_id"])
-                if row["revision"] != update.get("expected_revision"):
-                    from .store import Problem
-                    raise Problem("version_conflict", "The rule changed; refresh before saving", 409)
-                return merged_wake(row, update)
-
             card_direct = False
             if assistant:
                 from . import assistant as assistant_mod, team_rules
@@ -521,7 +491,7 @@ def install(app, store, auth, settings):
                 return None
 
             return plan(c, auth, who, e, body.value, target, settings.public_url, propose=propose,
-                        effective_update=effective_wake_update, card_direct=card_direct,
+                        card_direct=card_direct,
                         can_card=lambda method, path: valid_operation(method, path, settings,
                                                                       "assistant" if assistant else "botops"),
                         card_words=words)

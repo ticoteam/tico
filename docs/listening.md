@@ -109,4 +109,6 @@ personal token; every POST has an `Idempotency-Key` for safe retries ([API](api.
 
 Trace a post with `GET /api/v2/listening/items/<item-id>`, read sweep history with `GET /api/v2/listening/runs`, and inspect
 coverage and receiver verdicts with `GET /api/v2/listening/stats`. Do not treat blocked or rate-limited sweeps as evidence that
-no relevant posts exist. See `templates/environment-registry/listening.yaml` for the full routing shape.
+no relevant posts exist. Stats also carry `daily` (posts first seen per UTC day, by
+source) and `recent` (the newest posts routed to a destination you read, one row per post), which Market › Listening draws.
+See `templates/environment-registry/listening.yaml` for the full routing shape.
