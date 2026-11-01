@@ -28,6 +28,7 @@ function settingsBotEditorRows(e) {
     <div class="sb-row"><span>Task model</span><div>${settingsChoiceCombo(e, 'task')}${settingsTaskWarning(e)}</div><span></span></div>
     ${settingsTaskParts(e)}
     <div class="sb-row"><span>Computer</span>${settingsMachineSelect(e)}<span></span></div>
+    ${settingsBrowserExitRow(e)}
     ${cloudMachineRowHTML(e)}`}`;
 }
 // Where the bot's conversation compacts (backend/settings_admin.py COMPACT_AT). Only a CLI whose manifest says
@@ -42,6 +43,24 @@ function settingsCompactRow(e) {
   return `<div class="sb-row sb-compact"><span>Compact at</span><select class="settings-inline-select" data-bot-compact="${esc(e.name)}" data-current="${current}" aria-label="Compact at for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
       ${options.map(([value, label]) => `<option value="${value}" ${value === current ? 'selected' : ''}>${label}</option>`).join('')}
     </select><span></span></div>`;
+}
+// Which computer's internet the bot's browser goes out through (backend/browser_exit.py): only computers whose owner
+// shares with this bot, and the one it has now even if that stopped (it then fails closed, so it stays visible).
+function settingsBrowserExitRow(e) {
+  if (e.agent) return '';
+  const current = e.browser_exit || '';
+  const choices = (SETTINGS_DATA.machines || []).filter(m => m.id === current
+    || (!m.revoked_at && m.browser_exit?.sharing && m.browser_exit.bots.includes(e.name)));
+  if (!choices.length) return '';
+  return `<div class="sb-row"><span>Browse through</span><select class="settings-inline-select" data-bot-browser-exit="${esc(e.name)}" data-current="${esc(current)}"
+      aria-label="Browse through for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
+      <option value=""${current ? '' : ' selected'}>None</option>
+      ${choices.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(m.label)} · ${esc(settingsPersonName(m.operator))}</option>`).join('')}
+    </select><span></span></div>`;
+}
+function settingsBrowserExitRun(select) {
+  const slug = select.dataset.botBrowserExit, runner_id = select.value || null;
+  return async rev => { await post(`/v2/bots/${encodeURIComponent(slug)}/browser-exit`, {runner_id}); return rev; };
 }
 // The editor's held changes: each returns the save Save bot runs, given the bot's revision, answering the next one.
 function settingsCompactRun(select) {
@@ -286,6 +305,8 @@ function settingsEditBot(slug = '', inline = false) {
         && cloudMachineRun(slug, {always_on: cloudAlways.checked}, cloudAlways));
       const compact = event.target.closest('[data-bot-compact]');
       if (compact) stage('compact', 'compact at', changed(compact) && settingsCompactRun(compact));
+      const exit = event.target.closest('[data-bot-browser-exit]');
+      if (exit) stage('browser-exit', 'browse through', changed(exit) && settingsBrowserExitRun(exit));
       const profile = event.target.closest('[data-bot-profile], [data-profile-key]');
       if (profile) stage('profile', 'profile', profileStaged(profile));
       const keep = event.target.closest('[data-bot-keep-tasks]');

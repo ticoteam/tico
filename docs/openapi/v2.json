@@ -2492,6 +2492,127 @@
         ]
       }
     },
+    "/api/v2/bots/{bot}/browser-exit": {
+      "get": {
+        "summary": "The computer the bot's browser reaches the web through (null: its own) and the ones it may pick",
+        "operationId": "getBotBrowserExit",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotBrowserExitView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      },
+      "post": {
+        "summary": "Browse through a computer that shares its internet with this bot, or null for its own",
+        "operationId": "setBotBrowserExit",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotBrowserExit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotBrowserExitView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      }
+    },
     "/api/v2/bots/{bot}/budget": {
       "get": {
         "summary": "A bot's run budget (runs per hour and per day), the team default, its runs so far and any hold; for the people who manage it",
@@ -5113,6 +5234,207 @@
         },
         "tags": [
           "Model subscriptions"
+        ]
+      }
+    },
+    "/api/v2/computers/{rid}/browser-exit": {
+      "get": {
+        "summary": "Whether this computer shares its internet with bots, which bots, and its daily cap in bytes",
+        "operationId": "getComputerBrowserExit",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserExit"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Computers"
+        ]
+      },
+      "post": {
+        "summary": "Share this computer's internet with chosen bots, or stop: its owner only; an admin may turn it off",
+        "operationId": "setComputerBrowserExit",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserExitPolicy"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Computers"
+        ]
+      }
+    },
+    "/api/v2/computers/{rid}/browser-exit/usage": {
+      "get": {
+        "summary": "Bytes and connections through this computer per day, bot and hostname (30 days); its owner or an admin",
+        "operationId": "listComputerBrowserExitUsage",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 7,
+              "title": "Days"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserExitUsage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Computers"
         ]
       }
     },
@@ -34350,6 +34672,79 @@
         ],
         "additionalProperties": true
       },
+      "BotBrowserExit": {
+        "properties": {
+          "runner_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runner Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "runner_id"
+        ],
+        "title": "BotBrowserExit",
+        "description": "The computer a bot's browser reaches the web through; null is its own."
+      },
+      "BotBrowserExitView": {
+        "type": "object",
+        "properties": {
+          "browser_exit": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "runner_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "runner_id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "operator": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "operator",
+                "runner_id"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "may_change": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "browser_exit"
+        ],
+        "additionalProperties": true
+      },
       "BotBudget": {
         "properties": {
           "turns_per_hour": {
@@ -35422,6 +35817,173 @@
         "required": [
           "bot",
           "limit"
+        ],
+        "additionalProperties": true
+      },
+      "BrowserExit": {
+        "type": "object",
+        "properties": {
+          "sharing": {
+            "type": "boolean"
+          },
+          "bots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "daily_cap_bytes": {
+            "type": "integer"
+          },
+          "computer": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "additionalProperties": true
+          },
+          "used_today_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "may_change": {
+            "type": "boolean"
+          },
+          "may_turn_off": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bots",
+          "computer",
+          "daily_cap_bytes",
+          "may_change",
+          "may_turn_off",
+          "sharing",
+          "used_today_bytes"
+        ],
+        "additionalProperties": true
+      },
+      "BrowserExitPolicy": {
+        "properties": {
+          "sharing": {
+            "type": "boolean",
+            "title": "Sharing"
+          },
+          "bots": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "minLength": 1
+                },
+                "type": "array",
+                "maxItems": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bots"
+          },
+          "daily_cap_bytes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 10000000000000.0,
+                "minimum": 100000000.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Cap Bytes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sharing"
+        ],
+        "title": "BrowserExitPolicy",
+        "description": "A computer's internet shared with bots (backend/browser_exit.py). Omitted bots or cap keep what is stored."
+      },
+      "BrowserExitUsage": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "day": {
+                  "type": "string"
+                },
+                "bot": {
+                  "type": "string"
+                },
+                "host": {
+                  "type": "string"
+                },
+                "bytes": {
+                  "type": "integer"
+                },
+                "tunnels": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "bot",
+                "bytes",
+                "day",
+                "host",
+                "tunnels"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "day": {
+                  "type": "string"
+                },
+                "bytes": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "bytes",
+                "day"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "days",
+          "next",
+          "rows"
         ],
         "additionalProperties": true
       },
