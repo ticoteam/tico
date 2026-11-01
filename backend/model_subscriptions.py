@@ -18,11 +18,14 @@ named fallback's, with
 Changing a computer's subscription for a runtime (giving, switching, taking it off) or removing a subscription in use
 stops that computer's live runs on that runtime and puts their work back in the queue (quarantine_stops.restart), and
 every session of that runtime on that computer starts fresh (`_restart`): nothing begun on the old login is resumed on
-the new one. The page confirms first (409 `confirm_restart` with the counts).
+the new one. The page confirms first (409 `confirm_restart` with the counts). A bot there that was Rate limited on the
+old sign-in is re-judged against the one it runs on now, so a bot waiting on the old plan's limit resumes on the new
+plan at once (execution.lift_limited_on_computer).
 
 Usage limits: a subscription is one login wherever it runs, so a limit met on it holds it on every computer it is given
 to until the reset (login_holds `sub:<id>`). While held it is passed over like one that needs reconnecting: turns there
-run on the computer's own login, else the Gateway under the company's choice, else wait.
+run on the computer's own login, else the Gateway under the company's choice, else wait. Saving a new value ends its
+hold as Try now does (a new value may be another account); a rename does not.
 
 Connect (`connect`): instead of pasting, an owner or admin signs a plan in from the page. One online computer that can
 runs the CLI through the sign-in relay (backend/model_login.py): `claude setup-token`, or `codex login` in a home of its
@@ -440,12 +443,17 @@ def _plan(c, settings, runner_id, runtime):
 
 
 def _restart(c, settings, runner_id, runtime):
-    """Stop the computer's live runs on `runtime` (their work goes back in the queue, quarantine_stops.restart) and
-    start its sessions of that runtime fresh. Returns {stopped, sessions_reset}."""
+    """Stop the computer's live runs on `runtime` (their work goes back in the queue, quarantine_stops.restart), start
+    its sessions of that runtime fresh, and re-judge the bots there that were Rate limited on the old sign-in
+    (execution.lift_limited_on_computer). Call it after the computer_subscriptions row has changed: the re-judge reads
+    the sign-in the bots would use now. Returns {stopped, sessions_reset}."""
     from . import quarantine_stops
+    from .execution import lift_limited_on_computer
     line = _restart_line(c, runner_id, runtime)
     stopped = sum(quarantine_stops.restart(c, a, line) for a in _live(c, runner_id, runtime))
-    return {"stopped": stopped, "sessions_reset": _reset(c, settings, runner_id, runtime)}
+    reset = _reset(c, settings, runner_id, runtime)
+    lift_limited_on_computer(c, settings, H.KEEPER, runner_id, runtime)
+    return {"stopped": stopped, "sessions_reset": reset}
 
 
 def _signed_in_with(c, sid):
@@ -496,8 +504,8 @@ def _confirm_reconnect(c, settings, given):
 
 
 def save(c, vault, settings, who, body, sid=None):
-    """Add a subscription, or change a saved one: a new secret reconnects it (status `new`, so it counts again), a name
-    renames it. Returns its view."""
+    """Add a subscription, or change a saved one: a new secret reconnects it (status `new`, so it counts again) and ends
+    its usage-limit hold as Try now does, a name renames it. Returns its view."""
     now = H.now()
     if sid:
         sub = row(c, sid)
@@ -520,9 +528,12 @@ def save(c, vault, settings, who, body, sid=None):
             c.execute("UPDATE model_subscriptions SET sealed=?,preview=?,revision=revision+1,status='new',"
                       "status_detail='',status_at=?,updated=? WHERE id=?",
                       (vault.cipher.seal(c, _context(sid), value), preview, now, now, sid))
-            # A new value may be another account: as for a change, every computer given it stops its live runs on
-            # that runtime (their work goes back in the queue; confirmed first) and starts its sessions there fresh.
-            # An older runner never signed in with it, so nothing changes there.
+            # A new value may be another account: its own usage-limit hold ends as Try now does, one probe turn tests it
+            # (login_holds.try_now), before the bots are re-judged. As for a change, every computer given it stops its
+            # live runs on that runtime (their work goes back in the queue; confirmed first) and starts its sessions
+            # there fresh. An older runner never signed in with it, so nothing changes there.
+            from . import login_holds
+            login_holds.try_now(c, "", login_holds.subscription_login(sid), KINDS[sub["kind"]]["runtime"])
             stopped = sum(_restart(c, settings, runner_id, runtime)["stopped"] for runner_id, runtime in given)
             H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": True, "stopped": stopped})
             return view(c, row(c, sid))
@@ -572,8 +583,9 @@ def remove(c, settings, who, sid, confirm=False):
 
 def give(c, settings, who, body):
     """Give a computer a subscription for one runtime, switch it, or take it off (`subscription` null). A change stops
-    the computer's live runs on that runtime (confirmed first) and starts its sessions of that runtime fresh. A runner
-    too old to take one keeps signing in with its own login, so there it is only recorded: nothing stops."""
+    the computer's live runs on that runtime (confirmed first), starts its sessions of that runtime fresh, and re-judges
+    the bots there that were Rate limited on the old sign-in. A runner too old to take one keeps signing in with its own
+    login, so there it is only recorded: nothing stops, nothing is re-judged."""
     runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (body.runner_id,)).fetchone()
     if not runner:
         raise Problem("not_found", "Computer not found", 404)
