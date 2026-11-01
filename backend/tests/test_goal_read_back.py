@@ -511,6 +511,33 @@ def test_read_back_cannot_be_read_or_saved_after_strategy_bot_read_access_is_rev
     assert get(api, "goals/" + row["id"])["goal"]["title"] == "Publish the guide"
 
 
+@pytest.mark.parametrize("hidden_change", ["title", "why", "owner"])
+def test_cited_save_refuses_hidden_conflicts_without_disclosing_or_saving(api, hidden_change):
+    from backend.tests.test_api import restrict
+    strategy_bot(api)
+    row = goal(api, "Publish the guide")
+    r, attempt = turn(api, "coo", "ana-test", "Update the guide")
+    back = read_back(api, attempt, {"kind": "goal_update", "goal_id": row["id"], "title": "Agreed title"})
+    attempt = reply(api, r, attempt, "yes")
+    private = {"title": "Private revised title", "why": "Private revised purpose", "owner": "bot:inbox"}
+    with api.app.state.store.transaction() as c:
+        restrict(c, "inbox" if hidden_change == "owner" else "ops", people=["ana"])
+    # The owner changes the goal after yes, while the Strategy Bot cannot read it.
+    path = "goals/" + row["id"] + ("/why" if hidden_change == "why" else "")
+    post(api, path, {hidden_change: private[hidden_change]})
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT COUNT(*) FROM goal_events WHERE goal_id=?", (row["id"],)).fetchone()[0]
+    denied = save(api, attempt, back["changes"][0]["steps"][0], expected=403)
+    assert denied["error"]["code"] == "forbidden"
+    assert denied["error"]["detail"] == "The Strategy Bot can't see that bot's goals."
+    assert all(value not in json.dumps(denied) for value in private.values())
+    with api.app.state.store.read() as c:
+        assert G.goal(c, row["id"])[hidden_change] == private[hidden_change]
+        assert G.goal(c, row["id"])["title"] != "Agreed title"
+        assert c.execute("SELECT COUNT(*) FROM goal_events WHERE goal_id=?", (row["id"],)).fetchone()[0] == before
+        assert GR.saves(c, back["message_id"]) == {}
+
+
 def test_stored_read_back_keeps_access_checks_for_the_old_parent_it_named(api):
     from backend.tests.test_api import restrict
     strategy_bot(api)

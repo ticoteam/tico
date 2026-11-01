@@ -258,10 +258,75 @@ def changed_since(c, back, change, done):
     return said[:3]
 
 
-def agreement(c, who, cited, method, path, body):
+def read_back_access(c, auth, raw):
+    """The owner's rights do not widen the Strategy Bot's read access in a read-back."""
+    owners = []
+
+    def goal(gid):
+        row = G.goal(c, gid) if gid else None
+        if row:
+            owners.append(row["owner"])
+        return row
+
+    def measure(kid):
+        row = K.kpi(c, kid) if kid else None
+        if row:
+            owners.append(row["owner"])
+
+    def fields(body):
+        if not isinstance(body, dict):
+            return
+        if body.get("owner"):
+            owners.append(owner_actor(c, body["owner"], G.AUTO_ACTOR))
+        measure(body.get("kpi_id"))
+        goal(body.get("parent_id"))
+
+    row = goal(raw.get("goal_id"))
+    if row and "parent_id" in raw:
+        goal(row.get("parent_id"))       # the old parent's words are read back too
+    fields(raw)
+    fields(raw.get("measure"))
+    p = G.proposal(c, raw["proposal_id"]) if raw.get("proposal_id") else None
+    if p:
+        goal(p.get("goal_id"))
+        measure(p.get("kpi_id"))
+        fields(p.get("payload"))
+    read_back_owners(c, auth, owners)
+    return sorted(set(owners))
+
+
+def read_back_owners(c, auth, owners):
+    from .auth import Identity
+    reader = Identity(G.AUTO_ACTOR, "bot")
+    for owner in set(owners):
+        if H.is_bot(owner) and not auth.bot_access(c, reader, H.actor_id(owner))["read"]:
+            raise Problem("forbidden", "The Strategy Bot can't see that bot's goals.", 403)
+
+
+def read_back_access_stored(c, auth, changes):
+    """Recheck stored steps on read and save: access may have changed since the read-back."""
+    for ch in changes:
+        read_back_owners(c, auth, ch.get("read_owners") or [])
+        for st in ch["steps"]:
+            raw = dict(st["body"])
+            path = st["path"]
+            if m := re.fullmatch(r"/api/v2/goals/([^/]+)(?:/.*)?", path):
+                if m.group(1) != NEW:
+                    raw["goal_id"] = m.group(1)
+                if "/kpis/" in path:
+                    raw["kpi_id"] = path.split("/kpis/")[1].split("/")[0]
+            elif path.endswith("/decide"):
+                raw["proposal_id"] = path.split("/")[-2]
+            read_back_access(c, auth, raw)
+
+
+def agreement(c, who, cited, method, path, body, *, auth):
     """What this save is, once checked against the read-back the owner said yes to: the delegation record's
     `goal_read_back` part. Raises `not_agreed` (403), or 409 when the goal changed since or it was saved already."""
     back, yes, words = answered(c, who, cited)
+    # Authorize before inspecting history: conflict details contain current private values.
+    # Both middleware and the writer call this gate with their own connection.
+    read_back_access_stored(c, auth, back["changes"])
     done = saves(c, back["id"])
     sent = canonical(c, path, body, who.actor)
     found = None

@@ -616,9 +616,8 @@ def install(app, store, auth, mutate, settings):
     def agreed_save(c, request):
         """The read-back save the middleware let through (backend/app.py), checked again in this write."""
         who, record = request.state.identity, GR.active()
-        read_back_access_stored(c, GR.stored(c, record["goal_read_back"])["changes"])
         claim = GR.agreement(c, who, record["cited"], request.method, request.url.path,
-                             getattr(request, "_body", b"") or b"{}")
+                             getattr(request, "_body", b"") or b"{}", auth=auth)
         if claim["goal_read_back"] != record["goal_read_back"] or claim["change"] != record["change"] \
                 or claim["step"] != record["step"]:
             raise GR.not_agreed("The read-back changed while this was saved")
@@ -711,72 +710,13 @@ def install(app, store, auth, mutate, settings):
         row = G.goal(c, p["goal_id"]) or {}
         return f"Why was {q(row.get('why') or 'none')}, now {q(pl.get('why') or '')}"
 
-    def read_back_access(c, raw):
-        """The owner's rights do not widen the Strategy Bot's read access in a read-back."""
-        owners = []
-
-        def goal(gid):
-            row = G.goal(c, gid) if gid else None
-            if row:
-                owners.append(row["owner"])
-            return row
-
-        def measure(kid):
-            row = K.kpi(c, kid) if kid else None
-            if row:
-                owners.append(row["owner"])
-
-        def fields(body):
-            if not isinstance(body, dict):
-                return
-            if body.get("owner"):
-                owners.append(GR.owner_actor(c, body["owner"], G.AUTO_ACTOR))
-            measure(body.get("kpi_id"))
-            goal(body.get("parent_id"))
-
-        row = goal(raw.get("goal_id"))
-        if row and "parent_id" in raw:
-            goal(row.get("parent_id"))       # the old parent's words are read back too
-        fields(raw)
-        fields(raw.get("measure"))
-        p = G.proposal(c, raw["proposal_id"]) if raw.get("proposal_id") else None
-        if p:
-            goal(p.get("goal_id"))
-            measure(p.get("kpi_id"))
-            fields(p.get("payload"))
-        read_back_owners(c, owners)
-        return sorted(set(owners))
-
-    def read_back_owners(c, owners):
-        from .auth import Identity
-        reader = Identity(G.AUTO_ACTOR, "bot")
-        for owner in set(owners):
-            if H.is_bot(owner) and not auth.bot_access(c, reader, H.actor_id(owner))["read"]:
-                raise Problem("forbidden", "The Strategy Bot can't see that bot's goals.", 403)
-
-    def read_back_access_stored(c, changes):
-        """Recheck stored steps on read and save: access may have changed since the read-back."""
-        for ch in changes:
-            read_back_owners(c, ch.get("read_owners") or [])
-            for st in ch["steps"]:
-                raw = dict(st["body"])
-                path = st["path"]
-                if m := re_goal.fullmatch(path):
-                    if m.group(1) != GR.NEW:
-                        raw["goal_id"] = m.group(1)
-                    if "/kpis/" in path:
-                        raw["kpi_id"] = path.split("/kpis/")[1].split("/")[0]
-                elif path.endswith("/decide"):
-                    raw["proposal_id"] = path.split("/")[-2]
-                read_back_access(c, raw)
-
     def read_back_plan(c, who, n, raw):
         """One change as the saves it stands for and the line the owner reads; 403 when it stays a click."""
         if not isinstance(raw, dict):
             raise Problem("validation", f"Change {n} is not an object", 422)
         if why := GR.click_reason(raw):
             raise Problem("stays_a_click", why, 403)
-        read_owners = read_back_access(c, raw)
+        read_owners = GR.read_back_access(c, auth, raw)
         kind = raw.get("kind")
         if kind not in GR.KINDS:
             raise Problem("validation", f"Change {n}: kind is one of {', '.join(GR.KINDS)}", 422)
@@ -998,7 +938,7 @@ def install(app, store, auth, mutate, settings):
             back = GR.stored(c, mid)
             if not back or (H.conversation(c, back["conversation_id"]) or {}).get("owner_actor") != who.actor:
                 raise Problem("not_found", "No such read-back", 404)
-            read_back_access_stored(c, back["changes"])
+            GR.read_back_access_stored(c, auth, back["changes"])
             done = GR.saves(c, mid)
             yes, why_not = None, ""
             if GR.strategy_turn(who):

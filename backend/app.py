@@ -815,7 +815,7 @@ def create_app(settings=None):
                                 # read-back it answered.
                                 return {**record, "assistant": request.state.identity.task_actor,
                                         **goal_read_back.agreement(c, request.state.identity, record["cited"],
-                                                                   request.method, request.url.path, raw)}
+                                                                   request.method, request.url.path, raw, auth=auth)}
                             record = assistant_instruction(c, request.state.identity, asked)
                             assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
                             if setting:
