@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
+from ..records import core as RC
 from ..records import reads as RR
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
 from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
@@ -1391,8 +1392,8 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 
 # ------------------------------------------------------------------------------------------------ search
 SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project", "po",
-              "estimate")
-RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
+              "estimate", "equipment")
+RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects", "equipment": "equipment"}
 SEARCH_EACH = 10            # results per kind when no kind is named
 
 
@@ -1429,13 +1430,15 @@ def _record_row(kind: str, r: Any) -> Row:
         row["sku"] = str(r["sku"])
     elif kind == "location":
         row["location_kind"] = str(r["kind"])
+    elif kind == "equipment":
+        row["equipment_kind"] = str(r["kind"])
     else:
         row["status"] = str(r["status"])
     return row
 
 
-RECORD_TABLE = {"location": "locations", "item": "items", "project": "projects"}
-RECORD_PLURAL = {"location": "locations", "item": "items", "project": "projects"}
+RECORD_TABLE = {"location": "locations", "item": "items", "project": "projects", "equipment": "equipment"}
+RECORD_PLURAL = {"location": "locations", "item": "items", "project": "projects", "equipment": "equipment"}
 
 
 ITEM_ACCOUNTS = ("income_account_id", "expense_account_id", "asset_account_id")
@@ -1456,12 +1459,36 @@ def _account_shown(view: VW.View, accounts: Mapping[str, Account], account_id: o
     return account is not None and view.sees_account(account)
 
 
+def _narrow(kind: str, f: Mapping[str, object]) -> tuple[dict[str, str], dict[str, str]]:
+    """The equal and by filters a record read takes (records/reads.search). Equipment is kept by its kind, its customer
+    or location, and a warranty that ends on or before a day; the other records take no filter."""
+    if kind != "equipment":
+        return {}, {}
+    equal: dict[str, str] = {}
+    for key in ("kind", "customer_id", "location_id"):
+        value = _filter(f, key)
+        if value is not None:
+            equal[key] = value
+    if equal.get("kind") not in (None, *RC.EQUIPMENT_KINDS):
+        raise invalid(f"equipment kind is {'|'.join(RC.EQUIPMENT_KINDS)}")
+    by: dict[str, str] = {}
+    ends = _filter(f, "warranty_ends_by")
+    if ends is not None:
+        by["warranty_ends_on"] = dates.day(ends).isoformat()
+    return equal, by
+
+
 def _record_out(kind: str, r: Any, accounts: Mapping[str, Account], view: VW.View) -> Row:
     """A record as the records API shows it. An item's accounts show to the viewers who see them, and its price shows
     to the viewers who see its income account: the price is what that account books."""
     out: Row = {"id": str(r["id"]), "name": str(r["name"]), "archived_at": r["archived_at"]}
     if kind == "location":
         out.update(kind=str(r["kind"]), parent_id=r["parent_id"], address=json.loads(r["address"] or "{}"))
+    elif kind == "equipment":
+        out.update(kind=str(r["kind"]), location_id=r["location_id"], customer_id=r["customer_id"],
+                   make=str(r["make"]), model=str(r["model"]), serial=str(r["serial"]),
+                   installed_on=r["installed_on"], warranty_ends_on=r["warranty_ends_on"],
+                   photo_file_id=r["photo_file_id"])
     elif kind == "item":
         out.update(sku=str(r["sku"]), kind=str(r["kind"]), unit=str(r["unit"]), currency=str(r["currency"]))
         if _account_shown(view, accounts, r["income_account_id"]):
@@ -1473,9 +1500,12 @@ def _record_out(kind: str, r: Any, accounts: Mapping[str, Account], view: VW.Vie
 
 
 def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archived: str = "hide",
-            cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
-    """Locations, items or projects by name (an item also by sku), past `cursor`. `archived` is hide, only or all.
-    A viewer with no finance view is refused; an item's accounts and price are cut to what the viewer sees."""
+            cursor: str | None = None, limit: int = 50, at: str | None = None,
+            filters: Mapping[str, object] | None = None) -> Row:
+    """Locations, items, projects or equipment by name (an item also by sku, equipment by serial, make or model), past
+    `cursor`. `archived` is hide, only or all; equipment also takes kind, customer_id, location_id and warranty_ends_by
+    (see _narrow). A viewer with no finance view is refused; an item's accounts and price are cut to what the viewer
+    sees."""
     ctx = load(c, at)
     view = ctx.view(viewer)
     _in_view_or_refuse(view)
@@ -1483,7 +1513,9 @@ def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archi
     after = (parts[0], parts[1]) if len(parts) == 2 else None
     active = {"hide": True, "only": False, "all": None}[archived]
     most = tab.page_size(limit)
-    rows = RR.search(c, RECORD_TABLE[kind], (q or "").strip()[:100], active=active, after=after, most=most + 1)
+    equal, by = _narrow(kind, filters or {})
+    rows = RR.search(c, RECORD_TABLE[kind], (q or "").strip()[:100], active=active, after=after, most=most + 1,
+                     equal=equal, by=by)
     shown = rows[:most]
     nxt = tab.encode_cursor([str(shown[-1]["name"]), str(shown[-1]["id"])]) if len(rows) > most else None
     return {RECORD_PLURAL[kind]: [_record_out(kind, r, ctx.accounts, view) for r in shown], "next_cursor": nxt}
@@ -1510,7 +1542,8 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
     start, end; bill/invoice: status, contact_id, start, end, aging; contact: kind, active; rule: kind (gate|posting);
     card: status, vendor (the cards saved on that vendor, so `vendor` answers "which of my cards works at X");
     po/estimate: status, contact_id, and a search over number, memo and contact name;
-    item/location/project: active (1 keeps only active records)."""
+    item/location/project: active (1 keeps only active records); equipment: kind (owned|customer), customer_id,
+    location_id, warranty_ends_by (a day: warranties ending on or before it), active."""
     if kind is not None and kind not in SEARCH_KINDS:
         raise invalid(f"kind is {'|'.join(SEARCH_KINDS)}")
     if cursor and kind is None:
@@ -1573,9 +1606,10 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                 _in_view_or_refuse(view)
                 parts = tab.decode_cursor(cursor)
                 active = _filter(f, "active")
+                equal, by = _narrow(k, f)
                 rows = RR.search(c, RECORD_KINDS[k], text, active=None if active is None else
                                  active in ("1", "true", "True"), after=(parts[0], parts[1]) if len(parts) == 2
-                                 else None, most=most)
+                                 else None, most=most, equal=equal, by=by)
                 results += [_record_row(k, r) for r in rows]
                 nxt = tab.encode_cursor([str(rows[-1]["name"]), str(rows[-1]["id"])]) \
                     if rows and len(rows) == most else None

@@ -533,6 +533,9 @@ ADDED = (
     ("fin_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
     # vendors: seats or licenses, and the next renewal date (spec §12; the renewal stage events come from watch)
     ("fin_contacts", "seats", "INTEGER"), ("fin_contacts", "renewal_on", "TEXT"),
+    # vendor terms: the default due date of a bill, the owner, and the notice a cancel-by deadline needs (V1, P3)
+    ("fin_contacts", "payment_terms_days", "INTEGER"), ("fin_contacts", "owner_id", "TEXT"),
+    ("fin_contacts", "renewal_notice_days", "INTEGER"),
     # the books gaps (migration 73): fin_transfers' columns added since it was first written
     ("fin_transfers", "from_feed_id", "TEXT"), ("fin_transfers", "to_feed_id", "TEXT"),
     ("fin_transfers", "settled_at", "TEXT"), ("fin_transfers", "submitted_at", "TEXT"),

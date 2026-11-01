@@ -214,7 +214,7 @@ def vendor_key(c: sqlite3.Connection, book_id: str, key: str) -> str:
 
 def renewals_due(c: sqlite3.Connection, book_id: str) -> list[Any]:
     """Active vendors with a renewal date: the watch raises each one's renewal stages."""
-    return c.execute("SELECT id, renewal_on FROM fin_contacts WHERE book_id=? AND active=1 "
+    return c.execute("SELECT id, renewal_on, renewal_notice_days FROM fin_contacts WHERE book_id=? AND active=1 "
                      "AND kind IN ('vendor','both') AND renewal_on IS NOT NULL AND renewal_on<>''",
                      (book_id,)).fetchall()
 

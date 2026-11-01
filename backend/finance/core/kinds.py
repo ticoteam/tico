@@ -25,6 +25,7 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "import_raw_totals",
        # shared records (backend/records): items, locations and projects
        "item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
+       "equipment_create", "equipment_update",
        # purchase orders and estimates (backend/finance/purchasing.py)
        "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
        "estimate_accept", "estimate_decline", "estimate_convert")
@@ -51,6 +52,7 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         "import_raw_totals",
         # shared records (backend/records): items, locations and projects
         "item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
+        "equipment_create", "equipment_update",
         # purchase orders and estimates
         "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
         "estimate_accept", "estimate_decline", "estimate_convert")
@@ -73,6 +75,7 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP, "import_raw_totals": R.BOOK,
          "item_create": R.BOOK, "item_update": R.BOOK, "location_create": R.BOOK, "location_update": R.BOOK,
          "project_create": R.BOOK, "project_update": R.BOOK,
+         "equipment_create": R.RECORDS, "equipment_update": R.RECORDS,
          "po_create": R.AP, "po_send": R.AP, "po_approve": R.AP, "po_close": R.AP, "po_void": R.AP,
          "estimate_create": R.AR, "estimate_send": R.AR, "estimate_accept": R.AR, "estimate_decline": R.AR,
          "estimate_convert": R.AR}
@@ -275,7 +278,12 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "contact_update": (("contact_id", "str", ""), ("name?", "str", ""), ("kind?", "vendor|customer|both", ""),
                        ("emails?", "list[str]", ""), ("default_account_id?", "str", ""), ("is_1099?", "bool", ""),
                        ("tax_id?", "str", ""), ("recipient_id?", "str", ""), ("active?", "bool", ""),
-                       ("seats?", "int", "vendors"), ("renewal_on?", "day", "vendors: a day, or empty to clear")),
+                       ("seats?", "int", "vendors"), ("renewal_on?", "day", "vendors: a day, or empty to clear"),
+                       ("payment_terms_days?", "int", "vendors: days a bill is due after its date when no due date is "
+                        "typed; empty clears it"),
+                       ("renewal_notice_days?", "int", "vendors: days of notice the cancel-by deadline is before the "
+                        "renewal date"),
+                       ("owner_id?", "str", "the teammate or bot who owns the contact; empty clears it")),
     "bill_create": (("vendor_id", "str", "a vendor contact"), ("number?", "str", "the vendor's bill number"),
                     ("bill_date", "day", ""), ("due_date?", "day", "or terms_days"),
                     ("terms_days?", "int", "due this many days after bill_date"), ("memo?", "str", ""),
@@ -339,6 +347,19 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                     ("sku?", "str", ""), ("unit?", "str", ""), ("price?", "minor", "a change asks for approval"),
                     ("income_account_id?", "str", ""), ("expense_account_id?", "str", ""),
                     ("asset_account_id?", "str", ""), ("active?", "bool", "")),
+    "equipment_create": (("name", "str", ""), ("kind", "owned|customer", "owned: a van or tool the company keeps; "
+                         "customer: a unit at a customer's site"),
+                         ("location_id?", "str", "where it is kept; a van needs no location"),
+                         ("customer_id?", "str", "customer kind: the customer it is at"),
+                         ("make?", "str", ""), ("model?", "str", ""), ("serial?", "str", "a van's VIN"),
+                         ("installed_on?", "day", ""), ("warranty_ends_on?", "day", ""),
+                         ("photo_file_id?", "str", "a Library file id; a bot's photo asks a person to confirm it")),
+    "equipment_update": (("equipment_id", "str", ""), ("name?", "str", ""), ("kind?", "owned|customer", ""),
+                         ("location_id?", "str", "empty to clear"), ("customer_id?", "str", "empty to clear"),
+                         ("make?", "str", ""), ("model?", "str", ""), ("serial?", "str", ""),
+                         ("installed_on?", "day", "empty to clear"), ("warranty_ends_on?", "day", "empty to clear"),
+                         ("photo_file_id?", "str", "a bot's photo asks a person to confirm it"),
+                         ("active?", "bool", "")),
     "location_create": (("name", "str", ""), ("kind?", "store|office|warehouse|plant|customer_site|vehicle|other", ""),
                         ("in_books?", "bool",
                          "a mirrored book: false keeps it in Tico; customer sites and vehicles default to false"),
@@ -412,6 +433,8 @@ WORDS: dict[str, str] = {
     "import_raw_totals": "Import a spreadsheet's history as raw totals: one balanced entry per month.",
     "item_create": "Add a product or service that lines and documents name.",
     "item_update": "Rename, re-account, deactivate, or change the price of an item (a price change asks first).",
+    "equipment_create": "Add a van, tool or customer unit: local records, never sent to the books.",
+    "equipment_update": "Change equipment, or archive it (active false).",
     "location_create": "Add a location that lines can be tagged with.",
     "location_update": "Rename, move, or deactivate a location.",
     "project_create": "Add a project that lines can be tagged with.",

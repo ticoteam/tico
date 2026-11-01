@@ -6438,7 +6438,7 @@ FINANCE_MAX_CHARS = 64000        # about 16k tokens
 FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close"]
 FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
                    "ar_overdue", "uncategorized_count", "unreconciled_days"]
-FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card"]
+FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card", "equipment"]
 FINANCE_INBOX = ["uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
                  "budget_near_limit", "sync_failed", "period_ready"]
 FIN_DAY = {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"}
@@ -6613,8 +6613,8 @@ def _fin_paged(api, path, query, key, budget):
 
 
 @tool("hub_finance_search", "Search the books you may see: entries, bank and card rows, bills, invoices, contacts, "
-      "rules and cards (each card with the vendor accounts it is saved on). Name a kind to page with cursor; without "
-      "one you get the first few of each kind.",
+      "rules, cards (each card with the vendor accounts it is saved on) and equipment (vans, tools and customer units, "
+      "local records). Name a kind to page with cursor; without one you get the first few of each kind.",
       {"kind": _s("What to search", enum=FINANCE_SEARCH), "q": _s("Words to match"),
        "status": _s("Row, document or card status"), "contact_id": _s("Bills/invoices: this vendor or customer"),
        "vendor": _s("Cards: saved on this vendor (a contact's id or name): which of your cards works there"),
@@ -6624,11 +6624,17 @@ def _fin_paged(api, path, query, key, budget):
        "contact_kind": _s("Contacts: vendor, customer or both", enum=["vendor", "customer", "both"]),
        "active": {"type": "boolean", "description": "Contacts: active or not"},
        "rule_kind": _s("Rules: gate or posting", enum=["gate", "posting"]),
+       "equipment_kind": _s("Equipment: owned (a van or tool) or customer (a unit at a customer)",
+                            enum=["owned", "customer"]),
+       "customer_id": _s("Equipment: at this customer (a contact's id)"),
+       "location_id": _s("Equipment: kept at this location"),
+       "warranty_ends_by": {**FIN_DAY, "description": "Equipment: warranties ending on or before this day"},
        "cursor": _s("next_cursor from the last page (needs kind)"),
        "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows per page (default 50)"}})
 def finance_search(api, args):
     query = _fin_query(args, ("kind", "q", "status", "contact_id", "vendor", "account_id", "money_account_id", "start",
-                              "end", "aging", "contact_kind", "rule_kind", "cursor", "limit"))
+                              "end", "aging", "contact_kind", "rule_kind", "equipment_kind", "customer_id",
+                              "location_id", "warranty_ends_by", "cursor", "limit"))
     if args.get("active") is not None:
         query["active"] = "true" if args["active"] else "false"
     budget = _fin_budget(args.get("limit"), 50)

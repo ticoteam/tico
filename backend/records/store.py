@@ -5,7 +5,7 @@ import sqlite3
 import uuid
 from collections.abc import Mapping
 
-ROW_TABLES = ("locations", "items", "projects")
+ROW_TABLES = ("locations", "items", "projects", "equipment")
 TABLES = """
 CREATE TABLE IF NOT EXISTS locations (
   id TEXT PRIMARY KEY, name TEXT NOT NULL,
@@ -26,6 +26,14 @@ CREATE TABLE IF NOT EXISTS items (
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, customer_id TEXT REFERENCES fin_contacts(id),
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')), archived_at TEXT,
+  created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT);
+
+CREATE TABLE IF NOT EXISTS equipment (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('owned','customer')),
+  location_id TEXT REFERENCES locations(id), customer_id TEXT REFERENCES fin_contacts(id),
+  make TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', serial TEXT NOT NULL DEFAULT '',
+  installed_on TEXT, warranty_ends_on TEXT, photo_file_id TEXT, archived_at TEXT,
   created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT);
 
 CREATE TABLE IF NOT EXISTS record_aliases (

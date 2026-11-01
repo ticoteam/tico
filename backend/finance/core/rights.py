@@ -6,7 +6,8 @@ from .org import SYSTEM, Org
 BOOK, AP, AR, PAY, CARDS, BUDGETS, RULES, ADMIN = (
     "finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards", "finance.budgets", "finance.rules",
     "finance.admin")
-RIGHTS = (BOOK, AP, AR, PAY, CARDS, BUDGETS, RULES, ADMIN)
+RECORDS = "finance.records"
+RIGHTS = (BOOK, AP, AR, PAY, CARDS, BUDGETS, RULES, ADMIN, RECORDS)
 # System work posts usage and keeps budgets current; it never grants, pays or changes access.
 SYSTEM_RIGHTS = frozenset({BOOK, BUDGETS})
 # What a default Bookkeeper is set up with (spec §7.4).

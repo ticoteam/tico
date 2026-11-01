@@ -331,6 +331,29 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.record(c, actor, kind="item", record_id=item_id))
 
+    @app.get("/api/v2/equipment")
+    def finance_equipment(request: Request, q: str = Query("", max_length=100),
+                          archived: Literal["hide", "only", "all"] = "hide",
+                          kind: Literal["owned", "customer"] | None = None,
+                          customer_id: str | None = Query(None, max_length=80),
+                          location_id: str | None = Query(None, max_length=80),
+                          warranty_ends_by: str | None = Query(None, pattern=DAY),
+                          cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
+                          view_as: str | None = None):
+        """Equipment and vans by name, serial, make or model; `kind`, `customer_id` and `location_id` narrow it, and
+        `warranty_ends_by` keeps the warranties ending on or before that day. `archived` as on locations."""
+        actor = as_viewer(request, view_as)
+        filters = {"kind": kind, "customer_id": customer_id, "location_id": location_id,
+                   "warranty_ends_by": warranty_ends_by}
+        return read(lambda c: finance_reads.records(c, actor, kind="equipment", q=q, archived=archived, cursor=cursor,
+                                                    limit=limit, filters={k: v for k, v in filters.items() if v}))
+
+    @app.get("/api/v2/equipment/{equipment_id}")
+    def finance_equipment_one(request: Request, equipment_id: ID, view_as: str | None = None):
+        """One piece of equipment, archived or not."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.record(c, actor, kind="equipment", record_id=equipment_id))
+
     @app.get("/api/v2/projects")
     def finance_projects(request: Request, q: str = Query("", max_length=100),
                          archived: Literal["hide", "only", "all"] = "hide",
@@ -462,7 +485,7 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/finance/search")
     def finance_search(request: Request,
                        kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location",
-                                     "project", "po", "estimate"] | None = None,
+                                     "project", "po", "estimate", "equipment"] | None = None,
                        q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
                        vendor: str | None = Query(None, max_length=120),
                        contact_id: str | None = Query(None, max_length=80),
@@ -472,14 +495,21 @@ def install(app, store, auth, mutate):
                        aging: Aging | None = None,
                        contact_kind: Literal["vendor", "customer", "both"] | None = None, active: bool | None = None,
                        rule_kind: Literal["gate", "posting"] | None = None,
+                       equipment_kind: Literal["owned", "customer"] | None = None,
+                       customer_id: str | None = Query(None, max_length=80),
+                       location_id: str | None = Query(None, max_length=80),
+                       warranty_ends_by: str | None = Query(None, pattern=DAY),
                        cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
                        view_as: str | None = None):
-        """Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees. With `kind` it
-        pages by `cursor`; without, it returns the first few of each kind."""
+        """Search entries, bank and card rows, bills, invoices, contacts, rules and equipment the caller sees. With
+        `kind` it pages by `cursor`; without, it returns the first few of each kind. Equipment takes equipment_kind,
+        customer_id, location_id and warranty_ends_by (a day)."""
         actor = as_viewer(request, view_as)
         named = {"status": status, "contact_id": contact_id, "account_id": account_id, "vendor": vendor,
                  "money_account_id": money_account_id, "start": start, "end": end, "aging": aging,
-                 "kind": contact_kind if kind == "contact" else rule_kind if kind == "rule" else None,
+                 "kind": contact_kind if kind == "contact" else rule_kind if kind == "rule" else
+                 equipment_kind if kind == "equipment" else None,
+                 "customer_id": customer_id, "location_id": location_id, "warranty_ends_by": warranty_ends_by,
                  "active": None if active is None else ("1" if active else "0")}
         filters = {k: v for k, v in named.items() if v is not None}
         return read(lambda c: finance_reads.search(c, actor, kind=kind, q=q, filters=filters, limit=limit,
