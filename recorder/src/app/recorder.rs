@@ -290,7 +290,7 @@ pub struct Recorder {
     asking_for: Option<String>,
     pub demo: bool,
     /// The action item being sent to Tico right now.
-    sending: Option<String>,
+    pub(super) sending: Option<String>,
     /// People and bots chosen in People, shown at once and added in Tico in the background.
     adding_people: Vec<Adding>,
     /// Why Tico refused the last people or bots added; shown in People.
@@ -298,7 +298,7 @@ pub struct Recorder {
     /// The meeting being sent and the step it is on, written by the send job as it goes.
     send_step: Arc<Mutex<Option<(String, String)>>>,
     /// The action item whose send failed, and why.
-    item_error: Option<(String, String)>,
+    pub(super) item_error: Option<(String, String)>,
     /// Who the last action item went to, offered first for the next one.
     last_owner: String,
     /// Choosing the Tico that action items go to.
