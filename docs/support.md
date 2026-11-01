@@ -7,11 +7,17 @@ is sent and kept.
 
 ## For a human
 
-Help (the `?` at the bottom of the sidebar) has a short overview on the left (what Tico is, where to start, how to get
-help, and links to the docs) and **Support** in the right rail, using the same sizing and resize controls as the rest of
-the app. On a narrower screen, such as a phone, Support comes first: your
-requests, **New request** and the composer are at the top without scrolling. A **Read the Tico docs** link sits right under
-Support, and the short overview follows below it.
+There is no Help button or Support button in the sidebar. Support opens as a pop-up over the screen you are on. You reach it in
+three ways:
+
+- **Ask Tico** (the row at the bottom of the sidebar, or **Cmd/Ctrl+J**; on a phone, the dot in the middle of the tab bar),
+  then **Loop in Support**, the link at the top right of the panel. This shares the chat's last 20 turns with Tico support in
+  one tap: no form and no diagnostics. See [The Assistant](assistant.md).
+- A button that opens Support on a request: **Report this**, **Want help setting up?**, **Send to support** under
+  **Setup check** on Health, or **Open** on the **Tico support replied.** notice.
+- Any link to `#/support`. Old `#/help` links open the same pop-up.
+
+The pop-up has a row of links at the top: **View docs**, **What's new** and **Your requests (N)**.
 
 - **Your requests (N)** is a list of all N requests, newest activity first. Each row shows the first line of your first message
   as its title and the rest of it as a muted preview, a status badge
@@ -25,8 +31,8 @@ Support, and the short overview follows below it.
   same. While a message is sending the composer is locked. If it fails, **Not sent** and the reason appear under the box
   and the message stays in it; nothing has reached Tico support. A sent message appears in the conversation at once.
 - The trash icon in the corner of a conversation deletes it, after you confirm.
-- With no requests yet, the rail is an **Ask Tico support** prompt with the composer. When support is off on the server
-  (demo, rehearsal or `TICO_SUPPORT=off`), Help says so in place of the rail.
+- With no requests yet, the pop-up opens on a new request with the composer ready. When support is off on the server
+  (demo, rehearsal or `TICO_SUPPORT=off`), the pop-up says so in place of the composer.
 
 | Field | |
 |---|---|
@@ -55,14 +61,15 @@ grouped, and how many entries were evicted or omitted. Computer heartbeat time d
 This is redacted technical evidence, not an anonymous ticket: the message and optional email/install ID may identify you.
 The allowlist and examples are in [PRIVACY.md](../PRIVACY.md#support-diagnostics).
 
-Replies appear in their conversation, raise a notice, and put the number of unread replies inside Ask, on **Tico support**
-under its **+**; Ask's button carries no count. Opening a
+Replies appear in their conversation, raise a **Tico support replied.** notice, and mark the request with a dot in
+**Your requests**. No unread count shows anywhere: not on Ask's button, not in the pop-up's links. A reply that lands in a chat
+you have looped Tico support into shows there as support's messages. Opening a
 conversation, or having it open in front of you when a reply lands, marks it read; there is no Mark read or Refresh button.
-Replies are checked when you open Help, when the app regains focus or comes back into view, and on the timer below. Background
+Replies are checked when you open Support, when the app regains focus or comes back into view, and on the timer below. Background
 refresh preserves your draft, focus and scroll position. Deleting removes the request and all its attachments at HQ and its
 local ticket record. Closed requests remain readable.
 
-- Any signed-in human may file a ticket from the form. A personal API token, the Assistant acting for a human, and a bot
+- Any signed-in human may file a ticket from Support. A personal API token, the Assistant acting for a human, and a bot
   may not file one directly; they report through a person's yes (below).
 - Demo mode has no Contact support: nothing leaves a demo. Neither does a rehearsal (`TICO_REHEARSAL=1`), which reports "rehearsal" as the reason it is off.
 - `TICO_SUPPORT=off` in the server's `.env` removes it from an install that must not phone out. `TICO_HQ_URL` points it at your
@@ -70,8 +77,8 @@ local ticket record. Closed requests remain readable.
 
 ### Reach us from anywhere
 
-- **Tico support** opens from any link to `#/support` (a chat reply's "Loop in Tico support", `#/help`): Help with a
-  new request, ready to write; a `#/support/manage` link opens one asking for full management. **Loop in Support**,
+- **Tico support** opens from any link to `#/support` (a chat reply's "Loop in Tico support", or an old `#/help` link): the
+  pop-up with a new request, ready to write; a `#/support/manage` link opens one asking for full management. **Loop in Support**,
   the link at the top right of the Ask panel, shows an open request's messages in that chat as blue-gray bubbles and
   writes your replies to it. It sends the chat's last 20
   turns, keys cut out, to that request, or to a new request sent at once when none is open ([The Assistant](assistant.md)). Empty lists carry no support line of their own.
@@ -82,7 +89,7 @@ local ticket record. Closed requests remain readable.
   names left out). The composer shows **Attached:** with a **Remove** button, and **Review and edit** shows the exact
   attachment before anything is sent. Every string in it goes through the same redactor as the rest of the diagnostics.
   When support is off, no Report this is offered.
-- **Setup check** in Help runs the checks `tico-setup doctor` runs, from the server against its own address (HTTPS
+- **Setup check** on Health (Settings > Health) runs the checks `tico-setup doctor` runs, from the server against its own address (HTTPS
   certificate, `/healthz`, the sign-in redirect for Google or Microsoft sign-in, the runner hostname), plus Health's red
   and yellow lines, and shows each with a plain fix. A Tico that serves only its own computer has no HTTPS to check.
   The server container, tunnel connector and `.env` permissions need a shell on the server, so for those it points to
@@ -145,7 +152,7 @@ No email and no diagnostics bundle go this way: diagnostics need a person to pre
 When a reply is not enough, an owner or an admin can let the Tico team into their app for a while. It is off until you
 start it, it always starts from one of your own open requests, and it ends on its own.
 
-1. Open the request in Help > Support and press **Let Tico support in**, under the conversation. Where it is off, the same place says
+1. Open the request in Support (from **Your requests**, or from one of the buttons above) and press **Let Tico support in**, under the conversation. Where it is off, the same place says
    why in one line (the server's `TICO_SUPPORT_ACCESS`, or the team rule).
 2. Choose what support may do:
    - **App only**: what an admin sees (settings, Health, computers, bots, tasks and run history), and changes to setup only: a
@@ -188,7 +195,7 @@ the bot makes it ([Tico HQ](tico-hq.md#support-access)).
 ## Beta features
 
 A Beta feature works today and may still change. The app shows a **Beta** pill beside it (its nav item, settings section,
-page title or template card), Help lists them under **Beta features**, and its page in this manual opens with a Beta note.
+page title or template card), What's new lists them under **Beta features**, and its page in this manual opens with a Beta note.
 @diagnostics lists the ones your team has on or in use; a Windows computer through WSL 2 reports itself as Linux, so the
 server cannot tell one is connected. One list in `backend/beta.py` drives all of these.
 
@@ -212,8 +219,8 @@ the times, and the thread. It keeps no IP address and no log of a request. Ticke
 with **Delete**, or the team when you ask (put "delete this request" in the ticket, or open an issue). The 13 month rule is for
 the anonymous install rows only. The reference for HQ's routes is in [telemetry.md](telemetry.md#support-tickets).
 
-Your Tico asks HQ about your tickets only when the app asks: when you open Help, when the app regains focus or comes back
-into view, and every 30 seconds while the support rail is open, or about every 5 minutes elsewhere while the app is open
+Your Tico asks HQ about your tickets only when the app asks: when you open Support, when the app regains focus or comes back
+into view, and every 30 seconds while the Support pop-up is open, or about every 5 minutes elsewhere while the app is open
 and you have a ticket that is not closed. It has no timer of its own. Each time, it asks about a ticket at most once every
 30 seconds when it was written on in the last hour or is the one you have open, every 5 minutes when it is open or
 answered but quiet, and every 6 hours when it is closed, the most recent first.
@@ -303,7 +310,7 @@ Without `HQ_STAFF_KEY` the watcher does nothing. To watch GitHub, list the repos
 
 **Fixed in.** Link a ticket to the ticoteam/tico issue or pull request that will fix it (`software/hq-tickets link TK-XXXXXXXX
 '#712'`). When a release ships it, HQ posts "Fixed in vX, update here" on the ticket by itself ([tico-hq.md](tico-hq.md#messages-known-issues-and-fixed-in-notices)),
-and the human sees it in Help under Your requests. HQ also keeps the known issues by version that Help shows.
+and the human sees it in Support under Your requests. HQ also keeps the known issues by version that What's new shows.
 
 `software/hq-tickets list`, `show TK-XXXXXXXX`; or with curl and the key in a header (`Authorization: Bearer $HQ_STAFF_KEY`):
 `GET /v1/staff/tickets?status=open`, `POST /v1/staff/tickets/{id}/reply` with `{"body": "..."}`, `POST .../status` with
