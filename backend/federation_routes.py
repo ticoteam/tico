@@ -15,7 +15,8 @@ from .auth import validate_identity
 from .models import Contract
 from .store import Problem
 
-LIST_LIMIT = 50          # threads and members a status read lists, newest first
+LIST_LIMIT = 50          # threads and peerings a status read lists, newest first
+MEMBER_LIMIT = 20        # members listed per thread: 50 threads x 20 members stays inside the list byte budget
 HQ_MESSAGES = {"unknown_install": "That install has no key with Tico HQ yet.",
                "no_key": "Register this install's key first.",
                "already_peered": "This install already has a peering with that one.",
@@ -81,7 +82,7 @@ def install(app, settings, store, auth):
         for row in c.execute("SELECT * FROM federation_threads ORDER BY updated_at DESC LIMIT ?", (LIST_LIMIT,)).fetchall():
             row = dict(row)
             members = [dict(m) for m in c.execute("SELECT install, status, joined_at_seq, removed_at_seq FROM federation_members "
-                                                  "WHERE thread_id=? ORDER BY install LIMIT ?", (row["thread_id"], LIST_LIMIT))]
+                                                  "WHERE thread_id=? ORDER BY install LIMIT ?", (row["thread_id"], MEMBER_LIMIT))]
             out.append({"thread_id": row["thread_id"], "home": row["home_install"] == me, "home_install": row["home_install"],
                         "applied_through": row["applied_through"], "high_seq": row["high_seq"],
                         "removed_at_seq": row["removed_at_seq"], "members": members if row["home_install"] == me else []})

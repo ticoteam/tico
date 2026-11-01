@@ -283,7 +283,8 @@ def sign_and_post(hq, sender, to, body, envelope_id=None, sent=None):
     signature = E.sign(private, sender.id, to.id, envelope_id, sent, body)
     headers = {"Authorization": "Bearer " + sender.key, "x-tico-to": to.id, "x-tico-envelope": envelope_id,
                "x-tico-sent-at": str(sent), "x-tico-key-id": key["key_id"], "x-tico-signature": signature}
-    response = httpx.post(URL, headers=headers, content=body, transport=httpx.MockTransport(hq))
+    with httpx.Client(transport=httpx.MockTransport(hq)) as http:
+        response = http.post(URL, headers=headers, content=body)
     assert response.status_code == 201, response.text
     return envelope_id
 
@@ -391,8 +392,8 @@ def test_the_kill_switch_stops_both_directions_and_resume_repairs(make_side, hq)
     resumed = a.client.post(f"/api/v2/federation/peerings/{row_for(a, b.id)}/pause", json={"paused": False}, headers=OWNER)
     assert resumed.json()["paused"] is False
     drive(a, b, rounds=3)
-    assert texts(b, there) == ["while paused"]
-    assert "from beta while paused" not in texts(a, tid)
+    assert "while paused" in texts(b, there)            # what was missed is caught up on resume
+    assert "from beta while paused" in texts(a, tid)    # and beta's own message reaches alpha
 
 
 def test_an_envelope_whose_actor_is_in_another_install_is_refused(make_side, hq):
@@ -420,7 +421,8 @@ def test_an_envelope_seen_twice_is_refused_the_second_time(make_side, hq):
     sign_and_post(hq, b, a, body, envelope_id=envelope_id)
     drive(a)
     assert texts(a, tid) == ["once"]
-    assert sorted(outcomes(a, b, envelope_id)) == ["applied", "replay"]
+    assert outcomes(a, b, envelope_id) == ["applied"]    # one receipt per envelope: the second copy is refused
+    assert hq.mail.get(a.id, []) == []                    # and it was taken and acknowledged like any other
 
 
 # ----------------------------------------------------------------------------- the CLI and the MCP tools
