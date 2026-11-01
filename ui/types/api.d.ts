@@ -1218,6 +1218,7 @@ export type FinanceAccess = {
   default: "everything" | "team_expenses" | "own_expenses" | "none";
   grants: Array<Record<string, unknown>>;
   kind: string;
+  may_grant: boolean;
   reports_to: string | null;
   rights: Array<string> | null;
   team: string | null;
@@ -1505,6 +1506,7 @@ export type FinanceDocument = (FinanceDocumentRow & {
 });
 
 export type FinanceDocumentRow = {
+  account?: Record<string, unknown> | null;
   aging?: string | null;
   approved_at?: string | null;
   approved_by?: string | null;
@@ -1526,6 +1528,8 @@ export type FinanceDocumentRow = {
   number: string;
   origin?: string;
   paid: number;
+  paid_by?: string | null;
+  paid_on?: string | null;
   pay_on?: string | null;
   payment?: {
   amount: number;
@@ -1537,7 +1541,9 @@ export type FinanceDocumentRow = {
   payment_link?: string | null;
   remaining: number;
   sent_at?: string | null;
+  split?: boolean;
   status: string;
+  team?: string | null;
   total: number;
   vendor?: {
   id?: string | null;
@@ -6776,7 +6782,9 @@ export type ListFinanceBillsParams = {
   aging?: "current" | "1_30" | "31_60" | "61_90" | "over_90" | null;
   cursor?: string | null;
   end?: string | null;
+  late?: boolean;
   limit?: number;
+  order?: "date" | "paid_on";
   q?: string;
   start?: string | null;
   status?: string | null;
@@ -6835,6 +6843,7 @@ export type ListFinanceInvoicesParams = {
   cursor?: string | null;
   customer_id?: string | null;
   end?: string | null;
+  late?: boolean;
   limit?: number;
   q?: string;
   start?: string | null;

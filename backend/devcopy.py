@@ -154,7 +154,8 @@ KEEP = frozenset((
     "items", "locations", "projects", "record_aliases",
     # Growth, brand and go-to-market (backend/growth.py, backend/brand_gtm.py)
     "brand_drafts", "brand_versions", "gtm_drafts", "gtm_versions", "gtm_sources", "growth_channels", "growth_ideas",
-    "growth_idea_channels", "growth_cohorts", "growth_settings",
+    "growth_idea_channels", "growth_cohorts", "growth_settings", "growth_segments", "growth_channel_segments",
+    "growth_idea_segments",
 ))
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.

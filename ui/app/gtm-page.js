@@ -1,12 +1,12 @@
-/* ui/app/gtm-page.js — The Go-to-market page (#/strategy/gtm[/tab], brand-and-gtm spec §5) and its card on the Strategy
+/* ui/app/gtm-page.js — The Go-to-market page (#/growth/gtm[/tab], brand-and-gtm spec §5) and its card on the Strategy
    page. Tabs: Motion, Buyer and Wishes edit the GTM draft (published with a note, like Brand; the draft pieces are in
-   brand-page.js); Channels and Sources are rows that change without a publish (/api/v2/growth/channels, /sources, one
-   source per kind of truth, two flagged); Model is the KPI tree from /api/v2/growth/kpis, whose place in the tree the
+   brand-page.js); Channels and Sources are rows that change without a publish (/api/v2/growth/channels, each with the
+   segments it reaches, and /sources, one source per kind of truth, two flagged); Model is the KPI tree from /api/v2/growth/kpis, whose place in the tree the
    owner sets through the KPI update route (POST /api/v2/kpis/{id}).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-let GT = null;            // the open Go-to-market page: {load, tab, data, props, publishing, ch, src, conflicts, kpis}
+let GT = null;            // the open Go-to-market page: {load, tab, data, props, publishing, ch, src, conflicts, kpis, segs}
 const GT_TABS = [['motion', 'Motion'], ['buyer', 'Buyer'], ['channels', 'Channels'], ['sources', 'Sources'], ['model', 'Model'], ['wishes', 'Wishes']];
 // The motions and what each sets by default (spec §5.2).
 const GT_MOTIONS = [
@@ -72,18 +72,18 @@ function pageGtm() {
     chMay: keep.chMay, srcMay: keep.srcMay};
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
-  main.innerHTML = redesignStrategyHead('gtm') + `<div id="gr-body" class="gr-body">${GT.data ? '' : skelRows(6, {dot: false})}</div>`;
+  main.innerHTML = growthHead('gtm') + `<div id="gr-body" class="gr-body">${GT.data ? '' : skelRows(6, {dot: false})}</div>`;
   if (GT.data) { gtmDraw(); GT.drawn = true; }
   void gtmRead(GT);
 }
 async function gtmRead(state) {
   try {
-    const [data, ch, src, k] = await Promise.all([get('/v2/gtm', {fresh: true}), get('/v2/growth/channels', {fresh: true}),
-      get('/v2/growth/sources', {fresh: true}), get('/v2/growth/kpis', {fresh: true}).catch(() => ({kpis: []}))]);
+    const [data, ch, src, k, segs] = await Promise.all([get('/v2/gtm', {fresh: true}), get('/v2/growth/channels', {fresh: true}),
+      get('/v2/growth/sources', {fresh: true}), get('/v2/growth/kpis', {fresh: true}).catch(() => ({kpis: []})), gsRead(true)]);
     if (GT !== state) return;
-    const next = {data, ch: ch.channels || [], src: src.sources || [], conflicts: src.conflicts || [], kpis: k.kpis || [], chMay: ch.may_edit, srcMay: src.may_edit};
+    const next = {data, ch: ch.channels || [], src: src.sources || [], conflicts: src.conflicts || [], kpis: k.kpis || [], segs, chMay: ch.may_edit, srcMay: src.may_edit};
     // A page already drawn from the last read keeps what is being typed when nothing changed.
-    const same = state.drawn && JSON.stringify(next) === JSON.stringify({data: state.data, ch: state.ch, src: state.src, conflicts: state.conflicts, kpis: state.kpis, chMay: state.chMay, srcMay: state.srcMay});
+    const same = state.drawn && JSON.stringify(next) === JSON.stringify({data: state.data, ch: state.ch, src: state.src, conflicts: state.conflicts, kpis: state.kpis, segs: state.segs, chMay: state.chMay, srcMay: state.srcMay});
     Object.assign(state, next);
     if (same) return;
   } catch (e) { if (GT === state) $('#gr-body').innerHTML = grFail(e); return; }
@@ -95,9 +95,11 @@ function gtmDraw() {
   const d = state.data, doc = ['motion', 'buyer', 'wishes'].includes(state.tab);
   const tabs = `<nav class="gr-tabs gt-tabs" aria-label="Go-to-market">${GT_TABS.map(([k, label]) =>
     `<a href="${GTM_ROUTE}${k === 'motion' ? '' : '/' + k}"${state.tab === k ? ' aria-current="page"' : ''}>${esc(label)}</a>`).join('')}</nav>`;
-  body.innerHTML = grCrumbs('#/strategy', 'Strategy', 'Go-to-market', grDocToolsHtml(d, state)) + (state.publishing ? grDocPublishHtml() : '') + tabs
+  // The draft's tools sit in the section head, beside the Growth tabs.
+  patchHTML($('#strat-actions'), grDocToolsHtml(d, state));
+  body.innerHTML = (state.publishing ? grDocPublishHtml() : '') + tabs
     + `<div class="gt-pane">${({motion: gtMotionHtml, buyer: gtBuyerHtml, wishes: gtWishesHtml, channels: gtChannelsHtml, sources: gtSourcesHtml, model: gtModelHtml})[state.tab](state)}</div>`;
-  grDocBind(body, '/v2/gtm', state, gtmDraw, gtmBookHtml);
+  grDocBind($('#main'), '/v2/gtm', state, gtmDraw, gtmBookHtml);
   if (doc) gtDocBind(state); else if (state.tab === 'channels') gtChannelsBind(state); else if (state.tab === 'sources') gtSourcesBind(state); else gtModelBind(state);
 }
 const gtBody = state => (grDocMay(state.data) ? state.data.draft?.body || state.data.published?.body : state.data.published?.body) || {};
@@ -182,13 +184,16 @@ function gtDocBind(state) {
 function gtChannelsHtml(state) {
   const may = state.chMay ?? grAdmin(), list = (state.ch || []).filter(c => !c.retired_at).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || String(a.name).localeCompare(String(b.name)));
   const src = id => (state.src || []).find(s => s.id === id), kpi = id => (state.kpis || []).find(k => k.id === id);
+  // The Segments column shows once the company has segments or a channel names one.
+  const segs = (state.segs || []).length > 0 || list.some(c => (c.segments || []).length);
   const add = may ? `<div class="gr-bar"><span class="spacer"></span><button class="primary" type="button" data-ch-add>+ Channel</button></div>` : '';
   if (!list.length) return add;
   return add + `<div class="card gr-scroll"><table class="gr-t"><thead><tr><th scope="col">Channel</th><th scope="col">Stage</th><th scope="col">Owner</th>
-    <th scope="col" class="num">Budget / mo</th><th scope="col">Numbers from</th><th scope="col">Guardrail</th>${may ? '<th scope="col"><span class="sr-only">Edit</span></th>' : ''}</tr></thead>
+    <th scope="col" class="num">Budget / mo</th>${segs ? '<th scope="col">Segments</th>' : ''}<th scope="col">Numbers from</th><th scope="col">Guardrail</th>${may ? '<th scope="col"><span class="sr-only">Edit</span></th>' : ''}</tr></thead>
     <tbody>${list.map(c => { const s = src(c.source_id), g = kpi(c.guardrail_kpi_id); return `<tr>
       <th scope="row"><span class="gr-cn"><span class="gr-track gr-track-${esc(c.track)}">${c.track === 'brand' ? 'Brand' : 'Performance'}</span>${esc(c.name)}</span>${c.why ? `<span class="muted gr-sub">${esc(c.why)}</span>` : ''}</th>
       <td>${grStage(c.stage)}</td><td>${esc(grWho(c.owner_ref) || '—')}</td><td class="num">${esc(grUsd(c.budget_month))}</td>
+      ${segs ? `<td><span class="gs-chips" data-ch-segs="${esc(c.slug)}">${gsTags(state.segs, c.segments)}</span></td>` : ''}
       <td>${s ? `<a href="${GTM_ROUTE}/sources">${esc(s.system)}</a>` : '—'}</td>
       <td>${g ? `${esc(g.name)}${c.guardrail_max != null ? ` ≤ ${esc(kpiNum(c.guardrail_max, g.unit))}` : ''}` : '—'}</td>
       ${may ? `<td><button class="ghost small" type="button" data-ch-edit="${esc(c.slug)}">Edit</button></td>` : ''}</tr>`; }).join('')}</tbody></table></div>`;
@@ -205,12 +210,15 @@ function gtChannelDialog(state, c = null) {
     <div class="gr-pair">${grField('Guardrail', `<select name="guardrail_kpi_id">${grOpts(kp.map(k => [k.id, k.name]), c?.guardrail_kpi_id, '—')}</select>`)}
     ${grField('Max', `<input name="guardrail_max" inputmode="decimal" value="${esc(c?.guardrail_max ?? '')}">`)}</div>
     ${grField('Why', `<textarea name="why" rows="2" maxlength="1000">${esc(c?.why || '')}</textarea>`)}
+    ${gsChecks(state.segs, c?.segments || [])}
     ${c ? '<button type="button" class="ghost danger gr-retire" data-retire>Retire</button>' : ''}`;
   const dlg = grDialog(c ? c.name : 'New channel', body, c ? 'Save' : 'Add', async form => {
     const el = form.elements, v = n => el[n].value.trim();
     const out = {name: v('name'), track: v('track'), stage: v('stage'), owner_ref: v('owner_ref') || null, budget_month: grNum(v('budget_month')),
       source_id: v('source_id') || null, guardrail_kpi_id: v('guardrail_kpi_id') || null, guardrail_max: grNum(v('guardrail_max')), why: v('why')};
     if (!out.name) throw new Error('A name');
+    const segs = gsPicked(form);
+    if (segs && (!c || segs.slice().sort().join() !== gsIds(state.segs, c.segments).sort().join())) out.segments = segs;
     if (c) await patch(`/v2/growth/channels/${encodeURIComponent(c.slug)}`, out);
     else {
       out.slug = v('slug').toLowerCase();
