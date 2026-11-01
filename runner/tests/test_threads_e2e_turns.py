@@ -128,7 +128,11 @@ def test_the_loop_guard_holds_a_bots_wakes_and_a_persons_message_resumes_them(ap
         turn = claim(api, peer, "cpo")
         assert turn is not None, f"round {n}: a person's mention wakes cpo"
         before = started()
-        finish(api, peer, turn, f"@ops ping {n}")
+        # A plain bot-to-bot message waits for its recipient's next run (backend/bot_to_bot.py), so cpo's ping is flagged
+        # needs-action: that is the bot-caused wake the loop guard counts. The flag is written with cpo's own turn token.
+        post(api, f"threads/{t['id']}/messages", {"text": f"@ops ping {n}", "kind": "say",
+                                                  "refs": {"needs_action": True}}, token=turn["token"])
+        finish(api, peer, turn, "")
         until(lambda: started() > before or held() > 0, f"round {n}: ops runs, or its wake is held")
         if held():
             break
