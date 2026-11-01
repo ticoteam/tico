@@ -66,6 +66,10 @@ def _name_stem(word):
     return R._stem(word)
 
 
+# Words that make a title a department head's: its card is the department's `lead`.
+HEAD_WORDS = frozenset("head chief director vp".split())
+
+
 def _name_words(text):
     """(stem, word) for each word of a job's name, two letters and up: "QA", "HR" and "UX" name the work."""
     words = re.findall(r"[a-z0-9]+", str(text or "").lower().replace("'", ""))
@@ -123,14 +127,20 @@ def _best_card(cards, title, team=""):
     group = str(team or "").strip().lower()
     best = None
     stems = {stem for stem, _ in _name_words(title)} - RANKS
+    heads = bool({word for _, word in _name_words(title)} & HEAD_WORDS)
     for card in cards:
         name = {stem for stem, _ in _name_words(card["name"])}
         shared = len(name & work)
-        if not shared:
+        # A head's title names the field it heads, which the head's card may not: "Head of HR" is the Head of People,
+        # whose department and tags say HR.
+        field = heads and card.get("lead") and bool(work & {stem for text in [card["department"], *card["tags"]]
+                                                            for stem, _ in _name_words(text)})
+        if not shared and not field:
             continue
         score, _ = R._match(card, words, common)
-        # More of the title in the name wins first: "Security Engineer", not "Security and Compliance Analyst".
-        score = (shared, len(name & stems), score)
+        # A head's title wants the head's card, then more of the title in the name wins: "Security Engineer", not
+        # "Security and Compliance Analyst".
+        score = (heads and bool(card.get("lead")), shared, len(name & stems), score)
         key = (score, card["department"] == group, -len(card["name"]), card["template"])
         if best is None or key > best[0]:
             best = (key, card)

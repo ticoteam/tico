@@ -101,7 +101,9 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
     _, cards = recruiting._recruitable(api.app.state.onboarding)
     for title, template in (("QA engineer", "issue-triage"), ("Security engineer", "security-engineer"),
                             ("Marketing manager", "marketing-lead"), ("Customer support lead", "support-lead"),
-                            ("Head of People", "people-lead"), ("Developer Advocates", "developer-advocate")):
+                            ("Head of People", "people-lead"), ("Developer Advocates", "developer-advocate"),
+                            ("Head of HR", "people-lead"), ("HR generalist", "people-hr"),
+                            ("Head of engineering", "engineering-lead"), ("Director of marketing", "marketing-lead")):
         assert recruiting._best_card(cards, title)["template"] == template
     # Every template's own name, and its plural, is that template's job.
     misses = [card["name"] for card in cards for title in (card["name"], card["name"] + "s")
