@@ -2365,6 +2365,21 @@ def _refs(node, found):
             _refs(value, found)
 
 
+TAGS['Federation'] = ("Shared threads between Tico installs through Tico HQ: this install's key, peerings (both installs "
+                      "approve, and a pause stops one) and the threads it shares (docs/federation.md).")
+STABLE.extend([
+    ('/api/v2/federation', 'get', 'Federation', 'getFederation', "This install's key id, Gateway, peerings and shared threads (no key material)", None),
+    ('/api/v2/federation/keys', 'post', 'Federation', 'createFederationKey', "Make this install's federation key and register it with Tico HQ", None),
+    ('/api/v2/federation/keys/rotate', 'post', 'Federation', 'rotateFederationKey', 'A new key; the old one is retired and every peering needs approving again', None),
+    ('/api/v2/federation/peerings', 'post', 'Federation', 'requestFederationPeering', 'Ask another install to peer; an Idempotency-Key is required', None),
+    ('/api/v2/federation/peerings/{peering_id}/approve', 'post', 'Federation', 'approveFederationPeering', "Approve a peering after checking the other install's key; active once both approve", None),
+    ('/api/v2/federation/peerings/{peering_id}/pause', 'post', 'Federation', 'setFederationPeeringPause', 'The kill switch: while paused nothing crosses the peering in either direction', None),
+    ('/api/v2/federation/peerings/{peering_id}/revoke', 'post', 'Federation', 'revokeFederationPeering', 'End a peering; a new request starts over', None),
+    ('/api/v2/federation/threads/{thread_id}/installs', 'post', 'Federation', 'shareFederationThread', 'Share a thread this install owns with an active peer; it gets the thread from now on', None),
+    ('/api/v2/federation/threads/{thread_id}/installs/{install_id}', 'delete', 'Federation', 'unshareFederationThread', 'Remove an install from a thread this install owns; it gets the removal and nothing after', None),
+])
+
+
 def spec(app):
     """The v2 document for this app: the stable operations of `app.openapi()`, described."""
     full = copy.deepcopy(app.openapi())

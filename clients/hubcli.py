@@ -342,6 +342,13 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            who changed caps, spend, groups, automations and inboxes; the owner sees all
     hub automation inbox <inbox> [--send on|off]
                                            an inbox's send switch (email, slack:dm, slack:#chan); off = drafts only
+    hub peer list                          this install's federation: key, Gateway, peerings, shared threads
+    hub peer key | rotate-key              make this install's key, or a new one (both sides approve again)
+    hub peer request <install>             ask another install to peer with this one; it approves, then you do
+    hub peer approve|pause|resume|revoke <peering>
+                                           approve it, the kill switch, resume it, or end it
+    hub peer share|unshare <thread> <install>
+                                           give an active peer a thread you own, or take an install out of one
     hub trigger list                       webhooks people and bots made; an automation runs on one
     hub trigger create <name> [--id X]     make one; the address (with its secret) is shown once
     hub trigger show <id>                  address, settings, 24-hour counts, automations
@@ -2529,6 +2536,31 @@ def parser():
     s.add_argument("--group", help="only this group: task, approval, needs_you, bot, release, meeting, strategy, market, "
                                    "inbound, health, webhook, tico, custom")
     s.set_defaults(fn="event-types")
+    peer = sub.add_parser("peer", help="federation: shared threads with other Tico installs, through Tico HQ").add_subparsers(dest="sub")
+    s = peer.add_parser("list", help="this install's key, Gateway, peerings and shared threads")
+    s.set_defaults(fn="peer list")
+    s = peer.add_parser("key", help="make this install's federation key (does nothing when it has one)")
+    s.set_defaults(fn="peer key")
+    s = peer.add_parser("rotate-key", help="a new key; every peering needs approving again on both sides")
+    s.set_defaults(fn="peer rotate-key")
+    s = peer.add_parser("request", help="ask another install to peer with this one; it approves, then you do")
+    s.add_argument("install", help="the other install's id: gi_ and 24 hex digits")
+    s.set_defaults(fn="peer request")
+    for verb, text in (("approve", "approve a peering, having checked the other install's key"),
+                       ("pause", "the kill switch: nothing crosses a paused peering"),
+                       ("resume", "let a paused peering carry again; what was missed is caught up"),
+                       ("revoke", "end a peering; a new request starts over")):
+        s = peer.add_parser(verb, help=text)
+        s.add_argument("peering", help="the peering's id from `hub peer list`")
+        s.set_defaults(fn="peer " + verb)
+    s = peer.add_parser("share", help="give an active peer a thread you own: it gets the thread from now on")
+    s.add_argument("thread", help="the thread's id")
+    s.add_argument("install", help="the other install's id")
+    s.set_defaults(fn="peer share")
+    s = peer.add_parser("unshare", help="take an install out of a thread you own; it gets the removal and nothing after")
+    s.add_argument("thread", help="the thread's id")
+    s.add_argument("install", help="the other install's id")
+    s.set_defaults(fn="peer unshare")
     trigger = sub.add_parser("trigger", help="webhooks that start automations (Settings > Webhooks)").add_subparsers(dest="sub")
     s = trigger.add_parser("list")
     s.set_defaults(fn="trigger list")
