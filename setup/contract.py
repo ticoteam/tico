@@ -26,8 +26,8 @@ RUNNER_IMAGE = "ghcr.io/ticoteam/tico-runner"
 RUNNER_CONTAINER = "tico-runner"
 RUNNER_VOLUME = "tico-runner"
 RUNNER_DIR = "/opt/tico-runner"
-ENROLLMENTS_PATH = "/api/v2/enrollments"  # POST, owner auth: {"code", "expires"}; codes last 15 minutes, single use
-COMPUTERS_PATH = "/api/v2/operations"  # GET, owner auth: {"machines": [{label, last_seen, revoked_at}], "server_time"}
+ENROLLMENTS_PATH = "/api/v2/enrollments"  # POST, owner auth: {"code", "expires_at", "operator"}; codes last 15 minutes, single use
+COMPUTERS_PATH = "/api/v2/operations"  # GET, owner auth: {"machines": [{label, last_seen_at, revoked_at}], "server_time"}
 ONLINE_SECONDS = 60  # a computer is online when it reported in this recently (backend/onboarding.py)
 
 HEALTH_PATH = "/healthz"

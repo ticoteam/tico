@@ -74,7 +74,7 @@ def lose_probe(mode):
             run.back_at = now + at(0, 40)
         else:
             with w.store.transaction() as c:
-                c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (job,))
+                c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job,))
             bot.lose()
     return during
 

@@ -2460,7 +2460,7 @@ impl Recorder {
             } else {
                 self.actor_name(actor)
             };
-            let at = message["created"].as_str().unwrap_or("");
+            let at = message["created_at"].as_str().unwrap_or("");
             rows.push((
                 millis(at),
                 rows.len(),

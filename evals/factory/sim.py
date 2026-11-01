@@ -443,7 +443,7 @@ class Run:
             for j in self.w.sql("SELECT j.bot, j.state, j.held, j.wake_class, m.refs FROM jobs j "
                                 "JOIN messages m ON m.id=j.message_id WHERE json_extract(m.refs,'$.task') IN "
                                 "(SELECT ? UNION SELECT from_task FROM task_relations WHERE to_task=? AND kind='parent') "
-                                "AND j.state NOT IN ('done','cancelled')", (t["id"], t["id"])):
+                                "AND j.state NOT IN ('done','canceled')", (t["id"], t["id"])):
                 out.append(f"  job {j['bot']} {j['state']} held={j['held']} {j['wake_class'] or ''}")
         out += self.diagnostics()
         return out

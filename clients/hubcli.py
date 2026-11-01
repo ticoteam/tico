@@ -153,7 +153,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            them, and your reports' goals; --all is every goal
     hub goal show <id>                     the goal, its KPIs (target, colour), tasks, check-ins, history
     hub goal read-back '[{"kind":"goal_create","owner":"company","title":"..."}]'
-    hub goal save POST /api/v2/goals '<body_json>' --on-behalf-of turn
+    hub goal save POST /api/v2/goals '<body>' --on-behalf-of turn
     hub goal create --owner me|X --title "..." [--parent ID] [--body "..."|--body-file f] [--top] [--bet ID]
                                            set a goal; a parent is optional. With one, it supports that goal
     hub goal status <id> red|yellow|green|done|dropped "<one sentence>"
@@ -1552,7 +1552,7 @@ def parser():
                                       "cite that yes with --on-behalf-of turn (or its message id) on each save.").add_subparsers(dest="sub")
     s = goal.add_parser("read-back", help="Tico writes the draft; saves nothing without a plain yes",
                         description="Post 1 to 20 changes as Tico's read-back. Saves nothing without a plain yes. "
-                                    "Returns message_id, text and exact method/path/body_json steps. After yes, use goal save "
+                                    "Returns message_id, text and exact method/path/body steps. After yes, use goal save "
                                     "for each agreed step; replace {new} with the first save's goal id using --created-goal. "
                                     "On not_agreed read back again; never retry the save.")
     s.add_argument("changes", help="JSON array: kind goal_create, goal_update, measure_add, target_set, measure_remove or suggestion, "
@@ -1561,7 +1561,7 @@ def parser():
     s = goal.add_parser("save", help="save one exact read-back step after the owner's plain yes")
     s.add_argument("method", choices=["POST"])
     s.add_argument("path", help="the step's /api/v2 path")
-    s.add_argument("body_json", help="the step's exact body_json string, unchanged")
+    s.add_argument("body", help="the step's exact body string, unchanged")
     s.add_argument("--created-goal", dest="created_goal", help="first save's goal id, to replace {new} in later paths")
     s.add_argument("--on-behalf-of", required=True, help="turn or the message id of the owner's plain yes")
     s.set_defaults(fn="goal save")

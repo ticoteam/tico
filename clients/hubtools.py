@@ -143,7 +143,7 @@ def _key(args, suffix=""):
 # ----------------------------------------------------------------------------- identity, messages
 from clients.tico import APIError  # noqa: E402
 
-@tool("hub_whoami", "Who you are to Tico: actor, role, Computer and attempt, or the External "
+@tool("hub_whoami", "Who you are to Tico: actor, role, Computer and run, or the External "
       "agent harness (a Hermes profile) when that is what runs you.", {})
 def whoami(api, args):
     return api.get("me")
@@ -1299,7 +1299,7 @@ GOAL_YES = _s("The owner's plain yes to a goal read-back: turn or its message id
 
 @tool("hub_goal_read_back", "Tico writes and stores the read-back in the owner's Strategy Bot chat. "
                             "Saves nothing without a plain yes. "
-      "Returns message_id, text and exact method/path/body_json steps; save agreed steps with hub_goal_save. "
+      "Returns message_id, text and exact method/path/body steps; save agreed steps with hub_goal_save. "
       "Kinds: goal_create, goal_update, measure_add, target_set, measure_remove, suggestion.",
       {"changes": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 20}},
       required=("changes",), writes=True)
@@ -1312,11 +1312,11 @@ def goal_read_back(api, args):
     return api.post("goals/read-back", {"changes": changes}, key=_key(args))
 
 
-@tool("hub_goal_save", "Save one exact method/path/body_json step returned by hub_goal_read_back after the owner's plain yes. "
+@tool("hub_goal_save", "Save one exact method/path/body step returned by hub_goal_read_back after the owner's plain yes. "
       "For later steps of a new goal, created_goal is the id from its first save. On not_agreed read back again; do not retry.",
       {"method": {"type": "string", "enum": ["POST"]}, "path": _s("The step's /api/v2 path"),
-       "body_json": _s("The exact body_json string, unchanged"), "created_goal": _s("First save's goal id for {new}"),
-       "on_behalf_of": GOAL_YES}, required=("method", "path", "body_json", "on_behalf_of"), writes=True)
+       "body": _s("The step's exact body string, unchanged"), "created_goal": _s("First save's goal id for {new}"),
+       "on_behalf_of": GOAL_YES}, required=("method", "path", "body", "on_behalf_of"), writes=True)
 def goal_save(api, args):
     path = args["path"]
     if "{new}" in path:
@@ -1330,9 +1330,9 @@ def goal_save(api, args):
         raise ValueError("path must be a goal read-back save step")
     if not args.get("on_behalf_of"):
         raise ValueError("cite the owner's plain yes with on_behalf_of")
-    body = json.loads(args["body_json"])
+    body = json.loads(args["body"])
     if not isinstance(body, dict):
-        raise ValueError("body_json must be a JSON object")
+        raise ValueError("body must be a JSON object")
     return _asked(api, args).post(path.removeprefix("/api/v2/"), body, key=_key(args))
 
 
@@ -4921,7 +4921,7 @@ def computers(api, args):
         if args.get("section"):
             raise ValueError("Name the computer whose section you want: `computer`")
         return {"computers": [computer_summary(r) for r in rows],
-                "services": [{"name": s.get("name"), "ok": not s.get("last_error"), "last_success": s.get("last_succeeded_at")}
+                "services": [{"name": s.get("name"), "ok": not s.get("last_error"), "last_succeeded_at": s.get("last_succeeded_at")}
                              for s in listing.get("services") or []],
                 "detail": "One computer in full: hub_computer_list computer=<label or id>"}
     match = [r for r in rows if wanted == r.get("id")] or [
