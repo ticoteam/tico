@@ -75,7 +75,7 @@ def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch
         c.execute("DELETE FROM registry_metadata WHERE key='last-stop:ops'")
         for slug, run in (("cpo", "marked"), ("finance", "finance-marked")):
             c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
-                      ("last-stop:" + slug, encode({"run_id": run, "at": H.now()})))
+                      ("last-stop:" + slug, encode({"attempt_id": run, "at": H.now()})))
         for slug in ("ops", "cpo", "coo", "finance"):
             H.status_set(c, H.KEEPER, slug, state="crashed", focus="Checked the queue")
     each = lines(api, ["coo", "cpo", "finance", "ops"], primed=False)[0]
@@ -128,7 +128,7 @@ def busy(api, machine, first, count, live=1):
         runs = [row[0] for row in c.execute("SELECT id FROM attempts ORDER BY created")]
         for n, slug in enumerate(slugs[live:]):
             c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
-                      ("last-stop:" + slug, encode({"run_id": runs[n % len(runs)], "at": H.now()})))
+                      ("last-stop:" + slug, encode({"attempt_id": runs[n % len(runs)], "at": H.now()})))
 
 
 def page(api, monkeypatch, path, token="ana-test"):

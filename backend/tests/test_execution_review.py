@@ -220,7 +220,7 @@ def test_usage_limited_turn_requeues_and_cools_off_longer_after_a_third_strike(a
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'completed'
         assert H.status(c, 'ops')['state'] == 'idle'
         assert c.execute("SELECT count(*) FROM events WHERE action='attempt.fallback' AND target=?", (fourth['id'],)).fetchone()[0] == 1
-    run = next(r for r in api.get('/api/runs', headers=headers()).json() if r['run'] == fourth['id'])
+    run = next(r for r in api.get('/api/runs', headers=headers()).json() if r['id'] == fourth['id'])
     assert run['fallback'] == 'gemini-api' and run['exit'] == 0
     assert 'Fallback: gemini-api' in api.get(f"/api/runs/{fourth['id']}/log", headers=headers()).text
 

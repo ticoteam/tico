@@ -135,9 +135,9 @@ def test_a_bot_the_reader_may_not_see_is_unnamed_in_turns_overloads_and_the_summ
     assert cara["runs"][0]["bot"] == "counsel" and cara["runs"][0]["id"] == attempt["id"]
     assert cara["overloads"][0]["bots"][0]["bot"] == "counsel" and "counsel" in cara["summary"]
     dee = get(api, f"computers/{rid}/performance?hours=1", token=tokens["dee"])     # Sales sees the bot, cannot read it
-    assert dee["runs"][0] == dee["runs"][0] | {"bot": "counsel", "model": "legal-model-x", "attempt": None}
+    assert dee["runs"][0] == dee["runs"][0] | {"bot": "counsel", "model": "legal-model-x", "id": None}
     seen = get(api, f"computers/{rid}/performance?hours=1", token=tokens["stranger"])
-    assert seen["runs"][0] == seen["runs"][0] | {"bot": "", "model": "", "attempt": None}
+    assert seen["runs"][0] == seen["runs"][0] | {"bot": "", "model": "", "id": None}
     assert seen["busiest"]["bots"] == [{"bot": "", "model": "", "runs": 1}]
     assert seen["overloads"][0]["bots"] == [{"bot": "", "model": "", "runs": 1}]
     assert "counsel" not in str(seen) and "legal-model-x" not in str(seen) and "another bot" in seen["summary"]

@@ -80,13 +80,13 @@ function fixtures() {
        took_s: 298, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [{kind: 'grace', at: ago(610)}],
        reason: 'Lease expired before completion', next: {kind: 'resumed', by: 'keeper', at: ago(130), note: 'Resumed automatically: it recorded no tool call.'},
        // Resumed by Tico, then the job ran try 2: the decision is history, with no state of the later try.
-       job_state: 'running', decision: {decision: 'resume', attempt_id: 'a1', current: false, state: null, by: 'keeper', by_kind: 'tico',
+       job_state: 'running', decision: {decision: 'resume', run_id: 'a1', current: false, state: null, by: 'keeper', by_kind: 'tico',
          at: '2026-10-26T07:05:00Z', note: 'Resumed automatically: it recorded no tool call.'}, subagents: [], background: []},
       // The Dev 563 shape: cut at its time limit, then dismissed by BotOps with a note (job_recovery).
       {run: 'a0', bot: 'eng', job: 'j0', try: 1, tries: 1, state: 'interrupted', outcome: 'interrupted', created: ago(5400), started: ago(5398), finished: ago(1800),
        took_s: 3598, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [], reason: 'Timeout: max_run_minutes (60 minutes)',
        next: {kind: 'dismissed', by: 'bot:botops', at: '2026-10-26T09:50:45.103088Z', note: 'Finished before the 60-min limit. Nothing to redo.'},
-       job_state: 'canceled', decision: {decision: 'dismiss', attempt_id: 'a0', current: true, state: 'canceled', by: 'bot:botops', by_kind: 'botops',
+       job_state: 'canceled', decision: {decision: 'dismiss', run_id: 'a0', current: true, state: 'canceled', by: 'bot:botops', by_kind: 'botops',
          at: '2026-10-26T09:50:45.103088Z', note: 'Finished before the 60-min limit. Nothing to redo.'}, subagents: [], background: []}]};
   return {tasks: [parent, plain, ...others], tree, runView};
 }

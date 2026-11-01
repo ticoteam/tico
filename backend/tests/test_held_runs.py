@@ -359,7 +359,7 @@ def test_queued_work_behind_a_held_run_joins_its_resumed_turn(api, monkeypatch, 
     assert 'Queued on this task while this run was held' in body
     assert 'VERDICT: changes PR #12 head ' + 'a' * 40 in body
     assert all(f'Subtask result {i}' in body for i in range(1, count))
-    assert {(j['state'], j['run_id']) for j in behind} == {('input', turn['id'])}
+    assert {(j['state'], j['attempt_id']) for j in behind} == {('input', turn['id'])}
     # The other task's comment keeps its own turn.
     others = queued_on(api, other_id)
     assert others and {j['state'] for j in others} == {'queued'}
