@@ -44,6 +44,7 @@ Every message gets an `origin_id` ('<uuid v7>@<install id>') and a `revision`; `
 import contextvars
 import json
 import os
+import re
 import secrets
 import time
 import uuid
@@ -137,6 +138,9 @@ TABLES = (
     "kind TEXT NOT NULL CHECK (kind IN ('mention','ask','assign')), in_audience INTEGER NOT NULL DEFAULT 1, "
     "created_at TEXT NOT NULL, UNIQUE (message_id, actor))",
     "CREATE INDEX IF NOT EXISTS message_mentions_actor ON message_mentions(actor, created_at)",
+    "CREATE TABLE IF NOT EXISTS message_reactions (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, actor TEXT NOT NULL, "
+    "emoji TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE (message_id, actor, emoji))",
+    "CREATE INDEX IF NOT EXISTS message_reactions_actor ON message_reactions(actor, created_at)",
     "CREATE TABLE IF NOT EXISTS message_revisions (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, "
     "origin_id TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT, deleted INTEGER NOT NULL DEFAULT 0, "
     "actor TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE (origin_id, revision))",
@@ -807,11 +811,15 @@ def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FR
         if not v.runner_turn:
             names = _qlist(v.member_names(c))
             slug = _q(H.actor_id(v.actor))
+            hidden = v.hidden_read(c)
+            home_bot = (f"(r.owner_actor IS NOT NULL AND r.owner_actor NOT IN {_qlist(sorted(hidden))})"
+                        if hidden is not None else "0")
             # A legacy root (no stored audience) reads as _legacy_denial: a participant, or the room's bot.
             terms = (f"({terms} OR COALESCE({x}root_id,{x}id) IN (SELECT r.id FROM {t('conversations')} r WHERE "
                      f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='r')} WHERE value={me}) OR "
                      f"(r.audience IS NULL AND {_LEGACY_ROOM_BOT.format(r='r')}={slug}) OR "
-                     f"(r.audience='home' AND r.owner_actor={me}) "
+                     f"(r.audience='home' AND (r.owner_actor={me} OR {home_bot})) OR r.audience='company' OR "
+                     f"(r.audience='team' AND r.audience_group_id IN {_qlist(v.chain(c))}) "
                      f"OR (r.audience IN ('members','personal') AND EXISTS (SELECT 1 FROM {t('thread_members')} tm "
                      f"WHERE tm.thread_id=r.id AND tm.actor IN {names}))))")
         out = f"({terms}) AND {fence}"
@@ -1279,7 +1287,7 @@ def _actor_of(principal):
 
 
 def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None, via=None,
-         origin=None, checked=None, attachments=None):
+         origin=None, checked=None, replay=None, attachments=None):
     """Write a message (contract §3.1). Inside the caller's write transaction; `checked` is the org-rule verdict its
     preflight returned outside it."""
     actor, v = _actor_of(principal)
@@ -1332,14 +1340,19 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
         others = [a for a in _dm_members(c, root_of(c, thread)) if a != actor]
         target = others[0] if len(others) == 1 else None
     if checked is not None:
+        # The org-rule verdict its preflight returned, applied inside the write: a hold writes nothing (no message, no
+        # delivery) and answers with the hold; a warning goes on the recipients' copy. `replay` is what Send anyway
+        # runs (org_rule_check's threads replayer: this post as the recorded principal, the check skipped).
         from . import org_rule_check
-        verdict = checked
-        if getattr(verdict, "held", False) or (isinstance(verdict, dict) and verdict.get("held")):
-            return org_rule_check.answer(verdict)
-        try:
-            org_rule_check.apply(c, verdict, {"thread_id": thread["id"], "body": text}, None)
-        except TypeError:
-            pass
+        gate = org_rule_check.apply(c, checked, {"thread_id": thread["id"], "body": text}, replay)
+        if gate and gate.get("moved"):
+            raise Problem("moved", "The thread changed while the message was checked; send it again", 409,
+                          retryable=True)
+        if gate and gate.get("held"):
+            _emit_message_held(c, thread, actor, gate)
+            return org_rule_check.answer(gate)
+        if gate and gate.get("warn"):
+            text = org_rule_check.warned_text(gate, text)
     token = POSTING.set({"origin": origin or {}, "attachments": bool(attachments), "via": via})
     try:
         if target and not str(target).startswith(OUTSIDE_PREFIXES):
@@ -1349,7 +1362,22 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
     finally:
         POSTING.reset(token)
     _audit(c, actor, "message:" + message["id"], None, {"thread_id": thread["id"], "kind": kind}, via)
+    _emit_message_created(c, thread, message)
     return message
+
+
+# Outgoing thread webhooks (backend/thread_webhooks.py, threads/surfaces) hook in here at integration: create, post
+# and a held post each call one. Inside the write transaction; they must only enqueue.
+def _emit_thread_created(c, thread):
+    return None
+
+
+def _emit_message_created(c, thread, message):
+    return None
+
+
+def _emit_message_held(c, thread, actor, verdict):
+    return None
 
 
 def _write_open(c, actor, text, thread, kind, refs, target):
@@ -1427,6 +1455,7 @@ def create(c, principal, *, title="", audience="members", audience_group_id=None
     for who in [actor] + resolved:
         _follow(c, row["id"], who, "starter" if who == actor else "joined", 0)
     _event(c, actor, "thread.created", row["id"], {"audience": audience, "members": resolved})
+    _emit_thread_created(c, row)
     _audit(c, actor, "thread:" + row["id"], None, {"audience": audience, "title": row["subject"],
                                                     "members": resolved})
     return view(c, principal, thread_row(c, row["id"]))
@@ -1507,6 +1536,24 @@ def home(c, owner_actor, *, create=True):
     return row
 
 
+SUB_THREAD_TITLE = 60
+_MARKDOWN = re.compile(r"(!?\[([^\]]*)\]\([^)]*\))|[*_`~>#]+")
+_MENTION = re.compile(r"(?<![\w@])@[\w.\-]+")
+
+
+def sub_thread_title(body):
+    """A sub-thread's stored title: its parent message's first line, without markdown or @mentions, clipped to about
+    60 characters at a word, with "…" when clipped. Stored, so a later edit of the parent leaves it."""
+    line = next((part for part in str(body or "").splitlines() if part.strip()), "")
+    line = _MARKDOWN.sub(lambda m: m.group(2) if m.group(1) else "", line)
+    line = " ".join(_MENTION.sub("", line).split())
+    if len(line) <= SUB_THREAD_TITLE:
+        return line
+    head = line[:SUB_THREAD_TITLE + 1]
+    cut = head.rsplit(" ", 1)[0] if " " in head else line[:SUB_THREAD_TITLE]
+    return cut.rstrip(" ,.;:-") + "…"
+
+
 def sub_thread(c, principal, parent_message_id):
     """The message's sub-thread, made if it has none. Two starts at once make one: the loser reads the winner's row
     (the parent_message_id index is unique)."""
@@ -1523,7 +1570,8 @@ def sub_thread(c, principal, parent_message_id):
     import sqlite3
     try:
         c.execute("SAVEPOINT threads_sub_thread")
-        row = _insert_thread(c, actor, title="", audience=None, parent=parent, parent_message_id=parent_message_id,
+        row = _insert_thread(c, actor, title=sub_thread_title(parent_message.get("body")), audience=None,
+                             parent=parent, parent_message_id=parent_message_id,
                              kind=parent.get("kind") or "chat", owner_actor=None)
         c.execute("RELEASE threads_sub_thread")
     except sqlite3.IntegrityError:
@@ -1532,7 +1580,91 @@ def sub_thread(c, principal, parent_message_id):
         found = c.execute("SELECT id FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()
         return thread_row(c, found[0])
     _event(c, actor, "thread.sub_thread", row["id"], {"parent": parent["id"], "message": parent_message_id})
+    _emit_thread_created(c, row)
     return row
+
+
+def reply_destination(c, principal, thread, parent_message_id):
+    """Where a run's reply goes: the sub-thread of `parent_message_id` when that message is in the same thread tree
+    as the run's thread (made if it has none), else the run's thread. A parent from another tree never moves a reply
+    there: a run answers only inside the tree its attempt was granted."""
+    thread = thread_row(c, thread)
+    if not parent_message_id or thread is None:
+        return thread["id"] if thread else None
+    if thread.get("parent_message_id") == parent_message_id:
+        return thread["id"]
+    parent = H.message(c, parent_message_id)
+    home = thread_row(c, parent["conversation_id"]) if parent else None
+    if home is None or (home.get("root_id") or home["id"]) != (thread.get("root_id") or thread["id"]):
+        return thread["id"]
+    return sub_thread(c, principal if isinstance(principal, str) else _actor_of(principal)[0], parent_message_id)["id"]
+
+
+# ----------------------------------------------------------------------------- reactions (spec section 3.4)
+MAX_EMOJI = 32
+MAX_REACTIONS_PER_MESSAGE = 50     # distinct emoji a message carries; the rest are refused
+
+
+def _reactable(c, principal, message_id):
+    """The message, when the principal reads it (C1 plus the per-message check); else 404."""
+    actor, v = _actor_of(principal)
+    message = H.message(c, message_id)
+    if not message or _carrier_message(message) or (v is not None and not message_readable(c, v, message)):
+        raise Problem("not_found", "Message not found", 404)
+    return actor, message
+
+
+def _carrier_message(message):
+    refs = message.get("refs") if isinstance(message.get("refs"), dict) else H._json(message.get("refs_json"), {})
+    return bool((refs or {}).get("carries"))
+
+
+def react(c, principal, message_id, emoji):
+    """Add the principal's reaction. Idempotent: the same emoji twice is one reaction. Returns the message's
+    reactions."""
+    actor, message = _reactable(c, principal, message_id)
+    emoji = str(emoji or "").strip()
+    if not emoji or len(emoji) > MAX_EMOJI or any(ch.isspace() for ch in emoji):
+        raise Problem("emoji", "A reaction is one emoji or a short :name:", 422)
+    distinct = c.execute("SELECT COUNT(DISTINCT emoji) FROM message_reactions WHERE message_id=? AND emoji<>?",
+                         (message["id"], emoji)).fetchone()[0]
+    if distinct >= MAX_REACTIONS_PER_MESSAGE:
+        raise Problem("too_many", "This message has as many different reactions as it can hold", 422)
+    added = c.execute("INSERT OR IGNORE INTO message_reactions(id,message_id,actor,emoji,created_at) VALUES(?,?,?,?,?)",
+                      (_new_id(), message["id"], actor, emoji, _now())).rowcount
+    if added:
+        _event(c, actor, "message.reacted", message["id"], {"emoji": emoji, "thread": message["conversation_id"]})
+        _audit(c, actor, "message:" + message["id"], None, {"reaction": emoji})
+    return reactions(c, [message["id"]]).get(message["id"], [])
+
+
+def unreact(c, principal, message_id, emoji):
+    """Remove the principal's own reaction (a no-op when there is none). Returns the message's reactions."""
+    actor, message = _reactable(c, principal, message_id)
+    emoji = str(emoji or "").strip()
+    gone = c.execute("DELETE FROM message_reactions WHERE message_id=? AND actor=? AND emoji=?",
+                     (message["id"], actor, emoji)).rowcount
+    if gone:
+        _event(c, actor, "message.unreacted", message["id"], {"emoji": emoji, "thread": message["conversation_id"]})
+        _audit(c, actor, "message:" + message["id"], {"reaction": emoji}, None)
+    return reactions(c, [message["id"]]).get(message["id"], [])
+
+
+def reactions(c, message_ids):
+    """{message id: [{emoji, count, actors}]} for messages the caller already checked, oldest emoji first. `actors`
+    keeps the first 20 per emoji."""
+    ids = [i for i in dict.fromkeys(message_ids) if i]
+    out = {}
+    for start in range(0, len(ids), 500):
+        part = ids[start:start + 500]
+        for row in c.execute("SELECT message_id,emoji,actor FROM message_reactions WHERE message_id IN (%s) "
+                             "ORDER BY created_at, rowid" % ",".join("?" * len(part)), part):
+            bucket = out.setdefault(row[0], {})
+            entry = bucket.setdefault(row[1], {"emoji": row[1], "count": 0, "actors": []})
+            entry["count"] += 1
+            if len(entry["actors"]) < 20:
+                entry["actors"].append(row[2])
+    return {mid: list(found.values()) for mid, found in out.items()}
 
 
 # ----------------------------------------------------------------------------- membership and attention
@@ -1936,6 +2068,7 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
             u = unread(c, v, s["id"])
             subs[s["parent_message_id"]] = {"id": s["id"], "count": n, "last_seq": s["last_seq"],
                                             "unread": u["unread"], "more": n > 0}
+    marks = reactions(c, ids)
     out, size, hidden_open = [], 0, False
     for m in rows:
         if m.get("deleted_at"):
@@ -1951,6 +2084,8 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
             hidden_open = False
         if m["id"] in subs and not item.get("hidden"):
             item["sub_thread"] = subs[m["id"]]
+        if m["id"] in marks and not item.get("hidden") and not item.get("deleted"):
+            item["reactions"] = marks[m["id"]]
         size += len(json.dumps(item, default=str))
         if out and size > max_bytes:
             more = True
@@ -2020,6 +2155,33 @@ def add_outside_delivery(c, thread_id, recipient, *, added_by=H.KEEPER):
               "VALUES(?,?,?,'member',?,?,?)", (_new_id(), row["id"], recipient, added_by, now, now))
     _event(c, added_by, "thread.outside_linked", row["id"], {"recipient": recipient})
     return {"thread_id": row["id"], "recipient": recipient}
+
+
+def remove_outside_member(c, principal, thread_id, actor):
+    """Take an outside destination (`slack:<channel>`, `peer:<install>`) off a thread: its member row goes and its
+    unsent deliveries become `moot`. One check: Manage on the thread, or an admin (who runs the bridges); a system
+    write (an actor string) is the keeper's only. Idempotent: a destination not linked returns removed False."""
+    who, v = _actor_of(principal)
+    recipient = str(actor or "")
+    if not recipient.startswith(OUTSIDE_PREFIXES):
+        raise Problem("recipient", "An outside destination is slack:<channel> or peer:<install>", 422)
+    if v is not None:
+        row = require(c, v, thread_id)
+        if not (can_manage(c, v, row) or (v.is_person and v.admin(c))):
+            raise Problem("forbidden", "Only someone who manages this thread, or an admin, can do that", 403)
+    else:
+        if who != H.KEEPER:
+            raise Problem("forbidden", "Only the keeper changes a thread's outside links without a viewer", 403)
+        row = thread_row(c, thread_id)
+        if row is None:
+            raise Problem("not_found", "Thread not found", 404)
+    gone = c.execute("DELETE FROM thread_members WHERE thread_id=? AND actor=?", (row["id"], recipient)).rowcount
+    if gone:
+        c.execute("UPDATE message_deliveries SET state='moot', updated_at=? WHERE thread_id=? AND recipient=? "
+                  "AND state='pending'", (_now(), row["id"], recipient))
+        _event(c, who, "thread.outside_removed", row["id"], {"recipient": recipient})
+        _audit(c, who, "thread:" + row["id"], {"outside_member": recipient}, None)
+    return {"thread_id": row["id"], "recipient": recipient, "removed": bool(gone)}
 
 
 def outside_due(c, prefix, limit=50):

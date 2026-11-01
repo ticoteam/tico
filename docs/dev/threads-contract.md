@@ -147,6 +147,13 @@ CREATE TABLE IF NOT EXISTS message_revisions (
   UNIQUE (origin_id, revision));
 CREATE INDEX IF NOT EXISTS message_revisions_message ON message_revisions(message_id, revision);
 
+-- Reactions (spec section 3.4). One row per actor and emoji; react needs read access to the message (C1 plus the
+-- per-message check), and only the reactor removes their own.
+CREATE TABLE IF NOT EXISTS message_reactions (
+  id TEXT PRIMARY KEY, message_id TEXT NOT NULL, actor TEXT NOT NULL, emoji TEXT NOT NULL, created_at TEXT NOT NULL,
+  UNIQUE (message_id, actor, emoji));
+CREATE INDEX IF NOT EXISTS message_reactions_actor ON message_reactions(actor, created_at);
+
 -- Per-install counters. name='messages' is the message seq (initialised to MAX(messages.rowid)).
 CREATE TABLE IF NOT EXISTS sequences (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
 ```
@@ -221,7 +228,7 @@ threads.AUDIENCES, threads.PRIVATE_AUDIENCES, threads.SAFE_REF_KEYS
 
 ```python
 threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None,
-             via=None, origin=None, checked=None, attachments=None) -> message view
+             via=None, origin=None, checked=None, replay=None, attachments=None) -> message view
 ```
 - `c`: inside the caller's write transaction (`mutate`/`store.transaction`). `principal`: a `threads.viewer(...)`, or
   an actor string for system writes (`keeper`, a migration) which skip C1.
@@ -233,8 +240,10 @@ threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_mes
   `{"origin_id", "revision", "install", "actor"}` for replicated inbound (Slack, federation); a repeat
   `(origin_id, revision)` returns the existing message and writes nothing.
 - `checked`: the org-rule verdict from `org_rule_check.preflight` (step 5, done by the caller **outside** the
-  transaction). `post` applies it with `org_rule_check.apply`; a held verdict returns `org_rule_check.answer(...)`
-  and writes no message.
+  transaction). `post` applies it with `org_rule_check.apply(c, checked, payload, replay)` and reads **apply's
+  return**: held → returns `org_rule_check.answer(gate)` and writes no message and no delivery; warn → the warned
+  text is written; moved → 409 `moved` (retryable). `replay`: what Send anyway runs (the rules-people track's
+  `threads` replayer: `threads.post` as the recorded principal, the check skipped).
 
 Step order (§3.1): (1) the caller authenticated `principal` (actor, represented principal, provenance); (2) C1 post
 right (`can_post`); (3) server mention parse (`threads.mentions(c, thread, body)`); (4) screening for outside
@@ -260,6 +269,8 @@ threads.create(c, principal, *, title="", audience="members", audience_group_id=
 threads.dm(c, principal, members, *, title="") -> thread view      # audience='personal', reuses an open DM with exactly these members
 threads.home(c, owner_actor, *, create=True) -> thread row          # lazy Home for bot:/human:/group: (a bot's open shared room is its Home); None when create=False and none
 threads.sub_thread(c, principal, parent_message_id) -> thread row   # get-or-create, race-safe on the unique index
+# A new sub-thread's `subject` is threads.sub_thread_title(parent body): first line, no markdown or @mentions,
+# clipped near 60 chars at a word with "…". Stored once; editing the parent later leaves it.
 ```
 - Roots default to `members` with the starter as `owner` member. Making a root public (`team`/`company`) is
   `threads.set_audience` by its starter or an admin (no Write needed on the group).
@@ -378,9 +389,15 @@ threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
 - Local holds and screening change only local delivery state, never the canonical message.
 
 ## 7. Migration (same release, `threads.migrate(c)`, once)
-Existing conversations (and conversations any legacy writer inserts later) keep `audience` NULL: their audience is
-derived live from `room_key`, `scope`, `kind` and `task_id` (`threads.audience_of`; SQL `COALESCE(audience, ...)`),
-because legacy writers set those columns after the insert. Likewise `owner_actor` stays as written and a shared
+Existing conversations (and conversations any legacy writer inserts later) keep `audience` NULL. **Who reads a root
+with no stored audience is decided by the pre-threads rules, exactly** (`threads._legacy_denial`, and the legacy term
+of `threads.readable_sql`): a task room by the task; a person by `scope` (personal: its owner, the Strategy room
+owner-only; shared: `rooms.shared_member_ids` plus Read on the bot, live; otherwise the owner or a participant), a
+bound meeting room by the meeting; an agent bot by participation or `rooms.room_bot`; a run by its attempt's grant.
+The only narrowing: a person who left, or whose sign-in is off, reads nothing. The e2e reader-set goldens
+(`backend/tests/fixtures/threads/reader-sets-*.json`) pin it. The audience *label* is still derived live from
+`room_key`, `scope`, `kind` and `task_id` (`threads.audience_of`) for sessions, wakes and posting rules,
+because legacy writers set those columns after the insert. A sub-thread of such a root reads as its root. Likewise `owner_actor` stays as written and a shared
 room's owner is derived (`threads.home_owner`). Only threads made by `threads.create`/`home`/`sub_thread` store an
 audience.
 
@@ -433,13 +450,16 @@ audience `members|personal|participants|meeting`, a private task's thread, or a 
 view in `backend/thread_events.py`):
 ```json
 {"seq": 900, "thread_id": "...", "root_id": "...",
- "kind": "created|renamed|archived|unarchived|audience|members|read|sub_thread|counters",
+ "kind": "created|renamed|archived|unarchived|audience|members|read|sub_thread|counters|reactions",
  "thread": {<thread view>},                      // created|renamed|archived|unarchived|audience|members|sub_thread
  "read": {"last_read_seq": 4411},                // kind=read, only to that reader
- "counters": {"last_seq": 4411, "last_unread_seq": 4400}}   // kind=counters
+ "counters": {"last_seq": 4411, "last_unread_seq": 4400},   // kind=counters
+ "message_id": "...", "reactions": [{"emoji": ":+1:", "count": 2, "actors": ["human:ana", "bot:legal"]}]}
+                                                 // kind=reactions, only when the viewer reads that message
 ```
 `changes.kind` values written by core's triggers: `created`, `renamed`, `archived`, `unarchived`, `audience`,
-`members`, `sub_thread`, `counters` (on `conversations`), `read` (on `thread_followers`, `ref` = actor).
+`members`, `sub_thread`, `counters` (on `conversations`), `read` (on `thread_followers`, `ref` = actor),
+`reactions` (on `message_reactions`, `ref` = message id).
 
 ## 10. REST shapes (§3.4; T2 builds the routes on these service functions)
 
@@ -468,14 +488,26 @@ Thread view (`threads.view(c, viewer, row)`):
 | `GET/POST/DELETE /api/v2/threads/{id}/members[/{actor}]` | `threads.members` / `add_member` / `remove_member` |
 | `PUT/DELETE /api/v2/threads/{id}/follow {notify}` | `threads.follow` / `unfollow` |
 | `PATCH/DELETE /api/v2/messages/{id}` | `threads.edit_message` / `delete_message` |
+| `PUT/DELETE /api/v2/messages/{id}/reactions/{emoji}` | `threads.react(c, principal, message_id, emoji)` / `threads.unreact(...)` → `[{"emoji", "count", "actors"}]`; 404 when the message is unreadable, 422 for a bad emoji or past 50 distinct |
 
 Timeline messages: the existing message view plus `thread_id`, `root_id`, `seq`, `revision`, `origin_id`,
-`edited_at`, `deleted` (tombstone: no body), and hidden rows as `{"id", "seq", "thread_id", "hidden": true}`.
+`edited_at`, `deleted` (tombstone: no body), `reactions` (`threads.reactions(c, ids)`, when any), and hidden rows as `{"id", "seq", "thread_id", "hidden": true}`.
 `/api/v2/conversations/*` stay as aliases for one release. Every list is paged and byte-capped.
 
 ## 11. Outside tracks' hooks
+- Thread webhooks: `threads._emit_thread_created(c, thread)` (create and sub_thread),
+  `threads._emit_message_created(c, thread, message)` (post) and `threads._emit_message_held(c, thread, actor,
+  verdict)` (a held post) are no-ops on core; integration points them at `backend/thread_webhooks.py`. They run inside
+  the write transaction and must only enqueue.
+- Runner replies in a sub-thread: the claim's `message` carries `parent_message_id` (its thread's), the runner sends
+  it back as `Completion.parent_message_id`, and `threads.reply_destination(c, actor, thread, parent_message_id)`
+  puts the reply in that message's sub-thread when it is in the run's thread tree (else the run's thread).
 - Slack/federation inbound: `threads.post(..., via="slack"|"peer", origin={...})`; edits and deletes:
   `threads.apply_revision`.
+- `threads.remove_outside_member(c, principal, thread_id, actor) -> {"thread_id", "recipient", "removed"}` takes a
+  `slack:`/`peer:` destination off a thread (Manage on the thread or an admin; an actor-string principal must be
+  `keeper`); its pending deliveries become `moot`; audit row and `thread.outside_removed` event. Bridges call this,
+  never a direct `thread_members` delete.
 - Outbound: `threads.add_outside_delivery(c, thread_id, recipient)` registers a linked destination; core writes a
   delivery per message (and per revision) for it; the track's sender reads
   `threads.outside_due(c, prefix, limit)` and settles with `threads.settle_delivery(c, delivery_id, state, error=None)`.
