@@ -63,7 +63,7 @@ def test_a_message_to_a_hermes_bot_waits_in_its_inbox_and_the_agent_answers_over
     assert [m["body"] for m in get(api, "conversations/" + other["conversation_id"] + "/messages", token=token)] == ["Private question."]
     ops = post(api, "chat/ops", {"text": "Hello Tico."})
     assert api.get("/api/v2/conversations/" + ops["conversation_id"] + "/messages",
-                   headers=headers(token)).status_code == 403
+                   headers=headers(token)).status_code == 404
 
 
 def test_agent_credentials_rotate_revoke_and_follow_the_bots_state(api):

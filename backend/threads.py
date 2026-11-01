@@ -249,6 +249,11 @@ def _triggers():
             "UPDATE message_deliveries SET delivered_at=NEW.delivered_at, "
             "state=CASE WHEN state='pending' AND NEW.delivered_at IS NOT NULL THEN 'delivered' ELSE state END, "
             f"updated_at={_NOW_SQL} WHERE carrier_id=NEW.id;"),
+        # A deleted message keeps no words anywhere: every writer that deletes (a thread delete, a task comment taken
+        # back, a hidden roadmap comment) empties its revision history too.
+        "threads_revisions_deleted": (
+            "AFTER UPDATE OF deleted_at ON messages WHEN NEW.deleted_at IS NOT NULL AND OLD.deleted_at IS NULL",
+            "UPDATE message_revisions SET body='' WHERE message_id=NEW.id;"),
     }
 
 
@@ -2043,7 +2048,8 @@ def apply_revision(c, origin, *, body=None, deleted=False):
     if row.get("deleted_at") or revision <= int(row.get("revision") or 0):
         c.execute("INSERT OR IGNORE INTO message_revisions(id,message_id,origin_id,revision,body,deleted,actor,"
                   "created_at) VALUES(?,?,?,?,?,?,?,?)", (_new_id(), row["id"], oid, revision,
-                                                          None if deleted else body, int(bool(deleted)),
+                                                          None if deleted or row.get("deleted_at") else body,
+                                                          int(bool(deleted)),
                                                           str(origin.get("actor") or row["from_actor"]), _now()))
         return None
     actor = str(origin.get("actor") or row["from_actor"])
