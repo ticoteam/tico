@@ -20,6 +20,7 @@
     statusKey: '',
     ui: {
       search: '', ask: '', addItem: '', peopleQuery: '', ownerQuery: '', tq: '', signin: null, legacy: '', key: '', xai: '',
+      editLine: null, editDraft: '', editInitial: '', removeLine: null, // { id, seq }: a draft or question belongs to one meeting
       hot: 0, mention: null,
       panel: null, opened: null, pop: null, tsearch: false, showAudio: false, confirm: null,
       form: null, saving: false, titleDraft: null, notesDraft: null, prevPage: 'library', stick: true,
@@ -616,12 +617,32 @@
         previous = null;
       }
       const who = !b.me && previous !== b.speaker ? `<div class="who" style="color:${colors[b.speaker]}">${esc(b.speaker)}</div>` : '';
-      items.push(`<div class="turn ${b.me ? 'me' : ''} ${b.partial ? 'partial' : ''}">${who}<div class="bubble">${b.paragraphs.map((p) => `<p>${highlight(p, q)}</p>`).join('')}</div></div>`);
+      items.push(`<div class="turn ${b.me ? 'me' : ''} ${b.partial ? 'partial' : ''} ${b.removed ? 'removed' : ''}">${who}<div class="bubble">${sharedLine(b, q)}</div></div>`);
       previous = b.speaker;
     }
     const tail = blocks[blocks.length - 1];
     if (a.pending && !m.setup.length && !recording && !q && !tail.partial) items.push(`<div class="turn"><div class="bubble typing"><i></i><i></i><i></i></div></div>`);
     return items;
+  }
+  /** A line shared live: its text, or the edit form or removal question while one is open. */
+  function sharedLine(b, q) {
+    const seq = b.seq ?? null;
+    const current = S.transcript?.id;
+    if (seq !== null && S.ui.editLine?.id === current && S.ui.editLine?.seq === seq) {
+      // The draft is typed into the box without a re-render, so the box keeps its place and focus.
+      return `<textarea class="line-edit" data-model="editDraft" rows="3" aria-label="Edit line" spellcheck="false">${esc(S.ui.editInitial)}</textarea><div class="line-actions"><button class="btn small quiet" data-act="cancel-line">Cancel</button><button class="btn small" data-act="save-line" data-seq="${seq}">Save</button></div>`;
+    }
+    let html = b.paragraphs.map((p) => `<p>${highlight(p, q)}</p>`).join('');
+    if (seq === null) return html;
+    if (b.edited && !b.removed) html += `<i class="line-note">edited</i>`;
+    if (S.ui.removeLine?.id === current && S.ui.removeLine?.seq === seq) {
+      return html + `<div class="line-actions"><span class="faint">Remove this line in Tico?</span><button class="btn small quiet" data-act="cancel-remove-line">Cancel</button><button class="btn small danger" data-act="remove-line" data-seq="${seq}">Remove</button></div>`;
+    }
+    if (b.editable) {
+      const remove = b.removed ? '' : `<button class="icon-btn tiny" data-act="ask-remove-line" data-seq="${seq}" title="Remove line" aria-label="Remove line">${icon('trash', 12)}</button>`;
+      html += `<div class="line-tools"><button class="icon-btn tiny" data-act="edit-line" data-seq="${seq}" title="Edit line" aria-label="Edit line">${icon('pencil', 12)}</button>${remove}</div>`;
+    }
+    return html;
   }
   /** Replaces only the rows that changed, so a partial turn grows in place instead of jumping. */
   function patchTranscript(body) {
@@ -990,6 +1011,11 @@
     S.ui.tsearch = false;
     S.ui.tq = '';
     S.ui.ask = '';
+    // Drafts and removal questions belong to the meeting they were started in.
+    S.ui.editLine = null;
+    S.ui.editDraft = '';
+    S.ui.editInitial = '';
+    S.ui.removeLine = null;
     S.page = 'meeting';
     S.meeting = null;
     S.hash.meeting = '';
@@ -1115,6 +1141,46 @@
     'close-pop': () => { S.ui.pop = null; render(); },
     'send-meeting': (el) => { S.ui.pop = null; act('send_meeting', { id: el.dataset.id, destination: el.dataset.dest }); },
     finish: () => act('finish_live'),
+    'edit-line': (el) => {
+      const seq = Number(el.dataset.seq);
+      const id = S.transcript?.id;
+      const block = (S.transcript?.blocks || []).find((b) => b.seq === seq);
+      if (!block || !id) return;
+      S.ui.editLine = { id, seq };
+      S.ui.editInitial = block.paragraphs.join(' ');
+      S.ui.editDraft = S.ui.editInitial;
+      S.ui.removeLine = null;
+      render();
+      document.querySelector('.line-edit')?.focus();
+    },
+    'cancel-line': () => { S.ui.editLine = null; render(); },
+    'save-line': async (el) => {
+      const edit = S.ui.editLine;
+      if (!edit) return;
+      const text = (S.ui.editDraft || '').trim();
+      await act('edit_shared_line', { id: edit.id, seq: edit.seq, text });
+      // A refused save (being sent, ended in Tico, empty) keeps the draft open with the reason shown.
+      const block = (S.transcript?.blocks || []).find((b) => b.seq === edit.seq);
+      const saved = S.transcript?.id === edit.id && block && block.paragraphs[0] === text;
+      if (saved && S.ui.editLine?.id === edit.id && S.ui.editLine?.seq === edit.seq) {
+        S.ui.editLine = null;
+        render();
+      }
+    },
+    'ask-remove-line': (el) => { S.ui.removeLine = { id: S.transcript?.id, seq: Number(el.dataset.seq) }; S.ui.editLine = null; render(); },
+    'cancel-remove-line': () => { S.ui.removeLine = null; render(); },
+    'remove-line': async (el) => {
+      const removal = S.ui.removeLine;
+      if (!removal) return;
+      S.ui.removeLine = null;
+      await act('remove_shared_line', { id: removal.id, seq: removal.seq });
+      // A refused removal asks again, with the reason shown, while the same meeting stays open.
+      const block = (S.transcript?.blocks || []).find((b) => b.seq === removal.seq);
+      if (S.transcript?.id === removal.id && !block?.removed && !S.ui.removeLine) {
+        S.ui.removeLine = removal;
+        render();
+      }
+    },
     retry: (el) => { S.ui.pop = null; act('retry', { id: el.dataset.id }); },
     'audio-status': () => { S.ui.pop = null; S.ui.panel = 'transcript'; S.ui.showAudio = true; render(); },
     'toggle-transcript': () => { S.ui.panel = S.ui.panel === 'transcript' ? null : 'transcript'; S.ui.stick = true; render(); },

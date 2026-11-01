@@ -106,6 +106,33 @@ def test_an_invoice_to_a_job_is_to_its_parent_customer_and_its_lines_are_tagged_
         assert tags == {"project": _local(c, "Project:12", "projects")}
 
 
+def test_an_invoice_or_estimate_line_on_another_customers_job_is_refused_and_one_on_its_own_customers_job_is_taken(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["parties"].append(M.Party(M.Ext("Customer", "8", "1"), "Gamma Client", "customer"))
+    fake.records["records"].append(M.Project(M.Ext("Project", "13", "1"), "Warehouse", customer="Customer:8"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        beta = _local(c, "Customer:4", "fin_contacts")
+        kitchen, warehouse = _local(c, "Project:12", "projects"), _local(c, "Project:13", "projects")
+        outbox = c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0]
+
+        def line(job: str) -> list[dict[str, Any]]:
+            return [{"account_id": account(c, "4000"), "amount": 1500, "description": "work", "tags": {"project": job}}]
+        refused = act(c, OWNER, "invoice_create", {"customer_id": beta, "invoice_date": "2026-10-06",
+                                                   "lines": line(warehouse)})
+        assert (refused.status, refused.code) == ("failed", "invalid"), refused
+        assert "belongs to another customer" in refused.reason
+        refused = act(c, OWNER, "estimate_create", {"customer_id": beta, "estimate_date": "2026-10-06",
+                                                    "lines": line(warehouse)})
+        assert (refused.status, refused.code) == ("failed", "invalid"), refused
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0] == outbox
+        assert act(c, OWNER, "invoice_create", {"customer_id": beta, "invoice_date": "2026-10-06",
+                                                "lines": line(kitchen)}).status == "committed"
+
+
 def test_a_renamed_or_deactivated_record_updates_in_location_and_reverses_nothing(books):
     fake = FakeBooks()
     _records(fake)

@@ -1860,7 +1860,7 @@ def strategy_bet_retire(api, args):
 # ----------------------------------------------------------------------------- brand, go-to-market, growth
 PAGE_TITLES = {"brand": "brand", "gtm": "go-to-market"}
 BRAND_SECTIONS = ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
-GTM_SECTIONS = ("motion", "buyer", "wishes", "playbooks")
+GTM_SECTIONS = ("motion", "buyer", "playbooks")
 
 
 def _page_show(api, kind, args):
