@@ -74,6 +74,26 @@ def test_a_task_thread_ask_is_left_to_its_card(api):
     assert sweep(api, later(25)) == []
 
 
+def test_a_nudge_in_a_direct_message_never_queues_the_bot(api):
+    """A DM's members are the bot and the person, so a notice there reaches the bot by the DM rule: the nudge must not
+    start a run for the bot that asked (a nudge is for the person)."""
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        dm = threads.dm(c, "bot:finance", ["human:ana"], title="Invoice")["id"]
+    with api.app.state.store.transaction() as c:      # control: a person's message here does wake the bot
+        said = threads.post(c, "human:ana", dm, "Checking now.")
+        woke = c.execute("SELECT COUNT(*) FROM message_deliveries WHERE message_id=? AND recipient='bot:finance' "
+                         "AND mode IN ('steer','queue')", (said["id"],)).fetchone()[0]
+    assert woke == 1
+    ask(api, dm)                                       # asked after her message, so it is still unanswered
+    sweep(api, later(25))
+    with api.app.state.store.read() as c:
+        nudge = c.execute("SELECT nudge_message_id FROM thread_followups").fetchone()["nudge_message_id"]
+        queued = c.execute("SELECT COUNT(*) FROM message_deliveries WHERE message_id=? AND recipient LIKE 'bot:%' "
+                           "AND mode IN ('steer','queue')", (nudge,)).fetchone()[0]
+    assert queued == 0
+
+
 def test_the_scheduled_run_nudges_through_the_same_sweep(api):
     setup_attempt(api, "finance")
     tid = bot_thread(api)
