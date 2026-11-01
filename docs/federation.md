@@ -18,6 +18,10 @@ Both installs need the Tico Gateway connected (Settings > Gateway), because fede
 Approval pins the other install's public key. Envelopes must be signed with the pinned key from then on.
 `hub peer list` shows this install's view of each peering's status.
 
+In the app, the owner does all of this in Library > Connections > Other companies: this install's id and key, Connect a
+company (by install id), and Approve, Pause, Resume or Revoke on each peering. A thread's Who can read sheet shows
+Shared with, where the owner adds or removes an install.
+
 ## Share a thread
 
 `hub peer share <thread> <install>` gives an active peer a thread this install owns (its audience is `members`).
