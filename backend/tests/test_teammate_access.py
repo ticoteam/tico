@@ -177,10 +177,13 @@ def test_hub_sql_hides_unseen_people_in_participants_and_authors(acme):
     post(api, f"tasks/{task['id']}/comments", {"text": "Clause 4 looks odd."}, token="cara-test")
     conversation = get(api, "tasks/" + task["id"], "eve-test").get("conversation_id") or task.get("conversation_id")
     sql = f"SELECT from_actor FROM messages WHERE conversation_id='{conversation}'"
-    assert "human:cara" in sql_column(api, sql, "eve-test")
+    before = sql_column(api, sql, "eve-test")
+    assert "human:cara" in before
     set_access(api, "humans/cara", token="cara-test", see={"teams": ["legal"]}, read={"teams": ["legal"]},
                write={"teams": ["legal"]})
-    assert "human:cara" not in sql_column(api, sql, "eve-test")
+    # Her message stays (it is readable); only its author is not named, as REST and the stream say it.
+    after = sql_column(api, sql, "eve-test")
+    assert len(after) == len(before) and "human:cara" not in after and "" in after
     assert "human:cara" in sql_column(api, sql, "fay-test")
     rows = sql_column(api, f"SELECT participants_json FROM conversations WHERE id='{conversation}'", "eve-test")
     assert all("human:cara" not in (row or "") for row in rows)

@@ -55,20 +55,10 @@ MASKED = {"bot_control": {"claim_task": "CASE WHEN source.claim_task IS NULL THE
 DENIED_FUNCTIONS = {"load_extension"}
 
 
-def unseen_authors(unseen, me, inner):
-    """A messages predicate (with its trailing AND) dropping posts by people the caller may not see, except in a
-    conversation the caller is a participant of: whoever is in a conversation with you is known to you there."""
-    people = sorted(t for t in unseen if t.startswith("human:"))
-    if not people:
-        return ""
-    return (f"(coalesce(source.from_actor,'') NOT IN {qlist(people)} OR EXISTS (SELECT 1 FROM {inner('conversations')} v, "
-            f"json_each(v.participants_json) p WHERE v.id=source.conversation_id AND p.value={me})) AND ")
-
-
 def teammate_masks(unseen, me, inner=None):
     """MASKED for one request: participant lists drop the people the caller may not see (in a conversation the caller
     is not in), group lists the groups they may not see. A task's owner, requester and closer, the actor of an event
-    or a task event, and a message's recipient read '' when they are such a person, unless the caller is a party to
+    or a task event, and a message's author and recipient read '' when they are such a person, unless the caller is a party to
     that task or in that conversation: whoever works with you there is known to you there. A bot's operator, owners,
     manager, author and group (its columns and its configuration) leave out whoever the caller may not see."""
     people = sorted(t for t in unseen if t.startswith("human:"))
@@ -91,7 +81,8 @@ def teammate_masks(unseen, me, inner=None):
         out["tasks"] = {column: masked(column, party("source.id")) for column in ("owner", "requester", "closed_by")}
         out["task_events"] = {"actor": masked("actor", party("source.task_id"))}
         out["events"] = {"actor": masked("actor", f"({member('source.target')} OR {party('source.target')})")}
-        out["messages"] = {"to_actor": masked("to_actor", member("source.conversation_id"))}
+        # As REST and the stream say it (teammate_access.Known): the message stays, its author is not named.
+        out["messages"] = {column: masked(column, member("source.conversation_id")) for column in ("from_actor", "to_actor")}
     if people or groups:
         out["bot_config"] = bot_config_masks(people, bare, groups)
     if people:
@@ -326,8 +317,9 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     base table, and a plain table name inside a predicate is the filtered view of it.
     """
     me, owner, bot = q(who.actor), who.role == "owner", who.role == "bot"
-    # People and groups the caller may not see (backend/teammate_access.py): not in `humans`, not as authors of
-    # messages outside the conversations they are in, and not in a participant or group list (teammate_masks).
+    # People and groups the caller may not see (backend/teammate_access.py): not in `humans`, and not named as authors
+    # or recipients of messages outside the conversations they are in, nor in a participant or group list
+    # (teammate_masks).
     unseen = TA.hidden(c, who, "see", ("human", "group"), auth) if unseen is None else unseen
     listener = L.sees_everything(who)
     mine_inboxes = [] if listener else L.destinations_of(who.actor, L.destinations(auth.settings, c))
@@ -419,8 +411,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "conversations": conversations,
         # Rooms are the small authorization set, unlike message/run history.
         # Build their id set once rather than re-evaluate the room view per message.
-        "messages": "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND "
-                    + unseen_authors(unseen, me, inner) + msg_gate,
+        "messages": "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND " + msg_gate,
         "tasks": tasks,
         "tags": tag_gate, "task_tags": by_task,
         "task_events": by_task + " AND " + content_gate(("old", "new", "note")), "task_delegations": by_task,
