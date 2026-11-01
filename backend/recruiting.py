@@ -82,20 +82,22 @@ SHORT = ((r"human resources?", "hr"), (r"financial planning", "fp"), (r"public r
 LETTERS = frozenset(short for _, short in SHORT)
 
 
+# How a job is held, not what it is: a qualifier made only of these words names no work.
+HELD = re.compile(r"(?:(?:contract(?:or)?|to|hire|remote|hybrid|on[\s-]?site|in[\s-]office|temporary|temp|part|full|"
+                  r"time|freelance|interim|fractional|permanent|intern(?:ship)?|us|usa|eu|uk|emea|apac|amer|americas|"
+                  r"latam|anz|global|worldwide|nyc|sf|\d+)[\s/-]*)+")
+
+
 def _name_words(text):
     """(stem, word) for each word of a job's name, two letters and up: "QA", "HR" and "UX" name the work."""
     text = re.sub(r"\bvice[\s-]+president\b", "vp", str(text or "").lower().replace("'", ""))
-    # What follows the job says how it is held, not what it is: "UX Designer (Contract)", "Rust engineer - remote".
-    # A title written backwards names the work after its comma or in brackets: "Manager, Engineering" and "Analyst
-    # (Pricing)" are the Engineering Manager and the Pricing Analyst.
-    brackets = [inside for inside in re.findall(r"\(([^)]*)\)", text) if inside.strip()]
+    # A qualifier after a comma, dash or in brackets names the work ("Software Engineer, Security", "Analyst
+    # (Pricing)", "Manager, Engineering") unless it says how the job is held ("UX Designer (Contract)", "Rust engineer
+    # - remote"). The work goes in front, so the job's last word still names its kind.
+    brackets = re.findall(r"\(([^)]*)\)", text)
     parts = re.split(r"\s+[-\u2013\u2014|]\s+|,|\|", re.sub(r"\([^)]*\)", " ", text))
-    first = re.findall(r"[a-z0-9]+", parts[0])
-    after = [part for part in parts[1:] if part.strip()] + brackets
-    if after and first and all(word in ROLE_WORDS or R._stem(word) in RANKS for word in first):
-        text = after[0] + " " + parts[0]
-    else:
-        text = parts[0]
+    work = [part for part in parts[1:] + brackets if part.strip() and not HELD.fullmatch(part.strip())]
+    text = " ".join(work + [parts[0]])
     for full, short in SHORT:
         text = re.sub(rf"\b{full}\b", lambda found, short=short: f"{short} {found.group(0)}", text)
     text = re.sub(r"\baccounting\b", "bookkeeping", text)      # the books, not a client account ("Account Manager")
