@@ -139,11 +139,10 @@ def replayer(operation, prepare=None, audience=None):
 
 # ----------------------------------------------------------------------------- whose writes
 def checked_as(who, assistant_bot=""):
-    """(principal, sender, via) a write is checked as, or None when nothing is. The principal is the teammate the
-    write is
-    held as: a person, or a bot that writes alone. The sender is who made the write: the person themselves, their
-    Assistant or BotOps acting for them (`via` says which), or the bot that sent it. A person's own write is checked as
-    that person, whatever token sent it."""
+    """(principal, sender, via) a write is checked as, or None when nothing is. The principal is the teammate the write
+    is held as: a person, or a bot that writes alone. The sender is who made the write: the person themselves, their
+    Assistant or BotOps acting for them (`via` says which), or the bot that sent it. A person's own write is checked
+    as that person, whatever token sent it."""
     if who is None:
         return None
     actor, task = str(who.actor or ""), str(who.task_actor or "")
@@ -349,9 +348,8 @@ def place_for(c, author, recipients=(), conversation_id=""):
 
 
 def _place_now(c, place, author, recipients):
-    """A write's place as the check reads it: a dict as it is, or the answer of a function, which is read only when
-    a rule
-    names a place."""
+    """A write's place as the check reads it: a dict as it is, or the answer of a function, which is read only when a
+    rule names a place."""
     if callable(place):
         return place(c, author, recipients) if R.any_where(c) else None
     return place or None
@@ -360,13 +358,12 @@ def _place_now(c, place, author, recipients):
 def check_as(store, primary, principal, sender, via, operation, output, recipients=(), *, context=None, obj="",
              draft=False, skip=(), place=None, attempt_id="", origin=None):
     """Check one output held as `principal` (a person or a bot). `sender` is who made it and `via` the route
-    (`checked_as`
-    reads both from an identity). `place`: the write's place, or a function of (c, principal, recipients) that reads it
-    inside the check's read (`place_for`). Returns the verdict `apply` reads, or None when nothing is checked (no rule
-    matches, checks are off, no principal). Never raises: a failure is a verdict marked unchecked. `skip`: (rule id,
-    version) pairs already decided (Send anyway asks only the rules changed or added since its hold); the verdict's
-    `matched` is every pair that matched, to check again inside the write. `origin`: where an outside message came from
-    (`inbound`), kept on the verdict and its hold."""
+    (`checked_as` reads both from an identity). `place`: the write's place, or a function of (c, principal,
+    recipients) that reads it inside the check's read (`place_for`). Returns the verdict `apply` reads, or None when
+    nothing is checked (no rule matches, checks are off, no principal). Never raises: a failure is a verdict marked
+    unchecked. `skip`: (rule id, version) pairs already decided (Send anyway asks only the rules changed or added
+    since its hold); the verdict's `matched` is every pair that matched, to check again inside the write. `origin`:
+    where an outside message came from (`inbound`), kept on the verdict and its hold."""
     author = principal
     if not author:
         return None
@@ -878,8 +875,7 @@ def _reader_sql(who):
 
 def _page(c, who, where, args, cursor, limit, auth, fallback):
     """One page of the holds `where` selects that the caller may read, oldest first, as summaries: at most `limit`
-    and at
-    most HOLD_LIST_BYTES. `next_cursor` continues it."""
+    and at most HOLD_LIST_BYTES. `next_cursor` continues it."""
     limit = max(1, min(int(limit or HOLD_LIST_MAX), HOLD_LIST_MAX))
     after = ("", "")
     if cursor:
@@ -914,8 +910,7 @@ def _page(c, who, where, args, cursor, limit, auth, fallback):
 
 def holds_listed(c, who, task_id="", thread="", cursor=None, limit=HOLD_LIST_MAX, auth=None):
     """The holds one caller may read, in one of three lists: a review task's (any state), a thread's held writes, or
-    every
-    held write the caller may read. Summaries, paged (`_page`)."""
+    every held write the caller may read. Summaries, paged (`_page`)."""
     where, args, fallback = _reader_sql(who)
     if not where:
         return [], None
@@ -1051,10 +1046,9 @@ def _same_audience(c, hold, audience=None, auth=None):
 
 
 def recheck(store, primary, hold, audience=None, auth=None):
-    """Outside the write, before Send anyway or an approved mail: when the rules that match now differ from those at
-    the hold (a rule edited or added since), the rules changed or added are a new check, on the same input the first
-    check had (text, audience, context, object, place). Returns (the pairs matching now, that verdict or None). The
-    write
+    """Outside the write, before Send anyway or an approved mail: when the rules that match now differ from those at the
+    hold (a rule edited or added since), the rules changed or added are a new check, on the same input the first check
+    had (text, audience, context, object, place). Returns (the pairs matching now, that verdict or None). The write
     checks the pairs again and refuses on a change in between. A changed audience refuses first (`_same_audience`)."""
     with store.read() as c:
         _same_audience(c, hold, audience, auth)
@@ -1450,9 +1444,9 @@ def install(app, store, auth, mutate):
 
     def mail_checked(request, who, author, body, check_id=""):
         """`author` is the teammate the mail is checked as (a person, when BotOps sends it for one): its holds and
-        approvals are
-        found under it; `who` stays the caller, for the write's permission and audit. A check counted unchecked keeps
-        `check_id`, so the mail tool's later report of it (it never got this answer) counts nothing more."""
+        approvals are found under it; `who` stays the caller, for the write's permission and audit. A check counted
+        unchecked keeps `check_id`, so the mail tool's later report of it (it never got this answer) counts nothing
+        more."""
         key = mail_digest(body.to, body.cc, body.subject, body.body)
         output = (f"Subject: {body.subject}\n\n" if body.subject else "") + body.body
         with store.read() as c:

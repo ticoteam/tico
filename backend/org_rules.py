@@ -118,9 +118,8 @@ WHERE_THREAD_CHARS = 100
 
 
 def _where_terms(c, value):
-    """A rule's `where` as stored: `thread:<id>` (a conversation's id), `team:<group>` (by its id or name, resolved
-    to the
-    group's id), `kind:dm` and `has_outside_members`. Any other term is refused, never kept: a rule that silently
+    """A rule's `where` as stored: `thread:<id>` (a conversation's id), `team:<group>` (by its id or name, resolved to
+    the group's id), `kind:dm` and `has_outside_members`. Any other term is refused, never kept: a rule that silently
     matched nothing would look like a rule that never fires."""
     if not value:
         return []
