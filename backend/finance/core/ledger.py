@@ -22,7 +22,8 @@ SOURCES = ("manual", "import", "bank", "card", "bill", "invoice", "payment", "us
 BASES = ("both", "accrual")
 DOC_SOURCES = ("bill", "invoice")
 # Tags on a line, one value per kind. Vendor is not a tag: it is the line's contact.
-TAG_KINDS = ("team", "teammate", "budget", "project", "custom")
+# location, project and class name a shared record (backend/records, fin_dimensions); the others are text.
+TAG_KINDS = ("team", "teammate", "budget", "project", "custom", "location", "class")
 MAX_LINES = 500
 
 
@@ -107,12 +108,15 @@ def tags(raw: object) -> dict[str, str]:
             continue
         if not isinstance(value, str) or len(value) > 200:
             raise invalid(f"tag {kind} is a text value")
+        if "|" in value:                  # a rollup key joins tags with |, so a value holding one could be misread
+            raise invalid(f"tag {kind} has no | in it")
         out[kind] = value.strip()
     return out
 
 
 def tagset(tag_map: Mapping[str, str], vendor: str = "") -> str:
-    """The canonical key a rollup row is kept under: every tag and the vendor, sorted. "" is a line with none."""
+    """The canonical key a rollup row is kept under: every tag and the vendor, sorted. "" is a line with none. Values
+    hold no "|" (tags() refuses one), so a reader can split the key back into its tags."""
     parts = [f"{kind}={tag_map[kind]}" for kind in sorted(tag_map) if tag_map[kind]]
     if vendor:
         parts.append(f"vendor={vendor}")

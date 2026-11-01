@@ -53,13 +53,14 @@ CREATE TABLE IF NOT EXISTS fin_lines (
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, role TEXT NOT NULL DEFAULT '');
 
 CREATE TABLE IF NOT EXISTS fin_dimensions (
-  id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('project','custom')), value TEXT NOT NULL,
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('project','custom','class')), value TEXT NOT NULL,
   name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   UNIQUE (kind, value));
 
 CREATE TABLE IF NOT EXISTS fin_line_tags (
   line_id TEXT NOT NULL REFERENCES fin_lines(id),
-  kind TEXT NOT NULL CHECK (kind IN ('team','teammate','budget','project','custom')), value TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('team','teammate','budget','project','custom','location','class')), value TEXT NOT
+  NULL,
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY (line_id, kind));
 
 CREATE TABLE IF NOT EXISTS fin_rollups (
@@ -390,6 +391,7 @@ CREATE INDEX IF NOT EXISTS fin_entries_reverses ON fin_entries(reverses_id);
 CREATE INDEX IF NOT EXISTS fin_raw_imports_hash ON fin_raw_imports(book_id, content_hash);
 CREATE INDEX IF NOT EXISTS fin_lines_entry ON fin_lines(entry_id);
 CREATE INDEX IF NOT EXISTS fin_lines_account ON fin_lines(account_id, entry_date);
+CREATE INDEX IF NOT EXISTS fin_bill_lines_po_line ON fin_bill_lines(po_line_id);
 CREATE INDEX IF NOT EXISTS fin_lines_contact ON fin_lines(contact_id, entry_date);
 CREATE INDEX IF NOT EXISTS fin_line_tags_value ON fin_line_tags(kind, value);
 CREATE INDEX IF NOT EXISTS fin_rollups_account ON fin_rollups(account_id, day);
@@ -538,6 +540,9 @@ ADDED = (
     ("fin_transfers", "provider_credit_txn_id", "TEXT"), ("fin_transfers", "find_after", "TEXT"),
     # the journal line a bank row matched (migration 75), so a transfer's two legs on one account match one at a time
     ("fin_feed_txns", "entry_line_id", "TEXT"),
+    # the shared item a bill or invoice line names (migration 76, backend/records)
+    ("fin_bill_lines", "item_id", "TEXT"), ("fin_invoice_lines", "item_id", "TEXT"),
+    ("fin_bill_lines", "po_line_id", "TEXT"),
 )
 
 
@@ -554,9 +559,49 @@ CREATE TABLE IF NOT EXISTS fin_tax_seeds (
   key TEXT PRIMARY KEY, rule_id TEXT NOT NULL, created_at TEXT NOT NULL);
 """
 
+# Purchase orders and estimates (backend/finance/store/purchasing.py). An order's line holds budget while it is open;
+# an estimate is invoiced once, so its invoice id is unique. A bill keeps billed on an order line that its provider
+# revision no longer names in fin_bill_retained.
+PURCHASING = """
+CREATE TABLE IF NOT EXISTS fin_purchase_orders (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), vendor_id TEXT NOT NULL REFERENCES fin_contacts(id),
+  number TEXT NOT NULL DEFAULT '', po_date TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','approved','closed','void')),
+  closed_by TEXT NOT NULL DEFAULT '' CHECK (closed_by IN ('','bills','hand')),
+  currency TEXT NOT NULL, total BIGINT NOT NULL DEFAULT 0, memo TEXT NOT NULL DEFAULT '',
+  sent_at TEXT, approved_by TEXT, approved_at TEXT, closed_at TEXT, voided_at TEXT,
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+
+CREATE TABLE IF NOT EXISTS fin_po_lines (
+  id TEXT PRIMARY KEY, po_id TEXT NOT NULL REFERENCES fin_purchase_orders(id), line_no INTEGER NOT NULL,
+  account_id TEXT REFERENCES fin_accounts(id), item_id TEXT, amount BIGINT NOT NULL CHECK (amount > 0),
+  description TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE (po_id, line_no));
+
+CREATE TABLE IF NOT EXISTS fin_estimates (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), customer_id TEXT NOT NULL REFERENCES fin_contacts(id),
+  number TEXT NOT NULL DEFAULT '', estimate_date TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','accepted','declined')),
+  currency TEXT NOT NULL, total BIGINT NOT NULL DEFAULT 0, memo TEXT NOT NULL DEFAULT '',
+  invoice_id TEXT REFERENCES fin_invoices(id), sent_at TEXT, decided_at TEXT,
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+
+CREATE TABLE IF NOT EXISTS fin_estimate_lines (
+  id TEXT PRIMARY KEY, estimate_id TEXT NOT NULL REFERENCES fin_estimates(id), line_no INTEGER NOT NULL,
+  account_id TEXT REFERENCES fin_accounts(id), item_id TEXT, amount BIGINT NOT NULL CHECK (amount > 0),
+  description TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '{}', taxable INTEGER,
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE (estimate_id, line_no));
+
+CREATE UNIQUE INDEX IF NOT EXISTS fin_estimates_invoice ON fin_estimates(invoice_id) WHERE invoice_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS fin_bill_retained (
+  bill_id TEXT NOT NULL REFERENCES fin_bills(id), po_line_id TEXT NOT NULL REFERENCES fin_po_lines(id),
+  amount BIGINT NOT NULL CHECK (amount > 0), PRIMARY KEY (bill_id, po_line_id));
+"""
+
 def table_names() -> list[str]:
     """Every fin_* table the migration makes."""
-    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX)
+    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX + PURCHASING)
 
 
 def statements(script: str) -> list[str]:
@@ -586,7 +631,7 @@ def _add_columns(c: sqlite3.Connection) -> None:
 def create(c: sqlite3.Connection) -> None:
     """Every table, index and trigger, statement by statement inside the caller's transaction (executescript would
     commit it). Idempotent: on an install made before a later phase it adds the new tables and columns too."""
-    for script in (TABLES, TAX):
+    for script in (TABLES, TAX, PURCHASING):
         for statement in statements(script):
             c.execute(statement)
     _add_columns(c)
@@ -717,3 +762,48 @@ def tax(c: sqlite3.Connection) -> None:
     for statement in statements(TAX):
         c.execute(statement)
     _add_columns(c)
+
+
+def purchasing(c: sqlite3.Connection) -> None:
+    """Cloud migration 77: purchase orders and estimates, and the bill line an order line is billed on. Idempotent:
+    `create` makes whatever is missing."""
+    create(c)
+
+
+def catalog(c: sqlite3.Connection, at: str) -> None:
+    """Cloud migration 76: the shared records (backend/records) and the location, class and item tags Finance's lines
+    take.
+    SQLite cannot widen a CHECK in place, so fin_dimensions and fin_line_tags are rebuilt keeping their rows, and each
+    project dimension moves to projects under its value. A project tag holds the project's id, which is the legacy
+    value, so no line's tags change and a closed month keeps its lines as they were. Idempotent."""
+    from ...records import store as RS
+    RS.create(c)
+    _widen(c, "fin_dimensions", "'class'")
+    _widen(c, "fin_line_tags", "'location'")
+    create(c)
+    _move_projects(c, at)
+
+
+def _widen(c: sqlite3.Connection, table: str, marker: str) -> None:
+    """Rebuild `table` from its TABLES definition when the table on disk predates `marker`. Rows are copied as they are."""
+    row = c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+    if row is None or marker in str(row[0]):
+        return
+    c.execute(f"ALTER TABLE {table} RENAME TO {table}_before")
+    definition = next(s for s in statements(TABLES) if s.startswith(f"CREATE TABLE IF NOT EXISTS {table} "))
+    c.execute(definition)
+    cols = ",".join(str(r[1]) for r in c.execute(f"PRAGMA table_info({table}_before)").fetchall())
+    c.execute(f"INSERT INTO {table}({cols}) SELECT {cols} FROM {table}_before")
+    c.execute(f"DROP TABLE {table}_before")
+
+
+def _move_projects(c: sqlite3.Connection, at: str) -> None:
+    """A project dimension becomes a projects row under its value. A project tag value no record has yet becomes
+    one under its own text, so the tag still points at a record."""
+    c.execute("INSERT INTO projects(id, name, status, archived_at, created_at, created_by_id) "
+              "SELECT value, name, 'open', CASE WHEN active THEN NULL ELSE ? END, ?, ? FROM fin_dimensions "
+              "WHERE kind='project' AND value NOT IN (SELECT id FROM projects)", (at, at, SYSTEM))
+    c.execute("DELETE FROM fin_dimensions WHERE kind='project'")
+    c.execute("INSERT INTO projects(id, name, status, created_at, created_by_id) "
+              "SELECT DISTINCT value, value, 'open', ?, ? FROM fin_line_tags WHERE kind='project' "
+              "AND value NOT IN (SELECT id FROM projects)", (at, SYSTEM))

@@ -36,8 +36,14 @@ PAGE = 1000                            # QuickBooks' most rows in one query or o
 MAX_PAGES = 100                        # a list of items larger than this is refused rather than read forever
 # The transactions a retry looks for first, by entity: a cut-off call may already have landed in QuickBooks.
 TRANSACTIONS = {"bill.create": "Bill", "invoice.create": "Invoice", "journal.create": "JournalEntry",
+                "purchaseorder.create": "PurchaseOrder", "estimate.create": "Estimate",
                 "payment.bill": "BillPayment", "payment.invoice": "Payment", "writeoff.create": "CreditMemo",
                 "credit.apply": "Payment"}
+# A shared record found by its name: the entity it is read from, and the field its name is in.
+NAMED = {"item.create": ("Item", "Name"), "location.create": ("Department", "Name"),
+         "project.create": ("Customer", "DisplayName")}
+# The provider kind a write's record is kept under when it differs from the QuickBooks entity (a job is a Project).
+SENT_AS = {"project.create": "Project"}
 
 
 def _marker(key: str) -> str:
@@ -319,6 +325,9 @@ class QuickBooks:
         elif op == "party.create":
             entity = "Vendor" if str(body.get("kind")) == "vendor" else "Customer"
             where, mark = f"DisplayName = '{_quote(body['name'])}'", ""
+        elif op in NAMED:
+            entity, field = NAMED[op]
+            where, mark = f"{field} = '{_quote(body['name'])}'" + (" AND Job = true" if op == "project.create" else ""), ""
         else:
             return None
         reply = self._call("GET", "query", query={"query": f"SELECT * FROM {entity} WHERE {where} MAXRESULTS 1000"})
@@ -331,17 +340,23 @@ class QuickBooks:
         for raw in rows:
             row = Q.as_map(raw) or {}
             if not mark or mark in str(row.get("PrivateNote") or ""):
-                return Sent(True, kind=entity, external_id=str(row.get("Id") or ""),
-                            revision=str(row.get("SyncToken") or ""))
+                return Sent(True, kind=SENT_AS.get(op, entity), external_id=str(row.get("Id") or ""),
+                            revision=str(row.get("SyncToken") or ""),
+                            lines=Q.line_ids(row) if op == "bill.create" else ())
         if len(rows) >= 1000:
             return Sent(False, error="UNKNOWN: too many writes that day to tell", final=True, unknown=True)
         return None
 
     def send(self, op: str, body: Mapping[str, Any], key: str) -> Sent:
         """One write, idempotent by its RequestId. Only a refusal from QuickBooks itself is final."""
-        request_id = str(uuid.uuid5(NAMESPACE, key))
+        return self._send(op, body, key, key)
+
+    def _send(self, op: str, body: Mapping[str, Any], key: str, request_key: str) -> Sent:
+        """A write whose marker comes from `key` (what the books find it by) and whose RequestId comes from
+        `request_key`, so a retry under a new request keeps the same marker."""
+        request_id = str(uuid.uuid5(NAMESPACE, request_key))
         items: dict[str, dict[str, str]] = {}
-        if op == "invoice.create":
+        if op in ("invoice.create", "estimate.create"):
             found = self._item_accounts()
             if isinstance(found, str):
                 return Sent(False, error=found)
@@ -363,9 +378,13 @@ class QuickBooks:
             return Sent(False, error="QuickBooks did not answer")
         made: dict[str, Any] = Q.as_map(reply.body.get(kind)) or {}
         if 200 <= reply.status < 300 and made:
-            return Sent(True, kind=kind, external_id=str(made.get("Id") or ""),
-                        revision=str(made.get("SyncToken") or ""))
+            return Sent(True, kind=SENT_AS.get(op, kind), external_id=str(made.get("Id") or ""),
+                        revision=str(made.get("SyncToken") or ""),
+                        lines=Q.line_ids(made) if op == "bill.create" else ())
         final = reply.status == 400 and "Fault" in reply.body      # a validation refusal: a retry says the same thing
+        if final and op == "invoice.create" and body.get("linked_estimate"):
+            # The estimate link is best effort: a refusal sends the invoice again without it, under its own request.
+            return self._send(op, {k: v for k, v in body.items() if k != "linked_estimate"}, key, f"{key}:unlinked")
         return Sent(False, error=_fault(reply.body, reply.status), final=final)
 
 
@@ -387,10 +406,20 @@ def _write_of(op: str, body: Mapping[str, Any],
     if op == "invoice.create":
         income = Q.income_items(items)
         return "Invoice", "invoice", Q.invoice_body(body, income), {}
+    if op == "purchaseorder.create":
+        return "PurchaseOrder", "purchaseorder", Q.purchase_order_body(body), {}
+    if op == "estimate.create":
+        return "Estimate", "estimate", Q.estimate_body(body, Q.income_items(items)), {}
     if op == "bill.void":
         return "Bill", "bill", Q.delete_body(str(body["ext"]), str(body["revision"])), {"operation": "delete"}
     if op == "invoice.void":
         return "Invoice", "invoice", Q.delete_body(str(body["ext"]), str(body["revision"])), {"operation": "void"}
+    if op in ("item.create", "item.update"):
+        return "Item", "item", Q.item_write(body, update=op.endswith("update")), {}
+    if op in ("location.create", "location.update"):
+        return "Department", "department", Q.location_write(body, update=op.endswith("update")), {}
+    if op == "project.create":
+        return "Customer", "customer", Q.job_write(body), {}
     if op == "writeoff.create":
         return "CreditMemo", "creditmemo", Q.writeoff_body(body), {}
     if op == "credit.apply":
