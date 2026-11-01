@@ -28,6 +28,7 @@ import dataclasses
 import importlib
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -126,11 +127,15 @@ def today_sets(settings):
             auth.sync_access(c)
             who = identities(c, auth)
             conversations = {}
-            for row in c.execute("SELECT id FROM conversations ORDER BY id").fetchall():
+            for row in c.execute("SELECT id,audience FROM conversations ORDER BY id").fetchall():
+                if row["audience"] == "home" and uuid.UUID(row["id"]).version == 4:
+                    continue    # a Home threads made for itself while the demo seeded (an update card): not legacy data
                 conversations[row["id"]] = {actor for actor, identity in who.items()
                                             if can_read(auth, c, identity, row["id"])}
             messages = {}
             for row in c.execute("SELECT * FROM messages ORDER BY id").fetchall():
+                if row["conversation_id"] not in conversations:
+                    continue
                 readers = conversations[row["conversation_id"]]
                 messages[row["id"]] = (row["conversation_id"], {
                     actor for actor in readers if task_privacy.message_readable(c, actor, dict(row))})
@@ -151,7 +156,7 @@ def full_from_golden(golden, owner_of):
     """The golden expanded back to every conversation and message of the world (`owner_of`, from the same world)."""
     conversations = {cid: set(readers) for cid, readers in golden["conversations"].items()}
     messages = {mid: (cid, set(golden["messages"].get(mid, golden["conversations"].get(cid, []))))
-                for mid, cid in owner_of.items()}
+                for mid, cid in owner_of.items() if cid in conversations}   # a skipped Home's messages stay out too
     return conversations, messages
 
 

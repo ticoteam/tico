@@ -219,7 +219,9 @@ TRIGGERS = [
      _needs("thread", "NEW.recipient")),
     ("changes_message_deliveries_update", "UPDATE", "message_deliveries", f"NEW.mode<>'none' AND {_changed('state')}",
      _needs("thread", "NEW.recipient")),
-    ("changes_thread_followers_update", "UPDATE", "thread_followers", _changed("last_read_seq"),
+    # Named apart from the threads topic's own read trigger below (changes_thread_followers_update): two specs under one
+    # name would replace each other on every boot.
+    ("changes_thread_followers_needs", "UPDATE", "thread_followers", _changed("last_read_seq"),
      _needs("thread", "NEW.actor")),
     ("changes_org_rule_holds_insert", "INSERT", "org_rule_holds", None, _needs("hold", "NEW.reviewer")),
     ("changes_org_rule_holds_update", "UPDATE", "org_rule_holds", _changed("state"), _needs("hold", "NEW.reviewer")),
