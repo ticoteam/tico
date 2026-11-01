@@ -34,10 +34,11 @@ from .store import H, Problem
 DRAFT_PAGE_KINDS = ("brand_draft", "gtm_draft")
 
 
-def company_editor(who):
+def company_editor(who, tap=False):
     """The owner, on their own click: never an admin or a member, never a bot (the Strategy Bot proposes), never someone
-    acting for the owner. The Strategy Bot's level, its regular checks, the vision and the strategy are theirs."""
-    return who.role == "owner" and not who.via
+    acting for the owner. The Strategy Bot's level, its regular checks, the vision and the strategy are theirs. `tap`:
+    the owner's tap on a Confirm card BotOps or their Assistant made counts as their click (backend/assistant.py confirm)."""
+    return who.role == "owner" and (not who.via or (tap and who.confirmed))
 
 
 def strategy_visible(who, proposal, auth=None):
@@ -387,7 +388,7 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
         def work(c):
             auth.domain(who)
-            if not company_editor(who):
+            if not company_editor(who, tap=True):
                 raise Problem("forbidden",
                               f"Only the owner chooses how much the {strategy_bot.name(c)} does, on their own "
                               "click; no admin or bot changes it, the Strategy Bot included", 403)
@@ -404,7 +405,7 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
         def work(c):
             auth.domain(who)
-            if not company_editor(who):
+            if not company_editor(who, tap=True):
                 raise Problem("forbidden",
                               f"Only the owner turns the {strategy_bot.name(c)}'s regular checks on or off, "
                               "on their own click", 403)

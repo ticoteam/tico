@@ -84,14 +84,14 @@ def test_every_team_rule_has_an_entry_and_every_entry_is_well_formed():
         assert e.kind != "person" or e.why, e.key
         # A Confirm card can only carry a route a person may confirm from BotOps.
         if e.kind == "confirm":
-            path = "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route)
+            path = settings_catalog.probe(e)
             assert valid_operation(e.method, path, None, "botops"), e.key
     assert botops_act  # the classifier the confirm check leans on stays importable
 
 
 def test_a_setting_waiting_for_a_confirm_card_goes_back_to_confirm_once_botops_can_make_one():
     for e in ENTRIES:
-        card = valid_operation(e.method, "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route), None, "botops")
+        card = valid_operation(e.method, settings_catalog.probe(e), None, "botops")
         if e.key in NO_CARD_YET:
             assert not card, e.key + " can be put on a Confirm card now: take it out of NO_CARD_YET"
             assert e.kind == "person" or e.when_held == "person", e.key
@@ -203,3 +203,25 @@ def test_catalogue_resolves_the_bot_for_id_addressed_transitions(api, botops):
     as_member(api, "ben@acme.example")
     err, unrelated = mcp(api, "hub_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "ben-test")
     assert not err and unrelated["you_may"] is False, unrelated
+
+
+def test_an_admin_asking_botops_to_raise_a_group_pool_limit_gets_a_card_the_tap_runs(api, botops):
+    """Settings stage 3, acceptance 13: a group's pool is `groups/<id>`, two segments of its route, so the card names
+    the route Settings uses and the admin's tap sets it. Before, the id was one escaped segment and no card could be
+    made, so BotOps sent the admin to Settings."""
+    from backend.tests.test_usage_limits import groups
+    groups(api, "product")
+    ben = turn(api, botops, person="ben-test", text="Raise the Engineering pool to $50 a day")
+    err, card = mcp(api, "hub_settings_set", {"key": "pool.limit.usd", "id": "groups/eng",
+                                              "value": {"daily_usd": 50}}, ben["token"])
+    assert not err and card["needs_confirm"] is True, card
+    assert card["action"]["path"] == "/api/v2/usage/pools/groups/eng", card["action"]
+    assert "$50" in card["action"]["description"], card["action"]
+    finish(api, botops, ben)
+    assert get(api, "usage/limits")["pools"]["groups"]["eng"]["daily_usd"] is None      # nothing until the tap
+    post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, "ben-test")
+    assert get(api, "usage/limits")["pools"]["groups"]["eng"]["daily_usd"] == 50
+    for bad in ("groups", "groups/eng/x", "eng"):
+        err, refused = mcp(api, "hub_settings_set", {"key": "pool.limit.usd", "id": bad, "value": {"daily_usd": 5}},
+                           "ben-test")
+        assert err and refused["error"] == "validation", (bad, refused)

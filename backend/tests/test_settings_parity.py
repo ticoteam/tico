@@ -74,6 +74,8 @@ SAMPLES = {
     "inbound.inbox.create": {"bot": "finance"},
     "inbound.inbox": {"enabled": True},
     "inbound.phone_request.cancel": {},
+    "bot.budget": {"turns_per_hour": 10, "expected_revision": 1},
+    "storage.move": {"expect_bytes": 0},
     # A computer given the subscription `_objects` made for it (a real computer and a real subscription, no run to stop).
     "models.computer_subscription": lambda o: {"runner_id": o.get("computers", ""), "runtime": "claude",
                                               "subscription": o.get("model-subscriptions", ""), "confirm": False},
@@ -99,6 +101,18 @@ NOT_PROVEN = {
     # Confirm entries: the card is made, but the tap can't run on this fixture.
     "bot.agent_credential.revoke": "tap 404: finance has no agent credential",
     "webhooks.gateway.wake": "tap 404: the trigger has no Tico Gateway address (a member's tap is refused first)",
+    "me.tokens.revoke": "tap 404: no synthetic API token",
+    "company.server_connection.remove": "tap 409: this server is not connected to a company server",
+    "storage.s3.remove": "tap 409: no company storage is set",
+    "people.person.delete": "tap 409: the fixture person can't be removed for good",
+    "repos.product.create": "422: the body shape (and no GitHub App here)", "listening.destination": "422: the body shape",
+    "listening.destination.remove": "tap 404: no synthetic listening destination",
+    "roadmap.public": "tap 422: the route takes no empty settings", "inbound.inbox.release": "tap 404: no synthetic inbox",
+    "inbound.phone_request": "tap 409: inbound is not configured",
+    "inbound.phone_request.accept": "422: needs the price shown (and inbound is not configured)",
+    "bot.cloud_machine": "tap 409: the fixture company is not on Tico Cloud",
+    "cloud.shared_machine": "tap 409: the fixture company is not on Tico Cloud",
+    "mail.address.order": "422: the body shape (an address order with its Idempotency-Key)",
 }
 # Where the route and the catalogue disagree today, beyond this ticket (Bot repositories and Takes member bots are fixed
 # here): (entry, person) -> what the route does. Settings stage 2 takes these; the test fails when one is fixed (take it
@@ -146,6 +160,7 @@ def _objects(api, machine):
         system = c.execute("SELECT id FROM system_routines LIMIT 1").fetchone() if c.execute(
             "SELECT 1 FROM sqlite_master WHERE name='system_routines'").fetchone() else None
     found["repositories"] = "Acme/product"
+    found["usage/pools"] = "company"
     found["settings/transitions"] = "tr-parity"
     found["system-routines"] = system[0] if system else "daily_update"
     found["computers"] = machine["runner_id"]
