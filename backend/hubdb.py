@@ -746,8 +746,7 @@ CREATE TABLE IF NOT EXISTS compact_first(
 """
 
 # The Strategy Bot's merged asks (backend/strategy_merge.py): each original item in a person's Needs you that one
-# Strategy Bot item stands for, and what became of it. An install that has the old table gets the table and its rows
-# before the migrations run (`_sync_strategy_tables`), so this creates the table only on a new install.
+# Strategy Bot item stands for, and what became of it.
 STRATEGY_MERGES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS strategy_merges (
   merged_into TEXT NOT NULL, original TEXT NOT NULL, person TEXT NOT NULL, asker TEXT NOT NULL,
@@ -760,7 +759,6 @@ CREATE INDEX IF NOT EXISTS strategy_merges_person ON strategy_merges(person, cre
 
 # The Strategy Bot log (backend/strategy_acts.py): each decision it made alone at level 3, or each thing it proposed
 # because it stays the owner's, and its Undo. Every task event one decision (or its Undo) wrote carries its action id.
-# As for STRATEGY_MERGES_SCHEMA, an install with the old table gets the table and its rows first.
 STRATEGY_ACTIONS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS strategy_actions (
   id TEXT PRIMARY KEY, created TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
@@ -967,8 +965,19 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA, LIVE_MEETING_TURN_RETRY_SCHEMA,
               POSTAL_MAIL_SCHEMA, POSTAL_MAIL_V2_SCHEMA, POSTAL_MAIL_V3_SCHEMA, TRIGGERS_CONSUMER_SCHEMA,
               GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA,
-              # 71: the retired per-task cap log (TASK_CAP_LOG_SCHEMA replaced it); its rows were copied in long ago.
-              "DROP TABLE IF EXISTS task_cap_sends;"]
+              # user_version 72: the retired per-task cap log (TASK_CAP_LOG_SCHEMA replaced it); its rows were copied
+              # in long ago.
+              "DROP TABLE IF EXISTS task_cap_sends;",
+              # user_version 73: the Strategy Bot's tables under their old names (renamed in v0.5.0), and the triggers
+              # that mirrored every write to them. Nothing reads or writes them; the new tables hold every row.
+              """DROP TRIGGER IF EXISTS strategy_merges_to_old_insert;
+DROP TRIGGER IF EXISTS strategy_merges_to_old_update;
+DROP TRIGGER IF EXISTS strategy_merges_to_old_delete;
+DROP TRIGGER IF EXISTS strategy_actions_to_old_insert;
+DROP TRIGGER IF EXISTS strategy_actions_to_old_update;
+DROP TRIGGER IF EXISTS strategy_actions_to_old_delete;
+DROP TABLE IF EXISTS ceo_merges;
+DROP TABLE IF EXISTS ceo_actions;"""]
 
 
 class Refused(Exception):
@@ -1230,93 +1239,6 @@ def ensure_market_reads(conn):
         conn.execute("RELEASE market_read_indexes")
 
 
-# The Strategy Bot's tables, each under the name an older release gives it. That release, reopened on the file after a
-# rollback, counts the migrations that make its tables as run, so for one release the old tables stay here. Triggers
-# keep each equal to its new one, so that release reads every row as it last was; it writes only to the old table, so
-# on start the old table holds the rows as they are, and the new one is made equal to it (`_sync_strategy_tables`).
-STRATEGY_TABLES = (("ceo_merges", "strategy_merges", STRATEGY_MERGES_SCHEMA),
-                   ("ceo_actions", "strategy_actions", STRATEGY_ACTIONS_SCHEMA))
-_MIRRORS = ("insert", "update", "delete")
-
-
-def _tables(conn):
-    return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-
-
-def _shared_columns(conn, old, new):
-    kept = {row[1] for row in conn.execute(f"PRAGMA table_info({new})")}
-    return [row[1] for row in conn.execute(f"PRAGMA table_info({old})") if row[1] in kept]
-
-
-def _mirror(conn, old, new):
-    """The triggers that copy every write to `new` to `old` (STRATEGY_TABLES)."""
-    columns = _shared_columns(conn, old, new)
-    names, values = ",".join(columns), ",".join("new." + column for column in columns)
-    keys = [row[1] for row in conn.execute(f"PRAGMA table_info({new})") if row[5]]
-    match = " AND ".join(f"{key}=old.{key}" for key in keys)
-    upsert = f"INSERT OR REPLACE INTO {old}({names}) VALUES({values});"
-    for event, body in (("insert", upsert), ("update", f"DELETE FROM {old} WHERE {match}; {upsert}"),
-                        ("delete", f"DELETE FROM {old} WHERE {match};")):
-        conn.execute(f"CREATE TRIGGER IF NOT EXISTS {new}_to_old_{event} AFTER {event.upper()} ON {new} "
-                     f"BEGIN {body} END")
-
-
-def _sync_strategy_tables(conn):
-    """Make each Strategy Bot table under its new name equal to the one under its old name, before the migrations run:
-    the old one holds every row as it last was, whichever release wrote it (STRATEGY_TABLES). A file from before the
-    rename gets its new tables here. What differs is looked at again under the write lock, so two servers starting
-    together copy once."""
-    def pending(old, new):
-        found = _tables(conn)
-        if old not in found:
-            return False
-        if new not in found:
-            return True
-        columns = ",".join(_shared_columns(conn, old, new))
-        return conn.execute(f"SELECT 1 FROM (SELECT {columns} FROM {old} EXCEPT SELECT {columns} FROM {new}) UNION ALL "
-                            f"SELECT 1 FROM (SELECT {columns} FROM {new} EXCEPT SELECT {columns} FROM {old}) "
-                            "LIMIT 1").fetchone() is not None
-    for old, new, schema in STRATEGY_TABLES:
-        if not pending(old, new):
-            continue
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            if pending(old, new):
-                _apply(conn, schema)
-                for event in _MIRRORS:      # the copy below is not this release's write to mirror back
-                    conn.execute(f"DROP TRIGGER IF EXISTS {new}_to_old_{event}")
-                columns = ",".join(_shared_columns(conn, old, new))
-                conn.execute(f"DELETE FROM {new}")
-                conn.execute(f"INSERT INTO {new}({columns}) SELECT {columns} FROM {old}")
-                _mirror(conn, old, new)     # back before the lock goes, so no write by another server is missed
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-
-
-def _keep_old_strategy_tables(conn):
-    """Give each Strategy Bot table its old-named twin, with its columns, where a new install has none, and the
-    triggers that copy every write to it (STRATEGY_TABLES)."""
-    triggers = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
-    if all(old in _tables(conn) and {f"{new}_to_old_{event}" for event in _MIRRORS} <= triggers
-           for old, new, _ in STRATEGY_TABLES):
-        return
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        for old, new, _ in STRATEGY_TABLES:
-            if old not in _tables(conn):
-                sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (new,)).fetchone()[0]
-                conn.execute(re.sub(r'^CREATE TABLE (IF NOT EXISTS )?("?)\w+\2', f"CREATE TABLE {old}", sql))
-                columns = ",".join(_shared_columns(conn, old, new))
-                conn.execute(f"INSERT INTO {old}({columns}) SELECT {columns} FROM {new}")
-            _mirror(conn, old, new)
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
-
-
 def migrate(conn, adopt_legacy=False):
     """Apply every migration the file has not seen, by `PRAGMA user_version`.
 
@@ -1327,7 +1249,6 @@ def migrate(conn, adopt_legacy=False):
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version == 0 and not adopt_legacy:
         _refuse_foreign(conn)
-    _sync_strategy_tables(conn)
     from .flight import begin
     for i in range(version, len(MIGRATIONS)):
         done = begin(conn)
@@ -1348,7 +1269,6 @@ def migrate(conn, adopt_legacy=False):
             raise
         finally:
             done()
-    _keep_old_strategy_tables(conn)
     ensure_market_reads(conn)
     # Cloud added explicit room scopes after the original local schema. Keep old local
     # databases usable without relying on SQLite's unsupported ADD COLUMN IF NOT EXISTS.
