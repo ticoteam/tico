@@ -428,3 +428,76 @@ def test_cli_read_back_and_cited_save_use_the_server_agreement(api, monkeypatch,
     with api.app.state.store.read() as c:
         assert G.goal(c, gid)['why'] == 'Purpose'
         assert not c.execute("SELECT id FROM goals WHERE title='Second'").fetchone()
+
+
+
+def test_read_back_refuses_goals_measures_and_suggestions_the_strategy_bot_cannot_read(api):
+    from backend.tests.test_goal_cards import propose
+    hidden = goal(api, "Private inbox objective", owner="inbox")
+    public = goal(api, "Publish the guide")
+    kpi = post(api, f"goals/{hidden['id']}/kpis", {"name": "Private inbox measure"})["kpi"]
+    suggestion = propose(api, "goal_kpi", {"kpi_id": kpi["id"]}, public["id"])
+    strategy_bot(api)
+    _, attempt = turn(api, "coo", "ana-test", "Go through suggestions")
+    changes = [
+        {"kind": "goal_update", "goal_id": hidden["id"], "title": "Changed"},
+        {"kind": "measure_add", "goal_id": public["id"], "measure": {"kpi_id": kpi["id"]}},
+        {"kind": "suggestion", "proposal_id": suggestion["id"], "decision": "confirm"},
+        {"kind": "goal_create", "title": "New", "owner": "inbox"},
+        {"kind": "goal_create", "title": "New", "owner": "ops", "parent_id": hidden["id"]},
+    ]
+    before = room_messages(api)
+    for change in changes:
+        refused = read_back(api, attempt, change, expected=403)
+        assert refused["error"]["detail"] == "The Strategy Bot can't see that bot's goals."
+        assert "Private inbox" not in str(refused)
+        assert room_messages(api) == before
+    assert get(api, "goals/" + hidden["id"])["goal"]["title"] == "Private inbox objective"
+    assert get(api, "goals/" + public["id"])["goal"]["kpis"] == []
+
+
+def test_a_yes_saves_a_goal_without_optional_measures_and_later_sync_does_not_nag(api):
+    from backend import goal_asks as GA
+    strategy_bot(api)
+    r, attempt = turn(api, "coo", "ana-test", "Publish the guide")
+    back = read_back(api, attempt, {"kind": "goal_create", "title": "Publish the guide", "owner": "ops"})
+    assert "warning" not in back["text"].lower()
+    attempt = reply(api, r, attempt, "yes")
+    made = save(api, attempt, back["changes"][0]["steps"][0])["goal"]
+    assert made["kpis"] == []
+    with api.app.state.store.transaction() as c:
+        GA.sync(c, "ana", at=H.shift(H.now(), seconds=40 * 86400))
+        assert not c.execute("SELECT 1 FROM goal_proposals WHERE goal_id=?", (made["id"],)).fetchone()
+
+
+def test_unattended_strategy_bot_can_file_a_card_but_cannot_save_a_goal_or_target(api):
+    from backend.tests.test_groups_leads import as_bot
+    strategy_bot(api)
+    as_bot(api, "goal-manager", "strategy-test")
+    row = goal(api, "Publish the guide")
+    kpi = post(api, f"goals/{row['id']}/kpis", {"name": "Guides read"})["kpi"]
+    for path, body, status in (("goals", {"title": "Unattended", "owner": "ops"}, 403),
+                       ("goals/" + row["id"], {"title": "Unattended"}, 409),
+                       (f"goals/{row['id']}/kpis/{kpi['id']}", {"kind": "improve", "target": 30, "deadline": "2099-12-31"}, 409)):
+        post(api, path, body, token="strategy-test", expected=status)
+    p = post(api, "goal-proposals", {"kind": "kpi_target", "goal_id": row["id"], "kpi_id": kpi["id"],
+                "payload": {"kind": "improve", "target": 30, "deadline": "2099-12-31"}, "reason": "Number stated by owner"}, token="strategy-test")["proposal"]
+    assert p["status"] == "pending"
+    shown = get(api, "goals/" + row["id"])["goal"]
+    assert shown["title"] == "Publish the guide" and shown["kpis"][0]["link"]["kind"] == "none"
+
+
+
+def test_read_back_cannot_be_read_or_saved_after_strategy_bot_read_access_is_revoked(api):
+    from backend.tests.test_api import restrict
+    strategy_bot(api)
+    r, attempt = turn(api, "coo", "ana-test", "Publish the guide")
+    row = goal(api, "Publish the guide")
+    back = read_back(api, attempt, {"kind": "goal_update", "goal_id": row["id"], "title": "Publish guide today"})
+    attempt = reply(api, r, attempt, "yes")
+    with api.app.state.store.transaction() as c:
+        restrict(c, "ops", people=["ana"])
+    denied = get(api, "goals/read-back/" + back["message_id"], attempt["token"], expected=403)
+    assert denied["error"]["detail"] == "The Strategy Bot can't see that bot's goals."
+    save(api, attempt, back["changes"][0]["steps"][0], expected=403)
+    assert get(api, "goals/" + row["id"])["goal"]["title"] == "Publish the guide"
