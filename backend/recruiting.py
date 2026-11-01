@@ -46,7 +46,8 @@ TOOL_LABELS = {"hub": "Tico tasks", "docs": "Docs", "web": "Web", "mail": "Email
 BUILT_IN_TOOLS = frozenset({"hub", "docs", "web"})
 # Words of rank, not of the work: "Support lead" and "Engineering lead" share no job.
 RANKS = frozenset(stem for word in ("lead", "head", "manager", "senior", "junior", "chief", "director", "specialist",
-                                    "associate", "officer") for stem, _ in R._words(word))
+                                    "associate", "officer", "staff", "principal") for stem, _ in R._words(word)) | {
+    "vp", "svp", "evp", "sr", "jr", "ii", "iii", "iv"}      # short ranks and levels: "VP, Product Marketing", "Designer II"
 # Words naming a kind of job, not its work, as written: "Rust engineer" and "QA Engineer" share no work, and neither do
 # "Data analyst" and "Pricing Analyst". "Engineering" is a field of work and stays.
 ROLE_WORDS = frozenset("""engineer engineers developer developers analyst analysts coordinator coordinators administrator

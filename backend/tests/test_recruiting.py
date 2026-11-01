@@ -115,12 +115,14 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
                             ("Senior Software Developer", "pr-reviewer"), ("QA engineer (contract)", "issue-triage"),
                             ("Security engineer - remote", "security-engineer"),
                             ("Manager, Engineering", "engineering-manager"), ("Engineer, Security", "security-engineer"),
-                            ("Manager, Customer Success", "customer-success")):
+                            ("Manager, Customer Success", "customer-success"),
+                            ("VP, Product Marketing", "product-marketing"), ("Sr. Security Engineer", "security-engineer")):
         assert recruiting._best_card(cards, title)["template"] == template, title
     # A title ending in a kind of job wants that kind: a designer is not the UX Writer, an assistant not the Account
     # Executive, a machine learning engineer not the Learning and Development Specialist.
     for title in ("UX designer", "Executive assistant", "Machine learning engineer", "Product designer",
-                  "Accounting manager", "UX Designer (Contract)", "Rust engineer, platform"):
+                  "Accounting manager", "UX Designer (Contract)", "Rust engineer, platform",
+                  "UX Designer II", "UX Designer III"):
         assert recruiting._best_card(cards, title) is None, title
     # Every template's own name, and its plural, is that template's job.
     misses = [card["name"] for card in cards for title in (card["name"], card["name"] + "s")
