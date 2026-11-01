@@ -43,6 +43,7 @@ Entry points, each taking a database connection, a viewer (an `auth.Identity`) a
 already read. Without it the admins are read from the database (`access.owner_and_admin_emails`).
 """
 import json
+import sqlite3
 
 from . import bot_access as A
 from . import people as P
@@ -71,11 +72,12 @@ def ensure(c):
 def migrate_team_pages(c):
     """A team page's "Seen by" (pin_places.audience_json) is now its group's Read: the page is the group's content,
     while See (being on the chart) stays as it was. Each narrowed page moves into its group's Read once, only when
-    Read is still Everyone, so nothing widens; then it is cleared."""
+    Read is still Everyone; when both are narrowed, Read becomes whoever both let in. Nothing widens. Then it is
+    cleared."""
     try:
         rows = c.execute("SELECT place, audience_json FROM pin_places "
                          "WHERE place LIKE 'team:%' AND audience_json IS NOT NULL").fetchall()
-    except Exception:            # a database from before team pages
+    except sqlite3.OperationalError:     # a database from before team pages
         return
     from . import audit_log
     for place, raw in ((r[0], r[1]) for r in rows):
@@ -88,8 +90,7 @@ def migrate_team_pages(c):
             row = c.execute("SELECT id, access FROM teammate_accesses WHERE target_type='group' AND target_id=?",
                             (gid,)).fetchone()
             before = _complete(row[1] if row else None, "group", gid)
-            doc = {key: (dict(level) if key == "read" and before[key].get("everyone") else before[key])
-                   for key in AUDIENCE_LEVELS}
+            doc = dict(before, read=_narrowest(c, before["read"], level))
             if doc != before:
                 text, now = json.dumps(doc, sort_keys=True, separators=(",", ":")), H.now()
                 if row:
@@ -100,6 +101,50 @@ def migrate_team_pages(c):
                               "created_at,updated_at) VALUES (?,?,?,?,1,'system',?,?)", (H.new_id(), "group", gid, text, now, now))
                 audit_log.write(c, "system", f"group:{gid}:access", before, doc, "team-page-audience")
         c.execute("UPDATE pin_places SET audience_json=NULL WHERE place=?", (place,))
+
+
+def _narrowest(c, stored, legacy):
+    """Whoever both audiences let in. Everyone gives way to the other; one that lets in no one the other does not is
+    kept as it is (its groups still resolve live); otherwise the people and bots in both, named one by one."""
+    if stored.get("everyone"):
+        return dict(legacy)
+    if legacy.get("everyone") or stored == legacy:
+        return dict(stored)
+    from . import views
+    roster, entries = views.roster(c, shared=True), views.entries(c, shared=True)
+
+    def actors(level):
+        out = {"human:" + p for p in level.get("people") or []} | {"bot:" + b for b in level.get("bots") or []}
+        for gid in level.get("teams") or []:
+            out |= group_member_actors(c, gid, roster, entries)
+        return out
+    mine, theirs = actors(stored), actors(legacy)
+    if mine <= theirs:
+        return dict(stored)
+    if theirs <= mine:
+        return dict(legacy)
+    both = mine & theirs
+    return {"everyone": False, "people": sorted(a[6:] for a in both if a.startswith("human:")), "teams": [],
+            "bots": sorted(a[4:] for a in both if a.startswith("bot:"))}
+
+
+def forget_group(c, actor, gid):
+    """A deleted group's access goes with it, and no other teammate's audience names it any more: a group made later
+    with the same id starts from the defaults. What it was stays in the audit log."""
+    from . import audit_log
+    for row in list(stored_rows(c).values()):
+        kind, ident = row["target_type"], row["target_id"]
+        before = _complete(row["access"], kind, ident)
+        if kind == "group" and ident == gid:
+            c.execute("DELETE FROM teammate_accesses WHERE id=?", (row["id"],))
+            audit_log.write(c, actor, f"group:{gid}:access", before, None, "group-deleted")
+            continue
+        after = {level: (dict(value, teams=[t for t in value["teams"] if t != gid]) if gid in value["teams"] else value)
+                 for level, value in before.items()}
+        if after != before:
+            c.execute("UPDATE teammate_accesses SET access=?,revision=revision+1,updated_by=?,updated_at=? WHERE id=?",
+                      (json.dumps(after, sort_keys=True, separators=(",", ":")), actor, H.now(), row["id"]))
+            audit_log.write(c, actor, f"{kind}:{ident}:access", before, after, "group-deleted")
 
 
 # ----------------------------------------------------------------------------- targets and stored shape
@@ -140,7 +185,7 @@ def stored_rows(c, kind=None):
             rows = c.execute("SELECT * FROM teammate_accesses WHERE target_type=?", (kind,)).fetchall()
         else:
             rows = c.execute("SELECT * FROM teammate_accesses").fetchall()
-    except Exception:            # a database from before the table: everyone has the defaults
+    except sqlite3.OperationalError:     # a database from before the table: everyone has the defaults
         return {}
     return {(r["target_type"], r["target_id"]): r for r in rows}
 
@@ -483,6 +528,8 @@ def hidden(c, viewer, level="see", kinds=KINDS, auth=None):
     role = getattr(viewer, "role", "")
     if role not in ("human", "bot") or is_admin(c, viewer, auth):
         return set()
+    if level in ("see", "read") and "bot" not in kinds and not stored_rows(c):
+        return set()            # nobody narrowed a person or a group: the defaults let everyone see them
     from . import views
     targets = []
     roster = views.roster(c, shared=True)
@@ -519,9 +566,7 @@ def save(c, who, target, body, auth=None, via=None):
     kind, ident = parse_target(target)
     if kind == "bot":
         raise Problem("validation", "A bot's access is set on the bot", 422)
-    require(c, who, "manage", target, auth)
-    if not _exists(c, kind, ident):
-        raise Problem("not_found", ("Person" if kind == "human" else "Group") + " not found", 404)
+    _require_existing(c, who, kind, ident, target, auth)
     row = stored_rows(c, kind).get((kind, ident))
     current = int(row["revision"]) if row else 0
     if int(body.get("revision") or 0) != current:
@@ -554,15 +599,37 @@ def view(c, who, target, auth=None):
     """What the Access editor reads: the three audiences, the revision, what the viewer holds, and the groups an
     audience can name. For whoever manages the teammate."""
     kind, ident = parse_target(target)
-    require(c, who, "manage", target, auth)
-    if not _exists(c, kind, ident):
-        raise Problem("not_found", ("Person" if kind == "human" else "Group") + " not found", 404)
+    _require_existing(c, who, kind, ident, target, auth)
     from . import views
     roster = views.roster(c, shared=True)
     names = {gid: g.get("name") or gid for gid, g in (roster.get("org_groups") or {}).items()}
     return {"target": f"{kind}:{ident}", **document(c, target), "default": default_document(kind, ident),
             "revision": revision(c, target), "you": levels_for(c, who, target, auth),
-            "teams": [{"id": gid, "name": name} for gid, name in sorted(names.items())]}
+            "teams": group_choices(c, who, names, auth)}
+
+
+def _require_existing(c, who, kind, ident, target, auth):
+    """Manage on a teammate that is there. One that is not and one the viewer may not see read the same 404."""
+    if not _exists(c, kind, ident):
+        raise Problem("not_found", ("Person" if kind == "human" else "Group") + " not found", 404)
+    require(c, who, "manage", target, auth)
+
+
+def group_choices(c, viewer, names, auth=None):
+    """`[{id, name}]` for {group id: name}, less the groups the viewer may not see: what an Access editor offers."""
+    groups_hidden = unseen(c, viewer, auth)[1]
+    return [{"id": gid, "name": name} for gid, name in sorted(names.items()) if gid not in groups_hidden]
+
+
+def group_rows(c, viewer, groups, auth=None):
+    """`[{id, name, parent}]` for a roster's `org_groups`, less the groups the viewer may not see; a parent they may
+    not see reads as the nearest one above it they may (or null)."""
+    from . import views
+    roster = views.roster(c, shared=True)
+    groups_hidden = unseen(c, viewer, auth)[1]
+    return [{"id": gid, "name": g.get("name") or gid,
+             "parent": visible_group(g.get("parent") or "", roster, groups_hidden) or None}
+            for gid, g in groups.items() if gid not in groups_hidden]
 
 
 def _exists(c, kind, ident):
@@ -615,9 +682,12 @@ def redact_chart(view, roster, people_hidden, groups_hidden):
     out = dict(view)
     out["people"] = [_redact_row(row, roster, parents, gone, groups_hidden)
                      for row in view.get("people") or [] if row.get("id") not in people_hidden]
-    for key in ("bots", "seats"):
-        if key in view:
-            out[key] = [_redact_row(row, roster, parents, gone, groups_hidden) for row in view.get(key) or []]
+    if "bots" in view:
+        # Rehung first (a hidden manager gives way to the next one up), then its own fields.
+        out["bots"] = [redact_bot(_redact_row(row, roster, parents, gone, groups_hidden), roster, people_hidden,
+                                  groups_hidden, team_was=row.get("team")) for row in view.get("bots") or []]
+    if "seats" in view:
+        out["seats"] = [_redact_row(row, roster, parents, gone, groups_hidden) for row in view.get("seats") or []]
     groups = []
     for row in view.get("org_groups") or []:
         if row.get("id") in groups_hidden:
@@ -646,16 +716,115 @@ def redact_bots(c, viewer, rows, auth=None):
     chart = P.org_view(roster, entries, archived, bare_people=True)
     view = redact_chart({"people": chart.get("people") or [], "org_groups": chart.get("org_groups") or [],
                          "bots": [{**row, "id": row.get("name")} for row in rows]}, roster, people_hidden, groups_hidden)
-    out = []
     for row in view["bots"]:
         row.pop("id", None)
-        if row.get("operator") in people_hidden:
-            row["operator"] = None
-        for key in ("users", "bot_owners"):
-            if isinstance(row.get(key), list):
-                row[key] = [p for p in row[key] if (p or {}).get("id") not in people_hidden]
-        out.append(row)
-    return out
+    return view["bots"]
+
+
+def bot_redactor(c, viewer, auth=None):
+    """`redact_bot` for this viewer, as a function of one bot row; the row as it is when nothing is hidden from them.
+    For the bot list and a bot's detail (`/api/v2/bots`), as `/api/v2/org` and `/api/employees` do through the chart."""
+    people_hidden, groups_hidden = unseen(c, viewer, auth)
+    if not people_hidden and not groups_hidden:
+        return lambda row: row
+    from . import views
+    roster = views.roster(c, shared=True)
+    return lambda row: redact_bot(row, roster, people_hidden, groups_hidden)
+
+
+def redact_bot(row, roster, people_hidden, groups_hidden, team_was=None):
+    """One bot's metadata less the people and groups the viewer may not see: its operator (and `operator_name`), its
+    owners, users and co-owners, a `reports_to` naming such a person (and `reports_to_name`), and a group (`team`, and
+    the `department` that names it) read as the nearest group above it they may see. `team_was`: its group before
+    the chart rehung it."""
+    if not people_hidden and not groups_hidden:
+        return row
+    row = dict(row)
+
+    def gone(ref):
+        ref = str(ref or "")
+        return (ref[6:] if ref.startswith("human:") else ref) in people_hidden
+    if row.get("operator") and gone(row["operator"]):
+        row["operator"] = None
+        if "operator_name" in row:
+            row["operator_name"] = None
+    for key in ("owners", "users", "bot_owners"):
+        if isinstance(row.get(key), list):
+            row[key] = [p for p in row[key] if not gone(p.get("id") if isinstance(p, dict) else p)]
+    if row.get("reports_to") and gone(row["reports_to"]):
+        row["reports_to"] = ""
+        if "reports_to_name" in row:
+            row["reports_to_name"] = None
+    was = row.get("team") if team_was is None else team_was
+    if was in groups_hidden:
+        row["team"] = visible_group(was, roster, groups_hidden) or None
+        if "department" in row:
+            group = (roster.get("org_groups") or {}).get(row["team"]) or {}
+            row["department"] = group.get("name") or row["team"] or ""
+    return row
+
+
+# ----------------------------------------------------------------------------- what a payload says about people
+class Known:
+    """Which of the people a payload names one reader may be told about, for REST answers and the stream alike: a
+    person they may not see is named only to someone in the same conversation, or a party to the same task (its
+    owner, its requester, or in its conversation). Elsewhere the field reads "" (null for `from_person`). The owner,
+    the admins and whoever manages that person see them anyway, as everywhere."""
+
+    TASK_FIELDS = ("owner", "requester", "closed_by", "origin_actor")
+
+    def __init__(self, c, viewer, auth=None):
+        self.c, self.viewer, self.auth = c, viewer, auth
+        self.me = str(getattr(viewer, "actor", "") or "")
+        self._people = None
+        self._in = {}
+
+    @property
+    def people(self):
+        """The viewer's unseen people, as actors."""
+        if self._people is None:
+            self._people = {"human:" + pid for pid in unseen(self.c, self.viewer, self.auth)[0]}
+        return self._people
+
+    def member(self, conversation_id):
+        if not conversation_id:
+            return False
+        if conversation_id not in self._in:
+            row = self.c.execute("SELECT participants_json FROM conversations WHERE id=?",
+                                 (conversation_id,)).fetchone()
+            self._in[conversation_id] = bool(row) and self.me in (H._json(row[0], []) or [])
+        return self._in[conversation_id]
+
+    def message(self, message):
+        if not self.people or not isinstance(message, dict):
+            return message
+        named = [key for key in ("from_actor", "to_actor") if message.get(key) in self.people]
+        if not named or self.member(message.get("conversation_id")):
+            return message
+        return {**message, **{key: "" for key in named}}
+
+    def messages(self, messages):
+        return [self.message(m) for m in messages] if self.people else messages
+
+    def conversation(self, conversation):
+        if not self.people or not isinstance(conversation, dict) or self.me in (conversation.get("participants") or []):
+            return conversation
+        return {**conversation, "participants": [a for a in conversation.get("participants") or []
+                                                 if a not in self.people]}
+
+    def task(self, task):
+        if not self.people or not isinstance(task, dict):
+            return task
+        named = [key for key in self.TASK_FIELDS if task.get(key) in self.people]
+        origin = task.get("from_person") in self.people
+        if not named and not origin:
+            return task
+        if self.me in (task.get("owner"), task.get("requester")) or self.member(task.get("conversation_id")):
+            return task
+        return {**task, **{key: "" for key in named}, **({"from_person": None} if origin else {})}
+
+    def tasks(self, tasks):
+        return [self.task(t) for t in tasks] if self.people else tasks
 
 
 def _redact_row(row, roster, parents, gone, groups_hidden):

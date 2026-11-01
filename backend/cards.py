@@ -864,13 +864,12 @@ def widened(c, auth, who, fid, cache):
 def choices(ctx, team=""):
     """What the card and pin forms offer the reader: templates, teams, the KPIs and pages they may read."""
     from . import kpis as K  # noqa: F401
-    from . import goal_routes
+    from . import goal_routes, teammate_access
     hidden = goal_routes._hidden_owners(ctx.c, ctx.auth, ctx.who)
     kpis = [{"id": r["id"], "name": r["name"]} for r in ctx.c.execute(
         "SELECT id, name, owner FROM kpis WHERE archived_at IS NULL ORDER BY name LIMIT 500") if r["owner"] not in hidden]
     return {"templates": [{"id": k, "name": v["name"], "fields": [f for f in v["fields"]]} for k, v in TEMPLATES.items()],
-            "teams": [{"id": gid, "name": g.get("name") or gid, "parent": g.get("parent") or None}
-                      for gid, g in ctx.groups.items()],
+            "teams": teammate_access.group_rows(ctx.c, ctx.who, ctx.groups, ctx.auth),
             "kpis": kpis, "pages": pages_for(ctx, team if team in ctx.groups else "", LIST_MAX)}
 
 

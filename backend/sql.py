@@ -67,11 +67,13 @@ def unseen_authors(unseen, me, inner):
 
 def teammate_masks(unseen, me, inner=None):
     """MASKED for one request: participant lists drop the people the caller may not see (in a conversation the caller
-    is not in), group lists the groups they may not see. A task's owner, requester and closer, and the actor of an
-    event or a task event, read '' when they are such a person, unless the caller is a party to that task or in that
-    conversation: whoever works with you there is known to you there."""
+    is not in), group lists the groups they may not see. A task's owner, requester and closer, the actor of an event
+    or a task event, and a message's recipient read '' when they are such a person, unless the caller is a party to
+    that task or in that conversation: whoever works with you there is known to you there. A bot's operator, owners,
+    manager, author and group (its columns and its configuration) leave out whoever the caller may not see."""
     people = sorted(t for t in unseen if t.startswith("human:"))
     groups = sorted(t.split(":", 1)[1] for t in unseen if t.startswith("group:"))
+    bare = sorted(t[6:] for t in people)
     out = {}
     if people and inner is not None:
         hidden = qlist(people)
@@ -89,6 +91,9 @@ def teammate_masks(unseen, me, inner=None):
         out["tasks"] = {column: masked(column, party("source.id")) for column in ("owner", "requester", "closed_by")}
         out["task_events"] = {"actor": masked("actor", party("source.task_id"))}
         out["events"] = {"actor": masked("actor", f"({member('source.target')} OR {party('source.target')})")}
+        out["messages"] = {"to_actor": masked("to_actor", member("source.conversation_id"))}
+    if people or groups:
+        out["bot_config"] = bot_config_masks(people, bare, groups)
     if people:
         out["conversations"] = {"participants_json": (
             "CASE WHEN source.participants_json IS NULL OR NOT json_valid(source.participants_json) THEN NULL "
@@ -99,7 +104,33 @@ def teammate_masks(unseen, me, inner=None):
         out["humans"] = {"teams_json": (
             "CASE WHEN source.teams_json IS NULL OR NOT json_valid(source.teams_json) THEN source.teams_json "
             f"ELSE (SELECT json_group_array(value) FROM json_each(source.teams_json) WHERE value NOT IN {qlist(groups)}) END")}
-        out["bot_config"] = {"team": f"CASE WHEN source.team IN {qlist(groups)} THEN NULL ELSE source.team END"}
+    return out
+
+
+def bot_config_masks(people, bare, groups):
+    """bot_config columns less the people (`human:<id>` in `people`, bare ids in `bare`) and groups the caller may
+    not see: ids read '', owner lists drop them, and the configuration loses a `team`, `reports_to` or `operator`
+    naming one."""
+    nobody = "(SELECT NULL WHERE 0)"              # an IN list that matches nothing
+    actors, ids, teams = qlist(people) if people else nobody, qlist(bare) if bare else nobody, \
+        qlist(groups) if groups else nobody
+    out = {"team": f"CASE WHEN source.team IN {teams} THEN NULL ELSE source.team END"}
+    if not people:
+        return out
+    for column in ("operator", "reports_to"):
+        out[column] = (f"CASE WHEN source.{column} IN {ids} OR source.{column} IN {actors} THEN '' "
+                       f"ELSE source.{column} END")
+    for column in ("created_by", "definition_updated_by"):
+        out[column] = f"CASE WHEN source.{column} IN {actors} THEN '' ELSE source.{column} END"
+    for column in ("owner_ids_json", "bot_owners_json"):
+        out[column] = (f"CASE WHEN source.{column} IS NULL OR NOT json_valid(source.{column}) THEN source.{column} "
+                       f"ELSE (SELECT json_group_array(value) FROM json_each(source.{column}) "
+                       f"WHERE value NOT IN {ids} AND value NOT IN {actors}) END")
+    out["config_json"] = (
+        "CASE WHEN source.config_json IS NULL OR NOT json_valid(source.config_json) THEN source.config_json "
+        "ELSE json_patch(source.config_json, (SELECT json_group_object(key, NULL) FROM json_each(source.config_json) "
+        f"WHERE (key='team' AND value IN {teams}) OR (key IN ('reports_to','operator') "
+        f"AND (value IN {ids} OR value IN {actors})))) END")
     return out
 
 

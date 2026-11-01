@@ -1360,11 +1360,12 @@ class SettingsAdmin:
 
     def access(self, c, who, bot):
         """Who may see, read and write to this bot, for the people who manage it."""
+        from . import teammate_access
         self._manager(c, who, bot)
         config = self._config(c, bot)
         return {"bot": bot, **BA.document(config["access_json"]), "revision": config["revision"],
                 "you": self.auth.bot_access(c, who, bot),
-                "teams": [{"id": tid, "name": name} for tid, name in sorted(self.team_names(c).items())]}
+                "teams": teammate_access.group_choices(c, who, self.team_names(c), self.auth)}
 
     def set_access(self, c, who, bot, body):
         self._manager(c, who, bot)

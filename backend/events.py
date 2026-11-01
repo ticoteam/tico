@@ -773,6 +773,7 @@ class _Viewer:
         self._bots = None
         self._conversations = {}
         self._unseen = None
+        self._known = None
 
     def bots(self):
         if self._bots is None:
@@ -789,6 +790,14 @@ class _Viewer:
         if actor.startswith("human:") and actor[6:] in self.unseen_people():
             return not self._known_there(row)
         return False
+
+    @property
+    def known(self):
+        """What a payload may say about people this reader may not see (backend/teammate_access.py `Known`)."""
+        if self._known is None:
+            from . import teammate_access
+            self._known = teammate_access.Known(self.c, self.who, self.auth)
+        return self._known
 
     def unseen_people(self):
         """The people this reader may not see (backend/teammate_access.py): their name leaves the stream too."""
@@ -888,7 +897,8 @@ def _messages(view, rows):
             continue
         if privacy.message_readable(c, view.principal, message):
             out.append((row, {"id": subject, "conversation_id": cid,
-                              "message": {**message, "refs": H._json(message["refs_json"], {}) or {}}}))
+                              "message": view.known.message({**message,
+                                                             "refs": H._json(message["refs_json"], {}) or {}})}))
         elif message.get("deleted_at") and _readable_before_deletion(view, message):
             out.append((row, {"id": subject, "conversation_id": cid, "deleted": True}))
     return out

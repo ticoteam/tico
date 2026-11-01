@@ -343,6 +343,187 @@ def test_a_team_page_is_seen_by_its_groups_read_and_old_audiences_move_there(acm
         audits = c.execute("SELECT count(*) FROM audit_log WHERE object='group:legal:access' AND actor='system'").fetchone()[0]
         left = c.execute("SELECT count(*) FROM pin_places WHERE audience_json IS NOT NULL").fetchone()[0]
     assert legal["see"]["everyone"]                 # See is left as it was
-    assert legal["read"]["people"] == ["cara"]      # already narrower: kept, not widened
+    assert legal["read"] == {"everyone": False, "people": [], "teams": [], "bots": []}   # {Cara} and {Fay}: nobody
     assert contracts == TA.default_document("group", "contracts")
-    assert audits == 0 and left == 0               # nothing changed for Legal
+    assert audits == 1 and left == 0
+
+
+def hide(api, path, *names):
+    audience = {"people": list(names)}
+    set_access(api, path, see=audience, read=audience, write=audience)
+
+
+def test_migration_keeps_whoever_both_boundaries_let_in(acme):
+    api, tokens = acme
+    store = api.app.state.store
+    with store.transaction() as c:
+        assert TA._narrowest(c, {"everyone": True}, {"everyone": False, "people": ["eve"]})["people"] == ["eve"]
+        # Read Legal (Cara, Fay, Counsel), page {Fay, Eve}: Fay only, named one by one.
+        both = TA._narrowest(c, A_({"teams": ["legal"]}), A_({"people": ["fay", "eve"]}))
+        assert both == {"everyone": False, "people": ["fay"], "teams": [], "bots": []}
+        # One inside the other: the narrower is kept as it is, its group still resolving live.
+        assert TA._narrowest(c, A_({"teams": ["contracts"]}), A_({"teams": ["legal"]}))["teams"] == ["contracts"]
+        assert TA._narrowest(c, A_({"teams": ["legal"]}), A_({"people": ["cara"]}))["people"] == ["cara"]
+
+
+def A_(level):
+    from backend import bot_access
+    return bot_access.audience({"everyone": False, **level})
+
+
+def test_a_deleted_group_takes_its_access_with_it(acme):
+    api, tokens = acme
+    set_access(api, "groups/sales", write={"people": ["fay"]})
+    set_access(api, "humans/cara", token="cara-test", read={"teams": ["sales", "legal"]})
+    assert levels(api, "fay", "group:sales")["write"]
+    assert api.delete("/api/v2/groups/sales", headers=headers("ana-test")).status_code == 200
+    post(api, "groups", {"name": "Sales", "add": {"people": ["dee"]}})
+    assert get(api, "groups/sales/access", "ana-test")["revision"] == 0      # the defaults, not the old grant
+    assert not levels(api, "fay", "group:sales")["write"] and levels(api, "dee", "group:sales")["write"]
+    assert get(api, "humans/cara/access", "cara-test")["read"]["teams"] == ["legal"]
+    assert not levels(api, "dee", "human:cara")["read"] or levels(api, "dee", "human:cara")["manage"]
+    with api.app.state.store.read() as c:
+        gone = c.execute("SELECT before_json, after_json FROM audit_log WHERE object='group:sales:access' "
+                         "AND via='group-deleted'").fetchone()
+    assert gone and '"fay"' in gone["before_json"] and gone["after_json"] is None
+
+
+def test_group_catalogues_leave_out_groups_the_reader_may_not_see(acme):
+    api, tokens = acme
+    hide(api, "groups/legal", "cara")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='eve' WHERE bot='analyst'")
+    for name, sees in {"eve": False, "cara": True}.items():
+        token = tokens[name]
+        mine = get(api, f"humans/{name}/access", token)["teams"]             # their own Access editor
+        assert any(g["id"] == "legal" for g in mine) is sees, name
+        picker = get(api, "cards/choices", token)["teams"]
+        assert any(g["id"] == "legal" for g in picker) is sees, name
+        contracts = next(g for g in picker if g["id"] == "contracts")
+        assert contracts["parent"] == ("legal" if sees else None), name
+    bot = get(api, "bots/analyst/access", "eve-test")["teams"]             # a bot's Access editor
+    assert not any(g["id"] == "legal" for g in bot) and any(g["id"] == "sales" for g in bot)
+
+
+def test_hub_sql_masks_bot_identities_and_message_recipients(acme):
+    api, tokens = acme
+    task = post(api, "tasks", {"owner": "counsel", "title": "Review the lease", "body": "Please."}, token="ana-test")
+    post(api, f"tasks/{task['id']}/comments", {"text": "Clause 4 looks odd."}, token="dee-test")
+    conversation = get(api, "tasks/" + task["id"], "ana-test")["task"]["conversation_id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='cara', bot_owners_json='[\"cara\",\"ana\"]', "
+                  "created_by='human:cara', config_json=json_set(config_json,'$.reports_to','cara') WHERE bot='counsel'")
+        c.execute("UPDATE messages SET to_actor='human:cara' WHERE conversation_id=?", (conversation,))
+    hide(api, "humans/cara", "dee", "fay")
+    hide(api, "groups/contracts", "fay")
+    row = "SELECT operator||'|'||bot_owners_json||'|'||created_by||'|'||coalesce(team,'-') FROM bot_config " \
+          "WHERE bot='counsel'"
+    assert sql_column(api, row, "eve-test") == ['|["ana"]||-']
+    assert sql_column(api, row, "fay-test") == ['cara|["cara","ana"]|human:cara|contracts']
+    config = sql_column(api, "SELECT config_json FROM bot_config WHERE bot='counsel'", "eve-test")[0]
+    assert '"team"' not in config and '"reports_to"' not in config and '"Counsel"' in config
+    recipients = f"SELECT DISTINCT to_actor FROM messages WHERE conversation_id='{conversation}'"
+    assert sql_column(api, recipients, "eve-test") == [""]
+    assert sql_column(api, recipients, "fay-test") == ["human:cara"]
+    assert sql_column(api, recipients, "dee-test") == ["human:cara"]      # in the conversation: known there
+
+
+def test_rest_and_the_stream_leave_hidden_people_out_of_messages_and_tasks(acme):
+    from backend import events as E
+
+    api, tokens = acme
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.read() as c:
+        cursor = E.latest(c)
+    task = post(api, "tasks", {"owner": "counsel", "title": "Review the lease", "body": "Please."}, token="cara-test")
+    post(api, f"tasks/{task['id']}/comments", {"text": "Clause 4 looks odd."}, token="cara-test")
+    conversation = get(api, "tasks/" + task["id"], "ana-test")["task"]["conversation_id"]
+    hide(api, "humans/cara", "fay")
+    for name, sees in {"eve": False, "fay": True, "ben": True}.items():
+        token = tokens[name]
+        page = api.get(f"/api/v2/conversations/{conversation}/messages", headers=headers(token)).json()
+        authors = {m["from_actor"] for m in page["messages"]}
+        assert ("human:cara" in authors) is sees, name
+        assert ("human:cara" in (page["conversation"].get("participants") or [])) is sees, name
+        assert (get(api, "tasks/" + task["id"], token)["task"]["requester"] == "human:cara") is sees, name
+        listed = next(t for t in get(api, "tasks?owner=counsel", token)["tasks"] if t["id"] == task["id"])
+        assert (listed["requester"] == "human:cara") is sees, name
+        with store.read() as c:
+            sent = E.read(c, auth, who(api, name), cursor, topics=("messages",))[0]
+        streamed = {data["message"]["from_actor"] for _, _, data in sent if "message" in data}
+        assert ("human:cara" in streamed) is sees, name
+    # Eve asked Cara for work: a party to that task, Cara stays named to her there.
+    mine = post(api, "tasks", {"owner": "human:cara", "title": "Sign the lease", "body": "Thanks."}, token="eve-test")
+    assert get(api, "tasks/" + mine["id"], "eve-test")["task"]["owner"] == "human:cara"
+
+
+def test_bot_metadata_leaves_out_hidden_people_and_groups_everywhere(acme):
+    api, tokens = acme
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='cara', owner_ids_json='[\"cara\"]', "
+                  "bot_owners_json='[\"cara\"]' WHERE bot='counsel'")
+    hide(api, "humans/cara", "fay")
+    hide(api, "groups/contracts", "fay")
+    for name, sees in {"eve": False, "fay": True}.items():
+        token = tokens[name]
+        listed = next(b for b in get(api, "bots", token) if b["slug"] == "counsel")
+        detail = get(api, "bots/counsel", token)
+        chart = next(b for b in get(api, "org", token)["bots"] if b["id"] == "counsel")
+        for row in (listed, detail):
+            assert (row["operator"] == "cara") is sees, name
+            assert any(o["id"] == "cara" for o in row["owners"] + row["bot_owners"]) is sees, name
+            assert row["team"] == ("contracts" if sees else "legal"), name
+        assert (detail.get("operator_name") is not None) is sees, name
+        assert chart["team"] == ("contracts" if sees else "legal"), name
+        assert chart["department"] == ("Contracts" if sees else "Legal"), name
+
+
+def test_report_order_names_only_people_the_reader_may_see(acme):
+    api, tokens = acme
+    hide(api, "humans/cara", "dee", "fay")
+    reports = lambda token: [r["id"] for r in get(api, "org/order/dee", token)["reports"]]  # noqa: E731
+    assert reports("fay-test") == ["cara"] and reports("eve-test") == []
+    assert api.get("/api/v2/org/order/cara", headers=headers("eve-test")).status_code == 404
+    assert api.get("/api/v2/org/order/cara", headers=headers("fay-test")).status_code == 200
+
+
+def test_access_reads_and_writes_answer_alike_for_missing_and_unseen(acme):
+    api, tokens = acme
+    hide(api, "humans/cara", "fay")
+    hide(api, "groups/legal", "cara")
+    body = {"see": EVERYONE, "read": EVERYONE, "write": EVERYONE, "revision": 0}
+    for path in ("humans/cara", "humans/nobody-here", "groups/legal", "groups/no-such-group"):
+        read = api.get(f"/api/v2/{path}/access", headers=headers("eve-test"))
+        write = api.put(f"/api/v2/{path}/access", json=body, headers=headers("eve-test"))
+        assert read.status_code == write.status_code == 404, path
+        assert problem(read) == problem(write) and problem(read), path
+    assert api.get("/api/v2/humans/dee/access", headers=headers("eve-test")).status_code == 403   # seen, not hers
+
+
+def problem(response):
+    body = response.json()
+    return {k: v for k, v in (body.get("error") or body).items() if k in ("code", "message", "detail", "title")}
+
+
+def test_botops_sets_access_as_the_person_without_the_delegation_header(acme):
+    from backend.tests.test_botops_parity import act
+    from backend.tests.test_member_bots import botops as make_botops, finish, turn
+
+    api, tokens = acme
+    machine = make_botops.__wrapped__(api)
+    body = {"see": EVERYONE, "read": NOBODY, "write": EVERYONE, "revision": 0}
+    eve = turn(api, machine, person="eve-test", text="Hide Cara's Home")
+    assert act(api, eve, "PUT", "humans/cara/access", body, ref=None).status_code == 403
+    finish(api, machine, eve)
+    dee = turn(api, machine, person="dee-test", text="Hide Cara's Home")
+    changed = act(api, dee, "PUT", "humans/cara/access", body, ref=None)
+    assert changed.status_code == 200, changed.text
+    group = act(api, dee, "POST", "groups/sales/access", {**body, "read": EVERYONE, "write": {"teams": ["legal"]}},
+                ref=None)
+    assert group.status_code == 403                                        # Dee does not lead Sales
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT actor FROM events WHERE action='person.access_changed' ORDER BY rowid DESC").fetchone()
+    assert row["actor"] == "human:dee"
+    from backend import assistant
+    assert assistant.valid_operation("PUT", "/api/v2/humans/cara/access", proposer="botops")
+    assert assistant.valid_operation("POST", "/api/v2/groups/sales/access", proposer="botops")

@@ -1205,6 +1205,8 @@ def create_app(settings=None):
             value["parts"] = parts
             if since := step_age.since_map(c, [row]).get(row["id"]):
                 value["step_since"] = since      # how long a Dev ticket has been at its working step (backend/step_age.py)
+            if who is not None:
+                value = teammate_access.Known(c, who, auth).task(value)     # people the reader may not see
         return value
 
     def task_views(rows, c, who, visible_sql="1"):
@@ -1328,7 +1330,7 @@ def create_app(settings=None):
                 value["origin_actor"] = None
             value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
             result.append(value)
-        return result
+        return teammate_access.Known(c, who, auth).tasks(result)       # people the reader may not see
 
     def mover(c, who):
         """Whether this person may move any task: the owner, or a person on a mover team."""
@@ -2445,8 +2447,9 @@ def create_app(settings=None):
                 shown.append((bot, level))
             rows = BotRows(c, who, [bot["slug"] for bot, _ in shown],
                            {bot["slug"] for bot, level in shown if level["read"]})
-            return [{**bot_view(c, bot, level, access, registry_roster, registry_entries, who, rows),
-                     "goal_active": readable_active(c, auth, who, bot["slug"], rows.goals.get(bot["slug"], []))}
+            redact = teammate_access.bot_redactor(c, who, auth)     # people and groups the caller may not see
+            return [redact({**bot_view(c, bot, level, access, registry_roster, registry_entries, who, rows),
+                            "goal_active": readable_active(c, auth, who, bot["slug"], rows.goals.get(bot["slug"], []))})
                     for bot, level in shown]
 
     @app.get("/api/v2/bots/{bot}")
@@ -2476,7 +2479,7 @@ def create_app(settings=None):
                 value["reports_to_name"] = (H.bot(c, reports) or {}).get("display_name") or reports
             if value.get("operator"):
                 value["operator_name"] = (H.human(c, value["operator"]) or {}).get("name") or value["operator"]
-            return value
+            return teammate_access.bot_redactor(c, who, auth)(value)
 
     @app.get("/api/v2/org")
     def org(request: Request, person: str | None = None, team: str | None = None, can: str | None = None):
@@ -2814,7 +2817,9 @@ def create_app(settings=None):
                                 **views.page_options(limit, max_bytes))
             turn_work.annotate(c, auth, request.state.identity, page["messages"])
             visual_view(c, request.state.identity, page["messages"])
-            return {"conversation": H.conversation(c, cid), **page}
+            known = teammate_access.Known(c, request.state.identity, auth)     # people the reader may not see
+            return {"conversation": known.conversation(H.conversation(c, cid)),
+                    **page, "messages": known.messages(page["messages"])}
 
     @app.get("/api/v2/conversations/{cid}/outline")
     def outline(request: Request, cid: str):

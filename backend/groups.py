@@ -449,6 +449,8 @@ def delete(c, auth, who, gid):
     automations.regroup(c, gid, up)
     del groups[gid]
     c.execute("DELETE FROM subscription_assignments WHERE scope='group' AND target=?", (gid,))
+    from . import teammate_access
+    teammate_access.forget_group(c, who.actor, gid)       # a group made later with this id starts from the defaults
     _finish(c, roster, people, changed)
     H.event(c, who.actor, "group.deleted", gid, {"moved_to": up})
     _audit(c, who.actor, before)
