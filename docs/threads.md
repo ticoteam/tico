@@ -51,6 +51,15 @@ Reply under one message when the side topic would bury the main discussion:
 `hub thread reply <thread> <message> "..."`. `hub thread sub <message>` opens the sub-thread without posting.
 Use them sparingly. The work that everyone needs to see stays in the thread.
 
+A thread shows its sub-threads inline: each message is followed by its sub-thread's messages, indented and quieter, in
+tree order. They organize; they don't hide. Tap one to open that sub-thread with the path back above it, and it shows
+its own sub-threads the same way. A long sub-thread shows its latest messages under an **N more** row that loads the
+rest in place. `hub thread show` returns the same tree: each row has its `depth`, and a `collapsed` row's `cursor` reads
+the rest with `hub thread show <that thread> --cursor <cursor>`.
+
+Opening a thread reads what it shows, per thread: it and each sub-thread inline, up to the last message drawn. A
+sub-thread whose **N more** holds something unread stays unread until you open that part.
+
 ## Following and unread
 
 Each reader follows a thread at one level:

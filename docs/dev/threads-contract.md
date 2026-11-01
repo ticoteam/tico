@@ -409,8 +409,14 @@ or reply to them). Otherwise today's cap (`UNSOLICITED_PER_DAY`) applies, counte
 - Counters per thread: `last_seq` (every message), `last_unread_seq` (a human's message, or one addressed to
   someone: `to_actor` set or any mention). Sidebar aggregates per root come from the counters of the root's subtree,
   never from per-follower writes.
+- A timeline is one tree: `threads.timeline` pages the opened thread's own messages, and each is followed by its
+  sub-thread's messages, recursively, each with its `depth`. A long branch shows its latest `BRANCH_TAIL` (20) under one
+  `collapsed` row (§10); `GET /threads/{that thread}/timeline?cursor=<the row's cursor>` reads the rest. Every row passes
+  the per-message check. Past `MAX_INLINE_ROWS`, `MAX_BRANCH_LEVELS` or the byte cap, a branch is its summary and a
+  `collapsed` row. A hidden message's branch does not show. The queries follow the tree's depth, not its branches.
 - Read state: `thread_followers.last_read_seq` per (thread, reader); max wins (devices); it advances only for
-  threads displayed, up to the last rendered message. A child never clears its siblings.
+  threads displayed, up to the last rendered message. A child never clears its siblings. The mark is one number, so a
+  branch whose `collapsed` row says `unread` is not marked until that part is opened.
 
 ```python
 threads.mark_read(c, viewer, thread_id, seq) -> {"thread_id", "last_read_seq"}
@@ -532,7 +538,7 @@ Thread view (`threads.view(c, viewer, row)`):
 |---|---|
 | `GET /api/v2/threads?cursor=&limit=` | `threads.sidebar(c, viewer, cursor=None, limit=50)` → `{"attention": [...], "threads": [...], "dms": [...], "next_cursor"}`; `attention`: threads with `me.unread` (mentions, asks, DM messages), then every root the viewer owns, is in or follows that holds capped wakes, each with `"capped": n, "capped_since"` |
 | `GET /api/v2/threads/{id}` | `threads.get(c, viewer, thread_id)` → thread view + `"breadcrumb": [{"id","title"}]` |
-| `GET /api/v2/threads/{id}/timeline?cursor=&limit=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=...)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor"}`; each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "count", "last_seq", "unread", "more"}` |
+| `GET /api/v2/threads/{id}/timeline?cursor=&limit=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=...)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor"}`; `next_cursor` and `limit` count the thread's own messages; each is followed by its sub-thread's rows in tree order (§5). Each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "title", "count", "last_seq", "last_read_seq", "unread", "more"}` (`count` and `unread` only of messages the viewer reads; `more` is how many are collapsed) |
 | `POST /api/v2/threads/{id}/read {seq}` | `threads.mark_read` |
 | `POST /api/v2/threads/{id}/read-all` | `threads.mark_all_read` |
 | `GET /api/v2/threads/search?q=` | T2 (FTS5), filtered by `threads.readable` per message |
@@ -545,7 +551,8 @@ Thread view (`threads.view(c, viewer, row)`):
 | `PUT/DELETE /api/v2/messages/{id}/reactions/{emoji}` | `threads.react(c, principal, message_id, emoji)` / `threads.unreact(...)` → `[{"emoji", "count", "actors"}]`; 404 when the message is unreadable, 422 for a bad emoji or past 50 distinct |
 
 Timeline messages: the existing message view plus `thread_id`, `root_id`, `seq`, `revision`, `origin_id`,
-`edited_at`, `deleted` (tombstone: no body), `reactions` (`threads.reactions(c, ids)`, when any), and hidden rows as `{"id", "seq", "thread_id", "hidden": true}`.
+`edited_at`, `deleted` (tombstone: no body), `reactions` (`threads.reactions(c, ids)`, when any), hidden rows as `{"id", "seq", "thread_id", "depth", "hidden": true}`, and a long branch's older part as
+`{"id": "more:<thread id>", "thread_id", "depth", "collapsed": true, "count", "cursor", "unread"}`.
 `/api/v2/conversations/*` stay as aliases for one release. Every list is paged and byte-capped.
 
 ## 11. Outside tracks' hooks

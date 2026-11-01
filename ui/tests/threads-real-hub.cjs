@@ -1,6 +1,6 @@
 // Threads on a real hub (ui/tests/support/real-hub.cjs): a company thread and a members-only thread, made through the API as
 // Dana. Dana, on a desktop, reads the company thread and replies in its composer; a sub-thread under one of its messages
-// shows its header and opens on its own; and her bot page switches between the bot's Home and DM. Omar, a teammate on the
+// shows inline under its header and opens on its own; and her bot page switches between the bot's Home and DM. Omar, a teammate on the
 // desktop, sees the company thread in the sidebar but not the members-only one, and its text is not on his page; opened by
 // direct URL it is "Not found"; and on a bot he may see but not read, the bot has no Home tab. Priya's Home is hidden from
 // Omar until Dana makes him Priya's manager (reports_to), and then he reads it. Priya, on a phone, taps the company thread
@@ -76,7 +76,8 @@ async function restrictPerson(hub) {
     const head = dana.locator('.th-subhead', {hasText: KICKOFF});
     await head.waitFor({timeout: t(15000)});
     assert.match(await head.innerText(), /1 reply/, 'the sub-thread header counts its one reply');
-    // The header is the way in: the timeline carries the root's messages, not the replies Dana has already read.
+    // The sub-thread's messages sit inline under it, indented; the header, or tapping one, opens it.
+    await dana.locator('.th-msg.th-sub', {hasText: RISKS}).waitFor({timeout: t(15000)});
     await head.click();
     await dana.waitForURL(new RegExp('#/thread/' + risks.thread_id), {timeout: t(15000)});
     await dana.locator('.thv-composer .p-text').waitFor({timeout: t(15000)});

@@ -5833,7 +5833,9 @@ def thread_list(api, args):
 
 
 @tool("hub_thread_show", "One thread in tree order: each message is followed by the sub-thread that branched from it, "
-      "indented. Also its title and breadcrumb. Paged over the thread's own messages; next_cursor reads on.",
+      "with its depth. A long sub-thread shows its latest messages under a collapsed row: hub_thread_show on that thread "
+      "with the row's cursor reads the rest. Also its title and breadcrumb. Paged over the thread's own messages; "
+      "next_cursor reads on.",
       {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("thread",))
 def thread_show(api, args):
     return api.get(_thread_path(args["thread"], "timeline"), cursor=args.get("cursor"), limit=args.get("limit"))
