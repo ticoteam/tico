@@ -229,8 +229,7 @@ CREATE TABLE IF NOT EXISTS schedules (
 
 CREATE TABLE IF NOT EXISTS turns (
   id TEXT PRIMARY KEY, bot TEXT, thread_id TEXT, started TEXT, finished TEXT, trigger TEXT,
-  message_id TEXT, task_id TEXT, exit TEXT, tokens_in INTEGER, tokens_out INTEGER,
-  cost REAL, summary TEXT);
+  message_id TEXT, task_id TEXT, exit TEXT, summary TEXT);
 
 CREATE TABLE IF NOT EXISTS deltas (
   id TEXT PRIMARY KEY, turn_id TEXT, seq INTEGER, kind TEXT, text TEXT, ts TEXT);
@@ -985,7 +984,10 @@ DROP TABLE IF EXISTS ceo_actions;""",
               # of the repository mirror's `documents` table, then drops that table and its versions.
               "CREATE TABLE IF NOT EXISTS market_pages (id TEXT PRIMARY KEY, title TEXT NOT NULL, "
               "category TEXT NOT NULL, body TEXT NOT NULL, seeded INTEGER NOT NULL DEFAULT 0, "
-              "updated_at TEXT NOT NULL)"]
+              "updated_at TEXT NOT NULL)",
+              # user_version 76: the one-number tokens_in and tokens_out and the cost a run kept before measured
+              # usage (USAGE_SCHEMA). _drop_legacy_turn_columns moves them and drops the columns.
+              ""]
 
 
 class Refused(Exception):
@@ -1198,6 +1200,23 @@ def _market_pages_from_documents(conn):
     conn.execute("DROP TABLE IF EXISTS documents")
 
 
+def _drop_legacy_turn_columns(conn):
+    """Move a run's pre-usage one-number tokens_in and tokens_out, and its cost, into input_tokens, output_tokens and
+    est_cost_usd where those are empty (the readers already fell back to them), then drop the three columns. A run
+    with measured usage keeps its own numbers."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(turns)")}
+    if "tokens_in" in columns:
+        conn.execute("UPDATE turns SET input_tokens=tokens_in WHERE input_tokens IS NULL AND cached_tokens IS NULL "
+                     "AND tokens_in IS NOT NULL")
+    if "tokens_out" in columns:
+        conn.execute("UPDATE turns SET output_tokens=tokens_out WHERE output_tokens IS NULL AND tokens_out IS NOT NULL")
+    if "cost" in columns:
+        conn.execute("UPDATE turns SET est_cost_usd=cost WHERE est_cost_usd IS NULL AND cost IS NOT NULL")
+    for column in ("tokens_in", "tokens_out", "cost"):
+        if column in columns:
+            conn.execute(f"ALTER TABLE turns DROP COLUMN {column}")
+
+
 def _apply(conn, script):
     for statement in _statements(script):
         match = ADD_COLUMN.fullmatch(statement)
@@ -1287,6 +1306,8 @@ def migrate(conn, adopt_legacy=False):
             elif i == 74:
                 _apply(conn, MIGRATIONS[i])
                 _market_pages_from_documents(conn)
+            elif i == 75:
+                _drop_legacy_turn_columns(conn)
             else:
                 _apply(conn, MIGRATIONS[i])
             conn.execute(f"PRAGMA user_version={i + 1}")
@@ -8867,15 +8888,15 @@ def turn_start(conn, actor, bot_slug, thread_id=None, trigger="message", message
         refuse(conn, actor, "identity", f"{actor_id(actor)} may only record its own turns")
     row = {"id": new_id(), "bot": slug, "thread_id": thread_id, "started": now(),
            "finished": None, "trigger": trigger, "message_id": message_id, "task_id": task_id,
-           "exit": None, "tokens_in": None, "tokens_out": None, "cost": None, "summary": None,
+           "exit": None, "summary": None,
            "trigger_kind": trigger_kind or "other", "trigger_source": trigger_source,
            "purpose": RT.clean_purpose(purpose) or RT.purpose_for(slug, trigger_kind or "other"),
            "rule_id": (str(rule_id)[:80] if rule_id else None)}
     conn.execute("INSERT INTO turns (id, bot, thread_id, started, finished, trigger, message_id, "
-                 "task_id, exit, tokens_in, tokens_out, cost, summary, trigger_kind, trigger_source, purpose, writes, "
+                 "task_id, exit, summary, trigger_kind, trigger_source, purpose, writes, "
                  "rule_id) "
                  "VALUES (:id, :bot, :thread_id, :started, :finished, :trigger, :message_id, :task_id, :exit, "
-                 ":tokens_in, :tokens_out, :cost, :summary, :trigger_kind, :trigger_source, :purpose, 0, "
+                 ":summary, :trigger_kind, :trigger_source, :purpose, 0, "
                  ":rule_id)", row)
     event(conn, actor, "turn.start", row["id"], {"bot": slug, "trigger": trigger, "trigger_kind": row["trigger_kind"],
                                               "purpose": row["purpose"]})
@@ -8898,7 +8919,7 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
     `usage` is what the run cost in tokens: input_tokens, cached_tokens, output_tokens, model, provider,
     est_cost_usd and billing (see USAGE_SCHEMA), and prompt_tokens, its newest request's prompt when known.
     Without `usage` the run is recorded at 0 tokens and $0 with `usage_reason` (USAGE_REASONS) saying why; never
-    left blank. The legacy `tokens_in`, `tokens_out` and `cost` columns are no longer written (docs/hub-sql.md)."""
+    left blank."""
     _writer(conn, actor)
     ts = now()
     conn.execute("UPDATE turns SET finished=?, exit=?, summary=? WHERE id=?", (ts, exit_code, summary, turn_id))

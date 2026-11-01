@@ -15,6 +15,7 @@ from pathlib import Path
 from backend import hubdb as H
 from backend import market as MK
 from backend import task_relations as TR
+from backend import wake_presets as WP
 
 EMPLOYEES = {
     "coo": {"display_name": "COO", "status": "active", "host": "keeper", "runtime": "codex",
@@ -1360,7 +1361,7 @@ class MarketNotesMoved(HubCase):
         self.conn.execute("INSERT INTO documents VALUES(?,?,?,?,?,?)",
                           ("repo/readme.md", "internal", "repo", json.dumps({"title": "Readme", "content": "x"}),
                            "d2", "2026-10-01T00:00:00.000000Z"))
-        self.conn.execute("PRAGMA user_version=72")     # the version before the ceo_* drop
+        self.conn.execute("PRAGMA user_version=74")     # the version before the market move
         self.conn.commit()
 
     def test_the_upgrade_copies_the_market_notes_and_drops_the_mirror_tables(self):
@@ -1386,3 +1387,38 @@ class MarketNotesMoved(HubCase):
         self.assertEqual([p["id"] for p in MK.list_pages(self.conn)], ["market/overview", "market/theses"])
         self.assertEqual((rewritten["content"], rewritten["seeded"]), ("Rewritten.", True))   # the seed's own write
         self.assertEqual(MK.read_page(self.conn, "market/theses")["content"], "Our bet.")
+
+
+class TurnLegacyUsageDropped(HubCase):
+    """Runs from before measured usage kept a one-number tokens_in and tokens_out, and a cost, on their turn row. The
+    upgrade to user_version 76 moves those into input_tokens, output_tokens and est_cost_usd where those are empty, and
+    drops the three columns. A run with measured usage keeps its own numbers."""
+
+    def install_as_before_measured_usage(self):
+        for column, kind in (("tokens_in", "INTEGER"), ("tokens_out", "INTEGER"), ("cost", "REAL")):
+            self.conn.execute(f"ALTER TABLE turns ADD COLUMN {column} {kind}")
+        now = H.now()
+        self.conn.execute("INSERT INTO turns(id,bot,started,finished,exit,tokens_in,tokens_out,cost) "
+                          "VALUES('old-run','ops',?,?,'completed',500,5,0.75)", (now, now))
+        self.conn.execute("INSERT INTO turns(id,bot,started,finished,exit,tokens_in,tokens_out,cost,"
+                          "input_tokens,cached_tokens,output_tokens,est_cost_usd) "
+                          "VALUES('measured','ops',?,?,'completed',999,77,9,100,50,10,0.2)", (now, now))
+        self.conn.execute("INSERT INTO turns(id,bot,started,finished,exit,cost) "
+                          "VALUES('cost-only','ops',?,?,'completed',9)", (now, now))
+        self.conn.execute("PRAGMA user_version=75")     # the version before the legacy columns are dropped
+        self.conn.commit()
+
+    def test_the_upgrade_moves_the_legacy_tokens_and_cost_and_drops_the_columns(self):
+        self.install_as_before_measured_usage()
+        H.migrate(self.conn)
+        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(turns)")}
+        self.assertFalse({"tokens_in", "tokens_out", "cost"} & columns)
+        self.assertEqual([tuple(r) for r in self.conn.execute(
+            "SELECT id, input_tokens, cached_tokens, output_tokens, est_cost_usd FROM turns ORDER BY id")],
+            [("cost-only", None, None, None, 9.0), ("measured", 100, 50, 10, 0.2), ("old-run", 500, None, 5, 0.75)])
+
+    def test_the_run_totals_read_the_moved_numbers(self):
+        self.install_as_before_measured_usage()
+        H.migrate(self.conn)
+        totals = {r[0]: r[1] for r in self.conn.execute(f"SELECT t.id, {WP.RUN_TOKENS} FROM turns t")}
+        self.assertEqual(totals, {"cost-only": 0, "measured": 160, "old-run": 505})

@@ -6,8 +6,8 @@ Every run (`turns`, same id as its attempt) records three things, all in plain c
   `trigger_source` where there is a source to name); the claim copies it onto the run. A message a person
   wrote is `person_message`, and a message a bot wrote (a task comment, a direct message) is `comment`: the
   message is the wake and its author says which. A keeper wake nothing stamped is `other`.
-- tokens: `tokens_in` (all input), `cached_tokens` (the cached part of it, where the harness reports it),
-  `input_tokens` (the rest) and `output_tokens`, as the run's usage already records them.
+- tokens: `input_tokens` (the uncached input), `cached_tokens` (the cached part of the input, where the harness
+  reports it) and `output_tokens`, as the run's usage records them.
 - `did_nothing`: 1 when the run made no write Tico counts (`writes` is 0), else 0. Exact for every write that
   reaches Tico with the run's token, and for a git push from a worktree of the run's own task, which its runner
   reports with the result (`pushes`, see `pushed`). A push from anywhere else is not seen.

@@ -541,3 +541,24 @@ def test_a_computer_with_only_a_codex_subscription_runs_codex_checks_and_their_l
         assert not login_holds.get(c, m["runner_id"], "", "codex")
         # ... and the check keeps its own schedule: it alone is held, the bot is not limited.
         assert H.status(c, "ops")["state"] != "limited" and "on a check" in H.status(c, "ops")["focus"]
+
+
+def test_an_api_key_subscriptions_month_cost_is_the_measured_cost_of_its_runs(api):
+    # The month's cost sums the est_cost_usd each run stored; it once summed a column no run writes and read zero.
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api, "anthropic_key", secret="sk-ant-api-" + "c" * 24, name="Company API")["id"]
+    m = machine(api, signed_in=True)
+    give(api, m, "claude", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "api-cost"}, m["token"])
+    post(api, f"attempts/{turn['id']}/complete", {
+        "outcome": "completed", "text": "Done.", "last_seq": 0,
+        "usage": {"input_tokens": 1000, "cached_tokens": 0, "output_tokens": 500, "model": "claude-sonnet-5-5",
+                  "runtime": "claude", "billing": "api"}}, m["token"])
+    with api.app.state.store.read() as c:
+        cost = c.execute("SELECT est_cost_usd FROM turns WHERE id=?", (turn["id"],)).fetchone()[0]
+    assert cost and cost > 0
+    assert listed(api)[0]["usage"]["cost_usd_month"] == round(cost, 2)

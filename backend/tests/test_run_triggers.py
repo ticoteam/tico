@@ -401,7 +401,7 @@ def test_the_weekly_table_counts_every_run_and_old_ones_read_unknown(api):
         {"input_tokens": 150, "cached_tokens": 750, "output_tokens": 20, "model": "fake-fallback"}]})
     with api.app.state.store.transaction() as c:
         # A run from before triggers were recorded, and one still going.
-        c.execute("INSERT INTO turns(id,bot,started,finished,trigger,exit,tokens_in,tokens_out) "
+        c.execute("INSERT INTO turns(id,bot,started,finished,trigger,exit,input_tokens,output_tokens) "
                   "VALUES('old-run','ops',?,?,'task','completed',500,5)", (H.now(), H.now()))
         c.execute("INSERT INTO turns(id,bot,started,trigger,trigger_kind) VALUES('live-run','ops',?,'say','comment')",
                   (H.now(),))

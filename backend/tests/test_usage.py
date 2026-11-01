@@ -225,7 +225,6 @@ def test_a_tico_run_prices_each_request_on_its_own_tier_and_other_tico_models_ke
 def zero_usage(row, reason):
     assert (row["input_tokens"], row["cached_tokens"], row["output_tokens"], row["est_cost_usd"],
             row["usage_reason"]) == (0, 0, 0, 0, reason)
-    assert all(row[key] is None for key in ("tokens_in", "tokens_out", "cost"))
 
 
 @pytest.mark.parametrize("outcome,limited,reason", [
