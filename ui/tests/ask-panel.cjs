@@ -63,7 +63,7 @@ async function open(browser, viewport, state) {
     if (ticket) {
       const t = state.tickets.find(x => x.id === ticket[1]);
       if (ticket[2] === 'read') { state.read.push(t.id); t.unread = false; }
-      else t.messages.push({body: JSON.parse(route.request().postData()).message, from: 'you', created: new Date().toISOString()});
+      else { const body = JSON.parse(route.request().postData()); (state.replies ||= []).push(body); t.messages.push({body: body.message, from: 'you', created: new Date().toISOString()}); }
       return json(t);
     }
     if (p === '/api/v2/support/tickets' && method === 'POST') {
@@ -74,6 +74,7 @@ async function open(browser, viewport, state) {
     }
     if (p === '/api/v2/support/tickets' || p === '/api/v2/support/tickets/refresh') return listing();
     if (p === '/api/v2/support/compose') return json({email: 'ben@example.test', diagnostics: {}});
+    if (p === '/api/v2/support/diagnostics/capture' || p === '/api/v2/support/diagnostics') return json({id: 'diag_1', text: '{\n  "format": 1\n}', bytes: 20});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
@@ -380,9 +381,20 @@ const words = text => text.trim().split(/\s+/).length;
     await noDiag.getByRole('button', {name: 'Attach diagnostics'}).click();
     const review = page.getByRole('dialog', {name: 'Review and edit diagnostics'});
     await review.waitFor();
+    await review.getByRole('button', {name: 'Use diagnostics'}).waitFor();
+    await page.waitForFunction(() => !document.querySelector('dialog[aria-label="Review and edit diagnostics"] [data-use]')?.disabled);
     assert.equal(state.filed.length, 1, 'nothing sent by Attach diagnostics');
-    await review.getByRole('button', {name: 'Close'}).click();
+    assert.equal((state.replies || []).length, 0, 'no reply written before Send');
+    // Use diagnostics attaches the reviewed capture to the looped-in request; Send then writes its reply with it (criterion 8).
+    await review.getByRole('button', {name: 'Use diagnostics'}).click();
     await page.waitForFunction(() => !document.querySelector('dialog[aria-label="Review and edit diagnostics"]'));
+    assert.equal(await page.locator('#support-pop [name=diag]').isChecked(), true, 'the attachment is on the request');
+    assert.equal((state.replies || []).length, 0, 'still nothing sent after Use diagnostics');
+    await page.locator('#support-pop [name=message]').fill('Still broken after the reload');
+    await page.locator('#support-pop .support-send').click();
+    await page.waitForFunction(() => (window.supportState?.().open || []).length === 1 && document.querySelectorAll('#support-pop [data-thread] .support-msg.you').length >= 2);
+    assert.deepEqual(state.replies.map(r => [r.message, r.diagnostics]), [['Still broken after the reload', 'diag_1']], 'the reply goes to the looped-in request with the attachment ');
+    assert.equal(state.filed.length, 1, 'the reply is not a new request');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('#support-pop')?.open);
     assert.equal(await page.locator('#ask-panel').evaluate(el => el.classList.contains('ask-shown')), true, 'Ask stays open');
