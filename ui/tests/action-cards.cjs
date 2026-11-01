@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs');
 const {threadsFake} = require('./support/threads-fake.cjs');
 
 const at = n => new Date(Date.UTC(2026, 9, 17, 9, n)).toISOString();

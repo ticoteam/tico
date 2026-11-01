@@ -51,6 +51,7 @@ async function run(viewport, shot) {
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/assistant' && req.method() === 'GET') return json({available: true, state: 'active', bot: 'botops', name: 'Assistant',
         room_id: 'c1', messages, has_more: false, next_before: null, execution: null, actions: {}, pending: []});
+      if (p === '/api/v2/conversations/c1/snapshot') return json({messages, execution: null, next_before: null});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/assistant/messages') { chatSends.push(req.postDataJSON().text); return json({error: {detail: 'not here'}}, 500); }
       if (p === '/api/v2/tasks') {

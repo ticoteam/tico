@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs');
 const {threadsFake} = require('./support/threads-fake.cjs');
 
 const SECRET = 'ana@acme.example:ATATT-super-secret-7788';
