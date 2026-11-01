@@ -14,7 +14,7 @@
 # Headless: the 1Password service account scoped to the company's vault, OP_SERVICE_ACCOUNT_TOKEN
 # in secrets/_shared.env (never in chat or git). The runner uses the same token to resolve
 # `op://vault/item/field` values in secrets files at turn start and strips it from the bot's
-# environment (runner/op.py). This script is the by-hand complement: plain values
+# environment (runner_support/op.py). This script is the by-hand complement: plain values
 # for connectors and checks run outside a bot turn.
 set -euo pipefail
 SECRETS="$(cd "$(dirname "$0")/../.." && pwd)/secrets"

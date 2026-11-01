@@ -1124,7 +1124,7 @@ def test_a_retry_after_the_deadline_keeps_the_setup_phase_and_names_the_register
     again = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
     assert again['link_id'] == link['link_id'] and again['checkout_state'] == 'setup_running'
     assert {k: again[k] for k in proof} == proof
-    # The registered setup command's own reports (runner/worktrees.py _run_registered_setup) finish it.
+    # The registered setup command's own reports (runner_support/worktrees.py _run_registered_setup) finish it.
     assert patch(state='pending', checkout_state='setup_running', setup_pending=True, **proof).status_code == 200
     assert patch(state='present', checkout_state='ready', setup_pending=False, **proof).status_code == 200
     with api.app_state.store.read() as c:

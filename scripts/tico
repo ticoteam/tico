@@ -47,7 +47,7 @@ ENV_DIR=""
 ENROLL_HINT="scripts/setup-runner.sh"
 
 # `python -m` puts the working directory on the module path, so every call runs from the checkout.
-engine() { (cd "$HUB" && "$PYTHON" -m runner.engine "$@"); }
+engine() { (cd "$HUB" && "$PYTHON" -m runner_support.engine "$@"); }
 # This checkout's Rust runner (tico-runner), downloaded or built first when there is none yet.
 runner_bin() { engine path 2>/dev/null || { engine prepare >&2 && engine path; }; }
 # The runner's own commands go to the Rust runner; the side jobs and their doctors stay Python.
@@ -57,7 +57,7 @@ runner() {
       local bin
       bin="$(runner_bin)" || { echo "no Rust runner for this checkout (see above)" >&2; return 1; }
       (cd "$HUB" && TICO_ROOT="$HUB" TICO_RUNNER_PYTHON="$PYTHON" "$bin" --config "$CONFIG" "$@") ;;
-    *) (cd "$HUB" && "$PYTHON" -m runner --config "$CONFIG" "$@") ;;
+    *) (cd "$HUB" && "$PYTHON" -m runner_support --config "$CONFIG" "$@") ;;
   esac
 }
 json_field() { "$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
@@ -84,7 +84,7 @@ label() {
   else printf 'team.tico.tico-%s' "$1"; fi
 }
 plist() { printf '%s/%s.plist' "$AGENTS" "$(label "$1")"; }
-# Linux: tico-bot.service, or tico-<env>-bot.service for a company environment (runner/systemd_units.py unit_name).
+# Linux: tico-bot.service, or tico-<env>-bot.service for a company environment (runner_support/systemd_units.py unit_name).
 unit_name() {
   if [ -n "$ENV_SLUG" ]; then printf 'tico-%s-%s.service' "$ENV_SLUG" "$1"; else printf 'tico-%s.service' "$1"; fi
 }
@@ -141,7 +141,7 @@ require_systemd_user() {
 # the ssh session that installed them ends.
 linger_note() {
   local note
-  note="$(cd "$HUB" && "$PYTHON" -m runner.systemd_units linger 2>/dev/null || true)"
+  note="$(cd "$HUB" && "$PYTHON" -m runner_support.systemd_units linger 2>/dev/null || true)"
   [ -z "$note" ] || echo "$note"
 }
 
@@ -171,7 +171,7 @@ install_one_systemd() {
   unit="$(unit_name "$kind")"; log="$LOG_DIR/tico-$kind.log"
   mkdir -p "$LOG_DIR"; chmod 0700 "$LOG_DIR"; touch "$log"; chmod 0600 "$log"
   [ -z "$ENV_SLUG" ] || extra=(--env "$ENV_SLUG")
-  (cd "$HUB" && "$PYTHON" -m runner.systemd_units write "$kind" --python "$PYTHON" --config "$CONFIG" --root "$HUB" \
+  (cd "$HUB" && "$PYTHON" -m runner_support.systemd_units write "$kind" --python "$PYTHON" --config "$CONFIG" --root "$HUB" \
      --log "$log" --path "$PATH" --dir "$UNIT_DIR" ${extra[@]+"${extra[@]}"}) >/dev/null
   sctl daemon-reload
   sctl enable "$unit" >/dev/null 2>&1
@@ -193,7 +193,7 @@ install_one() {
 <plist version="1.0"><dict>
   <key>Label</key><string>$service</string>
   <key>ProgramArguments</key><array>
-    <string>$PYTHON</string><string>-m</string><string>runner</string>
+    <string>$PYTHON</string><string>-m</string><string>runner_support</string>
     <string>--config</string><string>$CONFIG</string><string>$command</string>
   </array>
   <key>WorkingDirectory</key><string>$HUB</string>
@@ -219,7 +219,7 @@ install_server_systemd() {
   unit="$(unit_name api)"; log="$LOG_DIR/api.log"
   mkdir -p "$LOG_DIR"; chmod 0700 "$LOG_DIR"; touch "$log"; chmod 0600 "$log"
   [ -z "$ENV_SLUG" ] || extra=(--env "$ENV_SLUG")
-  (cd "$HUB" && "$PYTHON" -m runner.systemd_units write api --python "$PYTHON" --root "$HUB" --log "$log" --path "$PATH" \
+  (cd "$HUB" && "$PYTHON" -m runner_support.systemd_units write api --python "$PYTHON" --root "$HUB" --log "$log" --path "$PATH" \
      --dir "$UNIT_DIR" --env-file "$ENV_DIR/server.env" --port "$(env_field port)" ${extra[@]+"${extra[@]}"}) >/dev/null
   sctl daemon-reload
   sctl enable "$unit" >/dev/null 2>&1
@@ -629,7 +629,7 @@ PY
   status)
     require_setup
     fail=0
-    version="$(sed -n 's/^RUNNER_VERSION = "\(.*\)"/\1/p' "$HUB/runner/version.py")"
+    version="$(sed -n 's/^RUNNER_VERSION = "\(.*\)"/\1/p' "$HUB/runner_support/version.py")"
     echo "runner: version $version at $HUB ($(git -C "$HUB" rev-parse --short HEAD 2>/dev/null || echo 'not a git checkout'))"
     if [ -n "$ENV_DIR" ]; then
       echo "environment: $ENV_SLUG ($(env_field company_name), $(env_field id)) at $SITE"

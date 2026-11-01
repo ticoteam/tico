@@ -241,7 +241,7 @@ def run(args, who=None):
         with Path(args.file).open("rb") as source:
             return client.post_bytes("team/icon", source)
     if fn in ("task worktree add", "task worktree attach", "task worktree setup"):
-        from runner.worktrees import command
+        from runner_support.worktrees import command
         return command(client, args.worktree_sub, getattr(args, 'repo', None) or getattr(args, 'path', None), args.task)
     if args.cmd == "repo":
         from clients import hubtools

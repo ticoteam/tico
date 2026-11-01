@@ -36,7 +36,7 @@ def test_uncertain_changes_and_main_run_everything_and_ui_keeps_its_map(tmp_path
     # The audited UI map's scripts run, with any core script the dependency map finds using the file.
     assert {"chat", "imported-history"} <= set(ui["browser"]) and "--all" not in ui["browser"]
     assert checks.selection(["ui/app/core.js"])["browser"] == ["--all"]
-    assert checks.selection(["runner/harnesses/codex.toml"])["conformance"]
+    assert checks.selection(["harnesses/codex.toml"])["conformance"]
     assert checks.selection(["runner-rs/src/sessions.rs"])["conformance"]
     assert checks.selection(["backend/harness_actions.py"])["conformance"]
     # A removed mapped browser test makes the map uncertain, even if its sibling remains.
@@ -108,7 +108,7 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
 
 def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fails_the_job(tmp_path, monkeypatch, mapped):
     for changed, crates in ((["runner-rs/src/state.rs"], ["runner-rs"]), (["relay-rs/src/gateway.rs"], ["relay-rs"]),
-                            (["runner/redact.py"], ["runner-rs"]), (["runner-rs/Cargo.lock", "relay-rs/Cargo.lock"],
+                            (["runner_support/redact.py"], ["runner-rs"]), (["runner-rs/Cargo.lock", "relay-rs/Cargo.lock"],
                                                                     ["relay-rs", "runner-rs"]),
                             (["backend/tests/fixtures/gateway_enroll_contract.json"], ["runner-rs"])):
         for event in ("pull_request", "push"):
@@ -125,7 +125,7 @@ def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fai
     assert {"suite": "conformance", "files": [checks.CONFORMANCE], "crates": ["relay-rs", "runner-rs"]} in jobs
 
     monkeypatch.setattr(checks, "ROOT", tmp_path)
-    (tmp_path / "runner/tests").mkdir(parents=True)
+    (tmp_path / "runner_support/tests").mkdir(parents=True)
     (tmp_path / checks.CONFORMANCE).touch()
     (tmp_path / "ci-results").mkdir()
     (tmp_path / "ci-results/conformance.xml").write_text("<testsuite><testcase/></testsuite>")

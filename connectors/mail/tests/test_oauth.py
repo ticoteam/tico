@@ -291,14 +291,14 @@ class ReadOnlyRefusals(Base):
 
     def test_a_turn_with_a_supervisor_token_refuses_the_same_writes(self):
         os.environ[auth.SOCKET_ENV], os.environ["HUB_TOKEN"] = "/tmp/none.sock", "attempt"
-        with patch("runner.credential_socket.request_mail",
+        with patch("runner_support.credential_socket.request_mail",
                    return_value={"token": "ya29.t", "expiry": "", "scopes": [G + "gmail.readonly"]}):
             creds = auth.credentials("ana@acme.example", [auth.GMAIL_SCOPE])
         self.assertEqual(creds._tico_granted, [G + "gmail.readonly"])
-        with patch("runner.credential_socket.request_mail", return_value={"token": "ya29.t", "expiry": ""}):
+        with patch("runner_support.credential_socket.request_mail", return_value={"token": "ya29.t", "expiry": ""}):
             self.assertIsNone(getattr(auth.credentials("ana@acme.example", [auth.GMAIL_SCOPE]), "_tico_granted", None))
-        from runner.credential_socket import MailRefused
-        with patch("runner.credential_socket.request_mail", side_effect=MailRefused("signin")):
+        from runner_support.credential_socket import MailRefused
+        with patch("runner_support.credential_socket.request_mail", side_effect=MailRefused("signin")):
             with self.assertRaises(oauth.SignInFailed) as caught:
                 auth.credentials("ana@acme.example", [auth.GMAIL_SCOPE])
         self.assertIn("Reconnect", caught.exception.hint)       # a revoked grant reads as reconnect in a turn

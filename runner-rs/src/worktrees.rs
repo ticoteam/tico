@@ -1,4 +1,4 @@
-//! Computer-owned task worktrees (runner/worktrees.py): the heartbeat's report of each worktree the server
+//! Computer-owned task worktrees (runner_support/worktrees.py): the heartbeat's report of each worktree the server
 //! tracks here, an attached checkout's local proof (`tasks/.checkout-state/<sha256(link)>.json`, the Python
 //! marker format), and the cleanup and restore actions a heartbeat reply asks for. Never removes a tree before
 //! preserving its history. Adding and setting up a worktree inside a turn stay in the hub CLI (`hub worktree

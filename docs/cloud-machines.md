@@ -53,7 +53,7 @@ mid-stop lets it lapse, and a start clears it.
    `enrollments` and `cloud_machine_codes`, with the machine's key: the bot, or `_shared`) and asks HQ for a machine.
 2. HQ runs the equivalent of `boat new --from <HQ_BOAT_BASE_SNAPSHOT>` (default `tico-runner-base`) with two
    per-sandbox variables: `TICO_ENROLL_TOKEN` (that code) and `TICO_HUB_URL` (the server).
-3. At boot, `tico-cloud-machine.service` (`python -m runner.cloud_machine boot`) finds the two variables, enrolls the
+3. At boot, `tico-cloud-machine.service` (`python -m runner_support.cloud_machine boot`) finds the two variables, enrolls the
    runner once with `tico-runner enroll`, and runs `scripts/tico install`, which starts the runner and its helper jobs
    as systemd user units.
 4. The server sees a cloud code. For a bot's own machine it names the computer "&lt;bot&gt; (cloud)", closes it to
@@ -132,7 +132,7 @@ id=$(boat new --no-env --name "tico-runner-base-$V" --json | jq -r 'select(.even
 boat exec "$id" --timeout 1200 -- bash -lc "
   set -euo pipefail
   git clone --quiet --branch $V https://github.com/ticoteam/tico.git ~/tico
-  cd ~/tico && sudo python3 -m runner.cloud_machine base --user user"
+  cd ~/tico && sudo python3 -m runner_support.cloud_machine base --user user"
 # not enrolled, service enabled, linger on
 boat exec "$id" -- bash -lc 'test ! -e ~/.config/tico/runner.json && systemctl is-enabled tico-cloud-machine.service && loginctl show-user user -p Linger'
 boat snapshot "$id" "tico-runner-base-$(echo "${V#v}" | tr . -)"   # a fixed version to pin or roll back to (no dots in names)

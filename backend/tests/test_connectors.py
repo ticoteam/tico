@@ -3,8 +3,8 @@
 import os
 
 from backend.tests.test_api import api, post, runner  # noqa: F401
-from runner.connectors import ConnectorPublisher
-from runner.outage import Outage
+from runner_support.connectors import ConnectorPublisher
+from runner_support.outage import Outage
 
 
 def event(title="Product sync"):

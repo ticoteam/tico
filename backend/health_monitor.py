@@ -68,7 +68,7 @@ RESTART_BEFORE, RESTART_AFTER = 300, 120
 BRIEF_DROP_S = 30
 BACK = re.compile(r"event stream back after (\d+) s", re.I)
 STAMP = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?)Z")
-# Error lines a runner reports (runner/outage.py RECENT, sent as `recent_errors`) that point at a known problem.
+# Error lines a runner reports (runner_support/outage.py RECENT, sent as `recent_errors`) that point at a known problem.
 LOG_PATTERNS = (
     ("worktree_fallback", BUG, re.compile(r"runs in the bot's checkout \(.*permission denied", re.I), 1,
      "A task's turn ran in the bot's main checkout because its worktree could not be made (Permission denied)",

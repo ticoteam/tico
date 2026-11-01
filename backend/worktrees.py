@@ -231,7 +231,7 @@ def released_event(c, row, detail):
     data = {'link': row['id'], 'path': row['path'], 'reason': reason}
     if reason == 'task finished' and (detail.get('dirty_files') or detail.get('ahead')) \
             and not detail.get('snapshot_skipped'):
-        data['wip_branch'] = 'wip/' + row['task_id'][:8] + '-' + row['id'][:6]     # runner/worktrees.py wip_branch
+        data['wip_branch'] = 'wip/' + row['task_id'][:8] + '-' + row['id'][:6]     # runner_support/worktrees.py wip_branch
     if detail.get('stale_push_cleared'):
         data['reason'] += f" (stale push {detail['stale_push_cleared'][:12]} cleared)"
     H.event(c, H.KEEPER, 'worktree.released', row['task_id'], data)
@@ -557,7 +557,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         closed = row['task_status'] in CLOSED or row['bot_state'] == 'archived' or detail.get('delete_requested')
         # A worktree whose pull requests are all merged or closed has done its job even while its task waits on
         # something else (a release, an acceptance): it is released so it stops counting against the bot's limit.
-        # The computer removes it only while the bot is idle and only when it is clean and pushed (runner/worktrees.py).
+        # The computer removes it only while the bot is idle and only when it is clean and pushed (runner_support/worktrees.py).
         # A `pending` one too: a reservation or checkout that never finished must not hold a place for work that is
         # done (one sat pending for days after its pull request shipped).
         # A tree coming back for a reopened task is new work starting: it is judged once it is present.

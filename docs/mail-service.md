@@ -264,7 +264,7 @@ immediately. Same for legal@acme.example.
 
 ## Persisted mail on Tico
 
-The server never talks to Gmail. The `connectors` job (`python -m runner connectors`) syncs one
+The server never talks to Gmail. The `connectors` job (`python -m runner_support connectors`) syncs one
 roster mailbox every `TICO_MAIL_SYNC_SECONDS` (default 10 minutes): `mail sync --as ana`
 locally ( `--backfill 90d` when the server still has no messages), then `mail sync export` →
 `POST /api/v2/connectors/mail/messages` → `mail sync ack` until the local outbox is empty.

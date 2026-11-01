@@ -1,4 +1,4 @@
-//! A bot's reports and artifacts published as Tico files after a completed turn (runner/files_publish.py,
+//! A bot's reports and artifacts published as Tico files after a completed turn (removed Python runner: files_publish.py,
 //! clients/bot_files.py; docs/files.md).
 //!
 //! The folders are `files: {publish: [...]}` (the attempt's config, else bot.yaml), else `reports/` and

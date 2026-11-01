@@ -26,7 +26,7 @@ from clients import registry as REG  # noqa: E402
 from clients import harness_manifests  # noqa: E402
 from clients.manifest import manifest_path, repo_dir, routines_of, tools_of  # noqa: E402
 from clients.routines import MAX_CONTENT, validate_schedules  # noqa: E402
-from runner.op import OP_REF, resolve_op_refs  # noqa: E402
+from runner_support.op import OP_REF, resolve_op_refs  # noqa: E402
 
 TEMPLATE = REG.HUB_DIR / "templates/employee-repo"
 SECRETS = REG.ROOT / "secrets"

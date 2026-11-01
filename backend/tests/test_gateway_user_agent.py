@@ -2,7 +2,7 @@
 answers a library's default one (`Python-urllib/3.12`) with 403 before the request reaches the Gateway, so a Decide
 call sent without it never arrives, and with no other provider left nothing answers. CI talks to a fake Gateway
 directly; here that fake refuses every agent that is not Tico's, the way the release guard's proxy does for the runner
-(runner/tests/test_conformance.py `RefusingProxy`)."""
+(runner_support/tests/test_conformance.py `RefusingProxy`)."""
 
 import json
 import re
@@ -163,7 +163,7 @@ def test_every_module_that_sends_to_tico_hq_is_known_and_names_its_user_agent():
     """A new client of Tico HQ or the Gateway fails here until it sends a user agent of its own (a library's default
     is refused at the edge) and is listed above; one that stops naming its agent fails too."""
     found = set()
-    for folder in ("backend", "clients", "setup", "connectors", "runner", "scripts"):
+    for folder in ("backend", "clients", "setup", "connectors", "runner_support", "scripts"):
         for path in (ROOT / folder).rglob("*.py"):
             if "tests" in path.relative_to(ROOT).parts:
                 continue

@@ -1,5 +1,5 @@
-//! `tico-runner`: the Tico local runner. launchd and systemd units that start `python -m runner run` reach it through
-//! runner/engine.py. It keeps the registration file, state directory, lock and outbox, and registers and checks this
+//! `tico-runner`: the Tico local runner. launchd and systemd units that start `python -m runner_support run` reach it through
+//! runner_support/engine.py. It keeps the registration file, state directory, lock and outbox, and registers and checks this
 //! computer itself (`enroll`, `adopt`, `doctor`, crate::commands).
 
 // A turn's failure carries its whole report, and the caches key on tuples: both read better as they are.
@@ -104,7 +104,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
-/// The source fingerprint of this build (build.rs; runner/engine.py `source_id`).
+/// The source fingerprint of this build (build.rs; runner_support/engine.py `source_id`).
 pub const BUILD_ID: &str = env!("TICO_BUILD_ID");
 
 #[derive(Parser)]
@@ -235,7 +235,7 @@ enum ProfileAction {
     Login { name: String, runtime: String },
 }
 
-/// `profile add|list|login` (runner/__main__.py profile_command): local to this computer, no network.
+/// `profile add|list|login` (runner_support/__main__.py profile_command): local to this computer, no network.
 fn profile_main(action: ProfileAction, config: &mut config::Config) -> i32 {
     let result = match action {
         ProfileAction::Add { name, share_operator } => profiles::command(config, "add", Some(&name), share_operator),
@@ -313,7 +313,7 @@ fn main() {
         std::process::exit(0);
     }
     if argv.get(1).is_some_and(|a| a == "--build-id") {
-        // The source fingerprint build.rs stamped in: runner/engine.py rebuilds when the checkout's differs.
+        // The source fingerprint build.rs stamped in: runner_support/engine.py rebuilds when the checkout's differs.
         println!("{}", BUILD_ID);
         std::process::exit(0);
     }
@@ -476,7 +476,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
 
 #[cfg(test)]
 mod build_id_tests {
-    /// build.rs's SHA-256 and file list agree with `ring` here and with runner/engine.py `source_id`.
+    /// build.rs's SHA-256 and file list agree with `ring` here and with runner_support/engine.py `source_id`.
     #[test]
     fn the_build_id_is_the_checkouts_source_id() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
@@ -491,7 +491,7 @@ mod build_id_tests {
                 }
             }
         }
-        for p in std::fs::read_dir(root.join("runner/harnesses")).unwrap().flatten().map(|e| e.path()) {
+        for p in std::fs::read_dir(root.join("harnesses")).unwrap().flatten().map(|e| e.path()) {
             if p.extension().is_some_and(|e| e == "toml") {
                 names.push(p.strip_prefix(root).unwrap().display().to_string());
             }
@@ -507,7 +507,7 @@ mod build_id_tests {
         let id: String = digest.as_ref()[..8].iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(super::BUILD_ID, id);
         let python = std::process::Command::new("python3")
-            .args(["-c", "import sys; from runner.engine import source_id; print(source_id(__import__('pathlib').Path(sys.argv[1])))"])
+            .args(["-c", "import sys; from runner_support.engine import source_id; print(source_id(__import__('pathlib').Path(sys.argv[1])))"])
             .arg(root)
             .current_dir(root)
             .output();

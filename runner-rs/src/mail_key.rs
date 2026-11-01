@@ -1,4 +1,4 @@
-//! The company's Google Workspace key, where bots cannot read it (runner/mail_key.py). Under the two-user
+//! The company's Google Workspace key, where bots cannot read it (runner_support/mail_key.py). Under the two-user
 //! layout (crate::isolation) the supervisor keeps it in its own state directory and an inbox bot's turn asks,
 //! over the credential socket, for a short-lived token for one of the mailboxes the hub named for that attempt.
 //! Without the layout the key stays where it was, bots can read it, and readiness says `exposed`.
@@ -266,7 +266,7 @@ struct Mint {
     script: PathBuf,
     key: PathBuf,
     /// The server and this registration, for a Connect Google grant the server refreshes: its client secret stays
-    /// there (connectors/mail/oauth.py broker, runner/connectors.py mail_cli_env).
+    /// there (connectors/mail/oauth.py broker, runner_support/connectors.py mail_cli_env).
     broker: Option<(String, String)>,
 }
 

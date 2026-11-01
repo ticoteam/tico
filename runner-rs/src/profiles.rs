@@ -1,4 +1,4 @@
-//! Subscription profiles (runner/profiles.py): one directory on this machine per provider login, named in
+//! Subscription profiles (removed Python runner: profiles.py): one directory on this machine per provider login, named in
 //! runner.json (`profiles`, `default_profile`). Every bot's turn runs on the computer's one login per tool: the
 //! `default_profile` when there is one (that profile's HOME for Claude, CODEX_HOME for Codex), else the operator's
 //! own. A bot never has a login of its own (`bot_profiles` and a server-named profile are not read); a different
@@ -384,7 +384,7 @@ pub fn remove_profile(config: &Config, name: &str) -> Result<bool, String> {
     }
 }
 
-/// The `profile` subcommand: add, list (runner/__main__.py profile_command). Writes runner.json the
+/// The `profile` subcommand: add, list (runner_support/__main__.py profile_command). Writes runner.json the
 /// way Python does: every key kept, two-space indent.
 pub fn command(config: &mut Config, action: &str, name: Option<&str>, share_operator: bool) -> Result<String, String> {
     match action {
@@ -429,7 +429,7 @@ pub fn claude_token_cold(profile: Option<&Profile>) -> bool {
     expires.is_some_and(|ms| ms / 1000.0 <= crate::util::epoch_s())
 }
 
-/// Usage window snapshots per (profile, runtime, window) (runner/subscription_usage.py Reports): non-secret. The
+/// Usage window snapshots per (profile, runtime, window) (removed Python runner: subscription_usage.py Reports): non-secret. The
 /// window is `weekly` (10080 minutes) or `five_hour` (300); profile "" is the computer's own login.
 fn weekly() -> &'static Mutex<HashMap<(String, String, &'static str), Value>> {
     static W: OnceLock<Mutex<HashMap<(String, String, &'static str), Value>>> = OnceLock::new();

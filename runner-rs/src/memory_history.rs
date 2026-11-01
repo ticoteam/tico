@@ -1,4 +1,4 @@
-//! The commits that changed a bot's memory/ and knowledge/, reported to Tico (runner/memory_history.py;
+//! The commits that changed a bot's memory/ and knowledge/, reported to Tico (removed Python runner: memory_history.py;
 //! docs/learnings.md). After a completed turn, and every few minutes for every bot here, the newest memory
 //! commits Tico has not heard about (or whose state changed: pushed, or their run became known) go to
 //! `POST bots/{bot}/memory/report`, idempotent on the server.

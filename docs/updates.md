@@ -279,13 +279,13 @@ and run `docker compose up -d`. From then on the updater moves `TICO_TAG`.
 ## The runner
 
 Every computer runs the Rust runner (`tico-runner`, from `runner-rs/`). The launchd job and the systemd unit start
-`python -m runner run`, which execs the binary; the Docker image runs the binary directly.
+`python -m runner_support run`, which execs the binary; the Docker image runs the binary directly.
 
 - **Docker:** the image ships the binary (`/usr/local/bin/tico-runner`), built from the same tree.
 - **Mac or Linux checkout:** a checkout on a release tag downloads that release's `tico-runner-<os>-<arch>.gz` from
   GitHub, checked against the release's `tico-runner-SHA256SUMS`, into `runner-rs/target/dist/`. Any other checkout
   with `cargo` on PATH builds it (`cargo build --release`). `scripts/tico install` and every update get the binary
-  before the runner restarts (`python -m runner.engine prepare`); an update that cannot get it backs out and the
+  before the runner restarts (`python -m runner_support.engine prepare`); an update that cannot get it backs out and the
   runner keeps running the old release.
 
 A binary is only run when it was built from this checkout's `runner-rs` sources. When there is none and none can be

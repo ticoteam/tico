@@ -203,7 +203,7 @@ def _app_token(entry):
 
 def github_app_covers(c, bot):
     """Whether each run gets GH_TOKEN/GITHUB_TOKEN minted from the GitHub App: the App is connected and the bot's
-    repository is in its organization (the same test as POST /api/v2/github/token; runner/git_credentials.py)."""
+    repository is in its organization (the same test as POST /api/v2/github/token; runner_support/git_credentials.py)."""
     if not H._has_table(c, "github_app"):
         return False
     app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()

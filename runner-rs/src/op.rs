@@ -1,5 +1,5 @@
 //! 1Password references in a bot's granted credentials, resolved on this computer before the run starts
-//! (runner/op.py): a value like `op://vault/item/field` is read with `op read` and the service-account token in
+//! (runner_support/op.py): a value like `op://vault/item/field` is read with `op read` and the service-account token in
 //! `secrets/_shared.env` (OP_SERVICE_ACCOUNT_TOKEN), which never reaches the run itself.
 
 use std::collections::BTreeMap;

@@ -25,7 +25,7 @@ GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
 SCOPES = [GMAIL_SCOPE, CALENDAR_SCOPE]
 SERVICE_SCOPES = {"gmail": [GMAIL_SCOPE], "calendar": [CALENDAR_SCOPE]}
-SOCKET_ENV = "TICO_CRED_SOCKET"     # set in an isolated turn: the supervisor holds the key (runner/mail_key.py)
+SOCKET_ENV = "TICO_CRED_SOCKET"     # set in an isolated turn: the supervisor holds the key (runner_support/mail_key.py)
 REQUIRED_FIELDS = ("type", "client_email", "client_id", "private_key", "token_uri")
 
 SETUP_HINT = ("The owner creates it once: Google Cloud console > project acme-tico-hub > enable "
@@ -104,7 +104,7 @@ def supervisor_token(mailbox, scopes):
                       "Start mail through the runner so it can provide a scoped credential token.")
     if not service:
         raise Failure("mail access through the runner covers one service at a time", "Ask for gmail or calendar.")
-    from runner import credential_socket                # noqa: PLC0415
+    from runner_support import credential_socket                # noqa: PLC0415
     try:
         return credential_socket.request_mail(path, os.environ["HUB_TOKEN"], service, mailbox)
     except OSError as e:

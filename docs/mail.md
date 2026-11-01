@@ -427,7 +427,7 @@ See [Computer sign-in and diagnostics](install.md#linux-or-cloud-server-docker).
    the Python environment into the runner's volume (`/home/runner/tools/mail-venv`, or `/var/lib/tico-runner/tools/mail-venv`),
    about a minute, needing outbound access to PyPI once. It is not in the image, so the image stays slim for runners that never sync mail;
    it is rebuilt when `connectors/mail/requirements.txt` changes.
-4. Check: `python -m runner --config <runner.json> connectors-doctor`, then Settings shows the mail and calendar
+4. Check: `python -m runner_support --config <runner.json> connectors-doctor`, then Settings shows the mail and calendar
    tool health.
 
 ### Which mailboxes the sync covers

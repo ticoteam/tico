@@ -4,7 +4,7 @@
 // The key is taken in a password field, posted once with `switch` and emptied from the page; the dialog says the
 // subscription stays in use while the computer checks it, offers Cancel switch meanwhile, and ends saying the
 // subscription was signed out, or that it is still in use. Once switched, the same connection (same bots) runs on the
-// key. Every request is intercepted; the harness capabilities come from runner/harnesses/*.toml.
+// key. Every request is intercepted; the harness capabilities come from harnesses/*.toml.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

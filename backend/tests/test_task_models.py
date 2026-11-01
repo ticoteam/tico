@@ -306,7 +306,7 @@ def test_under_the_gateway_preset_a_task_model_not_signed_in_runs_on_the_bots_mo
 
 def test_a_task_model_whose_sign_in_cannot_be_checked_runs_rather_than_falling_back_for_good(api):
     """Grok's sign-in can't be checked without starting it, so the runner always reports it `unknown`
-    (runner/harnesses/grok.toml `check = "none"`): a "don't know" runs the task model, it is not a reason to fall back."""
+    (harnesses/grok.toml `check = "none"`): a "don't know" runs the task model, it is not a reason to fall back."""
     machine = ops_on_sonnet(api)
     rust_heartbeat(api, machine, {"claude": {"installed": True, "authenticated": "ready"},
                                   "grok": {"installed": True, "authenticated": "unknown"}})

@@ -1,4 +1,4 @@
-"""The harness manifests (runner/harnesses/*.toml) as the server and the clients read them: one row per harness,
+"""The harness manifests (harnesses/*.toml) as the server and the clients read them: one row per harness,
 keyed by the id bot configs use (`harness`, which is also the server's id), with its capabilities filled in.
 
 The runner installs from the same files (runner-rs/src/harness_tools.rs); this module only reads what Tico does
@@ -10,7 +10,7 @@ import tomllib
 from functools import lru_cache
 from pathlib import Path
 
-DIRECTORY = Path(__file__).resolve().parents[1] / "runner" / "harnesses"
+DIRECTORY = Path(__file__).resolve().parents[1] / "harnesses"
 
 # Every key `[capabilities]` may hold, with its type and the value an absent key means.
 FIELDS = {

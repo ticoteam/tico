@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from connectors.mail import Failure, auth
 from connectors.mail import __main__ as cli
-from runner import credential_socket
+from runner_support import credential_socket
 
 
 class DoctorSocket(unittest.TestCase):

@@ -272,7 +272,7 @@ at the same time, each with its own Docker names; the journey proceeds once thos
   the server restarts and the runner reconnects, the data survives down and up, and a runner box updates to the
   server's release and rolls back one that does not turn healthy;
 - `docker/side-jobs-smoke.sh`: a runner starts and stops the side job the hub assigns to it;
-- `runner/tests/test_isolation_docker.py`: Docker isolation against the candidate runner, with
+- `runner_support/tests/test_isolation_docker.py`: Docker isolation against the candidate runner, with
   `TICO_RUNNER_TEST_IMAGE=tico-rc-runner:local` and the same Python worker cap;
 - `scripts/journey-test.sh --release`: install the previous release from its checksummed bundle and seed it like a
   real team (older releases' rows, a computer on the previous runner, a team `HUB_` variable granted to BotOps, a bot

@@ -11,7 +11,7 @@ and holds no harness.
 
 | Harness | Manifest | Providers | Installed with | Signs in with |
 |---|---|---|---|---|
-| Codex | `runner/harnesses/codex.toml` | OpenAI | npm `@openai/codex` | ChatGPT subscription (device code, from Settings) or `OPENAI_API_KEY` |
+| Codex | `harnesses/codex.toml` | OpenAI | npm `@openai/codex` | ChatGPT subscription (device code, from Settings) or `OPENAI_API_KEY` |
 | Claude Code | `claude-code.toml` | Anthropic | npm `@anthropic-ai/claude-code` | Claude subscription (link and pasted code, from Settings), `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
 | Gemini CLI | `gemini-cli.toml` | Google | npm `@google/gemini-cli` | `GEMINI_API_KEY` |
 | Antigravity (Gemini variant) | `gemini-cli.toml` `[variants.antigravity]` | Google | Operator installs `agy`; the runner never installs or updates it | Google account, signed in by the operator in `agy`; readiness checks only that `agy` is on PATH, a real run checks the sign-in; no MCP servers |
@@ -369,7 +369,7 @@ A harness is a manifest plus a host adapter.
 1. **Host adapter**: `runner-rs/src/hosts/<host>.rs` (`start_thread`, `start_turn`, `interrupt`, and events on the
    host's channel). Add it to the `Host` enum in `runner-rs/src/hosts/mod.rs` and to `make_host` in
    `runner-rs/src/execute.rs`.
-2. **Manifest**: `runner/harnesses/<id>.toml`. The file name is the id.
+2. **Manifest**: `harnesses/<id>.toml`. The file name is the id.
 
    ```toml
    id = "acme-agent"            # lowercase letters, digits, hyphens

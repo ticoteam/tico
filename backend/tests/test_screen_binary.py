@@ -5,7 +5,7 @@ import hashlib
 import pytest
 
 from backend import screen_binary
-from runner import engine, release_update
+from runner_support import engine, release_update
 
 
 def test_native_download_checks_checksum_and_refuses_a_stale_source_fingerprint(tmp_path, monkeypatch):

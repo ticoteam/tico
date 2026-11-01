@@ -1,9 +1,9 @@
-//! Stamps the binary with its source fingerprint (`tico-runner --build-id`), so runner/engine.py can tell a
+//! Stamps the binary with its source fingerprint (`tico-runner --build-id`), so runner_support/engine.py can tell a
 //! build of this checkout from a stale one even when the version number has not moved.
 //!
-//! The fingerprint is runner/engine.py `source_id`: the first 16 hex digits of the SHA-256 of, for every file
+//! The fingerprint is runner_support/engine.py `source_id`: the first 16 hex digits of the SHA-256 of, for every file
 //! in runner-rs/build.rs, runner-rs/Cargo.toml, runner-rs/Cargo.lock, runner-rs/src/** and
-//! runner/harnesses/*.toml sorted by its path from the repository root: `path \0 length \0 bytes`.
+//! harnesses/*.toml sorted by its path from the repository root: `path \0 length \0 bytes`.
 //! SHA-256 is written out here so the build needs no extra crate.
 
 use std::path::{Path, PathBuf};
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 fn main() {
     let crate_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let root = crate_dir.parent().unwrap().to_path_buf();
-    for p in ["build.rs", "Cargo.toml", "Cargo.lock", "src", "../runner/harnesses"] {
+    for p in ["build.rs", "Cargo.toml", "Cargo.lock", "src", "../harnesses"] {
         println!("cargo:rerun-if-changed={p}");
     }
     println!("cargo:rerun-if-env-changed=TICO_VERSION");
@@ -46,7 +46,7 @@ fn files(root: &Path) -> Vec<(String, PathBuf)> {
             }
         }
     }
-    for entry in std::fs::read_dir(root.join("runner/harnesses")).into_iter().flatten().flatten() {
+    for entry in std::fs::read_dir(root.join("harnesses")).into_iter().flatten().flatten() {
         let p = entry.path();
         if p.is_file() && p.extension().is_some_and(|e| e == "toml") {
             out.push((rel(root, &p), p));

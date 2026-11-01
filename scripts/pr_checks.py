@@ -19,13 +19,13 @@ UI_MAP = {"ui/app/chat.js": ["chat", "imported-history"],
           "ui/app/chat-outline.js": ["chat", "imported-history"],
           "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
           "ui/app/visual-media.js": ["visual-media", "visual-media-app"]}
-CONFORMANCE = "runner/tests/test_conformance.py"
+CONFORMANCE = "runner_support/tests/test_conformance.py"
 # Each crate's `cargo test --locked` runs in the conformance job when any of its test inputs change:
-# runner-rs tests read runner/ (harnesses, fixtures and the Python runner they compare against) and the
+# runner-rs tests read harnesses/, runner-rs/tests and runner_support/ (the Python helpers they compare against) and the
 # backend's gateway enroll contract fixture, which gateway_relay's tests check the runner against, and the runner wire
 # contract's recorded answers (runner-rs/src/wire.rs).
 RUST_INPUTS = {"relay-rs": ("relay-rs/",),
-               "runner-rs": ("runner-rs/", "runner/", "backend/tests/fixtures/gateway_enroll_contract.json",
+               "runner-rs": ("runner-rs/", "harnesses/", "runner_support/", "backend/tests/fixtures/gateway_enroll_contract.json",
                              "contracts/runner/")}
 CHANGELOG_REFUSAL = ("No PR edits CHANGELOG.md; the Technical Writer writes notes at the release cut. "
                      "Remove your CHANGELOG.md changes.")
@@ -531,7 +531,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     files (None: any may be new) and `core` the core browser scripts (None: read from scripts/ui-tests.cjs)."""
     full = {"python": None, "browser": None, "caddy": True, "reason": "full default suite"}
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
-    runner = bool(rust) or any(p.startswith(("runner/", "runner-rs/", "relay-rs/")) or
+    runner = bool(rust) or any(p.startswith(("runner_support/", "harnesses/", "runner-rs/", "relay-rs/")) or
                                p in ("backend/harness_actions.py", "backend/runner_versions.py") for p in changed)
     full["rust"] = rust
     if event != "pull_request":

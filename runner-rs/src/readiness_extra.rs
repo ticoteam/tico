@@ -1,5 +1,5 @@
 //! The readiness rows beyond runtime sign-in and the checkout (service.py preflight and readiness): reserved-credential and Claude Code deny warnings, the GitHub
-//! sign-in and browser launch probes (runner/tool_probes.py), the container start probe (runner/container_probe.py),
+//! sign-in and browser launch probes (removed Python runner: tool_probes.py), the container start probe (removed Python runner: container_probe.py),
 //! the harness report, recent errors, and the
 //! fields an older server refused, held back for ten minutes.
 

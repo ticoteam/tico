@@ -1,4 +1,4 @@
-//! Keep the secrets a turn was granted out of what the runner writes down (`runner/redact.py`).
+//! Keep the secrets a turn was granted out of what the runner writes down (`runner_support/redact.py`).
 //!
 //! One redactor per turn holds its granted values and the common ways each turns up (URL-encoded, base64
 //! with and without padding, the password half of `user:password`) and replaces them with `••••`, longest
@@ -421,7 +421,7 @@ pub fn git_failure(stderr: &str, secrets: &[String], limit: usize) -> String {
     }
 }
 
-/// git with the clean environment `runner/safe_git.py` uses: no global or system config.
+/// git with the clean environment `runner_support/safe_git.py` uses: no global or system config.
 pub fn git(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
     let mut argv: Vec<String> = vec!["git".into()];
     argv.extend(crate::safegit::args(root));

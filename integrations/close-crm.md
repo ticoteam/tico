@@ -22,7 +22,7 @@ aliases: [close]
 
 Close is a sales CRM. Tico reads it in two ways:
 
-- **Meetings.** The runner's `close-calls` job (`runner/close_calls.py`) polls completed Close
+- **Meetings.** The runner's `close-calls` job (`runner_support/close_calls.py`) polls completed Close
   calls and Notetaker meetings every five minutes and imports their speaker turns and Close's
   summary into **Meetings**. It starts when `secrets/close-calls.env` holds `CLOSE_API_KEY` on a
   runner computer. It reads only and never downloads Close audio. Setup:

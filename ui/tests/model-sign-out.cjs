@@ -8,7 +8,7 @@
 // named, and a failed lookup offers Try again. After a change the page looks again until a heartbeat newer than the
 // change shows it (a stale one still reads the old state). A switch past its commit point reads as finishing with no cancel, and a Mac offers no
 // Switch account for Claude Code (switch_unavailable_on). Every request is intercepted; the harness capabilities come
-// from runner/harnesses/*.toml.
+// from harnesses/*.toml.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

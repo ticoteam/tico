@@ -137,7 +137,7 @@ def unavailable(what):
 
 def fetch_repository(person, slug, into, what="the original"):
     """A bot's repository, read-only, from its recorded GitHub repository, cloned into `into`: the same clone the runner does for a bot
-    that moved (runner/git_credentials.py), with a read token the server gives only for a bot the requester may read."""
+    that moved (runner_support/git_credentials.py), with a read token the server gives only for a bot the requester may read."""
     from clients.tico import APIError
     try:
         granted = person.post(f"bots/{slug}/repository-read-token", {})
@@ -147,7 +147,7 @@ def fetch_repository(person, slug, into, what="the original"):
         raise unavailable(what) from None
     if not granted.get("configured") or not granted.get("token") or not granted.get("repository"):
         raise unavailable(what)
-    from runner import git_credentials
+    from runner_support import git_credentials
     state, detail = git_credentials.clone_repository(Path(into), granted["repository"], {**os.environ, **git_credentials.environment(granted["token"])})
     if state != "cloned" or not head(into):
         raise CopyError("no_repository", unavailable(what).detail + (f" ({detail})" if detail else ""))
@@ -447,7 +447,7 @@ def refusing(fn):
 
 def publish(api, slug):
     """Give the new repository a home on GitHub when the team has connected it; else it stays on this computer. Its first placement
-    is this computer (backend/built_on.py), whose runner then publishes the history (runner/git_credentials.py publish_history)."""
+    is this computer (backend/built_on.py), whose runner then publishes the history (runner_support/git_credentials.py publish_history)."""
     from clients.tico import APIError
     try:
         made = api.post("github/repos", {"slug": slug, "empty": True})

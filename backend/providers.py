@@ -26,7 +26,7 @@ KEY = "providers"
 DEFAULT = "default"
 
 # `runtime` is the host a runner starts (runner-rs/src/hosts/<runtime>.rs); `harness` names the tool
-# manifest that installs it (runner/harnesses/<harness>.toml). `login`, what the person types on the runner's
+# manifest that installs it (harnesses/<harness>.toml). `login`, what the person types on the runner's
 # machine to sign that runtime in, comes from the manifest. Providers with no CLI of their own share the
 # catch-all runtime (`catch_all`): pi, reached with an OpenRouter API key.
 PROVIDERS = (

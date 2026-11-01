@@ -684,14 +684,14 @@ def task_tree(api, args):
 @tool("hub_task_worktree_add", "Create a task worktree from a repository this bot may write.",
       {"repo": _s("Repository owner/name"), "task": TASK_ID}, required=("repo",), writes=True, local=True)
 def task_worktree_add(api, args):
-    from runner.worktrees import command
+    from runner_support.worktrees import command
     return command(api, 'add', args['repo'], args.get('task'))
 
 
 @tool("hub_task_worktree_attach", "Attach a Git worktree inside the team workspace to this task.",
       {"path": _s("Path inside the team workspace"), "task": TASK_ID}, required=("path",), writes=True, local=True)
 def task_worktree_attach(api, args):
-    from runner.worktrees import command
+    from runner_support.worktrees import command
     return command(api, 'attach', args['path'], args.get('task'))
 
 

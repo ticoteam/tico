@@ -48,7 +48,7 @@ pub async fn off_worker<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'stati
     }
 }
 
-/// One log line on stdout, as `runner/outage.py` log prints it, with every running turn's secrets taken out.
+/// One log line on stdout, as `runner_support/outage.py` log prints it, with every running turn's secrets taken out.
 pub fn log(line: &str) {
     say(line, false);
 }

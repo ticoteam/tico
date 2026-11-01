@@ -795,7 +795,7 @@ and only while they are wanted:
   tick **Enabled** and choose this computer. The job starts within a minute and stops again when you switch it off
   or pick another computer. Put the tool's credential in the runner's secrets folder, for example
   `docker exec '<container-name>' sh -c 'umask 077; printf "%s\n" "GRANOLA_API_KEY=<key>" | tee /home/runner/workspace/secrets/granola.env >/dev/null'`
-  (the file names are in [meetings](meetings.md#meeting-importers)); `docker exec '<container-name>' python -m runner
+  (the file names are in [meetings](meetings.md#meeting-importers)); `docker exec '<container-name>' python -m runner_support
   --config /home/runner/runner.json importers-doctor` says which are present.
 - *Close calls*: put `CLOSE_API_KEY=<key>` in `/home/runner/workspace/secrets/close-calls.env` the same way. The job
   starts when that file appears; keep it on one computer only. See [meetings](meetings.md#close).
@@ -813,7 +813,7 @@ gets a computer to itself ([Message bots](mail.md#who-can-read-the-key)).
 The job starts within a minute of the file appearing, builds its Python environment into the volume the first time
 (about a minute; `docker logs` shows it), and stops when the file is removed. Instead of the key, an owner who
 sets `TICO_PROCESSING_OPERATORS` on the server assigns the job to that owner's runners. `docker exec '<container-name>'
-python -m runner --config /home/runner/runner.json connectors-doctor` says whether the key is found.
+python -m runner_support --config /home/runner/runner.json connectors-doctor` says whether the key is found.
 `TICO_SIDE_JOBS=0` in the container's environment turns the supervisor off.
 
 Update a runner with `docker pull ghcr.io/ticoteam/tico-runner:latest`, then remove and re-run the container

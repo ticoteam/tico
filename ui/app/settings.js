@@ -64,7 +64,7 @@ function settingsMachinesRefresh() {
   });
   return SETTINGS_PRESENCE.pending;
 }
-// Each model CLI's capabilities, from its manifest (GET /v2/models `harnesses`, runner/harnesses/*.toml): what the UI
+// Each model CLI's capabilities, from its manifest (GET /v2/models `harnesses`, harnesses/*.toml): what the UI
 // asks instead of naming CLIs. Fetched once; until then, or if the fetch fails, every capability reads as unknown.
 let HARNESS_ROWS = [];
 let HARNESS_ROWS_LOADING = null;

@@ -182,11 +182,11 @@ def test_the_bots_start_once_a_computer_runs_them(environment):
 
 
 def test_each_role_bot_is_made_already_set_up_so_it_does_its_starter_task(environment, tmp_path):
-    """The computer makes each bot's repository from its template (runner/catalog_job.py); a template's state.md
+    """The computer makes each bot's repository from its template (runner_support/catalog_job.py); a template's state.md
     says setup has not started, and its AGENT.md asks the setup questions first until it does."""
     import io
     import json
-    from runner import catalog_job
+    from runner_support import catalog_job
     api = environment()
     start(api)
     record, config = (api.get(path, headers=signed_in()).json() for path in ("/api/v2/setup", "/api/v2/config"))

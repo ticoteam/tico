@@ -1,5 +1,5 @@
 //! Read a subscription's weekly allowance through the signed-in CLI, without a thread, turn or paid request
-//! (runner/subscription_refresh.py): `codex app-server`'s `account/rateLimits/read`, relayed for the server's
+//! (removed Python runner: subscription_refresh.py): `codex app-server`'s `account/rateLimits/read`, relayed for the server's
 //! runner-subscription-refreshes. Only fixed states travel back, never a provider's error text.
 
 use std::sync::atomic::{AtomicBool, Ordering};

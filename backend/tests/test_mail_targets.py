@@ -10,7 +10,7 @@ from backend import routines
 from backend.store import encode
 from backend.tests.test_api import api, get, post, runner  # noqa: F401
 from backend.tests.test_mail_api import seed_org
-from runner.connectors import ConnectorPublisher
+from runner_support.connectors import ConnectorPublisher
 
 DECLARED = "ana@acme.team"
 

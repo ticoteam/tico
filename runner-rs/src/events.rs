@@ -1,4 +1,4 @@
-//! The server's word on what changed for this computer (`runner/runner_events.py`): `GET runners/me/events`
+//! The server's word on what changed for this computer (`removed Python runner: runner_events.py`): `GET runners/me/events`
 //! held open, each `runner` event naming the reads it covers. While the stream is down the runner polls as
 //! before; reconnects back off to RECONNECT_MAX_S and resume from the last event id. A server without the
 //! endpoint (404/405) is polled as before and asked again every LEGACY_RETRY_S. A stream that comes back after it

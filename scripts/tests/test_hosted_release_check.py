@@ -32,7 +32,7 @@ def test_source_bytes_must_match_the_native_build_id(tmp_path, monkeypatch):
         binary = tmp_path / kind / 'target/release' / ('tico-runner' if kind == 'runner-rs' else 'tico-screen-relay')
         binary.parent.mkdir(parents=True)
         binary.write_bytes(b'fictional binary')
-    (tmp_path / 'runner/harnesses').mkdir(parents=True)
+    (tmp_path / 'harnesses').mkdir(parents=True)
     ids = {kind: check.fingerprint(tmp_path, kind) for kind in ('runner', 'relay')}
     def ask(args, cwd=None):
         kind = 'runner' if Path(args[0]).name == 'tico-runner' else 'relay'

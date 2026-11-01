@@ -683,7 +683,7 @@
   },
   "EngineReadiness": {
    "additionalProperties": false,
-   "description": "Which runner engine the computer runs (runner/engine.py): the Rust runner and its build, or the Python one and why.",
+   "description": "Which runner engine the computer runs (runner_support/engine.py): the Rust runner and its build, or the Python one and why.",
    "properties": {
     "build": {
      "default": "",
@@ -769,7 +769,7 @@
   },
   "HarnessReadiness": {
    "additionalProperties": false,
-   "description": "One model CLI on the runner (runner/harnesses/*.toml): what is installed and whether it can\nbe kept current from Settings.",
+   "description": "One model CLI on the runner (harnesses/*.toml): what is installed and whether it can\nbe kept current from Settings.",
    "properties": {
     "authenticated": {
      "default": "unknown",

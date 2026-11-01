@@ -1,6 +1,6 @@
 //! Built-in bots (the assistant, BotOps, Librarian, Strategy Bot and the starters onboarding made) follow the
 //! catalog the release ships (service.py bootstrap and refresh_product_files). This binary carries no templates:
-//! the Python helper does the work, as `python -m runner --config <path> catalog` (runner/catalog_job.py),
+//! the Python helper does the work, as `python -m runner_support --config <path> catalog` (runner_support/catalog_job.py),
 //! the way side jobs run (crate::sidejobs). A bot assigned here without a repository is set up from its template
 //! before its repository is fetched; once per start of this runner, before a built-in bot's turn, the product files
 //! its template changed are brought up and committed. A failure is a log line, never a failed turn.
@@ -21,7 +21,7 @@ use crate::config::Config;
 use crate::fetchrepo::FETCH_RETRY_S;
 use crate::util::{log, text_of};
 
-/// Registrations from before the catalog carry no template: these slugs are their own (runner/catalog_job.py BOOTSTRAP_TEMPLATES).
+/// Registrations from before the catalog carry no template: these slugs are their own (runner_support/catalog_job.py BOOTSTRAP_TEMPLATES).
 const BOOTSTRAP_SLUGS: &[&str] = &["coo", "botops", "librarian", "goal-manager"];
 const ASK_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -57,10 +57,10 @@ pub fn pushed(bot: &str) {
     }
 }
 
-/// One request to `python -m runner catalog`; its answer, or None (logged) when Python could not give one.
+/// One request to `python -m runner_support catalog`; its answer, or None (logged) when Python could not give one.
 async fn ask(config: &Config, request: &Value) -> Option<Value> {
     let mut cmd = tokio::process::Command::new(crate::env::python());
-    cmd.args(["-m", "runner", "--config"]).arg(&config.path).arg("catalog").current_dir(crate::env::root())
+    cmd.args(["-m", "runner_support", "--config"]).arg(&config.path).arg("catalog").current_dir(crate::env::root())
         .env_remove("TICO_SIDE_JOBS").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).kill_on_drop(true);
     let mut child = match cmd.spawn() {
         Ok(child) => child,

@@ -1,5 +1,5 @@
-//! GitHub credentials for a turn (`runner/git_credentials.py`, `runner/credential_socket.py`,
-//! `runner/credential_bin/gh`).
+//! GitHub credentials for a turn (`runner_support/git_credentials.py`, `runner_support/credential_socket.py`,
+//! `runner_support/credential_bin/gh`).
 //!
 //! The hub mints a repository-scoped GitHub App token that lasts an hour; a turn can run longer, so git
 //! does not keep one. Its credential helper is `tico-runner git-credential`, which asks this runner's
@@ -465,7 +465,7 @@ pub async fn apply(env: &mut Env, client: &Client, cache: &TokenCache, bot: &str
             env.insert("PATH".into(), turn_path.clone());
             env.insert(TURN_PATH_KEY.into(), turn_path);
             if cfg!(target_os = "macos") {
-                let startup = crate::env::root().join("runner").join("shell_init");
+                let startup = crate::env::root().join("runner-rs").join("shell_init");
                 env.insert("TICO_TURN_BASH_ENV".into(), env.get("BASH_ENV").cloned().unwrap_or_default());
                 let zdot = env.get("ZDOTDIR").or_else(|| env.get("HOME")).cloned().unwrap_or_default();
                 env.insert("TICO_TURN_ZDOTDIR".into(), zdot);

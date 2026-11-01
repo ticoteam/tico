@@ -15,7 +15,7 @@ use crate::util::text_of;
 
 pub type Env = BTreeMap<String, String>;
 
-/// The process settings a turn and the runner's own git keep (`runner/safe_git.py` _SETTINGS), plus `LC_*`.
+/// The process settings a turn and the runner's own git keep (`runner_support/safe_git.py` _SETTINGS), plus `LC_*`.
 pub const SETTINGS: &[&str] = &[
     "HOME", "PATH", "SHELL", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "TZ", "TERM", "COLORTERM", "CODEX_HOME",
     "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR",
@@ -28,7 +28,7 @@ pub const RUNNER_HUB_ENV: &[&str] = &[
 ];
 pub const RESERVED_ENV: &[&str] = &["HOME", "PATH", "SHELL", "PYTHONPATH", "PYTHONHOME", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "CODEX_HOME", "CLAUDE_CONFIG_DIR"];
 pub const RESERVED_PREFIXES: &[&str] = &["TICO_", "DYLD_", "LD_"];
-/// Keys a turn never inherits unless a grant brings them (`runner/op.py` SECRET_KEYS).
+/// Keys a turn never inherits unless a grant brings them (`runner_support/op.py` SECRET_KEYS).
 pub const SECRET_KEYS: &[&str] = &["OPENROUTER_API_KEY", "HUB_INGEST_TOKEN", "OP_SERVICE_ACCOUNT_TOKEN"];
 
 pub fn process_environment() -> Env {

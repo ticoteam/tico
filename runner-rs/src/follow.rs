@@ -1,6 +1,6 @@
-//! Keeps this runner on the release its server runs (runner/release_update.py `Follower`, docs/updates.md).
+//! Keeps this runner on the release its server runs (runner_support/release_update.py `Follower`, docs/updates.md).
 //! The server names its release (`GET runners/desired`, or the event stream's `ready.release`). A checkout (Mac,
-//! Linux) hands the move to `python -m runner.release_update`, the same separate process the Python runner starts,
+//! Linux) hands the move to `python -m runner_support.release_update`, the same separate process the Python runner starts,
 //! which checks the tag out, restarts this runner through its supervisor and rolls back if it does not report in.
 //! A Docker runner asks its updater sidecar for the matching image. The heartbeat says where it stands (`release`,
 //! `kind`, `commit`, `update`), so Settings > Computers and Health see a Rust computer as they see a Python one.
@@ -30,7 +30,7 @@ const CHECKOUT_EVERY: Duration = Duration::from_secs(600);
 const PREPARE_LIMIT_S: u64 = 1800; // a cold cargo build (engine.py BUILD_TIMEOUT_S)
 const PREPARE_RETRY: Duration = Duration::from_secs(3600);
 /// What a restart picks up: a merge touching nothing here needs none (service.py RUNNER_CODE, plus the Rust source).
-const RUNNER_CODE: &[&str] = &["runner/", "runner-rs/", "clients/"];
+const RUNNER_CODE: &[&str] = &["runner_support/", "harnesses/", "runner-rs/", "clients/"];
 const NO_SUPERVISOR: &str = "no supervisor would start this runner again after an update: run `scripts/tico install` once on this computer and it updates itself";
 
 /// A semantic version's sort key (release_update.py `key`), or None.
@@ -326,7 +326,7 @@ pub struct Follower {
     pinned: bool,
     /// Supervised, and neither `self_update: false` nor TICO_RUNNER_SELF_UPDATE=0 (service.py under_supervisor).
     self_update: bool,
-    /// Gets the runner binary for the checkout as it now is (`python -m runner.engine prepare`); non-zero on failure.
+    /// Gets the runner binary for the checkout as it now is (`python -m runner_support.engine prepare`); non-zero on failure.
     prepare: Vec<String>,
     sidecar: Sidecar,
     inner: Mutex<Inner>,
@@ -355,7 +355,7 @@ pub fn init(config: &Map<String, Value>, directory: &Path) {
         commit,
         pinned,
         self_update,
-        prepare: [crate::env::python().to_string_lossy().into_owned(), "-m".into(), "runner.engine".into(), "prepare".into()].into(),
+        prepare: [crate::env::python().to_string_lossy().into_owned(), "-m".into(), "runner_support.engine".into(), "prepare".into()].into(),
         sidecar: Sidecar::from_env(),
         inner: Mutex::new(Inner { state: "idle".into(), revision: started.clone(), ..Default::default() }),
         started,
@@ -632,14 +632,14 @@ impl Follower {
         }
     }
 
-    /// `python -m runner.release_update` as its own process, so it outlives the runner it restarts. Under systemd the
+    /// `python -m runner_support.release_update` as its own process, so it outlives the runner it restarts. Under systemd the
     /// runner's unit kills its whole cgroup on restart, so the update is a transient unit of its own (release_update.py spawn).
     fn spawn(&self, want: &str) -> Result<(), String> {
         let python = crate::env::python();
         let pid = std::process::id().to_string();
         let dir = self.directory.to_string_lossy().to_string();
         let root = self.root.to_string_lossy().to_string();
-        let args = ["-m", "runner.release_update", "--root", &root, "--version", want, "--state-dir", &dir, "--pid", &pid, "--started", &self.started];
+        let args = ["-m", "runner_support.release_update", "--root", &root, "--version", want, "--state-dir", &dir, "--pid", &pid, "--started", &self.started];
         let log_path = self.directory.join("update.log");
         let unit = std::env::var("TICO_SYSTEMD_UNIT").unwrap_or_default();
         if unit.ends_with(".service") && !unit.contains('/') {
@@ -1064,8 +1064,8 @@ mod tests {
             let ok = Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"]).args(args).current_dir(cwd).output().unwrap();
             assert!(ok.status.success(), "{args:?}: {}", String::from_utf8_lossy(&ok.stderr));
         };
-        std::fs::create_dir_all(origin.join("runner")).unwrap();
-        std::fs::write(origin.join("runner/a.py"), "1").unwrap();
+        std::fs::create_dir_all(origin.join("runner_support")).unwrap();
+        std::fs::write(origin.join("runner_support/a.py"), "1").unwrap();
         sh(&origin, &["init", "-q"]);
         sh(&origin, &["add", "."]);
         sh(&origin, &["commit", "-qm", "one"]);
@@ -1082,7 +1082,7 @@ mod tests {
         assert_eq!(self_update(&here, &first).await, (true, String::new()));
         let head = checkout_commit(&here);
         assert!(!runner_code_changed(&here, &first, &head).await);
-        std::fs::write(origin.join("runner/a.py"), "2").unwrap();
+        std::fs::write(origin.join("runner_support/a.py"), "2").unwrap();
         sh(&origin, &["commit", "-qam", "code"]);
         sh(&here, &["fetch", "-q"]);
         assert!(runner_code_changed(&here, &head, "origin/main").await);
@@ -1109,7 +1109,7 @@ mod tests {
         assert_ne!(checkout_commit(&here), head);
         sh(&here, &["reset", "-q", "--hard", &head]);
 
-        std::fs::write(here.join("runner/a.py"), "dirty").unwrap();
+        std::fs::write(here.join("runner_support/a.py"), "dirty").unwrap();
         assert_eq!(self_update(&here, &head).await.1, "checkout has uncommitted changes");
         let _ = std::fs::remove_dir_all(dir);
     }

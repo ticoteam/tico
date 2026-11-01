@@ -349,7 +349,7 @@ function machineVersionsHTML(machine, online) {
   };
   // The owner sees every model CLI, to turn one on; everyone else what is there.
   const harnesses = Object.entries(machine.readiness?.harnesses || {}).filter(([, value]) => S.me?.role === 'owner' || value.installed || value.wanted || value.state !== 'idle').map(harnessChip).join('');
-  // Which runner engine it runs (runner/engine.py); hovering says the build, or why it is on Python.
+  // Which runner engine it runs (runner_support/engine.py); hovering says the build, or why it is on Python.
   const engine = machine.readiness?.engine;
   const release = machineRelease(machine);
   const facts = [`Tico ${release || 'version not reported'}`, machine.platform || '',

@@ -246,7 +246,7 @@ def cmd_e2e(args):
 
 def cmd_mint_token(args):
     """A short-lived access token for one mailbox, for the runner's supervisor to hand a turn
-    (runner/credential_socket.py). Prints the token and its expiry; the key itself never leaves."""
+    (runner_support/credential_socket.py). Prints the token and its expiry; the key itself never leaves."""
     try:
         token, expiry, granted = auth.mint_token(args.mailbox, args.service)
     except oauth.SignInFailed as e:

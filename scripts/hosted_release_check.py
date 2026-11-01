@@ -80,7 +80,7 @@ def fingerprint(root, kind):
     if kind == "runner":
         paths = [root / "runner-rs" / name for name in ("build.rs", "Cargo.toml", "Cargo.lock")]
         paths += list((root / "runner-rs/src").rglob("*"))
-        paths += list((root / "runner/harnesses").glob("*.toml"))
+        paths += list((root / "harnesses").glob("*.toml"))
         named = [(p.relative_to(root).as_posix(), p) for p in paths if p.is_file()]
     else:
         crate = root / "relay-rs"

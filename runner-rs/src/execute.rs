@@ -77,7 +77,7 @@ impl From<String> for Fail {
     }
 }
 
-/// What a turn spent (runner/usage.py Meter): the sum of each `tokens` event's `usage` increment. A host that learns
+/// What a turn spent (removed Python runner: usage.py Meter): the sum of each `tokens` event's `usage` increment. A host that learns
 /// the model from its harness (Muse Code) puts it on the event; it names the run's model when the config does not.
 /// A host that sees each model request (Claude, pi) lists them as `requests`, so the server can price each on its own; a
 /// fourth count, when the host sends one, is 1 for the bot's own request and 0 for a subagent's.
@@ -257,7 +257,7 @@ pub fn scrub_reply(text: &str) -> String {
 }
 
 /// The environment git runs with outside the model: process settings and the turn's GitHub helper settings
-/// only (runner/safe_git.py environment).
+/// only (runner_support/safe_git.py environment).
 fn git_env(turn: &Env) -> Env {
     crate::safegit::environment(turn)
 }
@@ -3248,7 +3248,7 @@ mod tests {
         let _controls = RunControls;
         let dir = std::env::temp_dir().join(format!("tico-bounded-prepare-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../runner/tests/fixtures/pi/turn.jsonl");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi/turn.jsonl");
         HOST_COMMAND.with(|command| *command.borrow_mut() = Some(crate::hosts::pi::testing::fake(&dir, &fixture)));
         let (url, seen, server) = recording_server().await;
         let path = dir.join("runner.json");
@@ -3540,7 +3540,7 @@ for line in sys.stdin:
         starts: usize,
     }
 
-    /// Turns on one session through a fake `pi --mode rpc` that reads 348 input tokens a turn (runner/tests/fixtures/pi), one per
+    /// Turns on one session through a fake `pi --mode rpc` that reads 348 input tokens a turn (runner-rs/tests/fixtures/pi), one per
     /// entry of `turns`, on a task's room or (`task` false) the bot's main chat; `serves` is whether the server says
     /// it takes `session` in a result.
     async fn session_turns(task: bool, serves: bool, turns: &[Turn]) -> Ran {
@@ -3548,7 +3548,7 @@ for line in sys.stdin:
         RUN_SESSION.with(|on| on.set(Some(serves)));
         let dir = std::env::temp_dir().join(format!("tico-session-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap(); // the bot's checkout, where its harness starts
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../runner/tests/fixtures/pi/turn.jsonl");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi/turn.jsonl");
         HOST_COMMAND.with(|command| *command.borrow_mut() = Some(crate::hosts::pi::testing::fake(&dir, &fixture)));
         let (url, seen, server) = recording_server().await;
         let path = dir.join("runner.json");
@@ -4597,7 +4597,7 @@ for line in sys.stdin:
             "config": {"runtime": "pi", "harness": "pi", "model": "synthetic"}});
         let main = crate::sessions::local_path(&runner.config, &bot, &attempt["config"]);
         std::fs::create_dir_all(&main).unwrap();
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../runner/tests/fixtures/pi/turn.jsonl");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi/turn.jsonl");
         HOST_COMMAND.with(|command| *command.borrow_mut() = Some(crate::hosts::pi::testing::fake(&dir, &fixture)));
         if matches!(kind, "refresh git" | "retry fallback") { crate::product_files::mark_unpushed(&bot); }
         let checkout = if matches!(kind, "refresh git" | "publish") { None } else { Some(runner.lanes.checkout(&bot).lock_owned().await) };

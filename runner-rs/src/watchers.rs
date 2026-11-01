@@ -1,5 +1,5 @@
 //! Watchers: programs in a bot's repository this runner runs on a schedule with no model (clients/watchers.py
-//! for the declaration and output protocol, runner/watchers.py for the runs; docs/watchers.md).
+//! for the declaration and output protocol, removed Python runner: watchers.py for the runs; docs/watchers.md).
 //!
 //! For each active bot hosted here, each program `watchers:` in bot.yaml declares runs no more often than its
 //! `every`, never twice at once, as the bot's user (crate::isolation), in the bot's repository, with the bot's

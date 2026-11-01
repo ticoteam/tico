@@ -4,7 +4,7 @@ A bot that waits for room inside its turn never goes idle, so its finished workt
 the bot is idle, never free. So the bot's own turn asking for a worktree it has no room for records one wait for that
 task and repository, and the refusal tells the bot to end its turn. When a place frees, the server reserves the worktree
 through the normal path (worktrees.provision: permission, ownership and computer checked again), the bot's computer
-checks it out and runs its setup while the bot is idle (runner/worktrees.py `prepare`), and only once the worktree is
+checks it out and runs its setup while the bot is idle (runner_support/worktrees.py `prepare`), and only once the worktree is
 present with setup done does the server wake the task, once, naming the worktree. The task's own session resumes with
 that message; nothing of the turn that asked is replayed. A failed checkout or setup wakes it once with the reason.
 

@@ -1093,7 +1093,7 @@ class ProfileReadiness(GoalReadiness):
 
 
 class HarnessReadiness(GoalReadiness):
-    """One model CLI on the runner (runner/harnesses/*.toml): what is installed and whether it can
+    """One model CLI on the runner (harnesses/*.toml): what is installed and whether it can
     be kept current from Settings."""
     name: str = Field(default="", max_length=100)
     runtime: str = Field(default="", max_length=100)
@@ -1133,7 +1133,7 @@ class RuntimeReadiness(GoalReadiness):
     detail: str = Field(default="", max_length=500)
     data_problem: Annotated[str, _cut(500)] = ""      # as ProfileReadiness
     # On a Docker runner: "own" when each turn on this tool runs as its own leased OS user, "bot" when its turns share
-    # the bot user and can enter every bot's checkout (its sign-in is owner-only state; runner/harnesses `isolated_user`).
+    # the bot user and can enter every bot's checkout (its sign-in is owner-only state; harnesses `isolated_user`).
     turn_user: Literal["", "own", "bot"] = ""
     # One machine may hold several subscriptions for the same runtime. The runtime row keeps
     # the profile that needs attention first; this is the per-profile breakdown behind it.
@@ -1260,7 +1260,7 @@ class ContainerExecReadiness(Contract):
 
 
 class EngineReadiness(Contract):
-    """Which runner engine the computer runs (runner/engine.py): the Rust runner and its build, or the Python one and why."""
+    """Which runner engine the computer runs (runner_support/engine.py): the Rust runner and its build, or the Python one and why."""
     name: Literal["rust", "python"]
     build: str = Field(default="", max_length=64)
     note: Annotated[str, BeforeValidator(lambda v: v[:300] if isinstance(v, str) else v), Field(max_length=300)] = ""
@@ -1321,7 +1321,7 @@ class StructuredReadiness(Contract):
     runtimes: dict[str, RuntimeReadiness] = Field(default_factory=dict)
     bots: dict[str, BotReadiness] = Field(default_factory=dict)
     harnesses: dict[str, HarnessReadiness] = Field(default_factory=dict, max_length=50)
-    mail_key: Literal["exposed"] | None = None      # the mail key is where bots can read it (runner/mail_key.py)
+    mail_key: Literal["exposed"] | None = None      # the mail key is where bots can read it (runner_support/mail_key.py)
     shared_env: Literal[True] | None = None         # secrets/_shared.env holds keys every bot there receives
     container_exec: ContainerExecReadiness | None = None
     # A bot's GitHub App token asked GitHub who it is, and Playwright's Chromium started (runner-rs/src/readiness_extra.rs).

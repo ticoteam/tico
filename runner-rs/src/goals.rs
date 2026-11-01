@@ -1,4 +1,4 @@
-//! Native harness goals and commands (runner/goals.py): which goals and slash commands each installed harness
+//! Native harness goals and commands (removed Python runner: goals.py): which goals and slash commands each installed harness
 //! offers, a bot repository's own Claude Code skills and commands, and the goal event vocabulary both hosts and
 //! the drive loop share.
 

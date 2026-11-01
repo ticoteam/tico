@@ -97,6 +97,17 @@ def suppression_set(ruff_text, baseline_text):
     return ignores, set(config.get("select", []))
 
 
+def renamed_since(ref):
+    """Old path -> new path for each file git sees as renamed since `ref`: a moved file keeps its suppressions."""
+    done = subprocess.run(["git", "diff", "--name-status", "-M", ref], cwd=ROOT, capture_output=True, text=True)
+    moves = {}
+    for line in done.stdout.splitlines():
+        fields = line.split("\t")
+        if fields[0].startswith("R") and len(fields) == 3:
+            moves[fields[1]] = fields[2]
+    return moves
+
+
 def check_growth(ref):
     """Fail when the baseline or the rule set changed in the direction of more suppression."""
     old_baseline = git_show(ref, BASELINE_NAME)
@@ -106,6 +117,8 @@ def check_growth(ref):
     old_config = git_show(ref, "ruff.toml") or ""
     new_ignores, new_select = suppression_set(CONFIG.read_text(encoding="utf-8"), BASELINE.read_text(encoding="utf-8"))
     old_ignores, old_select = suppression_set(old_config, old_baseline)
+    moves = renamed_since(ref)
+    old_ignores = {(moves.get(path, path), code) for path, code in old_ignores}
     problems = []
     for path, code in sorted(new_ignores - old_ignores):
         problems.append(f"new suppression: {code} in {path} (fix it, or get it reviewed as a baseline change)")

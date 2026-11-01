@@ -18,7 +18,7 @@ from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post, runner, setup_attempt  # noqa: F401
 from connectors.mail import oauth
-from runner.connectors import ConnectorPublisher, failure_reason
+from runner_support.connectors import ConnectorPublisher, failure_reason
 
 CLIENT = "1234-tico.apps.googleusercontent.com"
 
@@ -478,7 +478,7 @@ def test_health_names_a_policy_block_as_the_workspace_admin_s(app):
     assert "Google Workspace for acme.example has a policy that blocks Tico" in found["last_error"]
 
 
-# The computer's side: runner/connectors.py
+# The computer's side: runner_support/connectors.py
 
 class Hub:
     def __init__(self, queue):

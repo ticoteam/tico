@@ -4,7 +4,7 @@
 // the CLI printed (a failure gives its message), never points to a terminal when the computer is slow to start, and
 // closes by itself once signed in (saying so in a toast) or when cancelled, cancelling it on the computer. A
 // self-hosted Tico keeps the computer's lines, the terminal hint and the dialog open after a cancel. Every request is
-// intercepted; the harness capabilities come from runner/harnesses/*.toml.
+// intercepted; the harness capabilities come from harnesses/*.toml.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

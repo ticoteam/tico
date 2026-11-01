@@ -1,5 +1,5 @@
 //! `state-<id>/runner.sqlite`: the durable outbox and session references, the same file and schema as
-//! `runner/state.py` (the Python side jobs' store). Tables and columns are only ever added, so an older runner can still read it.
+//! `runner_support/state.py` (the Python side jobs' store). Tables and columns are only ever added, so an older runner can still read it.
 
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -314,7 +314,7 @@ impl State {
     }
 
     /// What a thread was last given under `thread` in session_repo_rules (state.py repo_rules): the repo-rules
-    /// digest, or under `goal:<thread>` the task goal revision it holds (runner/goals.py task_goal_set).
+    /// digest, or under `goal:<thread>` the task goal revision it holds (removed Python runner: goals.py task_goal_set).
     pub fn repo_rules(&self, thread: &str, digest: Option<&str>) -> Result<Option<String>, String> {
         self.with(|c| {
             if let Some(d) = digest {

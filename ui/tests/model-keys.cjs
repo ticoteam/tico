@@ -6,7 +6,7 @@
 // online. Replace key takes the key in a password field, posts it once and empties the field, and follows the
 // computer's check to the end. Replacing the shared key for all of them is a credential administrator's alone. A member
 // who does not run the computer sees none of it. Every request is intercepted; the harness capabilities come from
-// runner/harnesses/*.toml.
+// harnesses/*.toml.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

@@ -15,7 +15,7 @@ if (bundled) {
   process.on('exit', () => { try { fs.rmSync(out, {recursive: true, force: true}); } catch {} });
 }
 exports.bundled = bundled;
-// The harness catalog GET /v2/models sends, with each CLI's capabilities read from runner/harnesses/*.toml, so a
+// The harness catalog GET /v2/models sends, with each CLI's capabilities read from harnesses/*.toml, so a
 // test's mock answers what the server would.
 // Read on first use: most scripts never ask, and starting Python costs every one of them.
 let harnesses;

@@ -1,4 +1,4 @@
-//! Contract scenarios from runner/tests/test_worktrees.py, test_task_sessions.py, test_shared_bots.py and
+//! Contract scenarios from runner_support/tests/test_worktrees.py, test_task_sessions.py, test_shared_bots.py and
 //! test_fetch_repository.py, with real git against local bare repositories (no GitHub, no network).
 
 use std::path::{Path, PathBuf};
@@ -238,7 +238,7 @@ async fn isolated_existing_checkout_proofs_go_to_the_bot_and_links_in_their_fold
     assert_eq!(owner_mode(&linked), (0, 0o700), "a symlink in the folder is never followed");
     assert_eq!(owner_mode(&folder.join("escape.json")).0, 0, "nor handed over itself");
 
-    // The bot's `hub worktree setup` replaces a proof the way runner/worktrees.py does: temp file, then rename.
+    // The bot's `hub worktree setup` replaces a proof the way runner_support/worktrees.py does: temp file, then rename.
     let replace = format!("printf %s '{{\"schema\":1}}' > {0}.tmp && mv {0}.tmp {0}", marker.display());
     let replaced = crate::gitrun::run_as_bot(&["/bin/sh".into(), "-c".into(), replace], &env, None, 10).await.unwrap();
     assert!(replaced.ok(), "{}", replaced.stderr);
@@ -317,7 +317,7 @@ async fn isolated_existing_task_locks_go_to_the_bot_without_replacing_inodes_or_
 
 // HotMic 0.3.46 leftovers: a managed base clone (repos/<name>/.git, its config and tico-managed) owned by
 // ticorun, directories 755, files 644. Refreshing it hands it to the bot, whose worktree add and
-// mark_managed (runner/repositories.py) then work.
+// mark_managed (runner_support/repositories.py) then work.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 #[ignore = "requires a disposable Linux two-user environment"]

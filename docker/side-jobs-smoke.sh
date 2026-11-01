@@ -33,7 +33,7 @@ url=http://127.0.0.1:8765/api/v2
 healthy() { docker exec "$server" curl -fsS --max-time 3 http://127.0.0.1:8765/healthz; }
 runner_id() { docker exec "$server" python -c 'import sqlite3
 print(sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True).execute("SELECT id FROM runners WHERE revoked_at IS NULL").fetchone()[0])'; }
-importer_running() { docker exec "$runner" pgrep -f 'python -m runner .* importers$'; }
+importer_running() { docker exec "$runner" pgrep -f 'python -m runner_support .* importers$'; }
 importer_stopped() { ! importer_running; }
 reported() {
   api "$url/meeting-importers" | python3 -c '
@@ -66,6 +66,6 @@ step "switching it off stops the job, and the runner stays up"
 api -X POST -H "Idempotency-Key: side-$RANDOM$RANDOM$SECONDS" \
   -d '{"enabled": false, "runner_id": ""}' "$url/meeting-importers/zoom" >/dev/null
 retry 60 importer_stopped || fail "the importers job kept running after it was unassigned"
-docker exec "$runner" pgrep -f '(python -m runner|tico-runner) .* run$' >/dev/null || fail "the runner itself stopped"
+docker exec "$runner" pgrep -f 'tico-runner .* run$' >/dev/null || fail "the runner itself stopped"
 docker logs "$runner" 2>&1 | grep -q 'no longer assigned here' || fail "the runner did not log stopping the job"
 echo "side-jobs-smoke: ok"

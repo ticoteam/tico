@@ -208,7 +208,7 @@ format is a `422` that names the problem.
 On a Linux runner nothing is installed: the job starts when `secrets/close-calls.env` (`CLOSE_API_KEY=<key>`, mode
 600) exists in the runner's `workspace/secrets/` folder, and stops when it is removed. Keep the key on one computer.
 
-The `python -m runner close-calls` job (on a Mac, or a Linux runner) polls completed Close call and Notetaker meeting activities
+The `python -m runner_support close-calls` job (on a Mac, or a Linux runner) polls completed Close call and Notetaker meeting activities
 every five minutes and imports their timed speaker turns and Close's text summary through
 `POST /api/v2/imports/transcripts`. That door is the Close worker's own: it keeps each provider
 revision, joins a call to the Notetaker meeting it belongs to, and follows Close's corrections until a
@@ -226,7 +226,7 @@ imports use that person's queue without a computer update.
 The first pull covers 30 days of Close activity creation. Close's organization-wide activity API does
 not allow filtering by meeting time, so the worker revisits pending future meetings until their
 transcripts arrive. To scan meetings created before that window, stop the `close-calls` service and
-run `python -m runner close-calls --backfill-days DAYS` from the enrolled computer, with `DAYS` between 1
+run `python -m runner_support close-calls --backfill-days DAYS` from the enrolled computer, with `DAYS` between 1
 and 365; it makes one bounded pass, then exits. Restart the service afterward. On a Linux runner there is no
 service to stop: move `secrets/close-calls.env` aside so the runner stops the job, run the backfill, then put it back. The worker stops with an
 error if a single day exceeds its 5,000-activity page limit, so narrow the window and retry.
@@ -239,7 +239,7 @@ the others a dialog with the same form as Tools > Meeting importers (owners only
 
 ## Meeting importers
 
-Zoom, Google Meet and Granola each have an importer. They run as one job, `python -m runner
+Zoom, Google Meet and Granola each have an importer. They run as one job, `python -m runner_support
 importers`, on an enrolled computer (`scripts/tico install importers` on a Mac; a Linux runner (Docker) starts it by itself once an importer is assigned to it; the Sources strip on the
 Meetings page shows each one's health). Each importer:
 
@@ -255,7 +255,7 @@ Meetings page shows each one's health). Each importer:
 - reads a bounded window: the first pass covers the last 30 days, then each pass re-reads the last
   72 hours (summaries and transcripts arrive late) and moves on. A meeting still being transcribed
   keeps the window from passing it for up to seven days. For older history, stop the job and run
-  `python -m runner importers --backfill-days DAYS [--only zoom|google-meet|granola]`
+  `python -m runner_support importers --backfill-days DAYS [--only zoom|google-meet|granola]`
   (1 to 365; Google Meet keeps only 30 days, so it is capped there); it makes one pass and exits;
 - files a meeting for the roster human it belongs to. A human who is not on the roster is filed
   under the team owner, except Granola, which skips notes it cannot place, because those are
@@ -264,7 +264,7 @@ Meetings page shows each one's health). Each importer:
 **Turn one on.** As the owner open Tools > Meeting importers, tick **Enabled**,
 choose the computer that holds the credential file, and **Save**. The card shows the last sync, the
 last import, how many meetings it has filed and the last error. Only computers whose owner may run
-importers (`TICO_PROCESSING_OPERATORS`, else the owner) are offered. `python -m runner
+importers (`TICO_PROCESSING_OPERATORS`, else the owner) are offered. `python -m runner_support
 importers-doctor` on the computer says which credential files are present, without calling any tool.
 
 **On a Linux runner** there is nothing to install: the runner starts the job while an importer is assigned to it and
@@ -489,10 +489,10 @@ Otter has no importer here. Use `hub meeting import`, the API, or write one as b
 ## Writing an importer
 
 Each of the importers above is a small module that reads one tool's API, maps it onto the fields above,
-and posts it; nothing on the Tico side changes when one is added. `runner/importers/base.py` is the
+and posts it; nothing on the Tico side changes when one is added. `runner_support/importers/base.py` is the
 shared shape: subclass `Importer`, say how to list credentials (`scopes`) and meetings (`fetch`), and it
 supplies the window, cursor, idempotent filing, roster fallback and status reporting. Add it to
-`runner/importers/__init__.py` and to `IMPORTERS` in `backend/meeting_importers.py` to get a card in
+`runner_support/importers/__init__.py` and to `IMPORTERS` in `backend/meeting_importers.py` to get a card in
 Settings. The steps below are the same whether it is a module or a standalone script.
 
 1. **Pick the door.**
@@ -500,7 +500,7 @@ Settings. The steps below are the same whether it is a module or a standalone sc
      human's own credential (a personal token). No `owner_email`; the meeting is theirs.
    - *Runs for the team on a computer that is enrolled as a runner*, as the Close worker and the
      importers above do: post to the same route with the runner's credential and `owner_email` for
-     each meeting. See `runner/importers/base.py` (or `runner/close_calls.py`) for the shape (a poll
+     each meeting. See `runner_support/importers/base.py` (or `runner_support/close_calls.py`) for the shape (a poll
      loop, a cursor in the runner's state database, a heartbeat, `CodeWatch` to restart on new code)
      and `clients/tico.py` for the client.
 2. **Choose a `source` name** (`granola`, `zoom`...). It is a label on the meeting, a filter on

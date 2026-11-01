@@ -1,4 +1,4 @@
-//! `runner.json`: the registration `tico-runner enroll` (or an older `python -m runner enroll`) wrote. Read as a
+//! `runner.json`: the registration `tico-runner enroll` (or an older `python -m runner_support enroll`) wrote. Read as a
 //! JSON object and written back with every key it holds, known or not, so nothing another version wrote is lost.
 
 use std::fs;

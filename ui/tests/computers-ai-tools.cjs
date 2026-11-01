@@ -89,7 +89,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
         if (presenceMode === 'live') box.last_seen = at(presenceOffset - 3000);
         return json({machines: [box, empty, fresh, revoked], services: []});
       }
-      // The manifests' capabilities this page reads (runner/harnesses/*.toml).
+      // The manifests' capabilities this page reads (harnesses/*.toml).
       if (p === '/api/v2/providers') return json({enabled: ['openai'], default: {runtime: 'codex', model: 'test-model'},
         providers: [{id: 'openai', label: 'OpenAI'}]});
       if (p === '/api/v2/models') return json({models: [{id: 'test-model', label: 'Test model', provider: 'openai', runtime: 'codex'}], harnesses: [

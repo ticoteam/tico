@@ -289,7 +289,7 @@ def test_botops_is_given_a_read_only_token_for_a_bot_on_another_computer_only_fo
     with api.app.state.store.transaction() as c:
         restrict(c, "scribe", see={"everyone": True}, read={"everyone": True}, write={"everyone": True})
     seen = []
-    import runner.git_credentials as credentials
+    import runner_support.git_credentials as credentials
     monkeypatch.setattr(credentials, "clone_repository", lambda path, repository, env=None, url=None: seen.append((repository, env["GH_TOKEN"])) or ("failed", "no"))
     with pytest.raises(botcopy.CopyError) as refused:
         botcopy.fetch_repository(botcopy_person(api, attempt), "scribe", tmp_path / "into")

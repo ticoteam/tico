@@ -5,7 +5,7 @@ issues a refresh token that can act only as that person; it cannot reach anyone 
 The grant lives next to the service-account key (`google-oauth.json` beside `google-sa.json`, mode
 0600), so on a Linux runner it sits in the supervisor's state directory where bots cannot read it, and a
 bot's turn still gets only a short-lived access token for one of the mailboxes the hub named for it
-(runner/credential_socket.py).
+(runner_support/credential_socket.py).
 
 A person connects from Settings > Inbox > Connect Google (backend/google_connect.py): the sign-in uses Tico's own
 OAuth client, Google returns the browser to the server, and this computer's connectors job finishes it here with
@@ -33,7 +33,7 @@ from pathlib import Path
 from . import Failure, Refused
 
 GRANTS_ENV = "GOOGLE_OAUTH_GRANTS"
-BROKER_URL_ENV = "TICO_GOOGLE_BROKER_URL"       # the Tico server that holds the client secret (runner/connectors.py)
+BROKER_URL_ENV = "TICO_GOOGLE_BROKER_URL"       # the Tico server that holds the client secret (runner_support/connectors.py)
 BROKER_AUTH_ENV = "TICO_GOOGLE_BROKER_AUTH"     # this computer's runner registration, to ask it
 FILE = "google-oauth.json"
 AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"

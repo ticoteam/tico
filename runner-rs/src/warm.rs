@@ -1,4 +1,4 @@
-//! Warm sessions (`runner/warm.py`): a bounded cache of persistent Antigravity processes, one per conversation
+//! Warm sessions (`removed Python runner: warm.py`): a bounded cache of persistent Antigravity processes, one per conversation
 //! scope, each with a revocable credential. The process reads `HUB_TOKEN=tico-file:<home>/lease-token`, a file
 //! rewritten with each turn's attempt token and blanked when the turn ends, so a process kept between turns holds
 //! no live token. A process is replaced when its environment (HUB_TOKEN aside) changes or it has died, and is

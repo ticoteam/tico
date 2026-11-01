@@ -1,4 +1,4 @@
-//! `enroll`, `adopt` and `doctor` (runner/__main__.py): register this computer, take bots onto it, and check
+//! `enroll`, `adopt` and `doctor` (runner_support/__main__.py): register this computer, take bots onto it, and check
 //! readiness without running a turn. Exit codes as Python's: 2 for a usage refusal, 1 for a failed request or a
 //! bot that is not ready.
 

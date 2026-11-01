@@ -1,5 +1,5 @@
 //! What a bot's `tools:` block (older: `access:`) says, cut to what its page may show
-//! (runner/declared_access.py): the service, identity, verbs, a few scope fields, the note and the *name* of
+//! (removed Python runner: declared_access.py): the service, identity, verbs, a few scope fields, the note and the *name* of
 //! the credential's variable, never a value, plus whether that credential is on this computer.
 
 use std::sync::OnceLock;

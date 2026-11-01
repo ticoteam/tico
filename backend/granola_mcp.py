@@ -295,7 +295,7 @@ class GranolaMCP:
     @staticmethod
     def account_email(value):
         """Display-only claims received from the trusted token endpoint; never used for rights."""
-        from runner.importers.base import email_of
+        from runner_support.importers.base import email_of
         claims = [value, value.get("userinfo")]
         token = value.get("id_token")
         if isinstance(token, str) and len(token) < 100_000:
@@ -644,7 +644,7 @@ class GranolaMCP:
     @staticmethod
     def meeting_date(value):
         """Provider dates without a timezone (including English month names) are treated as UTC."""
-        from runner.importers.base import moment
+        from runner_support.importers.base import moment
         parsed = moment(value)
         if parsed is None and isinstance(value, str):
             for format in ("%b %d, %Y %I:%M %p", "%b %d, %Y"):
@@ -700,7 +700,7 @@ class GranolaMCP:
     @staticmethod
     def account_details(result):
         """Keep only display email and a recognized plan from optional account information."""
-        from runner.importers.base import email_of
+        from runner_support.importers.base import email_of
         try:
             value = GranolaMCP.content(result)
         except GranolaError:
@@ -761,7 +761,7 @@ class GranolaMCP:
         external_id = note.get("note_id") or note.get("id") or note.get("meeting_id")
         if not external_id:
             raise GranolaError("bad_response")
-        from runner.importers.base import people, text, https_url
+        from runner_support.importers.base import people, text, https_url
         attendees = note.get("attendees") or note.get("participants") or []
         participants = people(*[(a.get("name", ""), a.get("email", "")) if isinstance(a, dict) else str(a)
                                 for a in attendees])

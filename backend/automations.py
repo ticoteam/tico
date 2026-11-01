@@ -2703,7 +2703,7 @@ def install(app, store, auth, mutate):
                 raise Problem("not_found", "No such person", 404)
             return {"bot": hub.settings.assistant_bot if assistant.find_room(c, "human:" + person) else None}
 
-    # The computer that reads a mailbox carries out the mail actions queued for it (runner/connectors.py).
+    # The computer that reads a mailbox carries out the mail actions queued for it (runner_support/connectors.py).
     def mail_computer(c, who, mailbox):
         """Only the computer that reads this mailbox claims and reports its actions: by the check mail publishing uses
         (backend/connectors.py `publisher`), and, once the mailbox has been published, only the runner that did."""

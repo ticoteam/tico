@@ -35,7 +35,7 @@ print(sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True).execute("SELECT
 hub_scalar() { docker exec "$server" python -c 'import sqlite3, sys
 row = sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True).execute(sys.argv[1]).fetchone()
 sys.exit(0 if row and row[0] else 1)' "$1"; }
-job_running() { docker exec "$runner" pgrep -f 'python -m runner .* connectors$'; }
+job_running() { docker exec "$runner" pgrep -f 'python -m runner_support .* connectors$'; }
 job_stopped() { ! job_running; }
 google_saw() { docker exec "$runner" grep -q "$1" /tmp/google.log; }
 calendar_published() { hub_scalar "SELECT 1 FROM connector_snapshots WHERE kind='calendar'"; }
@@ -76,5 +76,5 @@ docker exec "$runner" test -x /home/runner/tools/mail-venv/bin/python || fail "t
 step "removing the key stops the job, and the runner stays up"
 docker exec "$runner" rm /home/runner/workspace/secrets/google-sa.json
 retry 60 job_stopped || fail "the connectors job kept running after the key was removed"
-docker exec "$runner" pgrep -f '(python -m runner|tico-runner) .* run$' >/dev/null || fail "the runner itself stopped"
+docker exec "$runner" pgrep -f 'tico-runner .* run$' >/dev/null || fail "the runner itself stopped"
 echo "connectors-smoke: ok"

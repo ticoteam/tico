@@ -1,4 +1,4 @@
-//! Model sign-in started from the browser (runner/login.py; backend/model_login.py is the server half).
+//! Model sign-in started from the browser (removed Python runner: login.py; backend/model_login.py is the server half).
 //!
 //! The runner starts the model's own login command, in the same home the runtime's readiness check and turns
 //! use, and relays what it prints: a link and a one-time code, or a prompt for a code the owner pastes back

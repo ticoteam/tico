@@ -30,7 +30,7 @@ HARNESS_CATALOG = (
     {"id": "muse", "label": "muse", "runtime": "muse", "external": True},
 )
 HARNESS_BY_ID = {row["id"]: row for row in HARNESS_CATALOG}
-# Each CLI's short name and capabilities come from its manifest (runner/harnesses/*.toml); an external agent has
+# Each CLI's short name and capabilities come from its manifest (harnesses/*.toml); an external agent has
 # none, so every capability reads as unknown for it.
 HARNESS_CATALOG = tuple({**row, "name": (manifests.get(row["id"]) or {}).get("name", row["label"]),
                          "capabilities": dict(manifests.caps(row["id"]))} for row in HARNESS_CATALOG)
