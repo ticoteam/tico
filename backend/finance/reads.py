@@ -559,6 +559,17 @@ def spend_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = No
 _RowKey = tuple[str, str, str, str]        # a breakdown row's history: line, vendor, team, teammate
 
 
+def _largest_remainder(amount: int, weights: Mapping[_RowKey, int]) -> dict[_RowKey, int]:
+    """`amount` split over positive weights to the cent: each key's floor share, then the cents left one each to the
+    largest remainders, ties to the smallest key (never the order the keys came in)."""
+    total = sum(weights.values())
+    parts = {k: amount * w // total for k, w in weights.items()}
+    left = amount - sum(parts.values())                 # 0 <= left < len(weights): floors only fall short
+    for k in sorted(weights, key=lambda k: (-(amount * weights[k] % total), k))[:left]:
+        parts[k] += 1
+    return parts
+
+
 @dataclass(frozen=True)
 class _Atom:
     """One piece of next month's projection: a saved projection's scope, or a default for a team and teammate (or the
@@ -666,10 +677,7 @@ def _next_by(s: _Seen, ids: Sequence[str], f: _Filter, vendor: str | None) -> di
             weights = dict.fromkeys(mine, 1)
         if not weights:
             weights = {(atom.account_id, "", atom.team, atom.teammate): 1}
-        total = sum(weights.values())
-        parts = {k: atom.amount * w // total for k, w in weights.items()}
-        top = max(weights, key=lambda k: (weights[k], k))
-        parts[top] += atom.amount - sum(parts.values())
+        parts = _largest_remainder(atom.amount, weights)
         for (i, v, team, mate), amount in parts.items():
             if vendor is not None and v != vendor:
                 continue

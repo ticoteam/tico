@@ -366,3 +366,22 @@ def test_each_column_of_a_lines_breakdown_adds_up_to_its_projection(books):
                 total = got["next_month"]["projection"] or 0
                 for by, rows in got["next_by"].items():
                     assert sum(rows.values()) == total, (viewer, code, by, rows, total)
+
+
+def test_a_projection_is_shared_out_by_largest_remainder():
+    keys = [("l", v, "", "") for v in ("a", "b", "c")]
+    assert list(FR._largest_remainder(10, dict.fromkeys(keys, 1)).values()) == [4, 3, 3]
+    assert list(FR._largest_remainder(10, dict(zip(keys, (1, 2, 3)))).values()) == [2, 3, 5]
+    assert list(FR._largest_remainder(2, dict.fromkeys(reversed(keys), 1)).values()) == [0, 1, 1]  # ties by key
+
+
+def test_a_saved_projection_with_no_weights_splits_its_cents_evenly(books):
+    with books.transaction() as c:
+        for v in ("acme-a", "acme-b", "acme-c"):                          # October only: no recurring weight
+            spend(c, "6100", 1_000, day="2026-10-02", team="eng", vendor=v)
+        line = account(c, "6100")
+        assert act(c, OWNER, "projection_set", {"account_id": line, "month": "2026-11", "team": "eng",
+                                                "amount": 2}).status == "committed"
+        got = FR.line_detail(c, OWNER, line, *OCT, at=AT)["next_by"]
+        assert got["vendor"] == {"acme-a": 1, "acme-b": 1, "acme-c": 0}
+        assert got["team"] == {"eng": 2}
