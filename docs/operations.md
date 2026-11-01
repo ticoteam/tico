@@ -11,10 +11,10 @@ link from the record.
 
 | Tab | Holds |
 |---|---|
-| Locations | Stores, offices, warehouses, plants, customer sites and vehicles: address, parent, customer, open purchase orders, equipment there, and this month's P&L |
+| Locations | Stores, offices, warehouses, plants and customer sites: address, parent, customer, open purchase orders, equipment there, and this month's P&L |
 | Products & services | Items bought or sold: name, SKU, kind, price, on hand, description |
 | Projects | Jobs and builds: status, customer, and the money on them |
-| Equipment | Things that need service: kind, location, customer, make, model, serial, next due date |
+| Equipment | Things that need service: owned machines, vans and trucks (the VIN is the serial), and customers' equipment; kind, location, customer, make, model, serial, next due date |
 
 The tabs shown depend on the business type set in Settings → General:
 
@@ -49,8 +49,7 @@ opens the Sidebar settings. Others do not see it. Permissions do not change.
 ## In books
 
 A location marked **In books** maps to a Department or tracking option in the connected books, so P&L lines tagged with it
-roll up there. Stores, offices, warehouses, plants and other default to on. Customer sites and vehicles default to off and
-stay local. Where the books own a name, renaming it in the books renames the record.
+roll up there. Stores, offices, warehouses, plants and other default to on. Customer sites default to off and stay local. Where the books own a name, renaming it in the books renames the record.
 
 ## CSV import
 

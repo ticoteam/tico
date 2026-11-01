@@ -8,12 +8,12 @@ You reach them through the Finance tools: `hub finance search`, `hub finance act
 
 ## What the records are
 
-- **Locations**: a store, office, warehouse, plant, customer site, vehicle or other place. A location can sit under a parent.
+- **Locations**: a store, office, warehouse, plant, customer site or other place. A location can sit under a parent.
 - **Products and services** (`item` records): name, SKU, kind, sale price, description, taxable. On-hand stock comes from the
   owning system (QuickBooks), is read only, and carries the time it was synced.
 - **Projects**: a piece of work for a customer, open or closed. Income and costs are tagged to it in Finance.
-- **Equipment**: owned (a van, a machine) or a customer's (the furnace in a customer's building). Make, model, serial,
-  install date, warranty end, location, customer, photo.
+- **Equipment**: owned (a machine, a van or a truck) or a customer's (the furnace in a customer's building). Make, model, serial,
+  install date, warranty end, location, customer, photo. A van or truck is owned equipment with its VIN as the serial, never a location.
 - **Due dates**: a date that opens a task, on a location, a piece of equipment or a vendor. Each occurrence completes on
   its own and keeps its history.
 
@@ -80,11 +80,13 @@ it before it is saved.
 
 1. Read the plate: make, model, serial, and the install date if shown. For a blurred or cut-off plate, ask once for another
    photo on the task, and create nothing.
-2. Find the customer and site with `hub finance search --kind contact` and `--kind location`. If the site is not on record,
-   ask on the task which one. Do not create a customer or site from the plate alone.
-3. `equipment_create` with kind `customer`, the customer, the site, make, model, serial and the photo, under a key such as
-   `plate:<serial>`. It waits as `needs_approval` until a person confirms it.
-4. Name the draft on the task with its serial and site, so the person can check it in a minute.
+2. For a unit at a customer's site (kind `customer`), find the customer and site with `hub finance search --kind contact` and
+   `--kind location`. If the site is not on record, ask on the task which one. Do not create a customer or site from the plate
+   alone. A unit the company owns (kind `owned`) skips the customer lookup; find its location with `--kind location`.
+3. `equipment_create` with kind `customer` when the unit is at a customer's site, or kind `owned` when the company owns it (a
+   machine, a van or a truck). Give its location, make, model, serial and the photo; for `customer`, also the customer. Use a key
+   such as `plate:<serial>`. It waits as `needs_approval` until a person confirms it.
+4. Name the draft on the task with its serial and location, so the person can check it in a minute.
 
 ## Limits
 
