@@ -366,13 +366,16 @@ def _revoked(store: Any, vault: object, link: Link, cid: str, provider: str, *, 
 
 
 def disconnect_books(store: Any, vault: object, link: Link, cid: str, provider: str, *, now: str) -> None:
-    """HQ drops the grant, then the vault rows and the connection's ids go. A failed HQ call keeps everything, so it
-    can be run again. HQ answering reconnect_required means its grant is already gone, so only the local rows go."""
+    """HQ drops the grant, then the vault rows and the connection's ids go. A failed HQ call, or a vault write that
+    fails on the way, keeps everything, so it can be run again. HQ answering reconnect_required means its grant is
+    already gone, so only the local rows go."""
     try:
         if _current(store, vault, cid).refresh_token:
             _revoked(store, vault, link, cid, provider, now=now)
-    except ReconnectRequired:
-        pass
+    except ReconnectRequired as e:
+        if e.code == "vault_write_failed":      # the rotated pair was not kept, so HQ's grant stands: drop nothing
+            raise BrokerFailed("vault_write_failed") from e
+        # HQ holds no grant to take off (reconnect_required, not_connected, no_refresh_token): the local rows go
     with store.transaction() as c:
         books = SX.books_settings(c, cid)
         for key in ("access", "refresh"):

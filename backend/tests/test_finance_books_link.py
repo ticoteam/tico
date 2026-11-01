@@ -421,3 +421,26 @@ def test_a_disconnect_HQ_cannot_finish_answers_a_retryable_reason_and_keeps_the_
     assert r.status_code == 502 and "revoke_failed" in r.text and "disconnect again" in r.text
     with store.read() as c:
         assert SX.books_status(c, cid) == "active"
+
+
+def test_a_disconnect_whose_vault_write_fails_keeps_the_connection_and_says_so_retryably(wired_api, monkeypatch):
+    store = wired_api.app.state.store
+    expired = {**tokens("acc-1", "ref-1", "2026-01-01T00:00:00Z"), "realm_id": None, "tenant_id": "ten-1"}
+    wire = wired(monkeypatch, connect=[ok({"url": CONSENT, "expires_in": 900})], claim=[ok(expired)],
+                 refresh=[ok(xero_tokens("acc-2", "ref-2"))], disconnect=[ok({"ok": True, "disconnected": True})])
+    wired_api.post("/api/v2/finance/books/connect", json={"provider": "xero"}, headers=headers())
+    wired_api.get(return_path(wired_api, wire) + "?finance=connected&claim=clm_7", headers=headers(),
+                  follow_redirects=False)
+    with store.read() as c:
+        cid = str(SX.books_connections(c)[0][0])
+
+    def down(c: Any, cid_: str, fresh: Any, *, by: str, at: str) -> None:
+        raise RuntimeError("vault is down")
+
+    monkeypatch.setattr(books_link, "save", down)           # the access token is due, so the disconnect refreshes first
+    r = wired_api.post(f"/api/v2/finance/books/{cid}/disconnect", headers=headers())
+    assert r.status_code == 502 and r.json()["error"]["code"] == "vault_write_failed"
+    assert r.json()["error"]["retryable"] is True
+    assert [path for path, _ in wire.calls].count("oauth/xero/disconnect") == 0       # HQ is not told it is gone
+    with store.read() as c:
+        assert SX.books_status(c, cid) != "disconnected"
