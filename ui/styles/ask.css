@@ -1,98 +1,134 @@
-/* Ask (ui/app/ask-panel.js): a round button at the bottom left of the page opens the person's chat bot in a panel
-   above it; on a phone the Ask tab opens it as a sheet over the page, above the tab bar. */
-.ask-fab{position:fixed;left:calc(var(--rail-left) + 16px);bottom:16px;z-index:25;width:44px;height:44px;border-radius:50%;
-  border:0;background:var(--accent);color:var(--accent-ink);display:inline-flex;align-items:center;justify-content:center;
-  cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.28)}
-.ask-fab[hidden]{display:none}
-/* What it floats over keeps its footprint clear at the end of the scroll, so no last row hides under it. */
-@media (min-width:761px){
-  #main{padding-bottom:var(--fab-room)}
-  .tasks-pane,#main.upd-chat-layout>.upd-col,.au-rail,.lc-scroll,.dash-grid{padding-bottom:var(--fab-room)}
-  /* a bot's message box sits at the bottom too: it starts --s3 clear of the button (16px + 44px in from the rail, less
-     the page's 28px gutter) */
-  body:has(#ask-fab:not([hidden])) #main.bot-chat-layout #chat-composer{padding-left:calc(16px + 44px + var(--s3) - 28px)}
+/* Ask (ui/app/ask-panel.js): on a computer "Ask Tico" is the sidebar's bottom row, above the account, and opens the
+   person's chat bot in a panel straight above that row, over the sidebar; on a phone the Liquid Dot sits in the
+   centre of the tab bar and opens it as a sheet over the page, above the tab bar. Its mark is the Liquid Dot
+   (liquid-dot.css). While the panel is open the dot sits beside its name (ldotFly carries it there and back) and a
+   close mark holds its place in the row (or the tab). Nothing floats over the page while it is closed. */
+.side-ask{display:flex;align-items:center;gap:2px;min-width:0}
+.ask-row{flex:1;min-width:0;display:flex;align-items:center;gap:var(--s2);padding:7px 10px;border:0;border-radius:6px;background:none;
+  color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;white-space:nowrap;cursor:pointer}
+.ask-row[hidden]{display:none}
+.ask-row:hover,.ask-row[aria-expanded="true"]{background:var(--surface2)}
+.ask-glyph{display:inline-grid;place-items:center;width:20px;height:20px;flex:none}
+.ask-glyph>*{grid-area:1/1}
+.ask-glyph .ask-x{width:20px;height:20px;font-size:20px;color:var(--muted);opacity:0}
+[aria-expanded="true"] .ask-glyph .ldot{opacity:0}
+[aria-expanded="true"] .ask-glyph .ask-x{opacity:1}
+@media (prefers-reduced-motion:no-preference){.ask-glyph .ask-x{transition:opacity var(--dur) var(--ease)}}
+/* With reduced motion the dot holds still, so a working or replying Assistant says so in a word at the row's end. */
+.ask-word{display:none;margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-xs)}
+@media (prefers-reduced-motion:reduce){.ask-word:not(:empty){display:block}}
+
+/* A peek: a few words beside the dot, Tico saying something waits on the person (askPeek). On a computer it comes out
+   of the rail level with the Ask row (askPeekPlace); on a phone it rises over the tab bar. One at a time. */
+.ask-peek{position:fixed;z-index:24;left:calc(var(--rail-left) + 8px);bottom:calc(var(--ask-row-y,64px) - 20px);height:40px;
+  max-width:min(300px,calc(100vw - var(--rail-left) - 24px));display:flex;align-items:center;border:1px solid var(--line);
+  border-radius:999px;background:var(--ask-face);color:var(--ink);box-shadow:0 6px 18px -6px rgba(0,0,0,.35);font-size:var(--t-sm)}
+.ask-peek:not(.ask-on){display:none}   /* a class, not `hidden` (askOn) */
+.ask-peek-go{flex:1;min-width:0;height:100%;display:flex;align-items:center;padding:0 2px 0 14px;border:0;border-radius:999px 0 0 999px;
+  background:transparent;color:inherit;font:inherit;cursor:pointer;text-align:left}
+.ask-peek-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ask-peek-x{flex:none;width:32px;height:32px;margin-right:4px;border:0;border-radius:50%;background:transparent;color:var(--muted);cursor:pointer;font-size:12px}
+.ask-peek-x:hover{color:var(--ink)}
+@media (prefers-reduced-motion:no-preference){
+  .ask-peek.ask-on{animation:ask-out .32s cubic-bezier(.2,0,0,1)}
 }
-.ask-fab .nav-icon{font-size:22px;color:inherit}
-.ask-fab:hover{filter:brightness(1.08)}
-.ask-fab[aria-expanded="true"]{background:var(--surface2);color:var(--ink)}
-.ask-panel{position:fixed;left:calc(var(--rail-left) + 16px);bottom:72px;z-index:25;width:min(400px,calc(100vw - var(--rail-left) - 32px));
-  height:min(560px,calc(100vh - 100px));display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);
+@keyframes ask-out{from{opacity:0;transform:translateX(-8px) scale(.97)}to{opacity:1;transform:none}}
+@keyframes ask-rise{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
+
+/* Straight above the Ask row, over the sidebar rather than the page, its foot just over the row (askToggle measures
+   --ask-foot), so the row and its close mark stay in view. */
+.ask-panel{position:fixed;left:8px;bottom:var(--ask-foot,64px);z-index:41;   /* over a "things need you" sheet (settings.css) */
+  width:min(400px,calc(100vw - 16px));transform-origin:bottom left;
+  height:min(560px,calc(100vh - var(--ask-foot,64px) - 12px));display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);
   border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.4);overflow:hidden;font-size:var(--t-base);line-height:var(--lh)}
-.ask-panel[hidden]{display:none}
+/* Closed (askSync): the panel keeps its box, never display:none (shown again from that, it lays out cold), but draws
+   none of it, takes no press (what is under it is pressable at once) and, inert, no focus. */
+.ask-panel:not(.ask-shown){visibility:hidden;content-visibility:hidden;pointer-events:none}
+.ask-panel:not(.ask-shown) .ldot{opacity:0}   /* closing: the dot is already on its way back to the row */
 .ask-head{display:flex;align-items:center;gap:6px;padding:8px 6px 8px 12px;border-bottom:1px solid var(--line);min-width:0}
-.ask-head h2{margin:0;font-size:var(--t-md);white-space:nowrap}
-.ask-mark{font-size:18px;color:var(--accent);font-variation-settings:"FILL" 1}
+.ask-head h2{min-width:0;margin:0;font-size:var(--t-md);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ask-mark{margin:0 2px}
 .ask-sees{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:140px;padding:1px 8px;border-radius:999px;
-  font-size:var(--t-xs);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
-.ask-sees[hidden]{display:none}
+  font-size:var(--t-xs);color:var(--muted);background:color-mix(in srgb,var(--ink) 7%,transparent)}
+.ask-sees:not(.ask-on){display:none}
 .ask-sees [data-ask-sees-name]{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ask-full{margin-left:auto;font-size:var(--t-sm);white-space:nowrap;color:var(--accent-quiet)}
-.ask-full:hover{color:var(--accent)}
+/* Who else is in the chat: Tico Support's chip, with its × (askPeople). It takes the place of the page the panel sees. */
+.ask-people{display:flex;align-items:center;min-width:0;margin-right:auto}
+.ask-head:has(.ask-sup-chip){gap:4px}
+.ask-head:has(.ask-sup-chip) .ask-sees{display:none}
+.ask-sup-chip{flex:none;display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 2px 0 3px;border-radius:999px;background:var(--sup);color:var(--sup-ink);
+  font-size:var(--t-xs);font-weight:600;white-space:nowrap}
+.ask-supx{display:inline-grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:50%;background:transparent;color:inherit;cursor:pointer}
+.ask-supx:hover{background:color-mix(in srgb,var(--sup-ink) 18%,transparent)}
+.ask-supx .nav-icon{font-size:14px;width:14px;height:14px;color:inherit}
+/* Tico Support's face: a headset on its blue-gray (the chip, its messages, the bubble that flies to the chip). */
+.ask-sav{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--sup-ink);color:var(--sup);flex:none}
+.ask-sav .nav-icon{font-size:14px;width:14px;height:14px;color:inherit;font-variation-settings:"FILL" 1,"wght" 400,"GRAD" 0,"opsz" 20}
+.ask-sav.ask-fly,.ask-sup-chip.ask-fly{position:fixed;z-index:70;margin:0;will-change:transform;pointer-events:none}
+/* "Loop in Support": a plain link at the top right while support is out of the chat (askFlip). */
+.ask-loop{flex:none;padding:4px;border:0;background:transparent;font:inherit;font-size:var(--t-sm);white-space:nowrap;color:var(--link-quiet);cursor:pointer}
+.ask-loop:not(.ask-on){display:none}
+.ask-loop:hover{color:var(--link)}
+.ask-loop:disabled{opacity:.6;cursor:default}
 .ask-ib{width:32px;height:32px;flex:0 0 32px;border:0;border-radius:8px;background:transparent;color:var(--muted);display:inline-flex;
   align-items:center;justify-content:center;cursor:pointer;font:inherit;font-size:15px;line-height:var(--lh-none)}
 .ask-ib:hover{background:var(--surface2);color:var(--ink)}
-#ask-add{font-size:22px;font-weight:400}
-.ask-head .ask-sees+.ask-ib,.ask-head h2+.ask-ib{margin-left:auto}
-.ask-head .ask-ib+.ask-full{margin-left:4px}
-.ask-menu{display:flex;flex-direction:column;padding:4px;border-bottom:1px solid var(--line)}
-.ask-menu[hidden]{display:none}
-.ask-menu button{display:flex;align-items:center;gap:8px;min-height:36px;padding:0 10px;border:0;border-radius:8px;background:transparent;
-  color:var(--ink);font:inherit;text-align:left;cursor:pointer}
-.ask-menu button:hover,.ask-menu button:focus-visible{background:var(--surface2)}
-.ask-menu button span{color:var(--muted);font-size:var(--t-sm)}
-.ask-menu button span::before{content:"· "}
-#ask-support[data-support-count]::after{content:attr(data-support-count);margin-left:auto;min-width:18px;height:18px;padding:0 4px;
-  box-sizing:border-box;border-radius:9px;background:var(--ink);color:var(--bg);font:600 var(--t-xs)/18px var(--sans);text-align:center}
-.ask-members{display:flex;align-items:center;gap:6px;padding:4px 6px 4px 12px;border-bottom:1px solid var(--line);font-size:var(--t-sm)}
-.ask-members[hidden]{display:none}
-.ask-member{border:0;background:transparent;color:var(--ink);font:inherit;font-weight:600;cursor:pointer;padding:2px 4px;border-radius:6px}
-.ask-member:hover{background:var(--surface2)}
-.ask-member[aria-pressed="true"]{background:var(--ask-green);color:#fff}
-/* Tico support in the chat: green bubbles, the person's on the right, support's on the left. */
-.ask-panel{--ask-green:#15803d}
-.ask-sup{max-width:85%;margin:4px 0;display:flex;flex-direction:column;gap:2px}
-.ask-sup.you{align-self:flex-end;align-items:flex-end}
-.ask-sup.them{align-self:flex-start}
-.ask-sup-who{font-size:var(--t-xs);color:var(--muted)}
-.ask-sup-body{padding:7px 12px;border-radius:18px;white-space:pre-wrap;overflow-wrap:anywhere}
-.ask-sup.you .ask-sup-body{background:var(--ask-green);color:#fff;border-bottom-right-radius:6px}
-.ask-sup.them .ask-sup-body{background:color-mix(in srgb,var(--ask-green) 20%,var(--surface));color:var(--ink);border-bottom-left-radius:6px}
+
+/* The thread, in time order: Tico's turns are plain text (the dot stays in the header); the person's are dark bubbles
+   on the right; Tico Support's are blue-gray bubbles under its headset; a hairline row says who joined or left; what
+   waits on the person sits as a card where it was asked. */
+.ask-thread{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;overflow-wrap:anywhere;padding:10px 14px 8px;display:flex;flex-direction:column;gap:4px}
+.ask-thread .conv-run.chat{border:0;padding:4px 0}
+.ask-thread .conv-run-head{display:none}
+.ask-thread .bubble{margin:0}
+.ask-thread .bubble .who{display:none}
+.ask-thread .bubble.bot.reply{padding:0;background:transparent;border:0;border-radius:0}
+.ask-thread>p[role="status"]{margin:4px 0}
+.ask-thread .bubble.you{max-width:80%;padding:8px 12px;border:0;border-radius:16px 16px 4px 16px;background:var(--ink);color:var(--bg)}
+.ask-sup{display:flex;margin:4px 0}
+.ask-sup.them{align-items:flex-end;gap:8px}
+.ask-sup.you{justify-content:flex-end}
+.ask-sup small{display:block;margin:0 0 3px 2px;font-size:var(--t-xs);font-weight:600;color:var(--sup-ink)}
+.ask-sup-body{max-width:80%;padding:8px 12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.ask-sup.them>div{max-width:80%;min-width:0}
+.ask-sup.them .ask-sup-body{max-width:none;border-radius:16px 16px 16px 4px;background:var(--sup);color:var(--ink)}
+.ask-sup.you .ask-sup-body{border-radius:16px 16px 4px 16px;background:var(--ink);color:var(--bg)}
+.ask-sys{margin:6px 0 2px;padding-top:8px;border-top:1px solid var(--line);font-size:var(--t-xs);color:var(--muted);text-align:center}
 /* What waits on the person: a bot's question, answered here. */
 .ask-card{margin:8px 0;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);display:flex;flex-direction:column;gap:6px}
 .ask-card-who{font-size:var(--t-xs);font-weight:600;color:var(--muted)}
 .ask-card-q{overflow-wrap:anywhere}
+/* A long question: three lines until tapped (ask-panel.js askQuestionHTML). */
+button.ask-card-q{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;padding:0;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}
+button.ask-card-q[aria-expanded="true"]{display:block;-webkit-line-clamp:none}
+.ask-reply select{flex:1;min-width:0}
 .ask-picks{display:flex;flex-wrap:wrap;gap:6px}
 .ask-reply{display:flex;gap:6px}
 .ask-reply input{flex:1;min-width:0}
-.ask-drop{margin-left:auto;width:28px;height:28px;flex-basis:28px}
-.ask-drop{font-size:var(--t-base)}
-.ask-thread{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;overflow-wrap:anywhere;padding:8px 12px;display:flex;flex-direction:column}
-.ask-thread .conv-run.chat{border:0;padding:6px 0}
-.ask-thread .conv-run-head{display:none}
-.ask-thread .bubble{margin:0}
-.ask-thread .bubble.you{border:0}
-.ask-thread .bubble.bot.reply{background:transparent;border-radius:0}
 .ask-empty{display:flex;flex-direction:column;align-items:flex-start;gap:6px;margin-top:auto}
 .ask-form{padding:0 8px 8px;min-width:0}
 .ask-panel>.err{margin:0 12px 8px}
+
 .mobile-ask{display:none}
 .mobile-ask[hidden]{display:none!important}
 @media (max-width:760px){
-  .ask-fab{display:none}
+  .side-ask{display:none}   /* the tab bar's dot is Ask, and Search has its own tab */
   .mobile-ask{display:flex}
-  /* The primary action: an accent circle with no word under it, filling its column. Its centre sits 2px above the other
-     tabs' icons, so the row reads as one line and the circle as raised; a close mark replaces the glyph while open. */
-  .mobile-ask{justify-content:flex-start;padding-top:0}
-  .mobile-ask-mark{flex:none;width:44px;height:44px;margin-top:-5px;border-radius:50%;background:var(--accent);color:var(--accent-ink);
-    display:flex;align-items:center;justify-content:center;box-shadow:0 3px 10px rgba(0,0,0,.22),0 1px 2px rgba(0,0,0,.18);
-    transition:transform var(--dur-fast) var(--ease)}
-  .mobile-ask-mark .mobile-nav-icon{width:24px;height:24px;font-size:24px}
-  .mobile-ask:active .mobile-ask-mark{transform:scale(.96)}
+  /* The dot, live, in the centre of the tab bar: the two tabs on its left share the width the three on its right do. */
+  #mobile-nav:has(.mobile-ask:not([hidden])){grid-template-columns:repeat(2,minmax(0,1.5fr)) minmax(64px,1.2fr) repeat(3,minmax(0,1fr))}
+  #mobile-nav:has(.mobile-ask:not([hidden])) #mobile-ask{grid-column:3;grid-row:1}
+  .mobile-ask .ask-glyph{width:26px;height:26px}
+  .mobile-ask .ask-glyph .ask-x{width:24px;height:24px;font-size:24px}
+  /* a few words: centred over the dot, as wide as they are */
+  .ask-peek{left:50%;translate:-50% 0;max-width:calc(100vw - 24px);bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px)}
+  .ask-peek.ask-on{animation-name:ask-rise}
   .ask-panel{left:0;right:0;width:auto;top:max(48px,env(safe-area-inset-top));height:auto;
     bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));border-radius:16px 16px 0 0;border-width:1px 0 0}
   body.mobile-composer-focus .ask-panel{bottom:0}   /* typing: the tab bar makes way for the keyboard (layout.css) */
   body.ask-open{overflow:hidden}
+  /* room for Tico Support's chip: the name steps aside (the dot says who this is; the dialog keeps the name) */
+  .ask-head:has(.ask-sup-chip) h2{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
   .ask-ib{width:44px;height:44px;flex-basis:44px}
-  .ask-menu button{min-height:48px}
+  .ask-loop{min-height:44px}
 }
 /* Opening and closing move in motion.css. */

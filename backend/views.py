@@ -598,6 +598,9 @@ def operation_issues(c, who, auth):
                 "AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL", ("bot:" + slug, H.now()))]
             queued = len(privacy.readable_messages(c, privacy.actor(who), waiting))
         uncertain = jobs["uncertain"]
+        if uncertain:
+            from .execution import tico_chosen
+            uncertain -= tico_chosen(c, who, slug)
         if uncertain and not mac_offline:
             noun = "run" if uncertain == 1 else "runs"
             queued_note = (f" {queued} other request{' is' if queued == 1 else 's are'} still queued."
@@ -828,6 +831,11 @@ def free_turn(c, bot, location, human=False):
     return (machine.get("label") or "its computer") if sum(held.values()) >= turn_limit(row) else ""
 
 
+def cloud_machine_wait(c, bot):
+    from .cloud_machines import waiting
+    return waiting(c, bot)
+
+
 def queued_label(c, bot, location, settings=None, human=False, behind=False, queued=False):
     """(label, readiness_reason) for a bot's queued work: what it is waiting for, in a person's words. `human`: a
     person's message; `behind`: the bot is still answering earlier work in this same conversation; `queued`: it was
@@ -848,6 +856,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif (stop := bot_stops.queued_reason(c, bot, human)):
         # Tico stopped the bot (failed runs, run budget) or it waits out a failed run: the words say why.
         label = "Saved — " + stop
+    elif not location["online"] and (cloud := cloud_machine_wait(c, bot)):
+        # Its own cloud machine is stopped or starting (backend/cloud_machines.py): the words say which, or why not.
+        label = "Saved — " + cloud
     elif not location["online"]:
         label = "Saved — waiting for " + ((location["machine"] or {}).get("label") or "a registered computer")
     elif not location["awake"]:
@@ -991,6 +1002,12 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
         if state in ("leased", "running"):
             parts = turns.reply_parts([(e["kind"], json.loads(e["payload_json"]), e["created"]) for e in c.execute(
                 "SELECT kind,payload_json,created FROM attempt_events WHERE attempt_id=? ORDER BY seq", (job["attempt_id"],))])
+        if parts:
+            # A bot that org rules apply to shows that it works and its tool steps, never its reply before the reply
+            # is checked and delivered (backend/org_rule_check.py).
+            from .org_rule_check import watched
+            if watched(c, job["bot"]):
+                parts = [p for p in parts if p["kind"] == "tool"]
         parts, omitted = live_parts(parts)
         execution = {"job_id": job["id"], "message_id": job["message_id"], "bot": job["bot"],
                      "attempt_id": job["attempt_id"], "state": state, "label": label,
@@ -1021,20 +1038,25 @@ _VISIBLE_TASK_SQL = "SELECT * FROM tasks WHERE id=? AND (%s)"
 
 
 def _prime_person_origins(c, visible_sql, ids):
-    """The rows person_origin reads, each task as `visible_sql` lets this reader see it or None, read in one query
+    """The rows person_origin reads, each task as `visible_sql` lets this reader see it or None, checked in one query
     per 500 with that same rule rather than one query per card and ancestor. Returns the ids the rule lets this
-    reader see, from the same read, so the caller needs no second check of them."""
+    reader see, so the caller needs no second check of them.
+
+    The check answers one row, the readable ids as JSON, and the rows are the snapshot's task rows (H.prime_tasks; Needs
+    you has read them all just before). Reading `SELECT *, (rule)` here stepped every row again, each step the GIL given
+    up and taken back: on a busy server that waits up to the 5 ms switch interval a row, and a 2 ms read took 50 ms to
+    1.4 s on Tico Team."""
     readable = set()
     for part in H.chunks(sorted({tid for tid in ids if tid})):
-        found = {}
-        for row in c.execute("SELECT *, (%s) AS visible_here FROM tasks WHERE id IN (%s)"
-                             % (visible_sql, ",".join("?" * len(part))), part):
-            row = dict(row)
-            if row.pop("visible_here"):
-                readable.add(row["id"])
-                found[row["id"]] = row
+        found = json.loads(c.execute("SELECT json_group_array(id) FROM tasks WHERE id IN (%s) AND (%s)"
+                                     % (",".join("?" * len(part)), visible_sql), part).fetchone()[0])
+        readable.update(found)
         if read_cache.cache(c) is not None:
-            read_cache.prime(c, _VISIBLE_TASK_SQL % visible_sql, {(tid,): found.get(tid) for tid in part})
+            H.prime_tasks(c, found, with_tags=False)
+            # The row `SELECT * FROM tasks WHERE id=? AND (rule)` answers: the task's row as stored, or None.
+            rows = {tid: read_cache.one(c, H.TASK_SQL, (tid,)) for tid in found}
+            read_cache.prime(c, _VISIBLE_TASK_SQL % visible_sql,
+                             {(tid,): dict(rows[tid]) if rows.get(tid) else None for tid in part})
     return readable
 
 
@@ -1377,6 +1399,15 @@ def fold_related(items, c, me):
     return [it for it in items if str(it["id"]) not in gone]
 
 
+# Plans on messages_superseded_asks_to: on messages_to_delivered it walked every message to the person (31k on Tico
+# Team, 43 ms warm) to find a few hundred replaced asks.
+WITHDRAWN_ASKS_SQL = (
+    "SELECT count(*) FROM messages s WHERE s.to_actor=? AND s.kind='ask' AND s.superseded_at>=? "
+    "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.kind='ask' AND m.to_actor=s.to_actor "
+    "AND m.from_actor=s.from_actor AND m.conversation_id=s.conversation_id AND m.rowid>s.rowid "
+    f"AND {H.OPEN_ASK_SQL})")
+
+
 def went_away(c, me, days=7):
     """How many of `me`'s Needs you items left this week without them: an ask that expired or went ahead on its bot's
     default, an ask or approval withdrawn (superseded by a newer one, or no longer needed), and what their Assistant
@@ -1386,10 +1417,7 @@ def went_away(c, me, days=7):
                         "AND json_extract(detail_json,'$.to')=?", (since, me)).fetchone()[0]
     # A question a newer one from the same bot replaced, still open in the same thread, did not go away: it is asked
     # again, so only one with no open successor counts.
-    withdrawn = (c.execute("SELECT count(*) FROM messages s WHERE s.to_actor=? AND s.kind='ask' AND s.superseded_at>=? "
-                           "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.kind='ask' AND m.to_actor=s.to_actor "
-                           "AND m.from_actor=s.from_actor AND m.conversation_id=s.conversation_id AND m.rowid>s.rowid "
-                           f"AND {H.OPEN_ASK_SQL})", (me, since)).fetchone()[0]
+    withdrawn = (c.execute(WITHDRAWN_ASKS_SQL, (me, since)).fetchone()[0]
                  + c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.to_actor=? "
                              "AND a.decision='withdrawn' AND a.decided_at>=?", (me, since)).fetchone()[0])
     assistant = (c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.to_actor=? "
@@ -1599,9 +1627,10 @@ def card_why(item):
     if str(q.get("why") or "").strip():
         return str(q["why"]).strip()
     line = H.person_ask_of_body(item.get("body"), item.get("title"))
-    said = " ".join(line.split()).casefold()
+    said, plain = " ".join(line.split()).casefold(), lambda x: " ".join(str(x or "").split()).casefold()
+    # A line the question already says (all of it, or the org rule warning it leads with) is not said twice.
     if (not line or "\n" in line or len(line) > 200 or H.lint_plain(line)
-            or said in {" ".join(str(x or "").split()).casefold() for x in (q.get("question"), item.get("title"))}):
+            or said == plain(item.get("title")) or said in plain(q.get("question"))):
         return ""
     return line
 
@@ -1993,10 +2022,15 @@ def install_views(app, store, auth, mutate, task_view):
         bots = H.bots(c)
         archived = {row["slug"] for row in bots if row.get("state") == "archived"}
         registries = {r["bot"]: r for r in read_cache.configs(c)}
+        from .browser_exit import bot_exits
+        exits = bot_exits(c)               # the computer each bot browses through, when one is set
         goals = {}
         for bot, conversation in c.execute("SELECT bot,conversation_id FROM chat_goals WHERE status='active'"):
             goals.setdefault(bot, []).append(conversation)
         company = providers.load(c, store.settings)
+        from . import cloud_machines
+        # Each bot's cloud machine, own or shared, Tico Cloud only (backend/cloud_machines.py): one read for every bot.
+        cloud_rows = cloud_machines.rows(c) if cloud_machines.offered(c, store.settings) else None
         # Each bot's last finished run, one turns_bot_finished seek per bot rather than a sort of every run there is.
         latest_run = {slug: tid for slug, tid in c.execute(
             "SELECT b.slug,(SELECT t.id FROM turns t WHERE t.bot=b.slug AND t.finished IS NOT NULL "
@@ -2129,6 +2163,7 @@ def install_views(app, store, auth, mutate, task_view):
                          "goals": (registry["goals"] if registry else "") or "",
                          "goal_active": readable_active(c, auth, who, slug, goals.get(slug, [])),
                          **location,
+                         "browser_exit": exits.get(slug),
                          "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
                          "icon": icon_of(config), "helper": helper(config),
                          # What Settings and the branch editor show and pick from (backend/wake_presets.py).
@@ -2142,7 +2177,10 @@ def install_views(app, store, auth, mutate, task_view):
                                                      and lifecycle.may_complete(auth, c, who, slug)),
                          # Labelled as on the bot list, so its computer is named to one who cannot see it.
                          "app_delivery": app_delivery.view(c, config),
-                         "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime")))})
+                         "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime"))),
+                         "cloud_machine": None if cloud_rows is None or location.get("agent") else
+                         cloud_machines.shown(slug, cloud_rows.get(slug), bool(location.get("machine")),
+                                              cloud_rows.get(cloud_machines.SHARED))})
         return rows
 
     @app.get("/api/me")
@@ -2299,6 +2337,16 @@ def install_views(app, store, auth, mutate, task_view):
             from .subscription_identity import display_names
             # One pass for every renamed subscription (not one registry_metadata lookup per shared login).
             login_names = display_names(c)
+            from . import cloud_machines
+            # {runner: {bot, shared, size, state}} for computers that are a cloud machine: a bot's own (`bot`), or the
+            # company's shared one (`shared`, bot None).
+            cloud_of = {r["runner_id"]: {"bot": None if r["bot"] == cloud_machines.SHARED else r["bot"],
+                                         "shared": r["bot"] == cloud_machines.SHARED,
+                                         "size": r["machine_size"] or r["size"], "state": r["state"]}
+                        for r in cloud_machines.rows(c).values() if r["runner_id"]}
+            from . import browser_exit
+            # One pass each for every computer's internet sharing and today's bytes through it.
+            exit_policies, exit_used = browser_exit.policies(c), browser_exit.used_today_all(c)
             runners = list(c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                       "accepts_member_bots,turns_at_once,screen,performance,capabilities_json,"
                                       "restart_since,"
@@ -2381,6 +2429,10 @@ def install_views(app, store, auth, mutate, task_view):
                                  "signed_out": signed_out.get(row["id"]) or {},
                                  "key_cleared": key_cleared.get(row["id"]) or [],
                                  "inbox_only": row["id"] in kept_for_inbox,
+                                 # Its internet shared with bots (backend/browser_exit.py): the owner alone changes it.
+                                 "browser_exit": browser_exit.listing(
+                                     exit_policies.get(row["id"]), manage, browser_exit.is_owner(who, row), hidden,
+                                     exit_used.get(row["id"], 0)),
                                  # {runtime: {env, preview}}: its own keys stored from here, and the company's shared
                                  # ones, for the rows a key signs in (backend/computer_keys.py). Never a value, and a
                                  # preview only for whoever may change the computer.
@@ -2393,7 +2445,8 @@ def install_views(app, store, auth, mutate, task_view):
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": harness_recent.get(row["id"]) or [],
-                                 "harness_choices": harness_choice.get(row["id"]) or {}})
+                                 "harness_choices": harness_choice.get(row["id"]) or {},
+                                 "cloud_machine": cloud_of.get(row["id"])})
             health = [{**dict(r), "name": SERVICE_NAMES.get(r["service"], r["service"])}
                       for r in c.execute("SELECT service,last_success,last_error FROM service_health")]
             from .agents import listing as agent_listing
@@ -2471,6 +2524,10 @@ def install_views(app, store, auth, mutate, task_view):
             attempt = c.execute("SELECT * FROM attempts WHERE id=?", (run_id,)).fetchone()
             events = c.execute("SELECT seq,kind,payload_json,created FROM attempt_events "
                                "WHERE attempt_id=? ORDER BY seq", (run_id,)).fetchall()
+            # A live run of a bot org rules apply to keeps its reply out until it is checked and delivered.
+            from .org_rule_check import hides_run
+            if hides_run(c, attempt):
+                events = [e for e in events if e["kind"] not in ("delta", "message")]
             lines = [store.settings.app_name + " cloud run " + run_id, "Bot: " + turn["bot"],
                      "Started: " + str(turn["started"]), "Finished: " + str(turn["finished"]),
                      "Outcome: " + str(turn["exit"])]
@@ -2680,7 +2737,7 @@ def install_views(app, store, auth, mutate, task_view):
                     raise Problem("validation", f"At most {NEEDS_IDS_MAX} ids", 422)
                 positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
                 return {"actor": who.actor, "count": len(items), "version": current, "positions": positions,
-                        "items": [x for x in items if str(x["id"]) in positions]}
+                        "items": needs_visuals(c, who, [x for x in items if str(x["id"]) in positions])}
             out = {"actor": who.actor, "count": len(items), "items": items, "older": older,
                    "went_away": went_away(c, who.actor), "version": current, "next": None}
             if limit is not None or cursor:
@@ -2688,7 +2745,16 @@ def install_views(app, store, auth, mutate, task_view):
                 out["bots"] = needs_bots(items, who.actor)
                 if restarted:
                     out["restart"] = True
+            needs_visuals(c, who, out["items"])
             return out
+
+    def needs_visuals(c, who, items):
+        """A question's files under review (backend/file_reviews.py) as this reader sees them, with fresh addresses,
+        added after the list's version is taken: an address renewed on the hour is not a change to the list."""
+        asks = [x["ask"] for x in items if isinstance(x.get("ask"), dict) and (x["ask"].get("refs") or {}).get("attachments")]
+        if asks:
+            visuals.for_reader(app, auth.settings, c, who, asks)
+        return items
 
     @app.get("/api/v2/tico/fleet")
     def tico_fleet(request: Request):

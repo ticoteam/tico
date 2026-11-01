@@ -130,17 +130,23 @@ def publication_payload(task_id, operation, values):
             'content_sha256': hashlib.sha256(text.encode()).hexdigest()}
 
 
-def approve(c, actor, task_id, operation, values, approval_id=None):
+def exact_approval(c, actor):
+    """Whether `actor`'s public text needs an exact approved publish payload (approve): a bot's, or one acting for a
+    person, when the team asks for approval; the Strategy Bot's whatever the setting."""
     if not H.is_bot(actor) and not H.VIA.get():
+        return False
+    from . import strategy_acts
+    return strategy_acts.is_strategy_bot(actor) or settings(c)['bot_public_approval']
+
+
+def approve(c, actor, task_id, operation, values, approval_id=None):
+    if not exact_approval(c, actor):
         return
     from . import strategy_acts
-    strategy_actor = strategy_acts.is_strategy_bot(actor)
-    if strategy_actor and not approval_id:
+    if strategy_acts.is_strategy_bot(actor) and not approval_id:
         # Publishing is the owner's at every level: the Strategy Bot publishes only what a person approved, whatever the
         # team's setting for other bots.
         strategy_acts.gate(c, actor, "publish", f"publish a change to a task on the public roadmap ({operation})")
-    if not strategy_actor and not settings(c)['bot_public_approval']:
-        return
     # From here the approval is checked exactly; for the Strategy Bot whatever the setting, so any id is not enough.
     expected = publication_payload(task_id, operation, values)
     row = H.approval(c, approval_id) if approval_id else None
@@ -151,7 +157,10 @@ def approve(c, actor, task_id, operation, values, approval_id=None):
     H.approval_consume(c, actor, approval_id)
 
 
-def publication(c, actor, row, visibility=None, public_title=None, public_summary=None, approval_id=None):
+def publication(c, actor, row, visibility=None, public_title=None, public_summary=None, approval_id=None,
+                allowance=0):
+    """A task's public fields as a write sets them. `allowance` is the length of an org rule's Warn line the server put
+    before the summary (backend/app.py, rule_warned_fields): the cap is the bot's own text's, the line past it."""
     fields = {k: v for k, v in (('visibility', visibility), ('public_title', public_title),
                                 ('public_summary', public_summary)) if v is not None}
     if not fields:
@@ -160,7 +169,7 @@ def publication(c, actor, row, visibility=None, public_title=None, public_summar
         H.refuse(c, actor, 'kind', 'visibility is public or private')
     if public_title is not None and (not public_title.strip() or len(public_title) > 300):
         H.refuse(c, actor, 'lint', 'Public title is 1 to 300 characters')
-    if public_summary is not None and len(public_summary) > 8000:
+    if public_summary is not None and len(public_summary) > 8000 + allowance:
         H.refuse(c, actor, 'lint', 'Public summary is at most 8000 characters')
     if fields.get('visibility', row['visibility']) == 'public' and H.task_private(c, row):
         H.refuse(c, actor, 'private', 'A two-party private task cannot be published')

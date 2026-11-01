@@ -37,13 +37,17 @@ TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
 # Rows that only describe the task: kept with it in the trash.
 TASK_ROWS = ("task_events", "task_links", "task_tags", "task_delegations", "task_reminders",
              "service_key_tasks", "task_roles", "task_assets", "task_requesters", "task_milestone_waits",
-             "task_check_models", "task_run_models")
+             "task_check_models", "task_run_models", "growth_ideas", "growth_idea_channels",
+             "growth_idea_segments")
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = ("turns", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
              "watcher_items")
 # A file a person attached to the task itself (scope `task:<id>`) is not work; any other file touched on the task is.
+# A verdict on a file under review (`reviewed`, backend/file_reviews.py) is not work either: the file is the work, and
+# a deleted task's verdicts stop counting.
 FILE_WORK = (("bot_files", "SELECT count(*) FROM bot_files WHERE task_id IN ({}) AND scope <> 'task:' || task_id"),
-             ("bot_file_activity", "SELECT count(*) FROM bot_file_activity a WHERE a.task_id IN ({}) AND NOT EXISTS "
+             ("bot_file_activity", "SELECT count(*) FROM bot_file_activity a WHERE a.task_id IN ({}) "
+                                   "AND a.action <> 'reviewed' AND NOT EXISTS "
                                    "(SELECT 1 FROM bot_files f WHERE f.id=a.file_id AND f.scope='task:' || a.task_id)"),
              # A task file a bot made (from a run, or as itself) is work even though it sits on the task.
              ("bot_file_versions", "SELECT count(*) FROM bot_files f WHERE f.task_id IN ({}) AND f.scope='task:' || f.task_id "

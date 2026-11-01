@@ -35,6 +35,10 @@ def inbound_wait_timeout(method, path, body, default, *, query=None):
 # at Medium or High): their callers wait past it.
 SLOW_POSTS = frozenset({"/api/v2/decisions", "/api/v2/gateway/search", "/api/v2/gateway/fetch"})
 SLOW_WAIT = 45
+# A file streamed from disk (a video up to the server's limit): the server stores the bytes after the last one is sent.
+STREAM_WAIT = 600
+# An image takes an image model's time (the Gateway's own try is 120 s): its caller waits past that.
+LONG_POSTS = {"/api/v2/gateway/images": 150}
 
 
 class APIError(Exception):
@@ -109,6 +113,10 @@ class Client:
         timeout = inbound_wait_timeout(method, path, body, self.timeout)
         if method == "POST" and path in SLOW_POSTS:
             timeout = max(timeout, SLOW_WAIT)
+        if hasattr(data, "read"):
+            timeout = max(timeout, STREAM_WAIT)
+        if method == "POST" and path in LONG_POSTS:
+            timeout = max(timeout, LONG_POSTS[path])
         for attempt in range(self.retries + 1):
             if hasattr(data, "seek"):
                 data.seek(0)
@@ -166,7 +174,7 @@ class Client:
                 raise failure
             time.sleep(min(2 ** attempt, 5) + random.random() * 0.2)
 
-    def get(self, path, **query):
+    def get(self, path, /, **query):  # positional: a query may carry its own "path" (file-approvals does)
         filtered = {k: v for k, v in query.items() if v is not None}
         suffix = "?" + urllib.parse.urlencode(filtered) if filtered else ""
         return self.request("GET", "/api/v2/" + path + suffix)

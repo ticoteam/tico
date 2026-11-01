@@ -23,12 +23,13 @@ for the request gate. Every answer replaces it: paying, or credit landing, opens
 (every SYNC seconds while the company is a cloud one, and whenever Settings > Billing is opened), with no restart. HQ
 not answering keeps the last word. A change of access is an audit event (`cloud.access`).
 
-Until HQ has answered, a Tico Cloud cell (TICO_UPDATES=tico, `setup cell`) is asked every SYNC too, not every UNKNOWN:
-its first ask can run before its Gateway key is enrolled. A new or changed key asks at once (`sync_later`).
+Until HQ has answered, a Tico Cloud cell (TICO_CELL=1, which `setup cell` sets) is asked every SYNC too, not every
+UNKNOWN: its first ask can run before its Gateway key is enrolled. A new or changed key asks at once (`sync_later`).
 """
 
 import json
 import logging
+import os
 import threading
 from datetime import timedelta
 
@@ -110,9 +111,16 @@ def routines_paused(c):
 
 
 def cell():
-    """Whether this install is a Tico Cloud cell: Tico runs its updates (TICO_UPDATES=tico, backend/releases.py)."""
+    """Whether this install is a Tico Cloud cell company: TICO_CELL=1, which `setup cell` writes (docs/cell.md). A .env
+    an older core wrote has only TICO_UPDATES=tico, until that company's next `cell update`; it still counts."""
     from . import releases
-    return releases.managed()
+    return strict_cell() or releases.managed()
+
+
+def strict_cell():
+    """Only TICO_CELL=1 says a cell. TICO_UPDATES=tico alone is the general externally-managed-update flag, which other
+    installs carry too, so Sleep when idle uses this one: its cell behaviour must not turn on for them."""
+    return os.environ.get("TICO_CELL", "").strip() == "1"
 
 
 def current(store):

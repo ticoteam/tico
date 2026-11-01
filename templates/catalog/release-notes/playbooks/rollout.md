@@ -53,6 +53,10 @@ was touched.
 
 ## 3. Report
 
+Before you call the release live, check that each job of its release workflow has finished and each asset the
+release names is on it (`gh run list -R <repo>` for the tag, `gh release view vX.Y.Z -R <repo> --json assets`). A failed job
+or a missing asset is reported on the task, even when the installs updated. The check runs after the rollout and adds no gate before it.
+
 On the release task, one comment: the version and commit, the release link, and per install before → after with its
 outcome and computers. Update `knowledge/versioning.md` with the release and date, commit, and close the task.
 

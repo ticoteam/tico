@@ -1,5 +1,5 @@
 /* ui/styles/motion.css — State changes that move: menus and panels arriving, counts ticking, a task's check, a card
-   lifting under the pointer, the Assistant's mark while it replies, and every fold chevron's turn (ui/app/motion.js
+   lifting under the pointer, and every fold chevron's turn (ui/app/motion.js
    drives the parts a stylesheet cannot see). Linked last, so its few rules win over the files' own.
    Rules: 200ms at most (--dur-fast 120ms for most, --dur 180ms for larger surfaces), opacity and transform only
    (the individual translate and scale properties, so an element's own transform is kept), only on a change of state,
@@ -24,22 +24,19 @@
 :where(dialog.gpanel[open]){animation:m-from-right var(--dur) var(--ease)}
 @media (min-width:761px){:where(#task-peek[open]){animation:m-from-right var(--dur) var(--ease)}}
 
-/* ---- Ask (ui/app/ask-panel.js): the panel rises 8px as it fades in and sinks back as it fades out; on a phone the
-   sheet comes up from the bottom. The panel keeps its box while it leaves (display waits for the fade), but takes no
-   press: what is under it is pressable at once. */
+/* ---- Ask (ui/app/ask-panel.js): the panel rises 8px out of the Ask row as it fades in and sinks back as it fades out; on a phone the
+   sheet comes up from the bottom. It always has its box (ask.css): opening draws it at once, and closing stops drawing
+   it (visibility, content-visibility) only once the fade is done; it takes no press from the start of the close. */
 @media (prefers-reduced-motion:no-preference){
-  .ask-panel{transition:opacity var(--dur-fast) var(--ease),translate var(--dur-fast) var(--ease),display var(--dur-fast) allow-discrete}
-  .ask-panel[hidden]{opacity:0;translate:0 8px;pointer-events:none}
-  @starting-style{.ask-panel:not([hidden]){opacity:0;translate:0 8px}}
+  .ask-panel{transition-property:opacity,translate,visibility,content-visibility;transition-duration:var(--dur-fast),var(--dur-fast),0s,0s;
+    transition-timing-function:var(--ease);transition-behavior:normal,normal,normal,allow-discrete}
+  .ask-panel:not(.ask-shown){opacity:0;translate:0 8px;transition-delay:0s,0s,var(--dur-fast),var(--dur-fast)}
   @media (max-width:760px){
-    .ask-panel{transition-duration:var(--dur)}
-    .ask-panel[hidden]{translate:0 48px}
-    @starting-style{.ask-panel:not([hidden]){translate:0 48px}}
+    .ask-panel{transition-duration:var(--dur),var(--dur),0s,0s}
+    .ask-panel:not(.ask-shown){translate:0 48px;transition-delay:0s,0s,var(--dur),var(--dur)}
   }
 }
-/* The Assistant replying: Ask's mark twinkles until the reply is in (body.ask-replying, ui/app/ask-panel.js). */
-@keyframes m-twinkle{50%{opacity:.55;scale:.88}}
-body.ask-replying :is(.ask-fab .nav-icon,.ask-head .ask-mark,.mobile-ask[aria-expanded="false"] .mobile-nav-icon){animation:m-twinkle 1.4s var(--ease) infinite}
+/* The Assistant replying moves Ask's dot (liquid-dot.css states, set by ui/app/ask-panel.js askDot). */
 
 /* ---- counts (motion.js countSet, countWatch): the old number slides up and out as the new one comes up from below.
    The badge's box never changes: the old number is drawn over it, the new one is the badge's own text. */
@@ -82,8 +79,7 @@ body.ask-replying :is(.ask-fab .nav-icon,.ask-head .ask-mark,.mobile-ask[aria-ex
 @media (prefers-reduced-motion:reduce){
   :is(.tl-pop,.p-menu,.people-menu,.slash-menu,.mg-menu,#account-menu,#new-version-pop,#account-status-pop,
     #team-add-menu,.dash-menu,.au-menu,.vcard-menu-list,.pg-menu-list,.meet-src-menu,.ask-menu,[popover],dialog.gpanel,#task-peek,
-    .m-tick-in,.m-check path,.tmodal-act.m-checking svg path,.m-task-done),.m-ticking::before,
-  body.ask-replying :is(.ask-fab .nav-icon,.ask-head .ask-mark,.mobile-ask .mobile-nav-icon){animation:none!important}
+    .m-tick-in,.m-check path,.tmodal-act.m-checking svg path,.m-task-done),.m-ticking::before{animation:none!important}
   :is(a.card,button.card,.bcard,.au-card,.meet-tile,.rdo-card,.ob-tile,.chev,.section-chev,.req-arrow,.tl-gchev svg,
     .tl-chev svg,.sub-chev,.au-chev,.rdo-cx){transition:none!important}
   .rail-fold>summary::before,.task-orig>summary::before,.chat-side>summary::before,.run-steps>summary::before,

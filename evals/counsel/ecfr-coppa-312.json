@@ -1,0 +1,29 @@
+{
+  "expected": [
+    {
+      "text": "Get verifiable parental consent before collecting personal information from a child.",
+      "quote": "Obtaining verifiable consent means making any reasonable effort",
+      "section": "312.5",
+      "who_hint": "product"
+    },
+    {
+      "text": "Ask for age in a neutral way that does not default to a set age or encourage a false age.",
+      "quote": "must be done in a neutral manner that does not default to a set age or encourage visitors to falsify age information",
+      "section": "312.2",
+      "who_hint": "product"
+    },
+    {
+      "text": "Do not collect a child's personal information without verifiable parental consent.",
+      "quote": "It shall be unlawful for any operator of a website or online service directed to children",
+      "section": "312.3",
+      "who_hint": "product"
+    }
+  ],
+  "url": "https://www.ecfr.gov/current/title-16/chapter-I/subchapter-C/part-312",
+  "fetched_at": "2026-10-30T23:40:36Z",
+  "from": {
+    "name": "16 CFR 312 (COPPA rule)",
+    "kind": "government"
+  },
+  "truncated": false
+}

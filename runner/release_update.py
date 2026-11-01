@@ -312,9 +312,10 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     version = tag[1:]
 
     def say(state, error=""):
-        error = disk_error_message(error)
+        # A blocked checkout's message holds file names, which may look like a disk error (test_enospc.py).
+        error = error if state == "blocked" else disk_error_message(error)
         disk = {}
-        if disk_space_error(error):
+        if state != "blocked" and disk_space_error(error):
             try:
                 disk["disk_free"] = shutil.disk_usage(directory).free
             except OSError:
@@ -333,8 +334,12 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
         return say("blocked", f"the checkout is on branch {branch}; switch it to main to follow releases")
     dirty = [line for line in g("status", "--porcelain", "--untracked-files=no").stdout.splitlines() if line]
     if dirty:
+        # "XY path" lines: the status letters and the space come off; a rename keeps its "old -> new" as it is.
+        named = ", ".join(line[3:] for line in dirty[:3])
+        more = f", and {len(dirty) - 3} more" if len(dirty) > 3 else ""
+        # The names go last: say() cuts the error at 300 characters, and the instruction must survive that.
         return say("blocked", f"the checkout has {len(dirty)} changed file{'s' if len(dirty) != 1 else ''}; "
-                              "commit or stash them and the runner updates itself")
+                              f"commit or stash them and the runner updates itself: {named}{more}")
     fetched = g("fetch", "--quiet", "origin", f"refs/tags/{tag}:refs/tags/{tag}", timeout=120)
     if fetched.returncode:
         return say("failed", fetched.stderr if disk_space_error(fetched.stderr) else

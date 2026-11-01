@@ -21,7 +21,7 @@ function taskDialogWire(d) {
     if (d.open || d.taskOpening?.pending) return;
     if (!TASK_CHAT || TASK_CHAT.dialog === d) taskChatStop();
     d.tfEl?.querySelector('video, audio')?.pause();
-    d.tfEl = null; d.tfOpen = null;
+    d.tfEl = null; d.tfOpen = null; d.giEl = null;
     d.taskOpening = {}; d.askDrafts = new Map();
   });
 }
@@ -205,6 +205,8 @@ function taskPropFocus(d) {
 function taskModalBind(d, task, full = false) {
   tfAdopt(d, task);
   taskPagesAdopt(d, task);      // the task's pages, as cards at its top (ui/app/pages.js)
+  ruleHoldsAdopt(d, task);      // a rule review's held outputs and their actions (ui/app/org-rule-holds.js)
+  growthIdeaAdopt(d, task);     // an Idea task's hypothesis, test and verdict (ui/app/growth-idea.js)
   d.dataset.version = String(task.version ?? '');
   if (!d.liveTask || String(d.liveTask.id) !== String(task.id) || Number(task.version) >= Number(d.liveTask.version)) d.liveTask = task;
   if (d.taskRail?.id !== String(task.id)) d.taskRail = {id: String(task.id), open: new Set()};
@@ -331,7 +333,7 @@ function taskSessionsHTML(t) {
 let TASK_RUN_ROWS = null, TASK_RUN_LOADING = null;
 function taskRunCatalog() {
   TASK_RUN_LOADING ||= get('/v2/models').then(d => {
-    TASK_RUN_ROWS = (d.models || []).filter(m => !m.deprecated && !/^tico-/.test(m.id || ''));
+    TASK_RUN_ROWS = (d.models || []).filter(m => !m.deprecated && !m.meeting && !/^tico-/.test(m.id || ''));
     return TASK_RUN_ROWS;
   }, () => { TASK_RUN_LOADING = null; return []; });
   return TASK_RUN_LOADING;
@@ -552,6 +554,9 @@ const TASK_EVENT_WORDS = {step: id => id ? `moved it to ${pipelineStepName(id)}`
 function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
   if (x.kind === 'event') {
     if (x.field === 'status' && x.old == null) return '';           // created: the header says so
+    // The type and first step a task is filed with are part of its creation too, not moves.
+    if ((x.field === 'type' || x.field === 'step') && x.old == null
+      && all?.some(y => y.kind === 'event' && y.field === 'status' && y.old == null && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 2000)) return '';
     if (x.field === 'comment' && x.new) return '';                  // an edit: the comment itself says edited
     // A step move already names where the task went; its status change would say it twice.
     if (x.field === 'status' && all?.some(y => y.kind === 'event' && y.field === 'step' && y.new && y.ts === x.ts)) return '';
@@ -1060,7 +1065,9 @@ function hubModalHTML(t, it, opts = {}) {
     ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
     <div class="tmodal-body task-layout">
       <div class="tmodal-main">
+      <section class="gr-idea" data-growth-idea aria-label="Idea" hidden></section>
       <section class="task-pages" data-task-pages aria-label="Pages" hidden></section>
+      <section class="rule-holds" data-rule-holds aria-label="Held by a rule" hidden></section>
       ${askToYou && qcardItem(t) ? qcardBoxHTML(t) : waitLabel && waitText ? (askToYou ? `<div class="task-ask"${taskQcardWait(t)}><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
         : `<p class="task-wait"><span class="lbl">${esc(waitLabel)}</span> ${esc(waitText)}</p>`) : ''}
       ${taskDeferredHTML(t)}

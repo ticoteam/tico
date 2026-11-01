@@ -127,6 +127,8 @@ class Inbound:
     def __init__(self, store, settings, auth):
         self.store,self.settings,self.auth = store,settings,auth
         self.judge = lambda: None                  # the app's decision model, set by install
+        self.wake_mail = lambda: None              # the physical-mail drain's kick, set by install
+        self.blobs = self.files = lambda: None     # the blob store and Library, for the bills address; set by install
         self.key = os.environ.get('TICO_INBOUND_KEY','').strip()
         from .support import hq_url
         self.url = (os.environ.get('TICO_INBOUND_URL','').strip() or hq_url()).rstrip('/')
@@ -431,6 +433,8 @@ class Inbound:
         deliveries = page.get('deliveries',[])
         if len(deliveries)>50 or len(encode(page).encode())>1024*1024:
             raise ValueError('invalid_delivery_page')
+        from . import bills_address, postal_mail
+        kicked = False
         with self.store.transaction() as c:
             cursor = c.execute('SELECT cursor FROM inbound_sync WHERE singleton=1').fetchone()[0]
             through = page['cursor']
@@ -451,12 +455,17 @@ class Inbound:
                 if inserted.rowcount:
                     H.hook(c,'inbound.received',item['delivery_id'],lambda: {'message_id':item['delivery_id'],'inbox_id':item['inbox_id'],
                                                                            'kind':item['kind']},'keeper',revision=0)
+                    # A scan another mail provider emailed to the mail-intake inbox becomes a letter (backend/postal_mail.py).
+                    if postal_mail.emailed(c,item):kicked = True
+                    # A bill emailed to the bills address waits for the drain below (backend/bills_address.py).
+                    bills_address.emailed(c,item)
             # Keep cumulative gap summaries; the cursor commit and gap update are atomic with messages.
             old = json.loads(c.execute('SELECT gaps_json FROM inbound_sync WHERE singleton=1').fetchone()[0])
             gaps = {(g['inbox_id'],g['from'],g['to']):g for g in old+page.get('gaps',[])}
             c.execute("UPDATE inbound_sync SET cursor=?,last_sync=?,error='',gaps_json=? WHERE singleton=1",
                       (through,time.time(),encode(list(gaps.values())[-100:])))
             self.expire(c)
+        if kicked:self.wake_mail()
 
     def sync(self):
         if self.off or not self.sync_lock.acquire(blocking=False):return
@@ -488,6 +497,9 @@ class Inbound:
         if now()-self.purged_at>=PURGE_EVERY:
             self.expire()
         self.sync()
+        # Bills from the bills address: their bytes come from HQ like the messages, then become draft bills.
+        from . import bills_address
+        bills_address.drain(self,self.store,self.blobs(),self.files())
 
     async def loop(self,stop):
         while not stop.is_set():
@@ -500,6 +512,9 @@ class Inbound:
 def install(app,store,settings,auth):
     service = Inbound(store,settings,auth)
     service.judge = lambda: getattr(app.state,'judge',None)
+    service.wake_mail = lambda: getattr(app.state,'postal_mail',None) and app.state.postal_mail.kick()
+    service.blobs = lambda: getattr(app.state,'blobs',None)
+    service.files = lambda: getattr(app.state,'files',None)
     app.state.inbound = service
 
     @app.post('/api/v2/inbound/company-connection')

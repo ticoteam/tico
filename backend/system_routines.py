@@ -112,12 +112,25 @@ ACTIONS = {
     "wake_task_manager": ("open a Task check task for each department that has something to fix",
                           ("tasks", "wake", "task manager")),
     "wake_health_monitor": ("wake the Health Monitor for a new finding", ("health", "wake")),
+    "check_books": ("read the Bookkeeper's Finance work queue: rows to categorize, bills, payments due, overdue "
+                    "invoices, receipts, failed syncs, months ready to close", ("finance", "books", "bills", "inbox")),
+    "wake_bookkeeper": ("open or update one Books check task for the Bookkeeper only when the queue has something new",
+                        ("finance", "bookkeeper", "wake")),
+    "check_watch": ("read the Bookkeeper's Watch checks: runway, unusual spend, duplicate charges, price increases",
+                    ("finance", "watch", "runway", "spend", "duplicate", "price")),
+    "wake_watch": ("open or update one Watch task for the Bookkeeper only when a check finds something new",
+                   ("finance", "bookkeeper", "wake", "watch")),
+    "check_rules_digest": ("list the posting rules made this week; none is a quiet run",
+                           ("finance", "rules", "digest")),
+    "wake_rules_digest": ("open the week's rules digest task for the Bookkeeper when there are new rules",
+                          ("finance", "rules", "digest", "wake")),
     "list_exceptions": ("list each engineering board's stuck tickets, failed runs, waiting checks, full builders, "
                         "outages, refused moves and failed merges", ("engineering", "exceptions", "stuck", "tickets")),
     "wake_type_manager": ("wake the board's manager only for an entry its last list did not have",
                           ("engineering", "exceptions", "wake", "manager")),
     "read_activity": ("read yesterday's chats, tasks, Slack, mail and meetings",
                       ("learnings", "chat", "slack", "mail", "meetings")),
+    "propose_memory_tidy": ("propose memory and knowledge edits for the pilot bots", ("memory", "tidy", "pilot")),
     "send_learnings": ("send each bot what it should remember", ("learnings", "memory", "send")),
     "remind_due": ("tell a bot when one of its tasks reaches its due time", ("due", "remind", "tasks")),
     "go_ahead": ("go ahead on a past-deadline question's default answer, or expire it",
@@ -187,10 +200,25 @@ JOBS = [
         "Lists each department's quiet tasks, overdue asks, review tickets without a pull request, merged work that did "
         "not move and held bots in plain code, and opens one task for the Task Manager per department that has something.",
         CHECKS, "Hourly on weekdays, 08:00 to 18:00", 3600, control=True, then=("report_tasks", "wake_task_manager")),
+    Job("bookkeeper_check", "Books check",
+        "Reads the Bookkeeper's Finance work queue in plain code and opens one task for the Bookkeeper only when it has "
+        "something new. Nothing new is a quiet run: no task, no model call.",
+        CHECKS, "Hourly", 3600, control=True, then=("check_books", "wake_bookkeeper")),
+    Job("bookkeeper_watch", "Books watch",
+        "Reads runway, unusual spend, duplicate charges and price increases in plain code, and opens one Watch task for "
+        "the Bookkeeper only when a check finds something new. Nothing new is a quiet run: no task, no model call.",
+        CHECKS, "Daily", 86400, then=("check_watch", "wake_watch")),
+    Job("bookkeeper_rules_digest", "Rules digest",
+        "Once a week, lists the posting rules made that week and opens the Bookkeeper's digest task for them. No new "
+        "rules is a quiet run.",
+        CHECKS, "Weekly", 7 * 86400, then=("check_rules_digest", "wake_rules_digest")),
     Job("engineering_exceptions", "Engineering exceptions",
         "Lists each engineering board's exceptions in plain code and wakes its manager (Manager profile) with them only "
         "when the list has an entry the last one did not. Tickets that move on their own are not listed.",
         CHECKS, "Hourly", 3600, control=True, then=("list_exceptions", "wake_type_manager")),
+    Job("memory_tidy", "Nightly memory tidy",
+        "Proposes memory and knowledge edits for up to three pilot bots on their named models. Pilot stop: $50.",
+        LEARNING, "Nightly at 03:30", control=True, then=("propose_memory_tidy",)),
     Job("learnings", "Nightly learnings",
         "Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember.",
         LEARNING, "Nightly at 03:00", ai=True, control=True, labels=("learnings-route",), then=("read_activity", "send_learnings")),
@@ -297,17 +325,20 @@ CONTROLS = {
     "health_scan": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00", owner_only=True),
     # One run a night reads the day before (backend/learnings.py claims one per night): the choice is its time.
     "learnings": Control(presets=(DAILY,), preset=DAILY, at="03:00"),
+    "memory_tidy": Control(on=False, presets=(DAILY,), preset=DAILY, at="03:30"),
     "ask_deadlines": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     # Hourly while people are at work: a report outside business hours would wait on nobody to read it.
     "task_manager_report": Control(presets=(BUSINESS, HOURLY, FOUR_HOURS, DAILY), preset=BUSINESS, at="09:00"),
     "engineering_exceptions": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
+    "bookkeeper_check": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     "topic_fresh": Control(rule="topic_fresh"),
     "stall_triage": Control(rule="stall_triage"),
 }
 
 
 QUICK_KEYS = ("still_wanted", "kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
-              "engineering_exceptions")   # run by backend/scheduler.py QUICK
+              "engineering_exceptions", "bookkeeper_check", "bookkeeper_watch",
+              "bookkeeper_rules_digest")   # last runs read by backend/scheduler.py (QUICK and FIXED)
 
 
 def zone():
@@ -348,7 +379,7 @@ def schedule_words(key, cfg):
     if not cfg or not cfg.get("preset"):
         return BY_KEY[key].schedule
     words = PRESETS[cfg["preset"]][0].format(at=cfg.get("at") or "")
-    return "Nightly at " + cfg["at"] if key == "learnings" else words
+    return "Nightly at " + cfg["at"] if key in ("learnings", "memory_tidy") else words
 
 
 def may_change(auth, who, key):
@@ -743,10 +774,20 @@ def listing(c, settings, now=None, who=None, auth=None):
                 "owner_only": bool(ctl and ctl.owner_only),
                 "can_change": bool(ctl and who is not None and auth is not None and can_change(auth, who, job.key)),
                 "last": None, "next": _stamp(following) if following else None}
+        if job.key == "memory_tidy":
+            from . import memory_tidy_controls
+            item["run_unavailable"] = memory_tidy_controls.UNAVAILABLE
+        if job.key == "memory_tidy" and item["can_change"]:
+            from . import memory_tidy_controls
+            item["pilots"] = memory_tidy_controls.pilots(c)
+            item["pilot_models"] = memory_tidy_controls.model_options(c, settings)
         item["search"] = search_words(job, when_words, then_words, department)
         if job.key == "task_manager_report":
             from .task_manager import active as task_manager_active
             item["note"] = None if task_manager_active(c) else "Opens no tasks while the Task Manager is paused (Settings > Bots)"
+        if job.key in ("bookkeeper_check", "bookkeeper_watch", "bookkeeper_rules_digest"):
+            from .bookkeeper import active as bookkeeper_active
+            item["note"] = None if bookkeeper_active(c) else "Opens no tasks while the Bookkeeper is paused (Settings > Bots)"
         if job.key == "health_scan":
             # Its own switch only says whether it may run; it finds nothing while the Health Monitor itself is off.
             from .health_monitor import active
@@ -794,7 +835,15 @@ def install(app, store, auth, mutate):
         owner. Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
         who = request.state.identity
         may_change(auth, who, key)
-        mutate(request, body, lambda c: save_config(c, who.actor, key, body.on, body.preset, body.at))
+        if body.pilots is not None and key != "memory_tidy":
+            raise Problem("invalid", "Only Nightly memory tidy has a pilot list", 422)
+
+        def work(c):
+            if body.pilots is not None:
+                from . import memory_tidy_controls
+                memory_tidy_controls.save(c, store.settings, who.actor, [p.model_dump() for p in body.pilots])
+            return save_config(c, who.actor, key, body.on, body.preset, body.at)
+        mutate(request, body, work)
         with store.read() as c:
             return {"job": row_of(c, store.settings, key, who, auth)}
 

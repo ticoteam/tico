@@ -1,0 +1,21 @@
+[package]
+name = "anlg-embedding"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+build = "../models.rs"
+
+[lib]
+name = "anlg_embedding"
+
+[features]
+default = ["onnx"]
+onnx = ["dep:anlg-onnx", "dep:knf-rs"]
+coreml = ["onnx", "anlg-onnx/coreml"]
+
+[dependencies]
+anlg-onnx = { path = "../onnx", optional = true }
+knf-rs = { git = "https://github.com/thewh1teagle/pyannote-rs", rev = "e23bd29", package = "knf-rs", optional = true }
+serde = "1"
+thiserror = "2"

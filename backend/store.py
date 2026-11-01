@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 from collections import deque
 from contextlib import ExitStack, contextmanager
 
@@ -551,14 +552,72 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     return deleted
 
 
+TOKEN_RETENTION_DAYS = 7
+
+
+def sweep_tokens(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
+    """Delete the `attempt_events` kind 'tokens' rows of runs finished more than TOKEN_RETENTION_DAYS ago, in short
+    transactions like `sweep_deltas`; returns the count.
+
+    Money and usage never come from these rows: a run's totals are its turns row (input_tokens, cached_tokens,
+    output_tokens, est_cost_usd, written by turn_finish), turn_usage_segments and attempts.result_json. The rows go only
+    once that turn is finished with its totals written, and no job of the run is 'uncertain': auto_reconcile's hop_failed
+    and review_jobs read them there. Attempts are walked in creation order from the mark 'tokens-sweep-mark', as
+    sweep_deltas does; one still unfinished when the walk passes it keeps its rows."""
+    at = now or H.now()
+    cutoff = H.shift(at, days=-TOKEN_RETENTION_DAYS)
+    created_before = H.shift(at, days=-TOKEN_RETENTION_DAYS - 1)     # a run finishing a day after it began is late
+    with store.read() as c:
+        mark = c.execute("SELECT value_json FROM registry_metadata WHERE key='tokens-sweep-mark'").fetchone()
+    mark = json.loads(mark[0]) if mark else ["", ""]
+    deleted = 0
+    while deleted < most:
+        with store.read() as c:
+            rows = c.execute(
+                "SELECT a.id,a.created,a.finished,EXISTS(SELECT 1 FROM turns t WHERE t.id=a.id AND t.finished IS NOT NULL "
+                "AND (t.input_tokens IS NOT NULL OR t.usage_reason IS NOT NULL)) "
+                "AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.attempt_id=a.id AND j.state='uncertain') AS recorded "
+                "FROM attempts a WHERE a.created<? AND (a.created,a.id)>(?,?) ORDER BY a.created,a.id LIMIT 200",
+                (created_before, *mark)).fetchall()
+        if not rows:
+            break
+        done = [r["id"] for r in rows if r["recorded"] and r["finished"] and r["finished"] < cutoff]
+        while done:
+            with store.transaction() as c:
+                removed = c.execute("DELETE FROM attempt_events WHERE id IN (SELECT id FROM attempt_events "
+                                    "WHERE attempt_id IN (%s) AND kind='tokens' LIMIT ?)" % ",".join("?" * len(done)),
+                                    (*done, batch)).rowcount
+            deleted += removed
+            if removed < batch:
+                break
+        mark = [rows[-1]["created"], rows[-1]["id"]]
+        with store.transaction() as c:
+            c.execute("INSERT INTO registry_metadata VALUES('tokens-sweep-mark',?) "
+                      "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(mark),))
+        if len(rows) < 200:
+            break
+    return deleted
+
+
 # The `events` log keeps every action except these bookkeeping ones, which the hourly sweep drops once they are older
-# than EVENT_RETENTION_DAYS. Not swept, because a reader needs old rows of them: `attempt.input.moved` (the privacy
+# than their tier's days. Not swept, because a reader needs old rows of them: `attempt.input.moved` (the privacy
 # and provenance of an old run: live_privacy, read_deps, provenance_clock), `attempt.limited` (login_holds names the
-# runtime of an old limited run that kept no limit_source). `credential.revealed` and `credential.sent_to_computer`
-# are not swept: they are the credential's audit trail, and their repeats are written less often (credentials.record_use).
-# Old rows of them stay; credential_uses keeps each last use, so nothing reads them for it.
-EVENT_SWEEP_ACTIONS = ("message.delivered", "turn.start", "turn.finish", "status.set", "wake.skipped", "sql.query",
-                       "message.notice")
+# runtime of an old limited run that kept no limit_source), `judge.call` (a budget counts its day, decide_readout reads
+# 31 days, and the row repeats the cost), `mcp.call` (tool-call stats up to 90 days, and the weekly SQL view),
+# `github.token` and `inbound.read` (security and read audits, like `mail.read`). `credential.revealed` and
+# `credential.sent_to_computer` are not swept: they are the credential's audit trail, and their repeats are written less
+# often (credentials.record_use). Old rows of them stay; credential_uses keeps each last use, so nothing reads them for it.
+# Seven days: writers only, or readers that look back no further than a week (bot.drain: deploy_draining reads the
+# last hour, release_deploy_drains a week at most).
+EVENT_NOISE_ACTIONS = ("sql.query", "wake.skipped", "message.delivered", "message.read", "status.set", "turn.start",
+                       "turn.finish", "github.checks_read", "rate_limit.set", "attempt.fallback", "attempt.lease-held",
+                       "job.suppress", "bot.drain", "operator.deployment-undrain", "listen.judgment",
+                       "bot.repository_read")
+EVENT_NOISE_RETENTION_DAYS = 7
+# Thirty days: `message.notice` as before, and `github.pull_request`, which quiet_work.settle reads back to the start of
+# the run that carried a task (no run has a length cap, so a 30-day keep is the most it can rely on). Its own mark,
+# since the old one had walked past every github.pull_request row already on disk.
+EVENT_SWEEP_ACTIONS = ("message.notice", "github.pull_request")
 EVENT_RETENTION_DAYS = 30
 # Rows per write transaction. A delete costs about 2 ms a row on TIDY (six indexes on events, cold pages), so 5000
 # held the one writer for 6-10 s and every request queued behind it; 500 holds it for about one second.
@@ -567,23 +626,38 @@ EVENT_SWEEP_MAX = 20000      # rows one hourly pass deletes at most; a larger ba
 
 
 def sweep_events(store, now=None, batch=EVENT_SWEEP_BATCH, most=EVENT_SWEEP_MAX):
-    """Delete the EVENT_SWEEP_ACTIONS rows older than EVENT_RETENTION_DAYS; returns the count.
+    """Delete the bookkeeping rows past their tier's days (EVENT_NOISE_ACTIONS after EVENT_NOISE_RETENTION_DAYS,
+    EVENT_SWEEP_ACTIONS after EVENT_RETENTION_DAYS); returns the count. The tiers share no action and keep separate
+    marks, so each one's walk is its own. The noise tier goes first within the one `most` budget, so a large first
+    backlog drains there and the 30-day tier follows."""
+    at = now or H.now()
+    deleted = 0
+    for key, actions, days in (("events-noise-mark", EVENT_NOISE_ACTIONS, EVENT_NOISE_RETENTION_DAYS),
+                               ("events-sweep-30-mark", EVENT_SWEEP_ACTIONS, EVENT_RETENTION_DAYS)):
+        deleted += _sweep_event_tier(store, key, actions, H.shift(at, days=-days), batch, most - deleted)
+    return deleted
 
-    The scan walks the `events_ts` index forward from a mark kept in registry_metadata, so a pass reads only the
-    time since the last one (and not the kept rows before it again). The scan runs outside the write lock; each
-    batch's delete is its own short transaction, like `sweep_idempotency`. Events are only ever written with the
-    current time, so once a pass has reached the cutoff, nothing older than it is left behind."""
-    cutoff = H.shift(now or H.now(), days=-EVENT_RETENTION_DAYS)
-    marks = ",".join("?" * len(EVENT_SWEEP_ACTIONS))
+
+def _sweep_event_tier(store, key, actions, cutoff, batch, most):
+    """One tier of sweep_events: the `actions` rows older than `cutoff`, walked forward on `events_ts` from the mark
+    kept under `key`; returns the count.
+
+    The scan walks the index from the mark, so a pass reads only the time since the last one (and not the kept rows
+    before it again). The scan runs outside the write lock; each batch's delete is its own short transaction, like
+    `sweep_idempotency`. Events are only ever written with the current time, so once a pass has reached the cutoff,
+    nothing older than it is left behind."""
+    if most <= 0:
+        return 0
+    marks = ",".join("?" * len(actions))
     with store.read() as c:
-        saved = c.execute("SELECT value_json FROM registry_metadata WHERE key='events-sweep-mark'").fetchone()
+        saved = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (key,)).fetchone()
     mark = json.loads(saved[0]) if saved else ""
     deleted = 0
     while deleted < most:
         with store.read() as c:
             rows = c.execute(f"SELECT rowid,ts FROM events INDEXED BY events_ts WHERE ts>=? AND ts<? "
                              f"AND action IN ({marks}) ORDER BY ts LIMIT ?",
-                             (mark, cutoff, *EVENT_SWEEP_ACTIONS, batch)).fetchall()
+                             (mark, cutoff, *actions, batch)).fetchall()
         if not rows:
             mark = cutoff
             break
@@ -598,8 +672,8 @@ def sweep_events(store, now=None, batch=EVENT_SWEEP_BATCH, most=EVENT_SWEEP_MAX)
         if not removed:
             break               # the rows left the table under the scan: the next pass starts again from the mark
     with store.transaction() as c:
-        c.execute("INSERT INTO registry_metadata VALUES('events-sweep-mark',?) "
-                  "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(mark),))
+        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                  (key, json.dumps(mark)))
     return deleted
 
 
@@ -609,9 +683,15 @@ def sweep_events(store, now=None, batch=EVENT_SWEEP_BATCH, most=EVENT_SWEEP_MAX)
 # writes (a reveal with no attempt, a computer send by a model key) is kept and counts as the pair's last write, as it
 # did then. Person reveals are never touched. Rows at or after the first pass's time are not walked: the deploy's rows
 # are already at the new grain. Passes resume from the credential after the last finished one (registry_metadata).
-TRIM_BATCH = 500           # deletes per write transaction
+# Paced, not back to back: a batch of 500 deletes plus the WAL checkpoint it triggers held the writer gate for 5-7 s on
+# TIDY's first pass (scheduler.py:437), so writers waited up to 9 s against the 10 s WRITE_WAIT. 200 rows per write, then
+# a pause, lets writers in between batches.
+TRIM_BATCH = 200           # deletes per write transaction
+TRIM_PAUSE = 0.5           # seconds slept after each write transaction
 TRIM_PAGE = 2000           # rows read per read transaction
+TRIM_READ_PAUSE = 0.05     # seconds slept between read pages
 TRIM_MAX = 50_000          # deletes one hourly pass makes at most
+_sleep = time.sleep        # the pauses go through this so tests can run without waiting
 TRIM_ACTIONS = ("credential.revealed", "credential.sent_to_computer")
 TRIM_MARK = "credential-use-trim"
 
@@ -642,6 +722,7 @@ def _trim_stream(store, action, target, before, page):
         yield from fresh
         if len(rows) < limit or not fresh:
             return
+        _sleep(TRIM_READ_PAUSE)
         last = rows[-1]["ts"]
         seen = {row["id"] for row in rows if row["ts"] == last}
 
@@ -680,7 +761,9 @@ def _trim_target(store, target, before, batch, budget, page):
 
 def _trim_flush(store, rowids):
     with store.transaction() as c:
-        return c.execute(f"DELETE FROM events WHERE rowid IN ({','.join('?' * len(rowids))})", rowids).rowcount
+        deleted = c.execute(f"DELETE FROM events WHERE rowid IN ({','.join('?' * len(rowids))})", rowids).rowcount
+    _sleep(TRIM_PAUSE)
+    return deleted
 
 
 def _trim_next_target(store, after):
@@ -1001,6 +1084,7 @@ class Store:
     def connect(self, factory=None, check_same_thread=True):
         c = sqlite3.connect(str(self.settings.db_path), timeout=WRITE_WAIT, isolation_level=None,
                             factory=factory or self.factory, check_same_thread=check_same_thread)
+        H.leave_wal_for_litestream(c)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA foreign_keys=ON")
         # A writer waits out a backup checkpoint or another process's pass, but not so long that requests pile up
@@ -1083,18 +1167,28 @@ class Store:
             c.executescript(_company_storage.SCHEMA)
             from . import tico_storage as _tico_storage
             c.executescript(_tico_storage.SCHEMA)
+            from . import model_subscriptions as _model_subscriptions
+            c.executescript(_model_subscriptions.SCHEMA)
             from . import google_connect as _google_connect
             _google_connect.ensure_schema(c)
             from . import support as _support
             c.executescript(_support.SCHEMA)
             from . import inbound as _inbound
             c.executescript(_inbound.SCHEMA)
+            from . import bills_address as _bills_address
+            c.executescript(_bills_address.SCHEMA)
             from . import support_access as _support_access
             c.executescript(_support_access.SCHEMA)
             from . import credential_cards as _credential_cards
             c.executescript(_credential_cards.SCHEMA)
             from . import watchers as _watchers
             c.executescript(_watchers.SCHEMA)
+            from . import cloud_machines as _cloud_machines
+            c.executescript(_cloud_machines.SCHEMA)
+            from . import browser_exit as _browser_exit
+            c.executescript(_browser_exit.TRIGGERS)
+            # A stop's reservation against the claim (backend/cloud_machines.py `reserve`); NULL is none.
+            H.add_column(c, "cloud_machines", "stop_until", "REAL")
             from . import screening as _screening
             c.executescript(_screening.SCHEMA)
             from . import bot_task_tabs as _bot_task_tabs
@@ -1107,6 +1201,8 @@ class Store:
             c.executescript(_cards.SCHEMA)
             from . import task_manager as _task_manager
             c.executescript(_task_manager.SCHEMA)
+            from . import bookkeeper as _bookkeeper
+            c.executescript(_bookkeeper.SCHEMA)
             from . import health_monitor as _health_monitor
             c.executescript(_health_monitor.SCHEMA)
             # When a finding last woke the Health Monitor, and how bad it is: a rise wakes it (backend/health_monitor.py).
@@ -1627,6 +1723,76 @@ class Store:
                     # The one task an operator limited a bot's claims to (execution.scoped_sql); NULL is no limit.
                     H.add_column(c, "bot_control", "claim_task", "TEXT")
                     c.execute("INSERT INTO cloud_migrations VALUES(63,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=64").fetchone():
+                    # Finance's tables, indexes and invariant triggers, every phase's (backend/finance/store/schema.py).
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.create(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(64,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=65").fetchone():
+                    # Finance phase 1 (banking, cards, payments, gate rules): its new fin_* tables, and the columns it
+                    # added to tables migration 64 made. Idempotent, so an install made after phase 1 changes nothing.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.phase1(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(65,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=66").fetchone():
+                    # Finance phase 2 (bills, invoices, contacts, settlements, the cash view, posting rules): new fin_*
+                    # tables and columns. Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.phase2(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(66,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=67").fetchone():
+                    # Finance phase 3 (bot cards): the saved-card record, which vendor accounts a card is saved on.
+                    # Idempotent like 65 and 66.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.phase3(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(67,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=68").fetchone():
+                    # Finance phase 4 (the mirror of QuickBooks or Xero): external refs with their revision, and the
+                    # restatements of closed months. Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.phase4(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(68,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=69").fetchone():
+                    # Finance's Stripe feed: indexes on the charge link and the source id in each Stripe row's raw json,
+                    # which the refund lookups search by (backend/finance/store/schema.py). Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.stripe(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(69,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=70").fetchone():
+                    # Finance tax (spec §11): the sales tax jurisdictions and the due dates seeded for the outside
+                    # obligations. Idempotent, like 66.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.tax(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(70,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=71").fetchone():
+                    # Finance history imports (spec §4.1): the fin_raw_imports table. Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.raw_import(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(71,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=72").fetchone():
+                    # Finance close snapshots (fin_close_snapshots): a closed month reads the account tree it closed
+                    # with. Idempotent like 66.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.close_snapshots(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(72,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=73").fetchone():
+                    # The books gaps: fin_transfers, internal transfers between our own bank accounts
+                    # (backend/finance/transfers.py). Idempotent like 65 and 66.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.gaps_books(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(73,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=74").fetchone():
+                    # Finance's mirror columns (unknown writes, provider line ids) and fin_credit_refunds on an
+                    # install that took migrations 64 to 68 before they existed. Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.create(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(74,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=75").fetchone():
+                    # The journal line each matched bank row took (fin_feed_txns.entry_line_id), on an install that
+                    # took migrations 64 to 74 before it. Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.feed_lines(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(75,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the
@@ -1670,6 +1836,19 @@ class Store:
                 # Unversioned the same way; the first run makes the draft from the company profile.
                 from .strategy import ensure as ensure_strategy
                 ensure_strategy(c)
+                # The built-in Idea task type growth ideas are filed as (backend/growth.py).
+                from .growth import ensure as ensure_growth
+                ensure_growth(c)
+                # Org rules and their due dates (backend/org_rules.py, backend/rule_due.py): sources, rules, holds, due
+                # dates and their status rows. Unversioned the same way: an older release never reads the tables.
+                from .org_rules import ensure as ensure_org_rules
+                ensure_org_rules(c)
+                # Their verdict cache (backend/org_rule_check.py). Unversioned the same way.
+                from .org_rule_check import ensure as ensure_org_rule_check
+                ensure_org_rule_check(c)
+                # Counsel's documents: the versions it was asked to read, the only versions it may cite (backend/counsel.py).
+                from .counsel import ensure as ensure_rule_reads
+                ensure_rule_reads(c)
                 # Lens runs (backend/lenses.py): the exercises run against the strategy or the market. Unversioned too.
                 from .lenses import ensure as ensure_lenses
                 ensure_lenses(c)
@@ -1765,6 +1944,10 @@ class Store:
                                    # Partial, so the scheduler's live-lease read keeps attempts_live_lease.
                                    ("attempts_finished_state", "attempts(state, finished) WHERE finished IS NOT NULL"),
                                    ("events_action_target", "events(action, target, ts)"),
+                                   # One action's rows in a time window, with no target (Health's limited runs, the
+                                   # judge's month, MCP calls): events_action_target walks every row of the action
+                                   # (911 ms on TIDY), events_ts every action's rows in the window.
+                                   ("events_action_ts", "events(action, ts)"),
                                    # Conversations newest first (hubdb.conversations_for, chats_with): the ORDER BY's
                                    # expression word for word, or SQLite sorts every conversation.
                                    ("conversations_recent", "conversations(COALESCE(last_message_at, created))"),
@@ -1785,6 +1968,9 @@ class Store:
                                    # so Health's silent_waits keeps a good plan.
                                    ("messages_open_ask_to",
                                     "messages(to_actor, conversation_id) WHERE kind='ask' AND answered_by IS NULL"),
+                                   # Replaced asks to someone (views.went_away, on every Needs you read).
+                                   ("messages_superseded_asks_to",
+                                    "messages(to_actor, superseded_at) WHERE kind='ask' AND superseded_at IS NOT NULL"),
                                    # PRs at a commit (github.pr_signal, on every check and status webhook): the
                                    # query's expression word for word.
                                    ("task_links_pr_head", "task_links(json_extract(detail_json,'$.head_sha')) WHERE kind='pr'"),

@@ -41,6 +41,41 @@ def _delivery(args):
     return delivery_of(args)
 
 
+def _rules_args(args):
+    """`hub rules` flags as the API takes them: the Who and With flags become scope objects, the rest pass as they are."""
+    def scope(names, everyone=False, all_bots=False):
+        out = {}
+        if names:
+            out["names"] = list(names)
+        if everyone:
+            out["everyone"] = True
+        if all_bots:
+            out["all_bots"] = True
+        return out or None
+    if args.fn in ("rules add", "rules edit", "rules accept"):
+        who = scope(getattr(args, "who_names", None), getattr(args, "everyone", False), getattr(args, "all_bots", False))
+        if who is not None:
+            args.who = who
+    if args.fn in ("rules add", "rules edit"):
+        with_scope = scope(getattr(args, "with_names", None))
+        if with_scope is not None:
+            setattr(args, "with", with_scope)
+    if args.fn == "rules read" and not getattr(args, "source", None):
+        args.fn = "rules get"                      # one rule by id; with --from it is a document read (hub_rules_read)
+    if args.fn == "rules add" and getattr(args, "file_version", None) and not getattr(args, "quote", None):
+        raise SystemExit("hub rules add: --version goes with --file and --quote")
+    if args.fn == "rules add" and getattr(args, "quote", None):
+        if not getattr(args, "file_id", None):
+            raise SystemExit("hub rules add: a quote needs --file (the document it is in)")
+        args.cite = {"file_id": args.file_id, "section": getattr(args, "section", None) or "", "quote": args.quote}
+        if getattr(args, "file_version", None):
+            args.cite["version"] = args.file_version
+    for flag in ("who_names", "with_names", "everyone", "all_bots", "file_id", "section", "quote", "file_version"):
+        if hasattr(args, flag):
+            delattr(args, flag)
+    return args
+
+
 def via_tool(client, args, **more):
     """Run the tool of the command's own name with the command's flags as its arguments."""
     from clients import hubtools
@@ -50,6 +85,10 @@ def via_tool(client, args, **more):
         fields["visuals"] = visuals_from_args(args)
     if args.fn in ("bot keep-tasks-going", "bot turns-at-once", "computer turns-at-once") and hasattr(args, "limit"):
         fields["limit"] = args.limit  # explicit null restores the default; omission only reads
+    if args.fn == "bot browser-exit" and hasattr(args, "computer"):
+        fields["computer"] = args.computer  # explicit null is the bot's own internet; omission only reads
+    if args.fn == "computer browser-exit" and "sharing" in fields:
+        fields["sharing"] = fields["sharing"] == "on"
     fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
@@ -162,14 +201,33 @@ def market_spend(client, args, tool):
     return tool(client, args)
 
 
+def counsel_held(args):
+    """Counsel runs a shell, so its CLI is held to the tools it is offered as its MCP is (hubtools.COUNSEL_TOOLS): a web
+    search or fetch, a message, and every other command outside that list are refused before anything is sent."""
+    from clients import hubtools
+    if (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip() != hubtools.COUNSEL_BOT:
+        return
+    fn = getattr(args, "fn", None)
+    entry = hubtools.BY_NAME.get(tool_name(fn)) if fn else None
+    if entry and hubtools.COUNSEL not in hubtools.offered_to(entry):
+        raise SystemExit(f"{fn} is not available to Counsel: it has no credentials and sends nothing")
+
+
 def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
+    counsel_held(args)
     # A query may run for 20 s on the server before it is stopped, a decision's providers 25 s; leave room for that.
     client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=45 if args.cmd in ("decision", "gateway") else 30 if args.cmd == "sql" else 120 if args.cmd == "listening" or args.fn == "market import" else 130 if args.cmd == "inbound" else 15)
     fn = args.fn
     if args.cmd == "inbound":
         return via_tool(client,args)
+    if args.cmd == "rules":
+        return via_tool(client, _rules_args(args))
+    if args.cmd == "mail":
+        return via_tool(client, args)
+    if args.cmd == "finance":
+        return via_tool(client, args, **({"operation_id": args.operation_id} if getattr(args, "operation_id", None) else {}))
     if args.cmd == "settings":
         return via_tool(client, args)
     if args.cmd in ("card", "pin"):
@@ -242,9 +300,7 @@ def run(args, who=None):
               "brief", "pipeline", "mcp stats", "calendar list", "calendar status", "team show", "team budget", "org order", "org reports-to", "run list",
               "message list", "message mark-read", "bot recent", "agent pair show", "agent pair approve", "agent pair decline",
               "slack channel list", "slack channel add", "slack channel remove", "slack channel import",
-              "seat list", "seat create", "seat update", "seat close", "seat draft"):
-        if fn == "seat draft" and args.file:      # the Strategy Bot's draft, from a file beside it
-            return via_tool(client, args, text=Path(args.file).read_text())
+              "seat list", "seat create", "seat update", "seat close"):
         return via_tool(client, args)
     if fn == "run export":
         from clients import hubtools
@@ -303,7 +359,7 @@ def run(args, who=None):
         from clients import hubtools
         text = Path(args.file).read_text(errors="replace") if args.file else sys.stdin.read()
         return hubtools.BY_NAME["hub_classify"]["fn"](client, {"text": text})
-    if fn in ("decision readout", "decision outcome", "gateway catalog", "gateway search", "gateway fetch"):
+    if fn in ("decision readout", "decision outcome", "gateway catalog", "gateway search", "gateway fetch", "gateway image"):
         return via_tool(client, args)
     if args.cmd == "decision":
         return judge(client, args)
@@ -405,8 +461,11 @@ def run(args, who=None):
     def tool(client, args):
         """The goal, KPI and proposal commands run the MCP tool of the same name, so both say the same thing."""
         from clients import hubtools
-        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
+        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "subsub", "fn", "json") and v is not None}
         fields["operation_id"] = key
+        if args.fn == "brand check":
+            file = fields.pop("file")
+            fields["text"] = sys.stdin.read() if file == "-" else Path(file).read_text()
         if args.fn == "kpi log":
             if fields.pop("estimate", False) and "quality" not in fields:
                 fields["quality"] = "estimate"
@@ -673,7 +732,7 @@ def run(args, who=None):
             if args.body_file:
                 args.body = Path(args.body_file).read_text()
         return tool(client, args)
-    if cmd in ("kpi", "proposal", "strategy"):
+    if cmd in ("kpi", "proposal", "strategy", "brand", "gtm", "growth"):
         return tool(client, args)
     if cmd == "lens":
         from clients import hubtools
@@ -928,7 +987,7 @@ def local_slug(client, args, workspace):
         known = {b.get("slug") or b.get("name") for b in client.get("bots", include_archived="1")}
     except (APIError, AttributeError, TypeError):
         known = set()
-    reserved = ("assistant", "botops", "librarian", "goal-manager", "coo", "task-manager", "health-monitor")
+    reserved = ("assistant", "botops", "librarian", "goal-manager", "coo", "task-manager", "health-monitor", "bookkeeper")
     return catalog.free_slug(args.name or card.get("name") or args.template, lambda slug: (
         slug in known or slug in reserved
         or any((workspace / (prefix + slug)).exists() for prefix in (REPO_PREFIX, OLD_REPO_PREFIX))))
@@ -1163,6 +1222,80 @@ def sql_csv(result):
 WORKTREE_WAIT_EXIT = 3
 
 
+def _plain(value, indent=""):
+    """Any JSON value as indented `key: value` lines, empty fields left out."""
+    if isinstance(value, dict):
+        lines = []
+        for k, v in value.items():
+            if v in (None, "", [], {}):
+                continue
+            if isinstance(v, (dict, list)):
+                lines += [f"{indent}{k}:", *_plain(v, indent + "  ")]
+            else:
+                lines.append(f"{indent}{k}: {v}")
+        return lines
+    if isinstance(value, list):
+        lines = []
+        for v in value:
+            if isinstance(v, (dict, list)):
+                inner = _plain(v, indent + "  ")
+                lines += [indent + "- " + inner[0].lstrip(), *inner[1:]] if inner else []
+            else:
+                lines.append(f"{indent}- {v}")
+        return lines
+    return [f"{indent}{value}"]
+
+
+def _table(rows, cols):
+    """Rows as aligned columns: cols are (header, key or function)."""
+    cells = [[h for h, _ in cols]] + [["" if (v := (f(r) if callable(f) else r.get(f))) is None else str(v)
+                                       for _, f in cols] for r in rows]
+    widths = [max(len(row[i]) for row in cells) for i in range(len(cols))]
+    return "\n".join("  ".join(c.ljust(w) for c, w in zip(row, widths, strict=True)).rstrip() for row in cells)
+
+
+def growth_text(fn, result):
+    """`hub brand|gtm|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines.
+    `--json` prints the API response instead."""
+    if not isinstance(result, dict):
+        return "\n".join(_plain(result))
+    if fn in ("brand summary", "gtm summary"):
+        return result.get("text") or "Nothing published yet."
+    if fn == "brand check":
+        hits = result.get("hits") or []
+        if not hits:
+            return f"No hits against brand v{result.get('n', 0)}." if result.get("n") else "No brand published yet."
+        return "\n".join(f"{h['level']}: {h['kind']} \"{h['match']}\" at {h['index']}" + (f" ({h['rule']})" if h.get("rule") else "")
+                         for h in hits)
+    if fn == "growth segment list":
+        return _table(result.get("segments") or [], [("id", "id"), ("name", "name"), ("status", "status"),
+                      ("motion", "motion"), ("buyer", "who_buys"), ("deal", "deal_size"),
+                      ("channels", lambda r: ", ".join(r.get("channels") or [])), ("ideas", "ideas")])
+    if fn in ("growth channel list",):
+        return _table(result.get("channels") or [], [("slug", "slug"), ("name", "name"), ("stage", "stage"),
+                      ("track", "track"), ("owner", "owner_ref"), ("budget/mo", "budget_month")])
+    if fn in ("gtm sources", "growth source list"):
+        text = _table(result.get("sources") or [], [("id", "id"), ("truth for", "truth_for"), ("system", "system"),
+                      ("reach", lambda r: f"{r.get('reach_kind')}:{r.get('reach_ref') or ''}".rstrip(":")), ("may", "may")])
+        conflicts = result.get("conflicts") or []
+        return text + ("\n\nConflicts:\n" + "\n".join(_plain(conflicts)) if conflicts else "")
+    if fn == "growth idea list":
+        return _table(result.get("ideas") or [], [("id", "task_id"), ("status", "status"), ("ice", "ice"),
+                      ("title", "title"), ("assignee", "assignee")])
+    if fn == "growth economics":
+        rows = list(result.get("rows") or []) + ([result["total"]] if result.get("total") else [])
+        head = f"Month: {result.get('month') or 'none yet'}"
+        head += f"  Segment: {result['segment']}" if result.get("segment") else ""
+        return head + "\n" + _table(rows, [
+            ("channel", "name"), ("spend", "spend"), ("bot", "bot_cost"), ("new", "new_customers"), ("CAC", "cac"),
+            ("months", "expected_months"), ("LTV", "ltv"), ("LTV:CAC", "ltv_cac"), ("payback", "payback_months")])
+    if fn == "growth cohort list":
+        return _table(result.get("cohorts") or [], [("month", "month"), ("channel", lambda r: r.get("channel") or "unknown"),
+                      ("spend", "spend"), ("bot", "bot_cost"), ("new", "new_customers"), ("d30", "kept_d30"),
+                      ("d90", "kept_d90"), ("d180", "kept_d180"), ("quality", "quality")])
+    return "\n".join(_plain(result)) or "Nothing yet."
+
+
 def main(args, who=None):
     try:
         result = run(args, who)
@@ -1178,6 +1311,8 @@ def main(args, who=None):
             print(integration_text(result))
         elif args.fn == "tool query-search" and not args.json:
             print(query_text(result) if args.query_id else queries_text(result))
+        elif args.cmd in ("brand", "gtm", "growth") and not getattr(args, "json", False):
+            print(growth_text(args.fn, result))
         elif args.fn == "automation guide" and isinstance(result, dict) and "text" in result:
             print(result["text"])
         elif args.fn == "bot go-live" and isinstance(result, dict) and result.get("state") == "waiting_for_repository":
@@ -1187,6 +1322,8 @@ def main(args, who=None):
                   f"{result.get('computer')} has the repository; nothing needs to run again.")
         else:
             print(json.dumps(result, indent=2))
+        if args.fn == "file approved":
+            return 0 if isinstance(result, dict) and result.get("approved") else 1
         if isinstance(result, dict) and result.get("readback"):    # what a relation write stored, direction and all
             for line in result["readback"]:
                 print("hub: stored: " + str(line), file=sys.stderr)

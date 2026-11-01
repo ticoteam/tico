@@ -72,7 +72,7 @@ button.prop-v:hover,button.prop-v[aria-expanded=true]{background:var(--prop-hove
 .code-list,.sub-list{list-style:none;margin:0;padding:0}
 .code-line{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;min-height:24px;padding:2px 22px 2px 0;line-height:var(--lh)}
 .code-main{display:flex;align-items:baseline;gap:5px;min-width:0;flex:1 1 10em;color:var(--ink);text-decoration:none;overflow:hidden;white-space:nowrap}
-a.code-main:hover .code-title,a.code-main:hover .code-repo{color:var(--accent);text-decoration:underline}
+a.code-main:hover .code-title,a.code-main:hover .code-repo{color:var(--ink);text-decoration:underline}
 .code-main:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}
 .code-repo{font-weight:600}
 .code-repo.unknown{font-weight:400;color:var(--muted)}
@@ -105,7 +105,7 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 .sub-chev{display:grid;place-items:center;width:24px;height:24px;margin:0 -6px;border:0;background:none;padding:0;color:var(--muted);cursor:pointer;font-size:12px;line-height:var(--lh-none)}
 .sub-chev.open{transform:var(--chev-open)}
 .sub-open{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;border:0;background:none;padding:2px 0;font:inherit;color:var(--ink);cursor:pointer;text-align:left}
-.sub-open:hover .sub-title{color:var(--accent)}
+.sub-open:hover .sub-title{color:var(--ink)}
 .sub-open:focus-visible,.sub-chev:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}
 .sub-who{display:inline-flex;flex:none}
 .sub-who .av{width:16px!important;height:16px!important;font-size:7px!important}

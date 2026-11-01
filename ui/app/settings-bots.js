@@ -61,7 +61,8 @@ function settingsAllChoices() {
   // Once the owner has chosen providers, only their models are offered (a bot already on another
   // one keeps its own choice in the editor).
   const enabled = SETTINGS_DATA.enabledProviders || [];
-  return (SETTINGS_DATA.models || []).filter(model => !model.deprecated &&
+  // Meeting models (providers.py `meeting`) are picked in Settings' Meeting model select, not as a bot's own model.
+  return (SETTINGS_DATA.models || []).filter(model => !model.deprecated && (!model.meeting || model.id === SETTINGS_KEEP_MODEL) &&
     (!enabled.length || !model.provider || enabled.includes(model.provider) || model.id === SETTINGS_KEEP_MODEL)).flatMap(model =>
     (model.harnesses || [model.runtime]).flatMap(harness =>
       (model.efforts?.length ? model.efforts : [model.default_effort || '']).map(effort => {
@@ -486,15 +487,17 @@ async function settingsSaveTaskModel(e, change, revision, inEditor = false) {
 }
 function settingsMachineSelect(e) {
   if (e.agent) return settingsAgentCell(e);
-  const current = e.machine?.runner_id || '';
-  const machines = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at &&
+  // On Tico Cloud the shared and the bot's own cloud machine are two choices; no cloud machine is offered as a computer.
+  const cloud = e.cloud_machine, current = cloudMachineValue(e) || e.machine?.runner_id || '';
+  const machines = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at && !machine.cloud_machine &&
     (S.me?.role === 'owner' || machine.operator === S.me?.id));
   const unassigned = `Not assigned · ${settingsPersonName(e.operator)}`;
   const currentLabel = e.machine ? `${e.machine.label} · ${settingsPersonName(e.machine.operator)}` : unassigned;
   const seen = e.machine?.last_seen ? `last seen ${ago(e.machine.last_seen)}` : e.machine ? 'waiting for its first heartbeat' : 'register a computer first';
   return `<select class="settings-inline-select" data-bot-machine="${esc(e.name)}" data-current="${esc(current)}"
-    aria-label="Computer for ${esc(e.display_name)}" title="${esc(`${currentLabel} · ${seen}`)}" ${settingsCanManageBot(e) && machines.length ? '' : 'disabled'}>
+    aria-label="Computer for ${esc(e.display_name)}" title="${esc(`${currentLabel} · ${seen}`)}" ${settingsCanManageBot(e) && (machines.length || cloud) ? '' : 'disabled'}>
       ${current ? '' : `<option value="" selected disabled>${esc(unassigned)}</option>`}
+      ${cloud ? cloudMachineOptionsHTML(current) : ''}
       ${machines.map(machine => `<option value="${esc(machine.id)}" ${machine.id === current ? 'selected' : ''}>${esc(machine.label)} · ${esc(settingsPersonName(machine.operator))}</option>`).join('')}
     </select>`;
 }
@@ -503,6 +506,7 @@ function settingsBotProblem(e) {
   if (e.status !== 'active') return '';
   if (e.agent?.synced) return e.online ? '' : 'history not synced';
   if (e.agent) return !e.agent.credential ? 'no credential' : e.online ? '' : 'not reporting';
+  if (cloudMachineOn(e)) return e.cloud_machine.problem || '';
   return !e.machine ? 'no computer' : e.online && e.ready ? '' : e.online ? (e.readiness?.problems?.[0] || 'Computer not ready') : 'offline';
 }
 // Search lasts while the page is open; selection is trimmed to matching manageable bots.

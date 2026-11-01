@@ -30,7 +30,7 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import hubdb as H
+from . import hubdb as H, task_privacy
 from .auth import validate_identity
 from .health import GITHUB_HEALTH, note_github_token
 from .store import Problem, digest, encode
@@ -1172,6 +1172,9 @@ def install_github_app(app, settings, store):
                             and name.split("/")[0].lower() == row["org"].lower() and name.lower() not in missing):
                         have.add(name.lower())
                         grants.append({'full_name': name, 'access': 'write'})
+            if who.attempt_id and task_privacy.private_meeting_run(c, who.attempt_id):
+                # A private meeting's turn reads its repositories and pushes to none (task_privacy.PRIVATE_MEETING_WRITES).
+                grants = [{'full_name': g['full_name'], 'access': 'read'} for g in grants]
         issuer = reviewer.for_bot(body.bot)
         repos = [r['full_name'] for r in grants]
         write_repos = [r['full_name'] for r in grants if r['access'] == 'write']

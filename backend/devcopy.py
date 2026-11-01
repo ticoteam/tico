@@ -39,7 +39,7 @@ EMPTY = (
     # queued work
     "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "calendar_actions",
     "meeting_deliveries", "worktree_waits", "check_waits", "check_head_provenance", "idempotency",
-    "idempotency_messages", "blob_media_retries",
+    "idempotency_messages", "blob_media_retries", "seat_requests",   # a cloud agent request's key: a replay re-files
     "github_product_repo_operations", "github_review_operations", "invite_sends",
     # milestone waits: each pending row is a wake the copy could send; the milestones seen only settle those
     "task_milestone_waits", "milestones",
@@ -47,26 +47,35 @@ EMPTY = (
     "task_reconnects", "google_signin_refusals",
     # routines and watchers
     "webhooks", "webhook_events", "webhook_sends", "webhook_attempts",   # outgoing: a copy never sends an event out
-    "task_rules", "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "trigger_bodies", "trigger_seen", "rule_events_seen", "rule_task_runs", "rule_task_state", "trigger_relays", "hook_relay_state", "sleep_idle_state", "tico_notices", "watcher_runs", "watcher_items", "watcher_refs",
+    "task_rules", "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "trigger_bodies", "trigger_seen", "rule_events_seen", "rule_task_runs", "rule_task_state", "trigger_relays", "hook_relay_state", "sleep_idle_state", "tico_notices", "mail_items", "mail_intake", "mail_reads", "mail_private_backfill", "watcher_runs", "watcher_items", "watcher_refs",
     "task_manager_seen", "task_manager_reports",    # the Task Manager's repeat ledger and last checks: the copy starts its hourly report fresh
+    "bookkeeper_seen", "bookkeeper_watch_listed",   # the Bookkeeper's ledgers: the copy starts its checks fresh
+    "org_rule_holds",    # org rules: a held output could still be sent anyway from the copy
+    "org_rule_verdicts",  # org rule checks: the model's verdicts, a cache
     "watcher_pending", "watcher_triage",    # support triage: tickets waiting for their check (customer text), and its verdicts
     "screening_pending", "screening_verdicts",  # screening: outside text waiting for its check, and the model's verdicts
     # runner and bot sessions
-    "enrollments", "hosting_enrollments", "assignments", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "compact_first", "model_logins", "model_login_cleared", "computer_keys", "model_login_key_off",
+    "enrollments", "hosting_enrollments", "assignments", "cloud_machines", "cloud_machine_codes", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "compact_first", "model_logins", "model_login_cleared", "computer_keys", "model_login_key_off",
     "computer_profiles", "subscription_assignments", "runner_harness_actions", "runner_harness_choices",
     "runner_versions", "start_places", "org_turn_waits",
+    # Browse through: a computer's sharing and a bot's choice open tunnels through a real person's internet; the relay's
+    # batch marks only settle that relay's usage reports (backend/browser_exit.py)
+    "browser_exits", "bot_browser_exits", "browser_exit_marks",
     # human sign-in and service keys
     "human_tokens", "oidc_sessions", "oidc_codes", "oauth_grants", "oauth_clients", "service_keys",
     "service_key_tasks", "owner_links",
     # credentials
     "credentials", "credential_keys", "credential_grants", "credential_uses", "credential_requests", "credential_imports",
     "directory_credentials", "company_storage", "tico_storage",
+    # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
+    "model_subscriptions", "computer_subscriptions", "attempt_subscriptions",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
     "support_tickets", "support_access", "support_access_log",
     # Agent inbox bodies/codes and delivery cursors never enter a rehearsal copy.
     "inbound_inboxes", "inbound_messages", "inbound_sync",
+    "bills_inbound",     # emailed bills: senders, subjects and HQ delivery ids
     "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
     "attempt_captures", "attempt_capture_drops", "attempt_diagnostics",
@@ -85,13 +94,18 @@ EMPTY = (
     "task_cap_sends", "task_cap_log",
     # A hard delete's queue of bytes still to remove from storage: the copy never deletes from the source's stores.
     "blob_purges",
+    # Finance: what moves money or calls a provider (connections and their tokens, cursors and id maps, the outbox and
+    # inbox, cards and their authorizations, payees and payments) and spend holds. Its pending actions and undrained events are trimmed
+    # in prune; the books, budgets, views and rules are kept.
+    "fin_connections", "fin_external_refs", "fin_outbox", "fin_inbox", "fin_cards", "fin_card_auths", "fin_holds",
+    "fin_recipients", "fin_payments", "fin_transfers", "fin_provider_users", "fin_card_saves",
 )
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
                "automation_versions")
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
 HISTORY = {"attempts": "created", "jobs": "created", "messages": "created", "events": "ts", "deltas": "ts",
-           "bot_status_history": "since", "audit_log": "at"}
+           "bot_status_history": "since", "audit_log": "at", "browser_exit_usage": "day"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
@@ -115,7 +129,7 @@ KEEP = frozenset((
     "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "market_turn_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
     "meeting_items", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
     "message_links_seen", "notes", "pages", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
-    "recording_source_refs", "recording_transcripts", "redesign_migrated", "redesign_migration_accepts", "refusals", "registry_metadata", "repositories", "rule_suggestions", "rules", "run_backoff", "runners",
+    "recording_source_refs", "recording_transcripts", "org_rules", "org_rule_misses", "redesign_migrated", "redesign_migration_accepts", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_reads", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_events", "strategy_versions",
     "system_runs", "tags", "task_assets",
@@ -123,6 +137,21 @@ KEEP = frozenset((
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
     "usage_limits", "usage_pools", "task_caps",
+    # Finance history and definitions (EMPTY has what acts; prune drops pending actions and settles undrained events)
+    "fin_accounts", "fin_actions", "fin_allocations", "fin_attachments", "fin_bill_lines", "fin_bills", "fin_books",
+    "fin_budget_versions", "fin_budgets", "fin_contacts", "fin_dimensions", "fin_entries", "fin_events",
+    "fin_feed_txns", "fin_invoice_lines", "fin_invoices", "fin_line_tags", "fin_lines", "fin_money_accounts",
+    "fin_periods", "fin_private_lines", "fin_projections", "fin_reconciliations", "fin_restatements", "fin_rights",
+    "fin_rollups",
+    "fin_rule_counters", "fin_rule_runs", "fin_rules", "fin_settings", "fin_statements", "fin_usage_snapshots",
+    "fin_settlements", "fin_cash_rollups", "fin_credit_refunds", "fin_vendor_aliases", "fin_vendor_labels",
+    "fin_vendor_legacy",
+    "fin_view_defaults", "fin_view_grants", "fin_view_versions",
+    "fin_raw_imports", "fin_close_snapshots", "fin_tax_jurisdictions", "fin_tax_seeds",
+    # Growth, brand and go-to-market (backend/growth.py, backend/brand_gtm.py)
+    "brand_drafts", "brand_versions", "gtm_drafts", "gtm_versions", "gtm_sources", "growth_channels", "growth_ideas",
+    "growth_idea_channels", "growth_cohorts", "growth_settings", "growth_segments", "growth_channel_segments",
+    "growth_idea_segments",
 ))
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
@@ -283,6 +312,12 @@ def prune(c, days, keep_automations=False):
     if "registry_metadata" in present:
         c.execute("UPDATE registry_metadata SET value_json=? WHERE key='roadmap_ip_secret'",
                   (json.dumps(secrets.token_hex(32)),))
+    # Finance makes its kept tables inert itself: pending actions, undrained events, links to emptied holds.
+    if "fin_actions" in present:
+        from .finance import actions as finance
+        dropped = finance.scrub_dev_copy(c, now())["fin_actions"]
+        if dropped:
+            removed["fin_actions"] = removed.get("fin_actions", 0) + dropped
     if "jobs" in present:
         delete("jobs", "state IN (%s)" % ",".join("?" * len(OPEN_JOBS)), OPEN_JOBS)
     if "attempts" in present:

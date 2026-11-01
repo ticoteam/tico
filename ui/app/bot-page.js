@@ -15,16 +15,16 @@ async function recentRuns() {
 // Header (name, alert, goal) stays visible; work and configuration tabs live in the URL
 // as #/bot/<slug>/<tab>, so refresh and Back keep the tab. Panes stay in the DOM once loaded; only
 // the conversation is torn down when you leave Chat, because it polls.
-// Configuration has its own four tabs; old More, Docs and Session links retain a destination.
-const BOT_DETAIL_TABS = ['info', 'instructions', 'history', 'settings'];
+// Configuration has its own five tabs (Rules lists what the bot must follow, ui/app/org-rules.js); old More, Docs and Session links retain a destination.
+const BOT_DETAIL_TABS = ['info', 'rules', 'instructions', 'history', 'settings'];
 const BOT_TABS = ['chat', 'tasks', ...BOT_DETAIL_TABS];
 // The assistant is chatted with only on each person's own Assistant page (#/assistant), so its bot page has no Chat.
 const botTabs = slug => {
   const tabs = slug === assistantBot() ? BOT_TABS.filter(t => t !== 'chat') : BOT_TABS;
   const mine = S.emps.find(e => e.name === slug)?.my_access;
   // Seen but not read: no updates or docs, and Chat and Tasks only for someone who may write to it (the
-  // page then holds their own threads and tasks with the bot, and the request box).
-  return mine && !mine.read ? tabs.filter(t => t === 'info' || (mine.write && (t === 'chat' || t === 'tasks'))) : tabs;
+  // page then holds their own threads and tasks with the bot, and the request box). Every teammate reads its Rules.
+  return mine && !mine.read ? tabs.filter(t => t === 'info' || t === 'rules' || (mine.write && (t === 'chat' || t === 'tasks'))) : tabs;
 };
 const botLimited = e => !!e?.my_access && !e.my_access.read;
 const botPersonName = id => (S.people || []).find(p => p.id === id)?.name || settingsPersonName(id);
@@ -32,6 +32,87 @@ let BOT = null;
 function botStopped() {
   BOT?.settingsCleanup?.();
   BOT_CHAT_TASK_LOAD++; BOT_CHAT_TASKS = new Map(); BOT = null;
+}
+// Pause is one row in the bot's Settings, not a strip on the page; the header's Paused badge says it at a glance.
+// The control API remains the sole authority; failed writes never change the shown state.
+function botPauseHTML(slug, state, error = '') {
+  const retry = '<button type="button" class="ghost small" data-bot-pause-retry>Retry</button>';
+  if (!state) return error ? `<p class="err" role="alert">${esc(error)} ${retry}</p>` : '<p class="muted" role="status">Loading…</p>';
+  const e = S.emps.find(x => x.name === slug), name = e?.display_name || slug;
+  const paused = state.state === 'paused', record = state.paused_by;
+  const stamp = record && Number.isFinite(Date.parse(record.at))
+    ? `${new Date(record.at).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';
+  const can = state.can_control && !state.company_paused && ['active', 'paused'].includes(state.state);
+  const tasks = paused && state.open_tasks ? ` <a href="#/bot/${encodeURIComponent(slug)}/tasks">${state.open_tasks} open task${state.open_tasks === 1 ? ' is' : 's are'} waiting on it</a>` : '';
+  return `<div class="bot-pause-row">
+    <div class="bot-pause-copy"><div class="bot-pause-title${paused ? ' bot-pause-record' : ''}" role="status" aria-live="polite" aria-atomic="true">${paused ? (stamp ? `Paused by ${esc(record.name)} on ${esc(stamp)}` : 'Paused') : 'Pause this bot'}</div>
+      <p class="muted">${paused ? `${esc(name)} is paused: no tasks, messages or routines until it is unpaused.${tasks}${!state.can_control ? ` Ask ${esc(state.operator || 'its operator')} to unpause.` : ''}`
+        : 'Stops new tasks, messages and routines; a turn in progress is interrupted.'}</p>
+      ${state.company_paused ? '<p class="muted">Company is paused for billing. <a href="#/settings/billing">Add credit</a></p>' : ''}
+      ${error ? `<p class="err" role="alert">${esc(error)} ${retry}</p>` : ''}</div>
+    ${can ? `<button type="button" class="ghost" data-bot-pause-action="${paused ? 'resume' : 'pause'}">${paused ? 'Unpause' : 'Pause'}</button>` : ''}
+  </div>`;
+}
+function botPauseDraw() {
+  const host = $('#bot-control-host'); if (!host || !BOT) return;
+  const focus = host.contains(document.activeElement);
+  patchLiveHTML(host, botPauseHTML(BOT.slug, BOT.pauseState, BOT.pauseError));
+  const button = host.querySelector('[data-bot-pause-action]');
+  if (button) { button.disabled = !!BOT.pauseBusy; button.onclick = () => botPauseChange(BOT, button.dataset.botPauseAction); }
+  const retry = host.querySelector('[data-bot-pause-retry]');
+  if (retry) { retry.disabled = !!BOT.pauseBusy; retry.onclick = async () => { const view = BOT, action = view.pauseRetry; await botPauseLoad(); if (action && BOT === view) await botPauseChange(view, action); }; }
+  if (focus && !host.contains(document.activeElement)) (button || retry)?.focus();
+}
+// The header's and the tree's Paused badges read the roster, which only catches up at its next poll. The pause state
+// (a fresh read or a finished control) is the authority, so the roster entry follows it as soon as it is known.
+function botPauseFollow(view) {
+  const emp = S.emps.find(x => x.name === view.slug), paused = view.pauseState?.state === 'paused', badge = $('#bot-paused');
+  if (emp && paused !== (emp.status === 'paused')) { emp.status = paused ? 'paused' : 'active'; renderTree(); }
+  if (badge) patchLiveHTML(badge, botPausedBadge(view.slug));
+}
+async function botPauseLoad() {
+  const view = BOT;
+  if (!view || view.pauseLoading || view.pauseBusy) return;
+  view.pauseLoading = true;
+  const generation = view.pauseGeneration || 0;
+  try {
+    const value = await get(`/v2/bots/${encodeURIComponent(view.slug)}/pause-state`, {fresh: true});
+    if (BOT !== view || view.pauseBusy || generation !== (view.pauseGeneration || 0)) return;
+    view.pauseState = value;
+    view.pauseLoadedAt = Date.now();
+    if (!view.pauseRetry) view.pauseError = '';
+    botPauseFollow(view);
+  } catch (error) {
+    if (BOT === view && generation === (view.pauseGeneration || 0) && !view.pauseState) view.pauseError = `Could not load bot state: ${error.message}`;
+  } finally {
+    view.pauseLoading = false;
+    if (BOT === view) {
+      botPauseDraw();
+      // The control may have finished while this older read waited on billing. Re-read its committed state.
+      if (generation !== (view.pauseGeneration || 0) && !view.pauseBusy && !view.pauseRetry) void botPauseLoad();
+    }
+  }
+}
+async function botPauseChange(view, action) {
+  if (BOT !== view || view.pauseBusy || !view.pauseState?.can_control || view.pauseState.company_paused) return;
+  // Invalidate any refresh already in flight, even if it arrives after the control finishes.
+  view.pauseGeneration = (view.pauseGeneration || 0) + 1;
+  view.pauseBusy = true; view.pauseError = ''; view.pauseRetry = null; botPauseDraw();
+  try {
+    const result = await post(`/v2/bots/${encodeURIComponent(view.slug)}/control`, {action, expected_revision: view.pauseState.revision});
+    if (BOT !== view) return;
+    view.pauseState = {...view.pauseState, state: action === 'pause' ? 'paused' : 'active', revision: result.revision,
+      paused_by: null};
+    botPauseFollow(view);
+    const name = S.emps.find(x => x.name === view.slug)?.display_name || view.slug;
+    toast(`${name} is ${action === 'pause' ? 'paused.' : 'unpaused'}`, false,
+      action === 'pause' ? {label: 'Unpause', run: () => botPauseChange(view, 'resume')} : null);
+  } catch (error) {
+    if (BOT === view) { view.pauseError = `Could not ${action === 'pause' ? 'pause' : 'unpause'}: ${error.message}`; view.pauseRetry = action; }
+  } finally {
+    view.pauseBusy = false;
+    if (BOT === view) { botPauseDraw(); if (!view.pauseRetry) void botPauseLoad(); }
+  }
 }
 function botStatePill(slug) {
   const st = stateOf(slug);
@@ -203,10 +284,19 @@ function botLimitHTML(slug) {
   return `<section class="bot-limit" role="status"><span aria-hidden="true">⚠</span> ${esc(overLimitWord(limit))}${limit.limit != null ? ` (${usd(limit.spent)} of ${usd(limit.limit)})` : ''}. <a href="#/strategy/budget/${encodeURIComponent('bot:' + slug)}">Raise limit</a></section>`;
 }
 // The alert beside the name and the limit banner come and go with the status poll and live events.
+// The Settings pause row re-reads HQ-backed state only when the page's view of paused is out of date, or a minute old.
+const PAUSE_STALE_MS = 60_000;
+function botPauseStale(view) {
+  if (!view.pauseState || view.pauseLoadedAt == null) return true;
+  if ((stateOf(view.slug) === 'paused') !== (view.pauseState.state === 'paused')) return true;
+  return Date.now() - view.pauseLoadedAt >= PAUSE_STALE_MS;
+}
 function botAlertDraw() {
   if (!BOT) return;
-  const alert = $('#bot-alert'), limit = $('#bot-limit-host'), held = $('#bot-quarantine-host');
+  if (botPauseStale(BOT)) void botPauseLoad();
+  const alert = $('#bot-alert'), limit = $('#bot-limit-host'), held = $('#bot-quarantine-host'), paused = $('#bot-paused');
   if (alert) patchLiveHTML(alert, botAlertHTML(BOT.slug));
+  if (paused) patchLiveHTML(paused, botPausedBadge(BOT.slug));
   if (held) patchLiveHTML(held, botQuarantineCard(BOT.slug));
   if (limit) patchLiveHTML(limit, botLimitHTML(BOT.slug));
 }
@@ -217,15 +307,17 @@ const draggingFiles = ev => [...(ev.dataTransfer?.types || [])].includes('Files'
 ['dragover', 'drop'].forEach(t => window.addEventListener(t, ev => {
   if (draggingFiles(ev) && !ev.target.closest?.('input[type=file]')) ev.preventDefault();
 }));
-function chatDropZone(zone, P) {
-  const pill = pq(P, '.p-pill');
+// `pillNow` is the pill, or a function giving the one there now (the Ask panel keeps its zone and makes a new pill per load).
+function chatDropZone(zone, pillNow) {
+  const cur = () => typeof pillNow === 'function' ? pillNow() : pillNow;
   let depth = 0;
-  const on = v => pill?.classList.toggle('over', v);
+  const on = v => { const P = cur(); if (P) pq(P, '.p-pill')?.classList.toggle('over', v); };
   zone.addEventListener('dragenter', ev => { if (!draggingFiles(ev)) return; ev.preventDefault(); depth++; on(true); });
   zone.addEventListener('dragover', ev => { if (!draggingFiles(ev)) return; ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; });
   zone.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (!depth) on(false); });
   zone.addEventListener('drop', ev => {
-    if (!draggingFiles(ev)) return;
+    const P = cur();
+    if (!draggingFiles(ev) || !P) return;
     ev.preventDefault(); depth = 0; on(false);
     P.files.push(...ev.dataTransfer.files); pillChips(P);
     pq(P, '.p-text')?.focus();
@@ -268,7 +360,7 @@ async function pageBot(slug, tab) {
   <div class="bot-top" id="bot-top">
     <button class="bot-back-arrow" id="bot-back-arrow" type="button" aria-label="Back" title="Back">‹</button>
     <div class="bot-ident"><span data-tip-bot="${esc(slug)}" tabindex="0" role="img" aria-label="${esc(e.display_name || slug)} status">${avatar(slug, 36, stateOf(slug))}</span>
-      <div class="botid"><div class="bot-nameline"><h1${role ? ` title="${esc(role)}"` : ''}>${shownName(e)}${runtimeTag(e)}${botBetaPill(e)}</h1><button type="button" class="bot-learn" id="bot-learn" aria-label="Learnings" title="Learnings" hidden><span class="nav-icon" aria-hidden="true">psychology</span><span class="bl-label">Learnings</span><span class="bl-n" hidden></span></button>${limited ? '' : botScreenLinkHTML(slug)}<span id="bot-tool-strip" hidden></span></div>
+      <div class="botid"><div class="bot-nameline"><h1${role ? ` title="${esc(role)}"` : ''}>${shownName(e)}${runtimeTag(e)}${botBetaPill(e)}</h1><span id="bot-paused">${botPausedBadge(slug)}</span><button type="button" class="bot-learn" id="bot-learn" aria-label="Learnings" title="Learnings" hidden><span class="nav-icon" aria-hidden="true">psychology</span><span class="bl-label">Learnings</span><span class="bl-n" hidden></span></button>${limited ? '' : botScreenLinkHTML(slug)}<span id="bot-tool-strip" hidden></span></div>
         <div class="meta" id="bot-branches"></div>
         <div class="meta" id="bot-alert">${limited ? '' : botAlertHTML(slug)}</div></div></div>
     <div class="bot-switch" id="btabs" role="tablist" aria-label="${esc(e.display_name || slug)}">
@@ -341,7 +433,7 @@ async function pageBot(slug, tab) {
       <dl class="bot-setup">
         ${role ? `<dt>Role</dt><dd>${botRoleHTML(role)}</dd>` : ''}
         <dt>Humans</dt><dd>${userChips(e) || '<span class="muted">Nobody assigned</span>'}</dd>
-        ${!e.agent ? `<dt>Computer</dt><dd>${e.machine ? `${esc(e.machine.label || e.machine.runner_id)} <span class="muted">· ${e.online ? 'Online' : 'Offline'}</span>` : '<span class="muted">Not assigned</span>'}</dd>
+        ${!e.agent ? `<dt>Computer</dt><dd>${cloudMachineOn(e) ? cloudMachineComputerHTML(e) : e.machine ? `${esc(e.machine.label || e.machine.runner_id)} <span class="muted">· ${e.online ? 'Online' : 'Offline'}</span>` : '<span class="muted">Not assigned</span>'}</dd>
         <dt>Harness</dt><dd>${esc(harnessWords(e.harness || e.runtime || e.resolved_runtime) || 'Team default')}</dd>` : ''}
         ${e.agent ? `<dt>Run by</dt><dd>${esc(agentKind(e.agent))}${e.agent.profile ? ` · profile <code>${esc(e.agent.profile)}</code>` : ''}${e.agent.version ? ` · ${esc(e.agent.version)}` : ''}${e.agent.platform ? ` · ${esc(e.agent.platform)}` : ''}<span class="muted"> · ${esc(agentPresenceLabel(e.agent, e.online).toLowerCase())}${e.agent.last_seen ? `, last ${e.agent.synced ? 'sync' : 'seen'} ${esc(ago(e.agent.last_seen))}` : ''}</span></dd>
         <dt>Model</dt><dd>${e.agent.model ? `${esc(e.agent.model)}${e.agent.provider ? `<span class="muted"> · ${esc(e.agent.provider)}</span>` : ''}` : "<span class=\"muted\">the profile's own</span>"}</dd>`
@@ -377,9 +469,11 @@ async function pageBot(slug, tab) {
     <section class="card"><header><h2>Screen</h2></header><dl class="bot-setup" id="bot-screen-settings"></dl></section>
     <section class="card" id="bot-access-card"><header><h2>Access</h2></header>
       ${accessTable(e)}</section>
+    <section class="card" id="bot-pause-card" aria-label="Pause"><div id="bot-control-host">${botPauseHTML(slug, null)}</div></section>
 
   </div>`}
 
+  <div id="pane-rules" role="tabpanel" aria-labelledby="bot-tab-rules" hidden><div id="bot-rules" class="ru-bot"></div></div>
   ${limited ? '<div id="pane-docs" role="tabpanel" aria-labelledby="bot-tab-instructions" hidden>' : `<div id="pane-docs" role="tabpanel" aria-labelledby="bot-tab-instructions" hidden>
     <section class="card"><header><h2>Instructions</h2></header><div class="md" id="agent">Loading…</div>
       <div id="bot-instructions-editor"></div></section>
@@ -390,6 +484,7 @@ async function pageBot(slug, tab) {
   </div>`;
 
   BOT = {slug, tab: null, loaded: new Set(), limited};
+  void botPauseLoad();
   botScreenWire(slug);
   frBotWire(slug);
   orgHistoryVisit('b:' + slug);
@@ -569,13 +664,14 @@ function showBotTab(tab) {
   $('#bot-details').hidden = work;
   $('#pane-more').hidden = view !== 'info';
   $('#pane-docs').hidden = view !== 'instructions';
-  for (const t of ['history', 'settings']) if ($('#pane-' + t)) $('#pane-' + t).hidden = view !== t;
+  for (const t of ['history', 'rules', 'settings']) if ($('#pane-' + t)) $('#pane-' + t).hidden = view !== t;
   $('#bot-detail-tabs').querySelectorAll('[data-bot-detail-tab]').forEach(button => {
     const on = button.dataset.botDetailTab === view;
     button.classList.toggle('cur', on); button.setAttribute('aria-selected', String(on));
     button.tabIndex = on ? 0 : -1;
   });
   if (view === 'history') void botHistoryLoad(BOT.slug);
+  if (view === 'rules') void botRulesLoad(BOT.slug);   // read each time: rules change on the Rules page
   placeBotHead();
   if (!work) { botScreenRefresh(BOT.slug); botInfoRefresh(BOT.slug); }
   if (chat && BOT_PILL?.focusOnOpen) {

@@ -6,6 +6,7 @@ nothing here reads `registry/` or the real `runtime/hub.db`.
 import hashlib
 import json
 import re
+import sqlite3
 import tempfile
 import unittest
 import unittest.mock
@@ -1362,3 +1363,25 @@ class StrategyTableNames(HubCase):
         for old, new, _ in H.STRATEGY_TABLES:
             columns = [r[1] for r in self.conn.execute(f"PRAGMA table_info({new})")]
             self.assertEqual([r[1] for r in self.conn.execute(f"PRAGMA table_info({old})")], columns)
+
+
+class WalLeftForLitestream(unittest.TestCase):
+    def test_the_last_close_keeps_the_wal_so_litestream_can_resume(self):
+        # Litestream resumes from its place in the WAL; a plain connection's last close would fold and delete it.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "hub.db"
+            conn = H.connect(path)
+            conn.execute("CREATE TABLE probe(x)")
+            conn.execute("INSERT INTO probe VALUES (1)")
+            conn.close()
+            self.assertTrue(Path(f"{path}-wal").exists())
+            reader = sqlite3.connect(path)
+            self.assertEqual(reader.execute("SELECT count(*) FROM probe").fetchone()[0], 1)
+            reader.close()
+            # The control: without the flag the same last close deletes the WAL.
+            plain = Path(directory) / "plain.db"
+            control = sqlite3.connect(plain, isolation_level=None)
+            control.execute("PRAGMA journal_mode=WAL")
+            control.execute("CREATE TABLE probe(x)")
+            control.close()
+            self.assertFalse(Path(f"{plain}-wal").exists())

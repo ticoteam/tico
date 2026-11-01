@@ -394,7 +394,7 @@ something. Plain code then decides from the answers, your settings and your open
 | A progress note | FYI: stays with the bot; no wait is set. |
 | A hands-only chore (grant access, merge, add a key) | **Hands needed**, its own group, up to its own budget (5). |
 | Work the bot could do itself, or unclear | Sent back to the bot. |
-| Anything else, with B open items as your budget (10) | Under B: reaches you. B to 3B: also meets one of your lines. 3B to 10B: also recommends something and can't wait past today. 10B or more: only something that can't wait at all. |
+| Anything else, with B open items as your budget (10) | Under B: reaches you. B to 3B: also meets one of your lines. 3B to 10B: also meets one of your lines and recommends something. 10B or more: only something that can't wait at all. |
 
 Something urgent (an outage, a security exposure, money being lost) always reaches you, unless it is only a progress
 note: that is FYI however urgent, and a repeat still joins your open item. Sent back is never a
@@ -525,6 +525,22 @@ Open the collapsed **Details** for the full message and technical text, includin
 In Decide, **Details** also includes a link to the task.
 See [When nobody answers a bot's ask](#when-nobody-answers-a-bots-ask) for when questions close.
 Approvals for spending or publishing keep their own card.
+
+#### Reviewing files
+
+`hub task question <person> "Is this cut ready?" --review cut.mp4` (repeatable, a path or `FILE[@N]`; MCP
+`hub_task_question` with `review`) asks about exact file versions. A path is published first. The card shows the files
+inline (pictures, video, audio, pages; four at most, the rest as chips) with **Approve** and **Request changes**, unless
+the bot gives its own options. `--pick` (2–5 files) makes one option per file, each under its media, plus **Request
+changes**. Request changes asks for a note. The person must be able to open each file. With your own `--option`s,
+only one labelled "Approve" approves; any other label is recorded as `other`. The same question about other versions
+is a new question; about the same versions while the first is open, it is refused as a duplicate.
+
+The answer records `reviewed: [{file, version, digest, verdict}]` (`approve`, `changes`, `passed` for the files not
+picked, `other`). `--spend "LABEL=AMOUNT:WHAT"` (`--spend-account`, default `gateway`) makes picking LABEL also
+approve that spend: the answer stores `spend_approval`, a `spend` approval the bot requested and the person decided,
+which the bot consumes once (`hub approval consume`). [`hub file approved`](files.md#approved-versions) reads the
+verdicts. Where a bot moves a stage instead of a person, it reviews directly with `hub file review`.
 
 Tico refuses a bot's question to a person, saying why and with an example, when:
 
@@ -1076,7 +1092,7 @@ hub task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the mi
 ```
 
 `--check-model` takes a runtime (its provider's recommended model) or `runtime:model`. With no value (`auto` in the
-API) it takes the company's check model (Settings > Computers > Models, [How it works](how-it-works.md)): the first in its
+API) it takes the company's check model (Settings > Models, [How it works](how-it-works.md)): the first in its
 order from a provider other than the parent's authors and runnable on the bot's computer. The authors are every
 maker on the parent's finished runs (a fallback counts) and the provider its owner runs on. Another provider is a
 preference: with none that can run, it runs on an author's own, and the subtask's history says so. `--role` is `review` or `check` (the default). The API takes `check_model` and `check_role` on task create; the MCP tool is
@@ -1087,7 +1103,7 @@ preference: with none that can run, it runs on an author's own, and the subtask'
   or files in its body. Its turns carry none of the bot's deferred tasks or messages.
 - Only the runtime, model, harness and effort change. The bot's repository, tools, credentials and isolation are
   its own, so a check never runs with more than the bot has.
-- Only a provider the company has enabled (Settings > Computers > Models) and a current model can be named, and the
+- Only a provider the company has enabled (Settings > Models) and a current model can be named, and the
   bot's computer must not report that runtime missing or signed out. A computer that reports it signed out is not
   handed the subtask's turns.
 - Task detail shows the subtask's `check_model`, and the run's provenance (`ran_on` on the task's runs) names the
@@ -1100,7 +1116,7 @@ preference: with none that can run, it runs on an author's own, and the subtask'
   declined, its held turn is let go instead of retrying after each reset; a person's message on it stays queued.
 - When the limit is on the computer's default login (no subscription) and Health already marks that login out of
   quota (`default_login_limited`, docs/health-monitor.md), the check does not wait: its next turn runs at once on
-  the next check model in the company's order (Settings > Computers > Models) that is not from a provider whose work it
+  the next check model in the company's order (Settings > Models) that is not from a provider whose work it
   checks, not on another login out of quota there, and that the bot's computer can run. The task's history and the
   bot's status say where it moved. It goes back to the model it asked for once a turn on that login completes or
   the provider's reset passes, or once the bot moves to another computer or gets a subscription for that tool. With

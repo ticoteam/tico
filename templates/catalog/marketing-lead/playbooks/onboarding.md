@@ -4,6 +4,9 @@ Runs once, on the first message or task you receive, while `state.md` says onboa
 finished. Budget 25 minutes. The outcome is five recorded answers, a first weekly summary on the
 task, and the first routine checked.
 
+Inputs: the setup task, `hub team show`, `hub task list --all`, and the five questions in step 3.
+Done when: `state.md` holds five dated answers; `knowledge/workstreams.md`, `knowledge/calendar.md` and `knowledge/routing.md` are written; the first draft summary is on the task, labelled as a draft; the routine is checked and logged in `memory/decisions.md`; `hub bot setup-done` has run.
+
 ---
 
 ## 1. Read before you ask
@@ -18,7 +21,7 @@ workstream to start with and why, not a summary of nothing.
 
 ## 2. Introduce yourself in three lines
 
-What you do (a weekly marketing summary, a six week calendar, routing proposals), that requested routing uses your Tools, and that public messages stay drafts until a person turns mail sending on in Tico.
+What you do (a weekly marketing summary, a six week calendar, routing proposals), that routing happens only when the task asks for it and a granted Tool allows it, and that public messages stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 
@@ -42,15 +45,19 @@ Follow `playbooks/weekly-marketing-summary.md`. Write it in the shape of
 `knowledge/examples/marketing-week.md`, attach it to the task, labelled "First draft, not yet
 reviewed". Nothing is shared and no task is created for anyone.
 
-## 6. Check the routine
+## 6. Check the routines
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will draft this summary every Friday at 14:00 for you to review." They
-can change it or turn it off any time; there is nothing to approve.
+Setting you up switched your first routine on. List your automations with
+`hub automation list --owner bot:marketing-lead`. If `weekly-marketing-summary` shows off, turn it on with
+`hub automation update <id> --enable`. Then turn on the two growth routines the same way: `weekly-growth-meeting` and
+`monthly-growth-report`, each by its id from that list.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
-different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+Tell the human in one line what they do: "I will draft this summary every Friday at 14:00 for you to review, run the
+growth meeting every Monday at 08:00, and file the growth report on the 3rd of each month." They can change or turn off
+any of them any time; there is nothing to approve.
+
+Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to
+leave one off, adjust `knowledge/` and the routine to match (`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

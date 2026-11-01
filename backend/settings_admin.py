@@ -614,10 +614,11 @@ class SettingsAdmin:
         CA.gate(c, who.actor, "bots", f"remove {bot}")
         # The assistant, BotOps, the Librarian, the Strategy Bot and the Task Manager are built in: nobody archives
         # them, the owner included.
-        if bot in (self.settings.assistant_bot, "botops", "librarian", "goal-manager", "task-manager"):
+        if bot in (self.settings.assistant_bot, "botops", "librarian", "goal-manager", "task-manager", "bookkeeper"):
             raise Problem("system_bot", (self.settings.assistant_name if bot == self.settings.assistant_bot
                                          else "BotOps" if bot == "botops" else "The Librarian" if bot == "librarian"
                                          else "The Task Manager" if bot == "task-manager"
+                                         else "The Bookkeeper" if bot == "bookkeeper"
                                          else "The " + strategy_bot.name(c))
                           + " is built in to every team and cannot be archived or deleted; you can pause or rename it", 409)
         lifecycle = self.auth.report_lifecycle(c, who, bot, "archive")

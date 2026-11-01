@@ -39,12 +39,13 @@ import json
 import logging
 import threading
 import weakref
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from pydantic import Field
 
 from . import automation_actions as A
+from . import automation_due as D
 from . import automation_engine as E
 from . import automation_flow as F
 from . import people as P
@@ -164,6 +165,11 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None):
            "problems": redesign_migration.wake_problems(c, row["id"], flow) if flow.get("wakes") else []}
     if flow["trigger"]["type"] == "schedule":
         out["next_run"] = row["next_due"] or _iso(_due(flow["trigger"], datetime.now(timezone.utc)))
+    if flow["trigger"]["type"] == "due":
+        # next_due is the next due day (a date); next_run is when its run starts.
+        day = _due_day(row["next_due"])
+        out["next_due"], out["next_run"] = (None, None) if not day else (
+            day.isoformat(), _iso(D.fire_at(day, D.open_days_of(flow["trigger"]), D.zone_of(flow["trigger"]))))
     if flow.get("enabled") is False:
         # Paused, not just off: the run guard turned it off and nobody has changed it since.
         guard = c.execute("SELECT max(ts) FROM events WHERE target=? AND action='automation.run_guard'",
@@ -214,10 +220,28 @@ def _next_n(c, aid):
     return (row[0] or 0) + 1
 
 
+def _due_link(flow):
+    trigger = (flow or {}).get("trigger")
+    return str(trigger.get("rule_due_id") or "") if isinstance(trigger, dict) else ""
+
+
+def _check_due_link(c, aid, flow, before):
+    """A trigger's `rule_due_id` is its due date's own routine's alone (backend/rule_due_routine.py links it): a save,
+    proposal or restore that names a due date this automation is not the routine of is refused, so no automation opens
+    tasks that count toward someone else's due date. A link it already had is left as it is (a rename or pause)."""
+    due_id = _due_link(flow)
+    if not due_id or due_id == _due_link(before):
+        return
+    from . import rule_due
+    if not (H._has_table(c, "rule_due_dates") and rule_due.links(c, due_id, aid)):
+        raise Problem("forbidden", "Only the routine a rule's due date links may name it in rule_due_id", 403)
+
+
 def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_version=False, via=None, audit=True):
     """Write the automation, with its audit row (`audit`: a bot's new draft has none). A change to what it does
     (trigger, steps, batch) is a new version; a rename, pause or cap is not. `current` makes that pending version the
     current one instead; `new_version` writes one even when nothing it does changed (restoring an old version)."""
+    _check_due_link(c, aid, flow, before)
     now, prior = H.now(), c.execute("SELECT version FROM automations WHERE id=?", (aid,)).fetchone()
     n = prior["version"] if prior else None
     if current is not None:
@@ -232,8 +256,10 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
                int(flow["builtin"]), json.dumps(flow, sort_keys=True), n, now)
     # A new schedule is due at its next time after now, set here, so the time GET shows as next_run is the one the
     # scheduler runs even when its first pass comes after it.
-    due = _iso(_due(flow["trigger"], datetime.fromisoformat(now.replace("Z", "+00:00")))) \
-        if flow["trigger"]["type"] == "schedule" else None
+    at = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    due = _iso(_due(flow["trigger"], at)) if flow["trigger"]["type"] == "schedule" else None
+    if flow["trigger"]["type"] == "due":
+        due = _due_text(D.start(flow["trigger"], at))
     if prior:
         # A due time stays through a rename, cap or group change, so the occurrence due now still runs; a new
         # schedule, or one turned back on, starts from the next time after now.
@@ -257,6 +283,20 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
         # A converted routine turned on or off, by whoever: what read the routine's own switch still sees it.
         H.event(c, actor, "routine.updated", source["id"], {"enabled": bool(flow["enabled"]), "automation": aid})
     return _row(c, aid)
+
+
+def remove(c, actor, row, via=None):
+    """Delete an automation: what it holds is dropped, its unfinished runs are skipped (one mid-step finishes that step
+    and stops there, `HubServices.on_hold`), and the delete is on record. The row stays, marked deleted."""
+    aid = row["id"]
+    _unhold(c, aid, actor, "drop", via)
+    c.execute("UPDATE automations SET deleted_at=?, enabled=0 WHERE id=?", (H.now(), aid))
+    for dropped in c.execute("SELECT id FROM automation_runs WHERE automation_id=? AND status IN "
+                             "('queued','waiting','running')", (aid,)).fetchall():
+        _cancel_mail(c, dropped["id"])
+    c.execute("UPDATE automation_runs SET status='skipped',finished=? WHERE automation_id=? "
+              "AND status IN ('queued','waiting','running')", (H.now(), aid))
+    audit_log.write(c, actor, "automation:" + aid, flow_of(row), None, via)
 
 
 def follow(c, owner, old, new):
@@ -290,6 +330,7 @@ def regroup(c, old, new):
 
 def _propose(c, actor, aid, flow, before, summary):
     """A bot's change it may not make itself: kept as a pending version that a person with edit rights restores."""
+    _check_due_link(c, aid, flow, before)
     n = _next_n(c, aid)
     c.execute("INSERT INTO automation_versions(automation_id,n,actor,at,flow_json,status,summary) "
               "VALUES(?,?,?,?,?,'pending',?)", (aid, n, actor, H.now(), json.dumps(_versioned(flow), sort_keys=True),
@@ -477,6 +518,9 @@ def _checked(c, flow, settings=None, access=True, saved=None, aid=None, wake_ste
         flow = F.check(flow)
     except F.Invalid as exc:
         raise Problem("invalid", str(exc), 422)
+    if flow["trigger"]["type"] == "due":
+        # Stored on the flow, so a later change to the company's zone does not move the routine.
+        flow["trigger"] = {"open_days": D.OPEN_DAYS, "tz": D.zone_of({}), **flow["trigger"]}
     if flow.get("wakes"):   # a converted "What wakes" automation: only edits its wake rules can carry out
         from .redesign_migration import check_wakes
         check_wakes(flow, c if wake_steps else None, saved, aid)
@@ -946,6 +990,11 @@ def queue(c, row, payload, ref="", *, manual=False, chain=()):
         return None
     if not manual and _absorbed(c, row):
         return None
+    if str(ref).startswith("due:") and c.execute(
+            "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? AND status!='failed' LIMIT 1",
+            (row["id"], str(ref)[:200])).fetchone():
+        # One due day, one run: a repeated or concurrent pass for the same day starts nothing new.
+        return None
     if str(ref).startswith("slack:") and c.execute(
             "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? LIMIT 1",
             (row["id"], str(ref)[:200])).fetchone():
@@ -1337,6 +1386,144 @@ def _held(c, aid, rid):
     return out
 
 
+# The automation steps whose words go to someone, and the arguments that hold them, checked against org rules
+# (backend/org_rule_check.py) when the automation acts as a bot.
+RULE_CHECKED = {"create_task": ("title", "body"), "assign": ("text", "note"), "label": ("text", "note"),
+                "note": ("text", "note"), "wake_bot": ("text", "prompt"), "post_update": ("text", "body"),
+                "send_reply": ("body", "text")}
+
+
+def _rule_key(do, args):
+    """The argument a warned step's reader gets, which its warning line goes on: the first checked argument the step
+    sets; a new task, its body (a title is kept whole); a post of the turn's own output, its `text` (what
+    `_post_update` posts); an assign, its hand-off `note`."""
+    if do == "create_task":
+        return "body"
+    keys = RULE_CHECKED.get(do) or ()
+    key = next((k for k in keys if args.get(k)), None)
+    if key:
+        return key
+    if do == "post_update":
+        return "text"
+    if do == "assign" and args.get("owner"):
+        return "note"
+    return None
+
+
+def _reply_addresses(values):
+    """The addresses a mail reply goes to: the message's sender and the others it was sent to."""
+    message = A._message(values) or {}
+    if message.get("source") == "slack":
+        return []
+    mailbox = str(message.get("mailbox") or "").strip().lower()
+    found = [str(a).strip().lower() for a in [message.get("from"), *(message.get("to") or []), *(message.get("cc") or [])]
+             if a and "@" in str(a)]
+    return sorted({a for a in found if a != mailbox})
+
+
+def _reply_audience(c, auto, args, values):
+    """Who a reply step's words reach. In Slack: the room its bot posts in (the operator, or a shared room's people)
+    and the person who wrote. By mail: the roster people it is addressed to."""
+    from . import org_rule_check
+    message = A._message(values) or {}
+    if message.get("source") != "slack":
+        return org_rule_check.mail_recipients(c, _reply_addresses(values))
+    out = [str(message.get("from") or "").replace("person:", "human:")]
+    bot = A.R._slug(args.get("bot")) or A._owner_bot(c, auto)
+    if bot:
+        from . import rooms
+        if rooms.thread_mode(c, bot) == rooms.SHARED:
+            room = c.execute("SELECT id FROM conversations WHERE scope='shared' AND room_key=? AND closed_at IS NULL "
+                             "ORDER BY COALESCE(last_message_at,created) DESC LIMIT 1", (bot,)).fetchone()
+            out += (H.conversation(c, room["id"]) or {}).get("participants") or [] if room else []
+        operator = c.execute("SELECT operator FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        if operator and operator["operator"]:
+            out.append(H.human_actor(operator["operator"]))
+    return out
+
+
+def _rule_audience(c, auto, do, args, values):
+    """Who a step's words reach, for a rule's With: a new task's owner, the run's task's owner and requester, the bot
+    a note or wake goes to, a reply's people, and the whole company for an update."""
+    from . import org_rule_check
+    out = []
+    try:
+        task = A.task_of(c, auto, values)
+    except ValueError:
+        task = None
+    if do == "send_reply":
+        out += _reply_audience(c, auto, args, values)
+    if do == "post_update":
+        out += org_rule_check.company(c)
+    if do in ("create_task", "assign") and args.get("owner"):
+        owner = str(args["owner"]).replace("person:", "human:")
+        out.append(H.resolve_actor(c, owner) or (owner if ":" in owner else "bot:" + owner))
+    if do in ("assign", "label", "note") and task:
+        out += [task["owner"], task["requester"]]
+    if do in ("note", "wake_bot") and args.get("bot"):
+        out.append("bot:" + str(args["bot"]).removeprefix("bot:"))
+    if do == "wake_bot" and not args.get("bot") and A._owner_bot(c, auto):
+        out.append("bot:" + A._owner_bot(c, auto))
+    return sorted({a for a in out if a and a not in ("human:", "bot:")})
+
+
+def _warned_args(c, auto, gate, do, args, key, values):
+    """A warned step's arguments: the warning line on the argument its reader gets (`key`, from `_rule_key`): a post
+    of the turn's output posts that output with the line first; an assign with no note of its own puts the line
+    before the note the task already has, which stays whole."""
+    from . import org_rule_check
+    if not (gate and gate.get("warn") and key):
+        return args
+    said = args.get(key)
+    if not said and do == "post_update":
+        said = A._turn_output(values).get("text")
+    if not said and do == "assign":
+        try:
+            note = A.task_of(c, auto, values).get("note") or ""
+        except ValueError:
+            note = ""
+        return {**args, key: org_rule_check.warned_note(gate, note)}
+    return {**args, key: org_rule_check.warned_text(gate, str(said or "")).rstrip()}
+
+
+class TaskMoved(Exception):
+    """The task a step was checked on changed before its write: nothing is written, and the step checks again."""
+
+
+RULE_TRIES = 3          # checks of one step whose task keeps changing under it, before the step fails
+
+
+def replay_step(c, bot, hold, replay, ingest, gate=None):
+    """Send anyway on a held automation step: the step runs once, as its automation acts now, with no second check of
+    the rules it was held on (a newer rule's Warn, `gate`, goes on the step's text)."""
+    row = c.execute("SELECT * FROM automations WHERE id=?", (replay["automation"],)).fetchone()
+    if not row:
+        raise Problem("not_found", "The automation is gone", 409)
+    auto = {"id": row["id"], "flow": flow_of(row), "assistant_bot": "", "chain": replay.get("chain") or []}
+    if A.acts_as(c, auto) != hold["author"]:
+        # The output was approved as the held bot's: run as anyone else (a new owner, a group's new lead), it would
+        # write under another bot's permissions and rules. That is a new, checked write.
+        raise Problem("changed", "Who this automation acts as changed since it was held; it stays held. Run it again "
+                      "to check it.", 409)
+    args = _warned_args(c, auto, gate, replay["do"], replay["args"], _rule_key(replay["do"], replay["args"]),
+                        replay["values"])
+    chain, via = CHAIN.set(tuple(auto["chain"])), H.VIA.set("automation:" + row["id"])
+    try:
+        return A.run(c, auto, replay["run"], replay["do"], args, replay["values"], step=replay.get("step"))
+    finally:
+        H.VIA.reset(via)
+        CHAIN.reset(chain)
+
+
+def replay_audience(c, bot, replay):
+    """Who a held step would reach now (org_rule_check._same_audience), counted as its check counted them."""
+    row = c.execute("SELECT * FROM automations WHERE id=?", (replay["automation"],)).fetchone()
+    if not row:
+        raise Problem("not_found", "The automation is gone", 409)
+    auto = {"id": row["id"], "flow": flow_of(row), "assistant_bot": "", "chain": replay.get("chain") or []}
+    return _rule_audience(c, auto, replay["do"], replay["args"], replay["values"])
+
+
 class HubServices:
     """The executor's services in the hub. Each call with an effect takes its own short transaction, acting as the
     automation's owner with `via: automation:<id>` on what it logs and its chain on what it writes."""
@@ -1423,12 +1610,86 @@ class HubServices:
             found = self._screened(bot, ctx["values"]) if bot else None
             if found and found["action"] != "pass":
                 args = self._screened_task(found, bot, args, ctx["values"])
-        result = self._once(ctx, lambda c: A.run(c, self.auto, self.run_id, do, args, ctx["values"]))
+        for _ in range(RULE_TRIES):
+            rule = self._rule_check(do, args, ctx["values"], ctx.get("step"))
+            try:
+                result = self._once(ctx, lambda c, rule=rule: self._ruled(c, rule, do, args, ctx["values"],
+                                                                         step=ctx.get("step")))
+                break
+            except TaskMoved:
+                continue                   # rolled back, nothing written or recorded: check it as it is now
+        else:
+            raise RuntimeError("The task kept changing while this step's rule check ran; nothing was done")
         if found and found["action"] != "pass" and isinstance(result, dict) and result.get("task"):
             from . import screening
             self._write(lambda c: screening.note(c, found, "webhook", result["task"], bot=bot,
                                                  to=args.get("owner") if found["action"] == "hold" else None))
         return result
+
+    def _rule_text(self, c, do, args, values):
+        """What a step says, as the rule check reads it, and the argument a warning line goes on. A task handed to a
+        new owner (`assign`) says its title and body to them, with or without a note."""
+        keys = RULE_CHECKED.get(do)
+        if not keys:
+            return "", None
+        text = "\n\n".join(str(args[k]) for k in keys if args.get(k))
+        if do == "post_update" and not text:
+            text = str(A._turn_output(values).get("text") or "")
+        if do == "assign" and args.get("owner"):
+            try:
+                task = A.task_of(c, self.auto, values)
+            except ValueError:
+                task = None
+            if task:
+                text = "\n\n".join(filter(None, (text, f"Assigned: {task['title']}\n\n{task.get('body') or ''}".rstrip())))
+        return text, _rule_key(do, args)
+
+    def _rule_check(self, do, args, values, step=None):
+        """The org rule check of what this step writes, when the automation acts as a bot (backend/org_rule_check.py):
+        outside every transaction, as Decide's own calls are. A person's automation is never checked."""
+        from . import org_rule_check
+        from .auth import Identity
+        store = self.hub.store
+        with store.read() as c:
+            if do not in RULE_CHECKED or not org_rule_check.in_force(c):
+                return None             # no rule in force: the step's audience (a roster read) is never resolved
+            text, _ = self._rule_text(c, do, args, values)
+            if not text:
+                return None
+            author = A.acts_as(c, self.auto)
+            if not author or not H.is_bot(author):
+                return None
+            recipients = _rule_audience(c, self.auto, do, args, values)
+            task = None
+            if do == "assign":
+                try:
+                    task = A.task_of(c, self.auto, values)
+                except ValueError:
+                    pass
+        addresses = _reply_addresses(values) if do == "send_reply" else []
+        context = {"automation": self.flow.get("name") or self.row["id"], "step": do, "step_id": step or "",
+                   **({"to": addresses} if addresses else {})}
+        return org_rule_check.preflight(store, self.hub.app.state.judge, Identity(author, "bot"), "automation", text,
+                                        recipients, context=context,
+                                        obj=f"{task['id']}@{task['version']}" if task else "")
+
+    def _ruled(self, c, rule, do, args, values, step=None):
+        """The step inside its write: held by a rule, nothing is done and the run goes on with the step failed. A task
+        an assign was checked on that changed since (its version) is still held by a verdict that held; any other
+        verdict is stale, so nothing is written (`TaskMoved`) and `act` checks the task again outside the write."""
+        if rule:
+            from . import org_rule_check
+            text, key = self._rule_text(c, do, args, values)
+            gate = org_rule_check.apply(c, rule, text, {"automation": self.row["id"], "run": self.run_id, "do": do,
+                                                        "args": args, "values": _trim(values), "step": step,
+                                                        "chain": list(self.chain)}, tell=True,
+                                        obj_now=org_rule_check.current_obj(c, rule.get("obj")))
+            if gate and gate.get("moved"):
+                raise TaskMoved()
+            if gate and gate.get("held"):
+                return {"ok": False, "detail": "held by a rule", "held": gate["held"]["id"]}
+            args = _warned_args(c, self.auto, gate, do, args, key, values)
+        return A.run(c, self.auto, self.run_id, do, args, values, step=step)
 
     def _screened_task(self, found, bot, args, values):
         """A create_task step's arguments after screening: held for a person, or with the warning line first."""
@@ -1474,7 +1735,8 @@ class HubServices:
             if cap is not None and _spent(c, self.row["id"], self.run_id) + float(ctx.get("cost") or 0) >= float(cap):
                 return None
             started = A.start_turn(c, self.auto, self.run_id, ctx["step"], who, prompt, self.hub.settings.assistant_bot,
-                                   ctx["key"], label=ctx.get("label"), run_model=ctx.get("run_model"))
+                                   ctx["key"], label=ctx.get("label"), run_model=ctx.get("run_model"),
+                                   occurrence=ctx["values"].get("due"))
             if found and found["action"] == "warn":
                 from . import screening
                 screening.note(c, found, "webhook", started["ref"], bot=bot)
@@ -1587,6 +1849,8 @@ class Hub:
                       "WHERE id=?", (status, state.get("cost", 0), json.dumps(state, default=str),
                                      None if status in ("waiting", "queued", "held") else H.now(),
                                      min(waits) if waits and status == "waiting" else None, rid))
+            if status == "failed":
+                _due_failed(c, rid, _run_error(state))
             if status == "queued":
                 _ring(c)
 
@@ -1667,6 +1931,8 @@ def _settle_run(c, run_id):
     c.execute("UPDATE automation_runs SET status=?, state_json=?, finished=? WHERE id=?",
               (status, json.dumps(state, default=str),
                run["finished"] or (None if status == "waiting" else H.now()), run_id))
+    if status == "failed" and run["status"] != "failed":
+        _due_failed(c, run_id, _run_error(state))
 
 
 def restate(c, run_id, key, value, changes):
@@ -1726,6 +1992,9 @@ def tick(store, at=None):
                 fire(c, "schedule", {"schedule": {"at": row["next_due"], "cron": trigger["cron"], "tz": zone}},
                      f"schedule:{row['next_due']}", only=row["id"])
             c.execute("UPDATE automations SET next_due=? WHERE id=?", (_iso(next_due(trigger["cron"], at, zone)), row["id"]))
+        for row in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL AND enabled=1 "
+                             "AND trigger_type='due'").fetchall():
+            _due_pass(c, row, at)
         c.execute(f"UPDATE automation_runs SET status={RUNNABLE},wake_at=NULL WHERE status='waiting' AND wake_at<=?",
                   (now,))
         # A run cut off (the server stopped mid-run) goes on from its last save; its effects are not done twice.
@@ -1763,6 +2032,168 @@ def tick(store, at=None):
     return hub.drain() if hub else 0
 
 
+def _due_day(value):
+    """The cursor's due day as a date, or None (none left, or not yet set)."""
+    return date.fromisoformat(value) if value else None
+
+
+def _due_text(day):
+    """A due day as the cursor is stored: its ISO date, or "" once none is left (NULL means not yet set)."""
+    return day.isoformat() if day else ""
+
+
+DUE_RETRY = timedelta(hours=1)    # a due day whose run failed is run again no sooner than this after the failure
+DUE_TRIES = 3                     # failed runs of one due day before the routine gives that day up
+
+
+def due_input(trigger, day):
+    """The payload a due occurrence's run starts with, for its due day `day`: what `_due_pass` fires, and what a manual
+    run without input is given. Its `due` object makes the task's due and occurrence (backend/automation_actions.py)."""
+    zone, open_days = D.zone_of(trigger), D.open_days_of(trigger)
+    return {"due": {"due_on": day.isoformat(), "first_due": trigger["first_due"], "repeats": trigger["repeats"],
+                    "open_days": open_days, "tz": zone, "rule_due_id": trigger.get("rule_due_id"),
+                    "run_at": _iso(D.fire_at(day, open_days, zone))}}
+
+
+def _next_due_day(row, trigger, at):
+    """The routine's next due day not yet queued (its cursor), or None when none is left."""
+    return _due_day(row["next_due"]) if row["next_due"] is not None else D.start(trigger, at)
+
+
+def _same_trigger(c, aid, version, trigger):
+    """Whether a run's version had this due trigger (its days and zone): a run made under a trigger since changed, or
+    before the routine was a due one, is not an occurrence of the routine any more."""
+    row = c.execute("SELECT flow_json FROM automation_versions WHERE automation_id=? AND n=?", (aid, version)).fetchone()
+    if not row:
+        return False
+    was = json.loads(row[0]).get("trigger") or {}
+    return (was.get("type") == "due" and all(was.get(k) == trigger.get(k) for k in ("first_due", "repeats"))
+            and D.open_days_of(was) == D.open_days_of(trigger) and D.zone_of(was) == D.zone_of(trigger))
+
+
+def _owed(c, row, trigger):
+    """The due days whose runs failed and are still owed a try, oldest first, as (trigger_ref, last failure): fewer than
+    DUE_TRIES failed runs, no run that stands (ok, unfinished or skipped), made under this due trigger. Each day counts
+    its own failures, so the days of one catch-up that failed each keep their own tries."""
+    settled = {r[0] for r in c.execute("SELECT DISTINCT trigger_ref FROM automation_runs WHERE automation_id=? "
+                                       "AND trigger_ref LIKE 'due:%' AND status<>'failed'", (row["id"],))}
+    seen = {}
+    for r in c.execute("SELECT trigger_ref, version, finished FROM automation_runs WHERE automation_id=? "
+                       "AND trigger_ref LIKE 'due:%' AND status='failed' ORDER BY started", (row["id"],)):
+        if r["trigger_ref"] in settled:
+            continue
+        count = seen.get(r["trigger_ref"], (0, "", 0))[0]
+        seen[r["trigger_ref"]] = (count + 1, r["finished"] or "", r["version"])
+    return [(ref, last) for ref, (count, last, version) in sorted(seen.items())
+            if count < DUE_TRIES and _same_trigger(c, row["id"], version, trigger)]
+
+
+def _held_by_find(c, row):
+    """A find runs one at a time: a day waits while another run of the routine is unfinished."""
+    return bool(_finds(flow_of(row)["steps"]) and c.execute(
+        "SELECT 1 FROM automation_runs WHERE automation_id=? AND status IN ('queued','running','waiting','held') "
+        "LIMIT 1", (row["id"],)).fetchone())
+
+
+def _due_pass(c, row, at):
+    """A routine's due days whose run time has come, one run each: the cursor (`next_due`) walks forward, queueing each
+    day (`queue` refuses a second run for it). A failed day is owed another try (`_owed`), at most hourly, until
+    DUE_TRIES failed runs; the cursor is never moved back for it, so several failed days each keep their own tries.
+    A pause (access, or the bot not active) holds every day, with one `automation.deferred` event per reason and day,
+    and nothing is dropped: the next pass after it runs them. A find waits for its unfinished run."""
+    flow = flow_of(row)
+    trigger = flow["trigger"]
+    cursor = _next_due_day(row, trigger, at)
+    zone, open_days = D.zone_of(trigger), D.open_days_of(trigger)
+    owed = _owed(c, row, trigger)
+    if why := cloud_access.routines_paused(c) or _bot_away(c, row):
+        waiting = [date.fromisoformat(ref[4:]) for ref, _ in owed]
+        if cursor and D.fire_at(cursor, open_days, zone) <= at:
+            waiting.append(cursor)
+        if waiting:
+            _deferred(c, row, min(waiting).isoformat(), why)
+        return
+    cutoff = _iso(at - DUE_RETRY)
+    for ref, last in owed:
+        if last and last > cutoff:
+            continue    # a failed day is tried again no sooner than an hour after it failed
+        if _held_by_find(c, row):
+            break
+        _due_fire(c, row, trigger, date.fromisoformat(ref[4:]), ref)
+    day, passed = cursor, 0
+    while day and passed < D.MAX_CATCH_UP and D.fire_at(day, open_days, zone) <= at:
+        if _held_by_find(c, row):
+            break
+        _due_fire(c, row, trigger, day, f"due:{day.isoformat()}")
+        day = D.next_after(D.first_due(trigger), trigger["repeats"], day)
+        passed += 1
+    c.execute("UPDATE automations SET next_due=? WHERE id=?", (_due_text(day), row["id"]))
+
+
+def _due_fire(c, row, trigger, day, ref):
+    """One due day's run, or, for a routine linked to a rule's due date (`rule_due_id`) whose day someone already marked
+    Satisfied by hand, a skipped run in its place: it opens no task, and the day counts as done."""
+    from . import rule_due
+    if trigger.get("rule_due_id") and rule_due.marked(c, trigger["rule_due_id"], day.isoformat()):
+        if not c.execute("SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? AND status!='failed' "
+                         "LIMIT 1", (row["id"], ref)).fetchone():
+            state = {**E.start(due_input(trigger, day)), "status": "skipped"}
+            now = H.now()
+            c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started,finished,status,"
+                      "state_json,chain_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                      ("run_" + H.new_id(), row["id"], row["version"], ref, now, now, "skipped",
+                       json.dumps(state, default=str), "[]"))
+            H.event(c, H.KEEPER, "automation.skipped", row["id"], {"due_on": day.isoformat(), "reason": "satisfied"})
+        return
+    fire(c, "due", due_input(trigger, day), ref, only=row["id"])
+
+
+def _deferred(c, row, day, why):
+    """A due day a pause holds: one `automation.deferred` event per reason and day, not one per pass."""
+    last = c.execute("SELECT detail_json FROM events WHERE action='automation.deferred' AND target=? "
+                     "ORDER BY rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    detail = {"due_on": day, "reason": why}
+    if last and json.loads(last[0] or "{}") == detail:
+        return
+    H.event(c, H.KEEPER, "automation.deferred", row["id"], detail)
+
+
+def _run_error(state):
+    """Why a run failed, in words: the run's own error, else the first failed step's detail (an action's refusal)."""
+    if state.get("error"):
+        return str(state["error"])
+    for record in state.get("steps") or []:
+        if record.get("status") == "failed":
+            found = next((a.get("detail") or a.get("error") for a in _entries(record) if not a.get("ok", True)), None)
+            return str(found or record.get("error") or "a step failed")
+    return "failed"
+
+
+def _due_failed(c, rid, error=""):
+    """A due day's run has failed (once, as the run turns failed). Nothing moves: the day stays owed its next try
+    (`_owed`), and the cursor stays where it is. The try that makes DUE_TRIES failures gives the day up, with one
+    `automation.due_gave_up` event. A run under another trigger, or a routine that is no longer a due one, says nothing."""
+    run = c.execute("SELECT automation_id, trigger_ref, version FROM automation_runs WHERE id=?", (rid,)).fetchone()
+    ref = str(run["trigger_ref"] or "") if run else ""
+    if not ref.startswith("due:"):
+        return
+    try:
+        day = date.fromisoformat(ref[4:])
+    except ValueError:
+        return
+    aid = run["automation_id"]
+    auto = c.execute("SELECT trigger_type, flow_json FROM automations WHERE id=?", (aid,)).fetchone()
+    if not auto or auto["trigger_type"] != "due":
+        return
+    trigger = json.loads(auto["flow_json"])["trigger"]
+    if not _same_trigger(c, aid, run["version"], trigger):
+        return
+    failed = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=? AND trigger_ref=? AND status='failed'",
+                       (aid, ref)).fetchone()[0]
+    if failed == DUE_TRIES:
+        H.event(c, H.KEEPER, "automation.due_gave_up", aid, {"due_on": day.isoformat(), "error": str(error or "")[:300]})
+
+
 def _fail(c, rid, state, now, why):
     """The tick gives up on a run: failed, its unclaimed mail cancelled, its unfinished items left for a retry."""
     run = c.execute("SELECT automation_id FROM automation_runs WHERE id=?", (rid,)).fetchone()
@@ -1772,8 +2203,11 @@ def _fail(c, rid, state, now, why):
         _found_done(c, run["automation_id"], state, ended=True)
     else:
         _cancel_mail(c, rid)
+    was = c.execute("SELECT status FROM automation_runs WHERE id=?", (rid,)).fetchone()
     c.execute("UPDATE automation_runs SET status='failed',finished=?,claimed_at=NULL,state_json=coalesce(?,state_json) "
               "WHERE id=?", (now, json.dumps(state, default=str) if state else None, rid))
+    if was and was["status"] != "failed":
+        _due_failed(c, rid, why)
 
 
 def _due(trigger, at):
@@ -2077,15 +2511,7 @@ def install(app, store, auth, mutate):
         def work(c):
             auth.domain(who)
             row = deletable(c, who, aid)
-            _unhold(c, aid, who.actor, "drop", _via(who))
-            c.execute("UPDATE automations SET deleted_at=?, enabled=0 WHERE id=?", (H.now(), aid))
-            for dropped in c.execute("SELECT id FROM automation_runs WHERE automation_id=? AND status IN "
-                                     "('queued','waiting','running')", (aid,)).fetchall():
-                _cancel_mail(c, dropped["id"])
-            # A run mid-step finishes that step and stops there (`HubServices.on_hold`).
-            c.execute("UPDATE automation_runs SET status='skipped',finished=? WHERE automation_id=? "
-                      "AND status IN ('queued','waiting','running')", (H.now(), aid))
-            audit_log.write(c, who.actor, "automation:" + aid, flow_of(row), None, _via(who))
+            remove(c, who.actor, row, _via(who))
             return {"id": aid, "deleted": True}
         return mutate(request, body, work)
 
@@ -2120,7 +2546,12 @@ def install(app, store, auth, mutate):
                 # A sample the trigger's filters drop is dropped as the trigger would drop it: counted, no run row.
                 _count(c, aid, "dropped")
                 return {"run": None, "dropped": True}
-            rid = queue(c, row, {**body.input, "manual": {"by": who.actor}}, "manual", manual=True, chain=(aid,))
+            start = dict(body.input)
+            if not start and flow["trigger"].get("type") == "due":
+                # A due routine run by hand with no sample starts as its scheduler would for its next due day.
+                day = _next_due_day(row, flow["trigger"], datetime.now(timezone.utc)) or D.first_due(flow["trigger"])
+                start = due_input(flow["trigger"], day)
+            rid = queue(c, row, {**start, "manual": {"by": who.actor}}, "manual", manual=True, chain=(aid,))
             if not rid:
                 raise Problem("on_hold", "The automation is on hold: release or drop its held runs first", 409)
             return {"run": rid}

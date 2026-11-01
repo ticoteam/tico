@@ -308,6 +308,10 @@ function strategyDraftPropHtml(p) {
       // One field changed: its name goes with the bet's, since the block shows a name only for two or more.
       if (changed.length) rows.push(stratPropRow(`Change ${esc(stratPropBetName(b.id))}${changed.length === 1 ? ` <span class="muted">· ${esc(changed[0].label)}</span>` : ''}`, propNowProposedHtml(changed)));
     }
+    // Ideas the proposal links to this bet (backend/strategy.py apply_proposal); a link alone is a change too.
+    const ideas = (b.ideas || []).length;
+    if (ideas) rows.push(stratPropRow(`${b.id ? esc(stratPropBetName(b.id)) : `New ${esc(one.toLowerCase())}`} <span class="muted">· Ideas</span>`,
+      `Links ${ideas} idea${ideas === 1 ? '' : 's'}`));
   }
   const lens = pl.source === 'lens' ? p.lens_name : '', tripped = pl.source === 'bet_tripped';
   const from = lens ? ` from the <b>${esc(lens)}</b> lens` : pl.source === 'briefing' ? " from this week's market briefing"
@@ -1163,7 +1167,7 @@ function goalNeedsHtml(items) {
     if (it.kind === 'proposal') return proposalHtml({...it.proposal, may_decide: true}, it.kpi_name || it.goal_title || '').replace(/<\/li>$/, `${needTaskLink(it)}</li>`);
     // Where the Strategy Bot is on: the vision, written on Strategy, and the Why lines waiting on this
     // person, one row for all of them, each goal opening its panel where the Why is accepted or edited.
-    if (it.kind === 'vision') return `<li class="need-row" data-need-vision tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>Say what this company is for</b><span class="muted">: write the Vision on Strategy</span></span>${needTaskLink(it)}</li>`;
+    if (it.kind === 'vision') return `<li class="need-row" data-need-vision tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>Say what this company is for</b><span class="muted">: write the summary on Strategy</span></span>${needTaskLink(it)}</li>`;
     if (it.kind === 'why') {
       const goals = it.goals || [];
       return `<li class="need-row" data-need-why="${esc(goals[0]?.goal_id || '')}" tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>These goals need a Why line</b><span class="muted">: </span>${goals.map(g =>

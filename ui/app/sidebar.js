@@ -21,7 +21,7 @@ document.querySelectorAll('[data-section-toggle]').forEach(button => button.oncl
 });
 renderNavSections();
 // The built-ins stay out of the team chart. Each person's one chat is their Assistant (Ask, and its own page,
-// ui/app/assistant-page.js); BotOps, the Strategy Bot and the Librarian are its helpers (state.js ASSISTANT_HELPERS),
+// ui/app/assistant-page.js); BotOps, the Strategy Bot, the Librarian and Counsel are its helpers (state.js ASSISTANT_HELPERS),
 // which nobody chats with. Search, bot pickers and a person's page list none of the four; Settings > Bots manages them,
 // and #/bot/<slug> opens each for its settings, runs and logs.
 const isHiddenBot = slug => slug === assistantBot() || isAssistantHelper(slug);
@@ -173,6 +173,7 @@ function renderInboxNav() {
 function navCurSync(root) {
   const bot = S.route.startsWith('#/bot/') ? S.route.slice(6).split('/')[0] : null;
   const person = S.route.startsWith('#/person/') ? decodeURIComponent(S.route.slice(9).split('/')[0]) : null;
+  const seat = S.route.startsWith('#/seat/') ? decodeURIComponent(S.route.slice(7).split(/[/?]/)[0]) : null;
   const here = S.route.startsWith(MESSAGING) ? messagingParams() : null;
   for (const a of root.querySelectorAll('a.dept-label, a.node, a.person-mail-link, .inbox-list a')) {
     const href = a.getAttribute('href') || '', org = a.dataset.org || '';
@@ -180,7 +181,8 @@ function navCurSync(root) {
     const on = a.matches('.dept-label') ? S.route === href
       : a.matches('.person-mail-link') ? !!q && here.bot === q.get('bot')
       : q ? here.bot === q.get('bot') && here.source === q.get('source')
-      : org.startsWith('p:') ? person === org.slice(2) : org.startsWith('b:') ? bot === org.slice(2) : false;
+      : org.startsWith('p:') ? person === org.slice(2) : org.startsWith('b:') ? bot === org.slice(2)
+      : a.dataset.seat ? seat === a.dataset.seat : false;
     a.classList.toggle('cur', on);
     // The mail link beside a person marks its bot's mailbox; the person's own row is the page.
     if (on && !a.matches('.person-mail-link')) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
@@ -568,41 +570,6 @@ function orgGroupFieldWire() {
   };
   input.onblur = () => { ORG_EDIT = null; renderTree(); };
 }
-// A group's bet (groups.bet_id, ui/strategy-page.js): the owner picks one of the strategy's active bets, or None, from
-// the flag on the group's row; it saves when picked. The bets are read when a picker first opens.
-let ORG_BET = null;                         // the group whose Bet picker is open
-let ORG_BETS = null;                        // {bets, one} from GET /v2/strategy, once read
-const orgMayBet = () => S.me?.role === 'owner';
-const orgGroupBet = id => (S.orgGroups || []).find(g => g.id === id)?.bet_id || null;
-async function orgBetOpen(id) {
-  ORG_BET = ORG_BET === id ? null : id;
-  renderTree();
-  if (ORG_BET && !ORG_BETS) {
-    const st = await get('/v2/strategy').catch(() => null);
-    ORG_BETS = {bets: st?.bets || [], one: st?.label_one || 'Bet'};
-    renderTree();
-  }
-  $('#tree [data-group-bet-select]')?.focus();
-}
-function orgBetPopHTML(group) {
-  if (!ORG_BETS) return `<div class="org-bet-pop" data-group-bet-pop="${esc(group.id)}"><span class="muted">Loading…</span></div>`;
-  const options = ORG_BETS.bets.filter(b => b.status === 'active' || b.id === group.bet_id).sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9));
-  return `<div class="org-bet-pop" data-group-bet-pop="${esc(group.id)}"><label class="goal-f org-bet-f"><span>${esc(ORG_BETS.one)}</span>
-      <select data-group-bet-select="${esc(group.id)}"><option value=""${group.bet_id ? '' : ' selected'}>None</option>${options.map(b =>
-        `<option value="${esc(b.id)}"${b.id === group.bet_id ? ' selected' : ''}>${esc(b.statement)}</option>`).join('')}</select></label></div>`;
-}
-async function orgBetSave(select) {
-  const id = select.dataset.groupBetSelect, group = (S.orgGroups || []).find(g => g.id === id);
-  if (!group || select.value === (group.bet_id || '')) return;
-  select.disabled = true;
-  try {
-    await patch(`/v2/groups/${encodeURIComponent(id)}`, {bet_id: select.value});   // "" unlinks it
-    group.bet_id = select.value || null;
-    ORG_BET = null;
-    await refresh(true);
-  } catch (e) { toast(e.message, true); select.disabled = false; }
-  renderTree();
-}
 // The org list has no hover card on bots. What a bot's row says is its badge:
 // a subtle ring spins around it while the bot works, and it looks like a quiet alert when the bot
 // needs you — the count of tasks waiting on you, or a small ! when the need is not a task.
@@ -699,7 +666,7 @@ $('#org-history').onclick = () => {
 const isHelperBot = e => isBuiltInBot(e.name) || !!e.helper
   || (S.people || []).some(p => p.inbox_bot === e.name);
 // The order here and on Goals: the Assistant, then the other built-ins, then message bots.
-const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'task-manager', 'inbox'];
+const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'task-manager', 'bookkeeper', COUNSEL_BOT, 'inbox'];
 const helperRank = e => e.name === assistantBot() ? -1 : HELPER_ORDER.includes(e.name) ? HELPER_ORDER.indexOf(e.name) : 99;
 function orgTreeWithHelpers(byParent) {
   const out = {}, bot = {}, parentOf = {};
@@ -736,26 +703,10 @@ function orgTopPerson(byParent) {
   return tops.find(n => S.me?.owner_id && n.id === S.me.owner_id) || tops.find(n => me && n.id === me)
     || (roles.length === 1 ? roles[0] : tops.length === 1 ? tops[0] : null);
 }
-// Whether one of my personal tokens has reached Tico (GET /v2/me/tokens): undefined before asking, null when I may not
-// hold tokens (no button), else true or false. Without one, my row offers Connect (ui/connect-agent.js).
-let MY_AGENT, MY_AGENT_AT = 0;
-async function loadMyAgent() {
-  MY_AGENT_AT = Date.now();
-  try {
-    const data = await get('/v2/me/tokens'), rows = data.tokens || [], now = Date.now();
-    MY_AGENT = data.can_create === false ? null : rows.some(r => r.last_used && !r.revoked_at && !(r.expires_at && new Date(r.expires_at) < now));
-  } catch { MY_AGENT = null; }
-  renderTree();
-}
-window.addEventListener('tico:agents-changed', () => void loadMyAgent());
-// An agent set up after the dialog closed reports in later: check again on return to the app, at most once a minute.
-window.addEventListener('focus', () => { if (MY_AGENT === false && Date.now() - MY_AGENT_AT > 60e3) void loadMyAgent(); });
 function renderTree() {
   if (ORG_PENDING && !ORG_PENDING.sent) orgPendingApply(ORG_PENDING);   // a drop waiting for Move shows its new place
   ensureCollapsed();
-  if (MY_AGENT === undefined && S.me?.id) { MY_AGENT = null; void loadMyAgent(); }
   const byParent = orgTreeWithHelpers(orgTreeByParent());
-  const myId = mePerson()?.id;
   let needCounts;                                   // counted once per render, on first use
   const needN = slug => (needCounts ||= needsMeCounts()).get('bot:' + slug) || 0;
   // only "needs you" surfaces through a collapsed parent; running is not something to chase
@@ -801,26 +752,31 @@ function renderTree() {
   const row = (node, depth, flat = false, at = {parent: '', order: []}) => {
     if (node.kind === 'group') {
       const key = 'g:' + node.id, manage = orgCanGroups() && !flat, adding = manage && ORG_EDIT?.add === node.id;
+      // The plus opens the add menu for this group (ui/app/team-add.js): recruit a bot, an existing one, or a group.
+      const plus = !flat && teamAddAny(node.id), menuOpen = plus && teamAddOpenFor(node.id);
       const kids = byParent[key], isCol = kids && collapsed.has(key) && !adding;
       if (!kids && !manage) return '';
       const renaming = manage && ORG_EDIT?.rename === node.id;
       return `<li class="dept org-group"><div class="noderow" data-org="${esc(key)}"${manage && !renaming ? ' draggable="true"' : ''}>
         <button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(node.name)}">›</button>
-        ${renaming ? orgGroupFieldHTML(node.name) : `<a class="dept-label" href="${TEAM_PAGE}${esc(encodeURIComponent(node.id))}" draggable="false">${esc(node.name)}</a>`}
+        ${renaming ? orgGroupFieldHTML(node.name) : `<a class="dept-label" href="${TEAM_PAGE}${esc(encodeURIComponent(node.id))}" draggable="false"><span class="dept-name">${esc(node.name)}</span></a>`}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
-        ${manage && !renaming ? `<span class="org-group-tools"><button type="button" class="org-tool" data-group-add="${esc(node.id)}" title="Add group" aria-label="Add a group in ${esc(node.name)}"><span class="org-plus" aria-hidden="true">+</span></button><button type="button" class="org-tool" data-group-rename="${esc(node.id)}" title="Rename" aria-label="Rename ${esc(node.name)}"><span class="nav-icon" aria-hidden="true">edit</span></button>${orgMayBet() ? `<button type="button" class="org-tool${orgGroupBet(node.id) ? ' on' : ''}" data-group-bet="${esc(node.id)}" title="Bet" aria-label="Bet for ${esc(node.name)}" aria-expanded="${ORG_BET === node.id}"><span class="nav-icon" aria-hidden="true">flag</span></button>` : ''}<button type="button" class="org-tool" data-group-delete="${esc(node.id)}" title="Delete group" aria-label="Delete group ${esc(node.name)}"${ORG_DELETING.has(node.id) ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">delete</span></button></span>` : ''}</div>${orgConfirmHTML(key)}
-        ${manage && ORG_BET === node.id && orgMayBet() ? orgBetPopHTML({id: node.id, bet_id: orgGroupBet(node.id)}) : ''}
+        ${plus && !renaming ? `<span class="org-group-tools"><button type="button" class="org-tool" data-group-plus="${esc(node.id)}" title="Add" aria-label="Add to ${esc(node.name)}" aria-haspopup="menu" aria-expanded="${menuOpen}" aria-controls="team-add-menu"><span class="org-plus" aria-hidden="true">+</span></button>${manage ? `<button type="button" class="org-tool" data-group-rename="${esc(node.id)}" title="Rename" aria-label="Rename ${esc(node.name)}"><span class="nav-icon" aria-hidden="true">edit</span></button><button type="button" class="org-tool" data-group-delete="${esc(node.id)}" title="Delete group" aria-label="Delete group ${esc(node.name)}"${ORG_DELETING.has(node.id) ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">delete</span></button>` : ''}</span>` : ''}</div>${orgConfirmHTML(key)}
         <ul ${isCol ? 'hidden' : ''}>${adding ? `<li class="org-new">${orgGroupFieldHTML()}</li>` : ''}${rec(key, depth + 1)}</ul></li>`;
     }
     if (node.kind === 'seat') {
       // A role still being recruited: its title, marked Recruiting, with the job description on hover. Not a drop
       // target or dragged here (data-seat, not data-org): it is opened and moved from its own page.
       const key = 's:' + node.id, kids = !flat && byParent[key], isCol = kids && collapsed.has(key);
-      const tip = node.title + ' (Recruiting)' + (node.description ? '\n\n' + node.description : '');
+      const cloud = !!node.agent;                    // its cloud agent is requested: Connecting (ui/app/cloud-agents.js)
+      const tip = node.title + (cloud ? ' (Connecting)' : ' (Recruiting)') + (node.description ? '\n\n' + node.description : '');
+      const applicants = recruitSeatCount(node.id);    // known once its Applicants page listed them
       return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
         ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(node.title)}">›</button>` : ''}
-        <a class="node seat" href="#" data-seat="${esc(node.id)}" data-seat-open="${esc(node.id)}" title="${esc(tip)}">
-          <span class="nav-icon seat-icon" aria-hidden="true">person_search</span><span class="nm">${esc(node.title)}</span><span class="pill waiting seat-pill">Recruiting</span></a></div>
+        <a class="node seat" href="${esc(recruitAddress(node.id))}" data-seat="${esc(node.id)}" data-seat-open="${esc(node.id)}" title="${esc(tip)}">
+          <span class="nav-icon seat-icon" aria-hidden="true">person_search</span><span class="nm">${esc(node.title)}</span>${cloud
+            ? '<span class="pill waiting seat-pill connecting">Connecting</span>' : applicants === undefined
+            ? '<span class="pill waiting seat-pill">Recruiting</span>' : `<span class="cnt" title="Applicants">${applicants}</span>`}</a></div>
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }
     if (node.kind === 'person') {
@@ -831,7 +787,6 @@ function renderTree() {
         <a class="node person" href="#/person/${encodeURIComponent(p.id)}" title="${esc(personTitle(p))}" data-org="p:${esc(p.id)}"${placeAttrs(key, at)}${!flat && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
           ${personAvatar(p, depth ? 16 : 20)}<span class="nm">${esc(firstName(p.name) || p.id)}</span>
           ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}</a>
-        ${!flat && p.id === myId && MY_AGENT === false ? '<button type="button" class="org-connect" data-connect-agent title="Connect Grok Bot, Muse or another agent">Connect</button>' : ''}
         ${mailPersonVisible(p) ? `<a class="person-mail-link" href="${MESSAGING}?bot=${encodeURIComponent(p.inbox_bot)}&source=${encodeURIComponent('email:' + p.email)}" title="${esc(p.name || p.id)} has a message bot" aria-label="Open ${esc(p.name || p.id)}'s message bot">forum</a>` : ''}</div>${orgConfirmHTML(key)}
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }
@@ -875,31 +830,25 @@ function renderTree() {
   renderInboxNav();                                   // after the tree, which places what it can
   orgDragWire($('#tree'));
   orgGroupFieldWire();
-  const betSelect = $('#tree [data-group-bet-select]');
-  if (betSelect) betSelect.onchange = () => void orgBetSave(betSelect);
-  // Escape closes a group's Bet box, back on its button.
-  $('#tree').onkeydown = ev => {
-    if (ev.key === 'Escape' && ev.target.closest('.org-bet-pop')) {
-      ev.preventDefault(); ev.stopPropagation();
-      const id = ORG_BET; ORG_BET = null; renderTree();
-      $('#tree').querySelector(`[data-group-bet="${CSS.escape(id)}"]`)?.focus();
-    }
-  };
   $('#tree').onclick = ev => {
-    if (ev.target.closest('[data-connect-agent]')) { ev.preventDefault(); window.connectAgent?.(); return; }
     const seat = ev.target.closest('[data-seat-open]');
-    if (seat) { ev.preventDefault(); setDrawer(false); void recruitSeat(seat.dataset.seatOpen); return; }
+    if (seat) { setDrawer(false); return; }        // its Applicants page (ui/app/recruit.js)
     const confirm = ev.target.closest('[data-org-confirm]');
     if (confirm) { ev.preventDefault(); if (confirm.dataset.orgConfirm === 'go') void orgPendingSave(); else orgPendingCancel(); return; }
     if (ev.target.closest('.org-confirm')) return;
-    if (ev.target.closest('.org-bet-pop')) return;
-    const betTool = ev.target.closest('[data-group-bet]');
-    if (betTool) { ev.preventDefault(); void orgBetOpen(betTool.dataset.groupBet); return; }
-    if (ORG_BET) { ORG_BET = null; renderTree(); }
     const remove = ev.target.closest('[data-group-delete]');
     if (remove) { ev.preventDefault(); void orgGroupDelete(remove.dataset.groupDelete); return; }
-    const add = ev.target.closest('[data-group-add]'), rename = ev.target.closest('[data-group-rename]');
-    if (add || rename) { ev.preventDefault(); orgGroupEdit(add ? {add: add.dataset.groupAdd} : {rename: rename.dataset.groupRename}); return; }
+    const plus = ev.target.closest('[data-group-plus]');
+    if (plus) { ev.preventDefault(); teamAddToggle(plus.dataset.groupPlus); return; }
+    const rename = ev.target.closest('[data-group-rename]');
+    if (rename) { ev.preventDefault(); orgGroupEdit({rename: rename.dataset.groupRename}); return; }
+    // A group's name opens its page and unfolds it; only the arrow folds it again.
+    const label = ev.target.closest('a.dept-label');
+    if (label) {
+      const k = label.closest('[data-org]')?.dataset.org;
+      if (k && collapsed.delete(k)) { saveCollapsed(); renderTree(); }
+      return;
+    }
     const b = ev.target.closest('[data-toggle]'); if (!b) return;
     ev.preventDefault(); const k = b.dataset.toggle; collapsed.has(k) ? collapsed.delete(k) : collapsed.add(k);
     saveCollapsed();

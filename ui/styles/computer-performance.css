@@ -34,7 +34,7 @@
 .perf-strip{fill:color-mix(in srgb,var(--muted) 45%,transparent)}
 .perf-cross{stroke:var(--muted);stroke-width:1}
 .perf-hit{fill:transparent;cursor:crosshair;outline:none}
-.perf-hit:focus-visible{stroke:var(--accent);stroke-width:1}
+.perf-hit:focus-visible{stroke:var(--ink);stroke-width:1}
 .perf-tip{position:absolute;top:8px;z-index:2;display:flex;flex-direction:column;gap:2px;min-width:170px;max-width:280px;padding:var(--s2) var(--s3);
   border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:0 2px 8px rgba(0,0,0,.18);font-size:var(--t-sm);pointer-events:none}
 .perf-tip span{display:flex;align-items:center;gap:6px}

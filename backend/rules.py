@@ -69,7 +69,8 @@ BOT_TO_BOT = "bot_to_bot"
 # actions (`wake_bot`, `send_webhook`) do not, so they also run from events without one (judge_event).
 TASK_ACTIONS = ("close", "move_step", "set_wait", "relate", "note", "assign", "add_tag", "remove_tag")
 TAG_ACTIONS = ("add_tag", "remove_tag")
-EVENT_ACTIONS = ("wake_bot", "send_webhook", "create_task", "forward")
+EVENT_ACTIONS = ("wake_bot", "send_webhook", "create_task", "forward", "finance_freeze_cards", "finance_pause_budget",
+                 "finance_act")
 # The two that make something new from an event judged once (judge_event) refuse a message event: its ledger is what
 # makes a repeated call do nothing.
 ONCE_ACTIONS = ("create_task", "forward")
@@ -132,6 +133,7 @@ WAKE_EVENTS = {
     "release_published": "a release was published",
     "release_now": "a person asked for a release now",
     "task_manager_report": "the Task Manager's report for a department",
+    "bookkeeper_check": "the Bookkeeper's Books check found new Finance work",
     "pr_checks_done": "every check on a pull request head finished",
     "pr_review": "a GitHub review or review comment on a pull request, not from a person",
     "subtask_finished": "a subtask finished",
@@ -1136,10 +1138,28 @@ def _run_create_task(conn, rule_id, by, params, values, *, event, subject, revis
     return {**result, "ok": True, "detail": f"task {row['id']}"}
 
 
-# The event actions: `wake_bot {bot, text}`, `send_webhook {webhook, type, data}`, `create_task {owner, title, body}`
-# and `forward {webhook}`. Each returns its result row.
+def _finance(action):
+    """`finance_freeze_cards {budget_id?}`, `finance_pause_budget {budget_id?}`, `finance_act {kind, payload,
+    dry_run?}`: a Finance action as the rule's maker (backend/finance/actions.watch), so its rights and gates apply.
+    The payload's templates read the event; `budget_id` defaults to the event's budget."""
+    def run(conn, rule_id, by, params, values, *, event, subject, revision, task=None, ctx=None):
+        from .finance import actions as finance
+        data = values.get("data") if isinstance(values.get("data"), dict) else {}
+        params = {**params, "payload": templating.render_json(params.get("payload") or {}, values)}
+        done = finance.watch(conn, rule_id, by or H.KEEPER, action, params, data,
+                             f"rule-{rule_id}-{action}-{event}-{subject}"[:200])
+        ok = done.status in ("committed", "needs_approval")
+        detail = done.status if ok else f"{done.status}: {done.reason}"[:300]
+        return {"outcome": action, "target": str(params.get("budget_id") or data.get("budget_id") or params.get("kind")
+                                                 or ""), "ok": ok, "detail": detail}
+    return run
+
+
+# The event actions: `wake_bot {bot, text}`, `send_webhook {webhook, type, data}`, `create_task {owner, title, body}`,
+# `forward {webhook}` and the three Finance ones. Each returns its result row.
 EVENT_RUNNERS = {"wake_bot": _run_wake_bot, "send_webhook": _run_send_webhook, "create_task": _run_create_task,
-                 "forward": _run_forward}
+                 "forward": _run_forward, "finance_freeze_cards": _finance("finance_freeze_cards"),
+                 "finance_pause_budget": _finance("finance_pause_budget"), "finance_act": _finance("finance_act")}
 
 
 def _event_target(row, params):

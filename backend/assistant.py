@@ -91,6 +91,10 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # checks below.
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/plan", path):
         return True
+    # The mail tool's org rule check before a send, and its report of checks Tico never answered, change nothing: a
+    # person's own mail is never checked (backend/org_rule_check.py), and the send itself meets its own checks.
+    if re.fullmatch(r"/api/v2/bots/[^/]+/mail-check(/misses)?", path):
+        return True
     try:
         fields = json.loads(body or b"{}")
     except ValueError:
@@ -222,12 +226,14 @@ _REPORTS = (re.compile(r"/api/v2/(?:people|humans)/[^/]+"), re.compile(r"/api/v2
 
 
 def instructed_org(method, path, body=None):
-    """Whether this write is an org change that may run on the person's cited words: a group write, or a change of who a
-    person or a bot reports to and nothing else."""
+    """Whether this write is an org change that may run on the person's cited words: a group write, a change of who a
+    person or a bot reports to, or an org rule the person asked for (backend/org_rules.py), and nothing else."""
     path = normalize_path(path)
     if not path:
         return False
     if any(m == method and p.fullmatch(path) for m, p in _ORG):
+        return True
+    if method == "POST" and path in ("/api/v2/rules", "/api/v2/rules/read", "/api/v2/rules/ask"):
         return True
     fields = _fields(body)
     return (method == "POST" and any(p.fullmatch(path) for p in _REPORTS) and "reports_to" in fields
@@ -940,7 +946,7 @@ def ensure_room(c, actor, bot):
 # (`rooms.STRATEGY_ROOM`, one per company, belonging to the owner seat) is history: readable by the owner under
 # "Earlier chats", never written to again. A transfer of ownership still moves it to the new owner
 # (`move_strategy_room`), and `migrate` moved the cards that were waiting in it to the owner's Assistant room.
-HELPERS = ("botops", strategy_bot.SLUG, "librarian")
+HELPERS = ("botops", strategy_bot.SLUG, "librarian", H.COUNSEL)
 
 
 def strategy_on(c):
@@ -1192,7 +1198,7 @@ class Internal:
                                         params={k: v for k, v in (params or {}).items() if v is not None},
                                         headers=headers)
 
-    async def get(self, path, **params):
+    async def get(self, path, /, **params):
         try:
             response = await self.call("GET", path, params=params)
             return response.json() if response.status_code == 200 else None
@@ -1538,38 +1544,42 @@ def install(app, store, auth, mutate, onboarding):
         with store.read() as c:
             return view(c, who, room)
 
-    def chat_bot_for(c, who, files):
-        """The bot this person's chat posts to, refusing a chat that is off, takes text only (files) or is not theirs."""
+    def chat_bot_for(c, who):
+        """The bot this person's chat posts to, refusing a chat that is off or is not theirs."""
         info = availability(c, settings, who)
         if not info["available"]:
             raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-        if files:
-            raise Problem("text_only", "The " + info["name"] + " takes text only", 422)
         auth.require_write(c, who, info["bot"])
         return info["bot"]
 
     def post_message_sync(request, body, who, intent, reply, links, uploads=None):
         def work(c):
-            bot = chat_bot_for(c, who, uploads is not None)
+            bot = chat_bot_for(c, who)
             room = chat_room(c, settings, who)
+            said, kind, fast_links = reply, intent, links
+            # The canned hello only opens a chat: a "hi" after anything the person said goes to the model, which knows
+            # what came before, rather than repeating the same line.
+            if kind == "greeting" and c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? LIMIT 1",
+                                                (room["id"], who.actor)).fetchone():
+                said, kind, fast_links = None, None, []
             refs = {"assistant": True}
             if getattr(body, "place", None) == "updates":
                 refs["updates"] = True        # its turn is handed the updates they may read (backend/updates_chat.py)
             page = getattr(body, "page", None)
             if page and page.path.startswith("#/"):
                 refs["page"] = {"path": page.path, "title": page.title}   # where they asked from (runner-rs prompt.rs)
-            if reply is not None:
+            if said is not None:
                 refs["quiet"] = True
             message = H.say(c, who.actor, "bot:" + bot, body.text, conversation_id=room["id"],
                             kind="say", refs=refs)
             if uploads is not None:
                 message = app.state.uploads.attach(c, who, bot, message, uploads, body.titles)
-            out = {"message": message, "reply": None, "fast": reply is not None, "intent": intent}
-            if reply is not None:
-                out["reply"] = H._write_message(c, "bot:" + bot, who.actor, reply, room, "say",
-                                                {"assistant": True, "fast": True, "intent": intent, "links": links},
+            out = {"message": message, "reply": None, "fast": said is not None, "intent": kind}
+            if said is not None:
+                out["reply"] = H._write_message(c, "bot:" + bot, who.actor, said, room, "say",
+                                                {"assistant": True, "fast": True, "intent": kind, "links": fast_links},
                                                 message["id"], None, delivered_at=H.now())
-                H.event(c, who.actor, "assistant.fast", message["id"], {"intent": intent})
+                H.event(c, who.actor, "assistant.fast", message["id"], {"intent": kind})
             return out
         if uploads is not None:
             return app.state.uploads.write(request, body, uploads, work)
@@ -1590,8 +1600,8 @@ def install(app, store, auth, mutate, onboarding):
             await fast_answer(Internal(request), who, bots, body.text)
         return await asyncio.to_thread(post_message_sync, request, body, who, intent, reply, links)
 
-    # An Assistant room is text only: this door refuses every upload (`text_only`) before a byte is stored, for a client
-    # that still offers to attach.
+    # Files and pictures in a person's own Assistant chat (the Ask panel, the Assistant page), stored on the message like
+    # any bot chat's, in their room's conversation. They skip the quick answers, which read words only.
     @app.post("/api/v2/uploads/assistant/messages", openapi_extra=upload_contract(M.AssistantUpload))
     async def assistant_upload(request: Request):
         who = own(request)
@@ -1599,7 +1609,7 @@ def install(app, store, auth, mutate, onboarding):
         def admit(body):
             # Before any byte is stored, so a refused send keeps nothing; the write checks again in its transaction.
             with store.read() as c:
-                chat_bot_for(c, who, True)
+                chat_bot_for(c, who)
         body, uploads = await app.state.uploads.form(request, M.AssistantUpload, admit)
         return await asyncio.to_thread(post_message_sync, request, body, who, None, None, [], uploads)
 

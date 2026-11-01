@@ -54,8 +54,8 @@ _ticking = threading.Lock()
 
 
 def on(settings):
-    """A hosted install that is not a demo or a rehearsal (a copy of real data never updates for HQ), and that has its
-    own updater: a cloud company (TICO_UPDATES=tico) is updated by HQ from outside, with `setup cell update`."""
+    """A hosted install that is not a demo or a rehearsal (a copy of real data never updates for HQ), and that Tico does
+    not update from outside (TICO_UPDATES=tico). A cell company has an updater of its own (docs/cell.md) and asks."""
     return getattr(settings, "hosted", "") in HOSTED and not getattr(settings, "demo", False) \
         and not getattr(settings, "rehearsal", False) and not rehearsal_on() and not releases.managed()
 
@@ -240,6 +240,8 @@ def advance(store, now):
                       "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
                       (json.dumps({"actor": ACTOR, "from": current, "to": target}),))
             H.event(c, ACTOR, "system.update.started", target, {"from": current, "to": target})
+            from .execution import flag_cut
+            flag_cut(c, "update", target)    # the runs it cuts resume after it (execution.cut_by_update)
         try:
             releases.start(target)
         except Problem as problem:

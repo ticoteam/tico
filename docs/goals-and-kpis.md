@@ -28,6 +28,10 @@ Saving another field keeps that link. Choose **None** to remove it, or choose an
 | `owner` | the one accountable: Team (`company` in the API), a human or a bot |
 | `source_note` | where the number comes from |
 | `definition_version` | starts at 1 and goes up whenever the definition, unit, direction, cadence or source note changes; a rename or a new owner does not change it |
+| `parent_kpi_id` | the KPI this one moves: the inputs under a North Star. Shown as the KPI tree on the Growth tab |
+| `growth_role` | `north_star` (one per company; setting a new one clears the old), `input`, `guardrail` or blank |
+| `stage` | `reach`, `acquire`, `activate`, `retain` or `refer`: the Journey view |
+| `loop_name`, `loop_step` | a loop such as `referrals` and its step, for the Loops view. Labels on the KPI; there is no loop table |
 
 **Reading.** A fact, and immutable.
 
@@ -125,7 +129,7 @@ There is no On/Off switch. How much it does is the [level](strategy-bot.md) the 
 bet's wrong-if trips, puts one Decide card in front of them; the owner writes and publishes, never the bot.
 On goals and KPIs it does five things:
 
-1. **Goals make sense.** It flags vague, duplicate or unmeasured goals and suggests a KPI or clearer wording, as proposals on
+1. **Goals make sense.** It flags vague or duplicate goals and may suggest a measure once or clearer wording, as proposals on
    the goal. At Passive it does this when you ask it. It prefers goals that serve a strategy bet and have a KPI, and
    suggests one or two per active bet that no KPI-backed goal serves.
 2. **KPIs.** It is the steward of every KPI. Each has a folder in its repository, `kpis/<slug>/`, with `definition.md`,
@@ -241,7 +245,7 @@ their own click) or rejects it; confirming makes the change as that human.
 | `goal_kpi` | an existing `kpi_id`, or a new `kpi` (`name`, `definition`, `unit`, `direction`, `cadence`, `source_note`), and a `target` | the goal's owner or the KPI's |
 | `kpi_definition` | any of `name`, `definition`, `unit`, `direction`, `cadence`, `source_note` | the KPI's owner |
 | `kpi_target` | the target fields, with `goal_id` | the goal's owner or the KPI's |
-| `flag` | `issue`: `vague`, `duplicate` or `unmeasured`, and a `note` | the goal's owner |
+| `flag` | `issue`: `vague` or `duplicate`, and a `note` | the goal's owner |
 | `goal_why` | `why`: one line, up to 200 characters ([A goal's Why](#a-goals-why)); never for a goal tied to a bet | whoever may change the goal |
 | `strategy_draft` | partial `summary`, `vision`, `sections`, `bets` ([Strategy](strategy.md#who-may-do-what)); confirming writes the draft, never publishes | the team owner |
 | `recovery` | `evidence`, 1 to 4 `options` (`label`, 1 to 6 `actions`: `create`, `reorder` or `settle` on bots' tasks), `pick`; only the Strategy Bot at **Suggests actions** or **Acts on its own** ([Recoveries](#recoveries-and-merged-asks)) | the goal's owner; `{"decision": "confirm", "option": n}` approves another option than the pick |
@@ -356,6 +360,7 @@ hub goal create / update [--bet ID]        hub kpi create "<name>" [--goal ID] [
 hub goal status <id> <colour> "<why>"          [--direction ..] [--cadence ..] [--owner ..] [target flags]
 hub goal status <id> auto                         hub kpi update <id> [fields]
 hub goal refresh                           hub kpi link <goal> <kpi> [target flags]  |  hub kpi unlink <goal> <kpi>
+hub kpi update <id> --parent P --role R --stage S --loop NAME:STEP   growth fields; see Growth
 hub goal checkin <id> "<words>"            hub kpi log <kpi> <value> ["<note>"] [--period-end D] [--evidence ..]
 hub goal checkin-list <id>                         [--quality ..] [--supersedes READING]
 hub goal needs-you                         hub kpi show <kpi> [--effective]

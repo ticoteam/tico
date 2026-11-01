@@ -76,7 +76,9 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
     # One page bounds Python wait/provenance work, including pages with no eligible wake.
     # The scheduler persists the last inspected id, so held/started rows cannot starve later work.
     attempts = {} if attempts is None else attempts
-    visibility = f" AND t.id IN (SELECT id FROM tasks WHERE ({visible}))" if visible != "1" else ""
+    # Checked per candidate task (a key lookup), so the reader's rule keeps its own column names. As
+    # `t.id IN (SELECT id FROM tasks WHERE ...)` SQLite listed every task the rule allows first: 55 ms a call on TIDY.
+    visibility = f" AND EXISTS(SELECT 1 FROM tasks v WHERE v.id=t.id AND ({visible}))" if visible != "1" else ""
     rows = H._rows(c.execute("SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug "
                                  "WHERE t.status='open' AND b.state IN ('active','paused','quarantined') AND t.created<=? "
                                  + scope + visibility + " ORDER BY t.id LIMIT ?",
@@ -269,7 +271,8 @@ def reason(c, row, settings, shared=None, suspect=None):
     if jobs:
         job = jobs[0]
         return ('scoped' if not job['in_scope'] else 'uncertain' if not job['free'] else
-                E.job_refusal(c, job, followed, ready, busy, E.lanes_on(runner), E.roots_on(runner), suspect=suspect) or
+                E.job_refusal(c, job, followed, ready, busy, E.lanes_on(runner), E.roots_on(runner), suspect=suspect,
+                              runner=runner) or
                 ('cooling_off' if E.login_refusal(c, settings, runner['id'], bot, followed, job['id']) else 'not_started'))
     return (auto_tasks.refusal(c, row, followed, woken=True, suspect=suspect) or row.get('rewake_refusal')
             or 'no_queued_wake')

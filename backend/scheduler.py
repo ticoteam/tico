@@ -12,7 +12,8 @@ from . import goals as G
 from . import placement, run_triggers
 from . import system_routines as SR
 from .batch_work import isolated
-from .store import H, encode, reclaim_free_pages, sweep_credential_uses, sweep_deltas, sweep_events, sweep_idempotency, sweep_mail
+from .store import (H, encode, reclaim_free_pages, sweep_credential_uses, sweep_deltas, sweep_events, sweep_idempotency,
+                    sweep_mail, sweep_tokens)
 
 
 def stamp(at):
@@ -121,9 +122,43 @@ def run_invariants(store, auth, at, failures=None):
         SR.write(store, run)
 
 
+def run_bookkeeper_check(store, auth, at, failures=None):
+    # The Bookkeeper's Finance work queue, read in plain code (backend/bookkeeper.py). Nothing new is a quiet run: no task
+    # and no model call. Something new opens or updates one "Books check" task for the Bookkeeper.
+    with SR.recording(store, "bookkeeper_check", failures, "bookkeeper") as run:
+        from . import bookkeeper
+        with store.transaction() as c:
+            made = bookkeeper.check(c, auth, stamp(at))
+        run.did(made["words"], quiet=not made["items"])
+
+
+def run_bookkeeper_watch(store, auth, at, failures=None):
+    # The Bookkeeper's Watch (backend/bookkeeper.py watch): runway, unusual spend, duplicate charges and price increases,
+    # read in plain code. Nothing new is a quiet run; something new opens or updates one "Watch" task for the Bookkeeper.
+    with SR.recording(store, "bookkeeper_watch", failures, "bookkeeper") as run:
+        from . import bookkeeper
+        with store.transaction() as c:
+            made = bookkeeper.watch(c, auth, stamp(at))
+        run.did(made["words"], quiet=not made["items"])
+
+
+def run_bookkeeper_rules_digest(store, auth, at, failures=None):
+    # The weekly digest of posting rules made that week (backend/bookkeeper.py rules_digest). No new rule is a quiet run.
+    with SR.recording(store, "bookkeeper_rules_digest", failures, "bookkeeper") as run:
+        from . import bookkeeper
+        with store.transaction() as c:
+            made = bookkeeper.rules_digest(c, auth, stamp(at))
+        run.did(made["words"], quiet=not made["items"])
+
+
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
-         "engineering_exceptions": run_engineering_exceptions}
+         "engineering_exceptions": run_engineering_exceptions, "bookkeeper_check": run_bookkeeper_check}
+
+# The Bookkeeper's Watch (daily) and rules digest (weekly): their own cadence, not controlled jobs (CONTROLS has the
+# six a person switches). The Bookkeeper's pause is their off switch.
+FIXED = {"bookkeeper_watch": (run_bookkeeper_watch, timedelta(days=1)),
+         "bookkeeper_rules_digest": (run_bookkeeper_rules_digest, timedelta(days=7))}
 
 
 def run_now(store, auth, key, actor):
@@ -142,6 +177,9 @@ def run_now(store, auth, key, actor):
         if stale_review.tick(store, stamp(at), force=True) is None:
             raise Problem("conflict", "A stale ticket review is already running, or it was just switched off", 409)
         running = True
+    elif key == "memory_tidy":
+        from . import memory_tidy_controls
+        running = memory_tidy_controls.run_now(store, auth, actor)
     elif key == "learnings":
         from . import learnings
         with store.transaction() as c:
@@ -170,7 +208,52 @@ class Scheduler:
         self.stale_checked = None
         self.hosted_checked = None
         self.invariants_checked = None
+        self.finance_checked = {}   # Finance job -> its last start in this process
         self.marks = {}             # a controlled job's last start in this process, if its record could not be written
+
+    def finance_due(self, key, at, every):
+        last = self.finance_checked.get(key)
+        if last is not None and at - last < every:
+            return False
+        self.finance_checked[key] = at                 # marked first: a failing job retries on its interval
+        return True
+
+    def finance_tick(self, at, failures):
+        """Finance's short jobs (backend/finance/jobs.py), each in its own short transaction and none on the network:
+        waiting `finance.*` events every tick, run holds past expiry every ten minutes, Gateway usage postings hourly
+        (the Gateway worker fetches the meter), bills due, reminders, the cash alert and ready closes hourly, setup
+        when missing and next month's period daily."""
+        from .finance import actions as finance, reads as finance_reads
+        steps = []
+        try:
+            finance.gateway_ensure()                   # a Gateway worker that died comes back on the next tick
+            finance.banking_ensure()                   # so does the bank worker
+            with self.store.read() as c:
+                ready = finance_reads.is_set_up(c)
+                waiting = ready and finance_reads.events_waiting(c)
+        except Exception as exc:
+            failures.append({"finance": type(exc).__name__})
+            return
+        if not ready:
+            if self.finance_due("setup", at, timedelta(hours=1)):
+                steps.append(("finance_setup", lambda c: finance.ensure_setup(c, self.store.settings.owner_email)))
+        else:
+            if waiting:
+                steps.append(("finance_events", lambda c: finance.drain_events(c, stamp(at))))
+            if self.finance_due("holds", at, timedelta(minutes=10)):
+                steps.append(("finance_holds", lambda c: finance.expire_holds(c, stamp(at))))
+            if self.finance_due("usage", at, timedelta(hours=1)):
+                steps.append(("finance_usage", lambda c: finance.post_usage(c, stamp(at))))
+            if self.finance_due("documents", at, timedelta(hours=1)):
+                steps.append(("finance_documents", lambda c: finance.watch_documents(c, stamp(at))))
+            if self.finance_due("period", at, timedelta(days=1)):
+                steps.append(("finance_period", lambda c: finance.open_next_period(c, stamp(at))))
+        for name, step in steps:
+            try:
+                with self.store.transaction() as c:
+                    step(c)
+            except Exception as exc:
+                failures.append({name: type(exc).__name__})
 
     def due(self, key, at, cfgs, last):
         """Whether a controlled job (backend/system_routines.py CONTROLS) runs now: on, and due on its saved preset since
@@ -391,6 +474,16 @@ class Scheduler:
             learnings.nightly(self.store, at)
         except Exception as exc:
             failures.append({"learnings": type(exc).__name__})
+        try:
+            from . import memory_tidy_controls
+            from .store import Problem
+            try:
+                memory_tidy_controls.nightly(self.store, self.execution.auth, at)
+            except Problem as exc:
+                if exc.detail != memory_tidy_controls.UNAVAILABLE:
+                    raise
+        except Exception as exc:
+            failures.append({"memory_tidy": type(exc).__name__})
         # Page monitors (backend/market_watch.py): once a day the watched competitor pages are read on their own thread.
         try:
             from . import market_watch
@@ -412,6 +505,7 @@ class Scheduler:
             webhook_delivery.ensure()                          # a delivery worker that died comes back on the next tick
         except Exception as exc:
             failures.append({"webhook_delivery": type(exc).__name__})
+        self.finance_tick(at, failures)
         if self.swept is None or at - self.swept >= timedelta(hours=1):
             # Outside the scheduling transaction: the sweep takes its own short write
             # locks. Marked first so a failing sweep retries hourly, not every tick.
@@ -433,7 +527,8 @@ class Scheduler:
                 sweep_idempotency(self.store, stamp(at))
                 sweep_mail(self.store, stamp(at))
                 sweep_deltas(self.store, stamp(at))            # finished runs' streamed text pieces keep a day (store.DELTA_RETENTION_DAYS)
-                sweep_events(self.store, stamp(at))            # bookkeeping events keep 30 days (store.EVENT_SWEEP_ACTIONS)
+                sweep_tokens(self.store, stamp(at))            # finished runs' token rows keep a week (store.TOKEN_RETENTION_DAYS)
+                sweep_events(self.store, stamp(at))            # bookkeeping events keep 7 or 30 days (store.EVENT_NOISE_ACTIONS, EVENT_SWEEP_ACTIONS)
                 sweep_credential_uses(self.store, stamp(at))   # one-time: old credential use rows to one per USE_WINDOW (store.TRIM_MAX a pass)
                 reclaim_free_pages(self.store)                 # the pages those sweeps freed go back to the disk (store.VACUUM_PASS_MAX a pass)
                 from . import events
@@ -473,6 +568,13 @@ class Scheduler:
         for key, run in QUICK.items():
             if cfgs and self.due(key, at, cfgs, last):
                 run(self.store, self.execution.auth, at, failures)
+        # The Bookkeeper's fixed-cadence jobs (FIXED): due one interval after their last start, as controlled jobs are.
+        if cfgs is not None:
+            for key, (run, every) in FIXED.items():
+                mark = max([t for t in (self.marks.get(key), last.get(key)) if t], default=None)
+                if mark is None or at - mark >= every:
+                    self.marks[key] = at
+                    run(self.store, self.execution.auth, at, failures)
         # Production invariants every 15 minutes (backend/invariants.py): plain SQL, no model.
         if self.invariants_checked is None or at - self.invariants_checked >= timedelta(minutes=15):
             self.invariants_checked = at
@@ -702,6 +804,13 @@ class Scheduler:
                 run.did(SR.words_of({"approvals expired": ended.get("stale") or [],
                                      "approvals closed with their task": ended.get("ended") or [],
                                      "asks cleared": ended.get("asks") or []}, none="Nothing expired"))
+            # A Finance action whose approval was decided, withdrawn or expired ends now (its hold released).
+            try:
+                from .finance import actions as finance
+                with self.store.transaction() as c:
+                    finance.approvals_sweep(c, stamp(at))
+            except Exception as exc:
+                failures.append({"finance_approvals": type(exc).__name__})
             # ...and each weekday morning, questions unanswered two business days go back to their bots, one wake per
             # bot (backend/still_needed.py).
             with SR.recording(self.store, "still_needed", failures) as run:

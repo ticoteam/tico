@@ -14,9 +14,10 @@ from .settings_catalog import Setting as S
 SETTINGS_FILES = sorted(
     ["settings.js", "settings-access.js", "settings-bot-editor.js", "settings-bots.js", "settings-strategy-bot.js",
      "settings-company.js", "settings-devices.js", "settings-history.js", "settings-hosted.js", "settings-listening.js",
-     "settings-people.js", "settings-providers.js", "settings-recurring.js", "settings-release.js",
-     "settings-repositories.js", "settings-storage.js", "settings-webhooks.js",
-     "bot-budget.js", "bot-profile.js", "usage.js", "task-pipelines.js", "tags.js", "roadmaps.js", "inbound.js"])
+     "settings-mail.js", "settings-people.js", "settings-providers.js", "settings-recurring.js", "settings-release.js",
+     "settings-repositories.js", "settings-storage.js", "settings-webhooks.js", "subscriptions.js",
+     "bot-budget.js", "bot-profile.js", "usage.js", "task-pipelines.js", "tags.js", "roadmaps.js", "inbound.js",
+     "cloud-machines.js"])
 
 
 def _card(tab, card=""):
@@ -26,6 +27,8 @@ def _card(tab, card=""):
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "Settings > Computers", "Settings > Bots"
 RULES, HOOKS, TASKS, REPOS = "Settings > System", "Settings > Webhooks", "Settings > Tasks", "Settings > Repositories"
 INBOUND, STRATEGY = "Settings > Email & Phone", "Settings > System > Strategy bot"
+MAIL = "Settings > Mail"
+MODELS = "Settings > Models"
 
 _RULE_NAMES = {
     "assistant_direct": ("Assistant acts without asking", "confirm", ""),
@@ -43,12 +46,13 @@ _RULE_NAMES = {
     "stale_review": ("Review stale tasks", "direct", ""),
     "topic_fresh": ("Keep topics fresh", "direct", ""),
     "stall_triage": ("Stalled task check", "direct", ""),
+    "org_rule_checks": ("Check bot outputs against rules", "direct", ""),
 }
 _RULE_WHERE = {"health_monitor_reports": ("Settings > Health > Health monitor", _card("health")),
                "stale_review": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
                "topic_fresh": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
                "stall_triage": (RULES + " > What Tico runs on its own", _card("system", "set-system-card"))}
-_ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage")
+_ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage", "org_rule_checks")
 
 TEAM_RULES = [
     S("team.rules." + key, name, _RULE_WHERE.get(key, (PEOPLE + " > Team rules",))[0],
@@ -120,8 +124,8 @@ ENTRIES = TEAM_RULES + [
     S("owner.transfer", "Transfer ownership", PEOPLE + " > Owner", "owner", "confirm", "POST", "access/owner",
       value="json", card=_card("people")),
     # Computers
-    S("team.turn_levels", "Company turn levels", COMPUTERS + " > Company turn levels", "admin", "confirm", "POST",
-      "settings/turn-levels", value="json", card=_card("devices"), words="warning stop per person"),
+    S("team.turn_levels", "Company turn levels", MODELS + " > Limits", "admin", "confirm", "POST",
+      "settings/turn-levels", value="json", card=_card("models", "settings-limits"), words="warning stop per person"),
     S("bot.agent_credential", "Agent credential", COMPUTERS + " > Connect an agent", "bot", "person", "POST",
       "bots/{bot}/agent-credential", value="json", card=_card("devices"),
       why="A new agent credential is shown once, to the person, in Settings"),
@@ -148,19 +152,38 @@ ENTRIES = TEAM_RULES + [
       "computers/{computer}/member-bots", "accepts", card=_card("devices")),
     S("computer.turns_at_once", "Turns at once", COMPUTERS, "admin", "direct", "POST",
       "computers/{computer}/turns-at-once", value="json", card=_card("devices")),
+    S("computer.browser_exit", "Share internet with bots", COMPUTERS, "operator", "person", "POST",
+      "computers/{computer}/browser-exit", value="json", card=_card("devices"),
+      read="computers/{computer}/browser-exit", words="residential proxy exit browse through",
+      why="Only the person whose computer it is shares its internet"),
     S("computer.revoke", "Revoke a computer", COMPUTERS, "operator", "confirm", "POST", "computers/{computer}/revoke",
       value="json", card=_card("devices")),
     S("sleep.hours", "Sleep when idle", COMPUTERS + " > Sleep when idle", "admin", "direct", "POST", "sleep", "hours",
       "number", _card("devices", "settings-sleep"), "sleep#hours"),
-    S("models.providers", "Models", COMPUTERS + " > Models", "owner", "confirm", "PUT", "providers", value="json",
-      card=_card("devices", "settings-models"), read="providers", words="model provider fallback"),
-    S("models.gateway", "Tico AI Gateway", COMPUTERS + " > Models", "owner", "person", "PUT", "providers/gateway",
-      value="json", card=_card("devices", "settings-models"), why="A gateway key is typed in Settings, never passed "
+    S("models.providers", "Models", MODELS + " > Defaults", "owner", "confirm", "PUT", "providers", value="json",
+      card=_card("models", "settings-defaults"), read="providers", words="model provider fallback"),
+    S("models.gateway", "Tico AI Gateway", MODELS + " > Tico Gateway", "owner", "person", "PUT", "providers/gateway",
+      value="json", card=_card("models", "settings-gateway-card"), why="A gateway key is typed in Settings, never "
+      "passed through a bot"),
+    S("models.gateway.automatic", "Tico AI Gateway, automatic", MODELS + " > Tico Gateway", "owner", "confirm", "POST",
+      "providers/gateway/automatic", value="json", card=_card("models", "settings-gateway-card")),
+    S("models.gateway.remove", "Remove the Tico AI Gateway", MODELS + " > Tico Gateway", "owner", "confirm", "DELETE",
+      "providers/gateway", value="json", card=_card("models", "settings-gateway-card")),
+    # Company subscriptions (backend/model_subscriptions.py): a value is pasted only in Settings; giving one to a
+    # computer, or removing one in use, restarts that computer's runs on that runtime.
+    S("models.subscription.add", "Add a subscription", MODELS + " > Subscriptions", "admin", "person",
+      "POST", "model-subscriptions", value="json", card=_card("models", "settings-subs"),
+      words="claude max chatgpt plan setup token api key login", why="A subscription's token, key or login is "
+      "pasted in Settings, never passed through a bot"),
+    S("models.subscription.change", "Rename or reconnect a subscription", MODELS + " > Subscriptions",
+      "admin", "person", "POST", "model-subscriptions/{id}", value="json", card=_card("models", "settings-subs"),
+      words="rename reconnect", why="A subscription's token, key or login is pasted in Settings, never passed "
       "through a bot"),
-    S("models.gateway.automatic", "Tico AI Gateway, automatic", COMPUTERS + " > Models", "owner", "confirm", "POST",
-      "providers/gateway/automatic", value="json", card=_card("devices", "settings-models")),
-    S("models.gateway.remove", "Remove the Tico AI Gateway", COMPUTERS + " > Models", "owner", "confirm", "DELETE",
-      "providers/gateway", value="json", card=_card("devices", "settings-models")),
+    S("models.subscription.remove", "Remove a subscription", MODELS + " > Subscriptions", "admin",
+      "confirm", "DELETE", "model-subscriptions/{id}", value="json", card=_card("models", "settings-subs")),
+    S("models.computer_subscription", "A computer's subscription", MODELS + " > Subscriptions", "admin",
+      "confirm", "PUT", "computer-subscriptions", value="json", card=_card("models", "settings-subs"),
+      read="computer-subscriptions", words="give assign subscription computer claude codex"),
     # Bots
     S("bot.fallback", "Fallback model", BOTS, "bot", "direct", "POST", "bots/{bot}/fallback", "fallback", "text",
       _card("bots")),
@@ -168,6 +191,8 @@ ENTRIES = TEAM_RULES + [
       _card("bots")),
     S("bot.change", "Change a bot's model or computer", BOTS, "bot", "direct", "POST", "bots/{bot}/transitions",
       value="json", card=_card("bots"), words="model effort harness computer move"),
+    S("bot.browser_exit", "Browse through", BOTS + " > Bot editor", "bot", "direct", "POST", "bots/{bot}/browser-exit",
+      value="json", card=_card("bots"), read="bots/{bot}/browser-exit", words="residential proxy exit internet"),
     S("bot.restore", "Restore an archived bot", BOTS, "bot", "direct", "POST", "bots/{bot}/restore", value="json",
       card=_card("bots")),
     S("bot.limit.usd", "Bot spend limit", BOTS + " > Spend limit", "bot", "confirm", "PUT", "usage/limits/{bot}",
@@ -206,6 +231,13 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("bots"), words="turns per hour day"),
     S("bot.profile", "Bot profile", BOTS + " > Bot editor", "bot", "direct", "POST", "bots/{bot}/profile",
       value="json", card=_card("bots")),
+    # Tico Cloud: a cloud machine, shared or its own, its size and Always on all spend credit
+    # (backend/cloud_machines.py). The shared machine's size and Always on are the company's, for owners and admins.
+    S("bot.cloud_machine", "Cloud machine", BOTS + " > Bot editor", "bot", "confirm", "POST",
+      "bots/{bot}/cloud-machine", value="json", card=_card("bots"),
+      words="cloud machine shared own size always on computer"),
+    S("cloud.shared_machine", "Shared cloud machine", BOTS + " > Bot editor", "admin", "confirm", "POST",
+      "cloud-machines/shared", value="json", card=_card("bots"), words="shared cloud machine size always on"),
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
@@ -248,7 +280,7 @@ ENTRIES = TEAM_RULES + [
     *[S("screening." + source, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
         source, "choice:off|warn" + ("" if source == "mail" else "|hold"), _card("system", "set-screening-card"),
         "screening#modes." + source, words="prompt injection screening")
-      for source, name in (("webhook", "Webhooks"), ("mail", "Mail"), ("idea", "Ideas"), ("watcher", "Watchers"))],
+      for source, name in (("webhook", "Webhooks"), ("mail", "Mail"), ("idea", "Ideas"), ("watcher", "Watchers"), ("document", "Documents"))],
     *[S("screening." + layer, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
         layer, card=_card("system", "set-screening-card"), read="screening#layers." + layer,
         words="prompt injection screening detector")
@@ -315,6 +347,12 @@ ENTRIES = TEAM_RULES + [
     S("inbound.phone_request.cancel", "Cancel a phone request", INBOUND, "admin", "direct", "POST",
       "inbound/phone-requests/{id}/cancel", value="json", card=_card("inbound", "set-inbound")),
     # Usage
+    S("mail.address.order", "Get an address", MAIL + " > Addresses", "admin", "confirm", "POST", "postal/orders",
+      value="json", card=_card("mail", "settings-mail-addresses"),
+      words="physical mail mailbox postal address registered agent form 1583"),
+    S("mail.intake", "Mail-intake inbox", MAIL + " > Bring your own", "admin", "direct", "PUT", "postal/intake",
+      value="json", card=_card("mail", "settings-mail-intake"), read="postal/intake#intake",
+      words="physical mail scans email in postal provider"),
     S("team.limit.usd", "Company spend limit", "Usage > Company", "admin", "confirm", "PUT", "usage/limits",
       value="json", card="#/usage", read="usage/limits#default", words="usd dollars spend " + _USD),
     S("pool.limit.usd", "Pool spend limit", "Usage > Pools", "admin", "confirm", "PUT", "usage/pools/{id}",
@@ -328,7 +366,8 @@ NO_CARD_YET = ("assistant.on", "privacy.usage_count.reset", "company.server_conn
                "bot.budget", "strategy.checks", "strategy.level",
                "repos.product.create", "hooks.wake_url", "webhooks.outgoing.create",
                "listening.destination", "listening.destination.remove", "roadmap.public",
-               "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd")
+               "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd",
+               "bot.cloud_machine", "cloud.shared_machine", "mail.address.order")
 _NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
 ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY) if e.confirm_when else
             replace(e, kind="person", why=e.name + _NO_CARD_WHY)) if e.key in NO_CARD_YET else e for e in ENTRIES]
@@ -364,4 +403,5 @@ NOT_SETTINGS = {
     ("POST", "tasks/{x}/comments/{x}/moderate"): "moderates one comment on a public roadmap task",
     ("POST", "tasks/{x}/requesters/{x}/delete"): "removes one requester from a public roadmap task",
     ("POST", "tasks/{x}/requesters{x}"): "adds one requester to a public roadmap task",
+    ("POST", "postal/items/{x}/retry"): "tries one failed letter again",
 }

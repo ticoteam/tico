@@ -2,15 +2,16 @@
 watched against the numbers and the market.
 
 - The page is one row at a time in `strategy_versions`: a summary (400 characters, what every bot reads on every run),
-  the vision (400 characters; the Goals page reads it from here), four fixed sections (`serve`, `sell`, `know`, `not`)
+  the vision (400 characters, kept but not shown on the Strategy page; the Goals page reads it from here and falls
+  back to the summary), four fixed sections (`serve`, `sell`, `know`, `not`)
   plus any extra ones the owner adds (`extra: {key: {title, body}}`), and a snapshot of the bets. Exactly one row is
   the `draft` (`n` NULL); publishing stamps it `n` (1, 2, 3...), snapshots every bet that is not retired, and opens a
   fresh draft copied from it. The draft carries a `revision`: a write against an older one answers 409, so two
   editors never overwrite each other silently.
 - Bets (`strategy_bets`) are the spine: a statement that could turn out wrong, why, what it rules out, what would show
   it is wrong (`wrong_if`: a KPI crossing a threshold, a market thesis changing, or a sentence with a check date), the
-  market ids it rests on (`cites`), and a status (proposed, active, retired). An active bet has a `rules_out` and a
-  `wrong_if`, and at most 7 are active. Goals and groups link to a bet (`goals.bet_id`, a group's `bet_id`); a retired
+  market ids it rests on (`cites`), and a status (proposed, active, retired). `rules_out` and `wrong_if` are optional
+  (the fit check watches a bet only when it has a `wrong_if`), and at most 7 are active. Goals and groups link to a bet (`goals.bet_id`, a group's `bet_id`); a retired
   bet keeps its goals.
 - The default guide (`strategy_guides/default.yaml`) is the questions the Strategy Bot drafts a first strategy with. The
   exercises run against a strategy are lenses (backend/lenses.py).
@@ -40,6 +41,7 @@ import yaml
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
 
+from . import growth as G
 from . import hubdb as H
 from . import models as M
 from .store import Problem
@@ -61,6 +63,7 @@ GOALS_SHOWN = 20           # goals listed under one bet
 VERSIONS_PAGE = 100
 DEFAULT_GUIDE = "default"
 BET_STATUSES = ("proposed", "active", "retired")
+IDEAS_MAX = 20             # growth ideas one bet may list in a proposal
 WRONG_KINDS = ("kpi", "thesis", "text")
 DIRECTIONS = ("above", "below")
 FIXED = (("serve", "Who we serve"), ("sell", "What we sell, and for how much"),
@@ -245,11 +248,12 @@ def bets(c, status=None):
 
 def vision(c, editor=False):
     """The one vision: the draft's for the owner, the published one for everyone else. Before the first publish the
-    draft's is the team's vision for everyone, as it was before Strategy: a team that never publishes keeps it."""
+    draft's is the team's vision for everyone, as it was before Strategy: a team that never publishes keeps it. The
+    Strategy page shows only the summary, so an empty vision is the summary."""
     row = None if editor else \
-        H._one(c, "SELECT vision FROM strategy_versions WHERE status='published' ORDER BY n DESC LIMIT 1")
-    row = row or H._one(c, "SELECT vision FROM strategy_versions WHERE status='draft'")
-    return (row or {}).get("vision") or ""
+        H._one(c, "SELECT vision, summary FROM strategy_versions WHERE status='published' ORDER BY n DESC LIMIT 1")
+    row = row or H._one(c, "SELECT vision, summary FROM strategy_versions WHERE status='draft'") or {}
+    return row.get("vision") or " ".join(str(row.get("summary") or "").split())
 
 
 def website(c):
@@ -449,10 +453,12 @@ def update_draft(c, actor, revision=None, guide_id=None, summary=None, vision=No
         return row
     _bump(c, actor, row, changes)
     _event(c, actor, "draft", {"old": {k: row[k] for k in changes}, "new": changes})
-    if "vision" in changes and not current(c):
+    if ("vision" in changes or "summary" in changes) and not current(c):
         # Before the first publish the draft's vision is the team's (vision()), so its history goes beside the
         # description's (GET /company/history); after it, an unpublished vision stays the owner's until publish.
-        _vision_event(c, actor, row["vision"], changes["vision"])
+        # The summary stands in for an empty vision, so a summary change moves it too.
+        if "vision" in changes:
+            _vision_event(c, actor, row["vision"], changes["vision"])
         sync_vision(c)
     H.event(c, actor, "strategy.draft", "", {"fields": sorted(changes)})
     return draft(c)
@@ -536,13 +542,9 @@ def _cites(c, actor, value):
 
 
 def _may_be(c, actor, row, bet_id=None):
-    """The rules a bet's new state must keep: active only with what it rules out and what would show it wrong, at
-    most ACTIVE_MAX active and LIVE_MAX not retired."""
+    """The rules a bet's new state must keep: at most ACTIVE_MAX active and LIVE_MAX not retired. What it rules out
+    and what would show it wrong are optional; the fit check watches only a bet that has a wrong-if."""
     if row["status"] == "active":
-        if not row["rules_out"]:
-            H.refuse(c, actor, "lint", "an active bet says what it rules out (rules_out)")
-        if not row["wrong_if"]:
-            H.refuse(c, actor, "lint", "an active bet says what would show it is wrong (wrong_if)")
         active = c.execute("SELECT count(*) FROM strategy_bets WHERE status='active' AND id<>?",
                            (bet_id or "",)).fetchone()[0]
         if active >= ACTIVE_MAX:
@@ -633,9 +635,10 @@ def update_bet(c, actor, bet_id, statement=None, why=None, rules_out=None, wrong
 # ----------------------------------------------------------------------------- the Strategy Bot's proposal
 def proposal_error(c, payload):
     """What is wrong with a `strategy_draft` goal proposal (backend/goals.py), in a sentence, or None. The payload is
-    partial: {summary?, vision?, sections?, bets?: [{id?, statement, why?, rules_out?, wrong_if?, cites?, status?}],
-    source?, lens?}. A bet with an id is a partial change to it, so a retire is {id, status: retired}; a bet without one is
-    new and needs its statement. `source` says what prompted it (bet_tripped: a wrong-if tripped; lens: a lens run,
+    partial: {summary?, vision?, sections?, bets?: [{id?, statement, why?, rules_out?, wrong_if?, cites?, status?,
+    ideas?}], source?, lens?}. A bet with an id is a partial change to it, so a retire is {id, status: retired}; a bet
+    without one is new and needs its statement. `ideas` lists growth idea task ids that serve the bet; confirming links
+    them to it. `source` says what prompted it (bet_tripped: a wrong-if tripped; lens: a lens run,
     named by `lens`; briefing: the week's market briefing touched the bet)."""
     if not isinstance(payload, dict) or not any(payload.get(k) not in (None, "", [], {}) for k in
                                                 ("summary", "vision", "sections", "bets")):
@@ -679,6 +682,13 @@ def proposal_error(c, payload):
         if item.get("wrong_if") and (not isinstance(item["wrong_if"], dict)
                                      or item["wrong_if"].get("kind") not in WRONG_KINDS):
             return f"a wrong-if is kind {'|'.join(WRONG_KINDS)}"
+        ideas = item.get("ideas")
+        if ideas is not None and (not isinstance(ideas, list) or len(ideas) > IDEAS_MAX
+                                  or not all(isinstance(i, str) for i in ideas)):
+            return f"ideas is a list of at most {IDEAS_MAX} growth idea task ids"
+        for task_id in ideas or []:
+            if not H._one(c, "SELECT task_id FROM growth_ideas WHERE task_id=?", (task_id,)):
+                return f"no growth idea {task_id}"
     return None
 
 
@@ -686,7 +696,7 @@ def apply_proposal(c, actor, payload):
     """A confirmed `strategy_draft` proposal, written as the owner who confirmed it: the draft (merged onto it as it
     is now), then each bet, new or changed. Nothing is published."""
     update_draft(c, actor, None, None, payload.get("summary"), payload.get("vision"), payload.get("sections"))
-    ids = []
+    ids, linked = [], []
     for item in payload.get("bets") or []:
         fields = {k: item.get(k) for k in ("statement", "why", "rules_out", "wrong_if", "cites", "status")}
         if item.get("id"):
@@ -695,7 +705,12 @@ def apply_proposal(c, actor, payload):
             row, _ = add_bet(c, actor, fields["statement"], fields["why"] or "", fields["rules_out"] or "",
                              fields["wrong_if"], fields["cites"], fields["status"] or "proposed")
         ids.append(row["id"])
-    return {"draft": True, "bets": ids, "revision": draft(c)["revision"]}
+        for task_id in item.get("ideas") or []:
+            if not H._one(c, "SELECT task_id FROM growth_ideas WHERE task_id=?", (task_id,)):
+                continue                 # deleted since the proposal was filed: nothing to link
+            G._set_idea(c, actor, task_id, {"bet_id": row["id"]}, "growth.idea.update")
+            linked.append(task_id)
+    return {"draft": True, "bets": ids, "ideas": linked, "revision": draft(c)["revision"]}
 
 
 # ----------------------------------------------------------------------------- publishing
@@ -706,16 +721,15 @@ def _snapshot(row):
 def publish(c, actor, note="", revision=None):
     """Stamp the draft as version n with every bet that is not retired, open a fresh draft, emit `strategy.published`,
     and file the realignment card when bets with goals were retired or rewritten. The owner's own call (the route
-    checks). Refused without an active bet (which has rules_out and wrong_if) and a "What we won't do", or when
-    nothing changed since the last version."""
+    checks). Refused without an active bet and a "What we won't do", or when nothing changed since the last
+    version."""
     H._writer(c, actor)
     row = draft(c)
     _check_revision(c, row, revision)
     note = _clean(c, actor, note, NOTE_MAX, "note", one_line=True)
     snapshot = [_snapshot(b) for b in bets(c) if b["status"] != "retired"]
-    if not any(b["status"] == "active" and b["rules_out"] and b["wrong_if"] for b in snapshot):
-        H.refuse(c, actor, "lint", "publish with at least one active bet that says what it rules out and what would "
-                                   "show it is wrong")
+    if not any(b["status"] == "active" for b in snapshot):
+        H.refuse(c, actor, "lint", "publish with at least one active bet")
     if not row["sections"]["not"].strip():
         H.refuse(c, actor, "lint", "write \"What we won't do\" before publishing: a strategy with no trade-offs is a "
                                    "description")

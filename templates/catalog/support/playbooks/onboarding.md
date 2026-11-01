@@ -1,7 +1,7 @@
 # Setup
 
 Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 20 minutes. The outcome is seven recorded answers, a draft digest of the queue as it is
+finished. Budget 20 minutes. The outcome is five recorded answers, a draft digest of the queue as it is
 now, and the first routine checked.
 
 ---
@@ -32,12 +32,10 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 3. What may a customer be told from the documented policy (refund windows, plan limits, response times),
    and where is it written? You ask the Librarian, which answers from the docs; what the docs do not say
    becomes a marked gap and a task to the Librarian.
-4. What must reach a human immediately (refund, legal threat, outage, security, an angry customer),
-   and who?
-5. How should replies sound? Ask for two replies they were happy with.
-6. Who owns fixing product problems?
-7. How long should a ticket wait on a customer before you draft a nudge, and how many nudges before you
-   stop? (Default 3 days, then 7, then stop.)
+4. What must reach a person immediately (refund, legal threat, outage, security, an angry customer), and
+   who fixes a product problem once it repeats? A repeated bug becomes one task for that person.
+5. How should replies sound, and how long may a ticket wait on a customer before a nudge? Ask for two
+   replies they were happy with. Offer the default: a nudge after 3 days, a second 7 days later, then stop.
 
 ## 4. Record
 
@@ -56,13 +54,13 @@ task, labelled "First draft, not yet reviewed". Reply to nobody.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send you a queue digest with a draft for every ticket every weekday at 09:00 and never reply to anyone myself." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send you a queue digest with a draft for every ticket every weekday at 09:00 and never reply to anyone myself." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

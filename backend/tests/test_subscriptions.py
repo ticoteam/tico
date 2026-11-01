@@ -86,6 +86,34 @@ def test_server_rejection_blocks_only_matching_profile(api):
     assert report['runtimes']['codex']['authenticated'] == 'ready'
 
 
+def test_a_refused_bot_key_marks_only_that_bot_and_a_computer_refusal_marks_every_bot(api):
+    from backend.execution import Execution
+    r = runner(api)
+    body = {'version': 'test', 'platform': 'test', 'readiness': {'schema_version': 1,
+        'runtimes': {'pi': {'installed': True, 'authenticated': 'ready'},
+                     'claude': {'installed': True, 'authenticated': 'ready'}},
+        'bots': {'alpha': {'ready': True, 'runtime': 'pi'}, 'beta': {'ready': True, 'runtime': 'pi'},
+                 'gamma': {'ready': True, 'runtime': 'claude'}, 'delta': {'ready': True, 'runtime': 'claude'}}}}
+    post(api, 'runners/heartbeat', body, token=r['token'])
+
+    def report():
+        with api.app.state.store.transaction() as c:
+            return json.loads(c.execute('SELECT readiness_json FROM runners WHERE id=?', (r['runner_id'],)).fetchone()[0])
+
+    with api.app.state.store.transaction() as c:
+        Execution.mark_rejected(c, r['runner_id'], 'pi', 'Unauthorized', None, 'alpha')
+    refused = report()
+    assert (refused['bots']['alpha']['ready'], refused['bots']['alpha']['sign_in']) == (False, 'rejected')
+    assert refused['bots']['beta']['ready'] is True
+    assert refused['runtimes']['pi']['authenticated'] == 'ready'
+
+    with api.app.state.store.transaction() as c:
+        Execution.mark_rejected(c, r['runner_id'], 'claude', 'Unauthorized', None, 'gamma')
+    refused = report()
+    assert refused['bots']['gamma']['ready'] is False and refused['bots']['delta']['ready'] is False
+    assert refused['runtimes']['claude']['authenticated'] == 'rejected'
+
+
 def set_runtime(api, runtime, harness=None, bot="ops"):
     with api.app.state.store.transaction() as c:
         config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])

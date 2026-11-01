@@ -1,6 +1,6 @@
-// Settings > Computers > Models' models choice (backend/models_preset.py) against a fake server: the four choices in plain
-// words, the recommended one marked; picking a subscription choice with nothing ticked ticks Claude and ChatGPT; Save
-// sends the choice; the same form serves the first-run step. Its wording names no logo, partner or approval, and
+// The first-run step's models choice (backend/models_preset.py; Settings > Models has only the Gateway toggle now) against
+// a fake server: the four choices in plain words, the recommended one marked; picking a subscription choice with nothing
+// ticked ticks Claude and ChatGPT, and the form sends the choice. Its wording names no logo, partner or approval, and
 // says nothing about what Tico keeps of a sign-in.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -58,11 +58,17 @@ const {unrouted} = require('./support/routes.cjs');
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
-    const choices = page.locator('#set-prov [data-provider-presets]');
+    const choices = page.locator('#onb-prov [data-provider-presets]');
+    // The first-run form as welcome.js draws it, on the loaded app.
     const open = async () => {
-      await page.evaluate(() => loadSettings());
-      await page.locator('[data-settings-tab=devices]').click();
-      await page.evaluate(() => renderSettingsProviders());
+      await page.evaluate(async () => {
+        await loadSettings();
+        const view = await get('/v2/providers', {fresh: true});
+        let host = document.querySelector('#preset-host');
+        if (!host) { host = document.createElement('section'); host.id = 'preset-host'; host.className = 'card'; document.querySelector('.settings-pane:not([hidden])').prepend(host); }
+        host.innerHTML = providersFormHTML(view, SETTINGS_DATA.models, 'onb-prov');
+        providersWire(host.querySelector('#onb-prov'), view, SETTINGS_DATA.models);
+      });
       await choices.waitFor();
     };
     await page.goto('https://tico-ui.test/#/settings');
@@ -81,16 +87,15 @@ const {unrouted} = require('./support/routes.cjs');
     for (const claim of [/partner/i, /approved/i, /official/i, /endorse/i, /token/i, /password/i, /\bstor/i, /never see/i])
       assert.doesNotMatch(words, claim);
     // Nothing ticked: the recommended choice ticks Claude and ChatGPT and offers their models; Save sends the choice.
-    assert.equal(await page.locator('#set-prov [data-provider]:checked').count(), 0);
+    assert.equal(await page.locator('#onb-prov [data-provider]:checked').count(), 0);
     await choices.locator('[data-provider-preset][value=subscriptions-gateway]').check();
-    assert.deepEqual(await page.locator('#set-prov [data-provider]:checked').evaluateAll(boxes => boxes.map(b => b.value)), ['anthropic', 'openai']);
-    await page.locator('#set-prov-save').click();
-    await page.waitForFunction(() => document.querySelector('#set-prov [data-provider-preset][value=subscriptions-gateway]')?.checked);
-    assert.equal(sent.at(-1).preset, 'subscriptions-gateway');
-    assert.deepEqual(sent.at(-1).enabled, ['anthropic', 'openai']);
+    assert.deepEqual(await page.locator('#onb-prov [data-provider]:checked').evaluateAll(boxes => boxes.map(b => b.value)), ['anthropic', 'openai']);
+    const chosen = await page.evaluate(() => providersCollect(document.querySelector('#onb-prov')));
+    assert.equal(chosen.preset, 'subscriptions-gateway');
+    assert.deepEqual(chosen.enabled, ['anthropic', 'openai']);
     // Another choice keeps what is ticked.
     await choices.locator('[data-provider-preset][value=own-keys]').check();
-    assert.equal(await page.locator('#set-prov [data-provider]:checked').count(), 2);
+    assert.equal(await page.locator('#onb-prov [data-provider]:checked').count(), 2);
     // A phone: the choices wrap, with no sideways scroll.
     await page.setViewportSize({width: 390, height: 844});
     await open();

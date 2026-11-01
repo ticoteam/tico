@@ -83,6 +83,17 @@ STABLE = [
      "Whether the bot's manager bot may change its direct reports: true is on (the default), false is off; the owner's team rule overrides it", None),
     ("/api/v2/computers/{rid}/turns-at-once", "post", "Computers", "setComputerTurnsAtOnce",
      "Set the most turns a computer runs at once: null is automatic (its own capacity)", None),
+    ("/api/v2/computers/{rid}/browser-exit", "get", "Computers", "getComputerBrowserExit",
+     "Whether this computer shares its internet with bots, which bots, and its daily cap in bytes", "BrowserExit"),
+    ("/api/v2/computers/{rid}/browser-exit", "post", "Computers", "setComputerBrowserExit",
+     "Share this computer's internet with chosen bots, or stop: its owner only; an admin may turn it off", None),
+    ("/api/v2/computers/{rid}/browser-exit/usage", "get", "Computers", "listComputerBrowserExitUsage",
+     "Bytes and connections through this computer per day, bot and hostname (30 days); its owner or an admin",
+     "BrowserExitUsage"),
+    ("/api/v2/bots/{bot}/browser-exit", "get", "Bots", "getBotBrowserExit",
+     "The computer the bot's browser reaches the web through (null: its own) and the ones it may pick", "BotBrowserExitView"),
+    ("/api/v2/bots/{bot}/browser-exit", "post", "Bots", "setBotBrowserExit",
+     "Browse through a computer that shares its internet with this bot, or null for its own", "BotBrowserExitView"),
     ("/api/v2/bots/{bot}/subscription", "get", "Subscriptions", "getBotSubscription", "The Computer login a bot runs on", "BotSubscription"),
     ("/api/v2/repositories", "get", "Repositories", "listRepositories", "Team repositories", "RepositoryList"),
     ("/api/v2/repositories/refresh", "post", "Repositories", "refreshRepositories", "Refresh from GitHub", "RepositoryList"),
@@ -129,19 +140,15 @@ STABLE = [
      "Change a seat's title, job description, reporting line or group (a person it reports up to, or the owner)", "Seat"),
     ("/api/v2/seats/{seat_id}/close", "post", "Team chart", "closeSeat", "Take a seat off the chart; its row is kept",
      "SeatClosed"),
+    ("/api/v2/seats/draft", "post", "Team chart", "draftSeat",
+     "A job description for a job not posted yet, from its title: composed from the template catalog at once, or "
+     "with `redraft` rewritten once by the model when the server has a key. Stores nothing", "SeatDrafted"),
     ("/api/v2/seats/{seat_id}", "get", "Team chart", "getSeat",
-     "One seat, with whether the Strategy Bot's draft of its job description is done and "
-     "whether the caller may edit it",
-     "SeatDetail"),
-    ("/api/v2/seats/{seat_id}/open", "post", "Team chart", "openSeat",
-     "Open a seat: the owner opening it asks the Strategy Bot to draft its job description, unless a person wrote it",
-     "SeatDetail"),
-    ("/api/v2/seats/{seat_id}/draft", "post", "Team chart", "draftSeat",
-     "The Strategy Bot's draft of the job description the owner asked "
-     "for; a person's own words are kept", "SeatDetail"),
+     "One seat, with whose words its job description is and whether the caller may edit it", "SeatDetail"),
     ("/api/v2/seats/{seat_id}/recruit", "post", "Team chart", "recruitSeat",
-     "Up to three Tico templates for the seat at once, each with a one-line reason and a suggested model, exactly one "
-     "recommended, and the models one may choose instead. Local: nothing leaves the server", "SeatCandidates"),
+     "Up to eight Tico templates for the seat at once, best fit first, each with one line, what it needs, how well it "
+     "matches and a suggested model, and the models one may choose instead. Local: nothing leaves the server",
+     "SeatCandidates"),
     ("/api/v2/seats/{seat_id}/hire", "post", "Team chart", "hireSeat",
      "Pick a candidate: the bot is created in Onboarding in the seat's place, then its repository", "SeatHired"),
     ("/api/v2/groups", "get", "Team chart", "listGroups",
@@ -164,6 +171,8 @@ STABLE = [
     ("/api/v2/bots/{bot}", "get", "Bots", "getBot",
      "One bot: its profile for anyone who can see it; status, computer, queue and goals too for anyone who can read it",
      "BotDetail"),
+    ("/api/v2/bots/{bot}/pause-state", "get", "Bots", "getBotPauseState",
+     "Pause state and recorded person/time, readable open-task count and company billing pause; no billing amounts", None),
     ("/api/v2/bots/{bot}/access", "get", "Bots", "getBotAccess",
      "Who may see, read and write to a bot (its managers only; docs/permissions.md)", "BotAccessView"),
     ("/api/v2/bots/{bot}/access", "put", "Bots", "setBotAccess",
@@ -711,7 +720,8 @@ SCHEMAS = {
     "TaskTypeResult": obj({"type": ref("TaskType")}),
     "Task": obj({"private": "b", "id": "s", "title": "s", "body": "s", "requester": "s", "owner": "s", "status": "s", "created": "s",
                  "updated": "s", "due": "n", "version": "i", "lane": "s", "labels": items({"type": "string"}),
-                 "acceptance_criteria": items({"type": "string"})},
+                 "acceptance_criteria": items({"type": "string"}),
+                 "occurrence": {"type": ["string", "null"], "description": "A due-date routine's occurrence, \"<automation_id>:<due_on>\", on the task it opened: the due is its deadline, not a wake date."}},
                 required=["id", "title", "requester", "owner", "status", "created", "updated", "due", "version", "lane", "labels"],
                 owner_name={"type": "string", "description": "Display name of owner (`owner` stays the actor id)"},
                 requester_name={"type": "string", "description": "Display name of requester"},
@@ -763,18 +773,26 @@ SCHEMAS = {
     "SeatClosed": obj({"id": "s", "closed": "b"}, required=["id", "closed"]),
     "SeatDetail": obj({"id": "s", "kind": {"enum": ["seat"]}, "stage": {"enum": ["recruiting"]}, "title": "s",
                        "description": "s", "reports_to": "s", "team": "s", "created": "s",
-                       "description_by": {"enum": ["strategy_bot", "chart", "person"]},
-                       "draft": obj({"state": {"enum": ["none", "drafting", "drafted"]}, "by": "s", "at": "s"},
-                                    required=["state", "by", "at"]),
+                       "description_by": {"enum": ["chart", "person"]},
                        "can_edit": "b"},
-                      required=["id", "kind", "stage", "title", "description", "reports_to", "draft", "can_edit"]),
-    "SeatCandidate": obj({"template": "s", "name": "s", "summary": "s", "icon": "s", "department": "s", "reason": "s",
-                          "recommended": "b", "model": "s", "model_name": "s", "effort": "s"},
-                         required=["template", "name", "reason", "recommended", "model", "model_name"]),
+                      required=["id", "kind", "stage", "title", "description", "reports_to", "can_edit"]),
+    "SeatDrafted": obj({"description": "s", "source": {"enum": ["catalog", "model", "none"]}},
+                       required=["description", "source"]),
+    "SeatNeed": obj({"tool": "s", "label": "s", "required": "b",
+                     "state": {"enum": ["connected", "on_hire", "not_set"]}},
+                    required=["tool", "label", "required", "state"]),
+    "SeatCandidate": obj({"template": "s", "name": "s", "icon": "s", "department": "s", "department_id": "s",
+                          "line": "s", "summary": "s", "tags": items({"type": "string"}),
+                          "owns": items({"type": "string"}), "never": items({"type": "string"}),
+                          "onboarding": items({"type": "string"}), "prerequisites": items(ref("SeatNeed")),
+                          "match": {"enum": ["strong", "good", ""]}, "source": {"enum": ["template"]},
+                          "starter": "b", "model": "s", "model_name": "s", "effort": "s"},
+                         required=["template", "name", "icon", "department", "line", "tags", "owns", "prerequisites",
+                                   "match", "source", "model", "model_name"]),
     "SeatCandidates": obj({"seat": ref("SeatDetail"), "candidates": items(ref("SeatCandidate")),
                            "models": items(obj({"id": "s", "name": "s", "provider": "s"}, required=["id", "name"]))},
                           required=["seat", "candidates", "models"]),
-    "SeatHired": obj({"slug": "s", "seat": "s", "stage": {"enum": ["onboarding"]}, "reports_to": "s", "template": "s",
+    "SeatHired": obj({"slug": "s", "name": "s", "seat": "s", "stage": {"enum": ["onboarding"]}, "reports_to": "s", "template": "s",
                       "model": "s", "setup_task_id": "n", "note": "n"},
                      required=["slug", "seat", "stage", "reports_to", "template"]),
     "TaskFlow": obj({"going": "i", "waiting": "i"}, required=["going", "waiting"]),
@@ -1266,10 +1284,12 @@ SCHEMAS = {
     "UsageLimitView": obj({**{p + "_usd": NUM_N for p in PERIODS}, "source": {"type": "object", "description": "Where each cap comes "
                        "from: bot, company or null"}, **{p + "_spent": NUM_N for p in ("hour", "day", "week", "month")},
                        "percent": {"type": "integer", "description": "The highest share of one of the bot's own limits reached"},
-                       "blocked": {"enum": [*PERIODS, None], "description": "Set while a limit is met, the bot's own or a pool's: "
-                                   "the bot takes no new job"},
-                       "blocked_by": {"type": ["object", "null"], "description": "Whose limit holds the bot: scope (bot, company "
-                                      "or group:<id>), name (a pool's), period, and spent and limit (a pool's to the owner and "
+                       "blocked": {"enum": [*PERIODS, "quarterly", "yearly", "budget", None], "description": "Set while a "
+                                   "limit is met, the bot's own, a pool's or a Finance budget's (quarterly, yearly, or budget "
+                                   "for a one-time budget): the bot takes no new job"},
+                       "blocked_by": {"type": ["object", "null"], "description": "Whose limit holds the bot: scope (bot, company, "
+                                      "group:<id> or budget), name (a pool's or budget's), period, until for a budget (\"\" "
+                                      "when it never turns over), and spent and limit (a pool's to the owner and "
                                       "administrators only)", "additionalProperties": True},
                        **{"own_" + p + "_usd": NUM_N for p in PERIODS}, "may_edit": "b"}),
     "UsageDefaultView": obj({"default": obj({**{p + "_usd": NUM_N for p in PERIODS}, "count_subscription": "b"})}),
@@ -1300,6 +1320,18 @@ def _merge(*schemas, **more):
 
 
 # A goal with what the page adds to it, a link with what says how it is doing: one object each, so a client sees every field.
+SCHEMAS.update({
+    "BrowserExit": obj({"sharing": "b", "bots": items(_t("s")), "daily_cap_bytes": "i",
+                        "computer": obj({"id": "s", "label": "s"}),
+                        "used_today_bytes": {"type": ["integer", "null"]}, "may_change": "b", "may_turn_off": "b"}),
+    "BrowserExitUsage": obj({"rows": items(obj({"day": "s", "bot": "s", "host": "s", "bytes": "i", "tunnels": "i"})),
+                             "days": items(obj({"day": "s", "bytes": "i"})),
+                             "next": {"type": ["integer", "null"]}}),
+    "BotBrowserExitView": obj({"browser_exit": {"type": ["object", "null"], "properties": {
+                               "runner_id": {"type": "string"}, "name": {"type": "string"}}}},
+                          choices=items(obj({"runner_id": "s", "label": "s", "operator": "s"})),
+                          may_change=_t("b"), required=["browser_exit"]),
+})
 SCHEMAS["GoalResult"]["properties"]["goal"] = _merge(SCHEMAS["Goal"], SCHEMAS["GoalView"])
 SCHEMAS["GoalTree"]["properties"]["goals"] = items(_merge(SCHEMAS["Goal"], SCHEMAS["GoalTreeRow"]))
 SCHEMAS["KpiDetail"]["properties"]["links"] = items(_merge(SCHEMAS["KpiLink"], obj({
@@ -1381,6 +1413,351 @@ SCHEMAS.update({"AuditPage": {"type": "object", "required": ["rows", "next"], "p
     "rows": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
     "next": {"type": ["string", "null"]}}}})
 
+# Finance (backend/finance_routes.py): every read is cut to the caller's own view.
+DOC_CONTACT = {"type": ["object", "null"], "properties": {"id": {"type": ["string", "null"]},
+                                                          "name": {"type": ["string", "null"]}}}
+DOC_PAYMENT = {"anyOf": [obj({"id": "n", "status": {"type": "string", "enum": [
+    "queued", "sending", "awaiting_bank_approval", "submitted", "settled", "returned", "failed", "cancelled",
+    "unknown", "denied", "expired", "withdrawn"]}, "amount": "i", "on": "s", "error": "n"}), {"type": "null"}],
+    "description": "A bill's latest payment: its state, the day it was asked for and why it ended, if it did. No id "
+                   "when the scheduled ask ended before a payment existed (denied, expired, withdrawn or failed)"}
+TAGS["Finance"] = ("Budgets, the P&L, expenses, bills, invoices, contacts, reports and the work inbox, as far as the "
+                   "caller sees; Finance actions, committed or sent to one person for approval.")
+STABLE.extend([
+    ("/api/v2/finance/budgets", "get", "Finance", "listFinanceBudgets",
+     "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that "
+     "day (the version in effect then); amounts in cents. The owner may pass view_as", "FinanceBudgets"),
+    ("/api/v2/finance/pnl", "get", "Finance", "getFinancePnl",
+     "The P&L the caller sees, by day, week, month, quarter or year (past, current and projected columns), with budget "
+     "and projection beside each actual; each row says its section. view=expenses filters by teams and teammates "
+     "(several at once), who (bots, people or both) and unattributed. The owner may pass view_as",
+     "FinancePnl"),
+    ("/api/v2/finance/balance-sheet", "get", "Finance", "getFinanceBalanceSheet",
+     "Assets, liabilities and equity on a day, each line with its sources. Owner-only unless granted",
+     "FinanceBalanceSheet"),
+    ("/api/v2/finance/transactions", "get", "Finance", "listFinanceTransactions",
+     "Feed rows and entries the caller sees, newest first, with filters, search and a cursor", "FinanceTransactions"),
+    ("/api/v2/finance/cards", "get", "Finance", "listFinanceCards",
+     "The cards the caller follows, last 4 only, with allocation and spend this period", "FinanceCards"),
+    ("/api/v2/finance/sources", "get", "Finance", "listFinanceSources",
+     "Every source of the books grouped with counts, each with its account mapping, sync and access. Owner-only "
+     "unless granted", "FinanceSources"),
+    ("/api/v2/finance/webhook-deliveries", "get", "Finance", "listFinanceWebhookDeliveries",
+     "Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies, for a finance admin who sees "
+     "sources; the ordinary trigger routes refuse them", "FinanceWebhookDeliveries"),
+    ("/api/v2/finance/access", "get", "Finance", "getFinanceAccess",
+     "Who can see what in Finance: teams, each teammate's default, grants and rights, whether the caller may grant "
+     "them more (may_grant), private lines, the defaults",
+     "FinanceAccess"),
+    ("/api/v2/finance/payments", "get", "Finance", "listFinancePayments",
+     "Payments the caller made or whose line they see, newest first, with a cursor; errors only for the payer or a "
+     "finance admin", "FinancePayments"),
+    ("/api/v2/finance/transfers", "get", "Finance", "listFinanceTransfers",
+     "Internal transfers between two money accounts the caller sees, newest first, with their status and a cursor; "
+     "errors only for the maker or a finance admin", "FinanceTransfers"),
+    ("/api/v2/finance/tax/sales-tax", "get", "Finance", "getFinanceSalesTax",
+     "The sales tax workpaper for a year (this year when omitted): each jurisdiction's quarters with taxable and exempt "
+     "sales, tax collected and remitted, what is due and when. Full view only", "FinanceSalesTax"),
+    ("/api/v2/finance/tax/sales-tax.csv", "get", "Finance", "getFinanceSalesTaxCsv",
+     "The sales tax workpaper as CSV, the same lines as on screen. Full view only", None),
+    ("/api/v2/finance/tax/1099", "get", "Finance", "getFinance1099",
+     "The 1099 workpaper for a year (this year when omitted): each flagged vendor's cash paid with card payments left "
+     "out, the threshold, whether a 1099-NEC is due and when. Full view only", "Finance1099"),
+    ("/api/v2/finance/tax/1099.csv", "get", "Finance", "getFinance1099Csv",
+     "The 1099 workpaper as CSV, the same lines as on screen. Full view only", None),
+    ("/api/v2/finance/recipients", "get", "Finance", "listFinanceRecipients",
+     "Current payment recipients, last 4 only, for teammates who may pay", "FinanceRecipients"),
+    ("/api/v2/finance/mercury-users", "get", "Finance", "listFinanceMercuryUsers",
+     "Mercury's users as last synced, to pick a card holder, for teammates who may issue cards; emails (masked) only "
+     "for a finance admin", "FinanceMercuryUsers"),
+    ("/api/v2/finance/reconciliations", "get", "Finance", "listFinanceReconciliations",
+     "Reconciliations of the money accounts the caller sees, and how far each is locked", "FinanceReconciliations"),
+    ("/api/v2/finance/statements", "get", "Finance", "listFinanceStatements",
+     "Bank and card statements for the money accounts the caller sees", "FinanceStatements"),
+    ("/api/v2/finance/rules", "get", "Finance", "listFinanceRules",
+     "Finance gate and posting rules with their kind, priority, words, condition, outcome, examples and latest runs, "
+     "for teammates who may write "
+     "them; external_rule_id lists those linked to one external rule", "FinanceRules"),
+    ("/api/v2/finance/bills", "get", "Finance", "listFinanceBills",
+     "Bills the caller sees (payables: a view grant or finance.ap), newest first, filtered by status (comma-separated, "
+     "or unpaid), vendor, dates, aging bucket or late, and a search, with the open total by aging bucket and a cursor; "
+     "order=paid_on lists the last paid first",
+     "FinanceBills"),
+    ("/api/v2/finance/bills/{bill_id}", "get", "Finance", "getFinanceBill",
+     "One bill with its lines, the payments settled against it, its attachments and the actions and approvals on it",
+     "FinanceDocument"),
+    ("/api/v2/finance/invoices", "get", "Finance", "listFinanceInvoices",
+     "Invoices the caller sees (receivables: a view grant or finance.ar), newest first, with the same filters as bills",
+     "FinanceInvoices"),
+    ("/api/v2/finance/invoices/{invoice_id}", "get", "Finance", "getFinanceInvoice",
+     "One invoice with its lines, the payments received, its attachments and the actions and approvals on it",
+     "FinanceDocument"),
+    ("/api/v2/finance/contacts", "get", "Finance", "listFinanceContacts",
+     "Vendors (to whoever sees payables) and customers (receivables) by name, with what their open documents owe; a "
+     "tax id's last 4 only for a finance admin", "FinanceContacts"),
+    ("/api/v2/finance/chart", "get", "Finance", "getFinanceChart",
+     "The lines the caller may post to (id, number, name, type), for the bill, invoice and journal forms; for= bill "
+     "keeps expense and asset lines, invoice income lines; for teammates who write to the books", "FinanceChart"),
+    ("/api/v2/finance/pay-from", "get", "Finance", "listFinancePayFrom",
+     "The connected bank accounts the caller may pay bills from (finance.pay); balances only where the caller sees "
+     "that account", "FinancePayFrom"),
+    ("/api/v2/finance/feed/{feed_id}/expected", "get", "Finance", "listFinanceFeedExpected",
+     "The payments marked paid a settled bank row not yet in the books may be the bank side of (same money account and "
+     "direction, at most its amount, marked within 5 days), capped at 20, for the feed_match action",
+     "FinanceFeedExpected"),
+    ("/api/v2/finance/inbox", "get", "Finance", "getFinanceInbox",
+     "The caller's Finance work queue: uncategorized rows, bills to enter, unmatched and missing receipts, bills due, "
+     "overdue invoices, budgets near their limit, failed syncs and months ready to close, with counts and a cursor",
+     "FinanceInbox"),
+    ("/api/v2/finance/reports/{kind}", "get", "Finance", "getFinanceReport",
+     "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the "
+     "caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the "
+     "group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
+     "FinanceReportOf"),
+    ("/api/v2/finance/search", "get", "Finance", "searchFinance",
+     "Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees; with kind it pages by "
+     "cursor, without it returns the first few of each kind", "FinanceSearch"),
+    ("/api/v2/finance/metrics/{name}", "get", "Finance", "getFinanceMetric",
+     "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, "
+     "runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, "
+     "unreconciled_days", "FinanceMetric"),
+    ("/api/v2/finance/close/{month}", "get", "Finance", "getFinanceCloseChecklist",
+     "A month's close checklist (YYYY-MM) for teammates who do the books, and whether it is ready to close",
+     "FinanceCloseChecklist"),
+    ("/api/v2/finance/action-kinds", "get", "Finance", "listFinanceActionKinds",
+     "Every Finance action kind in a line, or with kind= one kind's payload fields, right and approval kind",
+     "FinanceActionKinds"),
+    ("/api/v2/finance/connections", "post", "Finance", "createFinanceConnection",
+     "Connect Mercury with a stored token credential (finance admins): the token is tested, its accounts listed and "
+     "mapped into the books. The Idempotency-Key is the action's key", "FinanceConnectionResult"),
+    ("/api/v2/finance/expenses", "get", "Finance", "getFinanceExpenses",
+     "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line. The owner may pass "
+     "view_as", "FinanceReport"),
+    ("/api/v2/finance/lines/{account_id}", "get", "Finance", "getFinanceLine",
+     "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's "
+     "projection (next_month; by vendor, team and teammate in next_by, named in next_labels), as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and "
+     "unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). Rows past top_n "
+     "fold into one Other row keyed \" other\", and the group with none is keyed \" unattributed\". The owner may pass view_as",
+     "FinanceReport"),
+    ("/api/v2/finance/actions", "post", "Finance", "requestFinanceAction",
+     "Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key is "
+     "the action's key; a retry re-reads the rest through the caller's current view. dry_run writes nothing and says "
+     "what would happen",
+     "FinanceAction"),
+    ("/api/v2/finance/actions/{action_id}", "get", "Finance", "getFinanceAction",
+     "An action's status, for whoever asked, its approver, or whose view covers it; its reason for the approver, and "
+     "otherwise only while that view covers it",
+     "FinanceAction"),
+    ("/api/v2/finance/bills-address", "put", "Finance", "setFinanceBillsAddress",
+     "Set the email address vendors send bills to, or clear it with null (owner or admin). inbox_id is the Email & "
+     "Phone inbox that receives it, else null: mail to it never reaches Tico and uploads still work",
+     "FinanceBillsAddress"),
+])
+SCHEMAS.update({
+    "FinanceBudgets": obj({"budgets": items({"type": "object", "additionalProperties": True}), "more": "b",
+                           "on": "s", "view_version": "i"}),
+    "FinanceReport": obj({"view_version": "i"}),
+    "FinancePnl": obj({
+        "start": "s", "end": "s", "period": "s", "basis": "s", "view": "s", "team": "n", "teammate": "n",
+        "budget_as_of": "n",
+        "columns": items(obj({"start": "s", "end": "s", "label": "s",
+                              "state": {"type": "string", "enum": ["past", "current", "future"]}})),
+        "filter": obj({"teams": items({"type": "string"}), "teammates": items({"type": "string"}),
+                       "who": {"type": "string", "enum": ["both", "bots", "people"]}, "unattributed": "b"}),
+        "rows": items(obj({"account_id": "s", "code": "s", "name": "s", "type": "s", "parent_id": "s", "private": "b",
+                           "section": {"type": "string", "enum": ["revenue", "cost_of_revenue", "operating", "other"]},
+                           "actual": {"type": ["array", "null"], "items": {"type": "integer"}},
+                           "total": {"type": ["integer", "null"]},
+                           "budget": {"type": ["array", "null"], "items": {"type": ["integer", "null"]}},
+                           "projection": {"type": ["array", "null"], "items": {"type": "integer"}}})),
+        "income": items({"type": "integer"}), "expense": items({"type": "integer"}), "net": items({"type": "integer"}),
+        "excluded": "b", "view_version": "i",
+        "teammates": items(obj({"teammate": "s", "kind": "s", "spent": "i", "budget": {"type": ["integer", "null"]}}))},
+        required=["start", "end", "period", "basis", "view", "columns", "rows", "income", "expense", "net",
+                  "excluded", "view_version"]),
+    "FinanceBalanceSheet": obj({
+        "as_of": "s", "currency": "s", "scoped": "b", "view_version": "i", "closed_through": "n",
+        "totals": obj({"asset": "i", "liability": "i", "equity": "i"}),
+        **{k: items(obj({"account_id": "n", "code": "s", "name": "s", "subtype": "s", "parent_id": "n", "balance": "i",
+                         "entry_sources": items({"type": "string"}),
+                         "sources": items(obj({"money_account_id": "s", "name": "s", "provider": "s", "last4": "n",
+                                               "provider_balance": {"type": ["integer", "null"]},
+                                               "balance_as_of": "n", "due_out": obj({"count": "i", "amount": "i"})}))}))
+           for k in ("assets", "liabilities", "equity")}}),
+    "FinanceTransactions": obj({
+        "rows": items(obj({"kind": {"type": "string", "enum": ["feed", "entry"]}, "id": "s", "date": "s", "amount": "i",
+                           "currency": "s", "counterparty": "s", "description": "s", "status": "s", "pending": "b",
+                           "card_id": "n", "entry_id": "n", "reconciled": "b", "money_account": {"type": ["object", "null"]},
+                           "lines": items({"type": "object", "additionalProperties": True}),
+                           "account_id": "s", "account": "s", "vendor": "s", "vendor_name": "s", "memo": "s",
+                           "source": "s",
+                           "reversed": "b", "tags": "o"}, required=["kind", "id", "date", "amount", "currency"])),
+        "next": "n", "currency": "s", "view_version": "i"}),
+    "FinanceCards": obj({
+        "cards": items(obj({"id": "s", "provider": "s", "holder": "s", "nickname": "s", "last4": "n", "kind": "s",
+                            "status": "s", "limit": {"type": ["integer", "null"]}, "limit_interval": "n",
+                            "provider_limit": {"type": ["integer", "null"]}, "sync_status": "s", "currency": "s",
+                            "money_account_id": "n", "budget": {"type": ["object", "null"]},
+                            "allocation": {"type": ["integer", "null"]}, "spent": {"type": ["integer", "null"]},
+                            "expires_at": "n", "created_at": "s"})),
+        "next": "n", "view_version": "i"}),
+    "FinanceSources": obj({
+        "groups": items(obj({"group": {"type": "string", "enum": ["banks", "cards", "payments", "payroll",
+                                                                  "bills_invoices", "tico", "accounting", "manual"]},
+                             "name": "s", "count": "i",
+                             "rows": items({"type": "object", "additionalProperties": True})})),
+        "view_version": "i"}),
+    "FinanceAccess": obj({
+        "teams": items(obj({"id": "s", "name": "s", "parent": "n", "lead": "n"})),
+        "teammates": items(obj({"teammate": "s", "kind": "s", "team": "n", "reports_to": "n",
+                                "default": {"type": "string", "enum": ["everything", "team_expenses", "own_expenses",
+                                                                       "none"]},
+                                "default_team": "n",
+                                "grants": items({"type": "object", "additionalProperties": True}),
+                                "rights": {"type": ["array", "null"], "items": {"type": "string"}},
+                                "may_grant": "b"})),
+        "private_lines": items(obj({"account_id": "s", "name": "s", "others_see": "s",
+                                    "full_detail": {"type": ["array", "null"], "items": {"type": "string"}}})),
+        "defaults": obj({"manager": "s", "member": "s", "manager_payroll": "s"}),
+        "can_view_as": "b", "can_edit_defaults": "b", "view_version": "i"}),
+    "FinanceAction": obj({"status": "s", "kind": "s", "action_id": "n", "code": "s", "reason": "s"},
+                         required=["status", "kind"]),
+    "FinancePayments": obj({
+        "payments": items(obj({
+            "id": "s", "status": {"type": "string", "enum": ["queued", "sending", "awaiting_bank_approval", "submitted",
+                                                             "settled", "returned", "failed", "cancelled",
+                                                             "unknown"]},
+            "amount": {"type": ["integer", "null"]}, "currency": "s", "method": "s", "memo": "s", "obligation": "n", "mode": "s",
+            "recipient": {"type": ["object", "null"], "properties": {"id": {"type": "string"},
+                                                                     "name": {"type": "string"},
+                                                                     "last4": {"type": ["string", "null"]},
+                                                                     "version": {"type": "integer"}}},
+            "account": {"type": ["object", "null"], "properties": {"id": {"type": "string"},
+                                                                   "code": {"type": "string"},
+                                                                   "name": {"type": "string"}}},
+            "money_account_id": "s", "created_by": "s", "created_at": "s", "settled_at": "n", "error": "n"},
+            required=["id", "status", "amount", "currency"])),
+        "next_cursor": "n"}),
+    "FinanceTransfers": obj({
+        "transfers": items(obj({
+            "id": "s", "status": {"type": "string", "enum": ["queued", "submitted", "unknown", "failed", "posted",
+                                                             "cancelled"]},
+            "amount": "i", "currency": "s", "memo": "s",
+            "from": obj({"id": "s", "name": "s", "last4": "n"}), "to": obj({"id": "s", "name": "s", "last4": "n"}),
+            "created_by": "s", "created_at": "s", "settled_at": "n", "last_error": "n"},
+            required=["id", "status", "amount", "currency", "from", "to"])),
+        "next_cursor": "n"}),
+    "FinanceSalesTax": obj({
+        "year": "i", "currency": "s",
+        "rows": items(obj({"period": "s", "code": "s", "jurisdiction": "s", "taxable_sales": "i", "exempt_sales": "i",
+                           "tax_collected": "i", "tax_remitted": "i", "due": "i", "due_on": "n"},
+                          required=["period", "code", "taxable_sales", "exempt_sales", "tax_collected", "due"]))}),
+    "Finance1099": obj({
+        "year": "i", "currency": "s", "threshold": "i", "due_on": "s",
+        "rows": items(obj({"vendor_id": "s", "vendor": "s", "tin_on_file": "b", "cash_paid": "i",
+                           "card_paid_excluded": "i", "threshold": "i", "reportable": "b"},
+                          required=["vendor_id", "vendor", "cash_paid", "reportable"]))}),
+    "FinanceRecipients": obj({"recipients": items(obj({
+        "id": "s", "name": "s", "method": "s", "last4": "n", "version": "i", "replaces_id": "n", "known": "b",
+        "synced": "b", "created_at": "s"}, required=["id", "name", "method", "version"]))}),
+    "FinanceReconciliations": obj({
+        "reconciliations": items(obj({
+            "id": "s", "money_account_id": "s", "statement_end": "s", "statement_balance": "i", "difference": "i",
+            "status": {"type": "string", "enum": ["open", "done", "undone"]}, "cleared_total": "i", "cleared": "i",
+            "statement_id": "n", "created_by": "s", "created_at": "s", "undone_at": "n"},
+            required=["id", "money_account_id", "statement_end", "statement_balance", "difference", "status"])),
+        "locked_through": {"type": "object", "additionalProperties": {"type": ["string", "null"]}}}),
+    "FinanceStatements": obj({"statements": items(obj({
+        "id": "s", "money_account_id": "s", "start_date": "n", "end_date": "s",
+        "starting_balance": {"type": ["integer", "null"]}, "ending_balance": "i", "currency": "s", "source": "s"},
+        required=["id", "money_account_id", "end_date", "ending_balance"]))}),
+    "FinanceRules": obj({"rules": items(obj({
+        "id": "s", "kind": {"type": "string", "enum": ["gate", "posting"]}, "priority": "i", "name": "s", "words": "s",
+        "when": "o", "outcome": "o",
+        "examples": items({"type": "object", "additionalProperties": True}), "external_rule_id": "n", "owner": "s",
+        "active": "b", "created_at": "s",
+        "runs": items(obj({"action_id": "n", "outcome": "n", "at": "s"}))}, required=["id", "name", "when", "outcome"]))}),
+    "FinanceMercuryUsers": obj({"users": items(obj({"id": "s", "name": "s", "connection_id": "s", "email": "n",
+                                                    "updated_at": "s"}))}),
+    "FinanceWebhookDeliveries": obj({"deliveries": items(obj({
+        "trigger": "s", "delivery": "s", "received_at": "s", "type": "s", "via": "s", "outcome": "s", "body": "s"}))}),
+    "FinanceConnectionResult": obj({"action_id": "n", "kind": "s", "status": "s", "code": "s", "reason": "s",
+                                    "approver": "n", "result": "o"}, required=["status", "kind"]),
+    "FinanceBillsAddress": obj({"bills_email": "n", "inbox_id": "n"}),
+    "FinanceBills": obj({"bills": items(ref("FinanceDocumentRow")), "next_cursor": "n", "open": ref("FinanceOpenTotal"),
+                         "currency": "s", "bills_email": "n", "view_version": "i"}),
+    "FinanceChart": obj({"accounts": items(obj({"id": "s", "number": "s", "name": "s", "type": "s", "subtype": "s",
+                                                "parent_id": "n", "company_wide": "b",
+                                                "attributable": items(obj({"team": "s", "teammate": "s"}, required=[]))},
+                                               required=["id", "number", "name", "type"])),
+                         "more": "b", "view_version": "i"}),
+    "FinancePayFrom": obj({"accounts": items(obj({"id": "s", "name": "s", "provider": "s", "last4": "n",
+                                                  "balance": {"type": ["integer", "null"]},
+                                                  "available_balance": {"type": ["integer", "null"]},
+                                                  "balance_as_of": "n"}, required=["id", "name"])),
+                           "currency": "s", "view_version": "i"}),
+    "FinanceFeedExpected": obj({"feed_id": "s", "kind": {"type": "string", "enum": ["bill", "invoice"]},
+                                "amount": "i", "date": "s", "expected": items(obj({
+                                    "settlement_id": "s", "kind": "s", "document_id": "s", "number": "s",
+                                    "contact_id": "s", "contact_name": "s", "amount": "i", "marked_on": "s"})),
+                                "more": "b", "view_version": "i"}),
+    "FinanceInvoices": obj({"invoices": items(ref("FinanceDocumentRow")), "next_cursor": "n",
+                            "open": ref("FinanceOpenTotal"), "currency": "s", "view_version": "i"}),
+    "FinanceOpenTotal": obj({"count": "i", "remaining": "i", "more": "b",
+                             "aging": obj({k: "i" for k in ("current", "1_30", "31_60", "61_90", "over_90")})}),
+    "FinanceDocumentRow": obj({
+        "id": "s", "kind": {"type": "string", "enum": ["bill", "invoice"]}, "number": "s",
+        "vendor": DOC_CONTACT, "customer": DOC_CONTACT, "date": "s", "due_date": "n", "status": "s", "currency": "s",
+        "total": "i", "paid": "i", "remaining": "i", "aging": "n", "days_late": "i", "memo": "s", "entry_id": "n",
+        "attachments": "i", "created_by": "s", "created_at": "s", "origin": "s", "approved_by": "n",
+        "approved_at": "n", "pay_on": "n", "payment": DOC_PAYMENT, "sent_at": "n", "written_off": "i",
+        "payment_link": "n", "account": {"type": ["object", "null"], "additionalProperties": True}, "split": "b",
+        "team": "n", "paid_on": "n", "paid_by": "n"},
+        required=["id", "kind", "number", "date", "status", "currency", "total", "paid", "remaining"]),
+    "FinanceDocument": {"allOf": [ref("FinanceDocumentRow"), obj({
+        "lines": items(obj({"id": "s", "account": {"type": ["object", "null"], "additionalProperties": True},
+                            "amount": "i", "description": "s", "tags": "o", "taxable": "b"},
+                           required=["id", "account", "amount", "description", "tags"])),
+        "settlements": items(obj({"id": "s", "from_kind": {"type": "string", "enum": ["payment", "feed", "credit",
+                                                                                       "account", "expected"]},
+                                  "from_id": "n", "amount": "i", "settled_on": "s", "entry_id": "n", "voided_at": "n",
+                                  "created_by": "s"})),
+        "attachments": items(obj({"id": "s", "file_id": "s", "created_by": "s", "created_at": "s"})),
+        "actions": items(obj({"action_id": "s", "kind": "s", "status": "s", "actor": "s", "approval_id": "n",
+                              "approval_to": "n", "rule_id": "n", "created_at": "s"})),
+        "settlement_count": "i", "settlements_more": "b", "attachment_count": "i", "attachments_more": "b",
+        "terms_days": {"type": ["integer", "null"]}, "schedule": {"type": ["object", "null"]}, "view_version": "i"},
+        required=["lines", "settlements", "attachments", "actions"])]},
+    "FinanceContacts": obj({"contacts": items(obj({
+        "id": "s", "name": "s", "kind": {"type": "string", "enum": ["vendor", "customer", "both"]},
+        "emails": items({"type": "string"}), "default_account": {"type": ["object", "null"], "additionalProperties": True},
+        "is_1099": "b", "has_tax_id": "b", "tax_id_last4": "n", "recipient_id": "n", "active": "b",
+        "owed": obj({"bills": "i", "invoices": "i"}, required=[]), "created_at": "s"},
+        required=["id", "name", "kind", "active"])), "next_cursor": "n", "view_version": "i"}),
+    "FinanceInbox": obj({"items": items(obj({"kind": {"type": "string", "enum": [
+        "uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
+        "budget_near_limit", "sync_failed", "period_ready"]}, "id": "s", "label": "s"})),
+        "counts": {"type": "object", "additionalProperties": {"type": "integer"}}, "more": items({"type": "string"}),
+        "next_cursor": "n", "currency": "s", "view_version": "i"}),
+    "FinanceReportOf": obj({"kind": {"type": "string", "enum": ["pnl", "balance_sheet", "cash_flow",
+                                                                 "budget_vs_actual", "ap_aging", "ar_aging",
+                                                                 "spend_by"]},
+                            "prior": {"type": "object", "additionalProperties": True}}, required=["kind"]),
+    "FinanceSearch": obj({"results": items(obj({"kind": {"type": "string", "enum": [
+        "entry", "feed", "bill", "invoice", "contact", "rule"]}, "id": "s", "label": "s"})),
+        "next_cursor": "n", "currency": "s", "view_version": "i"}),
+    "FinanceMetric": obj({"name": "s", "value": {"type": ["integer", "string", "null"]}, "unit": {
+        "type": "string", "enum": ["minor", "percent", "months", "count", "days"]}, "as_of": "s",
+        "data_as_of": "n", "stale": "b", "currency": "s", "view_version": "i"}, required=["name", "value", "unit",
+                                                                                         "as_of"]),
+    "FinanceCloseChecklist": obj({"month": "s", "start": "s", "end": "s", "status": "s", "ready": "b",
+                                  "checks": items(obj({"key": "s", "ok": "b", "label": "s"})), "view_version": "i"}),
+    "FinanceActionKinds": obj({"kinds": items(obj({"kind": "s", "words": "s", "live": "b"})), "kind": "s",
+                               "words": "s", "right": "s", "live": "b", "approval_kind": "s",
+                               "fields": items(obj({"name": "s", "type": "s", "required": "b", "words": "s"}))},
+                              required=[]),
+})
+
 # Proposals (backend/proposals.py): a change a person decides, applied by the hub on approve.
 STABLE.extend([
     ("/api/v2/approvals", "post", "Needs you", "requestApproval",
@@ -1411,7 +1788,7 @@ STABLE.extend([
     ("/api/v2/automations/question-sets", "get", "Automations", "listQuestionSets",
      "The saved question sets a Decide step may name (`set`), each with its questions", "QuestionSets"),
     ("/api/v2/automations/{aid}", "get", "Automations", "getAutomation",
-     "One automation with set questions filled in, today's counts and, for a schedule, next_run", "Automation"),
+     "One automation with set questions filled in, today's counts and, for a schedule or a due date, next_run (for a due date, next_due too)", "Automation"),
     ("/api/v2/automations/{aid}", "patch", "Automations", "updateAutomation",
      "Change it: a new trigger, steps or batch is a new version. A bot without edit rights gets "
      "`pending`, a proposal a person restores", "Automation"),
@@ -1452,7 +1829,10 @@ SCHEMAS.update({
                        "spend_cap": {"type": ["object", "null"]}, "batch": {"type": ["object", "null"]},
                        "last_run": {"type": ["object", "null"]},
                        "counts": obj({"today": obj({"runs": "i", "dropped": "i"})}),
-                       "next_run": {"type": ["string", "null"]}, "pending": "i", "warning": "s",
+                       "next_run": {"type": ["string", "null"]},
+                       "next_due": {"type": ["string", "null"], "description": "A due-date trigger's next due day "
+                                    "(YYYY-MM-DD); next_run is when its run starts"},
+                       "pending": "i", "warning": "s",
                        "kind": {"type": "string", "description": "The trigger as the overview groups it; system for "
                                 "Tico's own jobs"},
                        "problems": {"type": "array", "description": "Wake rules that name a step their task type "
@@ -1474,7 +1854,7 @@ SCHEMAS.update({
     "AutomationOverviewRuns": obj({
         "runs": items(obj({"id": "s", "automation_id": "s", "automation_name": "s",
                            "trigger": {"enum": ["message", "task_received", "schedule", "webhook", "listening", "event",
-                                                "system"]},
+                                                "due", "system"]},
                            "owner": "s", "started": "s", "finished": {"type": ["string", "null"]}, "status": "s",
                            "cost": "f", "started_by": "s", "outcome": "s", "step_count": {"type": ["integer", "null"]},
                            "count": {"type": "integer", "description": "Quiet system-job runs folded into this row"}},
@@ -1576,6 +1956,8 @@ SCHEMAS['TaskType']['properties'].update({'default_visibility': {'enum': ['publi
                                          'role': {'type': ['string', 'null'], 'enum': ['product-roadmap', 'engineering', None],
                                                   'description': 'The Product roadmap or Dev tickets type, whoever manages it'}})
 
+TAGS['Rules'] = ("Org rules: what teammates follow (internal) and what someone outside requires (external), with their "
+                 "due dates and sources.")
 TAGS['Strategy'] = ("The team's strategy: a draft the owner edits, numbered published versions, and the bets goals "
                     "serve.")
 STABLE.extend([
@@ -1639,7 +2021,7 @@ STABLE.extend([
     ('/api/v2/triggers/{trigger_id}','get','Triggers','getTrigger','One trigger',None),
     ('/api/v2/triggers/{trigger_id}','post','Triggers','updateTrigger','Change its name, preset, type source, hourly limit, keep days or unheard setting',None),
     ('/api/v2/triggers/{trigger_id}/rotate','post','Triggers','rotateTrigger','A new address secret; the old one stops at once',None),
-    ('/api/v2/triggers/{trigger_id}/signing','post','Triggers','signTrigger','Verify calls with a preset (hmac, github, standard, stripe, slack) or stop; the signing secret is shown once',None),
+    ('/api/v2/triggers/{trigger_id}/signing','post','Triggers','signTrigger','Verify calls with a preset (hmac, github, standard, stripe, slack, mercury) or stop; the signing secret is shown once',None),
     ('/api/v2/triggers/{trigger_id}/delete','post','Triggers','deleteTrigger','Delete a trigger and its kept calls',None),
     ('/api/v2/triggers/{trigger_id}/deliveries','get','Triggers','listTriggerDeliveries','The latest calls, newest first',None),
     ('/api/v2/triggers/{trigger_id}/deliveries/{delivery}','get','Triggers','getTriggerDelivery','One kept call: redacted headers and body (a bot reads fenced 20,000-character parts, only of a call it was given)',None),
@@ -1687,7 +2069,8 @@ STABLE.append(('/api/v2/notices', 'get', 'Notices', 'listNotices', 'Notices from
 SCHEMAS['NoticeList'] = obj({'notices': items(obj({'id': 's', 'kind': 's', 'body': 's', 'url': 's', 'sent_at': 's',
                                                     'received_at': 's', 'source': {'enum': ['relay', 'latest']}}))})
 SCHEMAS.update({
-    'SleepWhenIdle': obj({'sleep': obj({'hosted': 'b', 'layout': {'type': ['string', 'null']}, 'hours': 'i', 'runners': 'b',
+    'SleepWhenIdle': obj({'sleep': obj({'hosted': 'b', 'layout': {'type': ['string', 'null']}, 'hours': 'i', 'minutes': 'i',
+                                        'source': {'enum': ['cell', 'owner', 'default']}, 'managed': 'b', 'runners': 'b',
                                         'active': 'b', 'idle_since': {'type': ['string', 'null']}, 'blocker': 's',
                                         'wake_at': {'type': ['string', 'null']},
                                         'last_request': {'type': ['object', 'null']}, 'last_error': 's'})}),
@@ -1847,6 +2230,34 @@ STABLE.extend([
     ('/api/v2/cards/{cid}', 'patch', 'Cards and pins', 'updateCard', 'Change a card\'s heading or settings', None),
     ('/api/v2/cards/{cid}', 'delete', 'Cards and pins', 'removeCard', 'Remove a card and every pin of it', None),
 ])
+STABLE.extend([
+    ('/api/v2/rules', 'get', 'Rules', 'listRules', 'The org rules, newest first, paged; mine=true adds the bot\'s settings as sentences', None),
+    ('/api/v2/rules', 'post', 'Rules', 'addRule', 'Add an org rule: a bot\'s is a suggestion; only owners and admins add Everyone', None),
+    ('/api/v2/rules/counts', 'get', 'Rules', 'getRulesCounts', 'Internal and external rules in force, due dates open, suggestions waiting', None),
+    ('/api/v2/rules/read', 'post', 'Rules', 'readRuleDocument', 'Add a document for Counsel to read: a file you can read, or a public link (saved as a file version); Counsel suggests the rules in it', None),
+    ('/api/v2/rules/ask', 'post', 'Rules', 'askRules', 'A can-I question: the active rules that share words with it, cited, and Counsel\'s answer on a task', None),
+    ('/api/v2/rules/due', 'get', 'Rules', 'listRuleDue', 'Due dates of rules in force: overdue, then those falling due within next days', None),
+    ('/api/v2/rules/{rule_id}', 'get', 'Rules', 'getRule', 'One rule, its due dates, and the quote it cites where its file is readable', None),
+    ('/api/v2/rule-due/{due_id}', 'get', 'Rules', 'getRuleDue', 'One due date in full: its status, open occurrences, and its chain of edits (ended and removed rows included)', None),
+    ('/api/v2/rules/{rule_id}', 'post', 'Rules', 'updateRule', 'Edit a rule against its version; a bot cannot edit', None),
+    ('/api/v2/rules/{rule_id}/accept', 'post', 'Rules', 'acceptRule', 'Accept a suggestion, optionally changing its Who; a person only', None),
+    ('/api/v2/rules/{rule_id}/skip', 'post', 'Rules', 'skipRule', 'Set a suggestion aside', None),
+    ('/api/v2/rules/{rule_id}/retire', 'post', 'Rules', 'retireRule', 'Retire a rule in force; its due dates come back', None),
+    ('/api/v2/rules/{rule_id}/due', 'post', 'Rules', 'addRuleDue', 'Add a due date to a rule: first day, repeat, owner, routine lead time', None),
+    ('/api/v2/rule-due/{due_id}', 'post', 'Rules', 'updateRuleDue', 'Edit a due date; a change to first day or repeat starts a new row', None),
+    ('/api/v2/rule-due/{due_id}/remove', 'post', 'Rules', 'removeRuleDue', 'Remove a due date; its history is kept', None),
+    ('/api/v2/rule-due/{due_id}/satisfied', 'post', 'Rules', 'markRuleDueSatisfied', 'Mark the current occurrence satisfied; due_on when two are open', None),
+    ('/api/v2/rule-sources', 'get', 'Rules', 'listRuleSources', 'Where external rules come from (From), by name', None),
+    ('/api/v2/rule-sources', 'post', 'Rules', 'addRuleSource', 'Add a From; one that exists by name is returned', None),
+    ('/api/v2/bots/{bot}/rules', 'get', 'Rules', 'getBotRules', 'A bot\'s Rules tab: its settings as sentences, then internal and external rules, each paged by its own cursor', None),
+    ('/api/v2/rules/stats', 'get', 'Rules', 'getRuleCheckStats', 'Rule checks today: checks, unchecked, blocked, dollars left in the rules budget, and whether checks are on', None),
+    ('/api/v2/rules/check', 'post', 'Rules', 'checkRuleDraft', 'A bot checks a draft as the write it will be; sending that exact draft then costs no second check', None),
+    ('/api/v2/rule-holds', 'get', 'Rules', 'listRuleHolds', 'The holds on one review task, as its reviewer or the author bot reads them: summaries, a page at a time (next_cursor)', None),
+    ('/api/v2/rule-holds/{hold_id}', 'get', 'Rules', 'getRuleHold', 'One held output: only the author bot and the reviewer read it', None),
+    ('/api/v2/rule-holds/{hold_id}/keep', 'post', 'Rules', 'keepRuleHold', 'The reviewer keeps it blocked', None),
+    ('/api/v2/rule-holds/{hold_id}/send', 'post', 'Rules', 'sendRuleHold', 'The reviewer sends it anyway, once, with the hold\'s nonce', None),
+    ('/api/v2/rule-holds/{hold_id}/appeal', 'post', 'Rules', 'appealRuleHold', 'The author bot asks the reviewer to look, with why', None),
+])
 SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done_per_week', 'needs_you', 'spend', 'kpi',
                                                         'automation_runs', 'latest_pages']},
                        'title': 's', 'heading': 's', 'name': 's', 'team_name': 's', 'settings': 'o', 'hidden': 'b',
@@ -1860,6 +2271,38 @@ SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'team', 'bo
                                           required=['id', 'item', 'position', 'size'])),
                         'audience': {'type': 'object', 'description': 'A team page: who sees it (docs/permissions.md)'},
                         'name': 's', 'group': 's'}, required=['place', 'kind', 'saved', 'can_edit', 'pins'])
+
+# Settings > Models: the company's subscriptions (backend/model_subscriptions.py). Values are never in an answer.
+TAGS['Model subscriptions'] = ("The company's saved model logins and keys, given to computers per runtime. A value is "
+                               "sent only to add or reconnect one; no answer carries it.")
+STABLE.extend([
+    ('/api/v2/model-subscriptions', 'get', 'Model subscriptions', 'listModelSubscriptions', 'Saved subscriptions and the kinds that can be added', 'ModelSubscriptionList'),
+    ('/api/v2/model-subscriptions', 'post', 'Model subscriptions', 'addModelSubscription', 'Add a subscription: a kind, a name and the pasted value (owners and admins)', 'ModelSubscription'),
+    ('/api/v2/model-subscriptions/{sid}', 'post', 'Model subscriptions', 'changeModelSubscription', 'Rename a subscription and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true', 'ModelSubscription'),
+    ('/api/v2/model-subscriptions/{sid}', 'delete', 'Model subscriptions', 'removeModelSubscription', 'Remove a subscription and take it off every computer; 409 `confirm_restart` while runs would stop unless `confirm=1`', 'ModelSubscriptionDeleted'),
+    ('/api/v2/computer-subscriptions', 'get', 'Model subscriptions', 'listComputerSubscriptions', 'Which subscription each computer uses per runtime, and the computers that can take one', 'ComputerSubscriptionList'),
+    ('/api/v2/computer-subscriptions', 'put', 'Model subscriptions', 'setComputerSubscription', 'Give a computer a subscription for one runtime, switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true', 'ComputerSubscriptionResult'),
+])
+_SUB_KIND = {"enum": ["claude_token", "codex_login", "anthropic_key", "openai_key"]}
+SCHEMAS['ModelSubscription'] = obj({
+    'id': 's', 'name': 's', 'kind': _SUB_KIND, 'runtime': {'enum': ['claude', 'codex']}, 'label': 's',
+    'status': {'enum': ['new', 'working', 'needs_reconnect']}, 'status_detail': 's', 'status_at': 'n', 'preview': 's',
+    'revision': 'i', 'computers': items({'type': 'string'}),
+    'usage': {'anyOf': [obj({'window': {'type': ['string', 'null'], 'enum': ['5h', 'week', None]}, 'used_pct': NUM_N,
+                             'cost_usd_month': NUM_N, 'resets_at': 'n'}, required=['window', 'used_pct', 'cost_usd_month']),
+                        {'type': 'null'}]},
+    'added_by': 's', 'added_by_name': 's', 'created': 's', 'updated': 's'},
+    required=['id', 'name', 'kind', 'runtime', 'label', 'status', 'status_detail', 'status_at', 'preview', 'revision',
+              'computers', 'usage', 'added_by', 'added_by_name', 'created', 'updated'])
+SCHEMAS['ModelSubscriptionList'] = obj({
+    'subscriptions': items(ref('ModelSubscription')),
+    'kinds': items(obj({'kind': _SUB_KIND, 'label': 's', 'runtime': {'enum': ['claude', 'codex']}, 'secret_label': 's', 'help': 's'}))})
+SCHEMAS['ModelSubscriptionDeleted'] = obj({'deleted': 'b', 'id': 's', 'computers': 'i', 'stopped': 'i', 'sessions_reset': 'i'})
+SCHEMAS['ComputerSubscriptionList'] = obj({
+    'assignments': items(obj({'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 's'})),
+    'capable': items({'type': 'string'})})
+SCHEMAS['ComputerSubscriptionResult'] = obj({
+    'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 'n', 'stopped': 'i', 'sessions_reset': 'i'})
 
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
@@ -1902,6 +2345,9 @@ def spec(app):
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
             responses["200"] = {"description": "The file's bytes (application/octet-stream, sent as an attachment)",
                                 "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}
+        if method == "get" and path.startswith("/api/v2/finance/tax/") and path.endswith(".csv"):
+            responses["200"] = {"description": "The workpaper as CSV (text/csv, sent as an attachment)",
+                                "content": {"text/csv": {"schema": {"type": "string"}}}}
         if path == "/auth/login":
             responses = {"302": {"description": "Redirect to the identity provider"},
                          "400": {"description": "next is not an allowed origin, or code_challenge is missing"}}
@@ -1987,6 +2433,43 @@ def spec(app):
                            "description": "The browser session of Tico's own page (`__Host-tico_session` over https)."}}},
         "security": [{"bearer": []}, {"cookie": []}],
     }
+
+
+# Cloud agents (backend/cloud_agents.py): a seat asks Tico's team to connect an agent it does not connect yet.
+STABLE.extend([
+    ("/api/v2/cloud-agents", "get", "Team chart", "listCloudAgents",
+     "The cloud coding agents: the supported ones are added to the team, the others are requested from Tico", "CloudAgentList"),
+    ("/api/v2/cloud-agents/{agent_id}/request", "post", "Team chart", "requestCloudAgent",
+     "Request an agent Tico does not connect yet: a seat for it goes on the chart now and Tico's team builds the "
+     "connection. `other` takes the agent's name or website in `name`", "Seat"),
+    ("/api/v2/seats/{seat_id}/request-agent", "post", "Team chart", "requestSeatAgent",
+     "Request a cloud agent for a seat that has none: the seat keeps its role and holds its place until the agent connects",
+     "Seat"),
+    ("/api/v2/seats/{seat_id}/request", "get", "Team chart", "getSeatAgent",
+     "A seat's cloud agent: where its request stands (requested, building, ready) and the first task waiting for it",
+     "SeatAgent"),
+    ("/api/v2/cloud-agents/{agent_id}/add", "post", "Team chart", "addCloudAgent",
+     "Add an agent Tico connects as a Tico bot on the harness it runs on, placed under `reports_to`, or in the seat's "
+     "place when `seat_id` names one, which the bot then fills", "CloudAgentAdded"),
+    ("/api/v2/seats/{seat_id}/cancel-request", "post", "Team chart", "cancelSeatRequest",
+     "Withdraw a seat's cloud agent request: Tico hears of it, the seat closes and its first task is declined",
+     "SeatCancelled"),
+])
+SCHEMAS.update({
+    "CloudAgent": obj({"id": "s", "name": "s", "maker": "s", "site": "s", "line": "s", "supported": "b",
+                       "connect_id": "n"},
+                      required=["id", "name", "maker", "site", "line", "supported", "connect_id"]),
+    "CloudAgentList": obj({"agents": items(ref("CloudAgent"))}, required=["agents"]),
+    "CloudAgentAdded": obj({"bot": "s", "harness": "s", "model": "s", "seat": "s"},
+                           required=["bot", "harness", "model", "seat"]),
+    "SeatAgent": obj({"seat": ref("Seat"), "agent": ref("CloudAgent"),
+                      "steps": items({"enum": ["requested", "building", "ready"]}),
+                      "tasks": items(obj({"id": "s", "title": "s", "status": "s"}, required=["id", "title", "status"]))},
+                     required=["seat", "agent", "steps", "tasks"]),
+    "SeatCancelled": obj({"id": "s", "closed": "b", "request_state": "s"}, required=["id", "closed", "request_state"]),
+})
+SCHEMAS["Seat"]["properties"].update({name: _t("s") for name in ("agent", "agent_name", "request_state")})
+SCHEMAS["Seat"]["required"] = sorted(set(SCHEMAS["Seat"]["required"]) | {"agent", "agent_name", "request_state"})
 
 
 def generate():

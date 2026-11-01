@@ -366,6 +366,27 @@ def search(url, key, query, max_results=5, headers=None, timeout=25, opener=None
                  "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None}}, ""
 
 
+def image(url, key, prompt, category, images=(), size=None, count=1, headers=None, timeout=130, opener=None):
+    """Tico HQ's image maker (`POST <base>/images`, the gateway key): (status, {model, category, images: [{mime, b64}],
+    usage: {cost_usd}} or {}, error code). The references are base64 data URLs the caller has checked; the images come
+    back as the Gateway sent them. A count the Gateway gives less than asked for is the answer's own."""
+    body = {"prompt": str(prompt)[:4000], "category": str(category), "count": max(1, min(4, int(count)))}
+    if images:
+        body["images"] = [str(ref) for ref in images][:4]
+    if size:
+        body["size"] = str(size)[:20]
+    status, payload, code = _post(safe_base(url) + "/images", body,
+                                  {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener)
+    if status != 200:
+        return status, {}, code
+    made = [{"mime": str(i.get("mime") or "")[:40], "b64": str(i.get("b64") or "")}
+            for i in payload.get("images") or [] if isinstance(i, dict) and i.get("b64")][:4]
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    cost = usage.get("cost_usd")
+    return 200, {"model": str(payload.get("model") or "")[:60], "category": str(payload.get("category") or category)[:20],
+                 "images": made, "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None}}, ""
+
+
 def fetch(url, key, page, max_tokens=10000, headers=None, timeout=35, opener=None):
     """Tico HQ's page reader (`POST <base>/fetch`, the gateway key): (status, {url, title, content, usage: {cost_usd}} or {},
     error code). Only the fields the Gateway documents are kept; the content is another site's text."""
@@ -378,3 +399,27 @@ def fetch(url, key, page, max_tokens=10000, headers=None, timeout=35, opener=Non
     return 200, {"url": str(payload.get("url") or page)[:2000], "title": str(payload.get("title") or "")[:300],
                  "content": str(payload.get("content") or "")[:250000],
                  "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None}}, ""
+
+
+# The most an answer the recorder's speech relay passes on may be: a transcript of a clip, never a whole file.
+RELAY_LIMIT = 30 * 1024 * 1024
+
+
+def relay(method, url, body=None, headers=None, timeout=TIMEOUT):
+    """(status, body bytes) for a call the recorder's speech relay passes on, the Gateway's answer kept as it is. An
+    error answer keeps its status and body; status 0 means the Gateway could not be reached. The key goes only where
+    `safe_base` allows it, and never through a redirect."""
+    try:
+        safe_base(url)
+        request = urllib.request.Request(url, data=body, method=method, headers={
+            **(headers or {}), "Accept": "application/json",
+            **({"Content-Type": "application/json"} if body is not None else {})})
+        with _send(request, timeout=timeout) as response:
+            return response.status, response.read(RELAY_LIMIT)
+    except urllib.error.HTTPError as exc:
+        try:
+            return exc.code, exc.read(RELAY_LIMIT)
+        except OSError:
+            return exc.code, b""
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return 0, b""

@@ -53,7 +53,7 @@ session other than the first also leaves a line in the run's diagnostics and in 
 session: the old one wasn't on this computer"), and Health names a bot that lost its session more than twice in a day.
 
 A resumed session is sent only what is new: what was said since its last turn, the current message and this turn's
-notices. On a harness that says when it compacts (the `compaction_events` capability, Claude Code), the bot's standing
+notices. On a harness that says when it compacts (the `compaction_events` capability: Claude Code and pi), the bot's standing
 instructions become one line while they, AGENT.md and the model are unchanged, and the assigned task one line while it
 is unchanged, but only while the session's last turn and the whole prompt come to under 60% of its Compact at. If the
 session compacts during a shortened turn anyway, the turn is given the lines it left out at once. The whole prompt goes
@@ -62,6 +62,11 @@ interrupted turn, and after a turn that did not complete; the repo rules go agai
 not complete. A resumed session that turns out to be missing starts again with what a replacing session gets: the
 repo rules, the checkpoint and the room since its last turn. Other harnesses get the whole prompt every turn.
 
+A stateless bot (`stateless` in its config; Counsel by its template) keeps no session across tasks. Each task starts its
+own session and resumes only that task's, and a chat message to it starts a new session that is not saved. It gets the
+whole prompt every turn and is never told to read `memory/` or `state.md`. A new session for a task still starts from
+the task's checkpoint, as above.
+
 A turn that was cut off (a restart's drain, a **Stop**) leaves its session in place. The next turn resumes it and is
 told to check what the interrupted turn already did before repeating a step.
 
@@ -69,8 +74,8 @@ When a turn runs on a fallback harness or model, it runs in a side session of it
 never replaces the saved session; the next turn on the usual harness resumes that one and is told a side session ran.
 
 When a run fails because the session ran out of room, the next claim for it carries `compact_first`: the saved session
-is resumed and compacted before the turn (Claude Code `/compact`, Codex `thread/compact/start`, other harnesses with
-the `compaction` capability their own way). A harness that cannot compact, or a compaction that fails, starts a new
+is resumed and compacted before the turn (Claude Code `/compact`, Codex `thread/compact/start`, pi's RPC `compact`,
+other harnesses with the `compaction` capability their own way). A harness that cannot compact, or a compaction that fails, starts a new
 session (`compact_failed`). If the compacted run still fails the same way, or an older runner ignores the flag, Tico
 clears the session for the next run. `/compact` keeps its session.
 
@@ -137,6 +142,11 @@ or a person, cleans one up first. A task's worktree goes when the task is finish
 that bot's turn, or within about 10 minutes for another bot's copy or one whose files were still uploading. A worktree
 with unsaved changes, or commits that are on no remote, stays until someone saves or discards them.
 See [Task worktrees](worktrees.md) for code worktrees and cleanup.
+
+A private live meeting's bot turns get a worktree of their own the same way, `sessions/bot-<slug>/private-<id>`, but
+nothing in it is ever saved: it is never committed for the bot or pushed, and it is deleted, unsaved changes and all,
+within about 10 minutes of the meeting ending ([Live meetings](live-meetings-api.md)). Unlike a task's, it needs no
+upstream: a checkout with no remote gives it a copy of its own `HEAD`.
 
 ## Linked sessions
 

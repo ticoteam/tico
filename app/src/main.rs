@@ -388,11 +388,13 @@ mod visual_bridge_tests {
 fn build_window(app: &App) -> tauri::Result<()> {
     let Some(config) = connection(app) else { return build_server_window(app) };
     let start = config.start_url();
+    // Files dropped on a page reach it (chat composers, task files): Tauri's own drop handler would swallow them on macOS.
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(start))
         .title(config::app_name())
         .inner_size(1240.0, 820.0)
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .user_agent(USER_AGENT)
+        .disable_drag_drop_handler()
         .devtools(true)
         .visible(false)
         .initialization_script(&bridge_script(app))
@@ -579,6 +581,7 @@ fn open_hub_window(app: &App, url: url::Url) {
         .inner_size(1000.0, 800.0)
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .user_agent(USER_AGENT)
+        .disable_drag_drop_handler()
         .on_new_window(new_window_handler(app)), false);
     // A file the web view cannot show (Word, Excel, zip) downloads, leaving this window empty: save
     // it to Downloads, show it there and close the window. Only the file this window opened on
@@ -795,6 +798,7 @@ fn open_meeting_window(app: &App, id: &str) {
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .resizable(true)
         .user_agent(USER_AGENT)
+        .disable_drag_drop_handler()
         .on_new_window(new_window_handler(app));
     let _ = follow_sign_in(app, builder, false).build();
 }

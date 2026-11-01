@@ -190,3 +190,40 @@ def pages(world):
             "text": "stage,visitors\nlanding,1200\nsignup,310\nactivated,140\n"}, who=token), "funnel.csv")
     if world.turn("engineering-lead", act=act) is None:
         raise RuntimeError("the Engineering Lead's turn did not run")
+
+
+COUNSEL = "counsel-test"
+VENDOR_TERMS = ("Northwind Messaging Terms\n\n4. Messaging\n\nCustomer messages must include an opt-out line in every "
+                "send. Keep a record of each consent for five years.\n\n5. Data\n\nDelete raw logs after 30 days.\n")
+
+
+@seed("counsel")
+def counsel(world):
+    """Counsel on, as onboarding turns it on (its bot row and config, and a test token, "tico-counsel"), and a vendor's
+    terms in Files, uploaded by Dana under the Engineering Lead, for Rules › External › Add document. No model runs: a
+    test claims Counsel's run on its read task with the hub's runner token (real_hub_server.py prints it) and writes
+    its suggestions itself, through the API as that run."""
+    from backend.auth import Identity
+    from backend.blobs import register
+    from backend.store import H
+    from .harness import DANA, DANA_ID
+    with world.store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES(?, 'Counsel', 'active')", (H.COUNSEL,))
+        c.execute("INSERT OR REPLACE INTO bot_config(bot, config_json, team, operator) VALUES(?, '{}', '', ?)",
+                  (H.COUNSEL, DANA_ID))
+        c.execute("INSERT OR REPLACE INTO agents(bot, harness, token_hash, created, created_by) VALUES(?,?,?,?,?)",
+                  (H.COUNSEL, "test", "x-counsel", H.now(), "human:" + DANA_ID))
+        data = VENDOR_TERMS.encode("utf-8")
+        digest = world.app.state.blobs.put(data, "text/plain")
+        item = register(c, Identity("human:" + DANA_ID, "owner"), digest, len(data), "northwind-terms.txt", "text/plain")
+        world.app.state.files.add_version(
+            c, bot="engineering-lead", actor="human:" + DANA_ID, scope="bot", task=None, conversation=None, attempt="",
+            identity="upload:northwind-terms", title="Northwind Messaging Terms", name="northwind-terms.txt",
+            mime="text/plain", blob_id=item["id"], digest=digest, size=len(data))
+    world.app.state.auth.settings.test_identities[COUNSEL] = Identity("bot:" + H.COUNSEL, "bot", agent="test")
+    # Counsel on the world's computer, ready, so a read task's run can be claimed and started.
+    _ok(world.api("post", f"/api/v2/bots/{H.COUNSEL}/assignment",
+                  {"runner_id": world.runner["runner_id"], "expected_generation": 0}, who=DANA), "Counsel assignment")
+    _ok(world.api("post", "/api/v2/runners/heartbeat", {
+        "version": "test", "platform": "test",
+        "readiness": {slug: True for slug in [*world.bot_slugs, H.COUNSEL]}}, who=world.runner["token"]), "heartbeat")

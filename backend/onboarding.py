@@ -138,6 +138,8 @@ def _card(document, instructions):
             "team_templates": _strings(document.get("team_templates")),
             # A helper serves a person (the Inbox Manager), sits outside the org chart and is offered on its own.
             "kind": "helper" if document.get("kind") == "helper" else "role",
+            # A retired card is offered nowhere; a bot already built from it keeps it (`Onboarding.catalog`).
+            "retired": bool(document.get("retired")),
             # Checked when the wizard first shows the card, and `when` says who wants it.
             "default": bool(document.get("default")), "when": str(document.get("when") or ""),
             "summary": str(document.get("summary") or ""),
@@ -332,6 +334,8 @@ def config_view(c, settings, who=None):
         value["computer_logins_v1"] = True
         # Likewise whether a tool's turns run as their own OS user (runner-rs/src/fallback.rs server_takes_turn_user).
         value["readiness_turn_user"] = True
+        # And whether it is a cloud machine's trust group (`trust`, runner-rs/src/fallback.rs server_takes_trust).
+        value["readiness_trust"] = True
         # Where a bucket's objects open (TICO_S3_VIEW_URLS): the UI links s3:// URIs, `hub` rewrites them before sending.
         value["s3_view_urls"] = dict(settings.s3_view_urls)
         # Pages and SVG from Tico file hosting: the desktop app follows a frame to this origin, only on its signed
@@ -461,7 +465,7 @@ class Onboarding:
 
     # ------------------------------------------------------------------ catalog
     def catalog(self, c, rendered=True):
-        cards = read_cards(self.settings)
+        cards = [card for card in read_cards(self.settings) if not card["retired"] or H.bot(c, card["slug"])]
         if rendered:
             record = load(c)
             names = display_names(self.settings, record)
@@ -831,6 +835,8 @@ class Onboarding:
                 continue
             if c.execute("SELECT 1 FROM assignments WHERE bot=?", (row["bot"],)).fetchone():
                 continue                     # a bot a person already placed is never moved
+            if c.execute("SELECT 1 FROM cloud_machines WHERE bot=? AND mode='cloud'", (row["bot"],)).fetchone():
+                continue                     # it runs on a cloud machine (backend/cloud_machines.py)
             if self.auth.member_bot(c, row["bot"]) and not (
                     computer and (computer["accepts_member_bots"] or computer["operator"] == row["operator"])):
                 continue                     # a member's bot goes on its member's computer, or one open to members' bots
@@ -899,6 +905,16 @@ class Onboarding:
         """The same for the Task Manager (docs/task-manager.md): a company from before it was built in gets it once it can
         run it. It is a helper outside the org chart, so no chart or seat changes."""
         return self._ensure_builtin(c, "task-manager", "Task Manager", "task_manager.turned_on")
+
+    def ensure_bookkeeper(self, c):
+        """The same for the Bookkeeper (docs/bookkeeper.md), once Finance is set up (backend/bookkeeper.py `ensure`
+        checks that and adds its defaults). A helper outside the org chart, like the Task Manager."""
+        return self._ensure_builtin(c, "bookkeeper", "Bookkeeper", "bookkeeper.turned_on")
+
+    def ensure_counsel(self, c):
+        """The same for Counsel (docs/rules-plan.md §5): the helper that reads documents for Rules. A company from before it
+        was built in gets it once it can run it, and it is outside the org chart."""
+        return self._ensure_builtin(c, H.COUNSEL, "Counsel", "counsel.turned_on")
 
     def turn_on_task_manager(self, c, who):
         """Bring the Task Manager back after it was paused or archived by an older version (its report is plain code and
@@ -1055,6 +1071,9 @@ class Onboarding:
         self.ensure_librarian(c)              # a company from before it was built in
         self.ensure_goal_manager(c)
         self.ensure_task_manager(c)
+        from . import bookkeeper
+        bookkeeper.ensure(c, self, self.auth)
+        self.ensure_counsel(c)
         placed = self._wire(c, record, "human:" + operator, runner_id)
         self._store(c, record, "human:" + operator)
         return branches + placed
@@ -1079,6 +1098,7 @@ class Onboarding:
                     c.execute("UPDATE runners SET operator=? WHERE id=?", (self.auth.owner_id(c), row["id"]))
                     H.event(c, actor, "runner.adopted", row["id"], {"operator": self.auth.owner_id(c)})
         if not row:
+            self._adopt_cloud(c, actor)
             return []
         placed = self.assign_pending(c, row["id"])
         self._activate_bootstrap(c, actor)
@@ -1088,15 +1108,36 @@ class Onboarding:
             H.event(c, actor, "onboarding.assigned", row["id"], {"bots": placed})
         return placed
 
+    def _adopt_cloud(self, c, actor):
+        """Tico Cloud with no computer yet: bots run on cloud machines (shared, or their own by role), made for work,
+        and the bootstrap bots are activated on them. Nothing until HQ has listed its sizes (`on_cloud_offered`)."""
+        from . import cloud_machines
+        if not cloud_machines.offered(c, self.settings):
+            return False
+        for found in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot LEFT JOIN "
+                               "assignments a ON a.bot=bc.bot WHERE a.bot IS NULL AND b.state<>'archived' "
+                               "ORDER BY bc.bot").fetchall():
+            cloud_machines.adopt(c, found["bot"], actor)
+        self._activate_bootstrap(c, actor)
+        return True
+
+    def on_cloud_offered(self, c):
+        """HQ has just listed its machine sizes (the cloud machines manager's sync). A setup finished before then, with
+        no computer, left its bots unplaced and its bootstrap bots planned: they go on cloud machines now, the same way
+        as had the sizes been known when it finished."""
+        if load(c)["completed"]:
+            self._adopt_cloud(c, H.KEEPER)
+
     def _activate_bootstrap(self, c, actor):
         """Activate the bootstrap bots (the assistant, BotOps) and the starters once a machine hosts
         them. Every other bot is set up by BotOps, and BotOps cannot be handed a task while it is
         planned, so leaving these to a separate click strands the whole setup."""
         cards = {card["template"]: card for card in read_cards(self.settings)}
         who = self.auth.owner_identity(c)
-        for row in c.execute("SELECT bc.bot,bc.revision,bc.config_json FROM bot_config bc "
-                             "JOIN assignments a ON a.bot=bc.bot JOIN bots b ON b.slug=bc.bot "
-                             "WHERE b.state='planned' ORDER BY bc.bot").fetchall():
+        for row in c.execute("SELECT bc.bot,bc.revision,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+                             "WHERE b.state='planned' AND (EXISTS(SELECT 1 FROM assignments a WHERE a.bot=bc.bot) OR "
+                             "EXISTS(SELECT 1 FROM cloud_machines m WHERE m.bot=bc.bot AND m.mode='cloud')) "
+                             "ORDER BY bc.bot").fetchall():
             declared = _json(row["config_json"], {}) or {}
             # A starter is parked (`needs_onboarding`), so activating it lets it answer a person and nothing else.
             if not ((cards.get(declared.get("template")) or {}).get("bootstrap") or declared.get("materialize")):

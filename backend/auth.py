@@ -58,6 +58,9 @@ def _edit_distance(a, b, limit):
     return previous[-1] if previous[-1] <= limit else None
 
 
+OPERATOR_SQL = "SELECT operator FROM bot_config WHERE bot=?"
+
+
 @dataclass(frozen=True)
 class Identity:
     actor: str
@@ -559,9 +562,10 @@ class Auth:
 
     def system_bot(self, slug):
         """The built-in bots (the Assistant, BotOps, the Librarian, the Strategy Bot, the Health Monitor, the Task
-        Manager): they act for the whole company, so only the company owner changes them. Admins manage every other
-        bot."""
-        return slug in (self.settings.assistant_bot, "assistant", "botops", "librarian", "goal-manager", "health-monitor", "task-manager")
+        Manager, the Bookkeeper): they act for the whole company, so only the company owner changes them. Admins
+        manage every other bot."""
+        return slug in (self.settings.assistant_bot, "assistant", "botops", "librarian", "goal-manager", "health-monitor", "task-manager",
+                        "bookkeeper", H.COUNSEL)
 
     def bot_manager(self, c, who, slug, operator=None):
         """Whether this person may manage the bot: the one "can manage this bot" rule (docs/permissions.md).
@@ -819,7 +823,7 @@ class Auth:
         return audience
 
     def operator(self, c, who, bot):
-        row = c.execute("SELECT operator FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = read_cache.one(c, OPERATOR_SQL, (bot,))
         return bool(row and (who.role == "owner" or
                             who.role == "human" and not self.system_bot(bot) and who.actor == "human:" + row["operator"]))
 

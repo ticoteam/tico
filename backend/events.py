@@ -103,13 +103,19 @@ _ANY_COLUMN = "__any_column_changed__"
 FAN_CAP = 100      # more tasks than this in one change: one `bulk` row, and lists read in full
 
 
-def _fan(kind, ids):
+def _fan(kind, ids, whole=None):
     """A `tasks` row for each task id `ids` (a SELECT of one column, `id`) yields: a change to
     something many tasks show, such as a tag or a step. Past FAN_CAP tasks (a type holding hundreds),
     one `bulk` row instead: per-task rows would be hundreds of events to every open page, each
-    task loaded per viewer, where one full read of the list costs less."""
+    task loaded per viewer, where one full read of the list costs less. `whole` (the same kind of
+    SELECT) is what is counted against FAN_CAP when it is more than `ids`: a type's steps are saved
+    one row at a time, and each step of a big type under the cap made its own hundred rows (TIDY,
+    Oct 30: one type edit, 1,412 rows over 353 tasks, and every open Bot Desk read the roster again)."""
     found = f"(SELECT id FROM ({ids}) WHERE id IS NOT NULL)"
-    many = f"(SELECT count(*) FROM (SELECT 1 FROM {found} LIMIT {FAN_CAP + 1}))>{FAN_CAP}"
+    counted = f"(SELECT id FROM ({whole}) WHERE id IS NOT NULL)" if whole else found
+    many = f"(SELECT count(*) FROM (SELECT 1 FROM {counted} LIMIT {FAN_CAP + 1}))>{FAN_CAP}"
+    if whole:
+        many += f" AND EXISTS(SELECT 1 FROM {found})"
     return (f"INSERT INTO changes(topic,kind,subject_id,at) SELECT 'tasks','{kind}',id,{_NOW} FROM {found} "
             f"WHERE NOT {many};"
             f"INSERT INTO changes(topic,kind,at) SELECT 'tasks','bulk',{_NOW} WHERE {many};")
@@ -183,9 +189,13 @@ TRIGGERS = [
      _fan("ask", "SELECT " + _ASK_TASK.format(mid="NEW.id") + " AS id")),
     ("changes_task_types_update", "UPDATE", "task_types", None,
      _fan("type", "SELECT id FROM tasks WHERE type_id=NEW.id")),
-    ("changes_task_steps_insert", "INSERT", "task_steps", None, _fan("type", "SELECT id FROM tasks WHERE step_id=NEW.id")),
-    ("changes_task_steps_update", "UPDATE", "task_steps", None, _fan("type", "SELECT id FROM tasks WHERE step_id=NEW.id")),
-    ("changes_task_steps_delete", "DELETE", "task_steps", None, _fan("type", "SELECT id FROM tasks WHERE step_id=OLD.id")),
+    # A step's tasks, counted against FAN_CAP with the rest of its type; a write that changes nothing is no change.
+    ("changes_task_steps_insert", "INSERT", "task_steps", None,
+     _fan("type", "SELECT id FROM tasks WHERE step_id=NEW.id", "SELECT id FROM tasks WHERE type_id=NEW.type_id")),
+    ("changes_task_steps_update", "UPDATE", "task_steps", _ANY_COLUMN,
+     _fan("type", "SELECT id FROM tasks WHERE step_id=NEW.id", "SELECT id FROM tasks WHERE type_id=NEW.type_id")),
+    ("changes_task_steps_delete", "DELETE", "task_steps", None,
+     _fan("type", "SELECT id FROM tasks WHERE step_id=OLD.id", "SELECT id FROM tasks WHERE type_id=OLD.type_id")),
     ("changes_attempts_carried", "UPDATE", "attempts", _changed("state"),
      _fan("run", "SELECT id FROM tasks WHERE carried_by=NEW.id")),
     ("changes_messages_insert", "INSERT", "messages", None,
@@ -252,7 +262,8 @@ TRIGGERS = [
 # at most a bot slug (or, for `screen_open`, the session's id), never a value (`GET /api/v2/runners/me/events`,
 # runner-rs/src/events.rs).
 RUNNER_KINDS = ("work", "assignments", "credentials", "config", "repositories", "worktrees", "restart",
-                "logins", "harness_actions", "credential_imports", "subscription_refresh", "screen_open")
+                "logins", "harness_actions", "credential_imports", "subscription_refresh", "screen_open",
+                "browser_exit")
 _BOT_RUNNER = "SELECT runner_id AS rid FROM assignments WHERE bot={bot}"
 # Credentials and repositories are rare company-wide changes: every computer re-reads its share.
 _ALL_RUNNERS = "SELECT id AS rid FROM runners WHERE revoked_at IS NULL"
@@ -625,11 +636,11 @@ LIVE_SQL = ("SELECT id,created FROM attempts WHERE bot=? AND state IN ('leased',
 
 
 def prime_bot_rows(c, slugs):
-    """Each of these bots' own row in the five tables a claim check reads (status, bot, limit, back-off, budget),
+    """Each of these bots' own row in the six tables a claim check reads (status, bot, limit, back-off, budget, exit),
     one query per table (per 500 bots), so a loop over bots reads none of them again. Outside a snapshot nothing is
     kept."""
     from .read_cache import cache, prime
-    from . import run_backoff, turn_budgets, usage_limits
+    from . import browser_exit, run_backoff, turn_budgets, usage_limits
     if cache(c) is None:
         return
     for part in H.chunks(sorted({H.actor_id(s) for s in slugs if s})):
@@ -638,7 +649,8 @@ def prime_bot_rows(c, slugs):
                                          ("bots", "slug", "SELECT * FROM bots WHERE slug=?"),
                                          ("usage_limits", "bot", usage_limits.OWN_SQL),
                                          ("run_backoff", "bot", run_backoff.GET_SQL),
-                                         ("bot_budget", "bot", turn_budgets.GET_SQL)):
+                                         ("bot_budget", "bot", turn_budgets.GET_SQL),
+                                         ("bot_browser_exits", "bot", browser_exit.BOT_EXIT_SQL)):
             found = {row[column]: row for row in c.execute(f"SELECT * FROM {table} WHERE {column} IN ({marks})", part)}
             prime(c, statement, {(s,): found.get(s) for s in part})
 
@@ -878,7 +890,7 @@ def _runs(view, rows):
                 picked.remove(states[key])
             states[key] = row
             picked.append(row)
-    readable = {}
+    readable, watched = {}, {}
     out = []
     refs = [row["ref"] for row in picked if row["kind"] == "output"]
     outputs = {str(e["id"]): e for e in c.execute(
@@ -903,6 +915,13 @@ def _runs(view, rows):
             event = dict(event)
             if not privacy.content_readable(c, view.principal, event):
                 continue
+            if event["kind"] in ("delta", "message"):
+                # A reply is not live for a bot org rules apply to: it shows once checked and delivered.
+                if bot not in watched:
+                    from .org_rule_check import watched as rules_watch
+                    watched[bot] = rules_watch(c, bot)
+                if watched[bot]:
+                    continue
             event["payload"] = H._json(event.pop("payload_json"), {})
             entry["output"] = event
         elif row["kind"] == "job":

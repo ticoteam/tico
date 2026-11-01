@@ -6,9 +6,10 @@ GitHub's public API, at most once per `TTL`, and never on a request's path: a re
 cached and, when that is stale, starts one background refresh. Any failure keeps the last answer.
 
 Applying an update is the job of a separate updater service (`TICO_UPDATER_URL`); this process
-never restarts itself. Without one the owner is told the command to run by hand. With `TICO_UPDATES=tico` (a cloud
-company on Tico's shared host, docs/cell.md) Tico runs every update from outside: the notice says `managed`, the app
-offers no Update now, and an update asked for here is refused with `managed_update`.
+never restarts itself. Without one the owner is told the command to run by hand. With `TICO_UPDATES=tico` Tico runs
+every update from outside: the notice says `managed`, the app offers no Update now, and an update asked for here is
+refused with `managed_update`. A cloud company on Tico's shared host is not that: it has an updater of its own
+(setup/cell_updater.py, docs/cell.md), which this module calls as it calls the sidecar.
 
 The check asks Tico HQ first (`GET <TICO_HQ_URL>/v1/latest`), which is also how an install is counted anonymously
 (backend/census.py, PRIVACY.md). With counting off, with `TICO_RELEASES_URL` set (a mirror), or when HQ does not
@@ -293,6 +294,24 @@ def _call(method, path, body=None):
         log.warning("Updater call %s %s failed: %s", method, path, type(exc).__name__)
         raise Problem("updater_unreachable", "The updater did not answer. Try again, or update by hand.", 502,
                       retryable=True, extra={"command": MANUAL_COMMAND}) from None
+
+
+def updater_answer(method, path, body=None):
+    """The updater's status and answer, for a caller that tells its refusals apart (sleep's 409 busy is not an outage).
+    Status 0 when it did not answer. `_call` is for the calls where any refusal is a failure."""
+    url, token = _updater()
+    if not url:
+        return 0, {}
+    try:
+        with _client(10) as http:
+            r = http.request(method, url + path, json=body, headers={"Authorization": "Bearer " + token})
+    except httpx.HTTPError:
+        return 0, {}
+    try:
+        answer = r.json()
+    except ValueError:
+        answer = {}
+    return r.status_code, answer if isinstance(answer, dict) else {}
 
 
 def status():

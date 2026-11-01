@@ -15,7 +15,9 @@
 }
 #app-nudge{flex:1;display:flex;align-items:center;gap:12px;padding:8px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:var(--t-base)}
 #app-nudge .app-nudge-text{flex:1;min-width:0}
-#app-nudge .app-nudge-get{padding:6px 12px;border-radius:8px;background:var(--accent);color:var(--accent-ink);text-decoration:none;font-weight:600;white-space:nowrap}
+/* a ghost: the banner is not the view's primary action */
+#app-nudge .app-nudge-get{padding:5px 12px;border:1px solid var(--line);border-radius:8px;color:var(--ink);text-decoration:none;font-weight:600;white-space:nowrap}
+#app-nudge .app-nudge-get:hover{background:var(--hover)}
 #app-nudge .app-nudge-close{border:0;background:none;color:var(--muted);cursor:pointer;font-size:14px;padding:4px}
 body.native #app-nudge{display:none}
 .row{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
@@ -50,13 +52,13 @@ body.native #app-nudge{display:none}
   #mobile-nav{position:fixed;z-index:18;left:0;right:0;bottom:0;height:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));display:grid;grid-template-columns:repeat(6,minmax(0,1fr));align-items:start;padding:6px 4px env(safe-area-inset-bottom);border-top:1px solid var(--line);background:var(--surface);background:color-mix(in srgb,var(--surface) 94%,transparent);box-shadow:0 -5px 20px rgba(0,0,0,.08);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);transition:transform var(--dur) var(--ease),visibility var(--dur) var(--ease)}
   .mobile-nav-item{min-width:0;height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:3px 2px;border:0;background:transparent;color:var(--muted);font:600 var(--t-xs)/var(--lh-display) var(--sans);cursor:pointer;text-decoration:none;-webkit-tap-highlight-color:transparent}
   .mobile-nav-item:hover{text-decoration:none}
-  .mobile-nav-item.cur{color:var(--accent)}
+  .mobile-nav-item.cur{color:var(--ink)}
   .mobile-nav-icon{
     width:25px;height:25px;display:flex;align-items:center;justify-content:center;border-radius:50%;
     overflow:hidden;user-select:none;font-family:"Material Symbols Outlined";
-    font-weight:200;font-style:normal;font-size:24px;line-height:var(--lh-none);
+    font-weight:300;font-style:normal;font-size:24px;line-height:var(--lh-none);
     letter-spacing:normal;text-transform:none;white-space:nowrap;
-    font-variation-settings:"FILL" 0,"wght" 200,"GRAD" 0,"opsz" 24;
+    font-variation-settings:"FILL" 0,"wght" 300,"GRAD" 0,"opsz" 24;
     font-feature-settings:"liga";-webkit-font-feature-settings:"liga";
     -webkit-font-smoothing:antialiased;
   }

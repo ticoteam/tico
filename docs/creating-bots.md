@@ -23,7 +23,7 @@ For another template, a task goes to BotOps to build the repository, apply the r
 You can also ask BotOps for a custom bot in chat; it takes the bot through placement and setup as you.
 Assistant, BotOps, Librarian and Strategy Bot are the four Built-in bots; they cannot be archived or deleted.
 
-The 98 role templates, in nine groups with a Leadership extra, are described in
+The 99 role templates, in nine groups with a Leadership extra, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
 measured against.
 
@@ -56,6 +56,23 @@ Built-in bots cannot be archived.
 ![Archive confirmation naming Account Executive as the recipient of the bot’s open tasks](images/settings-stage1/settings-archive-bot-confirm.png)
 
 *Synthetic Acme example. The confirmation names who gets the work; Cancel leaves the bot unchanged.*
+
+## Pause or unpause a bot
+
+Pause is a row at the bottom of the bot's **Settings** tab.
+
+1. Open the bot's page, then **Settings**, and click **Pause** in the **Pause this bot** row.
+2. To start the bot again, click **Unpause** in the same row.
+
+The control changes state after one click, without a confirmation, and the bot's header and its place in the team tree show a **Paused** badge until it is unpaused. There is no banner on the bot's page. For example, `hub bot pause support-helper` pauses Support helper; `hub bot resume support-helper` starts it again.
+
+While paused, the bot will not start tasks, answer messages or run work from its Automations. A turn in progress is interrupted when the computer receives the pause. If the bot has open tasks assigned to it, the row links to them and says how many are waiting.
+
+When Tico has a pause record, the row shows who paused the bot and when, in UTC. If there is no record, it says **Paused**. The row uses the existing bot-management permissions: if you can see the bot but cannot manage it, you see the state without a button and a prompt to ask its operator to unpause it. The existing command-line controls remain available to people with their current permissions: `hub bot pause <bot>` and `hub bot resume <bot>`.
+
+A company pause for billing is separate from a bot pause. The row says so in one line that links to **Add credit** in **Settings > Billing**. While company billing is paused, bot-level controls are unavailable; the bot's own paused state remains separate.
+
+If a control fails, the row keeps the current state, shows the reason and offers **Retry**.
 
 ## Edit Instructions
 
@@ -618,7 +635,7 @@ Levers set in **Settings → Bots**, not in the repository:
   the runtime refused). **None (fail)** is the default. A pick is saved with
   **Save bot**, like every change in the bot editor ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop runs in a side session of its own; the primary's session is kept for its next turn. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
-  the bot's computer unless the owner turned that off in **Settings → Computers → Models** (docs/how-it-works.md).
+  the bot's computer unless the owner turned that off in **Settings → Models** (docs/how-it-works.md).
 - **Task model**, **Task effort** and **Task context length**: a separate harness and model, effort, and context
   length for task sessions, each **Same as bot** until set. Set them in the editor and press **Save bot**, or click
   **Tasks** beside the model in the bots list. A task effort and a task context length work without a task model.
@@ -768,7 +785,7 @@ is supplied. Leave `slug` out: Tico picks a free one from `name` (else the templ
 reserved slugs, and returns it. Restore an archived bot only when asked.
 Use `build: false` to register only the record,
 for example when building it yourself on a Computer. BotOps defaults to record-only registration.
-An empty model in Add from template also inherits the Team default; choose one in Settings > Computers > Models
+An empty model in Add from template also inherits the Team default; choose one in Settings > Models
 if none is saved. `hub_template_list` includes Setup questions, first-routine output and draft-only status,
 and the example result. Unknown templates are refused before creating a record. To correct an existing
 record, update its `template` through the definition API or `hub_bot_update`; this changes metadata,

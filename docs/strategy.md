@@ -2,7 +2,8 @@
 
 **Strategy** (`#/strategy`) is where a team writes down the few bets it is making, keeps them honest against the
 market and the numbers, and makes the org chart and the goals follow from them. The page has one fixed shape: a
-summary every bot reads on every run, a vision, three to five **bets**, and four sections. The owner writes and
+summary every bot reads on every run, three to five **bets**, where the team plays in its market, its competitors,
+related news, and four sections. The owner writes and
 publishes it; the [Strategy Bot](strategy-bot.md) proposes; the [Librarian](librarian.md) keeps the evidence under it current.
 **Market** is a tab of the section (`#/strategy/market`; `#/market` redirects there), unchanged in what it does.
 
@@ -25,18 +26,52 @@ This page is the shape, lenses, who may do what, setup, publishing, the fit chec
 
 ## The page
 
-- **Summary.** At most 400 characters, drafted from the bets and edited by the owner. This is the text every bot gets
-  in its run context.
-- **Vision.** One or two sentences, at most 400 characters. It is stored here; the Goals page reads it from here.
-- **Bets.** Three to five recommended, at most seven active. Each has:
+The page is cards, in this order: the summary on top; **Where we play** beside the **Bets**; **Competitors** beside
+**Related news**; then the sections. The owner edits each in place; a × on hover (always shown on a touch screen)
+removes a thing.
+
+- **Brand and GTM.** Two cards beside the Summary: the Brand strip (name, positioning, colours, voice, never-say) and the
+  Go-to-market card (motion, buyer, channels, North Star and target). Each opens its full page, is versioned on its own,
+  and is published by the owner. See [Growth](growth.md#brand-and-gtm-cards).
+- **Growth.** Its own section under Strategy in the sidebar (`#/growth`; the old `#/strategy/growth` and
+  `#/strategy/gtm` addresses redirect): ideas, tests, verdicts, channel economics, the frameworks and the Go-to-market
+  page. See [Growth](growth.md).
+- **Summary.** At most 400 characters, drafted from the bets and edited by the owner. It is the one line on top and the
+  text every bot gets in its run context.
+- **Vision.** Stored, not shown on the page. The Goals page reads it from here and, when it is empty, reads the
+  summary instead. Setup no longer drafts one; one written earlier, or by the Strategy Bot or `hub strategy draft
+  --vision`, is kept and published as before.
+- **Bets.** Three to five recommended, at most seven active. The page shows each bet's statement, edited in place,
+  with its goals and health. **+ Bet** adds one, active while fewer than seven are (else proposed); × retires one
+  (with Undo), and **Retired** lists them with **Restore**. A proposed bet's **Proposed** pill makes it active. The
+  number beside a bet is its handle: drag it, or press the arrow keys on it, to reorder. Each bet has:
   - `statement`: one sentence that could turn out wrong;
   - `why`: the reasoning, one or two sentences;
-  - `rules_out`: what it refuses. Required for the bet to be active;
-  - `wrong_if`: the observation that would retire it, with a check-by date. Required for the bet to be active. It is
+  - `rules_out`: what it refuses. Optional, not shown on the page;
+  - `wrong_if`: the observation that would retire it, with a check-by date. Optional, not shown on the page; the
+    [fit check](#the-fit-check) watches only bets that have one. It is
     one of a KPI with a threshold ("monthly churn above 4%"), a market entity or page the bet rests on (the bet
     trips when it changes), or a sentence. A sentence-only wrong-if shows as **not yet measurable**;
   - `cites`: the market entities or pages the bet rests on (optional);
   - `status`: `proposed`, `active` or `retired`. A retired bet keeps its goals.
+- **Where we play.** The market's segments by spend ([Librarian](librarian.md#market-spend)), a sized segment inside
+  its sized parent, unsized ones as plain tiles. A segment the team plays in is **Us** (filled) and one it means to
+  enter next is **Next** (outlined); a click on a segment makes it Us, then Next, then neither, and several segments
+  may be each. × removes a segment (its sub-segments move up to its parent) and **Add a segment** adds one by name
+  (defining the market first, as "<company> market", when there is none). These are the market graph's own rows: Us is
+  `company/self` `operates_in` the segment, Next is `next: true` on the segment, as the company file's import writes
+  them. They mirror the [Growth segments](growth.md#segments): Us is a serving segment and Next a next one, and a
+  change on either page shows on the other. A write straight to the graph (the market routes, an import) moves the
+  Growth segment too: Us makes it serving, Next next, and losing both drops a serving or next one. A segment merged
+  into another hands it its Growth segment (or folds into the one it has, keeping the stronger status, with its
+  channels, ideas and cohorts). Only a person marks Us or Next here; a removed segment loses its Next, so adding it
+  again does not bring it back.
+- **Competitors.** Every company or product with a current `competes_with` edge to `company/self`, as chips that link
+  to their sites. × ends those edges (the company stays in the graph); **Add a competitor or its site** finds the
+  company the graph has by that name or domain, or makes it, and adds the edge.
+- **Related news.** What Listening found: the newest posts routed to a destination the reader reads, and the posts
+  setup filed as market insights (`about` "Listening: hot" and so on; the owner's only), hot first, then the newest,
+  eight at most, each linking out.
 - **Four sections**, markdown, in this order, in the owner's words:
   1. **Who we serve** (`serve`): the customer, the alternative they use today, the one you turned down.
   2. **What we sell, and for how much** (`sell`): the product and the pricing model, and the price that would break if
@@ -53,8 +88,11 @@ This page is the shape, lenses, who may do what, setup, publishing, the fit chec
 
 Acme is a fictional cleaning team. Its page, in short:
 
-- **Bet 1:** Charge half what other cleaning companies charge, because bots do the office work. *Rules out* a premium
-  tier and one-off deep cleans. *Wrong if* monthly churn among property managers passes 4%, checked by 31 March.
+- **Bet 1:** Charge half what other cleaning companies charge, because bots do the office work. (Kept in the data,
+  not shown: *rules out* a premium tier and one-off deep cleans; *wrong if* monthly churn among property managers
+  passes 4%, checked by 31 March.)
+- **Where we play:** Home cleaning is Us, Office cleaning is Next.
+- **Competitors:** CleanCo, MaidPro.
 - **Who we serve:** property managers, who use a local cleaner today.
 - **What we know that others don't:** the office work (booking, scheduling, billing), not the cleaning, is what makes
   cleaning expensive.
@@ -130,11 +168,12 @@ strategy ([Librarian](librarian.md#setting-up-the-market)). The optional Strateg
 Setup starts with **What are you building** and **Your bets** ([Onboarding](onboarding.md#the-screens)):
 
 1. **What are you building.** An existing team pastes its website and one line; a new idea is described in a few
-   sentences. With a URL the server fetches home, about, pricing and customers right away, fills the summary, the
-   vision and the four sections (each section marked **unconfirmed**), and proposes three bets the site implies, each
+   sentences. With a URL the server fetches home, about, pricing and customers right away, fills the summary and
+   the four sections (each section marked **unconfirmed**), and proposes three bets the site implies, each
    with what it rules out.
 2. **Your bets.** Claims to confirm or strike, not open questions. The page fills in on the right as the owner answers.
-   To leave the step: one active bet with a rules-out and a wrong-if, and one line under *What we won't do*. Without a
+   **Keep** makes a bet active; what it rules out and its wrong-if are optional, and shown only when set. To leave
+   the step: one active bet and one line under *What we won't do*. Without a
    model provider, or when the research failed, it is the same fields as a plain form; when the research gave up it
    lists what it found, each with **Add**. The step saves the **draft**; nothing is published.
 3. **Org.** Recruit proposes groups and bots from the bets and names the bet each serves.
@@ -150,13 +189,14 @@ polls it:
 | `state` | Meaning |
 |---|---|
 | `running` | `step` is `reading` (fetching pages) then `thinking` (the model call) |
-| `done` | `written` is `{sections, fields, bets, revision}`: the sections filled, which of `summary` and `vision` were filled, the proposed bet ids, the draft's new revision |
+| `done` | `written` is `{sections, fields, bets, revision}`: the sections filled, which fields were filled (only `summary` now), the proposed bet ids, the draft's new revision |
 | `gave_up` | the owner wrote the draft meanwhile (`error.code` `edited`) or a newer job started (`superseded`); nothing was written and `found` holds what the research found, to offer by hand |
 | `failed` | `error.code` is the fetch code (`private_address`, `timeout` ...), the model's, `empty`, `interrupted` when the server restarted mid-run (or it ran 10 minutes; it then writes nothing), or `cleared` when setup's website and line were cleared |
 | `no_model` | no model provider: the step is a plain form |
 
 Every job also carries `url`, `text`, `pages` (`[{url, title}]` or `{url, error}`, never page text), `found`
-(`{summary, vision, serve, sell, know, not, bets: [{statement, why, rules_out, wrong_if}]}` once the model answered)
+(`{summary, serve, sell, know, not, bets: [{statement, why, rules_out, wrong_if}]}` once the model answered; it
+drafts no vision, and the draft's `vision` is left as it is)
 and `started`/`finished`;
 the last five jobs are kept. The fetch is the doc-link fetch's guard: http and https only, every address the name
 resolves to must be public, each redirect re-checked, at most four pages of 8,000 characters in 45 seconds, and no
@@ -164,7 +204,7 @@ server credentials sent. The model call is the one-shot path the update writer u
 team's own provider key); no runner or agent turn is involved. Its prompt and answer schema are
 `backend/strategy_prompt.py`, a file with no imports that Tico HQ's setup page keeps a pinned copy of, so both draft
 the same fields; it never invents a number (a price, count or share appears only when a page or the owner states it).
-The summary, vision and sections are written only where empty, each section starting
+The summary and sections are written only where empty, each section starting
 `_Unconfirmed: drafted from acme.example._`; bets are added `proposed` with the suggested wrong-if as a text test
 due in 90 days. Nothing is published. There is no `hub` or MCP verb for it: it is a browser setup step.
 
@@ -179,7 +219,7 @@ Market tab's own first run (the Librarian's four questions) is unchanged ([Libra
 
 The owner edits the draft and publishes with a note. **Publish** refuses, and the button says why, until:
 
-- at least one bet is active with a `rules_out` and a `wrong_if`, and
+- at least one bet is active (what it rules out and its wrong-if are optional), and
 - *What we won't do* is not empty.
 
 Changes only to a bet's market citations or the guide also enable **Publish** when these conditions hold.
@@ -250,7 +290,12 @@ Every command has an MCP tool of the same name and arguments (`hub_strategy_show
 | `POST /strategy/publish` | the owner only | `{note, revision}`; refuses unless the [preconditions](#publishing) hold; answers the new version |
 | `GET /strategy/versions`, `/strategy/versions/{n}` | any reader | the list, newest first; one version |
 | `GET /strategy/diff?from=&to=` | any reader | `{fields: [{key, from, to}], bets: {added, retired, changed}}`, keyed by bet id and status |
-| `POST /strategy/bets`, `/strategy/bets/{id}` | the owner only | create; partial update including `rank` and `status`; at most seven active |
+| `POST /strategy/bets`, `/strategy/bets/{id}` | the owner only | create; partial update including `rank` and `status`; at most seven active, at most 30 not retired; `rules_out` and `wrong_if` optional |
+| `POST /market/segments/target` | the owner (a bot, the Librarian too, gets 403) | `{id, target: ours\|next\|none}`: the segment becomes Us, Next or neither, other segments unchanged; its Growth segment becomes serving, next or (for neither) dropped, a testing one staying testing; answers `{id, ours, next}` |
+| `POST /market/segments/remove` | the owner or the Librarian | `{id}`: retires the segment (its Next cleared, its Growth segment dropped) and moves its sub-segments up to its parent; not the root |
+| `GET /market/competitors` | any reader | `{competitors: [{id, name, url}]}`, by name |
+| `POST /market/competitors` | the owner or the Librarian | `{name}`: a name or a site; answers `{competitor}` |
+| `POST /market/competitors/remove` | the owner or the Librarian | `{id}`: ends its `competes_with` edges; 404 if it is not one |
 | `GET /strategy/summary` | any bot or human | plain text: the summary, one line per active bet with its wrong-if, "version N" |
 | `POST /strategy/draft-from`, `GET /strategy/draft-from/{job}` | the owner | setup research from `{url?, text?}`: fills `serve` and `sell` marked unconfirmed and proposes bets; gives up, reporting what it found, if the owner wrote the draft meanwhile. States are in [Setup](#setup); 422 for a missing or internal address |
 | `GET /strategy/guides` | any reader | deprecated: the Default guide only |
@@ -258,9 +303,9 @@ Every command has an MCP tool of the same name and arguments (`hub_strategy_show
 
 A bet's `wrong_if` is `{kind: kpi|thesis|text, kpi_id?, direction?, threshold?, market_id?, text?, check_by}`. The
 `strategy_draft` proposal's payload is partial `{summary?, vision?, sections?, bets?: [{id?, statement, why?,
-rules_out?, wrong_if?, cites?, status?}], source?, lens?}` (the server sets `source: "lens"` and `lens` for a lens run). Goals take `bet_id` on `POST /goals` and `POST /goals/{id}` and return
+rules_out?, wrong_if?, cites?, status?, ideas?}], source?, lens?}` (the server sets `source: "lens"` and `lens` for a lens run). A bet's `ideas` are growth idea task ids that serve it; confirming links each idea to that bet. Goals take `bet_id` on `POST /goals` and `POST /goals/{id}` and return
 it in `GET /goals` and `/goals/tree` ([Goals and KPIs](goals-and-kpis.md#hub-and-the-api)); goal proposals carry it
 too. Every change is a row in `strategy_events`, like `market_events`.
 
-Related: [Goals and KPIs](goals-and-kpis.md), [Your Strategy Bot](strategy-bot.md), [Librarian](librarian.md),
+Related: [Growth](growth.md), [Goals and KPIs](goals-and-kpis.md), [Your Strategy Bot](strategy-bot.md), [Librarian](librarian.md),
 [Routines](routines.md), [Agent context](agent-context.md).

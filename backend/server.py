@@ -35,6 +35,7 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
         lines.put("")
     threading.Thread(target=output, daemon=True).start()
     server = None
+    stopping = threading.Event()
     previous_signals = {}
     def stop(signum, frame):
         if server:
@@ -62,7 +63,13 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
                         os.environ[name] = value
         else:
             settings = replace(settings, screen_relay_url=url, screen_relay_key=key)
-        server = uvicorn.Server(uvicorn.Config(create_app(settings), log_level=log_level, access_log=False,
+        class Server(uvicorn.Server):
+            def handle_exit(self, sig, frame):  # uvicorn takes SIGINT and SIGTERM while it runs: a stop starts here
+                # The public port closes with the server, so a new connect is refused (Caddy holds it), not a relay 502.
+                stopping.set()
+                process.send_signal(signal.SIGTERM)
+                super().handle_exit(sig, frame)
+        server = Server(uvicorn.Config(create_app(settings), log_level=log_level, access_log=False,
             proxy_headers=False, timeout_graceful_shutdown=2,
             timeout_keep_alive=5))  # longer than the Rust relay's 4 s pool idle timeout
         def watch():
@@ -70,7 +77,7 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
             server.should_exit = True
         threading.Thread(target=watch, daemon=True).start()
         server.run(sockets=[listener])
-        if process.poll() is not None:
+        if process.poll() is not None and not stopping.is_set():
             raise RuntimeError("Rust screen relay exited; the supervisor must restart the server")
         if not server.started:
             raise RuntimeError("Backend startup failed")

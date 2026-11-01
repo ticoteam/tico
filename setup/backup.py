@@ -46,7 +46,7 @@ def aws_plan_lines(domain: str, region: str, account_id: str = "<account>") -> l
             f"older versions expire after {NONCURRENT_DAYS} days",
             f"IAM user {user_name(awsmod.slug(domain))} allowed to read and write that bucket only; its access key goes into .env "
             "(containers cannot use the instance role)",
-            f"The server copies its database (Litestream, within seconds) and attachments (every 30 seconds) to s3://{bucket}/{KEY_PREFIX}"]
+            f"The server copies its database (Litestream, about every minute) and attachments (every 30 seconds) to s3://{bucket}/{KEY_PREFIX}"]
 
 
 def create_s3(s3, iam, *, domain: str, region: str, account_id: str, name: str,

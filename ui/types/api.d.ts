@@ -136,6 +136,7 @@ export type Automation = {
   kind?: string;
   last_run?: Record<string, unknown> | null;
   name?: string;
+  next_due?: string | null;
   next_run?: string | null;
   owner?: string;
   paused?: boolean;
@@ -185,6 +186,7 @@ export type AutomationHeld = {
   last_run?: Record<string, unknown> | null;
   moved?: number;
   name?: string;
+  next_due?: string | null;
   next_run?: string | null;
   owner?: string;
   paused?: boolean;
@@ -234,7 +236,7 @@ export type AutomationOverviewRuns = {
   started_by?: string;
   status: string;
   step_count?: number | null;
-  trigger: "message" | "task_received" | "schedule" | "webhook" | "listening" | "event" | "system";
+  trigger: "message" | "task_received" | "schedule" | "webhook" | "listening" | "event" | "due" | "system";
 }>;
   since: string;
 };
@@ -316,6 +318,10 @@ export type AutomationVersions = {
 }>;
 };
 
+export type BillsAddress = {
+  address?: string | null;
+};
+
 export type Bot = {
   access: Access;
   can_complete_onboarding?: boolean;
@@ -354,6 +360,23 @@ export type BotAccessView = {
   teams?: Array<Record<string, unknown>>;
   write: Audience;
   you?: Access;
+};
+
+export type BotBrowserExit = {
+  runner_id: string | null;
+};
+
+export type BotBrowserExitView = {
+  browser_exit: {
+  name?: string;
+  runner_id?: string;
+} | null;
+  choices?: Array<{
+  label: string;
+  operator: string;
+  runner_id: string;
+}>;
+  may_change?: boolean;
 };
 
 export type BotBudget = {
@@ -591,6 +614,40 @@ export type BotUsageLimit = {
   limit: UsageLimitView;
 };
 
+export type BrowserExit = {
+  bots: Array<string>;
+  computer: {
+  id: string;
+  label: string;
+};
+  daily_cap_bytes: number;
+  may_change: boolean;
+  may_turn_off: boolean;
+  sharing: boolean;
+  used_today_bytes: number | null;
+};
+
+export type BrowserExitPolicy = {
+  bots?: Array<string> | null;
+  daily_cap_bytes?: number | null;
+  sharing: boolean;
+};
+
+export type BrowserExitUsage = {
+  days: Array<{
+  bytes: number;
+  day: string;
+}>;
+  next: number | null;
+  rows: Array<{
+  bot: string;
+  bytes: number;
+  day: string;
+  host: string;
+  tunnels: number;
+}>;
+};
+
 export type Card = {
   data: Record<string, unknown> | null;
   heading: string;
@@ -691,6 +748,40 @@ export type ClarifyAsk = {
   ask: string;
 };
 
+export type CloudAgent = {
+  connect_id: string | null;
+  id: string;
+  line: string;
+  maker: string;
+  name: string;
+  site: string;
+  supported: boolean;
+};
+
+export type CloudAgentAdd = {
+  reports_to?: string;
+  seat_id?: string;
+  team?: string;
+};
+
+export type CloudAgentAdded = {
+  bot: string;
+  harness: string;
+  model: string;
+  seat: string;
+};
+
+export type CloudAgentList = {
+  agents: Array<CloudAgent>;
+};
+
+export type CloudAgentRequest = {
+  first_task?: string;
+  name?: string;
+  reports_to?: string;
+  team?: string;
+};
+
 export type CommentDelivery = {
   default: "queue" | "defer" | null;
   default_for: string | null;
@@ -737,6 +828,30 @@ export type CompanyResult = {
 export type CompanyUpdate = {
   description?: string | null;
   vision?: string | null;
+};
+
+export type ComputerSubscription = {
+  confirm?: boolean;
+  runner_id: string;
+  runtime: string;
+  subscription?: string | null;
+};
+
+export type ComputerSubscriptionList = {
+  assignments: Array<{
+  runner_id: string;
+  runtime: "claude" | "codex";
+  subscription_id: string;
+}>;
+  capable: Array<string>;
+};
+
+export type ComputerSubscriptionResult = {
+  runner_id: string;
+  runtime: "claude" | "codex";
+  sessions_reset: number;
+  stopped: number;
+  subscription_id: string | null;
 };
 
 export type Config = {
@@ -899,6 +1014,32 @@ export type DocsSetup = {
   sources?: Array<string>;
 };
 
+export type DraftCheck = {
+  as?: "message" | "comment" | "task" | "assign";
+  text: string;
+  to: string;
+};
+
+export type DueAdd = {
+  first_due: string;
+  owner: string;
+  repeats: "once" | "weekly" | "monthly" | "quarterly" | "yearly";
+  task_days?: number | null;
+  timezone?: string | null;
+};
+
+export type DueEdit = {
+  first_due?: string | null;
+  owner?: string | null;
+  repeats?: "once" | "weekly" | "monthly" | "quarterly" | "yearly" | null;
+  task_days?: number | null;
+  timezone?: string | null;
+};
+
+export type DueSatisfied = {
+  due_on?: string | null;
+};
+
 export type Empty = Record<string, unknown>;
 
 export type EventType = {
@@ -1030,6 +1171,720 @@ export type FilterIn = {
   task_types?: Array<string>;
 };
 
+export type Finance1099 = {
+  currency: string;
+  due_on: string;
+  rows: Array<{
+  card_paid_excluded?: number;
+  cash_paid: number;
+  reportable: boolean;
+  threshold?: number;
+  tin_on_file?: boolean;
+  vendor: string;
+  vendor_id: string;
+}>;
+  threshold: number;
+  year: number;
+};
+
+export type FinanceAccess = {
+  can_edit_defaults: boolean;
+  can_view_as: boolean;
+  defaults: {
+  manager: string;
+  manager_payroll: string;
+  member: string;
+};
+  private_lines: Array<{
+  account_id: string;
+  full_detail: Array<string> | null;
+  name: string;
+  others_see: string;
+}>;
+  teammates: Array<{
+  default: "everything" | "team_expenses" | "own_expenses" | "none";
+  default_team: string | null;
+  grants: Array<Record<string, unknown>>;
+  kind: string;
+  may_grant: boolean;
+  reports_to: string | null;
+  rights: Array<string> | null;
+  team: string | null;
+  teammate: string;
+}>;
+  teams: Array<{
+  id: string;
+  lead: string | null;
+  name: string;
+  parent: string | null;
+}>;
+  view_version: number;
+};
+
+export type FinanceAction = {
+  action_id?: string | null;
+  code?: string;
+  kind: string;
+  reason?: string;
+  status: string;
+};
+
+export type FinanceActionKinds = {
+  approval_kind?: string;
+  fields?: Array<{
+  name: string;
+  required: boolean;
+  type: string;
+  words: string;
+}>;
+  kind?: string;
+  kinds?: Array<{
+  kind: string;
+  live: boolean;
+  words: string;
+}>;
+  live?: boolean;
+  right?: string;
+  words?: string;
+};
+
+export type FinanceActionRequest = {
+  dry_run?: boolean;
+  kind: string;
+  payload?: Record<string, unknown>;
+};
+
+export type FinanceBalanceSheet = {
+  as_of: string;
+  assets: Array<{
+  account_id: string | null;
+  balance: number;
+  code: string;
+  entry_sources: Array<string>;
+  name: string;
+  parent_id: string | null;
+  sources: Array<{
+  balance_as_of: string | null;
+  due_out: {
+  amount: number;
+  count: number;
+};
+  last4: string | null;
+  money_account_id: string;
+  name: string;
+  provider: string;
+  provider_balance: number | null;
+}>;
+  subtype: string;
+}>;
+  closed_through: string | null;
+  currency: string;
+  equity: Array<{
+  account_id: string | null;
+  balance: number;
+  code: string;
+  entry_sources: Array<string>;
+  name: string;
+  parent_id: string | null;
+  sources: Array<{
+  balance_as_of: string | null;
+  due_out: {
+  amount: number;
+  count: number;
+};
+  last4: string | null;
+  money_account_id: string;
+  name: string;
+  provider: string;
+  provider_balance: number | null;
+}>;
+  subtype: string;
+}>;
+  liabilities: Array<{
+  account_id: string | null;
+  balance: number;
+  code: string;
+  entry_sources: Array<string>;
+  name: string;
+  parent_id: string | null;
+  sources: Array<{
+  balance_as_of: string | null;
+  due_out: {
+  amount: number;
+  count: number;
+};
+  last4: string | null;
+  money_account_id: string;
+  name: string;
+  provider: string;
+  provider_balance: number | null;
+}>;
+  subtype: string;
+}>;
+  scoped: boolean;
+  totals: {
+  asset: number;
+  equity: number;
+  liability: number;
+};
+  view_version: number;
+};
+
+export type FinanceBills = {
+  bills: Array<FinanceDocumentRow>;
+  bills_email: string | null;
+  currency: string;
+  next_cursor: string | null;
+  open: FinanceOpenTotal;
+  view_version: number;
+};
+
+export type FinanceBillsAddress = {
+  bills_email: string | null;
+  inbox_id: string | null;
+};
+
+export type FinanceBudgets = {
+  budgets: Array<Record<string, unknown>>;
+  more: boolean;
+  on: string;
+  view_version: number;
+};
+
+export type FinanceCards = {
+  cards: Array<{
+  allocation: number | null;
+  budget: Record<string, unknown> | null;
+  created_at: string;
+  currency: string;
+  expires_at: string | null;
+  holder: string;
+  id: string;
+  kind: string;
+  last4: string | null;
+  limit: number | null;
+  limit_interval: string | null;
+  money_account_id: string | null;
+  nickname: string;
+  provider: string;
+  provider_limit: number | null;
+  spent: number | null;
+  status: string;
+  sync_status: string;
+}>;
+  next: string | null;
+  view_version: number;
+};
+
+export type FinanceChart = {
+  accounts: Array<{
+  attributable?: Array<{
+  team?: string;
+  teammate?: string;
+}>;
+  company_wide?: boolean;
+  id: string;
+  name: string;
+  number: string;
+  parent_id?: string | null;
+  subtype?: string;
+  type: string;
+}>;
+  more: boolean;
+  view_version: number;
+};
+
+export type FinanceCloseChecklist = {
+  checks: Array<{
+  key: string;
+  label: string;
+  ok: boolean;
+}>;
+  end: string;
+  month: string;
+  ready: boolean;
+  start: string;
+  status: string;
+  view_version: number;
+};
+
+export type FinanceConnectionRequest = {
+  approver_email?: string | null;
+  credential_id: string;
+  name?: string | null;
+  provider?: "mercury" | "stripe";
+  server_ip?: string | null;
+  token_creator_email?: string | null;
+};
+
+export type FinanceConnectionResult = {
+  action_id?: string | null;
+  approver?: string | null;
+  code?: string;
+  kind: string;
+  reason?: string;
+  result?: Record<string, unknown>;
+  status: string;
+};
+
+export type FinanceContacts = {
+  contacts: Array<{
+  active: boolean;
+  created_at?: string;
+  default_account?: Record<string, unknown> | null;
+  emails?: Array<string>;
+  has_tax_id?: boolean;
+  id: string;
+  is_1099?: boolean;
+  kind: "vendor" | "customer" | "both";
+  name: string;
+  owed?: {
+  bills?: number;
+  invoices?: number;
+};
+  recipient_id?: string | null;
+  tax_id_last4?: string | null;
+}>;
+  next_cursor: string | null;
+  view_version: number;
+};
+
+export type FinanceDocument = (FinanceDocumentRow & {
+  actions: Array<{
+  action_id: string;
+  actor: string;
+  approval_id: string | null;
+  approval_to: string | null;
+  created_at: string;
+  kind: string;
+  rule_id: string | null;
+  status: string;
+}>;
+  attachment_count?: number;
+  attachments: Array<{
+  created_at: string;
+  created_by: string;
+  file_id: string;
+  id: string;
+}>;
+  attachments_more?: boolean;
+  lines: Array<{
+  account: Record<string, unknown> | null;
+  amount: number;
+  description: string;
+  id: string;
+  tags: Record<string, unknown>;
+  taxable?: boolean;
+}>;
+  schedule?: Record<string, unknown> | null;
+  settlement_count?: number;
+  settlements: Array<{
+  amount: number;
+  created_by: string;
+  entry_id: string | null;
+  from_id: string | null;
+  from_kind: "payment" | "feed" | "credit" | "account" | "expected";
+  id: string;
+  settled_on: string;
+  voided_at: string | null;
+}>;
+  settlements_more?: boolean;
+  terms_days?: number | null;
+  view_version?: number;
+});
+
+export type FinanceDocumentRow = {
+  account?: Record<string, unknown> | null;
+  aging?: string | null;
+  approved_at?: string | null;
+  approved_by?: string | null;
+  attachments?: number;
+  created_at?: string;
+  created_by?: string;
+  currency: string;
+  customer?: {
+  id?: string | null;
+  name?: string | null;
+} | null;
+  date: string;
+  days_late?: number;
+  due_date?: string | null;
+  entry_id?: string | null;
+  id: string;
+  kind: "bill" | "invoice";
+  memo?: string;
+  number: string;
+  origin?: string;
+  paid: number;
+  paid_by?: string | null;
+  paid_on?: string | null;
+  pay_on?: string | null;
+  payment?: {
+  amount: number;
+  error: string | null;
+  id: string | null;
+  on: string;
+  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown" | "denied" | "expired" | "withdrawn";
+} | null;
+  payment_link?: string | null;
+  remaining: number;
+  sent_at?: string | null;
+  split?: boolean;
+  status: string;
+  team?: string | null;
+  total: number;
+  vendor?: {
+  id?: string | null;
+  name?: string | null;
+} | null;
+  written_off?: number;
+};
+
+export type FinanceFeedExpected = {
+  amount: number;
+  date: string;
+  expected: Array<{
+  amount: number;
+  contact_id: string;
+  contact_name: string;
+  document_id: string;
+  kind: string;
+  marked_on: string;
+  number: string;
+  settlement_id: string;
+}>;
+  feed_id: string;
+  kind: "bill" | "invoice";
+  more: boolean;
+  view_version: number;
+};
+
+export type FinanceInbox = {
+  counts: Record<string, number>;
+  currency: string;
+  items: Array<{
+  id: string;
+  kind: "uncategorized" | "bill_to_enter" | "unmatched_receipt" | "missing_receipt" | "bill_due" | "invoice_overdue" | "budget_near_limit" | "sync_failed" | "period_ready";
+  label: string;
+}>;
+  more: Array<string>;
+  next_cursor: string | null;
+  view_version: number;
+};
+
+export type FinanceInvoices = {
+  currency: string;
+  invoices: Array<FinanceDocumentRow>;
+  next_cursor: string | null;
+  open: FinanceOpenTotal;
+  view_version: number;
+};
+
+export type FinanceMercuryUsers = {
+  users: Array<{
+  connection_id: string;
+  email: string | null;
+  id: string;
+  name: string;
+  updated_at: string;
+}>;
+};
+
+export type FinanceMetric = {
+  as_of: string;
+  currency?: string;
+  data_as_of?: string | null;
+  name: string;
+  stale?: boolean;
+  unit: "minor" | "percent" | "months" | "count" | "days";
+  value: number | string | null;
+  view_version?: number;
+};
+
+export type FinanceOpenTotal = {
+  aging: {
+  "1_30": number;
+  "31_60": number;
+  "61_90": number;
+  current: number;
+  over_90: number;
+};
+  count: number;
+  more: boolean;
+  remaining: number;
+};
+
+export type FinancePayFrom = {
+  accounts: Array<{
+  available_balance?: number | null;
+  balance?: number | null;
+  balance_as_of?: string | null;
+  id: string;
+  last4?: string | null;
+  name: string;
+  provider?: string;
+}>;
+  currency: string;
+  view_version: number;
+};
+
+export type FinancePayments = {
+  next_cursor: string | null;
+  payments: Array<{
+  account?: {
+  code?: string;
+  id?: string;
+  name?: string;
+} | null;
+  amount: number | null;
+  created_at?: string;
+  created_by?: string;
+  currency: string;
+  error?: string | null;
+  id: string;
+  memo?: string;
+  method?: string;
+  mode?: string;
+  money_account_id?: string;
+  obligation?: string | null;
+  recipient?: {
+  id?: string;
+  last4?: string | null;
+  name?: string;
+  version?: number;
+} | null;
+  settled_at?: string | null;
+  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown";
+}>;
+};
+
+export type FinancePnl = {
+  basis: string;
+  budget_as_of?: string | null;
+  columns: Array<{
+  end: string;
+  label: string;
+  start: string;
+  state: "past" | "current" | "future";
+}>;
+  end: string;
+  excluded: boolean;
+  expense: Array<number>;
+  filter?: {
+  teammates: Array<string>;
+  teams: Array<string>;
+  unattributed: boolean;
+  who: "both" | "bots" | "people";
+};
+  income: Array<number>;
+  net: Array<number>;
+  period: string;
+  rows: Array<{
+  account_id: string;
+  actual: Array<number> | null;
+  budget: Array<number | null> | null;
+  code: string;
+  name: string;
+  parent_id: string;
+  private: boolean;
+  projection: Array<number> | null;
+  section: "revenue" | "cost_of_revenue" | "operating" | "other";
+  total: number | null;
+  type: string;
+}>;
+  start: string;
+  team?: string | null;
+  teammate?: string | null;
+  teammates?: Array<{
+  budget: number | null;
+  kind: string;
+  spent: number;
+  teammate: string;
+}>;
+  view: string;
+  view_version: number;
+};
+
+export type FinanceRecipients = {
+  recipients: Array<{
+  created_at?: string;
+  id: string;
+  known?: boolean;
+  last4?: string | null;
+  method: string;
+  name: string;
+  replaces_id?: string | null;
+  synced?: boolean;
+  version: number;
+}>;
+};
+
+export type FinanceReconciliations = {
+  locked_through: Record<string, string | null>;
+  reconciliations: Array<{
+  cleared?: number;
+  cleared_total?: number;
+  created_at?: string;
+  created_by?: string;
+  difference: number;
+  id: string;
+  money_account_id: string;
+  statement_balance: number;
+  statement_end: string;
+  statement_id?: string | null;
+  status: "open" | "done" | "undone";
+  undone_at?: string | null;
+}>;
+};
+
+export type FinanceReport = {
+  view_version: number;
+};
+
+export type FinanceReportOf = {
+  kind: "pnl" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
+  prior?: Record<string, unknown>;
+};
+
+export type FinanceRules = {
+  rules: Array<{
+  active?: boolean;
+  created_at?: string;
+  examples?: Array<Record<string, unknown>>;
+  external_rule_id?: string | null;
+  id: string;
+  kind?: "gate" | "posting";
+  name: string;
+  outcome: Record<string, unknown>;
+  owner?: string;
+  priority?: number;
+  runs?: Array<{
+  action_id: string | null;
+  at: string;
+  outcome: string | null;
+}>;
+  when: Record<string, unknown>;
+  words?: string;
+}>;
+};
+
+export type FinanceSalesTax = {
+  currency: string;
+  rows: Array<{
+  code: string;
+  due: number;
+  due_on?: string | null;
+  exempt_sales: number;
+  jurisdiction?: string;
+  period: string;
+  tax_collected: number;
+  tax_remitted?: number;
+  taxable_sales: number;
+}>;
+  year: number;
+};
+
+export type FinanceSearch = {
+  currency: string;
+  next_cursor: string | null;
+  results: Array<{
+  id: string;
+  kind: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule";
+  label: string;
+}>;
+  view_version: number;
+};
+
+export type FinanceSources = {
+  groups: Array<{
+  count: number;
+  group: "banks" | "cards" | "payments" | "payroll" | "bills_invoices" | "tico" | "accounting" | "manual";
+  name: string;
+  rows: Array<Record<string, unknown>>;
+}>;
+  view_version: number;
+};
+
+export type FinanceStatements = {
+  statements: Array<{
+  currency?: string;
+  end_date: string;
+  ending_balance: number;
+  id: string;
+  money_account_id: string;
+  source?: string;
+  start_date?: string | null;
+  starting_balance?: number | null;
+}>;
+};
+
+export type FinanceTransactions = {
+  currency: string;
+  next: string | null;
+  rows: Array<{
+  account?: string;
+  account_id?: string;
+  amount: number;
+  card_id?: string | null;
+  counterparty?: string;
+  currency: string;
+  date: string;
+  description?: string;
+  entry_id?: string | null;
+  id: string;
+  kind: "feed" | "entry";
+  lines?: Array<Record<string, unknown>>;
+  memo?: string;
+  money_account?: Record<string, unknown> | null;
+  pending?: boolean;
+  reconciled?: boolean;
+  reversed?: boolean;
+  source?: string;
+  status?: string;
+  tags?: Record<string, unknown>;
+  vendor?: string;
+  vendor_name?: string;
+}>;
+  view_version: number;
+};
+
+export type FinanceTransfers = {
+  next_cursor: string | null;
+  transfers: Array<{
+  amount: number;
+  created_at?: string;
+  created_by?: string;
+  currency: string;
+  from: {
+  id: string;
+  last4: string | null;
+  name: string;
+};
+  id: string;
+  last_error?: string | null;
+  memo?: string;
+  settled_at?: string | null;
+  status: "queued" | "submitted" | "unknown" | "failed" | "posted" | "cancelled";
+  to: {
+  id: string;
+  last4: string | null;
+  name: string;
+};
+}>;
+};
+
+export type FinanceWebhookDeliveries = {
+  deliveries: Array<{
+  body: string;
+  delivery: string;
+  outcome: string;
+  received_at: string;
+  trigger: string;
+  type: string;
+  via: string;
+}>;
+};
+
 export type Goal = {
   body: string;
   created: string;
@@ -1130,7 +1985,7 @@ export type GoalList = {
 
 export type GoalProposalCreate = {
   goal_id?: string | null;
-  kind: "goal_wording" | "goal_kpi" | "kpi_definition" | "kpi_target" | "flag" | "goal_why" | "recovery" | "strategy_draft";
+  kind: "goal_wording" | "goal_kpi" | "kpi_definition" | "kpi_target" | "flag" | "goal_why" | "recovery" | "strategy_draft" | "brand_draft" | "gtm_draft";
   kpi_id?: string | null;
   payload?: Record<string, unknown>;
   reason?: string;
@@ -1445,6 +2300,16 @@ export type HeldAction = {
   action: string;
 };
 
+export type HoldAppeal = {
+  why?: string;
+};
+
+export type HoldEmpty = Record<string, unknown>;
+
+export type HoldSend = {
+  nonce: string;
+};
+
 export type IfNoAnswer = {
   by?: string | null;
   do: string;
@@ -1735,9 +2600,14 @@ export type KpiUpdate = {
   cadence?: "daily" | "weekly" | "monthly" | null;
   definition?: string | null;
   direction?: "up" | "down" | "range" | null;
+  growth_role?: "north_star" | "input" | "guardrail" | null;
+  loop_name?: string | null;
+  loop_step?: number | null;
   name?: string | null;
   owner?: string | null;
+  parent_kpi_id?: string | null;
   source_note?: string | null;
+  stage?: "reach" | "acquire" | "activate" | "retain" | "refer" | null;
   unit?: string | null;
 };
 
@@ -1887,6 +2757,12 @@ export type MeetingSearch = {
   results: Array<unknown>;
 };
 
+export type MemoryTidyPilot = {
+  bot: string;
+  effort?: "low";
+  model: string;
+};
+
 export type Message = {
   answer?: ReviewAnswer;
   answers?: Array<string | ReviewAnswer>;
@@ -1940,6 +2816,49 @@ export type MessagePage = {
 
 export type MessageResult = {
   message: Message;
+};
+
+export type ModelSubscription = {
+  added_by: string;
+  added_by_name: string;
+  computers: Array<string>;
+  created: string;
+  id: string;
+  kind: "claude_token" | "codex_login" | "anthropic_key" | "openai_key";
+  label: string;
+  name: string;
+  preview: string;
+  revision: number;
+  runtime: "claude" | "codex";
+  status: "new" | "working" | "needs_reconnect";
+  status_at: string | null;
+  status_detail: string;
+  updated: string;
+  usage: {
+  cost_usd_month: number | null;
+  resets_at?: string | null;
+  used_pct: number | null;
+  window: "5h" | "week" | null;
+} | null;
+};
+
+export type ModelSubscriptionDeleted = {
+  computers: number;
+  deleted: boolean;
+  id: string;
+  sessions_reset: number;
+  stopped: number;
+};
+
+export type ModelSubscriptionList = {
+  kinds: Array<{
+  help: string;
+  kind: "claude_token" | "codex_login" | "anthropic_key" | "openai_key";
+  label: string;
+  runtime: "claude" | "codex";
+  secret_label: string;
+}>;
+  subscriptions: Array<ModelSubscription>;
 };
 
 export type Moderate = {
@@ -2463,6 +3382,67 @@ export type RoadmapSettings = {
   suggestions_bot?: string | null;
 };
 
+export type RuleAsk = {
+  question: string;
+};
+
+export type RuleCite = {
+  file_id: string;
+  quote: string;
+  section?: string;
+  version?: number | null;
+};
+
+export type RuleCreate = {
+  cite?: RuleCite | null;
+  description?: string;
+  if_broken?: "block" | "escalate" | "warn" | null;
+  kind: "internal" | "external";
+  reviewer?: string | null;
+  source_id?: string | null;
+  text: string;
+  who?: RuleScope | null;
+  with?: RuleScope | null;
+};
+
+export type RuleDecide = {
+  version?: number | null;
+  who?: RuleScope | null;
+};
+
+export type RuleEdit = {
+  description?: string | null;
+  if_broken?: "block" | "escalate" | "warn" | null;
+  reviewer?: string | null;
+  source_id?: string | null;
+  text?: string | null;
+  version: number;
+  who?: RuleScope | null;
+  with?: RuleScope | null;
+};
+
+export type RuleRead = {
+  file_id?: string | null;
+  kind?: string | null;
+  note?: string;
+  source_id: string;
+  url?: string | null;
+};
+
+export type RuleScope = {
+  all_bots?: boolean;
+  bots?: Array<string>;
+  everyone?: boolean;
+  groups?: Array<string>;
+  names?: Array<string>;
+  people?: Array<string>;
+};
+
+export type RuleSourceCreate = {
+  kind: "vendor" | "customer" | "government" | "other";
+  name: string;
+};
+
 export type RunNow = {
   input?: Record<string, unknown>;
 };
@@ -2472,6 +3452,7 @@ export type RunnerTurnsAtOnce = {
 };
 
 export type ScreeningModes = {
+  document?: "off" | "warn" | "hold" | null;
   idea?: "off" | "warn" | "hold" | null;
   mail?: "off" | "warn" | "hold" | null;
   model?: boolean | null;
@@ -2483,15 +3464,35 @@ export type ScreeningModes = {
 export type ScreeningTest = Record<string, unknown>;
 
 export type Seat = {
+  agent: string;
+  agent_name: string;
   created?: string;
   description: string;
   id: string;
   kind: "seat";
   org_parent?: string;
   reports_to: string;
+  request_state: string;
   stage: "recruiting";
   team?: string;
   title: string;
+};
+
+export type SeatAgent = {
+  agent: CloudAgent;
+  seat: Seat;
+  steps: Array<"requested" | "building" | "ready">;
+  tasks: Array<{
+  id: string;
+  status: string;
+  title: string;
+}>;
+};
+
+export type SeatAgentRequest = {
+  agent: string;
+  first_task?: string;
+  name?: string;
 };
 
 export type SeatBatch = {
@@ -2502,16 +3503,30 @@ export type SeatBatchCreate = {
   seats: Array<SeatCreate>;
 };
 
+export type SeatCancelled = {
+  closed: boolean;
+  id: string;
+  request_state: string;
+};
+
 export type SeatCandidate = {
-  department?: string;
+  department: string;
+  department_id?: string;
   effort?: string;
-  icon?: string;
+  icon: string;
+  line: string;
+  match: "strong" | "good" | "";
   model: string;
   model_name: string;
   name: string;
-  reason: string;
-  recommended: boolean;
+  never?: Array<string>;
+  onboarding?: Array<string>;
+  owns: Array<string>;
+  prerequisites: Array<SeatNeed>;
+  source: "template";
+  starter?: boolean;
   summary?: string;
+  tags: Array<string>;
   template: string;
 };
 
@@ -2541,12 +3556,7 @@ export type SeatDetail = {
   can_edit: boolean;
   created?: string;
   description: string;
-  description_by?: "strategy_bot" | "chart" | "person";
-  draft: {
-  at: string;
-  by: string;
-  state: "none" | "drafting" | "drafted";
-};
+  description_by?: "chart" | "person";
   id: string;
   kind: "seat";
   reports_to: string;
@@ -2556,16 +3566,27 @@ export type SeatDetail = {
 };
 
 export type SeatDraft = {
-  text: string;
+  redraft?: boolean;
+  reports_to?: string;
+  team?: string;
+  title: string;
+};
+
+export type SeatDrafted = {
+  description: string;
+  source: "catalog" | "model" | "none";
 };
 
 export type SeatHire = {
   model?: string;
+  name?: string;
+  runner_id?: string | null;
   template: string;
 };
 
 export type SeatHired = {
   model?: string;
+  name?: string;
   note?: string | null;
   reports_to: string;
   seat: string;
@@ -2577,6 +3598,13 @@ export type SeatHired = {
 
 export type SeatList = {
   seats: Array<Seat>;
+};
+
+export type SeatNeed = {
+  label: string;
+  required: boolean;
+  state: "connected" | "on_hire" | "not_set";
+  tool: string;
 };
 
 export type SeatUpdate = {
@@ -2611,7 +3639,10 @@ export type SleepWhenIdle = {
   last_error: string;
   last_request: Record<string, unknown> | null;
   layout: string | null;
+  managed: boolean;
+  minutes: number;
   runners: boolean;
+  source: "cell" | "owner" | "default";
   wake_at: string | null;
 };
 };
@@ -2868,6 +3899,13 @@ export type SubscriptionWeeklyResult = {
 } | null;
 };
 
+export type SubscriptionWrite = {
+  confirm?: boolean;
+  kind?: string | null;
+  name?: string | null;
+  secret?: string | null;
+};
+
 export type Suggestion = {
   email?: string;
   name?: string;
@@ -2882,6 +3920,7 @@ export type Suggestion = {
 export type SystemRoutineUpdate = {
   at?: string | null;
   on?: boolean | null;
+  pilots?: Array<MemoryTidyPilot> | null;
   preset?: "15m" | "hourly" | "4h" | "daily" | "business" | null;
 };
 
@@ -2955,6 +3994,7 @@ export type Task = {
   labels: Array<string>;
   lane: string;
   number?: number | null;
+  occurrence?: string | null;
   open_asks?: number;
   owner: string;
   owner_name?: string;
@@ -3567,7 +4607,7 @@ export type UsageLimit = {
 };
 
 export type UsageLimitView = {
-  blocked: "per_30m" | "hourly" | "daily" | "weekly" | "monthly" | null;
+  blocked: "per_30m" | "hourly" | "daily" | "weekly" | "monthly" | "quarterly" | "yearly" | "budget" | null;
   blocked_by: Record<string, unknown> | null;
   daily_usd: number | null;
   day_spent: number | null;
@@ -3860,12 +4900,28 @@ export type AcceptInboundPhoneQuoteParams = {
 export type AcceptInboundPhoneQuoteBody = AcceptPhone;
 export type AcceptInboundPhoneQuoteResponse = unknown;
 
+/** POST /api/v2/rules/{rule_id}/accept */
+export type AcceptRuleParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type AcceptRuleBody = RuleDecide;
+export type AcceptRuleResponse = unknown;
+
 /** POST /api/v2/cards */
 export type AddCardParams = {
   "Idempotency-Key": string;
 };
 export type AddCardBody = CardAdd;
 export type AddCardResponse = unknown;
+
+/** POST /api/v2/cloud-agents/{agent_id}/add */
+export type AddCloudAgentParams = {
+  "Idempotency-Key": string;
+  agent_id: string;
+};
+export type AddCloudAgentBody = CloudAgentAdd;
+export type AddCloudAgentResponse = CloudAgentAdded;
 
 /** POST /api/v2/doc-sources */
 export type AddDocSourceParams = {
@@ -3912,6 +4968,13 @@ export type AddLinkedDocParams = {
 export type AddLinkedDocBody = LinkCreate;
 export type AddLinkedDocResponse = LinkedDocResult;
 
+/** POST /api/v2/model-subscriptions */
+export type AddModelSubscriptionParams = {
+  "Idempotency-Key": string;
+};
+export type AddModelSubscriptionBody = SubscriptionWrite;
+export type AddModelSubscriptionResponse = ModelSubscription;
+
 /** POST /api/v2/pins */
 export type AddPinParams = {
   "Idempotency-Key": string;
@@ -3927,6 +4990,28 @@ export type AddPublicRoadmapCommentParams = {
 };
 export type AddPublicRoadmapCommentBody = PublicCommentInput;
 export type AddPublicRoadmapCommentResponse = unknown;
+
+/** POST /api/v2/rules */
+export type AddRuleParams = {
+  "Idempotency-Key": string;
+};
+export type AddRuleBody = RuleCreate;
+export type AddRuleResponse = unknown;
+
+/** POST /api/v2/rules/{rule_id}/due */
+export type AddRuleDueParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type AddRuleDueBody = DueAdd;
+export type AddRuleDueResponse = unknown;
+
+/** POST /api/v2/rule-sources */
+export type AddRuleSourceParams = {
+  "Idempotency-Key": string;
+};
+export type AddRuleSourceBody = RuleSourceCreate;
+export type AddRuleSourceResponse = unknown;
 
 /** POST /api/v2/strategy/bets */
 export type AddStrategyBetParams = {
@@ -3959,6 +5044,14 @@ export type AnswerTaskQuestionParams = {
 export type AnswerTaskQuestionBody = TaskAnswer;
 export type AnswerTaskQuestionResponse = TaskAnswerResult;
 
+/** POST /api/v2/rule-holds/{hold_id}/appeal */
+export type AppealRuleHoldParams = {
+  "Idempotency-Key": string;
+  hold_id: string;
+};
+export type AppealRuleHoldBody = HoldAppeal;
+export type AppealRuleHoldResponse = unknown;
+
 /** POST /api/v2/kpis/{kid}/archive */
 export type ArchiveKpiParams = {
   "Idempotency-Key": string;
@@ -3980,6 +5073,13 @@ export type AskDocsParams = {
 };
 export type AskDocsBody = DocsAsk;
 export type AskDocsResponse = DocsAsked;
+
+/** POST /api/v2/rules/ask */
+export type AskRulesParams = {
+  "Idempotency-Key": string;
+};
+export type AskRulesBody = RuleAsk;
+export type AskRulesResponse = unknown;
 
 /** POST /api/v2/tasks/{tid}/files */
 export type AttachTaskFileParams = {
@@ -4040,6 +5140,22 @@ export type CancelInboundPhoneRequestParams = {
 export type CancelInboundPhoneRequestBody = never;
 export type CancelInboundPhoneRequestResponse = unknown;
 
+/** POST /api/v2/seats/{seat_id}/cancel-request */
+export type CancelSeatRequestParams = {
+  "Idempotency-Key": string;
+  seat_id: string;
+};
+export type CancelSeatRequestBody = never;
+export type CancelSeatRequestResponse = SeatCancelled;
+
+/** POST /api/v2/model-subscriptions/{sid} */
+export type ChangeModelSubscriptionParams = {
+  "Idempotency-Key": string;
+  sid: string;
+};
+export type ChangeModelSubscriptionBody = SubscriptionWrite;
+export type ChangeModelSubscriptionResponse = ModelSubscription;
+
 /** POST /api/v2/chat/{bot} */
 export type ChatWithBotParams = {
   "Idempotency-Key": string;
@@ -4047,6 +5163,13 @@ export type ChatWithBotParams = {
 };
 export type ChatWithBotBody = ChatCreate;
 export type ChatWithBotResponse = ChatResult;
+
+/** POST /api/v2/rules/check */
+export type CheckRuleDraftParams = {
+  "Idempotency-Key": string;
+};
+export type CheckRuleDraftBody = DraftCheck;
+export type CheckRuleDraftResponse = unknown;
 
 /** POST /api/v2/tasks/dry-run */
 export type CheckTaskParams = {
@@ -4124,6 +5247,13 @@ export type CreateConversationParams = {
 };
 export type CreateConversationBody = ConversationCreate;
 export type CreateConversationResponse = unknown;
+
+/** POST /api/v2/finance/connections */
+export type CreateFinanceConnectionParams = {
+  "Idempotency-Key": string;
+};
+export type CreateFinanceConnectionBody = FinanceConnectionRequest;
+export type CreateFinanceConnectionResponse = FinanceConnectionResult;
 
 /** POST /api/v2/goals */
 export type CreateGoalParams = {
@@ -4396,13 +5526,12 @@ export type DisconnectGranolaParams = {
 export type DisconnectGranolaBody = never;
 export type DisconnectGranolaResponse = GranolaDisconnect;
 
-/** POST /api/v2/seats/{seat_id}/draft */
+/** POST /api/v2/seats/draft */
 export type DraftSeatParams = {
   "Idempotency-Key": string;
-  seat_id: string;
 };
 export type DraftSeatBody = SeatDraft;
-export type DraftSeatResponse = SeatDetail;
+export type DraftSeatResponse = SeatDrafted;
 
 /** POST /api/v2/strategy/draft-from */
 export type DraftStrategyFromParams = {
@@ -4535,6 +5664,13 @@ export type GetBotAccessParams = {
 export type GetBotAccessBody = never;
 export type GetBotAccessResponse = BotAccessView;
 
+/** GET /api/v2/bots/{bot}/browser-exit */
+export type GetBotBrowserExitParams = {
+  bot: string;
+};
+export type GetBotBrowserExitBody = never;
+export type GetBotBrowserExitResponse = BotBrowserExitView;
+
 /** GET /api/v2/bots/{bot}/budget */
 export type GetBotBudgetParams = {
   bot: string;
@@ -4549,6 +5685,13 @@ export type GetBotInstructionsParams = {
 export type GetBotInstructionsBody = never;
 export type GetBotInstructionsResponse = BotInstructions;
 
+/** GET /api/v2/bots/{bot}/pause-state */
+export type GetBotPauseStateParams = {
+  bot: string;
+};
+export type GetBotPauseStateBody = never;
+export type GetBotPauseStateResponse = unknown;
+
 /** GET /api/v2/bots/{bot}/profile */
 export type GetBotProfileParams = {
   bot: string;
@@ -4562,6 +5705,16 @@ export type GetBotRepositoriesParams = {
 };
 export type GetBotRepositoriesBody = never;
 export type GetBotRepositoriesResponse = BotRepositories;
+
+/** GET /api/v2/bots/{bot}/rules */
+export type GetBotRulesParams = {
+  bot: string;
+  external_cursor?: string | null;
+  internal_cursor?: string | null;
+  limit?: number;
+};
+export type GetBotRulesBody = never;
+export type GetBotRulesResponse = unknown;
 
 /** GET /api/v2/bots/{bot}/subscription */
 export type GetBotSubscriptionParams = {
@@ -4600,6 +5753,13 @@ export type GetCompanyResponse = CompanyResult;
 export type GetCompanyHistoryParams = Record<string, never>;
 export type GetCompanyHistoryBody = never;
 export type GetCompanyHistoryResponse = CompanyHistory;
+
+/** GET /api/v2/computers/{rid}/browser-exit */
+export type GetComputerBrowserExitParams = {
+  rid: string;
+};
+export type GetComputerBrowserExitBody = never;
+export type GetComputerBrowserExitResponse = BrowserExit;
 
 /** GET /api/v2/config */
 export type GetConfigParams = Record<string, never>;
@@ -4644,6 +5804,179 @@ export type GetFileVersionParams = {
 };
 export type GetFileVersionBody = never;
 export type GetFileVersionResponse = string;
+
+/** GET /api/v2/finance/tax/1099 */
+export type GetFinance1099Params = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinance1099Body = never;
+export type GetFinance1099Response = Finance1099;
+
+/** GET /api/v2/finance/tax/1099.csv */
+export type GetFinance1099CsvParams = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinance1099CsvBody = never;
+export type GetFinance1099CsvResponse = string;
+
+/** GET /api/v2/finance/access */
+export type GetFinanceAccessParams = Record<string, never>;
+export type GetFinanceAccessBody = never;
+export type GetFinanceAccessResponse = FinanceAccess;
+
+/** GET /api/v2/finance/actions/{action_id} */
+export type GetFinanceActionParams = {
+  action_id: string;
+};
+export type GetFinanceActionBody = never;
+export type GetFinanceActionResponse = FinanceAction;
+
+/** GET /api/v2/finance/balance-sheet */
+export type GetFinanceBalanceSheetParams = {
+  as_of?: string | null;
+  view_as?: string | null;
+};
+export type GetFinanceBalanceSheetBody = never;
+export type GetFinanceBalanceSheetResponse = FinanceBalanceSheet;
+
+/** GET /api/v2/finance/bills/{bill_id} */
+export type GetFinanceBillParams = {
+  bill_id: string;
+  view_as?: string | null;
+};
+export type GetFinanceBillBody = never;
+export type GetFinanceBillResponse = FinanceDocument;
+
+/** GET /api/v2/finance/chart */
+export type GetFinanceChartParams = {
+  for?: "bill" | "invoice" | "journal" | null;
+  view_as?: string | null;
+};
+export type GetFinanceChartBody = never;
+export type GetFinanceChartResponse = FinanceChart;
+
+/** GET /api/v2/finance/close/{month} */
+export type GetFinanceCloseChecklistParams = {
+  month: string;
+};
+export type GetFinanceCloseChecklistBody = never;
+export type GetFinanceCloseChecklistResponse = FinanceCloseChecklist;
+
+/** GET /api/v2/finance/expenses */
+export type GetFinanceExpensesParams = {
+  account_id?: string | null;
+  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account";
+  end?: string | null;
+  start?: string | null;
+  team?: string | null;
+  teammate?: string | null;
+  top_n?: number;
+  view_as?: string | null;
+};
+export type GetFinanceExpensesBody = never;
+export type GetFinanceExpensesResponse = FinanceReport;
+
+/** GET /api/v2/finance/inbox */
+export type GetFinanceInboxParams = {
+  cursor?: string | null;
+  kind?: string | null;
+  limit?: number;
+  view_as?: string | null;
+};
+export type GetFinanceInboxBody = never;
+export type GetFinanceInboxResponse = FinanceInbox;
+
+/** GET /api/v2/finance/invoices/{invoice_id} */
+export type GetFinanceInvoiceParams = {
+  invoice_id: string;
+  view_as?: string | null;
+};
+export type GetFinanceInvoiceBody = never;
+export type GetFinanceInvoiceResponse = FinanceDocument;
+
+/** GET /api/v2/finance/lines/{account_id} */
+export type GetFinanceLineParams = {
+  account_id: string;
+  end?: string | null;
+  limit?: number;
+  start?: string | null;
+  teammates?: Array<string> | null;
+  teams?: Array<string> | null;
+  top_n?: number;
+  unattributed?: boolean;
+  vendor?: string | null;
+  view_as?: string | null;
+  who?: "both" | "bots" | "people";
+};
+export type GetFinanceLineBody = never;
+export type GetFinanceLineResponse = FinanceReport;
+
+/** GET /api/v2/finance/metrics/{name} */
+export type GetFinanceMetricParams = {
+  account_id?: string | null;
+  budget_id?: string | null;
+  days?: number | null;
+  end?: string | null;
+  name: "cash" | "burn" | "runway_months" | "revenue" | "spend" | "budget_remaining" | "budget_pct_used" | "ap_due" | "ar_overdue" | "uncategorized_count" | "unreconciled_days";
+  start?: string | null;
+  team?: string | null;
+  teammate?: string | null;
+  view_as?: string | null;
+};
+export type GetFinanceMetricBody = never;
+export type GetFinanceMetricResponse = FinanceMetric;
+
+/** GET /api/v2/finance/pnl */
+export type GetFinancePnlParams = {
+  basis?: "cash" | "accrual";
+  budget_as_of?: string | null;
+  end?: string | null;
+  period?: "day" | "week" | "month" | "quarter" | "year";
+  start?: string | null;
+  team?: string | null;
+  teammate?: string | null;
+  teammates?: Array<string> | null;
+  teams?: Array<string> | null;
+  unattributed?: boolean;
+  view?: "company" | "expenses";
+  view_as?: string | null;
+  who?: "both" | "bots" | "people";
+};
+export type GetFinancePnlBody = never;
+export type GetFinancePnlResponse = FinancePnl;
+
+/** GET /api/v2/finance/reports/{kind} */
+export type GetFinanceReportParams = {
+  basis?: "cash" | "accrual" | null;
+  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account";
+  compare?: "prior" | null;
+  end?: string | null;
+  kind: "pnl" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
+  period?: "day" | "week" | "month" | "quarter" | "year";
+  start?: string | null;
+  top_n?: number;
+  view_as?: string | null;
+};
+export type GetFinanceReportBody = never;
+export type GetFinanceReportResponse = FinanceReportOf;
+
+/** GET /api/v2/finance/tax/sales-tax */
+export type GetFinanceSalesTaxParams = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinanceSalesTaxBody = never;
+export type GetFinanceSalesTaxResponse = FinanceSalesTax;
+
+/** GET /api/v2/finance/tax/sales-tax.csv */
+export type GetFinanceSalesTaxCsvParams = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinanceSalesTaxCsvBody = never;
+export type GetFinanceSalesTaxCsvResponse = string;
 
 /** GET /api/v2/goals/{gid} */
 export type GetGoalParams = {
@@ -4837,6 +6170,37 @@ export type GetRoadmapSettingsParams = Record<string, never>;
 export type GetRoadmapSettingsBody = never;
 export type GetRoadmapSettingsResponse = unknown;
 
+/** GET /api/v2/rules/{rule_id} */
+export type GetRuleParams = {
+  rule_id: string;
+};
+export type GetRuleBody = never;
+export type GetRuleResponse = unknown;
+
+/** GET /api/v2/rules/stats */
+export type GetRuleCheckStatsParams = Record<string, never>;
+export type GetRuleCheckStatsBody = never;
+export type GetRuleCheckStatsResponse = unknown;
+
+/** GET /api/v2/rule-due/{due_id} */
+export type GetRuleDueParams = {
+  due_id: string;
+};
+export type GetRuleDueBody = never;
+export type GetRuleDueResponse = unknown;
+
+/** GET /api/v2/rule-holds/{hold_id} */
+export type GetRuleHoldParams = {
+  hold_id: string;
+};
+export type GetRuleHoldBody = never;
+export type GetRuleHoldResponse = unknown;
+
+/** GET /api/v2/rules/counts */
+export type GetRulesCountsParams = Record<string, never>;
+export type GetRulesCountsBody = never;
+export type GetRulesCountsResponse = unknown;
+
 /** GET /api/v2/screening */
 export type GetScreeningParams = Record<string, never>;
 export type GetScreeningBody = never;
@@ -4848,6 +6212,13 @@ export type GetSeatParams = {
 };
 export type GetSeatBody = never;
 export type GetSeatResponse = SeatDetail;
+
+/** GET /api/v2/seats/{seat_id}/request */
+export type GetSeatAgentParams = {
+  seat_id: string;
+};
+export type GetSeatAgentBody = never;
+export type GetSeatAgentResponse = SeatAgent;
 
 /** GET /api/v2/sleep */
 export type GetSleepWhenIdleParams = Record<string, never>;
@@ -5046,6 +6417,14 @@ export type ImportMeetingBody = {
 };
 export type ImportMeetingResponse = unknown;
 
+/** POST /api/v2/rule-holds/{hold_id}/keep */
+export type KeepRuleHoldParams = {
+  "Idempotency-Key": string;
+  hold_id: string;
+};
+export type KeepRuleHoldBody = HoldEmpty;
+export type KeepRuleHoldResponse = unknown;
+
 /** POST /api/v2/goals/{gid}/kpis */
 export type LinkGoalKpiParams = {
   "Idempotency-Key": string;
@@ -5163,6 +6542,26 @@ export type ListChangelogParams = {
 export type ListChangelogBody = never;
 export type ListChangelogResponse = ChangelogList;
 
+/** GET /api/v2/cloud-agents */
+export type ListCloudAgentsParams = Record<string, never>;
+export type ListCloudAgentsBody = never;
+export type ListCloudAgentsResponse = CloudAgentList;
+
+/** GET /api/v2/computers/{rid}/browser-exit/usage */
+export type ListComputerBrowserExitUsageParams = {
+  days?: number;
+  limit?: number;
+  offset?: number;
+  rid: string;
+};
+export type ListComputerBrowserExitUsageBody = never;
+export type ListComputerBrowserExitUsageResponse = BrowserExitUsage;
+
+/** GET /api/v2/computer-subscriptions */
+export type ListComputerSubscriptionsParams = Record<string, never>;
+export type ListComputerSubscriptionsBody = never;
+export type ListComputerSubscriptionsResponse = ComputerSubscriptionList;
+
 /** GET /api/v2/conversations */
 export type ListConversationsParams = {
   bot?: string | null;
@@ -5228,6 +6627,185 @@ export type ListFilesParams = {
 };
 export type ListFilesBody = never;
 export type ListFilesResponse = FileLibrary;
+
+/** GET /api/v2/finance/action-kinds */
+export type ListFinanceActionKindsParams = {
+  kind?: string | null;
+};
+export type ListFinanceActionKindsBody = never;
+export type ListFinanceActionKindsResponse = FinanceActionKinds;
+
+/** GET /api/v2/finance/bills */
+export type ListFinanceBillsParams = {
+  aging?: "current" | "1_30" | "31_60" | "61_90" | "over_90" | null;
+  cursor?: string | null;
+  end?: string | null;
+  late?: boolean;
+  limit?: number;
+  order?: "date" | "paid_on";
+  q?: string;
+  start?: string | null;
+  status?: string | null;
+  vendor_id?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceBillsBody = never;
+export type ListFinanceBillsResponse = FinanceBills;
+
+/** GET /api/v2/finance/budgets */
+export type ListFinanceBudgetsParams = {
+  at?: string | null;
+  include_inactive?: boolean;
+  limit?: number;
+  view_as?: string | null;
+};
+export type ListFinanceBudgetsBody = never;
+export type ListFinanceBudgetsResponse = FinanceBudgets;
+
+/** GET /api/v2/finance/cards */
+export type ListFinanceCardsParams = {
+  cursor?: string | null;
+  holder?: string | null;
+  limit?: number;
+  q?: string;
+  status?: "active" | "frozen" | "cancelled" | null;
+  vendor?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceCardsBody = never;
+export type ListFinanceCardsResponse = FinanceCards;
+
+/** GET /api/v2/finance/contacts */
+export type ListFinanceContactsParams = {
+  active?: boolean | null;
+  cursor?: string | null;
+  kind?: "vendor" | "customer" | "both" | null;
+  limit?: number;
+  q?: string;
+  view_as?: string | null;
+};
+export type ListFinanceContactsBody = never;
+export type ListFinanceContactsResponse = FinanceContacts;
+
+/** GET /api/v2/finance/feed/{feed_id}/expected */
+export type ListFinanceFeedExpectedParams = {
+  feed_id: string;
+  view_as?: string | null;
+};
+export type ListFinanceFeedExpectedBody = never;
+export type ListFinanceFeedExpectedResponse = FinanceFeedExpected;
+
+/** GET /api/v2/finance/invoices */
+export type ListFinanceInvoicesParams = {
+  aging?: "current" | "1_30" | "31_60" | "61_90" | "over_90" | null;
+  cursor?: string | null;
+  customer_id?: string | null;
+  end?: string | null;
+  late?: boolean;
+  limit?: number;
+  q?: string;
+  start?: string | null;
+  status?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceInvoicesBody = never;
+export type ListFinanceInvoicesResponse = FinanceInvoices;
+
+/** GET /api/v2/finance/mercury-users */
+export type ListFinanceMercuryUsersParams = Record<string, never>;
+export type ListFinanceMercuryUsersBody = never;
+export type ListFinanceMercuryUsersResponse = FinanceMercuryUsers;
+
+/** GET /api/v2/finance/pay-from */
+export type ListFinancePayFromParams = {
+  view_as?: string | null;
+};
+export type ListFinancePayFromBody = never;
+export type ListFinancePayFromResponse = FinancePayFrom;
+
+/** GET /api/v2/finance/payments */
+export type ListFinancePaymentsParams = {
+  cursor?: string | null;
+  limit?: number;
+  status?: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown" | null;
+  view_as?: string | null;
+};
+export type ListFinancePaymentsBody = never;
+export type ListFinancePaymentsResponse = FinancePayments;
+
+/** GET /api/v2/finance/recipients */
+export type ListFinanceRecipientsParams = Record<string, never>;
+export type ListFinanceRecipientsBody = never;
+export type ListFinanceRecipientsResponse = FinanceRecipients;
+
+/** GET /api/v2/finance/reconciliations */
+export type ListFinanceReconciliationsParams = {
+  limit?: number;
+  money_account_id?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceReconciliationsBody = never;
+export type ListFinanceReconciliationsResponse = FinanceReconciliations;
+
+/** GET /api/v2/finance/rules */
+export type ListFinanceRulesParams = {
+  external_rule_id?: string | null;
+};
+export type ListFinanceRulesBody = never;
+export type ListFinanceRulesResponse = FinanceRules;
+
+/** GET /api/v2/finance/sources */
+export type ListFinanceSourcesParams = {
+  group?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceSourcesBody = never;
+export type ListFinanceSourcesResponse = FinanceSources;
+
+/** GET /api/v2/finance/statements */
+export type ListFinanceStatementsParams = {
+  limit?: number;
+  money_account_id?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceStatementsBody = never;
+export type ListFinanceStatementsResponse = FinanceStatements;
+
+/** GET /api/v2/finance/transactions */
+export type ListFinanceTransactionsParams = {
+  account_id?: string | null;
+  cursor?: string | null;
+  end?: string | null;
+  limit?: number;
+  money_account_id?: string | null;
+  q?: string | null;
+  source?: "all" | "feed" | "entry";
+  start?: string | null;
+  status?: "new" | "matched" | "posted" | "ignored" | "pending" | null;
+  teammates?: Array<string> | null;
+  teams?: Array<string> | null;
+  unattributed?: boolean;
+  view_as?: string | null;
+  who?: "both" | "bots" | "people";
+};
+export type ListFinanceTransactionsBody = never;
+export type ListFinanceTransactionsResponse = FinanceTransactions;
+
+/** GET /api/v2/finance/transfers */
+export type ListFinanceTransfersParams = {
+  cursor?: string | null;
+  limit?: number;
+  view_as?: string | null;
+};
+export type ListFinanceTransfersBody = never;
+export type ListFinanceTransfersResponse = FinanceTransfers;
+
+/** GET /api/v2/finance/webhook-deliveries */
+export type ListFinanceWebhookDeliveriesParams = {
+  limit?: number;
+};
+export type ListFinanceWebhookDeliveriesBody = never;
+export type ListFinanceWebhookDeliveriesResponse = FinanceWebhookDeliveries;
 
 /** GET /api/v2/goals/{gid}/checkins */
 export type ListGoalCheckinsParams = {
@@ -5350,6 +6928,11 @@ export type ListMessagesParams = {
 export type ListMessagesBody = never;
 export type ListMessagesResponse = MessagePage;
 
+/** GET /api/v2/model-subscriptions */
+export type ListModelSubscriptionsParams = Record<string, never>;
+export type ListModelSubscriptionsBody = never;
+export type ListModelSubscriptionsResponse = ModelSubscriptionList;
+
 /** GET /api/v2/models */
 export type ListModelsParams = Record<string, never>;
 export type ListModelsBody = never;
@@ -5425,6 +7008,48 @@ export type ListRecentBotsResponse = Recent;
 export type ListRepositoriesParams = Record<string, never>;
 export type ListRepositoriesBody = never;
 export type ListRepositoriesResponse = RepositoryList;
+
+/** GET /api/v2/rules/due */
+export type ListRuleDueParams = {
+  cursor?: string | null;
+  limit?: number;
+  next?: string;
+  status?: string | null;
+};
+export type ListRuleDueBody = never;
+export type ListRuleDueResponse = unknown;
+
+/** GET /api/v2/rule-holds */
+export type ListRuleHoldsParams = {
+  cursor?: string | null;
+  limit?: number;
+  task: string;
+};
+export type ListRuleHoldsBody = never;
+export type ListRuleHoldsResponse = unknown;
+
+/** GET /api/v2/rule-sources */
+export type ListRuleSourcesParams = {
+  cursor?: string | null;
+  limit?: number;
+};
+export type ListRuleSourcesBody = never;
+export type ListRuleSourcesResponse = unknown;
+
+/** GET /api/v2/rules */
+export type ListRulesParams = {
+  bot?: string | null;
+  cursor?: string | null;
+  kind?: string | null;
+  limit?: number;
+  mine?: boolean;
+  source?: string | null;
+  status?: string | null;
+  who?: string | null;
+  with?: string | null;
+};
+export type ListRulesBody = never;
+export type ListRulesResponse = unknown;
 
 /** GET /api/v2/seats */
 export type ListSeatsParams = Record<string, never>;
@@ -5613,6 +7238,14 @@ export type MarkChangelogReadParams = {
 export type MarkChangelogReadBody = ChangelogRead;
 export type MarkChangelogReadResponse = ChangelogReadResult;
 
+/** POST /api/v2/rule-due/{due_id}/satisfied */
+export type MarkRuleDueSatisfiedParams = {
+  "Idempotency-Key": string;
+  due_id: string;
+};
+export type MarkRuleDueSatisfiedBody = DueSatisfied;
+export type MarkRuleDueSatisfiedResponse = unknown;
+
 /** POST /api/v2/updates/read */
 export type MarkUpdatesReadParams = {
   "Idempotency-Key": string;
@@ -5635,14 +7268,6 @@ export type ModerateTaskCommentParams = {
 };
 export type ModerateTaskCommentBody = Moderate;
 export type ModerateTaskCommentResponse = unknown;
-
-/** POST /api/v2/seats/{seat_id}/open */
-export type OpenSeatParams = {
-  "Idempotency-Key": string;
-  seat_id: string;
-};
-export type OpenSeatBody = Empty;
-export type OpenSeatResponse = SeatDetail;
 
 /** POST /api/v2/places/{place}/order */
 export type OrderPlaceParams = {
@@ -5756,6 +7381,13 @@ export type ReadInboundMessageParams = {
 };
 export type ReadInboundMessageBody = never;
 export type ReadInboundMessageResponse = unknown;
+
+/** POST /api/v2/rules/read */
+export type ReadRuleDocumentParams = {
+  "Idempotency-Key": string;
+};
+export type ReadRuleDocumentBody = RuleRead;
+export type ReadRuleDocumentResponse = unknown;
 
 /** POST /api/v2/health-monitor/local-findings */
 export type RecordLocalHealthFindingParams = {
@@ -5894,6 +7526,15 @@ export type RemoveCardParams = {
 export type RemoveCardBody = never;
 export type RemoveCardResponse = unknown;
 
+/** DELETE /api/v2/model-subscriptions/{sid} */
+export type RemoveModelSubscriptionParams = {
+  "Idempotency-Key": string;
+  confirm?: boolean;
+  sid: string;
+};
+export type RemoveModelSubscriptionBody = never;
+export type RemoveModelSubscriptionResponse = ModelSubscriptionDeleted;
+
 /** DELETE /api/v2/humans/{pid} */
 export type RemovePersonParams = {
   "Idempotency-Key": string;
@@ -5919,6 +7560,14 @@ export type RemovePublicRoadmapRequesterParams = {
 };
 export type RemovePublicRoadmapRequesterBody = never;
 export type RemovePublicRoadmapRequesterResponse = unknown;
+
+/** POST /api/v2/rule-due/{due_id}/remove */
+export type RemoveRuleDueParams = {
+  "Idempotency-Key": string;
+  due_id: string;
+};
+export type RemoveRuleDueBody = DueSatisfied;
+export type RemoveRuleDueResponse = unknown;
 
 /** DELETE /api/v2/task-caps */
 export type RemoveTaskCapParams = {
@@ -5998,6 +7647,21 @@ export type RequestApprovalParams = {
 export type RequestApprovalBody = ApprovalCreate;
 export type RequestApprovalResponse = ApprovalRequested;
 
+/** POST /api/v2/cloud-agents/{agent_id}/request */
+export type RequestCloudAgentParams = {
+  "Idempotency-Key": string;
+  agent_id: string;
+};
+export type RequestCloudAgentBody = CloudAgentRequest;
+export type RequestCloudAgentResponse = Seat;
+
+/** POST /api/v2/finance/actions */
+export type RequestFinanceActionParams = {
+  "Idempotency-Key": string;
+};
+export type RequestFinanceActionBody = FinanceActionRequest;
+export type RequestFinanceActionResponse = FinanceAction;
+
 /** POST /api/v2/inbound/phone-requests */
 export type RequestInboundPhoneParams = {
   "Idempotency-Key": string;
@@ -6020,6 +7684,14 @@ export type RequestPublicRoadmapTaskParams = {
 };
 export type RequestPublicRoadmapTaskBody = PublicRequester;
 export type RequestPublicRoadmapTaskResponse = unknown;
+
+/** POST /api/v2/seats/{seat_id}/request-agent */
+export type RequestSeatAgentParams = {
+  "Idempotency-Key": string;
+  seat_id: string;
+};
+export type RequestSeatAgentBody = SeatAgentRequest;
+export type RequestSeatAgentResponse = Seat;
 
 /** POST /api/v2/tasks/{tid}/comments/{mid}/resolve */
 export type ResolveTaskQuestionParams = {
@@ -6070,6 +7742,14 @@ export type ResumeWebhookParams = {
 };
 export type ResumeWebhookBody = Empty;
 export type ResumeWebhookResponse = WebhookChanged;
+
+/** POST /api/v2/rules/{rule_id}/retire */
+export type RetireRuleParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type RetireRuleBody = RuleDecide;
+export type RetireRuleResponse = unknown;
 
 /** POST /api/v2/webhooks/{hook_id}/sends/{send_id}/retry */
 export type RetryWebhookSendParams = {
@@ -6187,6 +7867,28 @@ export type SearchFilesParams = {
 export type SearchFilesBody = never;
 export type SearchFilesResponse = FileSearch;
 
+/** GET /api/v2/finance/search */
+export type SearchFinanceParams = {
+  account_id?: string | null;
+  active?: boolean | null;
+  aging?: "current" | "1_30" | "31_60" | "61_90" | "over_90" | null;
+  contact_id?: string | null;
+  contact_kind?: "vendor" | "customer" | "both" | null;
+  cursor?: string | null;
+  end?: string | null;
+  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | null;
+  limit?: number;
+  money_account_id?: string | null;
+  q?: string;
+  rule_kind?: "gate" | "posting" | null;
+  start?: string | null;
+  status?: string | null;
+  vendor?: string | null;
+  view_as?: string | null;
+};
+export type SearchFinanceBody = never;
+export type SearchFinanceResponse = FinanceSearch;
+
 /** GET /api/v2/docs/search */
 export type SearchInternalAndLinkedDocsParams = {
   collection?: string;
@@ -6223,6 +7925,14 @@ export type SendMessageParams = {
 export type SendMessageBody = MessageCreate;
 export type SendMessageResponse = Message;
 
+/** POST /api/v2/rule-holds/{hold_id}/send */
+export type SendRuleHoldParams = {
+  "Idempotency-Key": string;
+  hold_id: string;
+};
+export type SendRuleHoldBody = HoldSend;
+export type SendRuleHoldResponse = unknown;
+
 /** POST /api/v2/webhooks/{hook_id}/send */
 export type SendWebhookParams = {
   "Idempotency-Key": string;
@@ -6252,6 +7962,14 @@ export type SetBotAccessParams = {
 };
 export type SetBotAccessBody = BotAccess;
 export type SetBotAccessResponse = BotAccessView;
+
+/** POST /api/v2/bots/{bot}/browser-exit */
+export type SetBotBrowserExitParams = {
+  "Idempotency-Key": string;
+  bot: string;
+};
+export type SetBotBrowserExitBody = BotBrowserExit;
+export type SetBotBrowserExitResponse = BotBrowserExitView;
 
 /** POST /api/v2/bots/{bot}/budget */
 export type SetBotBudgetParams = {
@@ -6307,6 +8025,19 @@ export type SetChatGoalParams = {
 export type SetChatGoalBody = GoalAction;
 export type SetChatGoalResponse = ChatGoalResult;
 
+/** POST /api/v2/computers/{rid}/browser-exit */
+export type SetComputerBrowserExitParams = {
+  "Idempotency-Key": string;
+  rid: string;
+};
+export type SetComputerBrowserExitBody = BrowserExitPolicy;
+export type SetComputerBrowserExitResponse = unknown;
+
+/** PUT /api/v2/computer-subscriptions */
+export type SetComputerSubscriptionParams = Record<string, never>;
+export type SetComputerSubscriptionBody = ComputerSubscription;
+export type SetComputerSubscriptionResponse = ComputerSubscriptionResult;
+
 /** POST /api/v2/computers/{rid}/turns-at-once */
 export type SetComputerTurnsAtOnceParams = {
   "Idempotency-Key": string;
@@ -6321,6 +8052,11 @@ export type SetExtraRepositoriesParams = {
 };
 export type SetExtraRepositoriesBody = ExtraRepos;
 export type SetExtraRepositoriesResponse = unknown;
+
+/** PUT /api/v2/finance/bills-address */
+export type SetFinanceBillsAddressParams = Record<string, never>;
+export type SetFinanceBillsAddressBody = BillsAddress;
+export type SetFinanceBillsAddressResponse = FinanceBillsAddress;
 
 /** POST /api/v2/goals/{gid}/kpis/{kid} */
 export type SetGoalKpiTargetParams = {
@@ -6486,6 +8222,14 @@ export type SignTriggerParams = {
 };
 export type SignTriggerBody = TriggerSigning;
 export type SignTriggerResponse = unknown;
+
+/** POST /api/v2/rules/{rule_id}/skip */
+export type SkipRuleParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type SkipRuleBody = RuleDecide;
+export type SkipRuleResponse = unknown;
 
 /** POST /api/v2/tasks/{tid}/snooze */
 export type SnoozeTaskParams = {
@@ -6741,6 +8485,22 @@ export type UpdateRepositoryParams = {
 };
 export type UpdateRepositoryBody = RepoUpdate;
 export type UpdateRepositoryResponse = unknown;
+
+/** POST /api/v2/rules/{rule_id} */
+export type UpdateRuleParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type UpdateRuleBody = RuleEdit;
+export type UpdateRuleResponse = unknown;
+
+/** POST /api/v2/rule-due/{due_id} */
+export type UpdateRuleDueParams = {
+  "Idempotency-Key": string;
+  due_id: string;
+};
+export type UpdateRuleDueBody = DueEdit;
+export type UpdateRuleDueResponse = unknown;
 
 /** PATCH /api/v2/seats/{seat_id} */
 export type UpdateSeatParams = {

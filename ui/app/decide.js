@@ -381,6 +381,8 @@ const decideStepsOnly = c => c.type === 'task' && (!!c.it.steps_only || pipeline
 function decideActionsPlain(c, k) {
   const skip = `<button type="button" data-dc="skip">Skip${k('S')}</button>`;
   if (c.type === 'pick' && (c.q.multi || decideTwo(c))) return qcardActionsHTML(c.it, c.q, {attr: 'dc', ticked: decideTicked(DEC, c), keys: true});
+  // A pick between files has a button under each file: no Pick one row.
+  if (c.type === 'pick' && qcardReview(c.it)?.pick) return skip;
   if (c.type === 'pick') return `${skip}<button type="button" disabled>Pick one</button>`;
   if (c.type === 'approve') return `<button type="button" data-dc="no">Decline${k('N')}</button><button type="button" class="primary" data-dc="yes">Approve${k('Y')}</button>`;
   if (c.yn) return `<button type="button" data-dc="no">No${k('N')}</button><button type="button" class="primary" data-dc="yes">Yes${k('Y')}</button>`;
@@ -409,7 +411,8 @@ function decideTick(st, i, on) {
   qcardRetick($('.decide .dc-actions'), c.it, c.q, ticked, 'dc');
 }
 const DEC_APPROVAL_Q = {send: 'Send this email?', spend: 'Approve this spend?', publish: 'Publish this?', merge: 'Merge this?',
-  support: 'Send this to Tico support?', task_cap: 'Set this task cap?', spend_limit: 'Set this spend limit?'};
+  support: 'Send this to Tico support?', task_cap: 'Set this task cap?', spend_limit: 'Set this spend limit?',
+  finance: 'Approve this Finance change?'};
 // The exact payload, as Needs you has always shown it (needs-you.js approvalPayloadNode): every value set as text,
 // the raw JSON folded underneath.
 function decideApprovalHTML(c) {
@@ -585,6 +588,11 @@ function decideAct(st, what, i, shown = st.shown) {
   if ((what === 'comment' || what === 'answer') && !note) { box?.focus(); return; }
   if (what === 'answer') { void decideTextAnswer(st, c, note); return; }
   if (what === 'ticked' && !decideTicked(st, c).size) return;
+  // Request changes on a review goes with the note that says what to change.
+  if (what === 'pick' && !note && qcardNeedsNote(c.it, c.q, qcardLabels(c.q, 'pick', i))) {
+    if (box) { box.placeholder = 'What should change?'; box.focus(); }
+    return;
+  }
   st.lockUntil = performance.now() + 350;
   const write = decideWrite(c, what, i, note);
   void decideCommit(st);                       // the previous action goes now

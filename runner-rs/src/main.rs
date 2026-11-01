@@ -25,8 +25,10 @@ mod accounts;
 mod afterwatch;
 mod appdriver;
 mod backlog;
+mod browser_exit;
 mod capture;
 mod client;
+mod cloud_machine;
 mod commands;
 mod config;
 mod credential_imports;
@@ -64,6 +66,7 @@ mod mail_key;
 mod manifest;
 mod memory_history;
 mod mcp;
+mod model_subscriptions;
 mod op;
 mod panics;
 mod perbot;
@@ -419,6 +422,9 @@ async fn start(command: Command, config: config::Config) -> i32 {
     flight::init(&state_dir);
     panics::install();
     let state = state::State::open(&state_dir).unwrap_or_else(|e| fail(&e));
+    // No turn runs yet: a company subscription's sign-in file left from one that was cut off goes.
+    model_subscriptions::sweep(&state_dir);
+    gateway_relay::sweep(&config.projects_dir());
     follow::record_revision(&state_dir);
     follow::init(&config.data, &state_dir);
     if isolation::enabled() {
@@ -458,6 +464,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
     // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers, close-calls and connectors.
     let side = sidejobs::start(&service.config);
     screen::start(service.config.path.clone(), client.clone());
+    browser_exit::start(client.clone());
     service.run().await;
     screen::shutdown().await;
     if let Some((task, stop)) = side {

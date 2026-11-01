@@ -180,11 +180,13 @@ def sweep(conn, at=None):
 
 def handed_to_people(conn, expiry, at=None):
     """Tasks a bot handed a person that the person has not touched since `expiry`: owned by them, requested by a bot,
-    still open or waiting (on nobody or that bot), not due later, not on a numbered board, not set aside until a date."""
+    still open or waiting (on nobody or that bot), not due later, not on a numbered board, not set aside until a date, and
+    not a due-date routine's occurrence (its day is its deadline, whoever owns it now)."""
     marks = ",".join("?" * len(ASKED_STATUSES))
     rows = H._rows(conn.execute(
         f"SELECT t.* FROM tasks t LEFT JOIN task_types y ON y.id=t.type_id WHERE t.status IN ({marks}) "
         "AND t.owner LIKE 'human:%' AND t.requester LIKE 'bot:%' AND t.created<? AND coalesce(y.numbered,0)=0 "
+        "AND t.occurrence IS NULL "
         "ORDER BY t.created", (*ASKED_STATUSES, expiry)))
     out = []
     for row in rows:

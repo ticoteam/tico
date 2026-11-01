@@ -27,6 +27,9 @@ TEMPLATES = {role["slug"] for role in ROLES}
 # Seats the company models place before Tico has a template for them: "No bot yet", and a person can hold one.
 SEATS = _load("seats.json")["seats"]
 OPEN_SEATS = {seat["slug"] for seat in SEATS}
+# Retired templates a saved draft may still name. The built-in that replaced each one comes with every install, so a seat
+# for it that is not built yet leaves the draft quietly instead of refusing the whole draft (`check`).
+RETIRED = {"bookkeeping"}
 # The company models a chart starts from (model_<key>.json), in the order the setup chat tries them: the first whose
 # `picks_when` signal the company has, else Everything. On-site work comes before services, so a cleaning company that
 # also sells its hours is a local service business.
@@ -513,7 +516,9 @@ def check(raw, snapshot=False):
                     "about": _text(company["about"], "company.about", LIMITS["about"]),
                     "signals": _choices(company["signals"], "company.signals", SIGNALS)},
         "people": [_person(p, i) for i, p in enumerate(_list(raw["people"], "people", LIMITS["people"]))],
-        "bots": [_bot(b, i) for i, b in enumerate(_list(raw["bots"], "bots", LIMITS["bots"]))],
+        "bots": [_bot(b, i) for i, b in enumerate(b for b in _list(raw["bots"], "bots", LIMITS["bots"])
+                                                   if not (isinstance(b, dict) and b.get("template") in RETIRED
+                                                           and not b.get("existing")))],
         "goals": [_goal(g, i) for i, g in enumerate(_list(raw["goals"], "goals", LIMITS["goals"]))],
         "rules": {"mode": rules["mode"], "never": [r for r in RULES if r in _choices(rules["never"], "rules.never", RULES)],
                   "review": rules["review"]},

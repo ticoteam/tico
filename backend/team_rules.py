@@ -34,9 +34,10 @@ DEFAULTS = {
     "topic_fresh": False,           # a direct chat starts fresh when the topic changes (backend/topic_change.py)
     "stall_triage": True,           # Decide reads a quiet task that nothing has changed on before a stall check stays silent (backend/stall_triage.py)
     "managers_manage_reports": True,  # a bot changes its direct reports' model, task model, name and description (backend/report_managers.py)
+    "org_rule_checks": True,        # a bot's outputs are checked against the org rules that apply to them (backend/org_rule_check.py)
 }
 # Rules an admin may change too, not only the owner (Settings > General).
-ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage")
+ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage", "org_rule_checks")
 # A rule whose default the server's environment sets (`TICO_STALE_REVIEW=1`, `TICO_TOPIC_FRESH=1` on Tico Team's own
 # server, `TICO_STALL_TRIAGE=0` to start a server with triage off). A saved choice wins; until someone sets the rule it is not stored, so it keeps following the environment.
 ENV_DEFAULTS = {"stale_review": "TICO_STALE_REVIEW", "topic_fresh": "TICO_TOPIC_FRESH",

@@ -22,10 +22,10 @@ import pytest
 from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
-SUBCOMMANDS = ["whoami", "inbound", "meeting", "message", "conversation", "question", "note", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
-               "proposal", "strategy", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
+SUBCOMMANDS = ["whoami", "inbound", "mail", "meeting", "message", "conversation", "question", "note", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
+               "proposal", "rules", "strategy", "brand", "gtm", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
-               "credential", "slack", "support", "health-monitor", "task-manager", "stall-triage", "roadmap", "service-key"]
+               "credential", "slack", "support", "health-monitor", "finance", "task-manager", "stall-triage", "roadmap", "service-key"]
 
 
 def run_hub(*args, env=None):
@@ -609,6 +609,21 @@ def test_computer_turns_at_once_cli_sends_automatic_as_null(monkeypatch):
     assert all(row['computer'] == 'rig-1' for row in sent)
 
 
+def test_browser_exit_cli_sends_none_as_null_and_on_off_as_booleans(monkeypatch):
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+    sent = []
+    for name in ('hub_bot_browser_exit', 'hub_computer_browser_exit'):
+        monkeypatch.setitem(BY_NAME[name], 'fn', lambda api, args: sent.append(args))
+    for argv in (['bot', 'browser-exit', 'ops'], ['bot', 'browser-exit', 'ops', 'none'],
+                 ['bot', 'browser-exit', 'ops', 'rig-1'], ['computer', 'browser-exit', 'rig-1', 'on', '--bots', 'ops,cpo'],
+                 ['computer', 'browser-exit', 'rig-1']):
+        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+    assert ['computer' in row for row in sent[:3]] == [False, True, True]
+    assert [row.get('computer') for row in sent[1:3]] == [None, 'rig-1']
+    assert (sent[3]['sharing'], sent[3]['bots']) == (True, ['ops', 'cpo']) and 'sharing' not in sent[4]
+
+
 def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_path):
     from clients import remotecli
     calls = []
@@ -791,3 +806,98 @@ def test_a_plain_webhook_header_sends_no_secret_key():
     from clients import hubtools
     fields = hubtools.webhook_options({"header": ["X-Team: acme"], "secret_header": ["X-Key: k"]})
     assert fields["headers"] == [{"name": "X-Team", "value": "acme"}, {"name": "X-Key", "secret": True, "value": "k"}]
+
+
+def test_file_approved_by_path_asks_with_the_path_and_digest_as_query_fields(tmp_path, monkeypatch):
+    """`hub file approved <path>` sends the path and digest as query fields, not as the client's own path argument."""
+    import hashlib
+    from urllib.parse import parse_qs, urlsplit
+    from clients import hubtools, remotecli, tico
+    sent = []
+    monkeypatch.setattr(tico.Client, "request", lambda self, method, path, *a, **kw: sent.append((method, path)) or {"approved": True})
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    monkeypatch.setenv("HUB_TOKEN", "bot-token")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "brief.md").write_bytes(b"# Brief\n")
+    assert remotecli.main(hubcli.parser().parse_args(["file", "approved", "brief.md", "--by", "human"])) == 0
+    (method, url), = sent
+    parts = urlsplit(url)
+    assert (method, parts.path) == ("GET", "/api/v2/file-approvals")
+    assert parse_qs(parts.query) == {"path": ["brief.md"], "digest": [hashlib.sha256(b"# Brief\n").hexdigest()], "by": ["human"]}
+    assert hubtools.files_approved(tico.Client("https://tico.acme.example", "bot-token"), {"target": "brief.md"}) == {"approved": True}
+
+
+def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatch):
+    """The playbooks call these exact flags; each must land in the API field it names."""
+    from clients import remotecli
+    sent = []
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.__dict__["_tico_is_botops"] = False
+
+        def get(self, path, **query):
+            return {"actor": "bot:growth", "kind": "bot"}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            sent.append((method, path, body))
+            return {"idea": {}, "kpi": {}, "segment": {}}
+
+        def post(self, path, body=None, key=None):
+            return self.call("POST", path, body)
+
+        def patch(self, path, body=None, key=None):
+            return self.call("PATCH", path, body)
+    monkeypatch.setattr(remotecli, "Client", Client)
+    monkeypatch.setenv("HUB_API_URL", "https://hub.example.test")
+
+    def run(*argv):
+        remotecli.run(hubcli.parser().parse_args(list(argv)))
+        return sent[-1]
+    assert run("growth", "idea", "create", "--title", "Referral card", "--bet", "b1", "--kpi", "k1", "--channel",
+               "referral", "--channel", "door", "--i", "7", "--c", "5", "--e", "8", "--source-kind", "lost_test",
+               "--follow-up-of", "t9", "--assignee", "me") == ("POST", "growth/ideas", {
+        "title": "Referral card", "bet_id": "b1", "kpi_id": "k1", "channels": ["referral", "door"], "source_kind": "lost_test",
+        "ice_i": 7, "ice_c": 5, "ice_e": 8, "follow_up_of": "t9", "assignee": "bot:growth"})
+    assert run("growth", "idea", "start", "t1", "--from", "2026-10-01", "--to", "2026-10-15", "--change", "New card",
+               "--stop-if", "CAC over 80", "--judged-kpi", "k2", "--min-events", "30", "--audience", "Austin")[2] == {
+        "test_from": "2026-10-01", "test_to": "2026-10-15", "change": "New card", "stop_if": "CAC over 80",
+        "judged_kpi_id": "k2", "min_events": 30, "audience": "Austin"}
+    assert run("growth", "idea", "verdict", "t1", "--status", "lost", "--bet-effect", "weakens",
+               "--confidence", "high")[1:] == ("growth/ideas/t1/verdict", {"status": "lost", "bet_effect": "weakens",
+                                                                           "confidence": "high"})
+    assert run("growth", "idea", "score", "t1", "--i", "3", "--c", "4", "--e", "5")[2] == {"i": 3, "c": 4, "e": 5}
+    assert run("growth", "cohort", "set", "--channel", "unknown", "--month", "2026-10", "--new", "18",
+               "--source", "new_customers=Stripe") == ("PUT", "growth/cohorts", {
+        "channel": "unknown", "month": "2026-10", "new_customers": 18, "sources": {"new_customers": "Stripe"}})
+    assert run("growth", "segment", "create", "--name", "Property managers", "--why", "Big portfolios") == (
+        "POST", "growth/segments", {"name": "Property managers", "why": "Big portfolios", "status": "testing"})
+    assert run("growth", "segment", "update", "segment/property-managers", "--status", "serving", "--motion",
+               "sales_led", "--who-buys", "Ops lead", "--owner", "me")[1:] == (
+        "growth/segments/segment/property-managers", {"status": "serving", "motion": "sales_led", "who_buys": "Ops lead",
+                                                      "owner_ref": "bot:growth"})
+    assert run("growth", "idea", "update", "t1", "--segment", "s1", "--segment", "s2")[2] == {"segments": ["s1", "s2"]}
+    assert run("growth", "channel", "update", "door", "--segment", "")[2] == {"segments": []}       # "" clears
+    assert run("growth", "cohort", "set", "--channel", "door", "--month", "2026-10", "--segment", "s1",
+               "--new", "4")[2] == {"channel": "door", "month": "2026-10", "segment_id": "s1", "new_customers": 4}
+    kpi = run("kpi", "update", "k1", "--parent", "k0", "--role", "north_star", "--loop", "referral:2")[2]
+    assert (kpi["parent_kpi_id"], kpi["growth_role"], kpi["loop_name"], kpi["loop_step"]) == ("k0", "north_star", "referral", 2)
+    assert "stage" not in kpi
+    assert run("brand", "draft", "--section", "positioning", "--body", '"Acme cleans homes"')[1:] == (
+        "brand/draft", {"sections": {"positioning": "Acme cleans homes"}})
+
+
+def test_a_json_flag_no_command_takes_is_ignored(monkeypatch, capsys):
+    p = hubcli.parser()
+    assert hubcli.parse(p, ["task", "show", "t_1", "--json"]).id == ["t_1"]
+    assert hubcli.parse(p, ["tool", "list", "--json"]).json is True                  # its own flag
+    assert hubcli.parse(p, ["--json", "tool", "list", "--json"]).json is True
+    assert hubcli.parse(p, ["meeting", "search", "--", "--json"]).q == "--json"       # a value stays a value
+    for wrong in (["task", "get", "t_1", "--json"], ["task", "show", "t_1", "--json", "--bogus"]):
+        with pytest.raises(SystemExit) as e:
+            hubcli.parse(p, wrong)
+        assert e.value.code == 2
+    assert "--bogus" in capsys.readouterr().err
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"vendor": "v_1"}'))                # stdin is read once
+    args = hubcli.parse(p, ["finance", "act", "bill_create", "--payload", "-", "--json"])
+    assert args.payload == {"vendor": "v_1"}

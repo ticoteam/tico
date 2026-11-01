@@ -1,5 +1,5 @@
 /* ui/app/redesign.js — The app's shell (redesign PLAN §1, wave 1): the sidebar order, the Strategy tabs
-   (Market / Strategy / Org / Goals / Budget), the moved pages and the old addresses that lead to them.
+   (Market / Strategy / Org / Goals / Budget), Growth's place under Strategy, the moved pages and the old addresses that lead to them.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -16,7 +16,7 @@ const helpBubble = (text, attrs = '') => `<span class="rd-help"${attrs ? ' ' + a
 // The rail is rearranged in place, once, not drawn again: the links keep their own badges and handlers (sidebar.js,
 // notices.js).
 let RD_NAV_DONE = false;
-const RD_NAV_ICONS = {automations: 'bolt', library: 'local_library', strategy: 'flag'};
+const RD_NAV_ICONS = {automations: 'bolt', library: 'local_library', strategy: 'flag', growth: 'rocket_launch', rules: 'gavel'};
 function redesignNav() {
   const nav = $('#side .side-scroll');
   if (!nav || RD_NAV_DONE) return;
@@ -29,6 +29,7 @@ function redesignNav() {
     return a;
   };
   const automations = link('automations', RD_AUTOMATIONS, RD_NAV_ICONS.automations, 'Automations');
+  const growth = link('growth', GR_ROUTE, RD_NAV_ICONS.growth, 'Growth');   // ui/app/growth-page.js
   const library = link('library', DOCS, RD_NAV_ICONS.library, 'Library'); library.classList.add('rd-lib-head');
   // Library's pages fold under it: a chevron beside it, remembered in this browser (rdLibSync).
   const libRow = document.createElement('div'); libRow.className = 'nav-row rd-lib-row';
@@ -42,11 +43,22 @@ function redesignNav() {
   const tools = link('tools', RD_TOOLS, 'api', 'Tools');   // ui/app/redesign-library.js
   const files = link('files', RD_FILES, 'folder_shared', 'Files');   // ui/app/pages.js
   subs.append(...[pick('a[data-nav="docs"]'), files, pick('a[data-nav="meetings"]'), tools].filter(Boolean));
+  // Rules (ui/app/org-rules.js) folds the same way, its tabs under it, folded until opened.
+  const rules = link('rules', RULES_ROUTE, RD_NAV_ICONS.rules, 'Rules'); rules.classList.add('rd-lib-head');
+  const rulesRow = document.createElement('div'); rulesRow.className = 'nav-row rd-lib-row rd-rules-row';
+  const rulesToggle = Object.assign(document.createElement('button'), {type: 'button', className: 'rd-lib-toggle rd-rules-toggle',
+    innerHTML: '<span class="section-chev" aria-hidden="true">›</span>'});
+  rulesToggle.setAttribute('aria-label', 'Rules pages');
+  rulesToggle.setAttribute('aria-controls', 'rd-rules');
+  rulesToggle.onclick = () => { const open = rdRulesOpen(); RD_RULES.inside = false; rdRulesRemember(!open); rdLibSync(); };
+  rulesRow.append(rules, rulesToggle);
+  const ruleSubs = document.createElement('div'); ruleSubs.className = 'rd-lib rd-rules'; ruleSubs.id = 'rd-rules';
+  ruleSubs.append(...RU_TABS.map(([k, label]) => link('rules-' + k, ruHref(k), 'gavel', label)));
   if (strategyLink) { strategyLink.setAttribute('href', MARKET_ROUTE); strategyLink.querySelector('.nav-icon').textContent = RD_NAV_ICONS.strategy; }
-  const order = [pick('#side-update'), pick('a[data-nav="overview"]'), pick('#nav-welcome'), strategyLink,
+  const order = [pick('#side-update'), pick('a[data-nav="overview"]'), pick('#nav-welcome'), strategyLink, strategyLink && growth,
     pick('a[data-nav="updates"]'), pick('a[data-nav="tasks"]'), automations, libRow, subs,
-    pick('#nav-pins')].filter(Boolean);
-  const rest = before.filter(el => !order.includes(el) && !subs.contains(el));
+    rulesRow, ruleSubs, pick('#nav-pins')].filter(Boolean);
+  const rest = before.filter(el => !order.includes(el) && !subs.contains(el) && !ruleSubs.contains(el));
   nav.append(...order, ...rest);
   rdLibSync();
   renderTree();   // marks the current page again: Automations and Tools did not exist when the first route drew the rail
@@ -59,14 +71,32 @@ const rdInLibrary = r => [DOCS, MEETINGS, '#/library'].some(base => rdUnder((r |
 function rdLibRemember(open) { try { localStorage.setItem(RD_LIB_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdLibSaved() { try { return localStorage.getItem(RD_LIB_KEY) !== 'closed'; } catch { return true; } }
 const rdLibOpen = () => RD_LIB.inside || rdLibSaved();
+// Rules folds the other way round: folded unless this browser opened it, opened while a Rules page is showing.
+const RD_RULES_KEY = 'tico.nav.rules';
+const RD_RULES = {inside: false, was: false};
+function rdRulesRemember(open) { try { localStorage.setItem(RD_RULES_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
+function rdRulesSaved() { try { return localStorage.getItem(RD_RULES_KEY) === 'open'; } catch { return false; } }
+const rdRulesOpen = () => RD_RULES.inside || rdRulesSaved();
 function rdLibSync() {
-  const subs = document.getElementById('rd-lib'), toggle = document.querySelector('.rd-lib-toggle');
+  rdRulesSync();
+  const subs = document.getElementById('rd-lib'), toggle = document.querySelector('.rd-lib-toggle:not(.rd-rules-toggle)');
   if (!subs || !toggle) return;
   const here = rdInLibrary(S.route);
   if (here && !RD_LIB.was) RD_LIB.inside = true;
   if (!here) RD_LIB.inside = false;
   RD_LIB.was = here;
   const open = rdLibOpen();
+  subs.hidden = !open;
+  toggle.setAttribute('aria-expanded', String(open));
+}
+function rdRulesSync() {
+  const subs = document.getElementById('rd-rules'), toggle = document.querySelector('.rd-rules-toggle');
+  if (!subs || !toggle) return;
+  const here = rdUnder((S.route || '').split('?')[0], RULES_ROUTE);
+  if (here && !RD_RULES.was) RD_RULES.inside = true;
+  if (!here) RD_RULES.inside = false;
+  RD_RULES.was = here;
+  const open = rdRulesOpen();
   subs.hidden = !open;
   toggle.setAttribute('aria-expanded', String(open));
 }
@@ -77,6 +107,10 @@ function redesignNavCurrent(nav) {
   if (nav === 'tools') return rdUnder(r, RD_TOOLS);
   if (nav === 'files') return rdUnder(r, RD_FILES);
   if (nav === 'strategy') return rdUnder(r, '#/strategy');
+  if (nav === 'growth') return rdUnder(r, GR_ROUTE);
+  if (nav === 'finance') return rdUnder(r, FIN_ROUTE);
+  if (nav === 'rules') return rdUnder(r, RULES_ROUTE);
+  if (nav.startsWith('rules-')) return rdUnder(r, RULES_ROUTE) && ruTabOf(r) === nav.slice(6);
   return false;
 }
 
@@ -93,6 +127,8 @@ function redesignRoute(r) {
   if (rdUnder(r, GOALS)) { location.replace(RD_GOALS + r.slice(GOALS.length)); return true; }
   if (r === '#/settings/listening') { location.replace(RD_LISTENING); return true; }
   if (r === '#/library') { location.replace(DOCS); return true; }
+  if (rdUnder(r, GR_OLD_ROUTE)) { location.replace(GR_ROUTE + r.slice(GR_OLD_ROUTE.length)); return true; }
+  if (rdUnder(r, GTM_OLD_ROUTE)) { location.replace(GTM_ROUTE + r.slice(GTM_OLD_ROUTE.length)); return true; }
   if (['#/recurring', '#/tasks/routines'].includes(r.split('?')[0])) { location.replace(RD_AUTOMATIONS); return true; }   // the Tasks page's Routines view
   if (rdUnder(r, RD_AUTOMATIONS)) {
     // The Automations page is its own files (ui/app/automations*.js); until they load, an empty mount point.
@@ -101,10 +137,15 @@ function redesignRoute(r) {
     return true;
   }
   if (rdToolsRoute(r)) return true;
+  if (rdUnder(r, BRAND_ROUTE)) { pageBrand(); return true; }   // ui/app/brand-page.js
+  if (rdUnder(r, GTM_ROUTE)) { pageGtm(); return true; }   // ui/app/gtm-page.js
+  if (rdUnder(r, GR_ROUTE)) { pageGrowth(); return true; }   // ui/app/growth-page.js
+  if (rdUnder(r, RULES_ROUTE)) { pageRules(); return true; }   // ui/app/org-rules.js
   if (pagesRoute(r)) return true;   // Library › Files and #/page/<id> (ui/app/pages.js)
   if (rdUnder(r, RD_GOALS)) { pageGoals(); return true; }
   if (rdUnder(r, RD_ORG)) { pageRdOrg(); return true; }
   if (rdUnder(r, RD_BUDGET)) { pageBudget(); return true; }
+  if (rdUnder(r, FIN_ROUTE)) { pageFinance(); return true; }   // ui/app/finance.js
   if (rdUnder(r, RD_LISTENING)) { pageRdListening(); return true; }
   // Market opens on the latest briefing.
   if (r === MARKET_ROUTE || rdUnder(r, RD_BRIEFING)) { pageRdBriefing(); return true; }
@@ -114,16 +155,21 @@ function redesignRoute(r) {
 function redesignAfterRoute() {
   if (!rdUnder(S.route || '', RD_AUTOMATIONS)) window.automationsStop?.();
   if (!rdUnder(S.route || '', RD_TOOLS)) rdToolsStop();
+  if (!rdUnder(S.route || '', RULES_ROUTE)) rulesStop();
   pagesStop(S.route || '');
   rdLibSync();
+  financeStop();
+  growthStop();
+  finProbeOnce();   // the Finance link shows once the viewer sees something in Finance
 }
 
-// The Strategy section's heading with the redesign's tabs. Lenses are the Strategy tab's second view.
+// The Strategy section's heading with the redesign's tabs. Lenses are the Strategy tab's second view; Brand opens
+// from the Strategy tab and keeps it lit.
 function redesignStrategyHead(tab) {
-  const on = tab === 'lenses' ? 'strategy' : tab;
+  const on = ['lenses', 'brand'].includes(tab) ? 'strategy' : tab;
   const tabs = [['market', MARKET_ROUTE, 'Market'], ['strategy', '#/strategy', 'Strategy'], ['org', RD_ORG, 'Org'],
     ['goals', RD_GOALS, 'Goals'], ['budget', RD_BUDGET, 'Budget']];
-  const sub = on === 'strategy'
+  const sub = tab === 'strategy' || tab === 'lenses'
     ? `<a class="strat-sub" href="${tab === 'lenses' ? '#/strategy' : LENSES_ROUTE}">${tab === 'lenses' ? 'Strategy' : 'Lenses'}</a>` : '';
   return `<div class="strat-head rd-strat-head"><h1>Strategy</h1>
       <nav class="tabs slim strat-tabs" aria-label="Strategy">${tabs.map(([id, href, label]) =>

@@ -11,7 +11,7 @@
 .support-head{display:flex;align-items:center;gap:4px;padding:10px 10px 4px 16px}.support-head .spacer{flex:1}.support-head h2{margin:0;font-size:var(--t-md)}
 .support-head .support-icon{font-size:15px}
 .support-links{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:0 16px 8px;font-size:var(--t-sm);color:var(--muted)}
-.support-links a,.support-links button.linkish{color:var(--accent);font-size:var(--t-sm);text-decoration:none}
+.support-links a,.support-links button.linkish{color:var(--link);font-size:var(--t-sm);text-decoration:none}
 .support-links a:hover,.support-links button.linkish:hover{text-decoration:underline}
 .support-links button.linkish[aria-pressed="true"]{color:var(--ink)}
 .support-connection{margin:0;padding:0 16px 8px;font-size:var(--t-sm);color:var(--muted)}.support-connection:empty{display:none}.support-connection.err{color:var(--fail)}
@@ -27,7 +27,7 @@
 .support-item-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
 .support-item.unread .support-item-title{font-weight:600}
 .support-item-body{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-sm);color:var(--muted)}
-.support-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.support-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--ink)}
 .support-item-meta{display:flex;align-items:center;gap:8px;font-size:var(--t-xs);color:var(--muted)}
 .support-badge{display:inline-block;font-size:var(--t-2xs);font-weight:600;padding:1px 7px;border-radius:10px;background:var(--idle-bg);color:var(--muted);white-space:nowrap;letter-spacing:var(--track-normal)}
 .support-badge.s-open{background:var(--run-bg);color:var(--run)}.support-badge.s-answered{background:var(--ok-bg);color:var(--ok)}
@@ -41,10 +41,10 @@
 .support-thread{display:flex;flex-direction:column;flex:1;min-height:120px;overflow-y:auto;padding:12px 16px;overscroll-behavior:contain;overflow-wrap:anywhere}
 .support-msg{max-width:85%;min-width:0;overflow-wrap:anywhere;padding:8px 12px;border-radius:10px;font-size:var(--t-base);margin:0 0 10px}
 .support-msg.you{align-self:flex-end;background:var(--surface2);border:1px solid var(--line);border-bottom-right-radius:3px}
-.support-msg.staff{align-self:flex-start;background:color-mix(in srgb,var(--accent) 12%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line));border-bottom-left-radius:3px}
+.support-msg.staff{align-self:flex-start;background:color-mix(in srgb,var(--ink) 7%,var(--surface));border:1px solid color-mix(in srgb,var(--ink) 30%,var(--line));border-bottom-left-radius:3px}
 .support-body{white-space:pre-wrap}
 .support-who{display:block;font-size:var(--t-xs);color:var(--muted);margin-bottom:4px}.support-msg.you .support-who{text-align:right}
-.support-delivered{align-self:flex-end;font-size:var(--t-xs);color:var(--muted);margin:-4px 0 6px}
+.support-delivered{align-self:flex-end;max-width:100%;text-align:right;overflow-wrap:anywhere;font-size:var(--t-xs);color:var(--muted);margin:-4px 0 6px}
 .support-empty{margin:auto 0;padding:12px 4px;text-align:center;color:var(--muted);font-size:var(--t-base);line-height:var(--lh)}
 .support-empty p{margin:0 0 6px}
 .support-sent{font-size:var(--t-sm);color:var(--muted);line-height:var(--lh);overflow-wrap:anywhere;margin:6px 0}
@@ -85,7 +85,7 @@
 }
 /* Report this (ui/support.js): a link beside what failed. */
 .report-this{font-size:var(--t-sm)}
-button.report-this-icon{all:unset;display:inline-flex;align-items:center;padding:0 2px;color:var(--muted);line-height:var(--lh-none);cursor:pointer}button.report-this-icon:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}button.report-this-icon:hover{color:var(--accent)}.report-this-icon .nav-icon{width:16px;height:16px;font-size:16px;color:inherit}
+button.report-this-icon{all:unset;display:inline-flex;align-items:center;padding:0 2px;color:var(--muted);line-height:var(--lh-none);cursor:pointer}button.report-this-icon:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}button.report-this-icon:hover{color:var(--ink)}.report-this-icon .nav-icon{width:16px;height:16px;font-size:16px;color:inherit}
 .truns-report{margin:4px 0 0}
 .support-report{margin:6px 0 0;font-size:var(--t-sm);color:var(--muted)}
 .support-report strong{color:var(--ink)}

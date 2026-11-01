@@ -1,10 +1,14 @@
-/* Strategy: how the team means to win (backend/strategy.py). A summary and a vision, the bets the team is making (each
-   with what it rules out, what would prove it wrong, its goals and their colours), then four fixed sections and any
-   the owner adds. The owner edits the draft in place and publishes numbered versions with a note; everyone else reads
-   the latest published version. Lenses (ui/lenses-page.js) and Market (ui/market-page.js) are the section's other tabs. */
+/* Strategy: how the team means to win (backend/strategy.py, docs/strategy.md#the-page). One line on top (the summary),
+   then Where we play beside the bets, the competitors beside related news, then four fixed sections and any the owner
+   adds. The owner edits the draft in place and publishes numbered versions with a note; everyone else reads the latest
+   published version. Where we play and Competitors are the market graph's own rows (backend/strategy_market.py), and
+   Related news is what Listening found. Lenses (ui/lenses-page.js) and Market (ui/market-page.js) are the section's
+   other tabs. */
 'use strict';
-let STRAT = null;          // the open page: {data, kpis, load, editBet, editSection, addSection, publishing}
+let STRAT = null;          // the open page: {data, kpis, load, adding, editSection, addSection, publishing}
 let STRAT_LOAD = 0;
+// The market cards' reads, each undefined while it loads and null when it could not be read: {spend, rivals, news}.
+let STRAT_MKT = {};
 const isStrategyRoute = r => r === '#/strategy' || r.startsWith('#/strategy?');
 const STRAT_STATUS = {proposed: 'Proposed', active: 'Active', retired: 'Retired'};
 const STRAT_MAX_ACTIVE = 7;
@@ -19,52 +23,55 @@ const STRAT_WRONG_KINDS = {kpi: 'KPI', thesis: 'Market', text: 'Sentence'};
 // A sentence wrong-if needs a day to look again (strategy._wrong_if); left empty, it is 90 days out.
 const STRAT_CHECK_DAYS = 90;
 const stratCheckBy = () => new Date(Date.now() + STRAT_CHECK_DAYS * 864e5).toISOString().slice(0, 10);
+const STRAT_X = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+const STRAT_NEWS_MAX = 8;
+const STRAT_TAGS = {hot: 'Hot', lead: 'Lead', rival: 'Rival', market: 'Market'};
 
 // The heading and the tabs, the same on each, so switching tabs never moves them (ui/app/redesign.js).
 window.strategyHeadHtml = tab => redesignStrategyHead(tab);
 
 window.strategyStop = function strategyStop() {
   STRAT_LOAD++;
-  if (STRAT) S.lastRead.strategy = {data: STRAT.data, kpis: STRAT.kpis};   // the next visit paints it at once
+  if (STRAT) S.lastRead.strategy = {data: STRAT.data, market: STRAT_MKT};   // the next visit paints it at once
   STRAT = null;
   const dlg = document.getElementById('strat-versions');
   if (dlg?.open) dlg.close();
 };
 
 // A return visit paints the strategy as last read, then reads it again and patches what changed; only the first visit
-// waits behind a skeleton.
+// waits behind a skeleton. The market cards load beside it and never hold the page up.
 window.pageStrategy = async function pageStrategy() {
   const load = ++STRAT_LOAD;
   const main = $('#main');
   main.classList.add('strategy-layout');
   const kept = S.lastRead.strategy;
+  STRAT_MKT = {...(kept?.market || {})};
   main.innerHTML = strategyHeadHtml('strategy') + `<div id="strat-body" class="strat-body">${kept ? '' : skelRows(6, {dot: false})}</div>`;
-  const open = (data, kpis) => {
-    STRAT = {data, kpis, load, editBet: '', editSection: '', addSection: false, publishing: false};
+  const open = data => {
+    STRAT = {data, kpis: [], load, adding: false, editSection: '', addSection: false, publishing: false};
     strategyRender();
     // #/strategy?bet=<id> (a goal's bet chip) scrolls to that bet and flashes it.
     const bet = new URLSearchParams(S.route.split('?')[1] || '').get('bet');
     const row = bet && document.querySelector(`[data-bet="${CSS.escape(bet)}"]`);
     if (row) { row.scrollIntoView({block: 'center'}); row.classList.add('strat-flash'); }
   };
-  if (kept) open(kept.data, kept.kpis || []);
-  let data, kpis;
-  // The KPIs name a KPI-backed Wrong if and fill the bet form's KPI picker; the page never waits on them.
-  try { [data, kpis] = await Promise.all([get('/v2/strategy'), v2Get('/v2/kpis').catch(() => null)]); }
+  if (kept) open(kept.data);
+  for (const key of ['spend', 'rivals', 'news', 'growth']) void strategyMarketRead(key, load);
+  let data;
+  try { data = await get('/v2/strategy'); }
   catch (error) {
     if (load === STRAT_LOAD && !kept && $('#strat-body')) $('#strat-body').innerHTML = `<p class="err">${esc(error.message || 'Could not load the strategy')}</p>`;
     return;
   }
-  kpis = kpis?.kpis || [];
   // A read that lands after the page was left is kept for the next visit when that visit has nothing yet.
-  if (load !== STRAT_LOAD) { S.lastRead.strategy ||= {data, kpis}; return; }
-  S.lastRead.strategy = {data, kpis};
-  if (!STRAT) { open(data, kpis); return; }
+  if (load !== STRAT_LOAD) { S.lastRead.strategy ||= {data}; return; }
+  S.lastRead.strategy = {data, market: STRAT_MKT};
+  if (!STRAT) { open(data); return; }
   // Something opened for editing meanwhile keeps the page as drawn; the save reads the strategy again.
   const state = STRAT;
-  if (state.editBet || state.editSection || state.addSection || state.publishing) return;
-  const same = sameData(data, state.data) && sameData(kpis, state.kpis);
-  state.data = data; state.kpis = kpis;
+  if (state.adding || state.editSection || state.addSection || state.publishing) return;
+  const same = sameData(data, state.data);
+  state.data = data;
   if (!same) strategyRender();
 };
 
@@ -73,6 +80,7 @@ const strategyMayEdit = data => data?.may_edit ?? S.me?.role === 'owner';
 const stratText = s => String(s ?? '').trim();
 const stratRank = (a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9);
 const stratExtra = version => version?.sections?.extra || {};
+// Blank: nothing written at all. The vision counts, though the page no longer shows it (the Goals page reads it).
 function strategyBlank(version, bets = []) {
   if (!version) return true;
   const s = version.sections || {};
@@ -96,20 +104,15 @@ function stratWrongSet(w) {
   if (w.kind === 'thesis') return !!stratText(w.market_id);
   return !!stratText(w.text);
 }
-// Why a bet cannot be active, or '' when it can.
-function stratActiveRefusal(bet, bets, one) {
-  if (!stratText(bet.rules_out) && !stratWrongSet(bet.wrong_if)) return `An active ${one.toLowerCase()} needs Rules out and Wrong if`;
-  if (!stratText(bet.rules_out)) return `An active ${one.toLowerCase()} needs Rules out`;
-  if (!stratWrongSet(bet.wrong_if)) return `An active ${one.toLowerCase()} needs Wrong if`;
+// Why a bet cannot be active, or '' when it can. Rules out and Wrong if are optional (backend/strategy.py _may_be).
+function stratActiveRefusal(bet, bets) {
   const others = (bets || []).filter(b => b.status === 'active' && b.id !== bet.id).length;
   if (others >= STRAT_MAX_ACTIVE) return `At most ${STRAT_MAX_ACTIVE} can be active`;
   return '';
 }
-// The server's rule for publishing, said before the click: one active bet with Rules out and Wrong if, and What we
-// won't do written.
+// The server's rule for publishing, said before the click: one active bet, and What we won't do written.
 function strategyPublishRefusal(data, view) {
-  const ready = (data.bets || []).some(b => b.status === 'active' && stratText(b.rules_out) && stratWrongSet(b.wrong_if));
-  if (!ready) return `Needs an active ${view.one.toLowerCase()} with Rules out and Wrong if`;
+  if (!(data.bets || []).some(b => b.status === 'active')) return `Needs an active ${view.one.toLowerCase()}`;
   if (!stratText(data.draft?.sections?.not)) return "Needs What we won't do";
   return '';
 }
@@ -186,15 +189,6 @@ function strategyPublishHtml() {
       <button class="primary" type="submit">Publish</button><button class="ghost" type="button" data-strat-publish-cancel>Cancel</button></form>`;
 }
 
-// Summary and vision: the owner's are fields that save when left, or on Enter.
-function strategyFieldHtml(key, title, value, owner, placeholder) {
-  const body = owner
-    ? `<textarea class="strat-field" data-strat-field="${key}" rows="2" maxlength="400" placeholder="${esc(placeholder)}" aria-label="${esc(title)}">${esc(value || '')}</textarea>`
-    : stratText(value) ? `<p class="strat-text">${esc(value)}</p>` : '';
-  if (!body) return '';
-  return `<section class="strat-sec strat-${key}" id="strat-sec-${key}"><h2 class="strat-k">${esc(title)}</h2>${body}</section>`;
-}
-
 // A goal's colour is its status (red, yellow, green); none yet is gray.
 function strategyGoalsHtml(goals) {
   if (!goals?.length) return '';
@@ -203,6 +197,8 @@ function strategyGoalsHtml(goals) {
 }
 
 // ---------------------------------------------------------------- a bet's form
+// The whole bet (Why, Rules out, Wrong if, status), for Setup's Your bets step (ui/setup-strategy.js); this page edits
+// only the statement.
 function strategyBetFormHtml(c = {}) {
   const status = c.status || 'proposed', w = c.wrong_if || {}, kind = STRAT_WRONG_KINDS[w.kind] ? w.kind : 'text';
   const kpis = STRAT?.kpis || [];
@@ -254,39 +250,168 @@ function strategyWrongFromForm(el) {
 }
 
 // ---------------------------------------------------------------- the bets
-function strategyBetHtml(c, n, view, data, live) {
-  if (view.owner && STRAT?.editBet === c.id) return `<li class="strat-bet" data-bet="${esc(c.id)}">${strategyBetFormHtml(c)}</li>`;
-  const move = view.owner && c.status !== 'retired' ? `<button class="ghost strat-mini" type="button" data-bet-up${n === 0 ? ' disabled' : ''} aria-label="Move up" title="Move up">↑</button>
-      <button class="ghost strat-mini" type="button" data-bet-down${n === live - 1 ? ' disabled' : ''} aria-label="Move down" title="Move down">↓</button>` : '';
-  const tools = view.owner ? `<span class="strat-bet-tools">${move}<button class="ghost strat-mini" type="button" data-bet-edit>Edit</button></span>` : '';
-  const status = c.status || 'proposed', health = (data.health_by_bet || {})[c.id];
-  const line = (k, html) => `<p class="strat-bet-line"><span class="strat-bet-k">${k}</span><span>${html}</span></p>`;
-  const goals = (data.goals_by_bet || {})[c.id];
-  return `<li class="strat-bet strat-${esc(status)}" data-bet="${esc(c.id)}">
-      <div class="strat-bet-top">${status === 'retired' ? '' : `<span class="strat-bet-n tnum" aria-hidden="true">${n + 1}</span>`}<span class="strat-bet-st">${esc(c.statement)}</span>
-        ${health && status !== 'retired' ? `<span class="strat-health" data-bet-health="${esc(health)}">${gdot(health, 'Health, from its KPI goals')}</span>` : ''}
-        ${status === 'active' ? '' : `<span class="pill strat-pill ${esc(status)}">${STRAT_STATUS[status] || status}</span>`}${tools}</div>
-      <div class="strat-bet-lines">
-        ${stratText(c.why) ? line('Why', esc(c.why)) : ''}
-        ${stratText(c.rules_out) ? line('Rules out', esc(c.rules_out)) : ''}
-        ${status === 'retired' ? '' : `<div data-bet-wrong>${line('Wrong if', strategyWrongIfHtml(c.wrong_if))}</div>`}
-        ${goals?.length ? `<div class="strat-bet-line strat-bet-goals"><span class="strat-bet-k">Goals</span>${strategyGoalsHtml(goals)}</div>` : ''}
-      </div></li>`;
+// A bet is its statement, edited in place. The number is the handle that drags it (or arrow keys); × retires it, and
+// Retired below brings it back. A new one starts active while there is room.
+const stratLive = data => (data.bets || []).filter(c => c.status !== 'retired').sort(stratRank);
+const stratRoom = data => (data.bets || []).filter(c => c.status === 'active').length < STRAT_MAX_ACTIVE;
+
+function strategyBetHtml(c, n, view, data) {
+  const status = c.status || 'proposed', health = (data.health_by_bet || {})[c.id], goals = (data.goals_by_bet || {})[c.id];
+  const one = esc(view.one);
+  const statement = view.owner
+    ? `<textarea class="strat-ed strat-bet-st" data-bet-st rows="1" maxlength="300" placeholder="A ${one.toLowerCase()}" aria-label="${one} ${n + 1}">${esc(c.statement)}</textarea>`
+    : `<span class="strat-bet-st">${esc(c.statement)}</span>`;
+  const num = view.owner
+    ? `<button type="button" class="strat-bet-n tnum" data-bet-drag aria-label="Move ${one.toLowerCase()} ${n + 1}" title="Drag to move">${n + 1}</button>`
+    : `<span class="strat-bet-n tnum" aria-hidden="true">${n + 1}</span>`;
+  const pill = status === 'active' ? '' : view.owner
+    ? `<button type="button" class="pill strat-pill ${esc(status)}" data-bet-activate title="Make it active">${STRAT_STATUS[status] || status}</button>`
+    : `<span class="pill strat-pill ${esc(status)}">${STRAT_STATUS[status] || status}</span>`;
+  return `<li class="strat-bet strat-${esc(status)}" data-bet="${esc(c.id)}">${num}
+      <div class="strat-bet-main">${statement}${strategyGoalsHtml(goals)}</div>
+      <span class="strat-bet-side">${health ? `<span class="strat-health" data-bet-health="${esc(health)}">${gdot(health, 'Health, from its KPI goals')}</span>` : ''}${pill}
+        ${view.owner ? `<button type="button" class="strat-x" data-bet-x aria-label="Remove ${one.toLowerCase()} ${n + 1}">${STRAT_X}</button>` : ''}</span></li>`;
+}
+function strategyNewBetHtml(view, n) {
+  return `<li class="strat-bet strat-bet-new" data-bet-new><span class="strat-bet-n tnum" aria-hidden="true">${n + 1}</span>
+      <div class="strat-bet-main"><textarea class="strat-ed strat-bet-st" data-bet-st rows="1" maxlength="300" placeholder="A ${esc(view.one.toLowerCase())}" aria-label="New ${esc(view.one.toLowerCase())}"></textarea></div></li>`;
+}
+function strategyBetsHead(view, live) {
+  const add = view.owner && !STRAT?.adding && live.length < 30
+    ? `<button type="button" class="strat-add" data-bet-add aria-label="Add ${esc(view.one)}">+ ${esc(view.one)}</button>` : '';
+  return `<div class="strat-card-head"><h2 class="strat-k" id="strat-bets-h">${esc(view.label)}</h2>${add}</div>`;
+}
+function strategyBetRowsHtml(data, view) {
+  const live = view.bets.filter(c => c.status !== 'retired');
+  return live.map((c, n) => strategyBetHtml(c, n, view, data)).join('') + (view.owner && STRAT?.adding ? strategyNewBetHtml(view, live.length) : '');
+}
+function strategyRetiredHtml(view) {
+  const retired = view.bets.filter(c => c.status === 'retired');
+  if (!view.owner || !retired.length) return '';
+  return `<details class="strat-retired"${STRAT?.retiredOpen ? ' open' : ''}><summary>Retired <span class="cnt tnum">${retired.length}</span></summary>
+      <ul class="strat-retired-list">${retired.map(c => `<li data-bet="${esc(c.id)}"><span>${esc(c.statement)}</span>
+        <button type="button" class="ghost strat-mini" data-bet-restore>Restore</button></li>`).join('')}</ul></details>`;
 }
 
-function strategyBetsHtml(data, view) {
-  const live = view.bets.filter(c => c.status !== 'retired'), retired = view.bets.filter(c => c.status === 'retired');
-  if (!view.owner && !live.length) return '';
-  const adding = view.owner && STRAT?.editBet === 'new';
-  return `<section class="strat-sec strat-bets-sec" id="strat-sec-bets" aria-labelledby="strat-bets-h">
-      <div class="strat-sec-head"><h2 class="strat-k" id="strat-bets-h">${esc(view.label)}</h2>
-        ${view.owner && !adding ? `<button class="ghost strat-mini" type="button" data-bet-add aria-label="Add ${esc(view.one)}" title="Add ${esc(view.one)}">Add</button>` : ''}</div>
-      ${live.length ? `<ol class="strat-bets">${live.map((c, n) => strategyBetHtml(c, n, view, data, live.length)).join('')}</ol>`
-        : adding ? '' : `<p class="muted strat-empty">None yet</p>`}
-      ${adding ? `<div class="strat-bet strat-bet-new">${strategyBetFormHtml()}</div>` : ''}
-      ${view.owner && retired.length ? `<details class="strat-retired"><summary>Retired <span class="cnt tnum">${retired.length}</span></summary>
-        <ol class="strat-bets">${retired.map((c, n) => strategyBetHtml(c, n, view, data, retired.length)).join('')}</ol></details>` : ''}
-    </section>`;
+// ---------------------------------------------------------------- Where we play
+// The market's segments by spend (GET /v2/market/spend), a sized segment inside its sized parent, the rest as plain
+// tiles. Us is filled, Next outlined; a click moves a segment Us, then Next, then neither. Several may be Us or Next, as
+// Growth's Serving and Next segments are (the server keeps both in step).
+function strategyAddRowHtml(kind, placeholder) {
+  return `<form class="strat-addrow" data-add="${kind}" novalidate><input type="text" name="name" maxlength="${kind === 'rival' ? 300 : 120}" autocomplete="off" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}">
+      <button type="submit" class="strat-add">Add</button></form>`;
+}
+const stratSk = () => skelRows(3, {dot: false});
+function strategyWhereHtml(owner) {
+  const spend = STRAT_MKT.spend;
+  const segs = spend?.segments || [];
+  const hint = owner && segs.length ? '<span class="strat-hint">Click to target</span>' : '';
+  const head = `<div class="strat-card-head"><h2 class="strat-k">Where we play</h2>${hint}</div>`;
+  if (spend === undefined) return head + stratSk();
+  const add = owner ? strategyAddRowHtml('seg', 'Add a segment') : '';
+  if (!segs.length) return `${head}<p class="strat-none-s">No market map yet.</p>${add}`;
+  const {drawn} = mktTree(spend);
+  const W = 200, H = 100, shown = new Set();
+  const pos = r => `left:${(r.x / W * 100).toFixed(3)}%;top:${(r.y / H * 100).toFixed(3)}%;width:${(r.w / W * 100).toFixed(3)}%;height:${(r.h / H * 100).toFixed(3)}%`;
+  const tile = (seg, r, value) => {
+    shown.add(seg.id);
+    const mark = seg.self ? 'Us' : seg.next ? 'Next' : '';
+    const title = `${seg.name}${value ? `: ${mktMoney(value)} a year, an estimate` : ''}`;
+    return `<div class="strat-tm${seg.self ? ' ours' : seg.next ? ' next' : ''}${owner ? ' pick' : ''}" data-seg="${esc(seg.id)}"${r ? ` style="${pos(r)}"` : ''}${owner
+      ? ` role="button" tabindex="0" aria-pressed="${seg.self ? 'true' : seg.next ? 'mixed' : 'false'}"` : ''} title="${esc(title)}">${mark ? `<em>${mark}</em>` : ''}<b>${esc(seg.name)}</b>${value ? ` <span>${mktMoney(value)}</span>` : ''}${owner
+      ? `<button type="button" class="strat-x" data-seg-x aria-label="Remove ${esc(seg.name)}">${STRAT_X}</button>` : ''}</div>`;
+  };
+  // One sized segment is not a map: then every segment is a plain tile.
+  const mapped = drawn.length >= 2 ? drawn : [];
+  const tiles = mktSquarify(mapped.map(g => ({g, value: g.value})), 0, 0, W, H).map(r => {
+    const g = r.g;
+    if (!g.kids.length) return tile(g.seg, r, g.value);
+    // The parent's own share holds its name and whole size; its sized parts sit under it, inside it, as full-width bands.
+    const sum = g.kids.reduce((a, k) => a + k.value, 0), own = g.value - sum;
+    const bands = [...(own > 0 ? [{seg: g.seg, value: own, whole: g.value}] : []), ...g.kids.slice().sort((a, b) => b.value - a.value)];
+    const total = bands.reduce((a, b) => a + b.value, 0);
+    let y = r.y;
+    const inner = bands.map(b => { const h = b.value / total * r.h, out = tile(b.seg, {x: r.x, y, w: r.w, h}, b.whole || b.value); y += h; return out; }).join('');
+    return `<div class="strat-tm-group" style="${pos(r)}"></div>${inner}`;
+  }).join('');
+  const plain = segs.filter(s => !shown.has(s.id));
+  const total = Number(spend.total?.spend_usd) || 0;
+  return `${head}${tiles ? `<div class="strat-map">${tiles}</div>` : ''}${plain.length ? `<div class="strat-tm-plain">${plain.map(s => tile(s, null, mapped.length ? 0 : Number(s.rolled_usd?.spend_usd) || 0)).join('')}</div>` : ''}
+    ${tiles && total ? `<p class="strat-cap">About ${mktMoney(total)} a year</p>` : ''}${add}`;
+}
+
+// ---------------------------------------------------------------- Competitors and Related news
+function strategyRivalsHtml(owner) {
+  const head = '<div class="strat-card-head"><h2 class="strat-k">Competitors</h2></div>';
+  const list = STRAT_MKT.rivals;
+  if (list === undefined) return head + stratSk();
+  const chips = (list || []).map(c => `<li class="strat-chip" data-rival="${esc(c.id)}">${/^https?:\/\//i.test(c.url || '')
+    ? `<a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.name)}</a>` : `<span>${esc(c.name)}</span>`}${owner
+    ? `<button type="button" class="strat-x" data-rival-x aria-label="Remove ${esc(c.name)}">${STRAT_X}</button>` : ''}</li>`).join('');
+  return `${head}${chips ? `<ul class="strat-chips">${chips}</ul>` : '<p class="strat-none-s">None yet.</p>'}${owner ? strategyAddRowHtml('rival', 'Add a competitor or its site') : ''}`;
+}
+// What Listening found: the posts routed to someone who reads them (GET /v2/listening/stats), and the posts setup filed
+// as market insights ("Listening: <tag>", backend/company_import.py). Hot first, then the newest.
+function strategyNews(stats, insights) {
+  const host = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
+  const out = [], seen = new Set();
+  const push = item => { if (!/^https?:\/\//i.test(item.url || '') || seen.has(item.url)) return; seen.add(item.url); out.push(item); };
+  for (const i of insights?.insights || []) {
+    const m = /^Listening:\s*([a-z]+)/i.exec(i.about || '');
+    if (m && i.status !== 'rejected') push({tag: m[1].toLowerCase(), title: i.claim || i.source_url, url: i.source_url, source: host(i.source_url), at: i.reported_at || ''});
+  }
+  for (const p of stats?.recent || []) push({tag: '', title: p.text || p.url, url: p.url,
+    source: typeof rdmLabel === 'function' ? rdmLabel(p.source) : p.source, at: p.published_at || p.at || ''});
+  const order = Object.keys(STRAT_TAGS), rank = t => (order.includes(t) ? order.indexOf(t) : order.length);
+  return out.sort((a, b) => rank(a.tag) - rank(b.tag) || String(b.at).localeCompare(String(a.at))).slice(0, STRAT_NEWS_MAX);
+}
+function strategyNewsHtml() {
+  const head = '<div class="strat-card-head"><h2 class="strat-k">Related news</h2></div>';
+  const news = STRAT_MKT.news;
+  if (news === undefined) return head + stratSk();
+  if (!news?.length) return head + '<p class="strat-none-s">No news yet.</p>';
+  return `${head}<ul class="strat-posts">${news.map(p => `<li>${STRAT_TAGS[p.tag] ? `<b class="strat-tag ${esc(p.tag)}">${STRAT_TAGS[p.tag]}</b>` : ''}<a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a>
+      <small>${esc(p.source || '')}${p.at ? `${p.source ? ' · ' : ''}${esc(stratDate(String(p.at).slice(0, 10)))}` : ''}</small></li>`).join('')}</ul>`;
+}
+
+// Reads one market card. Each lands on its own and redraws only its card.
+async function strategyMarketRead(key, load, fresh = false) {
+  const opts = fresh ? {fresh: true} : undefined;
+  let value = null;
+  try {
+    if (key === 'spend') value = await get('/v2/market/spend', opts);
+    else if (key === 'rivals') value = (await get('/v2/market/competitors', opts))?.competitors || [];
+    else if (key === 'growth') {
+      // The Brand strip and the Go-to-market card (ui/app/brand-page.js, gtm-page.js).
+      const [brand, gtm, ch, src, k] = await Promise.all([get('/v2/brand', opts).catch(() => null), get('/v2/gtm', opts).catch(() => null),
+        get('/v2/growth/channels', opts).catch(() => null), get('/v2/growth/sources', opts).catch(() => null), get('/v2/growth/kpis', opts).catch(() => null)]);
+      value = {brand, gtm, channels: ch?.channels || [], sources: src?.sources || [], kpis: k?.kpis || []};
+    }
+    else {
+      const since = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 19);
+      const [stats, insights] = await Promise.all([get(`/v2/listening/stats?since=${encodeURIComponent(since)}`, opts).catch(() => null),
+        S.me?.role === 'owner' ? get('/v2/market/insights', opts).catch(() => null) : null]);
+      value = strategyNews(stats, insights);
+    }
+  } catch { value = null; }
+  if (load !== STRAT_LOAD) return;
+  STRAT_MKT[key] = value;
+  strategyPaintMarket(key);
+}
+function strategyPaintMarket(key) {
+  if (!STRAT) return;
+  const owner = strategyView(STRAT.data).owner;
+  if (key === 'growth') {
+    const g = STRAT_MKT.growth;
+    if ($('#strat-setup')) patchHTML($('#strat-setup'), g ? brandSetupHtml(g.brand) + gtmSetupHtml(g.gtm, g) : '');
+    if ($('#strat-brand')) patchHTML($('#strat-brand'), g ? brandStripHtml(g.brand) : '');
+    if ($('#strat-gtm')) patchHTML($('#strat-gtm'), g ? gtmCardHtml(g.gtm, g) : '');
+    return;
+  }
+  const box = {spend: '#strat-where', rivals: '#strat-rivals', news: '#strat-news'}[key];
+  const el = $(box);
+  if (!el) return;
+  patchHTML(el, key === 'spend' ? strategyWhereHtml(owner) : key === 'rivals' ? strategyRivalsHtml(owner) : strategyNewsHtml());
 }
 
 // ---------------------------------------------------------------- the sections
@@ -310,87 +435,95 @@ function strategySectionsHtml(view) {
           <div class="goal-actions"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-section-cancel>Cancel</button>
             ${sec.extra ? '<span class="spacer"></span><button class="ghost danger" type="button" data-section-remove>Remove</button>' : ''}</div></form>`
       : stratText(sec.text) ? `<div class="md strat-md">${safeMd(sec.text)}</div>` : '<p class="muted strat-empty">Not written</p>';
-    return `<section class="strat-sec" id="strat-sec-${esc(sec.extra ? id : sec.key)}" data-section="${esc(sec.key)}"${sec.extra ? ' data-extra' : ''}>
+    return `<section class="card strat-card strat-sec" id="strat-sec-${esc(sec.extra ? id : sec.key)}" data-section="${esc(sec.key)}"${sec.extra ? ' data-extra' : ''}>
         <div class="strat-sec-head"><h2 class="strat-k">${esc(sec.title)}</h2>${owner && !editing ? `<button class="ghost strat-mini" type="button" data-section-edit>${stratText(sec.text) ? 'Edit' : 'Write'}</button>` : ''}</div>
         ${body}</section>`;
   }).join('');
   const add = !owner ? '' : STRAT?.addSection
-    ? `<section class="strat-sec"><form class="strat-sec-form" data-section-new novalidate>
+    ? `<section class="card strat-card strat-sec"><form class="strat-sec-form" data-section-new novalidate>
         <input type="text" name="title" maxlength="80" autocomplete="off" aria-label="Title" placeholder="Title" required>
         <textarea name="text" rows="6" aria-label="Section"></textarea>
         <div class="goal-actions"><button class="primary" type="submit">Add</button><button class="ghost" type="button" data-section-cancel>Cancel</button></div></form></section>`
-    : '<div class="strat-add-sec"><button class="ghost strat-mini" type="button" data-section-add>Add a section</button></div>';
+    : '';
   return rows + add;
 }
 
-function strategyTocHtml(view) {
-  const has = key => view.owner || stratText(view.version?.[key]);
-  const rows = [...(has('summary') ? [['summary', 'Summary']] : []), ...(has('vision') ? [['vision', 'Vision']] : []),
-    ...(view.owner || view.bets.some(b => b.status !== 'retired') ? [['bets', view.label]] : []),
-    ...strategySectionList(view.version).filter(sec => view.owner || stratText(sec.text)).map(sec => [sec.extra ? 'x-' + sec.key : sec.key, sec.title])];
-  return `<nav class="strat-toc" aria-label="Contents">${rows.map(([key, title]) =>
-      `<button type="button" class="strat-toc-link" data-strat-go="${esc(key)}">${esc(title)}</button>`).join('')}</nav>`;
-}
+// ---------------------------------------------------------------- the page
+// A frame of cards drawn once; each card is patched on its own, so a redraw leaves a field being typed in alone.
+const STRAT_FRAME = `<div id="strat-pub"></div>
+  <div class="strat-memo" id="strat-doc">
+    <section class="card strat-card strat-top strat-summary" id="strat-top"></section>
+    <div class="strat-row"><section class="card strat-card strat-where" id="strat-where"></section><section class="card strat-card strat-bets-card" id="strat-sec-bets" aria-labelledby="strat-bets-h"></section></div>
+    <div class="strat-setup" id="strat-setup"></div>
+    <div class="strat-brand" id="strat-brand"></div>
+    <div class="strat-row strat-gtm-row"><div class="strat-gtm" id="strat-gtm"></div><div class="strat-col"><section class="card strat-card" id="strat-rivals"></section><section class="card strat-card" id="strat-news"></section></div></div>
+    <div class="strat-secs" id="strat-secs"></div>
+    <div class="strat-add-sec" id="strat-add-sec"></div>
+  </div>`;
 
 function strategyRender() {
   const body = $('#strat-body');
   if (!body || !STRAT) return;
   const data = STRAT.data, view = strategyView(data);
   patchHTML($('#strat-actions'), strategyActionsHtml(data, view));
-  if (!view.owner && !data.current) { patchHTML(body, '<p class="strat-none">No strategy yet.</p>'); strategyBind(); return; }
-  const blank = !data.current && strategyBlank(data.draft, data.bets || []);
+  if (!view.owner && !data.current) { body.innerHTML = '<p class="strat-none">No strategy yet.</p>'; strategyBind(); return; }
+  if (!$('#strat-doc')) body.innerHTML = STRAT_FRAME;
   const v = view.version || {};
-  // Words typed in Summary or Vision and not yet saved survive a redraw (their save is on its way).
-  const typed = [...body.querySelectorAll('[data-strat-field]')].filter(f => f.value !== f.defaultValue).map(f => [f.dataset.stratField, f.value]);
-  // Patched, not replaced: a redraw after a read that changed one bet leaves the rest of the page where it is.
-  patchHTML(body, `${STRAT.publishing ? strategyPublishHtml() : ''}${strategyMetaHtml(data, view)}
-    <div class="strat-grid">${strategyTocHtml(view)}
-      <article class="strat-doc" id="strat-doc">${blank ? '<p class="strat-none">No strategy yet.</p>' : ''}
-        ${strategyFieldHtml('summary', 'Summary', v.summary, view.owner, 'What the team does, for whom, and how it wins')}
-        ${strategyFieldHtml('vision', 'Vision', v.vision, view.owner, 'Where the team is going')}
-        ${strategyBetsHtml(data, view)}
-        ${strategySectionsHtml(view)}
-      </article></div>`);
-  for (const [key, value] of typed) { const f = body.querySelector(`[data-strat-field="${key}"]`); if (f) f.value = value; }
+  // Words typed and not yet saved survive a redraw (their save is on its way).
+  const key = f => f.dataset.stratField || f.closest('[data-bet]')?.dataset.bet || 'new';
+  const typed = [...body.querySelectorAll('[data-strat-field], [data-bet-st]')].filter(f => f.value !== f.defaultValue).map(f => [key(f), f.value]);
+  patchHTML($('#strat-pub'), `${STRAT.publishing ? strategyPublishHtml() : ''}${strategyMetaHtml(data, view)}`);
+  patchHTML($('#strat-top'), view.owner
+    ? `<textarea class="strat-ed strat-big" data-strat-field="summary" rows="1" maxlength="400" placeholder="Your strategy in one sentence" aria-label="Summary">${esc(v.summary || '')}</textarea>`
+    : `<p class="strat-text strat-big">${esc(v.summary || '')}</p>`);
+  $('#strat-top').hidden = !view.owner && !stratText(v.summary);
+  const bets = $('#strat-sec-bets'), live = view.bets.filter(c => c.status !== 'retired');
+  bets.hidden = !view.owner && !live.length;
+  patchHTML(bets, `${strategyBetsHead(view, live)}<ol class="strat-bets" id="strat-bets-ol"></ol>${strategyRetiredHtml(view)}`);
+  const ol = $('#strat-bets-ol');
+  patchHTML(ol, strategyBetRowsHtml(data, view));
+  if (!ol.children.length) patchHTML(ol, `<li class="strat-bet strat-none-row"><span class="muted strat-empty">None yet</span></li>`);
+  for (const k of ['spend', 'rivals', 'news', 'growth']) strategyPaintMarket(k);
+  patchHTML($('#strat-secs'), strategySectionsHtml(view));
+  patchHTML($('#strat-add-sec'), view.owner && !STRAT.addSection ? '<button class="ghost strat-mini" type="button" data-section-add>Add a section</button>' : '');
+  for (const [k, value] of typed) {
+    const f = k === 'summary' ? body.querySelector('[data-strat-field="summary"]')
+      : k === 'new' ? body.querySelector('[data-bet-new] [data-bet-st]') : body.querySelector(`[data-bet="${CSS.escape(k)}"] [data-bet-st]`);
+    if (f) f.value = value;
+  }
   strategyBind();
 }
 
-// Reads the page again. `quiet` keeps the fields as they are (one may have the focus) and redraws only what depends on
-// the draft: the line above the page and the buttons.
-async function strategyReload(state, quiet = false) {
+// Reads the page again and redraws what changed; the cards patch on their own, so a field in use stays as it is.
+async function strategyReload(state) {
   try { state.data = await get('/v2/strategy', {fresh: true}); } catch { /* the saved words stay as drawn */ }
   if (STRAT !== state) return;
-  if (!quiet) { strategyRender(); return; }
-  const view = strategyView(state.data);
-  $('#strat-actions').innerHTML = strategyActionsHtml(state.data, view);
-  const old = document.querySelector('#strat-body .strat-meta'), html = strategyMetaHtml(state.data, view);
-  if (old) old.outerHTML = html || '';
-  else if (html) $('#strat-body .strat-grid')?.insertAdjacentHTML('beforebegin', html);
-  strategyBindActions();
+  strategyRender();
 }
 // Saves, then reads the page again. A draft changed elsewhere (409: its revision moved on) is read again whole, so
 // the owner sees what is there now.
-async function strategyWrite(run, {quiet = false, fail = 'Could not save'} = {}) {
+async function strategyWrite(run, {fail = 'Could not save'} = {}) {
   const state = STRAT;
   try { await run(); }
   catch (error) {
     if (error?.status === 409 && STRAT === state) {
       toast('Changed elsewhere, reloaded');
-      state.editSection = ''; state.addSection = false; state.publishing = false;
+      state.editSection = ''; state.addSection = false; state.publishing = false; state.adding = false;
       // What was typed lost to the newer draft: the fields draw what is there now.
-      for (const f of document.querySelectorAll('[data-strat-field]')) f.value = f.defaultValue;
-      await strategyReload(state, false);
+      for (const f of document.querySelectorAll('[data-strat-field], [data-bet-st]')) f.value = f.defaultValue;
+      await strategyReload(state);
       return false;
     }
     toast(error.message || fail, true);
     return false;
   }
   if (STRAT !== state) return true;
-  await strategyReload(state, quiet);
+  await strategyReload(state);
   return true;
 }
 // A draft write: only what changed, with the revision it was read at.
 const strategyDraftPut = change => put('/v2/strategy/draft', {...change, revision: STRAT?.data?.draft?.revision ?? null});
+const strategyBetPost = (id, change) => post(`/v2/strategy/bets/${encodeURIComponent(id)}`, {...change, revision: STRAT?.data?.draft?.revision ?? null});
 
 const stratAutosize = el => { el.style.height = 'auto'; el.style.height = el.scrollHeight + 2 + 'px'; };
 
@@ -403,14 +536,22 @@ function strategyBindActions() {
   if (publish) publish.onclick = () => { state.publishing = true; strategyRender(); $('[data-strat-publish-form] input')?.focus(); };
 }
 
+// One line of text that is its own field: Enter saves (by leaving it), Escape puts it back.
+function strategyInPlace(field, saved, save) {
+  stratAutosize(field);
+  field.oninput = () => stratAutosize(field);
+  field.onkeydown = ev => {
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); field.blur(); }
+    if (ev.key === 'Escape') { field.value = saved(); stratAutosize(field); field.blur(); }
+  };
+  field.onblur = () => save(field.value.replace(/\s+/g, ' ').trim());
+}
+
 function strategyBind() {
   const state = STRAT, body = $('#strat-body');
   if (!state || !body) return;
   strategyBindActions();
   const data = state.data, view = strategyView(data);
-
-  for (const button of body.querySelectorAll('[data-strat-go]')) button.onclick = () =>
-    document.getElementById('strat-sec-' + button.dataset.stratGo)?.scrollIntoView({block: 'start', behavior: 'smooth'});
 
   const form = body.querySelector('[data-strat-publish-form]');
   if (form) {
@@ -428,38 +569,18 @@ function strategyBind() {
       else form.querySelectorAll('button').forEach(b => { b.disabled = false; });
     };
   }
+  if (!view.owner) return;
 
-  for (const field of body.querySelectorAll('[data-strat-field]')) {
-    const key = field.dataset.stratField;
-    stratAutosize(field);
-    field.oninput = () => stratAutosize(field);
-    // What is saved now: a quiet save reads the draft again without drawing these fields.
-    const saved = () => strategyView(state.data).version?.[key] || '';
-    field.onkeydown = ev => {
-      if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); field.blur(); }
-      if (ev.key === 'Escape') { field.value = saved(); stratAutosize(field); field.blur(); }
-    };
-    field.onblur = () => {
-      const text = field.value.trim();
+  const summary = body.querySelector('[data-strat-field="summary"]');
+  if (summary) {
+    const saved = () => strategyView(state.data).version?.summary || '';
+    strategyInPlace(summary, saved, text => {
       if (STRAT !== state || text === stratText(saved())) return;
-      void strategyWrite(() => strategyDraftPut({[key]: text}), {quiet: true});
-    };
+      void strategyWrite(() => strategyDraftPut({summary: text}));
+    });
   }
-
-  // The bets: add, edit (status included, so retiring is an edit), and move up or down.
-  const add = body.querySelector('[data-bet-add]');
-  if (add) add.onclick = () => { state.editBet = 'new'; strategyRender(); $('[data-bet-form="new"] input')?.focus(); };
-  for (const li of body.querySelectorAll('li[data-bet]')) {
-    const id = li.dataset.bet;
-    const edit = li.querySelector('[data-bet-edit]');
-    if (edit) edit.onclick = () => { state.editBet = id; strategyRender(); $(`[data-bet-form="${CSS.escape(id)}"] input`)?.focus(); };
-    for (const [sel, step] of [['[data-bet-up]', -1], ['[data-bet-down]', 1]]) {
-      const b = li.querySelector(sel);
-      if (b) b.onclick = () => void strategyMove(id, step);
-    }
-  }
-  const bform = body.querySelector('[data-bet-form]');
-  if (bform) strategyBindBetForm(bform, state, view);
+  strategyBindBets(state, body, view);
+  strategyBindMarket(state, body);
 
   // The sections, one at a time: Save, or Cmd/Ctrl+Enter; Escape leaves it as it was.
   for (const sec of body.querySelectorAll('[data-section]')) {
@@ -519,62 +640,179 @@ function strategyExtraKey(title, version) {
   return key;
 }
 
-function strategyBindBetForm(bform, state, view) {
-  const data = state.data, id = bform.dataset.betForm, el = bform.elements;
-  const done = () => { state.editBet = ''; strategyRender(); };
-  const whyNot = bform.querySelector('[data-bet-why-not]');
-  const say = text => { whyNot.textContent = text; whyNot.hidden = !text; };
-  bform.querySelector('[data-bet-cancel]').onclick = done;
-  bform.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); done(); } };
-  el.wrong_kind.onchange = () => {
-    for (const box of bform.querySelectorAll('[data-wrong-kind]')) box.hidden = box.dataset.wrongKind !== el.wrong_kind.value;
-  };
-  const fields = () => ({statement: el.statement.value.trim(), why: el.why.value.trim(), rules_out: el.rules_out.value.trim(),
-    wrong_if: strategyWrongFromForm(el), status: el.status.value});
-  // Active needs Rules out and Wrong if: chosen without them, the bet stays Proposed and says why.
-  const check = () => {
-    if (el.status.value !== 'active') { say(''); return true; }
-    const refusal = stratActiveRefusal({id, ...fields()}, data.bets, view.one);
-    if (!refusal) { say(''); return true; }
-    el.status.value = (data.bets || []).find(b => b.id === id)?.status === 'retired' ? 'retired' : 'proposed';
-    say(refusal);
-    return false;
-  };
-  el.status.onchange = check;
-  bform.onsubmit = async ev => {
-    ev.preventDefault();
-    if (!el.statement.value.trim()) { el.statement.focus(); return; }
-    if (!check()) return;
-    const now = fields();
-    const was = (data.bets || []).find(c => c.id === id);
-    const same = (k, v) => k === 'wrong_if' ? JSON.stringify(v || null) === JSON.stringify(was.wrong_if || null) : v === (was[k] || '');
-    const change = was ? Object.fromEntries(Object.entries(now).filter(([k, v]) => !same(k, v))) : now;
-    // An emptied wrong-if is sent as {}: null means unchanged.
-    if (was && 'wrong_if' in change && !change.wrong_if) change.wrong_if = {};
-    if (was && !Object.keys(change).length) { done(); return; }
-    bform.querySelectorAll('button').forEach(b => { b.disabled = true; });
-    state.editBet = '';
-    const ok = await strategyWrite(() => post(was ? `/v2/strategy/bets/${encodeURIComponent(id)}` : '/v2/strategy/bets',
-      {...change, revision: state.data?.draft?.revision ?? null}));
-    if (!ok && STRAT === state) { state.editBet = id; bform.querySelectorAll('button').forEach(b => { b.disabled = false; }); }
-  };
+function strategyBindBets(state, body, view) {
+  const data = state.data, one = view.one.toLowerCase();
+  const add = body.querySelector('[data-bet-add]');
+  if (add) add.onclick = () => { state.adding = true; strategyRender(); body.querySelector('[data-bet-new] [data-bet-st]')?.focus(); };
+  const fresh = body.querySelector('[data-bet-new] [data-bet-st]');
+  if (fresh) strategyInPlace(fresh, () => '', text => {
+    if (STRAT !== state || !state.adding) return;
+    state.adding = false;
+    if (!text) { strategyRender(); return; }
+    // New bets start active while there is room; past the limit, proposed.
+    void strategyWrite(() => post('/v2/strategy/bets', {statement: text, status: stratRoom(data) ? 'active' : 'proposed',
+      revision: data.draft?.revision ?? null}));
+  });
+  for (const li of body.querySelectorAll('#strat-bets-ol li[data-bet]')) {
+    const id = li.dataset.bet, bet = () => (state.data.bets || []).find(c => c.id === id);
+    const field = li.querySelector('[data-bet-st]');
+    if (field) strategyInPlace(field, () => bet()?.statement || '', text => {
+      if (STRAT !== state || !bet()) return;
+      // Emptied, it keeps its words: × is how a bet goes.
+      if (!text) { field.value = bet().statement; stratAutosize(field); return; }
+      if (text !== stratText(bet().statement)) void strategyWrite(() => strategyBetPost(id, {statement: text}));
+    });
+    const x = li.querySelector('[data-bet-x]');
+    if (x) x.onclick = async () => {
+      const was = bet()?.status || 'active';
+      x.disabled = true;
+      if (await strategyWrite(() => strategyBetPost(id, {status: 'retired'}), {fail: 'Could not remove it'}))
+        toast(`Removed ${one}`, false, {label: 'Undo', run: () => void strategyWrite(() => strategyBetPost(id, {status: was}))});
+    };
+    const up = li.querySelector('[data-bet-activate]');
+    if (up) up.onclick = () => {
+      const refusal = stratActiveRefusal(bet(), state.data.bets);
+      if (refusal) { toast(refusal, true); return; }
+      up.disabled = true;
+      void strategyWrite(() => strategyBetPost(id, {status: 'active'}));
+    };
+    const handle = li.querySelector('[data-bet-drag]');
+    if (handle) strategyBindDrag(state, li, handle);
+  }
+  const retired = body.querySelector('.strat-retired');
+  if (retired) retired.ontoggle = () => { state.retiredOpen = retired.open; };
+  for (const li of body.querySelectorAll('.strat-retired li[data-bet]')) {
+    const b = li.querySelector('[data-bet-restore]');
+    b.onclick = () => { b.disabled = true; void strategyWrite(() => strategyBetPost(li.dataset.bet, {status: stratRoom(state.data) ? 'active' : 'proposed'})); };
+  }
 }
 
-// Moving a bet renumbers the live ones 0, 1, 2… and saves only the ranks that changed.
-async function strategyMove(id, step) {
-  const state = STRAT;
-  const live = (state.data.bets || []).filter(c => c.status !== 'retired').sort(stratRank);
-  const at = live.findIndex(c => c.id === id), to = at + step;
-  if (at < 0 || to < 0 || to >= live.length) return;
-  [live[at], live[to]] = [live[to], live[at]];
-  // Each save carries the revision the last one answered, so a stale page gets a 409; one that fails midway is read again.
+// The number is the handle: drag it up or down, or press the arrow keys on it.
+function strategyBindDrag(state, li, handle) {
+  const id = li.dataset.bet;
+  handle.onkeydown = ev => {
+    if (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown') return;
+    ev.preventDefault();
+    const order = stratLive(state.data).map(c => c.id), at = order.indexOf(id), to = at + (ev.key === 'ArrowUp' ? -1 : 1);
+    if (at < 0 || to < 0 || to >= order.length) return;
+    [order[at], order[to]] = [order[to], order[at]];
+    void strategyReorder(state, order).then(() => $(`#strat-bets-ol li[data-bet="${CSS.escape(id)}"] [data-bet-drag]`)?.focus());
+  };
+  handle.onpointerdown = ev => {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    const ol = li.parentElement, start = [...ol.querySelectorAll('li[data-bet]')].map(x => x.dataset.bet);
+    li.classList.add('dragging');
+    // On the document, not captured by the handle: moving the row in the list would drop a capture.
+    const move = e => {
+      if (e.pointerId !== ev.pointerId) return;
+      const others = [...ol.querySelectorAll('li[data-bet]')].filter(x => x !== li);
+      const before = others.find(x => { const r = x.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
+      if (before) { if (li.nextElementSibling !== before) ol.insertBefore(li, before); }
+      else if (others.length && others.at(-1).nextElementSibling !== li) others.at(-1).after(li);
+    };
+    const end = e => {
+      if (e.pointerId !== ev.pointerId) return;
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', end);
+      document.removeEventListener('pointercancel', end);
+      li.classList.remove('dragging');
+      const order = [...ol.querySelectorAll('li[data-bet]')].map(x => x.dataset.bet);
+      if (STRAT === state && order.join() !== start.join()) void strategyReorder(state, order);
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', end);
+    document.addEventListener('pointercancel', end);
+  };
+}
+// A new order renumbers the live bets 0, 1, 2… and saves only the ranks that changed. Each save carries the revision the
+// last one answered, so a stale page gets a 409; one that fails midway is read again.
+async function strategyReorder(state, order) {
+  const live = stratLive(state.data), byId = new Map(live.map(c => [c.id, c]));
+  const list = order.map(id => byId.get(id)).filter(Boolean);
   let revision = state.data.draft?.revision ?? null;
   const ok = await strategyWrite(async () => {
-    for (const [rank, c] of live.entries()) {
+    for (const [rank, c] of list.entries()) {
       if (c.rank !== rank) revision = (await post(`/v2/strategy/bets/${encodeURIComponent(c.id)}`, {rank, revision}))?.revision ?? null;
     }
   }, {fail: 'Could not move it'});
   if (!ok && STRAT === state) await strategyReload(state);
+}
+
+// ---------------------------------------------------------------- the market cards' writes
+// Each change draws at once and then saves; a refused one reads its card again.
+function strategyBindMarket(state, body) {
+  const spend = () => STRAT_MKT.spend;
+  const again = key => strategyMarketRead(key, STRAT_LOAD, true);
+  const failed = (key, error) => { toast(error?.message || 'Could not save', true); void again(key); };
+  const where = body.querySelector('#strat-where');
+  if (where) {
+    const cycle = tile => {
+      const seg = (spend()?.segments || []).find(s => s.id === tile.dataset.seg);
+      if (!seg) return;
+      const to = seg.self ? 'next' : seg.next ? 'none' : 'ours';
+      seg.self = to === 'ours'; seg.next = to === 'next';
+      strategyPaintMarket('spend');
+      $(`#strat-where [data-seg="${CSS.escape(seg.id)}"]`)?.focus();
+      post('/v2/market/segments/target', {id: seg.id, target: to}).catch(error => failed('spend', error));
+    };
+    where.onclick = ev => {
+      if (!STRAT || STRAT !== state) return;
+      const x = ev.target.closest('[data-seg-x]'), tile = ev.target.closest('[data-seg]');
+      if (x && tile) {
+        const id = tile.dataset.seg, all = spend()?.segments || [], seg = all.find(s => s.id === id);
+        if (!seg) return;
+        // Its sub-segments move up to its parent, as the server does.
+        spend().segments = all.filter(s => s !== seg).map(s => (s.parent === id ? {...s, parent: seg.parent, depth: Math.max(1, (s.depth || 2) - 1)} : s));
+        strategyPaintMarket('spend');
+        post('/v2/market/segments/remove', {id}).then(() => again('spend')).catch(error => failed('spend', error));
+        return;
+      }
+      if (tile) cycle(tile);
+    };
+    where.onkeydown = ev => {
+      const tile = ev.target.closest?.('[data-seg]');
+      if (!tile || ev.target !== tile || (ev.key !== 'Enter' && ev.key !== ' ')) return;
+      ev.preventDefault();
+      cycle(tile);
+    };
+  }
+  const rivals = body.querySelector('#strat-rivals');
+  if (rivals) rivals.onclick = ev => {
+    const x = ev.target.closest('[data-rival-x]'), chip = x?.closest('[data-rival]');
+    if (!chip) return;
+    const id = chip.dataset.rival;
+    STRAT_MKT.rivals = (STRAT_MKT.rivals || []).filter(c => c.id !== id);
+    strategyPaintMarket('rivals');
+    post('/v2/market/competitors/remove', {id}).catch(error => failed('rivals', error));
+  };
+  // The add rows sit in cards that are patched; a submit is caught on the card.
+  for (const [box, kind] of [['#strat-where', 'seg'], ['#strat-rivals', 'rival']]) {
+    const card = body.querySelector(box);
+    if (card) card.onsubmit = async ev => {
+      const f = ev.target.closest(`[data-add="${kind}"]`);
+      if (!f) return;
+      ev.preventDefault();
+      const name = f.elements.name.value.replace(/\s+/g, ' ').trim();
+      if (!name) { f.elements.name.focus(); return; }
+      f.querySelectorAll('input, button').forEach(el => { el.disabled = true; });
+      try {
+        if (kind === 'seg') {
+          if (!spend()?.definition) await put('/v2/market/definition', {root_name: `${companyName() || 'Our'} market`});
+          await post('/v2/market/segments', {name});
+        } else await post('/v2/market/competitors', {name});
+      } catch (error) {
+        toast(error?.status === 409 ? 'Already there' : error?.message || 'Could not add it', error?.status !== 409);
+        f.querySelectorAll('input, button').forEach(el => { el.disabled = false; });
+        f.elements.name.focus();
+        return;
+      }
+      await again(kind === 'seg' ? 'spend' : 'rivals');
+      // The row may be the same node as before (its markup did not change): emptied and on again, for the next one.
+      const row = $(`${box} [data-add="${kind}"]`);
+      if (row) { row.querySelectorAll('input, button').forEach(el => { el.disabled = false; }); row.elements.name.value = ''; row.elements.name.focus(); }
+    };
+  }
 }
 
 // ---------------------------------------------------------------- versions
@@ -628,7 +866,6 @@ function strategyVersionShow(dlg, n) {
       const block = (title, inner) => inner ? `<section class="strat-sv-sec"><h3 class="strat-k">${esc(title)}</h3>${inner}</section>` : '';
       html = `<div class="strat-sv-title"><b>v${esc(v.n)}</b>${v.note ? ` · ${esc(v.note)}` : ''}<div class="muted">${v.published_by ? esc(goalActorName(v.published_by)) : ''}${v.published_by && v.published ? ' · ' : ''}${v.published ? esc(fmt(v.published)) : ''}</div></div>
         ${block('Summary', stratText(v.summary) ? `<p>${esc(v.summary)}</p>` : '')}
-        ${block('Vision', stratText(v.vision) ? `<p>${esc(v.vision)}</p>` : '')}
         ${block(label, bets.length ? `<ol class="strat-sv-bets">${bets.map(c => `<li><b>${esc(c.statement)}</b>${stratText(c.why) ? `<div class="muted">${esc(c.why)}</div>` : ''}</li>`).join('')}</ol>` : '')}
         ${strategySectionList(v).map(sec => block(sec.title, stratText(sec.text) ? `<div class="md strat-md">${safeMd(sec.text)}</div>` : '')).join('')}`;
     } catch (error) { html = `<p class="err">${esc(error.message)}</p>`; }

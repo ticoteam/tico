@@ -5,8 +5,9 @@
 
 `runner` is a computer id (default: the computer the bot is on). The answer is judged from that computer's last
 heartbeat **for this bot**: its own subscription profile's sign-in when it has one, its own API-key Credential for the
-harnesses that take a key per bot (`api_keys = "bot"`: Gemini CLI, pi), and otherwise the computer's shared sign-in for that runtime. Another
-bot's missing key or another profile's sign-in never decides it.
+harnesses that take a key per bot (`api_keys = "bot"`: Gemini CLI, pi), the company subscription the computer is given
+for that runtime while one is in effect there (backend/model_subscriptions.py), and otherwise the computer's shared
+sign-in for that runtime. Another bot's missing key or another profile's sign-in never decides it.
 
     can_run      True, False, or None when nothing says (offline, an older computer, not checked yet, not applicable)
     applicable   False for a bot an external agent runs (Hermes, OpenClaw, Grok Bot): no computer check applies
@@ -144,16 +145,17 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
         if not gateway_connection.connected(c):
             return verdict(False, "The Tico AI Gateway is not connected", "Save the gateway key in Settings > Computers",
                            "#/settings")
-        # Only a computer that says it runs bots as their own user runs a Tico turn (runner-rs/src/gateway_relay.rs);
-        # the claim holds the work anywhere else (execution.claim_refusal). One that says it does not (a Mac, a server
-        # without Tico's Docker runner) is refused plainly, and an older runner that does not say is asked to update.
+        # Only a computer that says it runs bots as their own user, or a cloud machine's trust group, runs a Tico turn
+        # (runner-rs/src/gateway_relay.rs, models_preset.runs_gateway); the claim holds the work anywhere else
+        # (execution.claim_refusal). One that says it does not (a Mac, a server without Tico's Docker runner) is
+        # refused plainly, and an older runner that does not say is asked to update.
+        if models_preset.runs_gateway(readiness):
+            return verdict(True)
         if readiness.get("isolated") is False:
             return verdict(False, label + " can't run Tico Gateway work (it needs Tico's Docker runner)",
                            "Sign in to Claude or ChatGPT in Settings > Computers, or add a Docker runner", "#/settings")
-        if readiness.get("isolated") is not True:
-            return verdict(False, label + " hasn't said it can run Tico Gateway work",
-                           "Update its runner in Settings > Computers", "#/settings")
-        return verdict(True)
+        return verdict(False, label + " hasn't said it can run Tico Gateway work",
+                       "Update its runner in Settings > Computers", "#/settings")
     # A harness whose key each bot holds (`api_keys = "bot"`): the bot's own grant is its sign-in.
     own = harness or config.get("harness") or runtime
     name = bot_key({**config, "harness": own if runtime_of(own) == runtime else runtime}, runtime)
@@ -161,6 +163,12 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
         if name not in _held(c, bot):
             return verdict(False, "This bot has no " + name + " Credential", "Give the bot the " + name +
                            " Credential in Credentials", "#/credentials")
+        return verdict(True)
+    # A company subscription given to this computer for the runtime signs its CLI turns in, whatever the computer's own
+    # login says (backend/model_subscriptions.py). An older runner is never given one (in_effect), so nothing changes
+    # there; nor for a bot delivered through a desktop app, which signs in its own way.
+    from . import model_subscriptions
+    if not config.get("app_delivery") and model_subscriptions.in_effect(c, row["id"], runtime):
         return verdict(True)
     # Every bot runs each tool on its computer's one login for it: a bot has no sign-in of its own.
     shared = computer_login(readiness, runtime)

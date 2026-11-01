@@ -82,7 +82,7 @@ Every **Next** saves the whole draft with `PUT /api/v2/setup`, so a closed tab l
 
 | Screen | What it asks | What it stores |
 |---|---|---|
-| AI providers | Only while no provider is chosen yet; otherwise the wizard starts at What are you building. Choose [how bots get their models](ai-gateway.md#choose-how-bots-get-their-models). To choose later, select **Your company's plans or API keys**, untick its providers and press **Skip for now** | The team's providers, as Settings > Computers > Models saves them |
+| AI providers | Only while no provider is chosen yet; otherwise the wizard starts at What are you building. Choose [how bots get their models](ai-gateway.md#choose-how-bots-get-their-models). To choose later, select **Your company's plans or API keys**, untick its providers and press **Skip for now** | The team's providers, as Settings > Models saves them |
 | What are you building | **Website** (optional) and **What you're building**: the team's one line, or a new idea in a few sentences. **Next** with either starts the strategy research (`POST /api/v2/strategy/draft-from`); an address that is not a public website keeps you on the step with the reason. To retry interrupted research, see [Recover from interrupted strategy research](#recover-from-interrupted-strategy-research) | `names.website` and `answers.building`. The website is stored as an `https://` address (a bare `acme.example` gets the scheme; anything that is not a public web address is refused with 422); finishing setup files the Librarian's market task from it |
 | Your bets | The research's bets to **Keep**, **Edit** or **Strike** (Strike retires one), **Add** for your own, and **What we won't do**; the draft (Who we serve, What we sell, kept bets, won't do) fills in beside them, below them on a phone. While the research runs the step polls `GET /api/v2/strategy/draft-from/latest`. Without a model provider, or when the research failed, it is the same fields as a plain form; when it gave up because the draft changed meanwhile, it lists what it found, each with **Add**. **Next** waits for one active bet with Rules out and Wrong if, and a line under What we won't do ([Strategy](strategy.md#setup)) | The strategy **draft** and its bets (`/api/v2/strategy`). Nothing is published |
 | Names | **Team/Company name**, app name, and optionally your own name | `names`. From the moment they are saved they override `TICO_TEAM_NAME` (the old `TICO_COMPANY_NAME` remains an alias) and `TICO_APP_NAME` everywhere, including in the template cards. **Your name** (`names.owner_name`) is saved on the owner's roster entry, so the team chart and the sidebar show it instead of the address; it is prefilled from the roster, or from the display name the sign-in proxy vouches for (a `name` claim from Cloudflare Access or the AWS load balancer), and left blank it changes nothing. **Team email domain** (`names.team_domain`) is asked only when the owner signs in with public email such as gmail.com and no team address is on the roster; it is optional, and lets members add teammates at that domain (it does not let anyone sign in). The wizard does not ask for an assistant name: the tab is always called Assistant, and `names.assistant_name` is `TICO_ASSISTANT_NAME`, which is `Assistant` unless set (a name equal to the team's reads as `Assistant`) |
@@ -195,7 +195,7 @@ second). It reaches no computer.
   below about starters and other templates describe a bot made from a template: the sample company's, and from a seat once
   someone picks a bot for it.
 - **No AI provider and no computer are needed.** The team is created first. With no provider chosen a bot names no runtime or model and
-  follows the team default, so it runs once a provider is added in Settings > Computers > Models. With no computer enrolled the bots stay
+  follows the team default, so it runs once a provider is added in Settings > Models. With no computer enrolled the bots stay
   `planned`; when the owner's computer enrolls, the bots are placed on it and activated. Until then the after-Create screen says
   "Waiting for a computer" or "Add an AI provider".
 - Each bot goes in the **group** its template belongs to (Marketing, Product, Engineering ...); the group is made if the team has none yet,
@@ -232,6 +232,27 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   a task for it is refused with the name of the manager it reports to, it is never woken and it has no routines. The owner
   places a seat anywhere; anyone else under themselves or someone below them.
 - A seat is filled by recruiting it ([Recruiting a seat](#recruiting-a-seat)); the bot it gets starts Onboarding.
+- **A cloud agent** Tico does not connect yet is a request, not a bot: `POST /api/v2/cloud-agents/{id}/request` (or
+  `POST /api/v2/seats/{id}/request-agent` for a seat that has none) makes a seat with `agent` and `request_state`, and
+  files the request with Tico's team through support as a feedback ticket carrying only its message, with no install ID.
+  The seat and its first task are made first and the seat is `filing` until Tico's ticket is kept, then `requested`. A
+  repeated key, or an identical request sent at the same time, shares that one seat and ticket. A first task whose title
+  matches an open task is refused (`409`, `duplicate`) before Tico hears of it. The first task waits on the seat as a task
+  its person owns; `GET /api/v2/seats/{id}/request` shows it to anyone who may read it. While a request is filing, being
+  cancelled, or open, the seat cannot be closed, filled, hired, or renamed, moved or given another team (`409`).
+  **Cancel request** (`POST /api/v2/seats/{id}/cancel-request`) marks the seat `cancelling`, tells Tico on the same
+  ticket, closes the seat and lets go of the first task: it is declined if the person may update it, else it stays with
+  its owner. If Tico cannot be reached, or the last step fails, the seat goes back to `requested` and can be tried again.
+  A request a stopped process left `filing` or `cancelling` is recovered by the next request or cancel on its seat once it
+  is older than two minutes, and every such request is recovered when the store starts. A request for a seat in a team
+  needs the right to add to that team (`403`), as an add does.
+- **Claude Code and Codex** are added, not requested: `POST /api/v2/cloud-agents/{claude|codex}/add` with `{seat_id}`
+  fills the seat with a bot on that harness, owned by the person. Its role is the template Recruit ranks first for the
+  seat, so it lands exactly as a hire of that template does: in Onboarding, in the seat's place on the chart, with its
+  repository built by its computer (a starter) or by BotOps (any other template). It joins the seat's team and runs under
+  its own bot identity, with no personal token issued. An add with `{team, reports_to}` and no seat first opens a
+  *Software engineer* seat there and names the bot for the agent. A seat no template fits is refused (`409`) and leaves
+  nothing behind: a bot needs a role to build its repository (`backend/cloud_agents.py`).
 - **Onboarding** replaces *Set up*. A starter is created Onboarding: the team chart shows a small amber gear (hover it for
   *Onboarding*) and its page an **Onboarding** pill. **Start onboarding** sends it "Let's set you up." as the person, in their
   own chat with it (the **Chat** tab); any first message from a person does the same. It learns only: it answers and asks in
@@ -266,7 +287,7 @@ whole change. Members can add seats under themselves or someone below them; only
 - Each bot, in the team chart's groups and order (bots outside any group first, the built-ins last), with one status:
   *Waiting* while the team waits on a computer or provider, *Setting up* until a starter's repository exists, then its
   **Set up** button; *Active*; or a link to the setup task BotOps is working.
-- **AI providers**: the first link opens Settings > Computers > Models so bots can start working.
+- **AI providers**: the first link opens Settings > Models so bots can start working.
 - **Strategy: a draft. Publish your strategy**: a link to Strategy, until a version is published (Getting started's
   `strategy` step).
 - **Add an admin**: a name and an email. The human joins the roster and the sign-in list and is made an admin (`POST /api/v2/access/humans`,
@@ -433,41 +454,46 @@ state are also placed. Existing assignments and repository grants stay in place.
 
 ## Adding a bot later
 
-**Team → Add bot** makes a Recruiting seat first: a role title, who it reports to (you, or for the owner anyone on the
-chart; otherwise a bot you manage) and, optionally, a job description. Then it opens the seat like any other
-([Recruiting a seat](#recruiting-a-seat)). **Ask BotOps** in the same form opens its chat with an editable request
-instead.
+**Team → + → Post a job** (or a group's **+**) makes a Recruiting seat first: a job title, who it reports to (you, or for
+the owner anyone on the chart; otherwise a bot you manage), its team and a job description. Then it opens the seat's
+Applicants page ([Recruiting a seat](#recruiting-a-seat)).
 
-**Settings → Bots → Add bot** (Tico Recruit) starts with a role title and job description, then offers **Recruit
-candidates** (the same Recruiting seat), a template, an existing agent or a bot from scratch. The optional tools and
+**Settings → Bots → Add bot** (Tico Recruit) starts with a role title and job description, then offers **Post a job**
+(the same Recruiting seat), a template, an existing agent or a bot from scratch. The optional tools and
 reviewer answers carry into the selected template's instructions. Choosing a template there uses `POST /api/v2/bots`
 and creates a planned bot that waits for its setup conversation. External services link to their own setup instructions.
 
 ### Recruiting a seat
 
-Open a seat from its row on the team chart (`person_search` icon, **Recruiting**) or right after Add bot makes it.
-`backend/recruiting.py` does the work; the page is `ui/app/recruit.js`.
+Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a job makes it.
+`backend/recruiting.py` does the work; the pages are `ui/app/recruit.js`.
 
-- **The job description.** When the owner opens a seat whose description no person wrote, the Strategy Bot gets one task,
-  "Draft the job description: <title>", and answers it with `hub seat draft <seat> --text "..."` (or `--file`; MCP
-  `hub_seat_draft`, `POST /api/v2/seats/{id}/draft`, the Strategy Bot's own credential only). The seat shows "The Strategy Bot is
-  drafting…" and fills in when the draft lands. Until then, or for anyone else, it shows the chart's text. Anyone who may
-  change the seat edits the description (`PATCH /api/v2/seats/{id}`); from then on the words are theirs: a draft arriving
-  later is refused and its task declined, and nobody asks the Strategy Bot again. Opening is `POST /api/v2/seats/{id}/open`;
-  reading is `GET /api/v2/seats/{id}`, with `draft.state` (`none`, `drafting`, `drafted`), `description_by` (`strategy_bot`,
-  `chart` or `person`) and `can_edit`.
-- **Recruit** (`POST /api/v2/seats/{id}/recruit`) answers at once, on this Tico, with no outside service and no trial
-  task: up to three Tico catalog templates matched against the title and description, each with a one-line reason, and
-  exactly one marked **Recommended**. Each carries the model the template suggests among the providers the team has turned
-  on, and the list of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never
-  candidates.
-- **The pick** (`POST /api/v2/seats/{id}/hire`, `{template, model}`) creates the bot through the same checks as any new bot:
-  named after the seat, in the seat's place on the chart (`reports_to`) and group, owned by the person who picked, with the
-  template's instructions plus the job description, and **Onboarding**. The seat is then filled and leaves the chart; open seats that reported to it move under the new bot. Only
-  then is its repository made: a starter template's by the computer (`materialize`), any other's by a BotOps "Set up" task.
-  A filled seat, a template that is not a candidate, or a model the team has not turned on is refused and nothing is made.
-- Who may recruit and pick: the owner for any seat; a person for a seat under themselves or someone below them. Bots open
-  and read seats but do not recruit.
+- **The job description.** Leaving the title asks `POST /api/v2/seats/draft` (`{title, team, reports_to}`), which answers
+  and stores nothing: the catalog template that is the job the title names (its name shares a word of the work with
+  the title, never only a word of rank or a kind of job such as "Engineer" or "Analyst"; a title ending in a kind of job wants
+  that kind, and a head's title the department's head), composed at once into one line
+  of summary, "What you'll do" from what it owns and "Works in" from its tools (`source: "catalog"`). For a title no
+  template is, such as "Rust engineer", the team's model writes one from the title within five seconds (`source:
+  "model"`), or nothing comes back without a model (`source: "none"`). **Redraft** (`redraft: true`) also asks the team's model for one rewrite, given five seconds; if
+  there is no model or it fails, the composed text comes back. A description typed by hand is never replaced by the first
+  draft. Anyone who may change the seat edits it later from **Job post** (`PATCH /api/v2/seats/{id}`). Reading is
+  `GET /api/v2/seats/{id}`, with `description_by` (`chart` or `person`) and `can_edit`.
+- **Applicants** (`POST /api/v2/seats/{id}/recruit`) answers at once, on this Tico, with no outside service and no trial
+  task: up to eight Tico catalog templates matched against the title and description. Each has `match`: `strong` when
+  the template's name shares a word of the work with the title (not "Engineer" alone), `good` when it fits at all, else empty; strong ones come
+  first. Each carries a one-line summary, tags, what it owns and never does, its onboarding questions, what it needs (each
+  `connected`, `on_hire` or `not_set`) and the model it suggests among the providers the team has turned on, with the list
+  of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never applicants. Each
+  applicant has its own page (`#/seat/<id>/<template>`) with a **Hire** box: name, reports to, computer and model.
+- **Hire** (`POST /api/v2/seats/{id}/hire`, `{template, model, name?, runner_id?}`) creates the bot through the same checks
+  as any new bot: named as given (the seat's title by default), in the seat's place on the chart (`reports_to`) and
+  group, owned by the person who hired, with the template's instructions plus the job description, and **Onboarding**. The
+  seat is then filled and leaves the chart; open seats that reported to it move under the new bot. Only then is its
+  repository made: a starter template's by the computer (`materialize`), any other's by a BotOps "Set up" task. A filled
+  seat, a template that is not an applicant, a name already taken or a model the team has not turned on is refused and
+  nothing is made.
+- Who may post and hire: the owner for any seat; a person for a seat under themselves or someone below them. Bots read
+  seats but do not hire.
 
 The separate [LinkedBots directory](https://linkedbots.ai/) has a playful feed and a small Tico Recruit workspace at [recruit.tico.dev](https://recruit.tico.dev/).
 It can hand a selected template and role brief into your Tico using a URL fragment; it does not authenticate you or
@@ -579,7 +605,7 @@ also call `POST /api/v2/bots/{bot}/onboarded` to release a bot whose conversatio
 
 In **AI providers**, choose **Your company's plans or API keys** to show the provider checkboxes.
 With none ticked, **Skip for now** continues without a provider; bots wait until one is added.
-Settings > Computers > Models can also save with no providers enabled. After choosing providers, sign in on each computer
+Settings > Models can also save with no providers enabled. After choosing providers, sign in on each computer
 from that page, or store the model key in **Tools > Credentials** and grant **Every computer**. For a model API key or token
 named `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY`, a blank **Bot variable name** is
 inferred automatically; otherwise set the model's variable explicitly. Bot access still needs its own grant.

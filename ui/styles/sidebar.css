@@ -8,6 +8,12 @@
 .side-close{display:none;margin-left:auto;background:none;border:0;border-radius:6px;color:var(--muted);font-size:20px;line-height:var(--lh-none);padding:4px 6px;cursor:pointer}
 .side-close:hover{color:var(--ink);background:var(--surface2)}
 .side-scroll{min-height:0;flex:1;overflow-y:auto;padding:8px 0}
+/* A thin scrollbar that shows while the pointer is on the rail and never covers the row counts. */
+.side-scroll{scrollbar-width:thin;scrollbar-color:transparent transparent;scrollbar-gutter:stable}
+.side-scroll:hover,.side-scroll:focus-within{scrollbar-color:var(--line) transparent}
+.side-scroll::-webkit-scrollbar{width:6px}
+.side-scroll::-webkit-scrollbar-thumb{border-radius:3px;background:transparent}
+.side-scroll:hover::-webkit-scrollbar-thumb{background:var(--line)}
 .nav-link{display:flex;align-items:center;gap:var(--s2);padding:6px 10px;border-radius:6px;color:var(--ink);font-size:var(--t-base)}
 /* the sidebar's status line: the update notice */
 .side-rec{display:flex;align-items:center;gap:var(--s2);margin:0 0 6px;padding:6px 10px;border-radius:6px;background:var(--fail-bg);color:var(--ink);font-size:var(--t-base);line-height:var(--lh-tight);min-width:0}
@@ -21,9 +27,9 @@
   width:20px;height:20px;flex:none;overflow:hidden;user-select:none;
   display:inline-flex;align-items:center;justify-content:center;
   color:var(--muted);font-family:"Material Symbols Outlined";
-  font-weight:200;font-style:normal;font-size:20px;line-height:var(--lh-none);
+  font-weight:300;font-style:normal;font-size:20px;line-height:var(--lh-none);
   letter-spacing:normal;text-transform:none;white-space:nowrap;
-  font-variation-settings:"FILL" 0,"wght" 200,"GRAD" 0,"opsz" 24;
+  font-variation-settings:"FILL" 0,"wght" 300,"GRAD" 0,"opsz" 24;
   font-feature-settings:"liga";-webkit-font-feature-settings:"liga";
   -webkit-font-smoothing:antialiased;
 }
@@ -41,8 +47,8 @@
 .org-history{flex:none;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;background:none;cursor:pointer;padding:0}
 .org-history:hover{background:var(--surface2)}
 .org-history .nav-icon{font-size:18px}
-.org-history[aria-pressed="true"]{background:color-mix(in srgb,var(--accent) 14%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 60%,transparent),0 0 10px color-mix(in srgb,var(--accent) 45%,transparent)}
-.org-history[aria-pressed="true"] .nav-icon{color:var(--accent)}
+.org-history[aria-pressed="true"]{background:color-mix(in srgb,var(--ink) 8%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--ink) 40%,transparent)}
+.org-history[aria-pressed="true"] .nav-icon{color:var(--ink)}
 .inbox-list{list-style:none;margin:0;padding:0 0 6px}
 .inbox-list a{display:flex;align-items:center;gap:8px;padding:6px 10px 6px 12px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:var(--t-base)}
 .inbox-list a:hover{background:var(--surface2);text-decoration:none}
@@ -78,7 +84,7 @@
 .new-version{position:relative;padding:0 10px}
 #changelog-notice{display:flex;align-items:center;gap:8px;margin:0 10px;padding:6px 8px;border-radius:6px;color:var(--muted);font-size:var(--t-sm);text-decoration:none}
 #changelog-notice:hover{background:var(--surface2);color:var(--ink)}
-.changelog-notice-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--accent)}
+.changelog-notice-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--ink)}
 #changelog-badge{margin-left:auto;font-size:var(--t-2xs)}
 /* The first-run wizard while setup is not done (renderOnboardingNav): Finish setup and the team, not the app's pages
    or What's new. */
@@ -86,7 +92,7 @@ body.in-setup .side-scroll>.nav-link:not(#nav-welcome),body.in-setup .side-scrol
 body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #changelog-notice,body.in-setup #changelog-badge{display:none}
 #new-version{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
 #new-version:hover,#new-version[aria-expanded="true"]{background:var(--surface2);color:var(--ink)}
-#new-version .nv-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--accent)}
+#new-version .nv-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--ink)}
 #new-version-pop{position:absolute;left:10px;right:10px;bottom:calc(100% + 6px);z-index:21;padding:var(--s3);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 6px 24px rgba(0,0,0,.16);font-size:var(--t-sm);line-height:var(--lh)}
 #new-version-pop p{margin:0 0 10px;color:var(--muted)}#new-version-pop p strong{color:var(--ink)}
 #new-version-pop .nv-actions{display:flex;flex-wrap:wrap;gap:6px}
@@ -97,7 +103,6 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 #new-version-pop .nv-dismiss{margin-top:8px;padding:0;border:0;background:none;color:var(--muted);font-size:var(--t-sm);cursor:pointer;text-decoration:underline}
 .help-link{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border:1px solid var(--line);border-radius:50%;color:var(--muted);font:600 var(--t-base)/var(--lh-none) var(--sans);text-decoration:none}
 .help-link:hover,.help-link.cur{background:var(--surface2);color:var(--ink);text-decoration:none}
-#connect-agent{background:none;padding:0;cursor:pointer}#connect-agent[hidden]{display:none}#connect-agent .nav-icon{font-size:16px}
 .account-wrap{position:relative;min-width:0;flex:1;display:flex;align-items:center;gap:2px}
 #account{display:flex;align-items:center;gap:6px;flex:1;min-width:0;max-width:100%;overflow:hidden;color:var(--muted);font-size:var(--t-sm);white-space:nowrap;border:0;background:none;text-align:left;padding:6px 0;cursor:pointer;border-radius:6px}
 #account:hover,#account[aria-expanded="true"]{color:var(--ink);background:var(--surface2)}#account.cur{color:var(--ink)}
@@ -132,26 +137,27 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .tree li.org-group{--tree-up:8px}
 .tree li.org-group:first-child{--tree-up:2px}
 .org-group-tools{display:none;margin-left:auto;flex:none}
-.tree li.org-group>.noderow:hover .org-group-tools,.tree li.org-group>.noderow:focus-within .org-group-tools{display:inline-flex}
+.tree li.org-group>.noderow:hover .org-group-tools,.tree li.org-group>.noderow:focus-within .org-group-tools,
+.tree li.org-group>.noderow:has([aria-expanded=true]) .org-group-tools{display:inline-flex}
 @media (hover:none){.org-group-tools{display:inline-flex}}
 .org-tool{width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:5px;background:none;color:var(--muted);cursor:pointer;padding:0}
 .org-tool:hover{background:var(--surface2);color:var(--ink)}
 .org-tool .nav-icon{font-size:16px}
 .org-plus{font-size:20px;line-height:var(--lh-none);font-weight:400;color:var(--muted)}.org-history:hover .org-plus,.org-tool:hover .org-plus{color:var(--ink)}
-.org-name{flex:1;min-width:0;font:inherit;font-size:var(--t-base);padding:2px 6px;border:1px solid var(--accent);border-radius:6px;background:var(--surface);color:var(--ink)}
+.org-name{flex:1;min-width:0;font:inherit;font-size:var(--t-base);padding:2px 6px;border:1px solid var(--focus);border-radius:6px;background:var(--surface);color:var(--ink)}
 .tree li.org-new{padding:2px 0 2px var(--tree-lead);display:flex}
 /* Over the tree's lines, which are drawn above the rows. */
 .tree .noderow.drop-target,.tree .org-no-group.drop-target{position:relative;z-index:1;outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:6px}
 /* A report's place among its manager's reports: a line where it will go (ui/app/sidebar.js). */
 #tree .node:is(.drop-before,.drop-after,.drop-refused){position:relative;z-index:1}
-#tree .node.drop-before{box-shadow:0 -2px 0 var(--accent)}#tree .node.drop-after{box-shadow:0 2px 0 var(--accent)}
+#tree .node.drop-before{box-shadow:0 -2px 0 var(--ink)}#tree .node.drop-after{box-shadow:0 2px 0 var(--ink)}
 #tree .node.drop-refused{outline:2px dashed var(--muted);outline-offset:1px;border-radius:6px;cursor:not-allowed}
 /* A status change redraws rows of the team list several times a minute: what moves inside it never lays out the
-   rest of the sidebar again. Layout only, not paint: the Bet box reaches past the list's box. */
+   rest of the sidebar again. Layout only, not paint. */
 #tree{contain:layout}
 /* A drop waits for Move: the moved row in its new place, and under it a strip across the rail (orgConfirmHTML), over
    the tree's lines. --org-confirm-in is how far the row is indented, so the strip starts at the rail's left edge. */
-#tree :is(.node,.noderow).org-moved{background:color-mix(in srgb,var(--accent) 14%,transparent)}
+#tree :is(.node,.noderow).org-moved{background:color-mix(in srgb,var(--ink) 8%,transparent)}
 .org-confirm{position:relative;z-index:2;display:flex;flex-wrap:wrap;align-items:center;gap:6px var(--s2);margin:2px 0 4px calc(-1 * var(--org-confirm-in,0px));padding:6px 8px;background:var(--surface);border:1px solid var(--line);border-radius:6px;font-size:var(--t-sm);color:var(--ink)}
 .org-confirm-q{flex:1 1 120px;min-width:0;overflow-wrap:anywhere}
 .org-confirm-do{display:flex;gap:6px;margin-left:auto}
@@ -162,7 +168,9 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 #tree [draggable="true"]{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .tree .org-no-group{display:none;margin-top:8px;padding:6px 8px;color:var(--muted);font-size:var(--t-sm);border:1px dashed var(--line);border-radius:6px}
 .tree.org-dragging .org-no-group{display:block}
-.tree .dept-label{flex:1;padding:5px 6px 5px 10px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;user-select:none}
+.tree .dept-label{flex:1;min-width:0;padding:5px 6px 5px 10px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;user-select:none}
+/* The name is its own box: text-overflow does not apply to a flex label (layout.css), so the ellipsis sits here. */
+.tree .dept-name{display:block;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* A group's name opens its team page (#/team/<group>); the arrow beside it folds the group. */
 /* a team's label starts where the TEAM header's does (.section-toggle's 10px), not at the rows' --tree-lead */
 .tree a.dept-label{text-decoration:none}
@@ -177,34 +185,26 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .tree a.node.planned{color:var(--muted)}.tree a.node.planned .av{opacity:.35;filter:saturate(.4)}
 .tree a.node.paused{opacity:.6}
 /* A Recruiting seat: a role with no bot yet (ui/app/sidebar.js renderTree). */
-.tree .node.seat{flex:1;display:flex;align-items:center;gap:var(--s2);padding:6px;border-radius:6px;color:var(--muted);font-size:var(--t-base);min-width:0;cursor:default}
+.tree .node.seat{flex:1;display:flex;align-items:center;gap:var(--s2);padding:6px;border-radius:6px;color:var(--muted);font-size:var(--t-base);min-width:0;cursor:pointer;text-decoration:none}
 .tree .node.seat .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tree .node.seat .seat-icon{font-size:16px;width:20px;text-align:center}
 .tree .node.seat .seat-pill{margin-left:auto;font-size:var(--t-xs);padding:1px 6px;flex:none}
 .person-mail-link{display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;margin-left:2px;border-radius:6px;color:var(--muted);font-family:"Material Symbols Outlined";font-size:18px;text-decoration:none}
-.person-mail-link:hover,.person-mail-link.cur{background:var(--surface2);color:var(--accent);text-decoration:none}
+.person-mail-link:hover,.person-mail-link.cur{background:var(--surface2);color:var(--ink);text-decoration:none}
 .tree .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.org-connect{flex:none;height:22px;margin-left:2px;padding:0 9px;border:1px solid var(--line);border-radius:11px;background:none;color:var(--accent);font:inherit;font-size:var(--t-sm);font-weight:600;cursor:pointer}
-.org-connect:hover{background:var(--surface2)}
 
 /* Keep the personal branch label visible even when a long bot name is clipped. */
 .org-branch{flex:none;color:var(--muted);font-size:var(--t-2xs);font-weight:500;white-space:nowrap}
-/* A group's Bet picker, under its row (ui/app/sidebar.js orgBetPopHTML); the flag stays lit when the group has one. */
-.org-tool.on{color:var(--accent)}
-/* In line with the group's members; the group's rail runs past it on the left. */
-.org-bet-pop{position:relative;margin:4px 0 6px calc(var(--tree-elbow) + var(--tree-gap) + var(--tree-lead));padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);
-  --tree-stub-x:calc(-1px - var(--tree-elbow) - var(--tree-gap));--tree-from:-5px;--tree-down:7px}
-.org-bet-pop .org-bet-f select{height:32px;font-size:var(--t-base)}
 
 .bot-paused-badge{display:inline-flex;align-items:center;gap:3px;white-space:nowrap;flex-shrink:0}
 
-/* ---- The current row's bar (ui/app/motion.js navIndicator). Kept apart from the rules above: one 2px accent bar in
+/* ---- The current row's bar (ui/app/motion.js navIndicator). Kept apart from the rules above: one 2px ink bar in
    the scrolling list, moved onto whichever row is current (a page link, a teammate, a group, a mailbox) and sliding
    there when the page changes. The row keeps its own background, so without the script it reads as before. Transform
    only; it snaps (no slide) on first paint, when the list itself moves, and under reduced motion. The one bar the
    house rules (components.css, "no bars") allow: a marker that travels shows where the page went, a tint cannot. */
 .side-scroll{position:relative}
-.nav-ind{position:absolute;top:0;left:0;z-index:1;width:2px;height:16px;border-radius:1px;background:var(--accent);
+.nav-ind{position:absolute;top:0;left:0;z-index:1;width:2px;height:16px;border-radius:1px;background:var(--ink);
   transform-origin:0 0;pointer-events:none}
 .nav-ind.slide{transition:transform var(--dur-fast) var(--ease)}
 @media (prefers-reduced-motion:reduce){.nav-ind.slide{transition:none}}

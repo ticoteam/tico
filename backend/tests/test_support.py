@@ -678,6 +678,8 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
     assert question(riley) is None
     with store.transaction() as c:
         c.execute("UPDATE events SET ts=? WHERE actor='human:riley'", (H.shift(H.now(), days=-7),))
+    from backend import support_asks
+    support_asks.JOINED.clear()             # the server keeps a first action once read; only this test rewrites one
     assert question(riley)["moment"] == "day_7"
     monkeypatch.setenv("TICO_SUPPORT", "off")
     assert question(riley) is None and api.get("/api/v2/config", headers=riley).json()["support_on"] is False

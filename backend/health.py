@@ -13,7 +13,8 @@ import shlex
 from datetime import datetime, timezone
 
 from . import (access, billing_check, blob_s3, gateway_connection, hook_relay, hosted_updates, inbox_isolation, model_login,
-               pipeline_stats, providers, releases, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits, watchers)
+               pipeline_stats, providers, releases, replication, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits,
+               watchers)
 from .batch_work import report, storage_error
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
@@ -32,7 +33,10 @@ PERSON_QUEUE_MINUTES = 2    # a person's own message, sooner: someone is sitting
 RESTART_STUCK_MINUTES = 34
 SILENT_MINUTES = 10         # a computer this quiet while work is queued for it has stopped, not blinked
 NEEDS_YOU_MINUTES = 30      # this quiet, its owner is asked to bring it back
-BACKUP_STALE_HOURS = 6      # the replica normally trails by seconds
+# A backup location that stays behind the database is warned about and then marked bad (replication.behind_warn_seconds,
+# replication.BEHIND_BAD_MIN_S). More local files than _unsent_limit() in Litestream's level-0 folder means uploads are not
+# getting through. The floor is for the default one-minute sync; a longer interval holds more files between uploads.
+BACKUP_UNSENT_FILES = 1000
 RECENT_HOURS = 24
 GITHUB_HEALTH = "github:token"
 PROXIES = {"cloudflare": "Cloudflare Access", "aws-alb": "an AWS load balancer", "oidc": "OpenID Connect",
@@ -193,12 +197,13 @@ def _computers(c, runners_online, settings, limits=None):
                                   if v.get("installed") or n in wanted or n in assigned.get(r["id"], ())
                                   or n in run_on.get(r["id"], ())]})
     from . import org_turns
-    from .start_places import summary, describe
+    from .start_places import summaries, describe
     # Below warning, Health's stuck and queue checks already say why a bot is not starting: the Turns line skips
     # claim_refusal per queued bot. At warning it names quota and readiness waits again.
     classify = org_turns.admission(c)['at_warning']
+    counts = summaries(c, [row["id"] for row in rows], settings, limits, classify=classify)     # one pass, not per computer
     for row in rows:
-        row["turn_counts"] = summary(c, row["id"], settings, limits, classify=classify)
+        row["turn_counts"] = counts[row["id"]]
         row["turn_summary"] = describe(row["turn_counts"])
     return rows
 
@@ -601,6 +606,9 @@ def _waiting(c, online_ids, settings=None, limits=None):
     from .execution import _queue_suspects, queued_jobs_sql
     every_job = [job for part in H.chunks(aged_bots) for job in c.execute(queued_jobs_sql(part), part)]
     suspect = _queue_suspects(c, every_job)
+    # Bots on a cloud machine (backend/cloud_machines.py): one stopped for want of work is not offline.
+    from .cloud_machines import homes
+    on_cloud = homes(c)
     for bot in c.execute("SELECT slug,display_name,state FROM bots WHERE state IN ('active','paused','quarantined') ORDER BY slug"):
         slug = bot["slug"]
         count, oldest = queued.get(slug, (0, None))
@@ -618,6 +626,14 @@ def _waiting(c, online_ids, settings=None, limits=None):
             stuck.append({**row, "reason": "login_holder_unknown", "runner_id": where[0], "runtime": ""})
             continue
         report = report_for(slug, where) if count else {}
+        cloud = on_cloud.get(slug)
+        if cloud and (not where or where[0] not in online_ids):
+            # Started when it has work: only a refusal, or work that waited too long for it, is stuck.
+            if count and (cloud["problem"] or (oldest and oldest < cutoff)):
+                from .cloud_machines import problem_words
+                stuck.append({**row, "reason": "cloud_machine", "runner_id": where[0] if where else "", "runtime": "",
+                              "problem": problem_words(cloud["problem"]) or "Starting"})
+            continue
         if where and where[0] not in online_ids:
             waiting.append({**row, "reason": "computer_offline"})
             if count:
@@ -637,14 +653,14 @@ def _waiting(c, online_ids, settings=None, limits=None):
             # A bot the claim holds on purpose (a spend limit, a usage-limit cooldown, a lapsed lease whose worker still
             # runs, interrupted work awaiting review, ...) is said with that reason, not "slow".
             claimable = (('company_limit', None, False) if company_stopped else
-                         _claimable(c, settings, where[0], slug, limits))
+                         _claimable(c, settings, where[0], slug, limits, suspect=suspect))
             if claimable is None:
                 continue        # the claim's check for this bot raised: Health names that check instead
             refused, first, person = claimable
             if slug in busy and refused in (None, 'lane_held'):
                 # Keep claim priority for age checks; only use oldest-job diagnostics when
                 # that free-lane job is actually refused.
-                diagnostic = _claimable(c, settings, where[0], slug, limits, oldest=True)
+                diagnostic = _claimable(c, settings, where[0], slug, limits, oldest=True, suspect=suspect)
                 if diagnostic and diagnostic[0] and diagnostic[0] != "lane_held":
                     refused, first, person = diagnostic
             # Only fenced work is left: the interrupted run holds it, not the running turn, so that is the reason.
@@ -787,6 +803,8 @@ HELD = {
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
     "login_upgrade": ("Update {computer} to use one login per AI tool; its bots wait without changing accounts",
                       COMPUTERS),
+    # A bot with Browse through runs only on a runner that takes it there (backend/browser_exit.py CAPABILITY).
+    "browser_exit_update": ("Update {computer} to use Browse through", COMPUTERS),
     # A Tico model runs only where bots run as their own user (execution.claim_refusal): the bot waits, it never fails.
     "not_isolated": ("{computer} can't run Tico Gateway work (it needs Tico's Docker runner): it waits for another "
                      "model or computer", BOT_SETTINGS),
@@ -795,6 +813,8 @@ HELD = {
     "profile": ("Its subscription profile is not signed in or not reported on {computer}", COMPUTERS),
     "config": ("Its settings cannot be read", BOT_SETTINGS),
     "check_model": ("Its check model does not run on {computer}, or is on hold", BOT_SETTINGS),
+    # A private meeting's turn runs only on a runner with private lanes (execution.PRIVATE_LANES).
+    "private_update": ("{computer} needs a Tico update before it can join private meetings", COMPUTERS),
     "unreadable": ("Its queued message is one it may not read", RUNS),
     # Tico stopped the bot (backend/bot_stops.py): a person releases it. A back-off is a short pause after a failed run.
     "run_hold": ("Tico stopped it after five failed runs in a row and tries one run on its own now and then: check its last runs, or release it now", BOT_SETTINGS),
@@ -810,11 +830,28 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
     """Each stuck bot with a reason in plain words and one fix: sign in, move to a computer that can run it,
     or the settings page that can. Only administrators get fixes; a Bot administrator moves only to their own computers.
     A bot stuck in onboarding is the exception: whoever may manage it gets "Finish with defaults"."""
+    from . import readiness
     from .readiness import own_harness
     if not rows:
         return []
     computers = _movable(c, who, online_ids) if full else []
     configured = {r["slug"]: r["runtime"] or "" for r in c.execute("SELECT slug,runtime FROM bots")}
+    # Each offline computer's last check-in, read once for every bot waiting on one (not one read per bot).
+    offline = sorted({row["runner_id"] for row in rows if row["reason"] == "computer_offline"})
+    seen_at = {r["id"]: r["last_seen"] for r in c.execute(
+        f"SELECT id,last_seen FROM runners WHERE id IN ({','.join('?' * len(offline))})", offline)} if offline else {}
+    # Every quarantined bot's quarantine record, read together for its explanation (quarantine_display.explanation).
+    H.prime_quarantines(c, [row["bot"] for row in rows if row["reason"] == "quarantined"])
+    # Every stuck bot's configuration and operator, read together for its harness check and quarantine
+    # explanation (readiness._config and auth.operator read them per bot otherwise).
+    from .read_cache import prime
+    from .auth import OPERATOR_SQL
+    for part in H.chunks(sorted({row["bot"] for row in rows})):
+        marks = ",".join("?" * len(part))
+        found = {r["bot"]: r for r in c.execute(
+            f"SELECT bot,config_json,operator FROM bot_config WHERE bot IN ({marks})", part)}
+        prime(c, readiness.CONFIG_SQL, {(s,): found.get(s) for s in part})
+        prime(c, OPERATOR_SQL, {(s,): found.get(s) for s in part})
     out = []
     for row in rows:
         label, reason = row["computer"], row["reason"]
@@ -831,8 +868,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             text = "No computer"
             fix = _fix("Choose a computer", "#/settings", "bots")
         elif reason == "computer_offline":
-            seen = c.execute("SELECT last_seen FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
-            quiet = quiet_minutes(seen["last_seen"] if seen else None)
+            quiet = quiet_minutes(seen_at.get(row["runner_id"]))
             text = f"{label} has not checked in for {quiet} minutes" if quiet >= SILENT_MINUTES else f"{label} is offline"
             fix = _fix("Open Computers", "#/settings", "devices")
             if full and runtime:
@@ -854,6 +890,9 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
                         else _fix("Open Computers", "#/settings", "devices")
             else:
                 fix = _fix("Open bot settings", "#/settings", "bots")
+        elif reason == "cloud_machine":
+            text = "Cloud machine: " + (row.get("problem") or "Starting")
+            fix = _fix(*(BILLING if row.get("problem") == "Out of credit" else BOT_SETTINGS))
         elif reason == "limit":
             text = "Over its spending limit"
             fix = _fix("Raise limit", "#/usage")
@@ -1113,6 +1152,29 @@ def _slack(c):
     return _check("slack", "Slack", "bad", "Slack is disconnected" + (": " + state["message"] if state["message"] else "."), [fix])
 
 
+def _age_status(stamp):
+    """ok, warn or bad by how old a status-file time is: `behind_since` (how long the backup location has been behind the
+    database) or `checked_at` (when the loop last read it). A missing time is ok. The warning waits for ten sync intervals
+    (replication.behind_warn_seconds); bad past an hour, or past that warning time when it is later. It is judged from the
+    time itself, never from the age of the last copy: a quiet database writes nothing new and is not behind."""
+    if not stamp:
+        return "ok"
+    at = H.parse_ts(stamp)
+    if at is None:
+        return "warn"
+    age = (H.parse_ts(H.now()) - at).total_seconds()
+    warn_after = replication.behind_warn_seconds()
+    if age > max(replication.BEHIND_BAD_MIN_S, warn_after):
+        return "bad"
+    return "warn" if age > warn_after else "ok"
+
+
+def _unsent_limit():
+    """How many local level-0 files count as a pile-up. Litestream writes one local file a second on a busy database and
+    uploads once per sync interval, so two sync intervals' worth of files is normal; the floor is the one-minute default."""
+    return max(BACKUP_UNSENT_FILES, 2 * replication.sync_interval_seconds())
+
+
 def _backups(config, settings):
     backup = config.get("backup")
     fix = _fix("Backup settings", "https://github.com/ticoteam/tico/blob/main/docs/install.md#backups-and-restore")
@@ -1120,6 +1182,7 @@ def _backups(config, settings):
         return _check("backups", "Backups", "unknown", "This server does not report its backup state.")
     mode = str(backup["mode"]).replace("_", "-")
     last = backup.get("last_replicated_at") or ""
+    since = backup.get("behind_since") or ""
     target = str(backup.get("target_kind") or "")
     key = backup.get("credential_key") if isinstance(backup.get("credential_key"), dict) else {}
     key_here = bool(key.get("present"))                  # a local credential key (/data/credential.key) is in use
@@ -1131,6 +1194,19 @@ def _backups(config, settings):
     if mode == "off":
         return _check("backups", "Backups", "bad",
                       "Backups are off." + (KEY_LOST if key_here else ""), [fix])
+    # The loop writes checked_at every round, even when the listing fails; an old one means it has stopped or cannot reach
+    # the backup location, so nothing it last reported (copies, lag) can be trusted.
+    checked = _age_status(backup.get("checked_at"))
+    if checked != "ok":
+        return _check("backups", "Backups", checked,
+                      f"Backup status not checked since {backup.get('checked_at')}; the backup location may be unreachable.",
+                      [fix])
+    behind = _age_status(since) if mode == "remote" else "ok"
+    unsent = backup.get("unsent_files") if isinstance(backup.get("unsent_files"), int) else 0
+    if unsent > _unsent_limit():
+        return _check("backups", "Backups", "bad" if behind == "bad" else "warn",
+                      f"Backups are stuck: Litestream has {unsent:,} unsent files. Restart the server; if it continues, "
+                      "see the backup docs.", [fix])
     if mode in ("local-only", "local"):
         note = (" The credential key, which opens every saved credential, is only in this server's volumes too."
                 if key_here else "")
@@ -1144,10 +1220,13 @@ def _backups(config, settings):
                           [fix])
         return _check("backups", "Backups", "warn",
                       "Copies stay on this server only. A lost disk loses everything." + note, [fix])
-    if last and last < H.shift(H.now(), hours=-BACKUP_STALE_HOURS):
-        return _check("backups", "Backups", "warn", f"Last copy to {target or 'the remote'} was {last}.", [fix])
-    if not last:
-        return _check("backups", "Backups", "warn", "Set up, but nothing has been copied yet.", [fix])
+    if not last:    # `reason` says why there is no copy at all (replication.NO_RECENT_COPY)
+        return _check("backups", "Backups", "bad" if behind == "bad" else "warn",
+                      backup.get("reason") or "Set up, but nothing has been copied yet.", [fix])
+    if behind != "ok":
+        return _check("backups", "Backups", behind,
+                      f"Copies to {target or 'the remote'} have been behind the database since {since}. The newest copy is from "
+                      f"{last}.", [fix])
     if key_here and not key_copied:
         return _check("backups", "Backups", "warn",
                       f"The database is copied to {target or 'a remote'}, but the credential key has not been. A database restored "
@@ -1652,7 +1731,7 @@ def view(c, who, settings, auth, github, config):
             checks.append(_check("version", "Version", "info",
                                  f"Tico will update this server to {_v(notice['scheduled'])} when idle.",
                                  [_fix("What is new", "#/changelog")]))
-        elif notice.get("available") and notice.get("managed"):     # Tico runs this server's updates (docs/cell.md)
+        elif notice.get("available") and notice.get("managed"):     # Tico runs this server's updates (TICO_UPDATES)
             checks.append(_check("version", "Version", "info",
                                  f"{_v(notice.get('latest'))} is out. You are on {_v(releases.version())}. "
                                  "Tico updates this server.", [_fix("What is new", "#/changelog")]))
@@ -1832,18 +1911,20 @@ def view(c, who, settings, auth, github, config):
     else:
         checks.append(_check("computers", "Computers", "ok", f"{_plural(len(online), 'computer')} online."))
 
-    from .performance import load_status
+    from .performance import load_statuses, recent_overloads
+    loads = load_statuses(c, [computer["id"] for computer in computers])     # one read for every computer
     for computer in computers:
         if full or kind == "bot":
             checks.append(_check("turns:" + computer["id"], "Turns", "ok", computer["label"] + ": " + computer["turn_summary"],
                                  [_fix("Open Computers", "#/settings", "devices")] if full else []))
-        load = load_status(c, computer["id"])
+        load = loads[computer["id"]]
         if load["overloaded"]:
             checks.append(_check("runner_load:" + computer["id"], "Load", "warn",
                                  f"{computer['label']}: overloaded now (CPU or memory above 90% for five minutes).",
                                  [_fix("Open Computers", "#/settings", "devices")]))
 
     if full:
+        overloads = recent_overloads(c, [computer["id"] for computer in computers])
         for computer in computers:
             disk = computer.get("disk") or {}
             total, free = disk.get("total_bytes"), disk.get("free_bytes")
@@ -1854,8 +1935,8 @@ def view(c, who, settings, auth, github, config):
                                      "`docker image prune -a` to remove unused images. The update retries when space frees.",
                                      [_fix("Open Computers", "#/settings", "devices")]))
             # Diagnostics only: an overload is shown here and on the computer's Performance page; nothing acts on it.
-            from .performance import recent_overload, describe
-            overload = recent_overload(c, computer["id"])
+            from .performance import describe
+            overload = overloads[computer["id"]]
             if overload:
                 checks.append(_check("performance:" + computer["id"], "Load", "warn",
                                      f"{computer['label']}: {'overloaded now' if not overload['ended'] else 'was overloaded'}"

@@ -66,15 +66,19 @@ def held(c, runner_id):
     return out
 
 
+# Without the hint SQLite walked attempts_runner_finished (every attempt ever run) to skip the GROUP BY sort:
+# 48 ms on Tico Team's 37k attempts, 0.1 ms over the live ones.
+HELD_TOTALS_SQL = (
+    "SELECT a.runner_id,count(*) FROM attempts a INDEXED BY attempts_live_lease LEFT JOIN start_places p "
+    "ON p.attempt_id=a.id WHERE a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' "
+    "AND a.lease_until>? AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.runner_id")
+
+
 def held_totals(c):
     """{runner_id: turns held} for every computer in one pass. Health's capacity fence used to call
     `held` once per runner while already walking the fleet."""
     now = H.now()
-    return {r[0]: r[1] for r in c.execute(
-        "SELECT a.runner_id,count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
-        "WHERE a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' AND a.lease_until>? "
-        "AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.runner_id",
-        (now, now))}
+    return {r[0]: r[1] for r in c.execute(HELD_TOTALS_SQL, (now, now))}
 
 
 # A computer's "Turns at once" (runners.turns_at_once, NULL: automatic, its own capacity). A runner that cannot take a
@@ -221,12 +225,13 @@ def summary(c, runner_id, settings, default=None, *, classify=True):
                  lambda: _summaries(c, (runner_id,), settings, default, classify)[runner_id])
 
 
-def summaries(c, runner_ids, settings, default=None):
+def summaries(c, runner_ids, settings, default=None, *, classify=True):
     """`summary` for many computers in two scans. Each computer's counts are the ones `summary` would build
-    on its own, including the same claim refusal for each queued bot."""
+    on its own, including the same claim refusal for each queued bot (unless `classify=False`, as `summary`)."""
     from .read_cache import value
     ids = tuple(sorted({rid for rid in runner_ids if rid}))
-    return value(c, ("start_summaries", ids), lambda: _summaries(c, ids, settings, default))
+    return value(c, ("start_summaries", ids, bool(classify)),
+                 lambda: _summaries(c, ids, settings, default, classify))
 
 
 def _summaries(c, runner_ids, settings, default=None, classify=True):
@@ -260,7 +265,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
     from .execution import claim_refusal
     from .store import readiness_document
     runners = {row['id']: row for row in c.execute(f"SELECT * FROM runners WHERE id IN ({marks})", runner_ids)}
-    overloaded = {rid: performance.load_status(c, rid)['overloaded'] for rid in runner_ids}
+    overloaded = {rid: status['overloaded'] for rid, status in performance.load_statuses(c, runner_ids).items()}
     reasons = {'cooling_off': 'quota', 'limit': 'spending limit', 'not_ready': 'computer readiness',
                'readiness_unknown': 'computer readiness', 'sign_in_rejected': 'sign-in',
                'draining': 'bot paused', 'run_hold': 'stopped runs', 'backoff': 'a failed run', 'budget': 'run budget',

@@ -108,6 +108,7 @@ MEANING = {
     "reviewer_holds_tasks": "A bot with the Reviewer profile owns open tasks that are not review or QA requests.",
     "responder_has_tasks": "A bot with the Responder profile, which takes no tasks, has open tasks.",
     "doer_idle": "A Doer's runs for a week all did nothing: its profile may not fit what it is asked to do.",
+    "org_rules_unchecked": "A fifth or more of today's bot outputs that rules apply to went out without a rule check.",
     **{p[0]: p[4] + "." for p in LOG_PATTERNS},
 }
 # What a Tico bug report says the fix is: one constant per tico-bug check, never a finding's own text.
@@ -330,7 +331,7 @@ def _login_checks(c, settings):
             continue                                  # a removed computer runs nothing more
         login = models_preset.LOGIN_NAMES.get(x["runtime"])
         if (login and models_preset.fallback_row(record) and record.get("auto_fallback")
-                and models_preset.isolated(readiness_document(runners[x["runner_id"]]["readiness_json"]))):
+                and models_preset.runs_gateway(readiness_document(runners[x["runner_id"]]["readiness_json"]))):
             # Under the two Gateway choices the bots there finish on Tico Gateway, last: one plain line.
             out.append(_finding(f"default_login_limited:{x['runner_id']}:{x['runtime']}", "default_login_limited", SETUP,
                                 f"{label}'s {login} login is used up",
@@ -492,7 +493,7 @@ def _bot_checks(c, settings=None):
             continue
         login = models_preset.LOGIN_NAMES.get(providers.bot_choice(c, settings, declared)[0])
         if login and models_preset.fallback_row(record) and record.get("auto_fallback") \
-                and not models_preset.isolated(computer):
+                and not models_preset.runs_gateway(computer):
             out.append(_finding("limited_no_fallback:" + bot, "limited_no_fallback", SETUP,
                                 f"{bot} stopped: its {login} login is used up",
                                 f"{bot} stopped: its {login} login is used up, and no computer here can run Tico "
@@ -692,11 +693,19 @@ def _server_checks(c):
                      BUG_FIX["server_cpu"])]
 
 
+def _org_rule_checks(c, settings):
+    """Rule checks that keep going unchecked (backend/org_rule_check.py): the rules are not being enforced."""
+    from .org_rule_check import health_findings
+    return [_finding(f["key"], f["check_id"], SETUP, f["title"], f["detail"], f["fix"])
+            for f in health_findings(c, settings)]
+
+
 def findings(c, settings):
     """Everything wrong right now, each once by key."""
     out = {}
     for part in (_runner_checks(c, settings), _login_checks(c, settings), _check_hold_checks(c),
-                 _bot_checks(c, settings), _release_approval_checks(c, settings), _server_checks(c)):
+                 _bot_checks(c, settings), _release_approval_checks(c, settings), _server_checks(c),
+                 _org_rule_checks(c, settings)):
         for item in part:
             out.setdefault(item["key"], item)
     return list(out.values())

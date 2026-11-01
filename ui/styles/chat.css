@@ -59,9 +59,10 @@
 .chat-side{margin:4px 0;color:var(--muted);font-size:var(--t-sm);line-height:var(--lh)}
 /* A task's start or milestone in the main chat: one quiet line like a folded side line; a tap opens the task's thread */
 .chat-task-row{display:flex;align-items:baseline;gap:.4em;width:100%;min-width:0;margin:4px 0;padding:5px 0;border:0;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);line-height:var(--lh);text-align:left;cursor:pointer}
-.chat-task-row:hover .ct-title{color:var(--accent)}
+.chat-task-row:hover .ct-title{color:var(--ink)}
 .chat-task-row .ct-dot{flex:none;align-self:center;width:7px;height:7px;margin:0 .45em 0 .2em;border-radius:50%;background:var(--run)}
-.chat-task-row .ct-dot.done{background:var(--ok)}
+/* done is finished, not news: the idle gray. Only blocked asks for attention (tokens.css: green is the dot's) */
+.chat-task-row .ct-dot.done{background:var(--idle)}
 .chat-task-row .ct-dot.blocked,.chat-task-row .ct-dot.stuck{background:var(--wait)}
 .chat-task-row .ct-dot.declined{background:var(--muted)}
 .chat-task-row .ct-title{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-weight:500}
@@ -200,7 +201,7 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 /* Outline: a long chat's prompts (ui/app/chat-outline.js). A quiet pill at the thread's top right; the list drops below
    it, and is a bottom sheet on a phone. */
 .conv-outline-btn{position:absolute;top:0;right:14px;z-index:3;padding:2px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--muted);font:500 var(--t-sm) var(--sans);cursor:pointer}
-.conv-outline-btn:hover,.conv-outline-btn:focus-visible{color:var(--ink);border-color:var(--accent)}
+.conv-outline-btn:hover,.conv-outline-btn:focus-visible{color:var(--ink);border-color:var(--focus)}
 .chat-outline{position:fixed;inset:var(--co-top,64px) var(--co-right,16px) auto auto;margin:0;width:min(360px,calc(100vw - 32px));max-height:min(60vh,520px);padding:0;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);box-shadow:0 8px 28px rgba(0,0,0,.28);overflow:hidden}
 .chat-outline[open]{display:flex;flex-direction:column}
 .chat-outline::backdrop{background:transparent}
@@ -211,7 +212,7 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 .chat-outline .co-row:hover,.chat-outline .co-row:focus-visible{background:var(--hover);outline:none}
 .chat-outline .co-text{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-base);line-height:var(--lh)}
 .chat-outline .co-row time{color:var(--muted);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
-.chat-outline .co-task{grid-column:1/-1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--accent-quiet);font-size:var(--t-sm);line-height:var(--lh)}
+.chat-outline .co-task{grid-column:1/-1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--link-quiet);font-size:var(--t-sm);line-height:var(--lh)}
 .chat-outline .co-empty{padding:10px 12px;color:var(--muted);font-size:var(--t-sm)}
 @media (max-width:760px){
   .chat-outline{inset:auto 0 0 0;width:100%;max-width:none;max-height:70dvh;border-radius:14px 14px 0 0;padding-bottom:env(safe-area-inset-bottom)}
@@ -221,11 +222,11 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 }
 /* The exchange a jump landed on, marked for a moment. */
 .conv-run.chat.jump-mark,.tcomment.jump-mark{animation:jump-mark 2s ease-out}
-@keyframes jump-mark{0%,30%{background:color-mix(in srgb,var(--accent) 16%,transparent)}100%{background:transparent}}
-@media (prefers-reduced-motion:reduce){.conv-run.chat.jump-mark,.tcomment.jump-mark{animation:none;background:color-mix(in srgb,var(--accent) 12%,transparent)}}
+@keyframes jump-mark{0%,30%{background:color-mix(in srgb,var(--ink) 10%,transparent)}100%{background:transparent}}
+@media (prefers-reduced-motion:reduce){.conv-run.chat.jump-mark,.tcomment.jump-mark{animation:none;background:color-mix(in srgb,var(--ink) 7%,transparent)}}
 /* Files dragged anywhere over the chat: the composer says where they will land. */
 #chat-composer .p-pill{position:relative}
-#chat-composer .p-pill.over::after{content:'Drop to attach';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border-radius:inherit;background:color-mix(in srgb,var(--surface) 90%,transparent);color:var(--accent);font-size:var(--t-base);font-weight:600;pointer-events:none}
+#chat-composer .p-pill.over::after{content:'Drop to attach';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border-radius:inherit;background:color-mix(in srgb,var(--surface) 90%,transparent);color:var(--ink);font-size:var(--t-base);font-weight:600;pointer-events:none}
 /* A desktop composer has room for a long message; a phone keeps its short cap. */
 @media (min-width:761px){#chat-composer .ask textarea{max-height:min(300px,100vh / 3)}}
 .conv-paused{flex:none;margin:var(--s2) 0 0;padding:6px 10px;border-radius:var(--radius);background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-sm)}
@@ -268,7 +269,7 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 .bot-chat-tasks{position:relative;flex:none;margin:0 0 8px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .bot-chat-task-groups{max-height:calc(2 * 1.4em + 12px);overflow-y:auto;overscroll-behavior:contain;padding:6px 34px 6px 11px;font-size:var(--t-base);line-height:var(--lh)}
 .bot-chat-task-row{display:block;width:100%;padding:0;border:0;background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
-.bot-chat-task-row+.bot-chat-task-row{margin-top:4px}.bot-chat-task-row:hover{color:var(--accent)}
+.bot-chat-task-row+.bot-chat-task-row{margin-top:4px}.bot-chat-task-row:hover{color:var(--ink)}
 .bot-chat-tasks-x{position:absolute;top:2px;right:2px;width:30px;height:30px;border:0;border-radius:6px;background:none;color:var(--muted);font-size:18px;line-height:var(--lh-none);cursor:pointer}
 .bot-chat-tasks-x:hover{color:var(--ink);background:var(--surface2)}
 /* Composer notices and attachment state sit above the input, so the input itself owns the edge. */
@@ -289,7 +290,7 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 .p-menu.p-ways>button{min-height:34px;border:0}
 .p-ways .p-for{display:flex;flex-wrap:wrap;gap:4px;padding:0 4px 4px 9px}
 .p-menu.p-ways .p-for button{width:auto;min-width:34px;height:34px;justify-content:center;padding:0 8px;border:1px solid var(--line);border-radius:17px;font-size:var(--t-sm);font-variant-numeric:tabular-nums}
-.p-menu.p-ways .p-for button[aria-checked="true"]{border-color:var(--accent);color:var(--accent);font-weight:600}
+.p-menu.p-ways .p-for button[aria-checked="true"]{border-color:var(--ink);color:var(--ink);font-weight:600}
 /* Chat owns the viewport: chrome and composer stay visible while only history scrolls. */
 #main.chat-layout{display:flex;flex-direction:column;height:100vh;height:100dvh;min-height:0;overflow:hidden;padding-bottom:max(var(--s3),env(safe-area-inset-bottom))}
 /* On desktop the body grid sizes the row (the app nudge may sit above); 100vh here would push the composer below the fold. */
@@ -325,7 +326,7 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
   #conv-access .muted{display:none}
   #chat-composer .p-pill{display:grid;grid-template-columns:36px minmax(0,1fr) auto auto;gap:2px;padding:4px;border-radius:24px;align-items:center}
   #chat-composer .p-pill:has(.p-bot){grid-template-columns:36px 36px minmax(0,1fr) auto auto}
-  #chat-composer .p-pill:has(.p-bot):not(:has(.p-attach)){grid-template-columns:36px minmax(0,1fr) auto auto}   /* the Assistant takes text only */
+  #chat-composer .p-pill:has(.p-bot):not(:has(.p-attach)){grid-template-columns:36px minmax(0,1fr) auto auto}   /* a chat with no attaching */
   #chat-composer .p-text{grid-column:-4;grid-row:1;order:0;flex:none;width:100%;height:36px;padding:6px 4px}
   #chat-composer .p-attach{grid-column:-5;grid-row:1;width:36px;height:36px;padding:0;justify-content:center}
   #chat-composer .p-go{grid-column:-2;grid-row:1;margin:0}

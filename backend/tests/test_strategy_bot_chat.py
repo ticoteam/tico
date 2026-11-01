@@ -344,36 +344,59 @@ def png():
     return image.getvalue()
 
 
-def test_an_assistant_chat_takes_text_only_for_the_owner_too_and_a_refused_upload_keeps_nothing(api, monkeypatch):
-    import hashlib
-    from backend.store import Problem
-    blobs = api.app.state.blobs
-    writes = []
+def test_a_file_in_an_assistant_chat_lands_on_the_persons_own_message_only(api):
+    import json
+    strategy_bot(api)
+    rooms = {token: get(api, "assistant", token)["room_id"] for token in ("ana-test", "ben-test")}
+    sent = {}
+    for token in ("ana-test", "ben-test"):
+        r = api.post("/api/v2/uploads/assistant/messages",
+                     data={"text": "Look", "page": json.dumps({"path": "#/tasks", "title": "Tasks"})},
+                     files={"files": ("image.png", png(), "image/png")}, headers=headers(token))
+        assert r.status_code == 200, r.text
+        sent[token] = r.json()
+    ana = sent["ana-test"]["message"]
+    # In her own room, with the page she asked from; a picture skips the quick answers.
+    assert ana["conversation_id"] == rooms["ana-test"] != rooms["ben-test"]
+    assert sent["ana-test"]["reply"] is None and sent["ana-test"]["fast"] is False
+    with api.app.state.store.read() as c:
+        refs = json.loads(c.execute("SELECT refs_json FROM messages WHERE id=?", (ana["id"],)).fetchone()[0])
+    assert refs["page"] == {"path": "#/tasks", "title": "Tasks"} and refs["assistant"] is True
+    [picture] = refs["attachments"]
+    assert picture["kind"] == "image" and picture["name"] == "image.png"
+    # Each reads their own and not the other's, by the file or by its blob, the owner included.
+    with api.app.state.store.read() as c:
+        bens = json.loads(c.execute("SELECT refs_json FROM messages WHERE id=?",
+                                    (sent["ben-test"]["message"]["id"],)).fetchone()[0])["attachments"][0]
+    for mine, theirs, token in ((picture, bens, "ana-test"), (bens, picture, "ben-test")):
+        for url in (f"/api/v2/files/{mine['file_id']}", mine["url"]):
+            assert api.get(url, headers=headers(token)).status_code == 200, (token, url)
+        for url in (f"/api/v2/files/{theirs['file_id']}", theirs["url"]):
+            assert api.get(url, headers=headers(token)).status_code in (403, 404), (token, url)
 
-    def storage_down(data, content_type="application/octet-stream"):
-        writes.append(hashlib.sha256(data).hexdigest())
-        raise Problem("storage", "Storage is unavailable", 503)
 
-    def kept(data):
-        return (blobs.directory / blobs.key(hashlib.sha256(data).hexdigest())).exists()
-
-    def stored(c):
-        return [c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
-                for table in ("messages", "message_assets", "bot_files", "blobs")]
+def test_an_assistant_upload_retried_with_its_key_is_stored_once(api):
+    import json
     strategy_bot(api)
     get(api, "assistant")
-    with api.app.state.store.read() as c:
-        before = stored(c)
-    # Refused before a byte is stored, so storage being down changes nothing; the same key again, with the same and
-    # with other content, is refused the same way.
-    mine, other = png() + uuid.uuid4().bytes, png() + uuid.uuid4().bytes
-    monkeypatch.setattr(blobs, "put", storage_down)
-    for token in ("ana-test", "ben-test"):
-        for text, picture in (("Look", mine), ("Look", mine), ("Look again", other)):
-            refused = api.post("/api/v2/uploads/assistant/messages", data={"text": text},
-                               files={"files": ("image.png", picture, "image/png")},
-                               headers={**headers(token), "Idempotency-Key": "paste-" + token})
-            assert refused.status_code == 422 and refused.json()["error"]["code"] == "text_only", refused.text
-            assert writes == [] and not kept(mine) and not kept(other)
-    with api.app.state.store.read() as c:
-        assert stored(c) == before
+
+    def send(text, picture, page="#/tasks"):
+        return api.post("/api/v2/uploads/assistant/messages",
+                        data={"text": text, "page": json.dumps({"path": page, "title": "Tasks"})},
+                        files={"files": ("image.png", picture, "image/png")}, headers=headers("ana-test", "paste-1"))
+
+    def stored():
+        with api.app.state.store.read() as c:
+            return [c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                    for table in ("messages", "message_assets", "bot_files", "blobs")]
+    picture = png() + uuid.uuid4().bytes
+    first = send("Look", picture)
+    assert first.status_code == 200, first.text
+    after = stored()
+    again = send("Look", picture)       # the response was lost: the same request again
+    assert again.status_code == 200 and again.json()["message"]["id"] == first.json()["message"]["id"]
+    assert stored() == after
+    # The same key with other words, another picture or another page is not that request.
+    for changed in (send("Look again", picture), send("Look", png() + uuid.uuid4().bytes), send("Look", picture, "#/docs")):
+        assert changed.status_code in (409, 422), changed.text
+    assert stored() == after

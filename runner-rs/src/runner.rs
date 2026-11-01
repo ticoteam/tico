@@ -93,6 +93,8 @@ pub struct Runner {
     shutdown: Mutex<Option<Instant>>,
     /// Persistent Antigravity processes kept between a conversation's turns.
     pub warm: crate::warm::WarmSessions,
+    /// pi processes kept between a thread's turns (hosts/pi.rs Pool).
+    pub pi: Arc<crate::hosts::pi::Pool>,
     /// What each bot's bot.yaml adds: tools, MCP servers, watchers, memory history (crate::perbot).
     pub perbot: crate::perbot::PerBot,
 }
@@ -172,6 +174,7 @@ impl Runner {
             restart_refused: AtomicBool::new(false),
             shutdown: Mutex::new(None),
             warm: crate::warm::WarmSessions::new(state.directory.join("antigravity"), capacity.max(8)),
+            pi: Arc::new(crate::hosts::pi::Pool::new(state.directory.join("pi"), capacity.max(8))),
             state,
             perbot: crate::perbot::PerBot::default(),
         }
@@ -379,7 +382,7 @@ impl Runner {
             && candidates.iter().all(|entry| entry["computer_logins_v1"] == true);
         let runtimes = readiness::runtime_report(&config, &self.sign_in, &self.client, &candidates, computer_logins).await;
         *self.runtime_rows.lock().unwrap() = runtimes.clone();
-        let mut checks = readiness::preflight(&config, &candidates, &runtimes, computer_logins).await;
+        let mut checks = readiness::preflight(&config, &self.sign_in, &candidates, &runtimes, computer_logins).await;
         self.perbot.decorate(&self.config, &mut checks, &candidates);
         self.publish_unpublished(&candidates, &mut checks).await;
         let notes = self.publish_notes.lock().unwrap().clone();
@@ -426,9 +429,10 @@ impl Runner {
             }
         }
         if !crate::lanes::held_back("profiles") {
+            // Profiles only: a subscription login is shared by its bots, so no bot is asked for (signin.refusal_key).
             let rejected = |runtime: &str, name: &str| {
                 let profile = crate::profiles::select(&config.data, Some(name));
-                profile.is_some_and(|p| self.sign_in.rejection(runtime, Some(&p)).is_some())
+                profile.is_some_and(|p| self.sign_in.rejection(runtime, Some(&p), "").is_some())
             };
             body["profiles"] = json!(crate::profiles::report(&config.data, &rejected).await);
         }
@@ -482,6 +486,11 @@ impl Runner {
             self.accounts.store(beat.subscription_accounts == Some(true), Ordering::SeqCst);
             // Performance diagnostics run only while the computer's owner has them on (crate::perf).
             crate::perf::set_enabled(beat.performance == Some(true));
+            // This computer is a browser exit only while its owner shares its internet (crate::browser_exit).
+            crate::browser_exit::set_sharing(beat.browser_exit == Some(true));
+            if let Some(bots) = beat.browser_exit_bots.as_deref() {
+                crate::browser_exit::keep_proxies(bots, began);
+            }
             if beat.restart == Some(true) && self.restart.lock().unwrap().is_none() {
                 // Only a supervisor that starts the runner again may let it exit to restart; take main first if safe.
                 if supervised() {
@@ -824,6 +833,7 @@ impl Runner {
             m.abort();
         }
         self.warm.prune(true).await;
+        self.pi.prune(true).await;
         // Git the runner started for mirrors, checkouts and worktrees goes with it, credential helpers included.
         crate::gitrun::stop_all();
         self.worktrees.settle().await;
@@ -865,6 +875,7 @@ impl Runner {
             clock.next_claim = None; // capacity came free: look for the next job now
         }
         self.warm.prune(false).await;
+        self.pi.prune(false).await;
         if maintenance.as_ref().is_some_and(|m| m.is_finished()) {
             if let Ok(Err(e)) = maintenance.take().unwrap().await {
                 log(&format!("Tico runner: heartbeat failed ({}); will retry", describe(&e)));

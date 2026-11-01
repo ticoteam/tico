@@ -23,12 +23,13 @@ function settingsBotEditorRows(e) {
     ${budgetRowHTML(e)}
     ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>${settingsAppDeliveryRow(e)}`
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
-    <div class="sb-sub" data-bot-sub-line hidden></div>
     ${settingsCompactRow(e)}
     <div class="sb-row"><span>Fallback</span>${settingsChoiceCombo(e, 'fallback')}<span></span></div>
     <div class="sb-row"><span>Task model</span><div>${settingsChoiceCombo(e, 'task')}${settingsTaskWarning(e)}</div><span></span></div>
     ${settingsTaskParts(e)}
-    <div class="sb-row"><span>Computer</span>${settingsMachineSelect(e)}<span></span></div>`}`;
+    <div class="sb-row"><span>Computer</span>${settingsMachineSelect(e)}<span></span></div>
+    ${settingsBrowserExitRow(e)}
+    ${cloudMachineRowHTML(e)}`}`;
 }
 // Where the bot's conversation compacts (backend/settings_admin.py COMPACT_AT). Only a CLI whose manifest says
 // `compaction` takes it, and it saves on its own without a fresh session, like the computer.
@@ -42,6 +43,24 @@ function settingsCompactRow(e) {
   return `<div class="sb-row sb-compact"><span>Compact at</span><select class="settings-inline-select" data-bot-compact="${esc(e.name)}" data-current="${current}" aria-label="Compact at for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
       ${options.map(([value, label]) => `<option value="${value}" ${value === current ? 'selected' : ''}>${label}</option>`).join('')}
     </select><span></span></div>`;
+}
+// Which computer's internet the bot's browser goes out through (backend/browser_exit.py): only computers whose owner
+// shares with this bot, and the one it has now even if that stopped (it then fails closed, so it stays visible).
+function settingsBrowserExitRow(e) {
+  if (e.agent) return '';
+  const current = e.browser_exit || '';
+  const choices = (SETTINGS_DATA.machines || []).filter(m => m.id === current
+    || (!m.revoked_at && m.browser_exit?.sharing && m.browser_exit.bots.includes(e.name)));
+  if (!choices.length) return '';
+  return `<div class="sb-row"><span>Browse through</span><select class="settings-inline-select" data-bot-browser-exit="${esc(e.name)}" data-current="${esc(current)}"
+      aria-label="Browse through for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
+      <option value=""${current ? '' : ' selected'}>None</option>
+      ${choices.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(m.label)} · ${esc(settingsPersonName(m.operator))}</option>`).join('')}
+    </select><span></span></div>`;
+}
+function settingsBrowserExitRun(select) {
+  const slug = select.dataset.botBrowserExit, runner_id = select.value || null;
+  return async rev => { await post(`/v2/bots/${encodeURIComponent(slug)}/browser-exit`, {runner_id}); return rev; };
 }
 // The editor's held changes: each returns the save Save bot runs, given the bot's revision, answering the next one.
 function settingsCompactRun(select) {
@@ -233,7 +252,7 @@ function settingsEditBot(slug = '', inline = false) {
   };
   const stage = (key, label, run) => { if (run) pending.set(key, {label, run}); else pending.delete(key); paintPending(); };
   if (rows) {
-    const paint = () => { rows.innerHTML = settingsBotEditorRows(S.emps.find(row => row.name === slug) || e); rows.querySelectorAll('[data-choice-apply]').forEach(button => button.remove()); settingsWireCombos(rows); void subsBotMount(rows, slug); void settingsMailSummary(rows, slug); void budgetMount(rows, slug, stage); void profileMount(rows, slug); paintPending(); };
+    const paint = () => { rows.innerHTML = settingsBotEditorRows(S.emps.find(row => row.name === slug) || e); rows.querySelectorAll('[data-choice-apply]').forEach(button => button.remove()); settingsWireCombos(rows); void settingsMailSummary(rows, slug); void budgetMount(rows, slug, stage); void profileMount(rows, slug); void cloudMachineMount(rows, slug); paintPending(); };
     const refresh = () => { if (!active() || !form.isConnected) { cleanup(); return; } if (pendingNames().length) return; if (touched) rev = (S.emps.find(row => row.name === slug) || e).revision; paint(); };
     paint();
     document.addEventListener('tico:settings-loaded', refresh);
@@ -275,9 +294,19 @@ function settingsEditBot(slug = '', inline = false) {
       if (machine) {
         const target = SETTINGS_DATA.machines.find(row => row.id === machine.value);
         machinePick = changed(machine) && target ? {id: target.id, label: target.label} : null;
+        // A cloud machine is not a move: the bot goes there when it is up (made or started when the bot next has work).
+        const pick = cloudMachinePick(machine.value);
+        stage('cloud', 'computer', changed(machine) && pick && cloudMachineRun(slug, {mode: 'cloud', placement: pick}));
       }
+      const cloudSize = event.target.closest('[data-bot-cloud-size]');
+      if (cloudSize) stage('cloud-size', 'size', changed(cloudSize) && cloudMachineRun(slug, {size: cloudSize.value}, cloudSize));
+      const cloudAlways = event.target.closest('[data-bot-cloud-always]');
+      if (cloudAlways) stage('cloud-always', 'always on', cloudAlways.checked !== (cloudAlways.dataset.current === 'true')
+        && cloudMachineRun(slug, {always_on: cloudAlways.checked}, cloudAlways));
       const compact = event.target.closest('[data-bot-compact]');
       if (compact) stage('compact', 'compact at', changed(compact) && settingsCompactRun(compact));
+      const exit = event.target.closest('[data-bot-browser-exit]');
+      if (exit) stage('browser-exit', 'browse through', changed(exit) && settingsBrowserExitRun(exit));
       const profile = event.target.closest('[data-bot-profile], [data-profile-key]');
       if (profile) stage('profile', 'profile', profileStaged(profile));
       const keep = event.target.closest('[data-bot-keep-tasks]');
@@ -518,6 +547,13 @@ function settingsEditOwners(slug, {stage} = {}) {
 async function settingsMoveBot(select) {
   const slug = select.dataset.botMachine, e = S.emps.find(row => row.name === slug);
   const current = select.dataset.current || '', machine = SETTINGS_DATA.machines.find(row => row.id === select.value);
+  const pick = cloudMachinePick(select.value);
+  if (e && pick && select.value !== current) {
+    try { await post(`/v2/bots/${encodeURIComponent(slug)}/cloud-machine`, {mode: 'cloud', placement: pick}); toast('Saved'); }
+    catch (error) { select.value = current; toast(error.message); return; }
+    await loadSettings();
+    return;
+  }
   if (!e || !machine || machine.id === current) return;
   if (!await settingsConfirmTransition(e, 'machine', machine.label)) { select.value = current; return; }
   await settingsBeginTransition(select, e, {kind:'machine', runner_id:machine.id,

@@ -60,6 +60,10 @@
   let pending = null;
   const PERF_WINDOWS = [[0, 'None'], [24, '1 day'], [168, '7 days'], [336, '14 days']];
   const statuses = {open: 'Open', answered: 'Answered', closed: 'Closed', gone: 'Removed'};
+  // The reply promise (Support & Managed Owner's spec, reply-promise.md): the same words before and after sending, and who
+  // answers first. Shown on an open request only, never on an answered, closed or failed one.
+  const PROMISE = 'We usually reply within 1 business day (Monday to Friday).';
+  const WHO_ANSWERS = "Tico's support assistant answers first and brings in a person when it needs one.";
   const ICON = {
     send: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 12h15M13 6l6 6-6 6"/></svg>',
     trash: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5"/></svg>',
@@ -102,9 +106,9 @@
     if (!r.ok) throw Object.assign(new Error(data.error?.detail || data.error?.message || (typeof data.detail === 'string' ? data.detail : '') || 'Could not reach support. Try again.'), {status: r.status});
     return data;
   }
-  // The number of unread replies shows only inside Ask's panel: on Tico support in its + menu here, and on the
-  // support chip (ui/app/ask-panel.js, which hears `tico:support` to show an open request as in its chat). Ask's
-  // button and the phone's Ask tab carry no count.
+  // Unread replies show only inside Ask's panel, as support's messages in the chat (ui/app/ask-panel.js hears
+  // `tico:support`); an #ask-support item, where a page has one, carries the count. Ask's button and the phone's Ask
+  // tab carry no count.
   function mark() {
     const n = state.unread, item = document.getElementById('ask-support');
     if (item) {
@@ -219,12 +223,12 @@
   function renderThread(pin = false) {
     const host = pop.querySelector('[data-thread]'), t = current();
     const bubble = (body, staff, at, diag) => `<div class="support-msg ${staff ? 'staff' : 'you'}"><span class="support-who">${staff ? 'Tico support' : 'You'}${at ? ` · <time datetime="${escape(at)}">${escape(when(at))}</time>` : ''}</span><div class="support-body">${escape(body)}</div>${diag ? '<small class="support-sent">Diagnostics attached</small>' : ''}</div>`;
-    const after = {open: 'Delivered to Tico support. Their reply will appear here.', gone: 'Tico support removed this request.'};
+    const after = {open: `Delivered to Tico support. ${PROMISE} The reply will appear here.`, gone: 'Tico support removed this request.'};
     // No request in the chat: an empty chat, and a way back to the last request when it is closed.
     const recent = newestFirst(state.tickets)[0], closedLast = !latest() && recent?.status === 'closed' ? recent : null;
     const html = t ? bubble(t.message, false, t.created, t.sent?.diagnostics) + (t.messages || []).map(m => bubble(m.body, m.from === 'staff', m.created, m.has_diagnostics)).join('')
         + (after[t.status] ? `<p class="support-delivered">${after[t.status]}</p>` : '')
-      : `<div class="support-empty"><p>Ask us anything. A person at Tico reads every message.</p>${closedLast
+      : `<div class="support-empty"><p>Ask us anything. ${PROMISE}</p><p>${WHO_ANSWERS}</p>${closedLast
         ? `<p>Your last request, ${escape(title(closedLast))}, is closed. <button type="button" class="linkish" data-view-last="${escape(closedLast.id)}">View it</button></p>` : ''}</div>`;
     // stays on the newest message only while the reader is there, so a poll never moves someone reading back
     // (ui/app/stick-scroll.js); a reply that lands while they are scrolled up shows the "New reply" pill instead
@@ -610,6 +614,17 @@
     mark(); if (isOpen()) render(); schedule();
     return next;
   };
+  // Ask's "Loop in Tico Support" switch with no open request: a new request, sent at once, holding the chat it shares
+  // (the switch is the consent; ui/app/ask-rules.js askShareText scrubs it). The reply email and install details are
+  // the same defaults the form starts with.
+  window.supportFile = async message => {
+    const body = {message, email: compose?.email || '', include_ids: true, ...(appVersion() ? {app_version: appVersion()} : {})};
+    const next = await call('POST', '/support/tickets', body, uid());
+    stateRevision++;
+    state.tickets = [next, ...state.tickets.filter(t => t.id !== next.id)];
+    mark(); if (isOpen()) render(); schedule();
+    return next;
+  };
   window.supportRead = async id => {
     const revision = stateRevision;
     try {
@@ -719,7 +734,7 @@
     });
     return pop;
   }
-  const visibleQuestion = () => ['ask-fab', 'mobile-ask'].map(id => document.getElementById(id)).find(el => el?.getClientRects().length);
+  const visibleQuestion = () => ['ask-row', 'mobile-ask'].map(id => document.getElementById(id)).find(el => el?.getClientRects().length);
   // On a phone the sheet sits on the bottom of what is visible: with the keyboard up, the space above it. The browser
   // reports that space in the visual viewport, whose height shrinks both for the keyboard and for pinch zoom, so
   // height × scale is the visible height in page pixels with zoom taken out. At normal scale the sheet follows the

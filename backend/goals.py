@@ -40,9 +40,10 @@ SOURCES = ("measured", "estimate")        # legacy names of a reading's quality;
 # Strategy Bot's bot-task changes to get a red or stalled goal back on track, at level 2 (backend/strategy_suggest.py).
 # strategy_draft: a change to the team's strategy draft and its bets, from any bot, the owner's to confirm.
 # strategy_realign: the goals of bets a publish retired or rewrote, filed by Tico for the owner (backend/strategy.py).
+# brand_draft, gtm_draft: sections for the brand or GTM draft from any bot, an admin's to confirm (backend/brand_gtm.py).
 PROPOSALS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery",
-             "strategy_draft", "strategy_realign")
-FLAGS = ("vague", "duplicate", "unmeasured")
+             "strategy_draft", "strategy_realign", "brand_draft", "gtm_draft")
+FLAGS = ("vague", "duplicate")
 
 
 # ----------------------------------------------------------------------------- reads
@@ -741,6 +742,9 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
     """What is wrong with a proposal's payload, in a sentence, or None."""
     if kind in ("goal_wording", "goal_kpi", "flag", "goal_why", "recovery") and not goal(conn, goal_id):
         return "name the goal this is about"
+    if kind in ("brand_draft", "gtm_draft") and (goal_id or kpi_id):
+        # A draft page proposal carries unpublished words: never filed under a goal or KPI members read.
+        return "a brand or GTM draft proposal is about the page, not a goal or KPI: leave goal_id and kpi_id out"
     if kind in ("kpi_definition", "kpi_target") and (not kpi_id or not kpi(conn, kpi_id)
                                                       or (kind == "kpi_definition" and K.auto(kpi_id))):
         return "name a KPI this is about (a KPI Tico computes itself has no definition to change)"
@@ -792,6 +796,9 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
         elif kind == "strategy_realign":
             from . import strategy
             return strategy.realign_error(conn, payload)
+        elif kind in ("brand_draft", "gtm_draft"):
+            from . import brand_gtm
+            return brand_gtm.proposal_error(conn, brand_gtm.kind_of_proposal(kind), payload)
     except ValueError as exc:
         return str(exc)
     return None
@@ -978,6 +985,10 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
         elif row["kind"] == "strategy_realign":
             from . import strategy
             result = strategy.apply_realign(conn, actor, payload, moves)
+        elif row["kind"] in ("brand_draft", "gtm_draft"):
+            # Merged into the draft as the admin who confirmed it. Never published.
+            from . import brand_gtm
+            result = brand_gtm.apply_proposal(conn, brand_gtm.kind_of_proposal(row["kind"]), actor, payload)
     conn.execute("UPDATE goal_proposals SET status=?, decided_by=?, decided_at=?, decision_note=?, result_json=? "
                  "WHERE id=?", ("confirmed" if decision == "confirm" else "rejected", actor, H.now(),
                                 str(note or "").strip()[:1000], H._dump(result) if result else None, proposal_id))

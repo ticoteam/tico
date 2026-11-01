@@ -35,6 +35,8 @@ import threading
 import time
 import traceback
 
+from . import hubdb
+
 LOG = logging.getLogger("tico.flight")
 
 SCHEMA = """
@@ -965,7 +967,8 @@ class Flight(threading.Thread):
         goes unwritten is named in a `recorder_gap` event, so the tables never lose a minute silently."""
         self.pending.append((minute, work))
         try:
-            c = sqlite3.connect(str(self.settings.db_path), timeout=self.db_wait, isolation_level=None)
+            c = hubdb.leave_wal_for_litestream(
+                sqlite3.connect(str(self.settings.db_path), timeout=self.db_wait, isolation_level=None))
         except sqlite3.Error:
             self.db_failed += 1
             self._trim()

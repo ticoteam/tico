@@ -1,0 +1,25 @@
+name: tico-counsel               # the slug: it matches the repository bot-tico-counsel and the label owner:tico-counsel
+display_name: "Counsel"
+labels: [owner:tico-counsel]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: high
+# Counsel's tasks are private (its requester and Counsel only); matches the server's default for this template.
+private_tasks_default: true
+
+# Each task is judged on its own: no session carries over to the next task, no memory/ or state.md is read or kept, and
+# nightly learnings skip it (backend/hubdb.py stateless, STATELESS_BY_TEMPLATE).
+stateless: true
+max_run_minutes: 60
+
+# Counsel sends nothing. It answers the person or bot that asked, on its task, and suggests rules.
+outbound_send: false
+
+# No routines and no watchers: Counsel only runs on a task (a document added, or a question asked).
+routines: []
+
+# What this bot may touch: nothing outside Tico. It has no credentials and sends nothing: it reads the document its task
+# gives it and the rules in force, and writes suggestions through `hub rules`. Tico fetches a link itself, with no
+# credential, before Counsel's task exists; Counsel never fetches.
+tools: []

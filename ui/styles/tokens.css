@@ -2,7 +2,7 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* swap, not block: text never waits on the icon font. Its ligature names ("dynamic_feed") stay hidden until the font
    is in (html.icons-ready, set by ui/theme.js; see base.css), so they never flash as words. */
-@font-face{font-family:"Material Symbols Outlined";font-style:normal;font-weight:200;font-display:swap;src:url(/vendor/fonts/material-symbols-outlined.woff2?v=95d5a76f3a2a) format("woff2")}
+@font-face{font-family:"Material Symbols Outlined";font-style:normal;font-weight:300;font-display:swap;src:url(/vendor/fonts/material-symbols-outlined.woff2?v=887fa52538ae) format("woff2")}
 /* Text: Inter, self-hosted (ui/vendor/fonts/inter-variable.woff2, built by scripts/build-text-font.py; OFL, see
    LICENSE-inter.txt). One variable file: weights 400-700, optical sizes 14-32, Latin and Latin Extended.
    optional, not swap: a page that does not have the font within ~100ms (a cold cache) keeps the fallback for its whole
@@ -41,55 +41,64 @@
   --dur-fast:120ms;--dur:180ms;--ease:cubic-bezier(.2,0,0,1);--ease-out:cubic-bezier(0,0,.2,1);
   /* the house rules these serve are at the top of components.css */
   /* focus: one ring for buttons, links, rows and switches, outside the box, or inside it on a row that meets its
-     container's edge; a text field takes the halo instead (its border turns the accent) */
-  --focus-ring:2px solid var(--accent);--focus-offset:2px;--focus-inset:-2px;
-  --focus-halo:3px solid color-mix(in srgb,var(--accent) 28%,transparent);
+     container's edge; a text field takes the halo instead (its border turns --focus). Ink, not the accent: --focus is
+     g7, 9:1 or more on every surface in both themes. */
+  --focus-ring:2px solid var(--focus);--focus-offset:2px;--focus-inset:-2px;
+  --focus-halo:3px solid color-mix(in srgb,var(--focus) 28%,transparent);
   /* control heights: small and regular (a phone's are 40px, forms.css) */
   --ctl-sm:28px;--ctl:32px;
-  /* the Ask button's footprint on a computer (ask.css): 16px off the bottom, 44px tall, 16px clear above it */
-  --fab-room:76px;
   /* a fold's chevron (chevron_right) turns a quarter to open */
   --chev-open:rotate(90deg);
 }
-/* Dark is the default. ui/theme.js sets <html data-theme> before the page paints: "dark" (also when nothing is
+/* Paper & Ink. Dark is the default. ui/theme.js sets <html data-theme> before the page paints: "dark" (also when nothing is
    saved), "light", or "system", which follows the OS. Light is the same nine steps in reverse order, so every rule
    names a step's role (--bg, --surface, --line...) and never a theme. */
 :root{
-  /* one neutral gray ramp, g0 the page and g8 the text; g6 (--muted) keeps 4.5:1 on every surface up to g3, in both themes */
-  --g0:#121417;--g1:#191c20;--g2:#20242a;--g3:#2a2f36;--g4:#363c45;--g5:#5b6470;--g6:#9199a6;--g7:#b6bec9;--g8:#e6e9ee;
+  /* Paper & Ink: one gray ramp with a slight green bias, g0 the page and g8 the text; g6 (--muted) keeps 4.5:1 on every
+     surface up to g3, in both themes */
+  --g0:#101513;--g1:#161c1a;--g2:#1d2421;--g3:#27302c;--g4:#333d39;--g5:#56625d;--g6:#909d97;--g7:#b6c1bb;--g8:#e5ebe7;
   --bg:var(--g0);--surface:var(--g1);--surface2:var(--g2);--line:var(--g3);--muted:var(--g6);--ink:var(--g8);
   --hover:var(--g3);
   /* the chosen segment of a switch, a step above its track (--surface2) */
   --raised:var(--g3);
   /* your own message: one clear step above the pane it sits on */
-  --bubble:#2d333c;
-  /* The teal, lifted a little so it reads on the neutral ramp: 8.1:1 on --bg, 6.9:1 on --surface2. */
-  --accent:#45c09c;--accent-ink:#0b1a15;
-  /* Links in a dense list (a bot's right rail): the accent, a step quieter. Mixed from --accent and --muted, so
-     it follows the theme without a value of its own. */
+  --bubble:#2b3430;
+  /* Jade, from the dot's own hue: 8.2:1 on --bg, 7:1 on --surface2. Green is the Liquid Dot's and the one primary
+     action's on a view (and a chart's one series); links, counts, selection, focus and status marks are ink. */
+  --accent:#5cc092;--accent-ink:#0c1a14;
   --accent-quiet:color-mix(in srgb,var(--accent) 68%,var(--muted));
-  --run:#7fb3f0;--wait:#e2b25a;--fail:#f08080;--idle:#6f7d8b;--ok:#6cc48f;
+  /* Links are ink (underlined where they sit in ink text); in a dense list (a bot's right rail), a step quieter. */
+  --link:var(--ink);--link-quiet:var(--g7);--focus:var(--g7);
+  --run:#7fb3f0;--wait:#e2b25a;--fail:#f08080;--idle:#6d7b75;--ok:#6cc48f;
   /* Waiting labels need a separate ink: the amber also fills badges with dark text. */
   --wait-ink:var(--wait);
   --run-bg:#1b2a3d;--wait-bg:#3a2f18;--fail-bg:#3d1f1f;--ok-bg:#1d3327;--idle-bg:var(--g2);
+  /* The Liquid Dot (liquid-dot.css): Tico, the assistant, and nothing else. A flat jade with a slight tonal fall, and
+     the soft shadow under it. The Ask pill's face it sits on; Tico Support's blue-gray in the chat (ask.css). */
+  --dot:#56a578;--dot-hi:#5fb083;--dot-lo:#4d966c;--dot-shadow:rgba(0,0,0,.55);--ask-face:var(--g1);
+  --sup:#20253a;--sup-ink:#b9c2f0;
   --sans:"Inter","Inter Fallback",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   /* The conversation: one centred column this wide at most, in slightly larger type with roomier lines. */
-  --read-width:800px;--read-size:var(--t-md);--read-leading:1.65;
+  --read-width:800px;--read-size:var(--t-md);--read-leading:1.55;
   color-scheme:dark;
 }
 :root[data-theme="light"]{
-  --g0:#ffffff;--g1:#f5f6f8;--g2:#eceef1;--g3:#e0e3e8;--g4:#cdd2d9;--g5:#9aa2ad;--g6:#5a636f;--g7:#3d444d;--g8:#16191d;
-  --bubble:#e5e8ec;--raised:var(--g0);
-  --accent:#0f6e56;--accent-ink:#ffffff;
-  --run:#2b6cb0;--wait:#b7791f;--fail:#c53030;--idle:#9aa5b1;--ok:#2f855a;
-  --wait-ink:#87540e;
-  --run-bg:#e6f0fb;--wait-bg:#fbf1dc;--fail-bg:#fde8e8;--ok-bg:#e3f4ea;
+  --g0:#fbfbf8;--g1:#f4f5f0;--g2:#eceee8;--g3:#dfe3db;--g4:#cdd3ca;--g5:#98a39c;--g6:#56635e;--g7:#3a4540;--g8:#172221;
+  --bubble:#e4e7e0;--raised:#ffffff;
+  --accent:#2e6b4f;--accent-ink:#ffffff;
+  --run:#2b5f96;--wait:#b7791f;--fail:#c53030;--idle:#9ba59f;--ok:#2f7a4f;
+  --wait-ink:#8a5a10;
+  --run-bg:#e4edf7;--wait-bg:#f6ecd6;--fail-bg:#fbe7e4;--ok-bg:#e7f2ea;
+  --dot:#4f9c71;--dot-hi:#5aa87c;--dot-lo:#468d65;--dot-shadow:rgba(23,34,33,.22);--ask-face:#ffffff;
+  --sup:#eef0fa;--sup-ink:#3d4a8a;
   color-scheme:light}
 @media (prefers-color-scheme:light){:root[data-theme="system"]{
-  --g0:#ffffff;--g1:#f5f6f8;--g2:#eceef1;--g3:#e0e3e8;--g4:#cdd2d9;--g5:#9aa2ad;--g6:#5a636f;--g7:#3d444d;--g8:#16191d;
-  --bubble:#e5e8ec;--raised:var(--g0);
-  --accent:#0f6e56;--accent-ink:#ffffff;
-  --run:#2b6cb0;--wait:#b7791f;--fail:#c53030;--idle:#9aa5b1;--ok:#2f855a;
-  --wait-ink:#87540e;
-  --run-bg:#e6f0fb;--wait-bg:#fbf1dc;--fail-bg:#fde8e8;--ok-bg:#e3f4ea;
+  --g0:#fbfbf8;--g1:#f4f5f0;--g2:#eceee8;--g3:#dfe3db;--g4:#cdd3ca;--g5:#98a39c;--g6:#56635e;--g7:#3a4540;--g8:#172221;
+  --bubble:#e4e7e0;--raised:#ffffff;
+  --accent:#2e6b4f;--accent-ink:#ffffff;
+  --run:#2b5f96;--wait:#b7791f;--fail:#c53030;--idle:#9ba59f;--ok:#2f7a4f;
+  --wait-ink:#8a5a10;
+  --run-bg:#e4edf7;--wait-bg:#f6ecd6;--fail-bg:#fbe7e4;--ok-bg:#e7f2ea;
+  --dot:#4f9c71;--dot-hi:#5aa87c;--dot-lo:#468d65;--dot-shadow:rgba(23,34,33,.22);--ask-face:#ffffff;
+  --sup:#eef0fa;--sup-ink:#3d4a8a;
   color-scheme:light}}

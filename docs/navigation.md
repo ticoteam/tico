@@ -6,7 +6,7 @@ Tools is in the sidebar.
 Controls appear when your rights allow the action. A card you can read but cannot change names who can.
 For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana owns the team.
 
-**Picks and services** opens Gateway. **Key and connection** opens Computers and scrolls to the Models card.
+**Picks and services** opens Gateway. **Key and connection** opens Models.
 
 | To | Open |
 |---|---|
@@ -23,28 +23,32 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Change Instructions | Bot → More → Instructions → Edit Instructions → Ask BotOps to change |
 | Change model, effort, owners or status | Settings → Bots |
 | Register or remove a Computer | Settings → Computers → Add computer; open a computer → Revoke computer |
-| Sign a computer in to an AI tool, or add a subscription | Settings → Computers → open a computer → Connections ([Computers](computers.md)) |
+| Add a subscription and give it to computers | Settings → Models → Add subscription; then Settings → Computers ([Subscriptions](computers.md#subscriptions)) |
+| Sign a computer in to an AI tool | Settings → Computers → open a computer → Connections ([Computers](computers.md)) |
+| Change company turn limits | Settings → Models → Limits |
 | Check problems and recovery | Settings → Health |
 | Store a Credential and grant it | Tools → Credentials → Add credential; then Access → Grant access |
 | Connect or review a Tool | Tools; Slack channels are under Tools → Slack channels |
 | Add or manage people and member rules | Settings → People |
 | Connect your Google account | Settings → My Google account |
 | Manage shared email and phone numbers | Settings → More → Email & Phone |
-| Choose AI providers | Settings → Computers → Models |
-| Connect the Tico AI Gateway | Settings → Computers → Models → Tico AI Gateway ([Tico AI Gateway](ai-gateway.md)) |
+| Choose AI providers | Settings → Models |
+| Connect the Tico AI Gateway | Settings → Models → Tico Gateway → Advanced ([Tico AI Gateway](ai-gateway.md)) |
 | Connect your External agent | Connect an external agent beside your email |
 | Review message work | Message bots → mailbox or channel |
 | Read or write team knowledge | Docs → Internal docs; outside sources are Linked docs |
+| Find a bot, human or page | ⌘K, or the search icon at the end of the sidebar's **Ask Tico** row (phone: the Search tab) |
 | Find a file or page any bot made | Library → Files (`#/library/files`); search finds text inside ([Files](files.md#library--files)) |
 | Open a page full size | Tap its card, or `#/page/<id>` ([Pages](pages.md)) |
 | Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the Strategy Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
 | See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |
+| See growth ideas, tests, verdicts and channel economics | Growth (`#/growth`; This week, Channels, Learning and Go-to-market are its tabs) ([Growth](growth.md)) |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
-| Contact support or continue a support conversation | Ask → **+** → Tico support (phone: the Ask tab) |
+| Contact support or continue a support conversation | Ask → **Loop in Support** (phone: the Ask tab), or any `#/support` link |
 
 All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor BotOps has a rail entry: **Ask**
-(bottom left, ⌘J; the phone's middle tab) opens your Assistant over any page, **Show chat** opens it full page
-(`#/assistant`), and the Assistant hands BotOps what needs BotOps;
+(the sidebar's bottom row, ⌘J; the phone's middle tab) opens your Assistant over any page as **Tico Assistant**, `#/assistant`
+opens it full page, and the Assistant hands BotOps what needs BotOps;
 the Strategy Bot is on Goals and proposes Strategy, and Ask the Librarian is on Docs and on Strategy's Market tab. The Strategy Bot is at the top of the team chart; the other three stay out of it.
 Inbox Manager and other repeating message work appear under **Message bots**.
 An older app may show Instructions under the bot's Docs tab; the action is still **Edit Instructions**.

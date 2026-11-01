@@ -51,9 +51,11 @@ def old_install(tmp_path, *, routines=True):
 
 
 def files(path):
-    """Every file of the database (main, -wal, -shm, journal) by name, with its hash."""
+    """Every file of the database (main, -wal, journal) by name, with its hash. Not -shm: it is SQLite's shared-memory
+    index, which every reader updates, and connections leave it on disk at close (hubdb.leave_wal_for_litestream)."""
     path = Path(path)
-    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(path.parent.glob(path.name + "*"))}
+    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(path.parent.glob(path.name + "*"))
+            if not p.name.endswith("-shm")}
 
 
 def start(settings, **changes):
@@ -186,7 +188,7 @@ def test_the_container_starts_an_old_install_with_no_setting(tmp_path):
 GONE_ROUTES = (("GET", "settings/redesign"), ("PUT", "settings/redesign"), ("GET", "routines"),
                ("GET", "bots/coo/routines"), ("POST", "bots/coo/routines"), ("POST", "routines/sch_1"),
                ("POST", "routines/sch_1/delete"), ("POST", "routines/sch_1/run"), ("GET", "routines/sch_1/occurrences"),
-               ("GET", "rules"), ("POST", "rules"), ("GET", "rules/r1"), ("POST", "rules/r1"), ("POST", "rules/r1/delete"),
+               ("POST", "rules/r1/delete"),     # GET/POST rules and rules/{id} are org rules now (backend/org_rules.py)
                ("GET", "rules/suggestions"), ("POST", "rules/suggestions/s1/apply"),
                ("POST", "rules/suggestions/s1/dismiss"), ("POST", "redesign/migration/dry-run"),
                ("POST", "redesign/migration/resolve"), ("POST", "redesign/migration/convert"),

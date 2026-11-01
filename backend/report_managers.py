@@ -46,8 +46,8 @@ def cap_used(c, manager, op, now):
     from .store import H
     ops = CAPS[op][1]
     since = H.shift(now, days=-WINDOW_DAYS)
-    return c.execute("SELECT count(*) FROM events WHERE action=? AND actor=? AND ts>=? AND "
-                     f"json_extract(detail_json,'$.op') IN ({','.join('?' * len(ops))})",
+    return c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE action=? AND actor=? AND ts>=? "
+                     f"AND json_extract(detail_json,'$.op') IN ({','.join('?' * len(ops))})",
                      (EVENT, "bot:" + manager, since, *ops)).fetchone()[0]
 
 

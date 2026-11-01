@@ -4,6 +4,10 @@ Triggered by a task routing a ticket to tier 2. Budget 45 minutes before you sto
 have. The outcome is a verdict, an answer or workaround for the Support Agent, and a bug report when it
 is a bug.
 
+Inputs: the routed task with the customer's report and any attached logs, `knowledge/workarounds.md`, `knowledge/diagnosis.md`, and the sandbox if one is granted.
+
+Done when: the verdict is on the task in its first line, a reproduction or a clear "could not reproduce" is recorded with its tries, the reply or workaround is on the Support Agent's task (marked tested or untested), any bug report is on a task for the person who files bugs, and `knowledge/workarounds.md` is updated.
+
 ---
 
 ## 1. Check what is known
@@ -26,15 +30,16 @@ for the Librarian whatever else you find.
 
 In the sandbox, from a known state, step by step, noting each value you used. Try the customer's
 environment where it differs. Two tries that fail to reproduce lead to "could not reproduce" with what
-evidence would change that (an export, a screen recording, a request id).
+evidence would change that (an export, a screen recording, a request id). Follow
+`skills/reproduce-from-a-known-state/SKILL.md`.
 
 ## 5. Decide and write
 
 - **Setup mistake**: the fix in steps the customer can follow, for the Support Agent's reply.
 - **Doc gap**: the answer, plus a task to the Librarian.
-- **Bug**: the report (title, steps, expected, actual, environment, frequency, customers affected,
-  evidence with credentials removed), a workaround if one exists and is tested, and the filing command for a
-  human.
+- **Bug**: the report (`skills/write-an-engineering-bug-report/SKILL.md`: title, steps, expected, actual,
+  environment, frequency, customers affected, evidence with credentials removed), a workaround if one exists and is
+  tested, and the filing command for a human.
 
 ## 6. Hand back
 

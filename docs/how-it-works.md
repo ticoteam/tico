@@ -120,7 +120,7 @@ not retry this action; leave a note for a person if you still need it."
 
 **hub.acme.example** — the record, the interface and the clock. A FastAPI backend (`backend/`) on one
 EC2 instance with SQLite on an encrypted EBS volume, attachments in a private S3 bucket, backed up
-to S3 twice over (Litestream replicates every ten seconds; a verified bundle of the database and
+to S3 twice over (Litestream replicates about every minute; a verified bundle of the database and
 every attachment is taken daily and restore-tested), behind Cloudflare Access. It holds every task, message, approval, routine, run and
 bot setting, serves the web interface (`ui/`), and runs the scheduler that turns due routines into
 tasks. It never runs a bot. It runs from the Docker image ([install.md](install.md)). Beside it
@@ -278,19 +278,24 @@ in the recovery history and shows its ownership in Stopped runs. Within five min
 scheduler re-evaluates the stopped job and records who owns recovery and why.
 When the computer reports a restart, a run resumes on the next scheduler sweep, including one that used a shell or
 edited files. Its recovery note gives the interruption time and tells it to check what already happened first;
-the same computer continues the same provider session. A hub update restarts computers too, often with no restart
-report. A run that ended within the lease plus fifteen minutes of an update finishing (the snapshot and health check
-take minutes) stopped during it: Needs you says so, but that is timing, not proof, so the run is held by the same rule
-as any lapsed run. Needs you groups those runs, two or more within ten minutes, into one row with **Try all again**
-and **Don’t retry** for the people who may decide them; each retry tells the bot to check what already happened
-first. **Try all again** appears only when the review card recommends retrying every one of them; otherwise the row
-says how many ran commands Tico can’t check and leaves retrying each of those to its own line. Each run keeps its own line under Details, and a run that recorded a named outside action or used an approval,
-or one with a choice already saved, keeps its own choices. A stopped run is counted once however many requests were
-folded into it. A consumed approval or a named irreversible outside action
+the same computer continues the same provider session. A consumed approval or a named irreversible outside action
 (merge, publish, send or payment) holds it for BotOps instead, and the review names the action. A second interruption
-is dismissed and BotOps is told. The computer records fixed operation labels alongside shell events without exposing
+is dismissed and BotOps is told. A stopped run is counted once however many requests were folded into it.
+The computer records fixed operation labels alongside shell events without exposing
 command arguments. Older program-only events from action-capable tools (such as `gh` or `npm`) go to review with a
-command-details-unavailable reason; they cannot prove that no merge or publish happened. A lost lease without a restart report resumes once after fifteen minutes when no consumed approval or named outside action was recorded. A second lost lease holds the job quietly for its computer and says Resuming; it does not dismiss the work or create a BotOps task. A server silence of up to thirty minutes extends existing leases once, so a twenty-minute renewal outage keeps the running session. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
+command-details-unavailable reason; they cannot prove that no merge or publish happened.
+Tico's update, or any restart of the server, cuts the runs live then, often with no restart report. An update never
+waits for them: as it starts, Tico flags every live run (`attempt.update_cut` in the event log), and the server's start
+flags the runs its last process still held. A flagged run that had started by then and ends without an answer within the lease plus fifteen
+minutes of the server coming back (the snapshot and health check take minutes) was cut; so is one that began just
+after the update and ended in that window. It resumes on the next sweep on the same computer and provider session,
+whatever it used, with the same note: the interruption time and to check what already happened first; a recorded
+named outside action or consumed approval is named in it, to verify before doing it again. There is no Needs you
+item, BotOps review or question for it; the decision is in the job's recovery record (`job.auto_reconcile`, Stopped
+runs history). One waiting for live work in its lane has that choice saved, and is judged again when the lane frees
+(a Stop, a finished task or a day's wait since then counts; a person's own choice replaces Tico's). A request is
+resumed from three such cuts; the fourth, or a cut more than a day old, ends it quietly.
+A lost lease without a restart report resumes once after fifteen minutes when no consumed approval or named outside action was recorded. A second lost lease holds the job quietly for its computer and says Resuming; it does not dismiss the work or create a BotOps task. A server silence of up to thirty minutes extends existing leases once, so a twenty-minute renewal outage keeps the running session. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
 A known primary login reset keeps runnable jobs queued until that reset when no eligible fallback is ready;
 a new message does not start another attempt on the spent login. An interrupted fallback returns to this queue
 only when its host acknowledged the end, reported its tools completely, and recorded no output, tools or consumed
@@ -314,8 +319,8 @@ messages still run: nothing about them is uncertain.
 **Needs you.** Every issue Tico derives says whether a human has to act. Those that do (a
 review owed, a computer gone for more than ten minutes, a missing agent credential, a stale backup,
 a usage limit hit three times) open in a dialog in front of the human the first time they appear,
-wherever they are in the app, with the action inline: *Review now* opens the interrupted work,
-*Open bot* goes to the bot. Closing it is remembered per issue and *Snooze* quiets it for an hour;
+wherever they are in the app. Each item is a title, at most one short line and at most two buttons: the title opens
+the details (the stopped runs, with *Open bot*, or the bot, the computer or Health). Closing it is remembered per issue and *Snooze* quiets it for an hour;
 the alert under the sidebar reopens it any time. Issues Tico resolves itself (a computer that
 just dropped off, a usage limit that is retrying) stay out of the way as *resolves on its own* in
 **Settings → Health**, one row per computer rather than one per bot. A cloud deploy is different: hub.acme.example is
@@ -409,7 +414,7 @@ can therefore continue that session once, even before any quota/capacity result.
 resumes the old primary; unknown effects and final answers keep their settlement safeguards. Late diagnostics cannot
 erase an already recorded continuation decision. The result field is sent only when the server advertises `source_continue`;
 older runners are not handed these continuations. Other turns try the bot's own provider first, so the
-bot moves back on its own once the limit resets. The owner turns this off in **Settings → Computers → Models**
+bot moves back on its own once the limit resets. The owner turns this off in **Settings → Models**
 (*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
 since when, and how many are limited.
 
@@ -498,7 +503,7 @@ model" finding. When a computer's default login (no subscription) keeps stopping
 says so once per computer and tool, e.g. "Team box's default Codex login is out of quota", until a turn on
 it completes or the reset time passes ([Health Monitor](health-monitor.md), `default_login_limited`).
 
-The company's **check model** (*Check model* in **Settings → Computers → Models**, `check_models` on
+The company's **check model** (*Check model* in **Settings → Models**, `check_models` on
 `/api/v2/providers`) is what review and check subtasks run on when they name no model: an ordered list such as
 `grok, codex`, each entry a runtime or `runtime:model`. The other enabled providers follow it, in their order. The
 pick is the first from a provider other than the one the work was written on; with none that can run, it runs on

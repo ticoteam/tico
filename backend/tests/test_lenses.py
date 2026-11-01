@@ -178,8 +178,10 @@ def test_the_models_result_is_checked_part_by_part_and_what_fails_is_dropped(api
     assert len(out["sections"]) == L.SECTIONS_MAX and len(out["sections"][0]["body"]) <= L.BODY_MAX
     assert [f["text"] for f in out["findings"]] == ["Real bet.", "About the strategy as a whole."]
     assert len(out["assumptions"]) == L.ASSUMPTIONS_MAX and len(out["sharpen"]) == L.SHARPEN_MAX
-    assert [c["label"] for c in out["changes"]] == ["Add to what we won't do", "Source is the server's"]
-    assert out["changes"][1]["payload"] == good                                          # source and lens are never the model's
+    # Rules out and Wrong if are optional, so a bare active bet is a change like any other.
+    assert [c["label"] for c in out["changes"]] == ["Add to what we won't do", "Active with nothing behind it",
+                                                     "Source is the server's"]
+    assert out["changes"][2]["payload"] == good                                          # source and lens are never the model's
     model["result"] = {"summary": "", "sections": [], "chart": None, "findings": [], "changes": []}
     empty = start(api)
     assert empty["status"] == "failed" and empty["error"]["code"] == "empty"

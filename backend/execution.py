@@ -14,10 +14,10 @@ from clients import gateway, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
-from . import claim_holds, cloud_access, quarantine_stops, reconnects, run_backoff, turn_budgets
+from . import browser_exit, claim_holds, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
-from .harnesses import reports_tool_calls
+from .harnesses import bot_keyed, reports_tool_calls
 from .statuses import PARKED_SQL
 from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
@@ -114,6 +114,11 @@ TASK_GOALS = "task_goals_v1"
 # A runner that advertises this continues the thread a claim names in `continue_thread` (capacity_continuation). Any
 # other runner ignores the field and would start the job on a fresh thread, so it is never handed such a job.
 CAPACITY_CONTINUE = "capacity_continue_v1"
+
+# A runner that advertises this runs a private live meeting's turns in that meeting's own checkout, read-only on GitHub
+# (runner-rs/src/sessions.rs, private lanes). Any other runner would run them in the bot's checkout and push what they
+# wrote, so it is never handed one: the turn waits for an updated runner (live_meetings `meeting.bot_turn_waiting`).
+PRIVATE_LANES = "private_lanes_v1"
 SOURCE_CONTINUE = "source_continue_v1"
 
 
@@ -192,6 +197,16 @@ def lanes_on(runner):
     return bool(runner) and LANES in _capability_set(runner["capabilities_json"])
 
 
+def private_lanes_on(runner):
+    return bool(runner) and PRIVATE_LANES in _capability_set(runner["capabilities_json"])
+
+
+def private_job(c, job):
+    """Whether a queued job is a private live meeting's turn (private_lane): only a private_lanes_on runner takes it."""
+    message = H.message(c, job["message_id"])
+    return bool(message and private_lane(c, H.conversation(c, message["conversation_id"])))
+
+
 def roots_on(runner):
     return bool(runner) and ROOTS in _capability_set(runner["capabilities_json"])
 
@@ -210,6 +225,18 @@ def session_task_id(c, bot, config, task_id, roots):
     return H.session_root(c, bot, task_id, config) if roots and task_id else task_id
 
 
+def reply_target(message, conversation, task):
+    """Whom a turn's reply goes to: the message's sender, or for the keeper's wake on a task, the personal room's
+    owner, else its first person, else the task's requester. The completion posts to it; the org rule check
+    (backend/org_rule_check.py) checks the reply against it before the completion's write."""
+    target = message["from_actor"]
+    if target == H.KEEPER and task:
+        humans = [p for p in conversation.get("participants") or [] if str(p).startswith("human:")]
+        target = ((conversation.get("owner_actor") if conversation.get("scope") == "personal" else None)
+                  or (humans[0] if humans else None) or task["requester"])
+    return target
+
+
 def work_task_id(message, conversation=None):
     """The work attached to a turn; parked urgent notices retain their task refs only as news.
 
@@ -224,8 +251,18 @@ def job_lane(c, bot, config, message, conversation, lanes, roots=False):
     its session root's lane, so it and its parent's turns take turns in one session."""
     if not lanes:
         return sessions.MAIN_LANE
+    if private := private_lane(c, conversation):
+        return private
     return sessions.lane(config, bot, session_task_id(c, bot, config, work_task_id(message, conversation), roots),
                          conversation["id"] if conversation else None)
+
+
+def private_lane(c, conversation):
+    """A private live meeting's room runs in its own lane (clients/sessions.py PRIVATE_LANE), else None."""
+    from .live_privacy import private_room
+    if conversation and private_room(c, conversation.get("room_key")):
+        return sessions.private_lane(conversation["id"])
+    return None
 
 
 def bump_bot_session_epoch(c, bot):
@@ -348,6 +385,8 @@ def lane_history(c, bot, config, history, conversation, lane, roots=False):
     lane, so the main session never reads task traffic and a task's session never reads the main chat or
     another task. The main chat's quiet task lines (`refs.task_started`, `refs.task_report`) are the main
     session's: how it hears that a task started and where it got to."""
+    if private := private_lane(c, conversation):
+        return list(history) if lane == private else []
     memo = {}
 
     def lane_of(message):
@@ -571,31 +610,65 @@ def restart_reported(c, attempt_id):
                 and result.get('text') == 'Runner restarted during execution')
 
 
-# An update that restarts the hub and its runners ends their turns without a report, so each lapses. The update's
-# snapshot, image switch and health check take minutes (docs/updates.md) and the sweep that expires a lapsed lease
-# runs after them, so a turn that ends this long after the update finished (or started) stopped during it. That is
-# timing, not proof the update restarted its computer: it names the cause and groups the runs for one choice, and
-# never relaxes the retry rule the way the computer's own restart report does.
+# Tico's update, or any restart of the hub, cuts the runs live then, mostly with no report from their computer, so each
+# lapses. Updates must not wait for runs, so each such run is flagged at the cut (`flag_cut`): when an update starts,
+# and when the hub starts for the runs its last process still held. A flagged run that ends without an answer within
+# the lease plus UPDATE_MARGIN_S of the hub coming back (the update's snapshot, image switch and health check take
+# minutes, docs/updates.md) was cut, and resumes on the next sweep with no Needs you (auto_reconcile). A run the flags
+# miss (one begun just after the update, before the updater restarted its runner) is judged by the same window.
 UPDATE_MARGIN_S = 15 * 60
+UPDATE_CUT = 'attempt.update_cut'
+UPDATE_RESUMES = 3          # update cuts one request resumes from; the next one ends it quietly
+UPDATE_STALE_S = 24 * 3600  # an older cut is dismissed, not resumed: its work is stale by now
+
+
+def flag_cut(c, cause, update=None):
+    """Flag every live run (leased or running) as cut by `cause`: 'update' as Tico's update starts (`update` its
+    target), 'restart' as the hub starts on the runs its last process held. How many it flagged."""
+    rows = c.execute("SELECT id,bot,job_id FROM attempts WHERE state IN ('leased','running')").fetchall()
+    for row in rows:
+        H.event(c, H.KEEPER, UPDATE_CUT, row['id'], {'bot': row['bot'], 'job_id': row['job_id'], 'cause': cause,
+                                                     **({'update': update} if update else {})})
+    return len(rows)
 
 
 def cut_by_update(c, attempt_id):
-    """Whether this run stopped during Tico's own update: an update started before the run ended, and the run ended
-    within the lease plus UPDATE_MARGIN_S of that update's finish (or of its start while the update is still running).
-    The updater restarts the runners after it reports its finish, so a run that began just after the update counts
-    too. Only a lapsed or interrupted run counts; a run that reported its own end never does."""
-    row = (c.execute("SELECT state,started,finished FROM attempts WHERE id=?", (attempt_id,)).fetchone()
-           if attempt_id else None)
-    if not row or row['state'] not in ('interrupted', 'expired') or not row['started'] or not row['finished']:
-        return False
+    """How Tico's update or a hub restart cut this run, {'cause': 'update' or 'restart', 'at': when}, else None. Only a
+    lapsed or interrupted run counts: never one that reported its own end, a Stop (a person's or a quarantine's) or a
+    usage limit, which keep their own rules. The updater restarts the runners after it reports its finish, so an
+    unflagged run that began just after the update counts too. A flag counts only for a run already started when it
+    was written: a lease claimed before the cut and started after it ran on the new hub, so its lapse is an ordinary
+    one."""
+    row = (c.execute("SELECT state,started,finished,stop_requested,result_json FROM attempts WHERE id=?",
+                     (attempt_id,)).fetchone() if attempt_id else None)
+    if (not row or row['state'] not in ('interrupted', 'expired') or not row['started'] or not row['finished']
+            or row['stop_requested']):
+        return None
+    result = json.loads(row['result_json'] or '{}') or {}
+    if result.get('limited') or result.get('limit_source'):
+        return None
+    window = Settings.lease_seconds + UPDATE_MARGIN_S
+    flagged = c.execute("SELECT ts,detail_json FROM events WHERE action=? AND target=? ORDER BY ts",
+                        (UPDATE_CUT, attempt_id)).fetchall()
+    flags = [f for f in flagged if row['started'] <= f['ts']]
+    if flagged and not flags:
+        return None
+    if flags:
+        # The hub is back at its start (the last flag) or once the update finished, whichever is later.
+        ended = c.execute("SELECT ts FROM events WHERE action='system.update.finished' AND ts>=? ORDER BY ts LIMIT 1",
+                          (flags[-1]['ts'],)).fetchone()
+        base = ended['ts'] if ended and ended['ts'] <= row['finished'] else flags[-1]['ts']
+        if row['finished'] <= H.shift(base, seconds=window):
+            update = any((json.loads(f['detail_json'] or '{}') or {}).get('cause') == 'update' for f in flags)
+            return {'cause': 'update' if update else 'restart', 'at': flags[0]['ts']}
     began = c.execute("SELECT ts FROM events WHERE action='system.update.started' AND ts<=? ORDER BY ts DESC LIMIT 1",
                       (row['finished'],)).fetchone()
     if not began:
-        return False
+        return None
     ended = c.execute("SELECT ts FROM events WHERE action='system.update.finished' AND ts>=? ORDER BY ts LIMIT 1",
                       (began['ts'],)).fetchone()
     base = ended['ts'] if ended and ended['ts'] <= row['finished'] else began['ts']
-    return row['finished'] <= H.shift(base, seconds=Settings.lease_seconds + UPDATE_MARGIN_S)
+    return {'cause': 'update', 'at': row['finished']} if row['finished'] <= H.shift(base, seconds=window) else None
 
 
 def restart_cause(facts):
@@ -691,7 +764,9 @@ def retry_facts(c, job, started, finished):
     starts = c.execute("SELECT count(*) FROM attempts WHERE started IS NOT NULL AND (job_id=? OR id IN "
                        "(SELECT attempt_id FROM attempt_inputs WHERE message_id=?))",
                        (job['id'], job['message_id'])).fetchone()[0]
-    update = cut_by_update(c, job['attempt_id'])
+    timeout = run_limit_minutes(c, job['attempt_id'])
+    # A run its own time limit cut was not cut by the update, whenever it ended.
+    update = None if timeout else cut_by_update(c, job['attempt_id'])
     restart = restart_reported(c, job['attempt_id'])
     attempt = c.execute('SELECT state,thread_id,runner_id FROM attempts WHERE id=?', (job['attempt_id'],)).fetchone()
     computer = c.execute('SELECT capabilities_json FROM runners WHERE id=?', (attempt['runner_id'],)).fetchone() if attempt else None
@@ -701,7 +776,6 @@ def retry_facts(c, job, started, finished):
                       "AND json_extract(payload_json,'$.final')=1 LIMIT 1", (job['attempt_id'],)).fetchone()
     lease_lost = bool(attempt and attempt['state'] == 'expired' and started and attempt['thread_id']
                       and capacity_continue_on(computer) and reported and not acted and not final)
-    timeout = run_limit_minutes(c, job['attempt_id'])
     outside = outside_actions(c, job, started, finished) if restart or lease_lost or timeout or update else []
     result = c.execute("SELECT result_json FROM attempts WHERE id=?", (job['attempt_id'],)).fetchone()
     result = json.loads(result[0] or '{}') if result else {}
@@ -811,8 +885,10 @@ def prime_readable_held(c, who, auth, bots):
     if not todo:
         return
     found = _readable_held_for(c, who, auth, todo)
+    chosen = _tico_chosen_for(c, who, todo)
     for bot in todo:
         values[_held_key(who, actor, bot)] = found[bot]
+        values[("tico_chosen", actor, bot)] = chosen[bot]
 
 
 def _readable_held_for(c, who, auth, bots):
@@ -820,9 +896,11 @@ def _readable_held_for(c, who, auth, bots):
     actor = privacy.actor(who)
     fence = auth.task_sql(c, who)
     marks = ",".join("?" * len(bots))
+    # A run Tico itself chose for (an update cut waiting for its lane, auto_reconcile) is nobody's to review.
     rows = list(c.execute(
         "SELECT m.*,j.attempt_id,j.id AS job_id,j.bot AS held_bot FROM jobs j JOIN messages m ON m.id=j.message_id "
-        f"WHERE j.bot IN ({marks}) AND j.state='uncertain' ORDER BY j.created", list(bots)))
+        f"WHERE j.bot IN ({marks}) AND j.state='uncertain' AND NOT EXISTS(SELECT 1 FROM job_recovery r "
+        "WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id AND r.actor=?) ORDER BY j.created", [*bots, H.KEEPER]))
     shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)}
     privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
     kept = [r for r in rows if r["id"] in shown
@@ -860,6 +938,32 @@ def _readable_held_for(c, who, auth, bots):
             out[row["held_bot"]].append((row, None, False))
         else:
             out[row["held_bot"]].append((row, task, True))
+    return out
+
+
+def tico_chosen(c, who, bot):
+    """How many of the bot's runs saved for later that `who` may read wait only for Tico's own choice to apply (an
+    update cut behind live work in its lane, auto_reconcile): nobody's to review, so no line counts them. Read for
+    every bot at once by prime_readable_held, so a status page pays no statement per bot for it."""
+    from . import read_cache
+    values, key = read_cache.cache(c), ("tico_chosen", privacy.actor(who), bot)
+    if values is not None and key in values:
+        return values[key]
+    return _tico_chosen_for(c, who, [bot])[bot]
+
+
+def _tico_chosen_for(c, who, bots):
+    actor, out = privacy.actor(who), dict.fromkeys(bots, 0)
+    rows = []
+    for part in H.chunks(list(bots)):
+        rows.extend(c.execute("SELECT m.*,j.attempt_id,j.bot AS held_bot FROM jobs j JOIN messages m ON m.id=j.message_id "
+                              "JOIN job_recovery r ON r.job_id=j.id AND r.attempt_id=j.attempt_id "
+                              f"WHERE j.bot IN ({','.join('?' * len(part))}) AND j.state='uncertain' AND r.actor=?",
+                              (*part, H.KEEPER)))
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)} if rows else set()
+    for r in rows:
+        if r["id"] in shown and (not r["attempt_id"] or privacy.attempt_readable(c, actor, r["attempt_id"])):
+            out[r["held_bot"]] += 1
     return out
 
 
@@ -946,11 +1050,7 @@ def stopped_rows(c, who, auth, bot, limit=5):
         # Each request folded into a run is judged on its own facts (its starts, the approvals its message used), and
         # the run's line is only as safe as its least safe request, since one choice settles them all.
         facts = retry_facts(c, job, attempt["started"] if attempt else None, attempt["finished"] if attempt else None)
-        return facts, {"retry": bool(facts["safe"] and facts["starts"] <= 1),
-                       # One choice for every run the update stopped, unless this one recorded a named outside action
-                       # or used an approval: those stay a choice of their own.
-                       "update_group": bool(facts["update"] and not facts["outside"] and not facts["consumed"]
-                                            and not facts["fallback_unknown"])}
+        return facts, {"retry": bool(facts["safe"] and facts["starts"] <= 1)}
 
     def handle(job):
         key = (job["id"], job["attempt_id"])
@@ -982,8 +1082,6 @@ def stopped_rows(c, who, auth, bot, limit=5):
     for row in rows:
         # The Details card decides each folded request on its own, so they can differ.
         saved = {job.get("decided") for job in row["jobs"]}
-        # Kept for readers not shown the jobs: a run someone started deciding is no longer the update's to group.
-        row["chosen"] = bool(saved - {None})
         row["decided"] = None if None in saved else saved.pop() if len(saved) == 1 else "mixed"
     return rows, len(by_run)
 
@@ -1074,8 +1172,10 @@ def left_by_keeper(c, who, bot):
         "SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
         "JOIN attempts a ON a.id=j.attempt_id "
         "JOIN job_recovery r ON r.job_id=a.job_id AND r.attempt_id=a.id "
-        "WHERE j.bot=? AND j.state='uncertain' AND j.id<>a.job_id AND r.actor=?",
-        (bot, H.KEEPER)))
+        "WHERE j.bot=? AND j.state='uncertain' AND j.id<>a.job_id AND r.actor=? "
+        # One Tico chose for itself too (an update cut behind live work) waits for nobody.
+        "AND NOT EXISTS(SELECT 1 FROM job_recovery o WHERE o.job_id=j.id AND o.attempt_id=j.attempt_id AND o.actor=?)",
+        (bot, H.KEEPER, H.KEEPER)))
     # One privacy prime (status/operations used to call message_readable per row here).
     shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)}
     privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
@@ -1095,6 +1195,16 @@ def limit_streak(c, bot):
             break
         streak += 1
     return streak
+
+
+# What runner-rs report_failure tags a private meeting's turn with when no copy of the bot's repository could be made
+# for it (sessions::PRIVATE_COPY_FAILED): no retry can help.
+PRIVATE_COPY_FAILURE = "private_checkout"
+
+
+def private_copy_failed(c, attempt_id):
+    return c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind='diagnostic' "
+                     "AND json_extract(payload_json,'$.code')=? LIMIT 1", (attempt_id, PRIVATE_COPY_FAILURE)).fetchone() is not None
 
 
 def limit_errors(c, attempt_id):
@@ -1119,11 +1229,14 @@ def capacity_continuation(c, job_id):
     return row[0] if row else None
 
 
+SOURCE_CONTINUATION_SQL = ("SELECT result_json FROM attempts WHERE job_id=? "
+                           "AND json_extract(result_json,'$.source_continue')=1 ORDER BY created DESC,rowid DESC LIMIT 1")
+
+
 def source_continuation(c, job_id):
     """The actual quota- or capacity-stopped fallback, bound to its job instead of the primary session."""
-    row = c.execute("SELECT result_json FROM attempts WHERE job_id=? "
-                    "AND json_extract(result_json,'$.source_continue')=1 ORDER BY created DESC,rowid DESC LIMIT 1",
-                    (job_id,)).fetchone()
+    from .read_cache import one
+    row = one(c, SOURCE_CONTINUATION_SQL, (job_id,))
     return json.loads(row[0]).get('source_continuation') if row else None
 
 
@@ -1548,6 +1661,41 @@ def checkpoint_safe(c, aid, task):
 DRAINING_SQL = "EXISTS(SELECT 1 FROM bot_control ctl WHERE ctl.bot=a.bot AND ctl.draining=1)"
 
 
+# What a Finance hook may raise that must not hold a bot's work: its own refusals and a bug in it.
+FINANCE_FAULTS = (ValueError, LookupError, TypeError, ArithmeticError, AttributeError)
+
+
+def finance_run_hold(c, bot, job_id):
+    """Hold the run's likely Gateway cost on the Finance budget that covers the bot, in the claim's transaction
+    (backend/finance/runs.py). True when a budget at its cutoff refuses the run. A fault in Finance holds nothing and
+    refuses nothing; a storage error fails the claim as any other does."""
+    from .finance import actions as finance
+    c.execute("SAVEPOINT finance_hold")
+    try:
+        refused = finance.run_hold(c, bot, job_id).refused
+    except (*FINANCE_FAULTS, finance.FinanceError) as exc:
+        c.execute("ROLLBACK TO finance_hold")
+        c.execute("RELEASE finance_hold")
+        report("finance_hold", job_id, exc)
+        return False
+    c.execute("RELEASE finance_hold")
+    return refused
+
+
+def finance_run_ended(c, job_id, turn_id):
+    """Settle the job's run hold at the run's priced Gateway cost, or release it when nothing was Gateway-billed."""
+    from .finance import actions as finance
+    c.execute("SAVEPOINT finance_settle")
+    try:
+        finance.run_ended(c, job_id, turn_id)
+    except (*FINANCE_FAULTS, finance.FinanceError) as exc:
+        c.execute("ROLLBACK TO finance_settle")
+        c.execute("RELEASE finance_settle")
+        report("finance_settle", turn_id, exc)
+        return
+    c.execute("RELEASE finance_settle")
+
+
 def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_bots=(), subscription_context=None,
                   default=None):
     """Why `runner`'s claim passes over all of `bot`'s queued work, or (None, config) when it may look at the bot's
@@ -1583,16 +1731,20 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
     from .subscriptions import login_upgrade
     if login_upgrade(runner, ready, bot=bot):
         return "login_upgrade", None
+    if browser_exit.CAPABILITY not in _capability_set(runner["capabilities_json"]) and browser_exit.bot_exit(c, bot):
+        return "browser_exit_update", None
     record = providers.load(c, settings)
     filled = providers.fill(record, config)
+    # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
+    ready = model_subscriptions.covered(ready, model_subscriptions.covered_runtimes(c, runner, filled))
     if cloud_access.frozen(c) and (gateway_connection.is_tico(filled.get("model"))
                                    or models_preset.waiting(record, ready, filled)):
         # A Tico Cloud company out of credit: no new turn that would spend it. A bot on its own subscription or keys
         # still runs; this one starts again once credit lands, with no restart.
         return "out_of_credit", None
-    if gateway_connection.is_tico(filled.get("model")) and not models_preset.isolated(ready):
-        # A Tico model runs only where bots run as their own user (runner-rs/src/gateway_relay.rs): elsewhere the
-        # runner would refuse the turn, so the work waits here instead of failing there.
+    if gateway_connection.is_tico(filled.get("model")) and not models_preset.runs_gateway(ready):
+        # A Tico model runs only where bots run as their own user, or on a cloud machine (runner-rs/src/gateway_relay.rs
+        # Separation): elsewhere the runner would refuse the turn, so the work waits here instead of failing there.
         return ("not_isolated" if ready.get("isolated") is False else "isolation_unknown"), None
     check = bot_readiness(ready, bot)
     if models_preset.waiting(record, ready, filled):
@@ -1606,7 +1758,7 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
             return "not_ready", None
         if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default):
             return "limit", None
-        return ("cooling_off", None) if cooling_off(c, bot) else (None, config)
+        return ("cooling_off", None) if cooling_off_here(c, settings, runner, bot, config) else (None, config)
     if check.get("ready") is not True:
         reported = check.get("ready") is False and bot in (ready.get("bots") or {})
         return ("not_ready" if reported else "readiness_unknown"), None
@@ -1617,7 +1769,8 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
         return "limit", None
     # While the bot's own login is held, that hold decides (login_refusal), so a ready fallback can take the turn;
     # otherwise the bot's own cooldown does, as for a limit its fallback met.
-    if (cooling_off(c, bot) and not primary_hold(c, settings, runner["id"], bot, config, ctx=subscription_context)
+    if (cooling_off_here(c, settings, runner, bot, config, subscription_context)
+            and not primary_hold(c, settings, runner["id"], bot, config, ctx=subscription_context)
             or login_refusal(c, settings, runner["id"], bot, config, ctx=subscription_context)):
         # Already-started fallback work continues its own login even if new fallbacks have since been disabled.
         pending = c.execute("SELECT id FROM jobs WHERE bot=? AND state='queued' AND held=0", (bot,))
@@ -1625,6 +1778,20 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
                    for j in pending):
             return "cooling_off", None
     return None, config
+
+
+def cooling_off_here(c, settings, runner, bot, config, ctx=None):
+    """cooling_off for a turn of `bot` on `runner`, judged on the login that turn would sign in with. A limit met on a
+    company subscription holds that subscription (backend/login_holds.py `sub:<id>`), which the computer then passes
+    over (model_subscriptions.in_effect): the turn runs on the computer's own login or the Gateway instead, so the
+    subscription's cooldown does not keep it waiting. That login's own hold, if any, still decides (login_refusal)."""
+    if not cooling_off(c, bot):
+        return False
+    last = last_limit(c, bot)
+    held = str((login_holds.for_attempt(c, last["id"]) if last else {}).get("profile") or "")
+    if held.startswith(login_holds.SUBSCRIPTION) and runner:
+        return login_key(c, settings, runner["id"], bot, config, ctx)[1] == held
+    return True
 
 
 def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None):
@@ -1701,7 +1868,7 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
         if providers.gateway_model(choice["model"]):
             # Signs in with the turn's relay: no login of its own to hold, but only where bots run as their own user
             # (a company row is listed only then; one the bot names is checked here).
-            if not models_preset.isolated(ready):
+            if not models_preset.runs_gateway(ready):
                 continue
             return "", choice["runtime"]
         signed = (ready.get("runtimes") or {}).get(choice["runtime"]) or {}
@@ -1798,10 +1965,10 @@ FOLD_TEXT = 4000           # characters of each one given in the prompt; the bot
 PRIME_QUEUED = 50          # queued messages a claim or an input poll reads together before checking them one by one
 
 
-def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *, suspect=None):
+def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *, suspect=None, runner=None):
     """Why the claim passes over one queued job of a bot claim_refusal let through, or None when it hands it out.
     `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
-    turn out (live_tasks)."""
+    turn out (live_tasks); `runner` the computer's row, whose company subscription signs a check's runtime in."""
     message = H.message(c, job["message_id"])
     if not privacy.message_readable(c, "bot:" + job["bot"], message):
         return "unreadable"
@@ -1826,6 +1993,10 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
         if why := auto_tasks.refusal(c, task, followed, woken=True, result=bool(refs.get("subtask")), message=message, suspect=suspect):
             return why
     wanted = check_models.of(c, task_id, job["bot"])
+    if wanted and runner is not None:
+        # A check runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
+        ready = model_subscriptions.covered(ready, model_subscriptions.covered_runtimes(
+            c, runner, check_models.apply(followed, wanted)))
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
         return "check_model"
     if wanted and not message["from_actor"].startswith("human:") and check_models.dropped(c, task_id):
@@ -1993,16 +2164,47 @@ def prime_claimables(c, bots, first=3):
         waiting = [job["message_id"] for queue in jobs.values()
                    for job in (queue if first is None else queue[:first])]
         privacy.prime_queued(c, H.prime_messages(c, waiting).values())
+        if first is None:
+            prime_job_checks(c, [job for queue in jobs.values() for job in queue])
 
 
-def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_job=False):
+def prime_job_checks(c, jobs):
+    """What job_refusal reads for each of these queued jobs besides its message and task (prime_queued), one query
+    a table for all of them: the job's fallback continuation (login_refusal), its task's queue return and step
+    (auto_tasks.prime_checks) and check model (check_models.prime). A batch row carries its key after the columns
+    the one-row read selects, which are read by position or name only."""
+    from .read_cache import cache, prime
+    if cache(c) is None or not jobs:
+        return
+    ids = [job["id"] for job in jobs]
+    found = {}
+    for part in H.chunks(ids):
+        for row in c.execute("SELECT result_json,job_id FROM attempts WHERE job_id IN (%s) "
+                             "AND json_extract(result_json,'$.source_continue')=1 ORDER BY created DESC,rowid DESC"
+                             % ",".join("?" * len(part)), part):
+            found.setdefault(row["job_id"], row)
+    prime(c, SOURCE_CONTINUATION_SQL, {(job_id,): found.get(job_id) for job_id in ids})
+    tasks, pairs = [], set()
+    for job in jobs:
+        message = H.message(c, job["message_id"])
+        if not message:
+            continue
+        task_id = work_task_id(message, H.conversation(c, message["conversation_id"]))
+        task = H.task(c, task_id) if task_id else None
+        tasks.append(task)
+        pairs.add((task_id, job["bot"]))
+    auto_tasks.prime_checks(c, tasks)
+    check_models.prime(c, pairs)
+
+
+def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_job=False, *, suspect=None):
     """(reason, first, person) for `bot`'s queued work on `runner_id`'s next claim: `reason` as bot_refusal says it;
     otherwise None with `first`, when the job the claim would hand out next was queued, and `person`, True when a
     person sent it. The scan keeps the claim's own order (Execution.candidate: a redirect, then a person's message, then
     a builder hand-off, then the longest waiting), so Health ages the job the claim would take: an old held job beside a young free one is
     neither held nor slow, and neither is an old free job behind a young chat the claim takes first.
     `oldest` diagnoses the oldest job outside a held lane; `with_job` also returns its ID for
-    observation aging and message-level authorization."""
+    observation aging and message-level authorization. `suspect`: as queued_reasons takes it."""
     def result(reason, first=None, person=None, job=None):
         values = (reason, first, person, job)
         return values if with_job else values[:3]
@@ -2035,8 +2237,10 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
             why = "scoped"
         elif not job["free"]:
             why = "uncertain"
+        elif not private_lanes_on(runner) and private_job(c, job):
+            why = "private_update"
         else:
-            why = job_refusal(c, job, followed, ready, busy, lanes, roots) or (
+            why = job_refusal(c, job, followed, ready, busy, lanes, roots, suspect=suspect, runner=runner) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
         if why is None or (oldest and why != "lane_held"):
             return result(why, job["created"], person, job["id"])
@@ -2056,7 +2260,9 @@ def _queue_suspects(c, queue):
         task = H.task(c, task_id) if task_id else None
         if task:
             tasks.append(task)
-    return auto_tasks.maybe_waiting(c, tasks)
+    suspect = auto_tasks.maybe_waiting(c, tasks)
+    auto_tasks.prime_waits(c, [task for task in tasks if task["id"] in suspect])     # each is asked `waiting` next
+    return suspect
 
 
 def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, suspect=None):
@@ -2089,8 +2295,10 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, s
             why = "scoped"
         elif not job["free"]:
             why = "uncertain"
+        elif not private_lanes_on(runner) and private_job(c, job):
+            why = "private_update"
         else:
-            why = job_refusal(c, job, followed, ready, busy, lanes, roots, live, suspect=suspect) or (
+            why = job_refusal(c, job, followed, ready, busy, lanes, roots, live, suspect=suspect, runner=runner) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
         yield job, why
 
@@ -2189,10 +2397,16 @@ class Execution:
                 raise Problem("enrollment", "Enrollment code is invalid or expired", 401)
             # Deterministic credential makes a lost enrollment response safely retryable.
             token = digest("tico-runner:" + body.code)
+            # A code minted for a cloud machine (backend/cloud_machines.py): the computer is named for it whatever label
+            # the machine sends, and given to the bots set to run there only: a bot's own is closed to other bots, the
+            # shared one takes members' bots.
+            from . import cloud_machines
+            cloud_bot = cloud_machines.enrolling(c, digest(body.code))
+            label = cloud_machines.label_for(c, cloud_bot) if cloud_bot else body.label
             if row["consumed_at"]:
                 runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL",
                                    (row["runner_id"],)).fetchone()
-                if not runner or runner["label"] != body.label:
+                if not runner or (runner["label"] != body.label and not cloud_bot):
                     raise Problem("enrollment", "Enrollment code was already used", 409)
                 return {"runner_id": runner["id"], "token": token, "operator": row["operator"]}
             rid = H.new_id()
@@ -2201,12 +2415,15 @@ class Execution:
             # (backend/screen.py).
             # Computers that existed before these defaults keep what they had.
             c.execute("INSERT INTO runners(id,label,operator,token_hash,created,platform,accepts_member_bots,"
-                      "screen_default_pending) VALUES(?,?,?,?,?,?,1,1)",
-                      (rid, body.label, row["operator"], digest(token), H.now(), body.platform))
+                      "screen_default_pending) VALUES(?,?,?,?,?,?,?,1)",
+                      (rid, label, row["operator"], digest(token), H.now(), body.platform,
+                       int(cloud_machines.opens(cloud_bot)) if cloud_bot else 1))
             c.execute("UPDATE enrollments SET consumed_at=?,runner_id=? WHERE code_hash=?",
                       (H.now(), rid, digest(body.code)))
             H.event(c, "human:" + row["operator"], "runner.enrolled", rid)
-            if self.runner_enrolled:
+            if cloud_bot:
+                cloud_machines.enrolled(c, self, rid, cloud_bot)    # not onboarding's: only its own bots go on it
+            elif self.runner_enrolled:
                 self.runner_enrolled(c, rid, row["operator"])
             return {"runner_id": rid, "token": token, "operator": row["operator"]}
 
@@ -2352,6 +2569,11 @@ class Execution:
         return {"server_time": H.now(), "start_places": True, "runtime_credential_source": True, "subscription_accounts": True, "worktree_record_stamp": True, "worktree_actions": sendable,
                 # Whether the runner samples its performance (backend/performance.py).
                 "performance": bool(restart) and restart["performance"] != "off",
+                # Whether this computer's owner shares its internet with bots: the runner holds its exit link open
+                # (backend/browser_exit.py).
+                "browser_exit": browser_exit.sharing(c, who.runner_id),
+                # The bots here with an exit set: the runner stops the proxies of the rest.
+                "browser_exit_bots": browser_exit.bots_on(c, who.runner_id),
                 # The owner's "Turns at once" (null: automatic). Only a runner with turns_at_once_v1 takes a raised one.
                 "turns_at_once": restart["turns_at_once"] if restart else None,
                 **({"worktree_actions_skipped": skipped} if skipped else {}),
@@ -2385,11 +2607,14 @@ class Execution:
             takes = runner['accepts_member_bots'] and self.auth.member_bot(c, row['bot'], configs.get(row['bot']), creators)
             if row['operator'] != runner['operator'] and runner['operator'] != owner and not takes:
                 continue
+            config = app_delivery.job_config(providers.fill(company, follow(
+                c, row['bot'], json.loads(row['config_json']), configs.get)))
             result.append({**dict(row), 'computer_label': runner['label'], 'computer_logins_v1': True,
-                           'config': app_delivery.job_config(providers.fill(company, follow(
-                               c, row['bot'], json.loads(row['config_json']), configs.get))),
+                           'config': config,
                            'repository': bot_repository(c, self.store.settings, row['bot'], configs.get, app),
-                           'mail_agent': bool(P.inbox_person(row['bot'], people))})
+                           'mail_agent': bool(P.inbox_person(row['bot'], people)),
+                           # The runtimes its own or its team's subscription signs in: no sign-in needed here for them.
+                           **model_subscriptions.assignment_fields(c, runner, config)})
         return result
 
     def assign(self, c, who, bot, body):
@@ -2418,6 +2643,8 @@ class Execution:
         if (runner["operator"] not in (operator, self.auth.owner_id(c))
                 and not (member_bot and (runner["accepts_member_bots"] or self.auth.bot_admin(who)))):
             raise Problem("forbidden", "This machine's operator is not authorized to host this bot", 403)
+        from . import cloud_machines
+        cloud_machines.check_host(c, bot, body.runner_id)
         old = c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone()
         generation = old["generation"] if old else 0
         if body.expected_generation != generation:
@@ -2446,6 +2673,7 @@ class Execution:
         built_on.forget(c, bot)                   # placed: its computer reports the checkout from now on
         if old and old["runner_id"] != body.runner_id:
             forget_report(c, old["runner_id"], bot)
+        cloud_machines.placed(c, bot, body.runner_id, who.actor)
         return dict(c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone())
 
     def grace_leases(self):
@@ -2701,22 +2929,31 @@ class Execution:
         return {"attempt_id": row["id"], "outcome": body.outcome, "job_state": state, "message": None}
 
     @staticmethod
-    def mark_rejected(c, runner_id, runtime, reason, profile=None):
-        """Record the refusal now; the runner's next heartbeat repeats it and later lifts it."""
+    def mark_rejected(c, runner_id, runtime, reason, profile=None, bot=""):
+        """Record the refusal now; the runner's next heartbeat repeats it and later lifts it. On a bot-keyed runtime with
+        no profile (pi, the Gemini CLI) the refused key is `bot`'s own, so only that bot is marked and the runtime's row
+        is left as the runner reports it."""
         record = c.execute("SELECT readiness_json FROM runners WHERE id=?", (runner_id,)).fetchone()
         ready = readiness_document(record[0] if record else None)
         row = (ready.get("runtimes") or {}).get(runtime)
         if not isinstance(row, dict):
             return
-        if profile:
+        own = bool(bot) and not profile and bot_keyed(runtime)
+        if profile or own:
             row = {}
         row.update(authenticated="rejected", rejected_at=H.now(), rejected_reason=reason[:300],
                    detail=("Sign-in rejected: " + reason)[:500])
-        for bot in ready.get("bots", {}).values():
-            if isinstance(bot, dict) and bot.get("runtime") == runtime and bot.get("profile", "") == (profile or ""):
-                bot["sign_in"] = "rejected"
-                bot["ready"] = False
-                bot["problems"] = [row["detail"]]
+        for name, entry in ready.get("bots", {}).items():
+            if not isinstance(entry, dict) or entry.get("runtime") != runtime:
+                continue
+            if own:
+                if name != bot:
+                    continue
+            elif entry.get("profile", "") != (profile or ""):
+                continue
+            entry["sign_in"] = "rejected"
+            entry["ready"] = False
+            entry["problems"] = [row["detail"]]
         if profile:
             report = c.execute("SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?",
                                (runner_id, profile)).fetchone()
@@ -2734,6 +2971,7 @@ class Execution:
         a bot-wide check that raises, and stops picking once CLAIM_HOLDS jobs are held; without it the error
         propagates. `skip`: the job ids a claim has already dropped, which are passed over."""
         lanes, roots, continues = lanes_on(runner), roots_on(runner), capacity_continue_on(runner)
+        private_lanes = private_lanes_on(runner)
         # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list. A runner
         # without lanes runs one turn per bot, so any active attempt takes the whole bot.
         busy = set(live_lanes(c))
@@ -2827,7 +3065,9 @@ class Execution:
                     continue        # old strict-primary runners cannot route a saved fallback
                 if not continues and continuation_thread(c, row["id"]):
                     continue        # left queued for a runner that continues its thread: this one would start it afresh
-                why = job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live)
+                if not private_lanes and private_job(c, row):
+                    continue        # a private meeting's turn waits for a runner that keeps it out of the bot's checkout
+                why = job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live, runner=runner)
                 if why != "unreadable":
                     # The bot's checks ran for this job without raising: the back-off their last failure started ends.
                     self.check_backoff.pop(row["bot"], None)
@@ -2898,6 +3138,7 @@ class Execution:
             if (not target or (remote and not claiming(rid, CLAIMED_WAITING_FRESH))
                     or not target['last_seen'] or target['last_seen'] < H.shift(H.now(), seconds=-90)
                     or not self.awake(target['awake_since'], H.now()) or runner_versions.paused(c, rid)
+                    or cloud_machines.held(c, rid)
                     or load_status(c, rid)['overloaded'] or start_places.ready_waiting(c, rid)
                     or sum(turns_here(c, rid).values()) >= start_places.turn_limit(target)):
                 continue
@@ -2953,7 +3194,7 @@ class Execution:
             return {"attempt": None, "paused": cloud_access.LOCKED}
         if c.execute('SELECT 1 FROM org_turn_waits LIMIT 1').fetchone():
             return None
-        why = runner_versions.paused(c, who.runner_id)
+        why = runner_versions.paused(c, who.runner_id) or cloud_machines.held(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
         people_only, held = self.held_starts(c, who.runner_id)
@@ -3075,7 +3316,9 @@ class Execution:
             return {'attempt': None, 'waiting': org_turns.REASON}
         if cloud_access.locked(c):
             return {"attempt": None, "paused": cloud_access.LOCKED}
-        why = runner_versions.paused(c, who.runner_id)
+        # A cloud machine reserved for a stop takes no new turn: checked under this write lock, which the stop's
+        # reservation also takes, so a claim either finds it or has its turn out before it (cloud_machines.reserve).
+        why = runner_versions.paused(c, who.runner_id) or cloud_machines.held(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
         people_only, held = self.held_starts(c, who.runner_id)
@@ -3180,6 +3423,8 @@ class Execution:
                 return {"attempt": None}    # the bot is over its run budget: held now, its queue kept
             if run_backoff.probe(c, row["bot"]):
                 return {"attempt": None}    # held for failed runs and its next try is not due, or another took it
+        if finance_run_hold(c, row["bot"], row["id"]):
+            return {"attempt": None}        # a Finance budget at its cutoff refuses the run (usage_limits holds the bot)
         live_ref = (msg.get("refs") or {}).get("live_meeting")
         if (isinstance(live_ref, dict) and msg.get("from_actor") == H.KEEPER
                 and msg.get("to_actor") == "bot:" + row["bot"]):
@@ -3197,6 +3442,11 @@ class Execution:
         from .shared_bots import follow
         followed = follow(c, row["bot"], json.loads(
             c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()[0]))
+        if isinstance(live_ref, dict):
+            # A live-meeting reply runs on its meeting's model (backend/live_meetings.py turn_config), not the bot's.
+            from .live_meetings import turn_config
+            followed = turn_config(c, self.store.settings, followed, row["bot"], live_ref.get("meeting_id"),
+                                   who.runner_id, row["id"], live_ref.get("turn_id"))
         # A check subtask's turns run on its own model, in its own session (backend/check_models.py).
         check = check_models.of(c, task["id"], row["bot"]) if task else None
         released_notice = bool(task and auto_tasks.notice_releases(c, task, msg))
@@ -3268,6 +3518,10 @@ class Execution:
         # The company's models choice: the Gateway while the bot's subscription is not signed in here, and the
         # Gateway as its last fallback, on a computer that can run it (backend/models_preset.py).
         here = readiness_document(runner["readiness_json"])
+        # The computer's subscription for this runtime signs the turn in, so a missing or
+        # refused sign-in here does not move it to the Gateway (backend/model_subscriptions.py).
+        subscribed = model_subscriptions.for_claim(c, runner, config)
+        here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
         # Its department's tier (Medium by default) is looked up only when a turn would use it.
         tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot"], followed)
         config = models_preset.with_gateway_fallback(record, here, models_preset.main_config(record, here, config, tier), tier)
@@ -3280,6 +3534,9 @@ class Execution:
         # (backend/run_backoff.py). An older runner ignores it, fails the same way, and the next run starts anew.
         if run_backoff.take_compact(c, row["bot"], conv["id"], aid):
             config = {**config, "compact_first": True}
+        # A stateless bot (Counsel): its runner starts each task fresh, reads and keeps no memory (hubdb.stateless).
+        if H.stateless(followed):
+            config = {**config, "stateless": True}
         gateway_connection.hand_out(c, aid, config)
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `hub conversation show` when it wants to. The
@@ -3412,6 +3669,7 @@ class Execution:
         from .views import roster
         people = roster(c)
         inbox = P.inbox_person(row["bot"], people)
+        subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
         from .chat_goals import current
         from . import worktrees
@@ -3423,18 +3681,24 @@ class Execution:
         return {"attempt": {"chat_goal": chat_goal, "routine": routine, "id": aid, "deferred": deferred,
                             # Which waiting turn takes a shared one-turn login first (runner-rs/src/login_turns.rs).
                             "login_class": login_class(c, task, msg, routine),
-                            "recovery": {"resume_session": restart_reported(c, row["attempt_id"]) or cut_by_update(c, row["attempt_id"])
+                            "recovery": {"resume_session": restart_reported(c, row["attempt_id"]) or bool(cut_by_update(c, row["attempt_id"]))
                                          or bool(run_limit_minutes(c, row["attempt_id"])) or bool(c.execute(
                                 "SELECT 1 FROM attempts WHERE id=? AND state='expired' AND thread_id IS NOT NULL",
                                 (row["attempt_id"],)).fetchone())} if recovery else None,
                             "computer_label": runner["label"], "computer_logins_v1": True,
+                            # The computer the bot's browser reaches the web through, or None (backend/browser_exit.py).
+                            "browser_exit": browser_exit.for_turn(c, row["bot"]),
                             # A starter bot's chat while it is `needs_setup` is its setup (runner prompt).
                             "onboarding": (parked["onboarding_state"] if parked else "") or "",
                             # The mailboxes an inbox bot's turn may ask its runner for mail access to: the one it declares
                             # (its person's email when it declares none), then the people below them.
                             "mailboxes": routines.token_mailboxes(c, row["bot"], people) if inbox else [], "next_run": carried, "notes": notes, "job_id": row["id"], "bot": row["bot"], "lane": lane,
-                            "credential_vault": c.execute("SELECT 1 FROM credential_grants WHERE subject=? AND revoked IS NULL LIMIT 1",
-                                                          ("bot:" + row["bot"],)).fetchone() is not None,
+                            "credential_vault": bool(subscriptions) or c.execute(
+                                "SELECT 1 FROM credential_grants WHERE subject=? AND revoked IS NULL LIMIT 1",
+                                ("bot:" + row["bot"],)).fetchone() is not None,
+                            # The company subscriptions this turn signs in with: ids and kinds, never values, which the run
+                            # reads from credential-runtime (backend/model_subscriptions.py).
+                            **({"subscriptions": subscriptions} if subscriptions else {}),
                             # A run on a Tico model reaches the Gateway through its runner, which alone is handed the key
                             # (runner-gateway-credentials; runner-rs/src/gateway_relay.rs).
                             "gateway": gateway_connection.wanted(config),
@@ -3689,14 +3953,15 @@ class Execution:
         c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), reply["id"]))
         H.held_queue_recheck(c, reply["id"])
 
-    def file_result(self, c, row, body):
+    def file_result(self, c, row, body, held=False):
         """A result whose job this runner no longer speaks for: a review decided it, another
         attempt owns the work now, or the bot moved to another Mac. The run is recorded against
         its own attempt so the text, the tokens and the outcome survive — a reviewer can now read
         what the run actually produced — and the job is left exactly as its owner left it. The
         attempt stays `expired`, which is the true account of its lease and keeps late output
-        archivable against it."""
-        result = body.model_dump(exclude={"load_snapshot"})
+        archivable against it. `held`: the org rule check held its reply (forget_late_reply), and `body`
+        carries only the note."""
+        result = {**body.model_dump(exclude={"load_snapshot"}), **({"held_reply": True} if held else {})}
         prior = json.loads(row['result_json'] or '{}')
         # A late report cannot erase the saved-session decision that already requeued this job.
         for key in ('lease_continue', 'quota_continue', 'capacity_continue', 'source_continue', 'source_running', 'source_pending'):
@@ -3724,7 +3989,7 @@ class Execution:
         (`quarantine_stops.requeues`)."""
         person = row["stop_requested"]
         benched = quarantine_stops.stopped_by(c, row)
-        then = quarantine_stops.HELD if held else quarantine_stops.REQUEUED
+        then = quarantine_stops.then(c, row, held)
         said = f"{benched}. {then}" if benched else f"Stopped by {stopper(c, person)}"
         settle_status(c, row["bot"], "idle", "", claimed=row["created"])
         # Quiet: the bot reads it with the room next time; it does not start a run of its own. A quarantined bot's
@@ -3732,8 +3997,9 @@ class Execution:
         H.unless_queue_full(c, lambda: H.say(c, H.KEEPER, "bot:" + row["bot"], said, conversation_id=conversation_id,
                                              kind="notice", refs={"quiet": True, "stopped_by": person,
                                                                   "turn_id": row["id"]}))
+        reason = "restart" if benched and quarantine_stops.restarted(c, row) else "quarantine"
         H.event(c, H.KEEPER, "attempt.stopped", row["id"], {"bot": row["bot"], "job_id": row["job_id"], "by": person,
-                                                            **({"quarantine": benched, "requeued": not held}
+                                                            **({reason: benched, "requeued": not held}
                                                                if benched else {})})
         # A worktree this turn was waiting for is not wanted any more (backend/worktree_waits.py).
         from .worktree_waits import cancel_for_attempt
@@ -4213,7 +4479,43 @@ class Execution:
                  "commands": [{"exit": cmd.exit, "killed": cmd.killed} for cmd in body.commands]})
         return {"woke": woke}
 
-    def complete(self, c, who, aid, body):
+    @staticmethod
+    def forget_held_reply(c, row, aid, conversation_id, note):
+        """A reply the org rule check held is kept nowhere but its hold: the run's live text and raw capture keep only
+        the note (a later capture upload is refused: `held_reply`), and the provider thread that wrote it is never
+        resumed (the run forgets it, the bot's session row goes, the conversation's and the bot's shared thread's
+        epochs move, so the next turn starts fresh)."""
+        c.execute("DELETE FROM attempt_events WHERE attempt_id=? AND kind='delta'", (aid,))
+        c.execute("UPDATE attempt_events SET payload_json=? WHERE attempt_id=? AND kind='message'",
+                  (encode({"text": note}), aid))
+        c.execute("DELETE FROM attempt_captures WHERE attempt_id=?", (aid,))
+        c.execute("DELETE FROM deltas WHERE turn_id=?", (aid,))
+        thread = c.execute("SELECT thread_id FROM attempts WHERE id=?", (aid,)).fetchone()[0]
+        c.execute("UPDATE attempts SET thread_id=NULL WHERE id=?", (aid,))
+        c.execute("UPDATE turns SET thread_id=NULL WHERE id=?", (aid,))
+        if thread:
+            c.execute("DELETE FROM bot_sessions WHERE bot=? AND thread_id=?", (row["bot"], thread))
+        c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
+                  "epoch=epoch+1,updated=excluded.updated", (conversation_id, H.now()))
+        bump_bot_session_epoch(c, row["bot"])
+        H.event(c, H.KEEPER, "reply.held", aid, {"bot": row["bot"]})
+
+    def forget_late_reply(self, c, row, rule_check):
+        """A late result's reply that the org rule check would hold (a Block or Escalate rule it breaks) is filed as its
+        held note only: no later turn posts it, so no hold is opened, and like a held completion the run keeps none of
+        its text, live stream or thread (forget_held_reply). Returns the note, or None when nothing holds it."""
+        from . import org_rule_check
+        if not org_rule_check.holds(rule_check):
+            return None
+        broken = [r for r in rule_check["rules"] if r["id"] in rule_check["broken"] and r["if_broken"] != "warn"]
+        note = org_rule_check.held_note(c, "bot:" + row["bot"], broken[0])
+        found = c.execute("SELECT m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
+                          (row["job_id"],)).fetchone()
+        self.forget_held_reply(c, row, row["id"], found[0] if found else None, note)
+        return note
+
+    def complete(self, c, who, aid, body, rule_check=None):
+        """`rule_check`: the org rule check of the reply (backend/org_rule_check.py), made before this write."""
         row = self.attempt(c, who, aid, final=True)
         # A turn a quarantine stopped ends stopped whatever it reports: a quarantined bot can post no answer, so one
         # finished in the seconds before its runner heard stays on the run. Its job goes back in the queue with the
@@ -4221,7 +4523,9 @@ class Execution:
         # (`quarantine_stops.requeues`); otherwise the whole turn's work is held for review, where the kept answer
         # shows what the run already finished (Dev 573).
         benched = quarantine_stops.stopped_by(c, row)
-        if benched and body.outcome == "completed":
+        # A turn that finished before its runner heard a restart's Stop (its computer's subscription changed) stays a
+        # finished turn: nothing to run again.
+        if benched and body.outcome == "completed" and not quarantine_stops.restarted(c, row):
             body = body.model_copy(update={"outcome": "interrupted"})
         # `attempt` has already given `restore` its chance. What is left is a finished turn whose
         # lease lapsed under it: settle the job with it when the job is still waiting, and file it
@@ -4235,7 +4539,12 @@ class Execution:
         # And a turn stopped while it waited for its shared login: older runners report failed, newer ones interrupted.
         # Either settles the Stop. A task done or closed meanwhile (`skipped`) also ends its waiting turn.
         skipped = body.outcome == "interrupted" and not row["stop_requested"] and finished_before_start(c, row)
-        unstarted = (row["state"] == "leased" and body.outcome == "failed"
+        # A private meeting's turn its computer could make no copy of the repository for (runner-rs
+        # sessions::PRIVATE_COPY_FAILED) never started, and would fail alike on every retry: it ends here, and the
+        # meeting says why (live_meetings `meeting.bot_turn_failed`), never handed back to run again.
+        no_copy = body.outcome != "completed" and not row["stop_requested"] and private_copy_failed(c, aid)
+        unstarted = (row["state"] == "leased" and no_copy
+                     or row["state"] == "leased" and body.outcome == "failed"
                      and (any(gateway.run_code(error) == gateway.NOT_ISOLATED for error in limit_errors(c, aid))
                           or body.primary_held and body.limited and not body.fallback)
                      or row["state"] == "leased" and body.outcome in ("failed", "interrupted") and bool(row["stop_requested"])
@@ -4253,7 +4562,10 @@ class Execution:
         if returned:
             return self.hand_back(c, row, body)
         if late and not self.settleable(c, who, row) and not self.settles_late(c, who, row, body):
-            filed = self.file_result(c, row, body)
+            held_late = self.forget_late_reply(c, row, rule_check)
+            if held_late:
+                body = body.model_copy(update={"text": held_late})
+            filed = self.file_result(c, row, body, held=bool(held_late))
             if row["stop_requested"] and not benched and self.holds(c, who, row):
                 # The Stop stands over the answer, and over a second run of the request too: the job ends as a
                 # stopped one would, rather than waiting uncertain for `auto_reconcile` to resume it. Inputs the runtime
@@ -4273,7 +4585,7 @@ class Execution:
                         include_deleted=True)
         conv = H.conversation(c, msg["conversation_id"])
         actor = "bot:" + row["bot"]
-        reply = None
+        reply, held = None, False
         # Nothing is posted under a comment taken back mid-turn: the reply would stand where it was and could
         # restate it. The turn's own result is still recorded below.
         if body.text and body.outcome == "completed" and msg["deleted_at"] is None:
@@ -4290,18 +4602,16 @@ class Execution:
                 (actor + ":" + aid, "/api/v2/messages", "/api/v2/conversations/" + conv["id"] + "/messages",
                  conv["id"], actor, text)).fetchone()
             task = H.task(c, work_task_id(msg, conv)) if work_task_id(msg, conv) else None
-            if task and task["owner"] == actor:
-                # Record the owner's final verdict even when the reply is withheld until Done.
-                H.record_verdict(c, actor, task, text=text)
             # A bot delivered through a desktop app: the computer may have reported the reply from the app first.
             same = same or app_delivery.echoes(c, conv["id"], actor, text, any_source=False)
-            if not already and not same and (msg["kind"] in ("say", "ask", "steer") or task):
+            # A reply the turn already sent (a tool message) is not posted again; the rule check's verdict on the final
+            # text still applies (held, the run keeps only the note), so `posting` decides only the post.
+            posting = not already and not same
+            if msg["kind"] in ("say", "ask", "steer") or task:
                 target = msg["from_actor"]
                 replyable = not str(target).startswith("bot:") or msg["kind"] == "ask"
                 if target == H.KEEPER and task:
-                    humans = [p for p in conv.get("participants") or [] if str(p).startswith("human:")]
-                    target = ((conv.get("owner_actor") if conv.get("scope") == "personal" else None)
-                              or (humans[0] if humans else None) or task["requester"])
+                    target = reply_target(msg, conv, task)
                     # A task in the bot's chat room always delivers, and so does one filed from a chat into
                     # its own room (H.task_from_chat). Any other dedicated task thread waits until the owner
                     # has marked the work done, or, for a finished turn that came in after its lease lapsed,
@@ -4313,18 +4623,25 @@ class Execution:
                             task["status"] == "done" or (late and task["status"] == "closed"))
                     # Woken by Tico on a task finished before it started, a turn that wrote nothing has no news: the
                     # person would only read "nothing changed" again. Its text stays on the run (Dev 359).
-                    if replyable and quiet_recheck(c, aid, body, task, msg):
+                    if posting and replyable and quiet_recheck(c, aid, body, task, msg):
                         replyable = False
                         H.event(c, H.KEEPER, "reply.withheld", aid, {"bot": row["bot"], "task": task["id"],
                                                                      "to": target, "reason": "no_change"})
-                if target not in (H.KEEPER, actor) and replyable:
+                # A reply the turn already sent is not posted again, but the person waiting still hears of a hold.
+                reaches = replyable
+                replyable = replyable and posting
+                if target not in (H.KEEPER, actor):
                     refs = {"turn_id": aid, **({"task": task["id"]} if task else {}),
                             **({"warnings": notices} if notices and msg["kind"] != "ask" else {})}
+                    refused = False
                     try:
-                        privacy.require_destination(c, Identity(actor, "bot", attempt_id=aid), target, conv["id"], refs, msg)
-                    except Problem as refused:
-                        if refused.code != "privacy":
+                        if replyable:
+                            privacy.require_destination(c, Identity(actor, "bot", attempt_id=aid), target, conv["id"],
+                                                        refs, msg)
+                    except Problem as refusal:
+                        if refusal.code != "privacy":
                             raise
+                        refused = True
                         # The run is done; only its reply may not go here. The result stays on the
                         # run, which only the private task's own parties can read, and the person
                         # who expected the reply is told, with nothing from the task named.
@@ -4332,11 +4649,40 @@ class Execution:
                             H._write_message(c, H.KEEPER, target, f"{row['bot']} finished, but its reply drew on "
                                              "a private task you can't read, so it was not posted here.",
                                              conv, "notice", {"withheld": {"bot": row["bot"]}}, None, None)
-                    else:
+                    # The org rule check's verdict (backend/org_rule_check.py), whether the reply is posted now or
+                    # waits on the run until Done: held, the run keeps only the note, never the reply.
+                    rule_gate, asked_text = None, body.text
+                    if rule_check and not refused:
+                        from . import org_rule_check
+                        checked = rule_check if target in rule_check["recipients"] else \
+                            {**rule_check, "outcome": "unchecked", "error": "target_changed"}
+                        rule_gate = org_rule_check.apply(c, checked, text, {"attempt": aid, "message": msg["id"],
+                                                                           "text": body.text}, tell=True)
+                    if rule_gate and rule_gate.get("held"):
+                        held = True
+                        note = org_rule_check.held_note(c, actor, rule_gate["rule"])
+                        if H.is_human(target) and reaches:
+                            H._write_message(c, H.KEEPER, target, note, conv, "notice",
+                                             {"org_rule": {"hold": rule_gate["hold_id"], "bot": row["bot"]},
+                                              **({"task": task["id"]} if task else {})}, None, None)
+                        body = body.model_copy(update={"text": note})
+                        self.forget_held_reply(c, row, aid, conv["id"], note)
+                        replyable = False
+                    elif rule_gate and rule_gate.get("warn"):
+                        text = org_rule_check.warned_text(rule_gate, text)
+                        body = body.model_copy(update={"text": org_rule_check.warned_text(rule_gate, body.text)})
+                    if replyable and not refused:
                         def post_reply():
-                            sent = H.answer(c, actor, msg["id"], body.text) if msg["kind"] == "ask" else H.say(
-                                c, actor, target, text, conversation_id=conv["id"],
-                                in_reply_to=msg["id"], refs=refs)
+                            if msg["kind"] == "ask":
+                                # The pick is resolved on the reply's own words; a warning goes on what the asker
+                                # reads (task_review.reply_answer).
+                                from .task_review import reply_answer
+                                from . import org_rule_check
+                                sent = reply_answer(c, self.auth, Identity(actor, "bot", attempt_id=aid), msg,
+                                                    asked_text, org_rule_check.warn_line(rule_gate))
+                            else:
+                                sent = H.say(c, actor, target, text, conversation_id=conv["id"], in_reply_to=msg["id"],
+                                             refs=refs)
                             if sent:
                                 self.stamp_reply(c, sent, row, aid, msg)
                             return sent
@@ -4347,6 +4693,10 @@ class Execution:
                             H.event(c, H.KEEPER, "reply.withheld", aid, {
                                 "bot": row["bot"], "to": target, "reason": "queue_full",
                                 **({"task": task["id"]} if task else {})})
+            if task and task["owner"] == actor and not held:
+                # Record the owner's final verdict even when the reply is withheld until Done: from the text as
+                # delivered, after the rule check, never from a held reply.
+                H.record_verdict(c, actor, task, text=text)
         # A turn on a check subtask ran on the check's model, not the bot's (backend/check_models.py).
         # Decided by what the claim handed out: a check handed to another bot mid-turn still ran on the check's model.
         check_task, check = check_models.handed_out(c, aid)
@@ -4369,7 +4719,9 @@ class Execution:
         c.execute("UPDATE attempts SET state=?,finished=?,final_text=?,result_json=? WHERE id=?",
                   (body.outcome, H.now(), body.text,
                    encode({**body.model_dump(exclude={"load_snapshot"}), **({'source_pause': 'quota'} if source_pause else {}),
-                           **({"check": check["runtime"]} if check else {})}), aid))
+                           **({"check": check["runtime"]} if check else {}),
+                           # A held reply's marker: its capture is never taken again (attempt_capture).
+                           **({"held_reply": True} if held else {})}), aid))
         quota_continue = False
         if source_pause and not body.fallback and row['thread_id'] and worked:
             computer = c.execute('SELECT capabilities_json FROM runners WHERE id=?', (row['runner_id'],)).fetchone()
@@ -4502,9 +4854,12 @@ class Execution:
             requeue = False  # a yield or limit flag cannot turn unknown fallback effects into a safe retry
         if repeated_capacity:
             requeue = False
+        no_copy = no_copy and not stopped    # (above) ended, not queued again nor left for auto_reconcile to resume
+        if no_copy:
+            requeue = False
         c.execute("UPDATE jobs SET state=? WHERE id=?",
                   ("completed" if body.outcome == "completed" else "uncertain" if held_back else "queued" if benched
-                   else "cancelled" if stopped
+                   else "cancelled" if stopped or no_copy
                    else "queued" if requeue else "uncertain", row["job_id"]))
         if tico_code == gateway.NOT_ISOLATED and not requeue:
             # Held as it is: never started, so `auto_reconcile` would resume it onto the same runner each sweep. It
@@ -4516,7 +4871,8 @@ class Execution:
             from .live_meetings import complete_runner_turn
             complete_runner_turn(c, live_ref.get("meeting_id"), live_ref.get("turn_id"), row["bot"],
                                  body.text if body.outcome == "completed" else "", body.outcome,
-                                 requeued=requeue)
+                                 requeued=requeue, attempt_id=aid,
+                                 failure=PRIVATE_COPY_FAILURE if no_copy else None, runner_id=row["runner_id"])
         turn_task = work_task_id(msg, conv)
         for incoming in c.execute("SELECT i.message_id,m.kind FROM attempt_inputs i "
                                   "JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?", (aid,)).fetchall():
@@ -4570,6 +4926,9 @@ class Execution:
                       usage=self.run_usage(c, row, body), usage_reason=self.no_usage_reason(body))
         from . import automations
         automations.turn_done(c, row, body.outcome, body.text)   # an automation that started this turn is charged it
+        from . import counsel
+        # Counsel's completed turn on a document's read task finishes that task.
+        counsel.turn_done(c, row, "stopped" if stopped else body.outcome, work_task_id(msg, conv), body.text)
         # The checkpoint goes on the task whose session the turn ran in: a subtask's turn runs in its session
         # root's lane (`task:<root>`, set at claim), so it checkpoints that root, never the subtask, even if
         # the subtask moved during the turn. A lane naming a task this bot does not own checkpoints nothing.
@@ -4582,7 +4941,10 @@ class Execution:
             checkpoint_task = H.task(c, turn_task_id) if turn_task_id else None
         if checkpoint_task:
             bot_config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
-            own = sessions.session_key(json.loads(bot_config[0]) if bot_config else {}, row["bot"],
+            # The followed config, as the turn's runner keyed it (a branch's session keys come from its original).
+            from .shared_bots import follow
+            followed_config = follow(c, row["bot"], json.loads(bot_config[0]) if bot_config else {})
+            own = sessions.session_key(followed_config, row["bot"],
                                        checkpoint_task["id"], conv["id"]) == "task:" + checkpoint_task["id"]
             # Only a turn in the task's own session leaves a checkpoint: a shared bot thread carries
             # other tasks. And a session that once took in another private task may carry it in every
@@ -4602,6 +4964,7 @@ class Execution:
                        wake_rules.settled_state(c, checkpoint_task, row["bot"], started, aid) if started else None,
                        checkpoint_task["id"]))
         usage_limits.after_run(c, row["bot"], self.store.settings.owner_email)
+        finance_run_ended(c, row["job_id"], aid)
         config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
         runtime, model = providers.bot_choice(c, self.store.settings, json.loads(config[0]) if config else {})
         # A turn on the bot's task model ran on that model (backend/task_models.py): its usage and limit are that login's.
@@ -4627,22 +4990,40 @@ class Execution:
                                                 runtime, body, aid, H.now(),
                                                 hopped=fallback_mark(json.loads(config[0] or "{}") if config else {})
                                                 if hopped else None)
+        elif check and not stopped and not gateway_wait and (limited or body.outcome == "completed"):
+            # A check's own schedule stays its own (check_models.hold below), but a company subscription it signed in
+            # with is one login on every computer given it: its limit holds it there too, and a check that worked on it
+            # clears it.
+            login_holds.after_turn(c, row["runner_id"], row["bot"], "", runtime, body, aid, H.now(),
+                                   subscriptions_only=True)
         if reset_wait or unstarted and body.primary_held and body.limited and not body.fallback:
             login_hold = hold_job_until_reset(c, row, own_login_hold(c, self.store.settings, row['bot']),
                                 'No fallback could take this claim; waiting for the primary login reset.') or login_hold
         if source_pause and login_hold and (quota_continue or body.fallback or not fallback_choice(
                 c, self.store.settings, row['runner_id'], row['bot'], json.loads(config[0] or '{}') if config else {})):
             hold_job_until_reset(c, row, login_hold, 'Provider quota paused this turn; continue its saved session at reset.')
+        # A turn signed in with a company subscription: a refusal is that subscription's, never the computer's login.
+        subscription = model_subscriptions.turn_rejected(
+            c, self.store.settings, aid, row["bot"], body.auth_rejected.runtime, body.auth_rejected.reason,
+            turn_task_id) if rejected else None
         if rejected:
-            self.mark_rejected(c, row["runner_id"], body.auth_rejected.runtime, body.auth_rejected.reason, body.profile_used)
+            if not subscription:
+                self.mark_rejected(c, row["runner_id"], body.auth_rejected.runtime, body.auth_rejected.reason,
+                                   body.profile_used, row["bot"])
             H.event(c, H.KEEPER, "attempt.auth_rejected", aid,
-                    {"bot": row["bot"], "runtime": body.auth_rejected.runtime, "reason": body.auth_rejected.reason})
-            # The task it ran for waits on a card for whoever signs the computer in (backend/reconnects.py).
-            reconnects.login_refused(c, self.store.settings, row["bot"], row["runner_id"],
-                                     body.auth_rejected.runtime, turn_task_id, body.profile_used or "")
+                    {"bot": row["bot"], "runtime": body.auth_rejected.runtime, "reason": body.auth_rejected.reason,
+                     **({"subscription": subscription["id"]} if subscription else {})})
+            if not subscription:
+                # The task it ran for waits on a card for whoever signs the computer in (backend/reconnects.py).
+                reconnects.login_refused(c, self.store.settings, row["bot"], row["runner_id"],
+                                         body.auth_rejected.runtime, turn_task_id, body.profile_used or "")
         elif body.outcome == "completed" and not check and not body.fallback:
-            # A run that completed on the bot's own login (not a fallback's) shows that profile's login works.
-            reconnects.login_works(c, row["runner_id"], [(runtime, body.profile_used or "")])
+            # A run that completed on the bot's own login (not a fallback's) shows that profile's login works, or
+            # the subscription it was handed.
+            if model_subscriptions.handed(c, aid, runtime):
+                model_subscriptions.turn_worked(c, aid, runtime)
+            else:
+                reconnects.login_works(c, row["runner_id"], [(runtime, body.profile_used or "")])
         if body.fallback:
             # The runner ran this turn on the bot's fallback harness: countable here, and
             # named in Runs, so a primary that keeps failing is noticed. `primary_runtime` is what the bot is
@@ -4770,7 +5151,8 @@ class Execution:
         elif rejected:
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
                           f"{body.auth_rejected.runtime} sign-in was rejected; " +
-                          ("sign in on this computer to continue" if requeue else "this run is saved for review"),
+                          (f"reconnect {subscription['name']} in Settings > Models" if subscription and requeue
+                           else "sign in on this computer to continue" if requeue else "this run is saved for review"),
                           claimed=row["created"], stop=aid if not requeue else None)
         elif silent and tico_code == gateway.UNAVAILABLE:
             from .repositories import save_metadata
@@ -4967,9 +5349,10 @@ class Execution:
         if (not body.acknowledge_uncertain_effects or row['state'] != 'uncertain'
                 or row['attempt_id'] != body.attempt_id):
             raise Problem("uncertain", "This run changed or its external effects have not been reviewed", 409)
-        # A deferred choice keeps the job uncertain; state alone cannot fence another open dialog.
-        if c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?",
-                     (job_id, body.attempt_id)).fetchone():
+        # A deferred choice keeps the job uncertain; state alone cannot fence another open dialog. Tico's own saved
+        # choice for an update cut gives way to a person's.
+        if c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=? AND actor<>?",
+                     (job_id, body.attempt_id, H.KEEPER)).fetchone():
             raise Problem("uncertain", "A choice is already saved for this run. Refresh to see it.", 409)
         note = body.note.strip()
         if len(note) < 20:
@@ -4994,9 +5377,11 @@ class Execution:
                 H.task_update(c, H.KEEPER, task['id'], status='done', quiet=True,
                               note='Recovery decisions saved. Tico applies deferred choices when the lane frees.')
 
-    def _decide(self, c, row, attempt_id, decision, note, actor, *, action='job.reconcile', shown=None, deferred=False, saved=False):
+    def _decide(self, c, row, attempt_id, decision, note, actor, *, action='job.reconcile', shown=None, deferred=False, saved=False,
+                cause=None):
         """Record one decision on an uncertain job: resume queues it again, dismiss releases it. `shown` is the
-        line people read when the note itself is written to the bot. A deferred choice stays held until its lane is idle."""
+        line people read when the note itself is written to the bot. A deferred choice stays held until its lane is idle.
+        `cause` names what stopped the run in the event ('update': the update cuts UPDATE_RESUMES counts)."""
         job_id = row['id']
         state = 'uncertain' if deferred else 'queued' if decision == 'resume' else 'cancelled'
         if not saved:
@@ -5013,6 +5398,7 @@ class Execution:
         c.execute("UPDATE jobs SET state=? WHERE id=?", (state,job_id))
         H.event(c, actor, action, job_id, {'attempt_id':attempt_id, 'decision':decision, 'note':note,
                                            **({'deferred': True} if deferred else {}),
+                                           **({'cause': cause} if cause else {}),
                                            **({'shown':shown} if shown else {})})
         self._finish_recovery_review(c, row['bot'])
         if not c.execute("SELECT 1 FROM jobs WHERE bot=? AND state='uncertain'", (row['bot'],)).fetchone():
@@ -5163,6 +5549,10 @@ class Execution:
         approval or a named merge, publish, send or payment requires review. Its note gives the interruption time
         and asks it to check existing effects first. Lost leases without that report retain the conservative rule.
 
+        A run Tico's update or a hub restart cut (cut_by_update) resumes on the next sweep whatever it used, a named
+        outside action or a consumed approval included (its note names those to verify first): nobody is asked, and
+        BotOps gets no review. A stale cut or a request cut UPDATE_RESUMES times already ends quietly (_update_choice).
+
         Any other run, one that used a tool that can change things or whose host cannot say what it
         did, stays held for its operator or BotOps to review (`review_jobs`), because the hub cannot
         see what a tool did on the Mac and running it again could repeat an outside action. BotOps is
@@ -5214,13 +5604,24 @@ class Execution:
                               'reason': 'Tico is waiting for live work on the same task or session lane and re-evaluates when it ends.'}
                     if not prior or prior['action'] != 'job.recovery_wait' or json.loads(prior['detail_json']) != detail:
                         H.event(c, H.KEEPER, 'job.recovery_wait', row['attempt_id'], detail)
+                    if not row['pending_decision'] and cut_by_update(c, row['attempt_id']):
+                        # Tico's own choice for an update cut, saved now so nobody is asked meanwhile; once the lane
+                        # frees, the sweep judges the run again rather than applying it blindly.
+                        facts = retry_facts(c, row, row['started'], row['finished'])
+                        if facts['update']:
+                            decided.append(self._decide(c, row, row['attempt_id'], *self._update_choice(c, row, facts),
+                                                        H.KEEPER, action='job.auto_reconcile', deferred=True, cause='update'))
                     continue
                 freed = bool(prior and prior['action'] == 'job.recovery_wait')
                 if freed:
                     H.event(c, H.KEEPER, 'job.recovery_ready', row['attempt_id'],
                             {'job_id': row['id'], 'owner': H.KEEPER,
                              'reason': 'Live task or session lane is free; Tico is re-evaluating recovery.'})
-                if row['pending_decision']:
+                if row['pending_decision'] and row['reviewer'] == H.KEEPER:
+                    # Tico's own saved choice is only a placeholder while the lane was busy: the rules below judge the
+                    # run afresh, so a Stop, a quarantine, a finished task or a day's wait since it was saved counts.
+                    c.execute("DELETE FROM job_recovery WHERE job_id=? AND actor=?", (row['id'], H.KEEPER))
+                elif row['pending_decision']:
                     decided.append(self._decide(c, row, row['attempt_id'], row['pending_decision'],
                                                 row['review_note'], row['reviewer'], saved=True))
                     continue
@@ -5231,7 +5632,8 @@ class Execution:
                 if not held or facts['restart'] or facts['lease_lost'] or facts['timeout']:
                     calls, acted, safe = facts['calls'], facts['acted'], facts['safe']
                 started = facts['starts']
-                if not row['aged'] and not freed and not facts['restart'] and not facts['timeout'] and not (safe and started <= 1):
+                if (not row['aged'] and not freed and not facts['restart'] and not facts['timeout'] and not facts['update']
+                        and not (safe and started <= 1)):
                     continue  # the usual wait: a person may look first
                 msg = H.message(c, row['message_id'])
                 conv = H.conversation(c, msg['conversation_id']) if msg else None
@@ -5283,6 +5685,12 @@ class Execution:
                         decided.append(self._decide(c, row, row['attempt_id'], 'resume', note, H.KEEPER,
                                                     action='job.auto_reconcile'))
                         said['resume'] += 1
+                    continue
+                if facts['update']:
+                    # Cut by Tico's update or a hub restart: resumed like a computer-reported restart, never held for a
+                    # person or BotOps, whatever it used (_update_choice).
+                    decided.append(self._decide(c, row, row['attempt_id'], *self._update_choice(c, row, facts),
+                                                H.KEEPER, action='job.auto_reconcile', cause='update'))
                     continue
                 # Only runs that started count: a claim that lapsed before its run began (a computer offline, the
                 # hub unreachable) says nothing about the request itself.
@@ -5348,8 +5756,7 @@ class Execution:
                     # The cut time is the attempt's finished (report) time: the closest Tico has to when
                     # the computer was cut off.
                     at = (row['finished'] or H.now())[11:16]
-                    cut = "a computer restart or lost lease" + (" during Tico's update" if facts['update'] else "")
-                    note = (f"You were interrupted at {at} UTC by {cut}. "
+                    note = (f"You were interrupted at {at} UTC by a computer restart or lost lease. "
                             "Check what already happened first, then continue in this provider session. "
                             "No consumed approval or named irreversible outside action was recorded. " +
                             (note if not acted else ''))
@@ -5367,6 +5774,31 @@ class Execution:
             with isolated(c, "auto_reconcile", bot):
                 self._say_settled(c, bot, said)
         return decided
+
+    @staticmethod
+    def _update_choice(c, row, facts):
+        """(decision, note) for a run Tico's update or a hub restart cut (facts['update']): resume on the same computer
+        and provider session, even after a shell, a local edit, a named outside action or a consumed approval, with a
+        note that names any such action to verify first. A cut more than UPDATE_STALE_S old is dismissed as stale, and
+        a request already resumed from UPDATE_RESUMES cuts ends; both quietly, in the recovery record only."""
+        cut = facts['update']
+        by = "Tico's update" if cut['cause'] == 'update' else "a Tico restart"
+        if (row['finished'] or row['created']) <= H.shift(H.now(), seconds=-UPDATE_STALE_S):
+            return 'dismiss', (f"Dismissed quietly: stopped by {by} at {cut['at'][:16].replace('T', ' ')} UTC, more than a "
+                               "day ago, so its stale work is not resumed.")
+        resumed = c.execute("SELECT count(*) FROM events WHERE action='job.auto_reconcile' AND target=? "
+                            "AND json_extract(detail_json,'$.cause')='update' "
+                            "AND json_extract(detail_json,'$.decision')='resume' "
+                            "AND json_extract(detail_json,'$.deferred') IS NULL", (row['id'],)).fetchone()[0]
+        if resumed >= UPDATE_RESUMES:
+            return 'dismiss', f"Ended quietly: cut by {by} again after {resumed} resumes, so it is not resumed again."
+        named = [*facts['outside'], *(['consumed approval (' + ', '.join(facts['approval_kinds']) + ')']
+                                      if facts['consumed'] else [])]
+        return 'resume', (f"You were interrupted at {cut['at'][11:16]} UTC by {by}. Check what already happened first, "
+                          "then continue in this provider session. " +
+                          (f"Before it stopped, this run recorded {', '.join(named)}: verify whether that already took "
+                           "effect before doing it again." if named else
+                           "No consumed approval or named irreversible outside action was recorded."))
 
     @staticmethod
     def _covered(c, row, task_id):
