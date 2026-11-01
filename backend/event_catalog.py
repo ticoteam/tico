@@ -80,6 +80,19 @@ def _build():
     add("needs_you.created", "Something now needs a person's answer.", asked)
     add("needs_you.answered", "A person answered something that needed them.", asked)
 
+    # Threads (docs/threads.md). Payloads are thin: ids and facts, never a message's words. An endpoint hears a thread
+    # only if its owner can read the thread; message.held goes to owners and admins only. message.created is for outgoing
+    # webhooks alone: a routine or rule does not hear every message.
+    thread = {"id": "t1", "title": "Refund policy", "audience": "members", "owner_actor": "human:ana", "root_id": "t1",
+              "parent_id": None, "parent_message_id": None}
+    add("thread.created", "A thread was started.", thread)
+    add("message.created", "A message was posted to a thread (outgoing webhooks only).",
+        {"id": "m1", "thread_id": "t1", "root_id": "t1", "parent_message_id": None, "seq": 4411,
+         "from_actor": "human:ana", "to_actor": None, "kind": "say"})
+    add("message.held", "The org rules held a message before it reached its thread.",
+        {"id": "m2", "thread_id": "t1", "root_id": "t1", "from_actor": "bot:ops", "rule": "refund_terms",
+         "hold": "h1"})
+
     add("bot.run_failed", "A bot's run failed.", {"bot": "ops", "attempt_id": "r1", "error_class": "login"})
     add("bot.held", "A bot was held: it hit a limit or kept failing.",
         {"bot": "ops", "reason": "budget", "window": "1h", "runs": 40, "budget": 30, "task": _TASK})

@@ -72,7 +72,7 @@ owner owns was placed on the old owner's computer, reassign it in Settings > Com
 ## Change the owner's sign-in email
 
 The owner can move to another sign-in address (a new Google account, say) and stay the same person: every task,
-comment, approval, conversation, bot and role stays theirs. It is not a transfer, and no second person is made.
+comment, approval, thread, bot and role stays theirs. It is not a transfer, and no second person is made.
 
 **First, set up the new address in Cloudflare Access.** Tico doesn't sign anyone in itself: Cloudflare Access (or
 Cognito, or your OIDC provider) checks who you are, then tells Tico your address. Add the new address, or its Google

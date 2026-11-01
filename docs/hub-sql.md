@@ -37,22 +37,22 @@ by a view that already carries your visibility, and SQLite's authorizer refuses 
 else. `SELECT * FROM messages` therefore means "the messages you may read". In plain words:
 
 - **The owner** (Ana) sees everything that is not a credential, with one exception: another
-  human's private Tico room (`conversations.scope = 'personal'`) and its messages stay
+  human's private DM (`conversations.scope = 'personal'`) and its messages stay
   private to that human.
 - **A human on the roster** sees the team: every bot they may read ([Who can see, read and write to a
   bot](permissions.md); a bot they may only see or write to is in the API but not here), every task except
-  those a bot they cannot read owns or requested, unless it is theirs, their own private Tico room, the shared rooms they are a member of, and
-  the direct conversations they take part in. Their own typed and voice notes, files and
+  those a bot they cannot read owns or requested, unless it is theirs, their own private DM, the shared threads they are a member of, and
+  the direct threads they take part in. Their own typed and voice notes, files and
   tool snapshots; nobody else's. Mail copies (`mail_messages`, `mail_mailboxes`,
   `mail_fts`) are owner-only in SQL; humans browse their visible mail on the Message bots page.
   Meetings are the exception: every team meeting is
   theirs to read, and a private one only if the invite names them
   ([Meetings](meetings.md), Who can do what).
 - **A bot** sees itself and every other bot it may read; its own tasks (owner or requester) and
-  tasks delegated to it while the delegation lasts; the conversation of the run it is running
-  in and the conversations of its tasks, with their messages, jobs, runs and output; its own
+  tasks delegated to it while the delegation lasts; the thread of the run it is running
+  in and the threads of its tasks, with their messages, jobs, runs and output; its own
   audit events and refusals; humans as `humans(id, name)` and no email addresses. Never another
-  human's private room, never the tasks, runs or messages of a bot it may not read, never the roster file.
+  human's private DM, never the tasks, runs or messages of a bot it may not read, never the roster file.
 - **A computer's runner credential** queries as the human who registered the computer, on this
   endpoint only.
 - **A personal API token** is the human it belongs to, here and on every other endpoint,
@@ -117,7 +117,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `docs` | `id, path, title, body, locked, version, created_by, created, updated_by, updated` | internal Docs, readable by teammates |
 | `doc_versions` | `doc_id, version, title, path, body, actor, created, note` | versions of visible internal Docs |
 | `linked_docs` | `id, title, url, kind, description, added_by, created, updated` | linked Docs |
-| `bot_files` | `id, bot, scope, identity, title, kind, locator, current_version, task_id, conversation_id` | Files, with the same task, conversation or bot visibility as their APIs |
+| `bot_files` | `id, bot, scope, identity, title, kind, locator, current_version, task_id, conversation_id` | Files, with the same task, thread or bot visibility as their APIs |
 | `bot_file_versions`, `bot_file_activity` | `file_id, version` or `file_id, action, actor, created` | versions and activity of visible Files |
 | `documents`, `document_versions` | legacy mirror fields | compatibility tables for the older docs mirror |
 | `learnings` | `id, integration, actor, text, created, deleted_at` | Tools: what bots and humans learned about a tool (`integration` is the stored column; `integrations/`, `hub tool learn`) |
@@ -186,7 +186,7 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
   `comment` and `person_message`, the subtask, the routine, the worktree.
 - **`writes`**: the hub writes the run made with its own run token (a task change, comment, link, message,
   file, approval request), plus one for a reply Tico posted for it (to a person, or an answer to a bot's ask). Reads and bookkeeping are not
-  writes: `hub sql`, opening a conversation, marking messages read, its own status line, refusals and lint.
+  writes: `hub sql`, opening a thread, marking messages read, its own status line, refusals and lint.
   A git push from a worktree of the run's own task counts one per push: its runner reports them with the run's
   result. A commit or pull request counts once Tico hears of it (`hub task link`, a task note, a push); a local
   commit Tico never sees cannot be counted.
@@ -221,7 +221,7 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
 A run from before this was recorded has none of these, and reads `unknown`; so does an attempt that never got
 a `turns` row (one that failed or expired before it started), counted with no tokens and no outcome. `run_weekly` adds them up per week
 (starting Monday, UTC), bot, trigger and purpose, over exactly the runs you may read in `turns` and `attempts`: a run on a
-private task, in someone else's room, or one you no longer have access to is left out of your totals. Its `input_tokens` is the run's measured usage (`input_tokens` + `cached_tokens`, every
+private task, in someone else's thread, or one you no longer have access to is left out of your totals. Its `input_tokens` is the run's measured usage (`input_tokens` + `cached_tokens`, every
 fallback segment included) and falls back to `tokens_in` only for a run with no usage recorded.
 Last week's numbers, biggest input first:
 

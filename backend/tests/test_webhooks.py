@@ -560,3 +560,18 @@ def test_endpoints_that_cannot_read_an_event_do_not_use_up_its_fan_out_places(ap
         private = H.task_create(c, "human:ben", "Review the sensitive packet", "Details.", "bot:cpo", private=True, lint=False)
     assert [s["subject"] for s in sends(api, ben["id"]) if s["type"] == "task.created"] == [private["id"]]
     assert all(sends(api, b["id"]) == [] for b in blind)
+
+
+def test_a_held_message_reaches_only_the_people_who_can_read_its_thread(api):
+    """An owner or admin hears of a held message only where they could read its thread. Ana owns the company and is in
+    neither the room nor the DM, so she hears of neither; the members and the DM's two people do."""
+    from backend import threads
+    with api.app.state.store.transaction() as c:
+        room = threads.create(c, "human:ben", title="Launch", audience="members", members=["human:priya"])
+        dm = threads.dm(c, "human:ben", ["human:priya"], title="")
+        for thread in (room, dm):
+            data = {"thread_id": thread["id"], "id": "m-held", "from_actor": "human:ben", "rule": "no-prices",
+                    "hold": "h-1"}
+            heard = {who: W.view_for(c, who, "message.held", "m-held", data, {}) is not None
+                     for who in ("human:ana", "human:ben", "human:priya")}
+            assert heard == {"human:ana": False, "human:ben": True, "human:priya": True}, thread["audience"]

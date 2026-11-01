@@ -11,7 +11,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | To | Open |
 |---|---|
 | Give work or review a result | Tasks → New task, List, Board or Done |
-| Talk to a bot about one task | Bot chat → tap the task's row ([Sessions](sessions.md)) |
+| Talk to a bot about one task | Bot's Home → tap the task's row ([Sessions](sessions.md)) |
 | See or link a task's sessions | Task → Sessions +; ⋯ → Copy session ID |
 | Add or edit a Routine | Automations → New automation ([Routines](routines.md)) |
 | See what Tico runs on its own | Settings → System → What Tico runs on its own ([System routines](system-routines.md)) |
@@ -44,7 +44,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |
 | See growth ideas, tests, verdicts and channel economics | Growth (`#/growth`; This week, Channels, Learning and Go-to-market are its tabs) ([Growth](growth.md)) |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
-| Contact support or continue a support conversation | Ask → **Loop in Support** (phone: the Ask tab), or any `#/support` link |
+| Contact support or continue a support thread | Ask → **Loop in Support** (phone: the Ask tab), or any `#/support` link |
 
 All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor BotOps has a rail entry: **Ask**
 (the sidebar's bottom row, ⌘J; the phone's middle tab) opens your Assistant over any page as **Tico Assistant**, `#/assistant`

@@ -22,7 +22,7 @@ import pytest
 from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
-SUBCOMMANDS = ["whoami", "inbound", "mail", "meeting", "message", "conversation", "question", "note", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
+SUBCOMMANDS = ["whoami", "inbound", "mail", "meeting", "message", "conversation", "thread", "question", "note", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
                "proposal", "rules", "strategy", "brand", "gtm", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "health-monitor", "finance", "task-manager", "stall-triage", "roadmap", "service-key"]
@@ -57,6 +57,71 @@ def test_wake_url_commands_reach_the_tools_that_put_the_owners_address(monkeypat
     assert calls == [("GET", "hooks/wake-url"), ("PUT", "hooks/wake-url", {"url": "https://wake.acme.example/start"}),
                      ("PUT", "hooks/wake-url", {"url": None})]
     assert {"hub_relay_wake_url_show", "hub_relay_wake_url_set", "hub_relay_wake_url_off"} <= set(hubtools.BY_NAME)
+
+
+def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
+    from clients import hubtools, remotecli
+    from clients.tico import APIError
+    calls = []
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+        def get(self, path, **query):
+            if path == "me":
+                return {"actor": "human:ana"}
+            calls.append(("GET", path, {k: v for k, v in query.items() if v is not None}))
+            return {}
+        def post(self, path, body=None, key=None):
+            calls.append(("POST", path, body))
+            return {}
+        def patch(self, path, body=None, key=None):
+            calls.append(("PATCH", path, body))
+            return {}
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            calls.append((method, path, body))
+            return {}
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    runs = [
+        (["thread", "list", "--limit", "10"], ("GET", "threads", {"limit": 10})),
+        (["thread", "show", "th1", "--cursor", "c2"], ("GET", "threads/th1/timeline", {"cursor": "c2"})),
+        (["thread", "home", "bot:ops"], ("GET", "threads/home", {"actor": "bot:ops"})),
+        (["thread", "dm", "human:ben"], ("GET", "threads/dm", {"with": "human:ben"})),
+        (["thread", "create", "Refund policy", "--audience", "team", "--group", "grp1", "--member", "human:ana",
+          "--member", "bot:legal", "--body", "Hi"],
+         ("POST", "threads", {"title": "Refund policy", "audience": "team", "audience_group_id": "grp1",
+                              "members": ["human:ana", "bot:legal"], "body": "Hi"})),
+        (["thread", "post", "th1", "Hello", "--kind", "ask", "--to", "human:ana", "--ref", "task:t9", "--ref", "task:t10"],
+         ("POST", "threads/th1/messages", {"text": "Hello", "kind": "ask", "to": "human:ana",
+                                           "refs": {"task": ["t9", "t10"]}})),
+        (["thread", "reply", "th1", "m7", "Side note"],
+         ("POST", "threads/th1/messages", {"text": "Side note", "kind": "say", "parent_message_id": "m7"})),
+        (["thread", "edit", "m7", "Fixed"], ("PATCH", "messages/m7", {"text": "Fixed"})),
+        (["thread", "sub", "m7"], ("POST", "threads", {"parent_message_id": "m7"})),
+        (["thread", "follow", "th1", "--notify", "mentions"], ("PUT", "threads/th1/follow", {"notify": "mentions"})),
+        (["thread", "follow", "th1"], ("PUT", "threads/th1/follow", {"notify": "live"})),
+        (["thread", "unfollow", "th1"], ("DELETE", "threads/th1/follow", None)),
+        (["thread", "read", "th1", "--seq", "42"], ("POST", "threads/th1/read", {"seq": 42})),
+        (["thread", "read", "th1", "--all"], ("POST", "threads/th1/read-all", {})),
+        (["thread", "search", "refund terms"], ("GET", "threads/search", {"q": "refund terms"})),
+        (["thread", "members", "list", "th1"], ("GET", "threads/th1/members", {})),
+        (["thread", "members", "add", "th1", "human:ana", "--owner"],
+         ("POST", "threads/th1/members", {"actor": "human:ana", "role": "owner"})),
+        (["thread", "members", "remove", "th1", "human:ana"], ("DELETE", "threads/th1/members/human:ana", None)),
+        (["thread", "update", "th1", "--title", "Refunds", "--archive"],
+         ("PATCH", "threads/th1", {"title": "Refunds", "archived": True})),
+        (["thread", "update", "th1", "--unarchive"], ("PATCH", "threads/th1", {"archived": False})),
+    ]
+    for words, expected in runs:
+        calls.clear()
+        remotecli.run(hubcli.parser().parse_args(words))
+        assert calls == [expected], words
+    with pytest.raises(APIError, match="not available"):
+        remotecli.run(hubcli.parser().parse_args(["thread", "link-slack", "th1", "#ops"]))
+    assert {"hub_thread_list", "hub_thread_show", "hub_thread_create", "hub_thread_post", "hub_thread_reply",
+            "hub_thread_sub", "hub_thread_edit", "hub_thread_follow", "hub_thread_unfollow", "hub_thread_read", "hub_thread_search",
+            "hub_thread_members_list", "hub_thread_members_add", "hub_thread_members_remove", "hub_thread_update",
+            "hub_thread_link_slack"} <= set(hubtools.BY_NAME)
 
 
 def test_review_command_and_mcp_preserve_head_body_and_retry_identity(tmp_path, monkeypatch):

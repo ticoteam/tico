@@ -53,14 +53,18 @@ The words Tico uses, and what each replaces.
 - **Proposal**: a suggested change to a goal, a KPI or the strategy draft, for its owner to confirm. A `strategy_draft` proposal is how the Strategy Bot puts a draft or a bet change in front of the owner.
 - **Run**: one time a bot works.
 - **Update**: a bot's daily or weekly post, and a new Tico version.
-- **Message**, **Comment**: a message is chat. A comment is on a task.
+- **Message**, **Comment**: a message is said in a thread. A comment is on a task.
+- **Thread**: a conversation with an audience and members, listed under Threads ([Threads](threads.md)).
+- **DM**: a private thread for exactly the people in it. Starting one with the same people reuses it.
+- **Sub-thread**: a side topic under one message, with its own read state.
+- **Call**: a Tico Meet call started in a thread ([Meetings](meetings.md)).
 - **Steer**, **Queue**, **Defer**: how a message, comment or new task reaches a bot. Steer: into its running turn now. Queue: right after that turn, or now. Defer: with its next turn there, at the latest after a deadline ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)).
 - **Deferred message**, **deferred task**: deferred to a bot's next run of any kind; once called a next-run task ([leave work for the next run](using-tico.md#leave-work-for-the-next-run)).
 - **Decision**: the typed-question model that classifies and decides.
 - **Handoff**: delegating work by opening a child task and setting the parent to waiting.
 - **Session**: one model conversation a bot resumes (a Claude Code or Codex thread). A bot has several ([Sessions](sessions.md)).
-- **Main chat**: a bot's chat on its page, and its session. It sees task work only as one-line reports.
-- **Task session**: the session for one task a bot owns, with its own room (thread) and worktree. Subtasks continue it by default.
+- **Home**: a bot's or a person's public thread, where a bot's open asks wait. A bot's Home is its main session's thread; it sees task work only as one-line reports.
+- **Task session**: the session for one task a bot owns, with its own thread and worktree. Subtasks continue it by default.
 - **Checkpoint**: a task's last turn reply, which a fresh session on the task starts from.
 - **state.md**: a bot's own note of what it is doing and what to pick up next.
 
