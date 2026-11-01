@@ -1006,6 +1006,26 @@ def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, *, posted: F.Fe
     return "linked"
 
 
+def may_wait(ctx: Ctx, row: Any, money: Any) -> bool:
+    """Whether a settled row not yet in the books may be the bank side of payments already marked paid from its money
+    account: expected_match leaves such a row to a person (feed_match), so it may neither pay another document nor be
+    posted as a bank line of its own (categorize). True when a payment waits for its gross (alone, or in a set that sums
+    to it), or the search could not look at every candidate.
+    A booked row, or a transfer between accounts, is never held back."""
+    from .banking import provider_fee
+    gross = abs(int(row["amount"])) + provider_fee(row, money)
+    if row["entry_id"] or not gross or str(row["kind"] or "") in F.TRANSFER_KINDS:
+        return False                # a transfer is never matched to payments at ingest either
+    kind = "bill" if int(row["amount"]) < 0 else "invoice"
+    start, end = _window(str(row["txn_date"]))
+    exact, cut = _waiting(ctx, kind, money, gross, start, end)
+    if exact or cut:
+        return True
+    waiting, cut = _waiting(ctx, kind, money, 0, start, end)
+    sets, partial = _combined(waiting, gross)
+    return bool(sets) or cut or partial
+
+
 def _link(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any],
           fees: Sequence[dict[str, object]] = ()) -> str:
     """The row is the bank side of these waiting payments: one takes its entry as it is; several, or one with fees
@@ -1168,13 +1188,16 @@ def feed_match(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 def _arrived(ctx: Ctx, kind: str, doc: Any, money: Any, amount: int, day: str) -> Any:
     """The bank row of this payment when it is in already (marked paid after the bank showed it): the one settled row
     on the money account of exactly this amount, within MATCH_DAYS of `day`, named like the contact, not a Finance
-    payment, a transfer or already applied to a document."""
+    payment, a transfer or already applied to a document. An unbooked row that other marked payments may be the bank
+    side of is left to a person (feed_match); this payment then waits like any other from the account."""
     start, end = _window(day)
     signed = -amount if kind == "bill" else amount
     found = [r for r in SK.transfer_candidates(ctx.c, [str(money["id"])], signed, start, end)
-             if not r["request_id"] and not r["card_id"] and _named(str(r["counterparty"]), str(doc["contact_name"] or ""))
+             if not r["request_id"] and not r["card_id"] and str(r["kind"] or "") not in F.TRANSFER_KINDS
+             and _named(str(r["counterparty"]), str(doc["contact_name"] or ""))
              and not SAP.settled_from(ctx.c, "feed", str(r["id"]))
-             and not (r["entry_id"] and len(SK.rows_of_entry(ctx.c, str(r["entry_id"]))) > 1)]
+             and not (r["entry_id"] and len(SK.rows_of_entry(ctx.c, str(r["entry_id"]))) > 1)
+             and not may_wait(ctx, r, money)]
     return found[0] if len(found) == 1 else None
 
 
@@ -1383,6 +1406,9 @@ def _pay(kind: str) -> Any:
             free = gross - SAP.settled_from(ctx.c, "feed", str(row["id"]))
             if amount > free:
                 raise invalid(f"that row has {free} left to apply")
+            if row_money is not None and may_wait(ctx, row, row_money):
+                raise FinanceError(CONFLICT, "that row may be a payment already marked paid that waits for its bank "
+                                             "row; link it with feed_match")
             day = V.opt_day(p, "date") or str(row["txn_date"])
         elif row is not None:
             day = V.opt_day(p, "date") or str(row["txn_date"])
