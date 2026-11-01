@@ -26,8 +26,13 @@ see it. Only the first person up the bot's chain reads its holds, not everyone a
 The list moves live. A delivery to the person, a change in its state, their read point in a thread, and a hold created
 or decided each write a change, so the list is read again.
 
-**Email digest.** Not built in this release: Tico has no outbound email for a person's digest yet. The existing
-notification settings do not send one.
+**Email digest.** A person who follows a thread on **digest** (the thread's notify setting) gets one email an hour
+that lists the threads with new messages for them: each title, its unread count and a link to the thread. The email
+carries no message text and no author names. A title goes only for a thread the person can still read, checked
+message by message when the email is sent, and nothing is sent when nothing is new. The person's **Email digests**
+switch, under **Notifications** on their page, turns it off; what is unread waits until it is on again. The mail is
+the Tico account issuer's, which mails only an address on the install's people list and holds each person to one
+digest an hour. An install that does not sign in with a Tico account sends none.
 
 **Browser notifications.** Off by default. Turn them on in the person's page under **Notifications**, then allow the
 browser's prompt. While Tico is in the background, a new thread item sends one browser notification, once. The memory is

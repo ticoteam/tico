@@ -134,6 +134,7 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 | **Due reminders** | Tells a bot when one of its tasks reaches its due time. | Every 10 seconds |
 | **Ask go-ahead** | A bot's question past its deadline goes ahead on its default answer, or expires. | Hourly |
 | **Follow-ups** | Nudges a person once, in their thread, when a bot's ask to them stays unanswered for a day. Plain code: no model is called, and nothing to nudge is a quiet run. See [Thread helper](thread-helper.md). Not a switch. | Every 15 minutes |
+| **Email digest** | Emails a person once an hour the threads they follow on digest that have new messages: each title, its unread count and a link, never the messages. Nothing new is a quiet run. Each person turns theirs off under Email digests. See [Thread helper](thread-helper.md). Not a switch. | Hourly |
 | **Approval expiry** | Takes approvals and asks nobody will act on out of Needs you. | Hourly |
 | **Unanswered questions** | On weekday mornings, sends questions unanswered for two business days back to their bots. | Hourly |
 | **Stalled task check** (AI) | Before a stall check stays silent on a stalled task nothing has changed on, Decide reads its last six messages: it sets the wait the messages name, closes the task if it is finished, or lets one stall wake through if it is stuck; unsure changes nothing and shows in the Task Manager's report. On by default; see [Stalled tasks](tasks.md). | When it happens |
