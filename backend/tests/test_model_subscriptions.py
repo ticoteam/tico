@@ -667,3 +667,96 @@ def test_changing_an_automatic_fallback_subscription_preserves_primary_sessions(
     response = api.delete(f"/api/v2/model-subscriptions/{sid}", headers=headers())
     assert response.status_code == 200 and response.json()["sessions_reset"] == 0
     assert epoch() == before
+
+
+@pytest.mark.parametrize("change", ["take_off", "reconnect", "remove"])
+@pytest.mark.parametrize("activate", [False, True])
+def test_live_primary_survives_unused_automatic_login_changes_but_active_fallback_stops(api, change, activate):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    m = machine(api, signed_in=True)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET capabilities_json=? WHERE id=?",
+                  (encode([MS.CAPABILITY, "model_subscription_activation_v1"]), m["runner_id"]))
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    give(api, m, "codex", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    assert turn["subscriptions"][0]["activate"] is True
+    assert "subscriptions" not in get(api, "credential-runtime", turn["token"])
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-claude"}, m["token"])
+    if activate:
+        response = get(api, "credential-runtime?subscription_runtime=codex", turn["token"])
+        assert response["subscription_activated"] is True
+        [value] = response["subscriptions"]
+        assert value["id"] == sid and value["revision"] == 1
+
+    def changed(confirm=False):
+        if change == "take_off":
+            return api.put("/api/v2/computer-subscriptions", headers=headers(), json={
+                "runner_id": m["runner_id"], "runtime": "codex", "subscription": None, "confirm": confirm})
+        if change == "remove":
+            return api.delete(f"/api/v2/model-subscriptions/{sid}", headers=headers(), params={"confirm": confirm})
+        return api.post(f"/api/v2/model-subscriptions/{sid}", headers=headers(), json={
+            "secret": codex_file(refresh="r-2"), "confirm": confirm})
+
+    response = changed()
+    if activate:
+        assert response.status_code == 409 and response.json()["error"]["running"] == 1
+        response = changed(confirm=True)
+    assert response.status_code == 200, response.text
+    renewed = post(api, f"attempts/{turn['id']}/renew", {}, m["token"])
+    assert bool(renewed.get("stop")) == activate
+    if not activate:
+        # A late hop cannot use a removed login, and a reconnect supplies only the current revision.
+        values = get(api, "credential-runtime?subscription_runtime=codex", turn["token"]).get("subscriptions", [])
+        assert [v["revision"] for v in values] == ([2] if change == "reconnect" else [])
+
+
+@pytest.mark.parametrize("blocked", ["held", "rejected"])
+def test_automatic_login_is_rechecked_at_activation(api, blocked):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    m = machine(api, signed_in=True)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET capabilities_json=? WHERE id=?",
+                  (encode([MS.CAPABILITY, "model_subscription_activation_v1"]), m["runner_id"]))
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    give(api, m, "codex", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    post(api, "runner-model-subscription-refresh", {"attempt": turn["id"], "subscription": sid,
+         "revision": 1, "value": codex_file(refresh="r-not-used")}, m["token"], expected=403)
+    with api.app.state.store.transaction() as c:
+        if blocked == "rejected":
+            MS._status(c, sid, "needs_reconnect", "Synthetic refusal")
+        else:
+            login_holds.record(c, m["runner_id"], login_holds.subscription_login(sid), "codex",
+                               H.now(), reset="2099-01-01T00:00:00Z", attempt_id=turn["id"])
+    assert "subscriptions" not in get(api, "credential-runtime?subscription_runtime=codex", turn["token"])
+
+
+@pytest.mark.parametrize("named", [False, True])
+def test_upfront_values_keep_restart_fence_for_legacy_automatic_and_new_named_fallbacks(api, named):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    m = machine(api, signed_in=True)
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    give(api, m, "codex", sid)
+    if named:
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE runners SET capabilities_json=? WHERE id=?",
+                      (encode([MS.CAPABILITY, MS.ACTIVATION_CAPABILITY]), m["runner_id"]))
+            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+            config["fallback"] = {"harness": "codex", "model": "gpt-6.1-sol"}
+            c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (encode(config),))
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    assert "activate" not in turn["subscriptions"][0]
+    assert get(api, "credential-runtime", turn["token"])["subscriptions"][0]["id"] == sid
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-legacy"}, m["token"])
+    assert give(api, m, "codex", None, expected=409)["error"]["running"] == 1
+    assert give(api, m, "codex", None, confirm=True)["stopped"] == 1

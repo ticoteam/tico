@@ -1834,8 +1834,8 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     is the runner's own choice (runner-rs/src/fallback.rs `configured`, `default_choice`): the fallback the bot names,
     else the first of the company's providers on another installed runtime signed in locally or by an effective
     computer subscription, with no hold keeping it off (the runner skips those too, from the holds its config carries).
-    That login's hold having just ended, the turn is its one probe, so with another job's probe out on it the bot waits rather than the runner picking it
-    anyway. The Gateway counts when the turn would be handed it (models_preset.with_gateway_fallback). A fallback
+    That login's hold having just ended, the turn is its one probe. With another job's probe out on it the bot waits
+    rather than the runner picking it anyway. The Gateway counts when the turn would be handed it (models_preset.with_gateway_fallback). A fallback
     turned off, none, or one the runner already found not ready in this hold window (`stuck`) means waiting."""
     from .harnesses import harness_caps, runtime_of
     named = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
