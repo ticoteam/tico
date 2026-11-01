@@ -190,9 +190,15 @@ Sub-threads are evaluated through their **root** row (same audience by §1.1, bu
 - **`restricted`** is computed at write time: 1 when the message has `legacy_audience`, an `in_reply_to`, any
   `refs` key outside `threads.SAFE_REF_KEYS`, sits in a `task` or `meeting` thread, or attaches files. A message with
   `restricted=0` skips `message_readable` once the audience check passed (the SSE and timeline fast path).
-- **`legacy_audience='shared:<slug>'`**: readable only by today's live predicate,
-  `rooms.shared_member(c, auth, actor, slug)` (primary users ∩ bot Read, plus the company owner). Others in the Home
-  see one collapsed **Earlier messages** row (`{"id", "seq", "hidden": true}` in a timeline; nothing on SSE).
+- **`legacy_audience='shared:<slug>'`**: readable by exactly today's live predicate, no more and no less:
+  `rooms.shared_member(c, auth, actor, slug)` with bot Read for people; participants and the room's bot for an
+  agent; a run's grant. Home readers outside it see one collapsed **Earlier messages** row (`{"id", "seq", "hidden":
+  true}` in a timeline; nothing on SSE).
+- **A migrated Home** (the bot's open shared room, `audience='home'` stored): everything new (`legacy_audience`
+  NULL, any sub-thread) follows Home Read. An old reader without Home Read still opens the Home's root
+  (`threads.legacy_reader_only`) but sees only that history: the timeline lists only legacy messages, `last_seq`
+  and `last_message_at` are the history's, unread is 0, no sub-thread opens, and SSE, `hub sql` and the legacy
+  per-message check (`task_privacy.message_readable` → `threads.legacy_gate`) hide new messages from them.
 - A hidden message renders as a quiet "not shown" row in timelines and is skipped on SSE.
 - New posts can't widen anything (`H.path_mentioned`, `guard_write` keep running in the write door).
 
@@ -410,9 +416,11 @@ bound meeting room by the meeting; an agent bot by participation or `rooms.room_
 The only narrowing: a person who left, or whose sign-in is off, reads nothing. The e2e reader-set goldens
 (`backend/tests/fixtures/threads/reader-sets-*.json`) pin it. The audience *label* is still derived live from
 `room_key`, `scope`, `kind` and `task_id` (`threads.audience_of`) for sessions, wakes and posting rules,
-because legacy writers set those columns after the insert. A sub-thread of such a root reads as its root. Likewise `owner_actor` stays as written and a shared
-room's owner is derived (`threads.home_owner`). Only threads made by `threads.create`/`home`/`sub_thread` store an
-audience.
+because legacy writers set those columns after the insert. A sub-thread of such a root reads as its root. Likewise `owner_actor` stays as written.
+Threads made by `threads.create`/`home`/`sub_thread` store an audience, and so does each bot's open shared room: the
+migration stores `audience='home'`, `owner_actor='bot:<slug>'` on it. Archived duplicate shared rooms, and a shared
+room `rooms.sync_shared_room` opens after the migration (a bot newly in shared mode), stay unstored and read by the
+live shared-room rule as before.
 
 | today | audience | notes |
 |---|---|---|

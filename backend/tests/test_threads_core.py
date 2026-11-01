@@ -237,6 +237,51 @@ def test_revisions_apply_highest_first_and_a_delete_is_final(world):
         assert row["deleted_at"] and not row["body"]
         kept = [r[0] for r in c.execute("SELECT body FROM message_revisions WHERE message_id=?", (message["id"],))]
         assert kept and not any(kept), "a deleted message keeps no words in its history"
+        mine = threads.post(c, owner, tid, "Private words")
+        threads.edit_message(c, owner, mine["id"], "Other private words")
+        threads.delete_message(c, owner, mine["id"])
+        # An early build wrote message words into the audit log: the one-time scrub keeps only their lengths.
+        c.execute("INSERT INTO audit_log VALUES('old-row','2026-10-31T00:00:00Z','human:ana','message:old',"
+                  "'{\"body\":\"Old words\",\"revision\":0}',NULL,NULL)")
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (threads.AUDIT_SCRUB_KEY,))
+        threads.ensure(c)
+        audits = " ".join(str(r[0]) + str(r[1]) for r in c.execute(
+            "SELECT before_json, after_json FROM audit_log WHERE object IN (?, 'message:old')", ("message:" + mine["id"],)))
+        assert "words" not in audits and '"length"' in audits, "audit rows keep lengths, never a message's words"
+
+
+def test_only_a_reader_gets_a_duplicate_a_sub_thread_or_a_tombstone(world):
+    """A replicated repeat, an existing sub-thread and a deleted message's tombstone are each answered only after the
+    caller is authorized: an outsider gets 404, a repeat aimed at another thread 409, and a reader who could not read
+    a message before it was deleted gets the quiet hidden row, not its author and refs."""
+    store, auth, who = world
+    with store.transaction() as c:
+        owner = threads.viewer(auth, owner_of(c, auth))
+        member, outsider = [a for a in people(who) if a != owner.actor][:2]
+        tid = threads.create(c, owner, title="Inner", audience="members", members=[member])["id"]
+        other = threads.create(c, owner, title="Other", audience="personal")["id"]
+        origin = {"origin_id": "0191-acme@peer-1", "revision": 0, "install": "peer-1"}
+        sent = threads.post(c, owner, tid, "Mirrored", via="peer", origin=origin)
+        stranger = threads.viewer(auth, who[outsider])
+        with pytest.raises(Problem) as hidden:
+            threads.post(c, stranger, tid, "Mirrored", via="peer", origin=origin)
+        assert hidden.value.status == 404
+        with pytest.raises(Problem) as moved:
+            threads.post(c, owner, other, "Mirrored", via="peer", origin=origin)
+        assert moved.value.status == 409
+        threads.sub_thread(c, owner, sent["id"])
+        with pytest.raises(Problem) as hidden:
+            threads.sub_thread(c, stranger, sent["id"])
+        assert hidden.value.status == 404
+        secret = H.task_create(c, owner.actor, "Acme acquisition", "", owner.actor, private=True, lint=False)
+        gone = threads.post(c, owner, tid, "See the plan", refs={"task": secret["id"]})
+        threads.delete_message(c, owner, gone["id"])
+    with store.read_transaction() as c:
+        listed = threads.timeline(c, threads.viewer(auth, who[member]), tid)["messages"]
+        row = next(m for m in listed if m["id"] == gone["id"])
+        assert row.get("hidden") and "from_actor" not in row and "refs" not in row
+        mine = next(m for m in threads.timeline(c, owner, tid)["messages"] if m["id"] == gone["id"])
+        assert mine["deleted"] and mine["refs"] == {} and mine["body"] is None
 
 
 # ----------------------------------------------------------------------------- C3: loop guard
@@ -392,6 +437,9 @@ def test_migration_keeps_each_crafted_messages_readers_and_a_roster_change_only_
     assert all(r["seq"] and r["origin_id"] for r in stamped.values())
     assert stamped[task_ref["id"]]["restricted"] == 1 and stamped[in_room["id"]]["legacy_audience"] == "shared:cpo"
     with store.read_transaction() as c:
+        home = threads.home(c, "bot:cpo", create=False)
+        assert home["audience"] == "home" and home["owner_actor"] == "bot:cpo"
+    with store.read_transaction() as c:
         after = message_readers(c, auth, ids)
     assert after == before
     api_post(live, "people/cara", {"left": True})
@@ -399,6 +447,56 @@ def test_migration_keeps_each_crafted_messages_readers_and_a_roster_change_only_
         removed = message_readers(c, auth, ids)
     assert all(removed[m] <= after[m] for m in ids)
     assert all("human:cara" not in removed[m] for m in ids)
+
+
+def test_a_migrated_home_shows_old_readers_only_its_history_and_home_readers_only_whats_new(world, monkeypatch):
+    """Spec section 4: the shared room is its bot's Home. Its history keeps exactly its old readers until a manager
+    opens it; everything new follows Home Read. Pinned in Python, in SQL and in the legacy per-message check."""
+    from backend import task_privacy
+    store, auth, who = world
+    with store.transaction() as c:
+        homeless = [a for a in sorted(who) if a.startswith("bot:") and threads.home(c, a, create=False) is None]
+        bot = homeless[0]
+        slug = H.actor_id(bot)
+        old_reader, home_reader = people(who)[:2]
+        room = H.open_conversation(c, old_reader, [old_reader, bot], kind="chat", subject="Shared room",
+                                   scope="shared", room_key=slug, allow_held=True)
+        old = H.say(c, old_reader, bot, "Old roadmap", conversation_id=room["id"])
+        # What the migration does to a shared room: its history keeps its readers, the room becomes the Home.
+        c.execute("UPDATE messages SET legacy_audience=?, restricted=1 WHERE id=?", ("shared:" + slug, old["id"]))
+        threads._store_shared_homes(c, slug)
+        assert threads.home(c, bot, create=False)["id"] == room["id"]
+        new = threads.post(c, bot, room["id"], "New plan")
+    real_home = threads.Viewer.can_read_home
+    monkeypatch.setattr(threads.Viewer, "shared_slugs",
+                        lambda self, c, slugs: {x for x in slugs if x == slug and self.actor == old_reader})
+    monkeypatch.setattr(threads.Viewer, "can_read_home", lambda self, c, owner: (
+        self.actor == home_reader if owner == bot else real_home(self, c, owner)))
+
+    def sees(c, actor):
+        v = threads.viewer(auth, who[actor])
+        python = {m for m in (old["id"], new["id"]) if threads.readable(c, v, m)}
+        sql = {r[0] for r in c.execute(
+            "SELECT id FROM messages WHERE conversation_id=? AND " + threads.message_sql(c, v, "messages") + " AND "
+            "conversation_id IN (SELECT id FROM conversations WHERE " + threads.readable_sql(c, v, "conversations")
+            + ")", (room["id"],))}
+        legacy = {m for m in (old["id"], new["id"]) if task_privacy.message_readable(c, actor, H.message(c, m))}
+        return python, sql, legacy, threads.readable(c, v, room["id"])
+
+    with store.read_transaction() as c:
+        assert sees(c, old_reader) == ({old["id"]}, {old["id"]}, {old["id"]}, True)
+        listed = threads.timeline(c, threads.viewer(auth, who[old_reader]), room["id"])
+        assert [m["id"] for m in listed["messages"]] == [old["id"]], "an old reader never sees what is new"
+        assert listed["thread"]["last_seq"] == old["seq"] and listed["thread"]["me"]["unread"] == 0
+        python, sql, legacy, opens = sees(c, home_reader)
+        assert (python, sql, opens) == ({new["id"]}, {new["id"]}, True)
+        assert old["id"] not in legacy
+    with store.transaction() as c:
+        threads.open_earlier_messages(c, H.KEEPER, slug)
+    with store.read_transaction() as c:
+        python, sql, _legacy, opens = sees(c, home_reader)
+        assert python == sql == {old["id"], new["id"]} and opens
+        assert sees(c, old_reader)[3] is False, "once opened, the Home is read by its Read audience alone"
 
 
 def test_outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_moot(world):

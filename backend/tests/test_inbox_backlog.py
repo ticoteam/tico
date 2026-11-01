@@ -137,3 +137,20 @@ def test_the_newest_hundred_readable_arrive_oldest_first_with_their_answers(api)
     assert [m["id"] for m in inbox["messages"]] == newest[::-1] and inbox["more_messages"] is True
     answered = {m["id"]: m["answered_at"] for m in inbox["messages"]}
     assert answered[ask] and all(at is None for mid, at in answered.items() if mid != ask)
+
+
+def test_a_persons_inbox_leaves_out_threads_they_cannot_read(api):
+    """A delivery waiting for a person in a thread they cannot read (someone else's personal thread: no owner or
+    addressee bypass) never reaches their inbox; one in a thread they read does."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        mine = H.open_conversation(c, "human:ana", ["human:ana", "human:ben"], kind="chat", subject="Ana and Ben")
+        theirs = H.open_conversation(c, "human:cara", ["human:cara", "bot:ops"], kind="chat", subject="Cara's",
+                                     scope="personal", owner_actor="human:cara", room_key="ops")
+        seen = H.say(c, "human:ana", "human:ben", "For Ben", conversation_id=mine["id"])
+        base = dict(c.execute("SELECT * FROM messages WHERE id=?", (seen["id"],)).fetchone())
+        clone(c, "messages", {**base, "conversation_id": theirs["id"], "from_actor": "human:cara"}, 1,
+              body=lambda i: "Cara's private words")
+    inbox = api.get("/api/v2/inbox", headers=headers("ben-test")).json()
+    bodies = [m["body"] for m in inbox["messages"]]
+    assert "For Ben" in bodies and "Cara's private words" not in bodies
