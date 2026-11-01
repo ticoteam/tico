@@ -16,6 +16,7 @@ from . import federation_envelope as E
 from . import federation_sync as S
 from . import federation_threads as T
 from . import hook_relay as HR
+from . import screening
 
 AREA = "federation"          # HQ's routes: <root>/federation/... where the root is the Gateway's base without `/gateway`
 EVERY = 15                   # seconds between ticks
@@ -92,6 +93,7 @@ class Relay:
         self.next_try = 0.0
         self.synced = 0.0
         self.interval = EVERY
+        self.deferred = None          # why the pull stopped short this tick (the peer is paused, or a check is not done)
 
     @property
     def off(self):
@@ -171,14 +173,13 @@ class Relay:
         with self.store.read() as c:
             rows = S.due_outbox(c, now())
         for row in rows:
-            with self.store.read() as c:
+            with self.store.transaction() as c:
                 if F.active(c, row["recipient"]) is None:
                     continue
                 outbound = S.envelope(c, self.vault(), row, now())
-            if outbound is None:
-                with self.store.transaction() as c:
-                    S.refused(c, row, "no_longer_due")
-                continue
+                if outbound is None:                 # no longer to be sent: a waiting delivery goes moot
+                    S.dropped(c, row)
+                    continue
             try:
                 self.send(link, row, outbound)
             except HR.Stop:
@@ -191,13 +192,36 @@ class Relay:
                         S.retry(c, row, failed.code, now())
                 continue
             with self.store.transaction() as c:
-                S.sent(c, row)
+                S.sent(c, row, outbound)
 
-    def gate(self):
-        """The org-rule verdict for a carried message, checked with this app's judge. It runs inside the receive's write."""
+    def screen_ahead(self, sender, body, me):
+        """The org-rule and injection verdicts for the carried texts an envelope brings, made before its write: the model
+        calls run outside any transaction. Keyed by S.screen_key; the write reads them through gate()."""
+        with self.store.read() as c:
+            texts = S.carried_texts(c, me, sender, body)
         judge = getattr(self.app.state, "judge", None)
-        return lambda actor, text, install, origin_id, thread_id: T.checked_inbound(
-            self.store, judge, actor, text, install, origin_id, thread_id)
+        verdicts = {}
+        for text in texts:
+            org = T.checked_inbound(self.store, judge, text["actor"], text["text"], text["install"], text["origin_id"],
+                                    text["thread_id"])
+            injection = screening.screen(self.store, "federation", text["text"],
+                                         key=f"{text['install']}:{text['origin_id']}:{text['revision']}", primary=judge)
+            verdicts[S.screen_key(text["install"], text["actor"], text["origin_id"], text["revision"], text["text"])] = (
+                org, injection)
+        return verdicts
+
+    def gate(self, verdicts):
+        """The checker a write asks for each carried text. A text with no verdict, or whose org-rule check did not run
+        (unchecked, for an outside text), defers the envelope: nothing is written and nothing is acked for it."""
+        def check(actor, text, install, origin_id, revision, thread_id):
+            found = verdicts.get(S.screen_key(install, actor, origin_id, revision, text))
+            if found is None:
+                raise S.Deferred("unscreened")
+            org, injection = found
+            if org and org.get("outcome") == "unchecked":
+                raise S.Deferred("rules_unchecked")
+            return org, injection
+        return check
 
     def fetch_authors(self, link, me, sender, body):
         """HQ's keys for the authors of an item from the home, looked up here, outside any transaction."""
@@ -213,8 +237,10 @@ class Relay:
             return {}
         try:
             found = self.directory(link, author)
-        except HR.Failed:
-            return {}                                       # receive refuses an item whose author has no known key
+        except HR.Failed as failed:
+            if failed.status and 400 <= failed.status < 500:
+                return {}                                   # no such install in HQ: receive refuses the item
+            raise                                           # a transient failure: the pull waits and tries again
         return {author: found} if found["key_id"] == key_id else {}
 
     def pull_once(self, link):
@@ -241,17 +267,25 @@ class Relay:
                 through = item.get("hq_seq", through)
                 continue
             fetched = self.fetch_authors(link, me, sender, body) if me else {}
-            with self.store.transaction() as c:
-                if F.install(c):
-                    S.receive(c, now(), sender, envelope_id, headers, body, epoch(item.get("received_at")), fetched,
-                              gate=self.gate())
+            verdicts = self.screen_ahead(sender, body, me) if me else {}
+            try:
+                with self.store.transaction() as c:
+                    if F.install(c):
+                        S.receive(c, now(), sender, envelope_id, headers, body, epoch(item.get("received_at")), fetched,
+                                  gate=self.gate(verdicts), vault=self.vault())
+            except S.Deferred as deferred:       # not decided yet: this item and those after it wait for a later pull
+                self.deferred = deferred.code
+                break
             through = item.get("hq_seq", through)
-        top = answer.get("cursor") if isinstance(answer.get("cursor"), int) else through
+        if self.deferred:
+            top = through
+        else:
+            top = answer.get("cursor") if isinstance(answer.get("cursor"), int) else through
         if top > cursor:
             self.call(link, "POST", "ack", {"through_hq_seq": top})
         with self.store.transaction() as c:
             c.execute("UPDATE federation_state SET cursor=?, acked=?, last_pull_at=? WHERE singleton=1", (top, top, now()))
-        return answer.get("more") is True
+        return answer.get("more") is True and not self.deferred
 
     # ------------------------------------------------------------------------- the loop
     def tick(self):
@@ -262,7 +296,7 @@ class Relay:
                 return
             self._tick()
             self.failures, self.next_try = 0, 0.0
-            self.note(None)
+            self.note(self.deferred)
         except HR.Stop:
             self.trouble("refused")
         except HR.Failed as failed:
@@ -273,6 +307,7 @@ class Relay:
             self.lock.release()
 
     def _tick(self):
+        self.deferred = None
         with self.store.read() as c:
             link = self.link(c)
             key = F.key(c)
@@ -284,6 +319,7 @@ class Relay:
             self.sync(link)
             self.synced = now()
         self.sweep(link)
+        self.deferred = None
         for _ in range(PAGES):
             if not self.pull_once(link):
                 break

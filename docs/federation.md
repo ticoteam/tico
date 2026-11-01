@@ -29,19 +29,24 @@ Shared with, where the owner adds or removes an install.
 ## Share a thread
 
 `hub peer share <thread> <install>` gives an active peer a thread this install owns (its audience is `members`).
-The peer gets the thread from that moment, not its history. Messages, edits and deletes after that point reach it.
+The peer gets the thread from that moment, not its history. A message reaches it only if it was posted after the peer
+joined; a sub-thread reply counts from its parent's time. Each message goes out in its current state: an edit made before
+the first send sends the new text, and a message deleted before anything left is never sent. A message restricted to a
+task or a meeting is never sent.
 
 `hub peer unshare <thread> <install>` removes an install. It gets the removal and nothing after it.
 
 On the receiving install, a shared thread is a replica. Only the accepting admin can read it at first. Other local people
 get a 404 until an admin adds them: `hub peer add-reader <thread> human:<name>`, or
-`POST /api/v2/federation/threads/{thread_id}/readers` with `{"actor": "human:<name>"}` (owner only).
+`POST /api/v2/federation/threads/{thread_id}/readers` with `{"actor": "human:<name>"}` (owner only). Readers are added only
+to a replica of a members thread. The home's own thread, a DM, a local thread, or a thread this install was removed from
+is refused with a 409.
 
 ## Pause, resume, revoke, rotate
 
 - `hub peer pause <peering>` is the kill switch. While paused, nothing crosses the peering in either direction.
-  Messages wait on the sending side.
-- `hub peer resume <peering>` lets it carry again. What was missed is caught up.
+  Messages wait on the sending side, and envelopes that arrive from the peer wait in HQ's mailbox.
+- `hub peer resume <peering>` lets it carry again. What waited is applied in order, and what was missed is caught up.
 - `hub peer revoke <peering>` ends the peering. A new request starts over and needs both approvals.
 - `hub peer rotate-key` makes a new key and retires the old one. Every peering needs approving again, on both sides.
 
@@ -74,9 +79,13 @@ Every route is owner only. Each write records an audit row and a change event, l
   own install when it leaves.
 - **Remote authors.** A message from another install is written as its real author, `human:ana@gi_x`, a guest on the
   receiving install. Each duplicate (origin id and revision) is written once.
-- **Rules.** A message from another install goes through inbound screening and the org rules, as its remote author.
-  A message the rules block is written nowhere. The receiving install sends back a refusal.
-  Outbound is covered by the normal write check: a local member's post passes the org rule check in `threads.post`
+- **Origin binding.** An origin id belongs to the install, author and thread that wrote it. A peer can edit or delete only
+  its own messages, and an origin id another author or thread already uses is refused.
+- **Rules and screening.** A message from another install is checked before anything is written. The org rules and the
+  injection screener (source `federation`, default `warn`) run first, outside the write, and the verdict is applied inside
+  it. A message the rules block is written nowhere, and the sender gets a refusal. A check that did not run (no verdict, or
+  the rules could not check) is never treated as a pass: the receiver holds that envelope and everything after it, and
+  retries on the next pull. Outbound needs no extra step: a local member's post passes the org rule check in `threads.post`
   before it is stored, so it is checked before it can replicate.
 - **Refusals.** A receiver that refuses a message (rules, namespace or unknown thread) sends a signed refusal to the
   install that sent it. That install posts a quiet note to the message's author in the thread, like a held message's note.
@@ -85,8 +94,12 @@ Every route is owner only. Each write records an audit row and a change event, l
   or delete for a message the replica does not have yet waits for a catch-up. A catch-up asks the home for everything
   after the last `home_seq` the replica applied.
 - **Membership.** The home is the membership authority. Its member list goes out as a signed membership item whenever it
-  changes, and a replica mirrors it as guest rows (`<actor>@<home install>`). A removed install gets a membership
+  changes, and a replica mirrors it as guest rows (`<actor>@<home install>`). Guests from a third install are in the same
+  roster as `<actor>@<that install>`, so every replica can name their author. A removed install gets a membership
   tombstone, and nothing after it.
+- **Sub-threads.** Messages in a shared thread's sub-threads are federated too. Each one carries its parent's origin id, so
+  a replica hangs the reply from the same message. Federation queues these itself, because core writes outside deliveries
+  only for a root's own messages. Keeper notes (system notices) are never sent.
 - **Wake.** A replicated message never starts a run for a remote guest bot. A local post cannot address one either: core
   refuses a bot name it does not know. A local bot follows the normal rule.
 
@@ -111,5 +124,6 @@ Treat HQ as a relay you trust for delivery, not as a place a shared thread is ke
 - A held federated message has no "send anyway". It stays held.
 - Core's member lists do not show company names yet. `GET /api/v2/federation` does (`company` on each peering, `members` and
   `guests` on each thread).
-- The org rule check runs inside the receive transaction when rules are in force.
 - A thread's history from before it was shared is never sent to a later member.
+- A deferred envelope (a paused peer, or a check that has not run) holds back the envelopes after it from every peer until it
+  clears. The receiver does not skip past a message it has not checked, so one stuck peer can delay the others.
