@@ -36,6 +36,13 @@ pub fn configured(config: &Value) -> Option<Hop> {
     Some(Hop { runtime: crate::harness_tools::runtime_of(&harness), harness, model, reasoning_effort: effort, default: false })
 }
 
+/// `configured`, unless the hop's runtime refused this bot's own key within REJECT_RECHECK: a refused key would be
+/// refused again, so the turn does not go there (signin.rs refusal_key).
+pub fn configured_for(config: &Value, sign_in: &crate::signin::SignIn, profile: Option<&crate::profiles::Profile>,
+                      bot: &str) -> Option<Hop> {
+    configured(config).filter(|hop| sign_in.rejection(&hop.runtime, profile, bot).is_none())
+}
+
 /// A different model on the spent login is no fallback. Ignore that named hop so the company's next provider
 /// can take the turn; with none ready the primary's limit stands. Per-bot keys have no shared login here.
 pub fn limited_config(config: &Value, profile: Option<&crate::profiles::Profile>) -> Value {
@@ -406,6 +413,18 @@ impl Hop {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_configured_fallback_its_runtime_refused_for_this_bot_is_not_taken() {
+        let dir = std::env::temp_dir().join(format!("tico-fallback-refused-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("secrets")).unwrap();
+        let sign = crate::signin::SignIn::new(&dir);
+        let config = json!({"harness": "claude", "model": "m", "fallback": {"harness": "pi", "model": "kimi-k3"}});
+        sign.reject("pi", "401 invalid OPENROUTER_API_KEY", None, "fallback-alpha");
+        assert!(configured_for(&config, &sign, None, "fallback-alpha").is_none());
+        assert_eq!(configured_for(&config, &sign, None, "fallback-beta").unwrap().harness, "pi");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn the_fallback_needs_a_harness_and_a_model() {

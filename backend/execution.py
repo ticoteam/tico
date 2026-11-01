@@ -17,7 +17,7 @@ from . import task_privacy as privacy
 from . import claim_holds, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
-from .harnesses import reports_tool_calls
+from .harnesses import bot_keyed, reports_tool_calls
 from .statuses import PARKED_SQL
 from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
@@ -2922,22 +2922,31 @@ class Execution:
         return {"attempt_id": row["id"], "outcome": body.outcome, "job_state": state, "message": None}
 
     @staticmethod
-    def mark_rejected(c, runner_id, runtime, reason, profile=None):
-        """Record the refusal now; the runner's next heartbeat repeats it and later lifts it."""
+    def mark_rejected(c, runner_id, runtime, reason, profile=None, bot=""):
+        """Record the refusal now; the runner's next heartbeat repeats it and later lifts it. On a bot-keyed runtime with
+        no profile (pi, the Gemini CLI) the refused key is `bot`'s own, so only that bot is marked and the runtime's row
+        is left as the runner reports it."""
         record = c.execute("SELECT readiness_json FROM runners WHERE id=?", (runner_id,)).fetchone()
         ready = readiness_document(record[0] if record else None)
         row = (ready.get("runtimes") or {}).get(runtime)
         if not isinstance(row, dict):
             return
-        if profile:
+        own = bool(bot) and not profile and bot_keyed(runtime)
+        if profile or own:
             row = {}
         row.update(authenticated="rejected", rejected_at=H.now(), rejected_reason=reason[:300],
                    detail=("Sign-in rejected: " + reason)[:500])
-        for bot in ready.get("bots", {}).values():
-            if isinstance(bot, dict) and bot.get("runtime") == runtime and bot.get("profile", "") == (profile or ""):
-                bot["sign_in"] = "rejected"
-                bot["ready"] = False
-                bot["problems"] = [row["detail"]]
+        for name, entry in ready.get("bots", {}).items():
+            if not isinstance(entry, dict) or entry.get("runtime") != runtime:
+                continue
+            if own:
+                if name != bot:
+                    continue
+            elif entry.get("profile", "") != (profile or ""):
+                continue
+            entry["sign_in"] = "rejected"
+            entry["ready"] = False
+            entry["problems"] = [row["detail"]]
         if profile:
             report = c.execute("SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?",
                                (runner_id, profile)).fetchone()
@@ -4985,7 +4994,7 @@ class Execution:
         if rejected:
             if not subscription:
                 self.mark_rejected(c, row["runner_id"], body.auth_rejected.runtime, body.auth_rejected.reason,
-                                   body.profile_used)
+                                   body.profile_used, row["bot"])
             H.event(c, H.KEEPER, "attempt.auth_rejected", aid,
                     {"bot": row["bot"], "runtime": body.auth_rejected.runtime, "reason": body.auth_rejected.reason,
                      **({"subscription": subscription["id"]} if subscription else {})})

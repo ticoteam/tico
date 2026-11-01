@@ -824,20 +824,21 @@ mod tests {
 
     #[tokio::test]
     async fn a_refused_bot_key_is_a_problem_for_that_bot_and_not_for_the_others_on_its_runtime() {
-        let dir = std::env::temp_dir().join(format!("tico-refused-bot-key-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let config = Config { path: dir.join("runner.json"), data: map(json!({"projects_dir": dir.join("projects").display().to_string()})) };
-        let sign = SignIn::new(&dir);
+        let config = checkouts(&["readiness-alpha", "readiness-beta"]);
+        let sign = SignIn::new(Path::new(&config.str("projects_dir")));
         sign.reject("pi", "401 invalid OPENROUTER_API_KEY", None, "readiness-alpha");
-        let assignment = |bot: &str| json!({"bot": bot, "config": {"runtime": "pi", "harness": "pi", "model": "openrouter/model"}});
-        let assignments = vec![assignment("readiness-alpha"), assignment("readiness-beta")];
-        // The runtime row is signed in (its grants are); the refusal is the refused bot's own.
+        let assignment = |bot: &str, model: &str| json!({"bot": bot, "config": {"runtime": "pi", "harness": "pi",
+                                                                                  "model": model}});
+        // beta runs the company's gateway model, which needs no key of its own, so only alpha's refusal can stop it.
+        let assignments = vec![assignment("readiness-alpha", "openrouter/model"),
+                               assignment("readiness-beta", "tico-mid-1.0")];
         let runtimes = map(json!({"pi": {"installed": true, "authenticated": "ready"}}));
         let rows = preflight(&config, &sign, &assignments, &runtimes, false).await;
-        let problems = |bot: &str| rows.iter().find(|r| r["bot"] == bot).map(|r| r["problems"].to_string()).unwrap_or_default();
-        assert!(problems("readiness-alpha").contains("Sign-in rejected"), "{}", problems("readiness-alpha"));
-        assert!(!problems("readiness-beta").contains("Sign-in rejected"), "{}", problems("readiness-beta"));
-        std::fs::remove_dir_all(&dir).unwrap();
+        let (alpha, beta) = (row_of(&rows, "readiness-alpha"), row_of(&rows, "readiness-beta"));
+        assert_eq!(alpha["ready"], json!(false));
+        assert!(alpha["problems"].to_string().contains("Sign-in rejected"), "{:?}", alpha["problems"]);
+        assert_eq!(beta["ready"], json!(true), "{:?}", beta["problems"]);
+        let _ = std::fs::remove_dir_all(config.str("projects_dir"));
     }
 
     /// A config whose projects folder holds a checkout (an AGENT.md) for each bot.
