@@ -48,7 +48,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
     rows = {row["slug"]: row for row in record["bots"]}
     assert rows["support"]["onboarding_state"] == rows["chief-of-staff"]["onboarding_state"] == "needs_setup"
     assert rows["botops"]["onboarding_state"] == rows["coo"]["onboarding_state"] == ""          # built in: they work at once
-    assert rows["support"]["setup_task_id"] is None and rows["support"]["reports_to"] == "chief-of-staff"
+    assert rows["support"]["setup_task_id"] is None and rows["support"]["reports_to"] == rows["chief-of-staff"]["id"]   # stored by id
     assert rows["chief-of-staff"]["reports_to"] == "human:morgan"                              # the owner, by default
 
     # Exposed with the template and its version; placed on the computer and active, its routine seeded off.

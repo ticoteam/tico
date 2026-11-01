@@ -110,26 +110,26 @@ function frNextStepHTML(state) {
 // A row's one status: a word, or the one thing to do there (Set up, Activate, the setup task being worked).
 function frBotStatusHTML(state, bot) {
   const card = state.catalog.cards.find(row => row.slug === bot.slug || row.template === bot.template);
-  const bootstrap = bot.slug === assistantBot() || !!card?.bootstrap;
+  const bootstrap = bot.id === assistantBot() || !!card?.bootstrap;
   const ready = !!bot.repository_present, active = bot.status === 'active', parked = ['needs_setup', 'needs_onboarding'].includes(bot.onboarding_state);
   const name = esc(bot.display_name || bot.slug);
   if (frWaiting(state)) return '<span class="pill waiting">Waiting</span>';
-  if (parked) return ready ? `<button class="ghost" type="button" data-fr-start="${esc(bot.slug)}" aria-label="Set up ${name}">Set up</button>`
+  if (parked) return ready ? `<button class="ghost" type="button" data-fr-start="${esc(bot.id)}" aria-label="Set up ${name}">Set up</button>`
     : '<span class="pill waiting">Setting up</span>';
   if (active) return '<span class="pill ok">Active</span>';
-  if (ready && !bootstrap) return `<button class="ghost" type="button" data-onb-activate="${esc(bot.slug)}" aria-label="Activate ${name}">Activate</button>`;
-  if (!bootstrap && bot.setup_task_id) return `<a href="#/task/${esc(bot.setup_task_id)}" data-onb-task="${esc(bot.slug)}">Setting it up</a>`;
+  if (ready && !bootstrap) return `<button class="ghost" type="button" data-onb-activate="${esc(bot.id)}" aria-label="Activate ${name}">Activate</button>`;
+  if (!bootstrap && bot.setup_task_id) return `<a href="#/task/${esc(bot.setup_task_id)}" data-onb-task="${esc(bot.id)}">Setting it up</a>`;
   return '<span class="pill waiting">Setting up</span>';
 }
 function frBotRowHTML(state, bot) {
-  return `<div class="onb-bot" data-onb-bot="${esc(bot.slug)}">${avatar(bot.slug, 27)}
+  return `<div class="onb-bot" data-onb-bot="${esc(bot.id)}">${avatar(bot.id, 27)}
       <strong class="onb-bot-name">${esc(bot.display_name || bot.slug)}</strong>
       <div class="onb-bot-actions">${frBotStatusHTML(state, bot)}</div></div>`;
 }
 // The bots in the team chart's groups and order (ui/app/sidebar.js): the bots outside any group first, as on the chart,
 // then each group, nested ones after their parent, then the built-ins. A bot the chart does not list yet joins the first.
 function frBotGroups(bots) {
-  const bySlug = new Map(bots.map(bot => [bot.slug, bot])), seen = new Set();
+  const byId = new Map(bots.map(bot => [bot.id, bot])), seen = new Set();
   const loose = {id: '', name: '', bots: []}, groups = [loose];
   const tree = orgTreeWithHelpers(orgTreeByParent());
   const walk = (parent, group) => {
@@ -140,16 +140,16 @@ function frBotGroups(bots) {
         walk('g:' + node.id, inner);
       } else if (node.kind === 'person') walk('p:' + node.id, group);
       else {
-        if (bySlug.has(node.name) && !seen.has(node.name)) { seen.add(node.name); group.bots.push(bySlug.get(node.name)); }
-        walk('b:' + node.name, group);
+        if (byId.has(node.id) && !seen.has(node.id)) { seen.add(node.id); group.bots.push(byId.get(node.id)); }
+        walk('b:' + node.id, group);
       }
     }
   };
   walk('', loose);
-  const rest = bots.filter(bot => !seen.has(bot.slug));
-  loose.bots.push(...rest.filter(bot => !isBuiltInBot(bot.slug)));
-  groups.push({id: 'built-in', name: 'Built-in', bots: rest.filter(bot => isBuiltInBot(bot.slug))
-    .sort((a, b) => helperRank({name: a.slug}) - helperRank({name: b.slug}))});
+  const rest = bots.filter(bot => !seen.has(bot.id));
+  loose.bots.push(...rest.filter(bot => !isBuiltInBot(bot.id)));
+  groups.push({id: 'built-in', name: 'Built-in', bots: rest.filter(bot => isBuiltInBot(bot.id))
+    .sort((a, b) => helperRank(a) - helperRank(b))});
   return groups.filter(group => group.bots.length);
 }
 // The saved choice, with provider names for older installs that predate presets.
@@ -163,10 +163,10 @@ function frProvidersName(state) {
 }
 function frNextHTML(state) {
   const bots = state.record.bots || [];
-  const owners = bots.map(bot => `<div class="fr-owner" data-fr-owner-row="${esc(bot.slug)}"><span>${esc(bot.display_name || bot.slug)}</span>
-      <select data-fr-owner="${esc(bot.slug)}" aria-label="Add an owner for ${esc(bot.display_name || bot.slug)}"><option value="">Add an owner…</option>${frPeople().map(person =>
+  const owners = bots.map(bot => `<div class="fr-owner" data-fr-owner-row="${esc(bot.id)}"><span>${esc(bot.display_name || bot.slug)}</span>
+      <select data-fr-owner="${esc(bot.id)}" aria-label="Add an owner for ${esc(bot.display_name || bot.slug)}"><option value="">Add an owner…</option>${frPeople().map(person =>
         `<option value="${esc(person.id)}">${esc(person.name || person.id)}${('human:' + person.id) === frOwner() ? ' (you)' : ''}</option>`).join('')}</select>
-      <span class="muted" data-fr-owned="${esc(bot.slug)}">${esc(frPersonName(S.me?.id))} owns it</span></div>`).join('');
+      <span class="muted" data-fr-owned="${esc(bot.id)}">${esc(frPersonName(S.me?.id))} owns it</span></div>`).join('');
   // Getting started's "Publish your strategy" (backend/getting_started.py): setup saved a draft, and publishing is a
   // deliberate click on the Strategy page.
   const strategy = GS?.items?.find(item => item.id === 'strategy');
@@ -205,7 +205,7 @@ async function frStartSetup(slug, button) {
 // begins its setup conversation. Any first message from a human does the same.
 async function frSendSetup(slug) {
   const bots = await v2Get('/v2/bots?include_archived=1');
-  const bot = (bots || []).find(row => row.slug === slug);
+  const bot = (bots || []).find(row => row.id === slug);
   if (bot && bot.state === 'planned') await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {status: 'active', expected_revision: bot.revision});
   v2ChatAdopt(slug, await post(`/v2/chat/${encodeURIComponent(slug)}`, {text: "Let's set you up."}));   // the Chat tab shows it
   await refresh(true);
@@ -272,7 +272,7 @@ function frBotWire(slug) {
     finish.disabled = true; finish.textContent = 'Saving…';
     try {
       const result = await post(`/v2/bots/${encodeURIComponent(slug)}/onboarded`, {});
-      const bot = S.emps.find(e => e.name === slug);
+      const bot = botRow(slug);
       if (bot) Object.assign(bot, {onboarding_state: result.onboarding_state, stage: result.stage});
       if (BOT?.slug === slug) frBotRefresh(slug);
       renderTree();
@@ -285,6 +285,6 @@ function frBotWire(slug) {
 }
 // The page follows setup completion by the bot or its manager.
 function frBotRefresh(slug) {
-  const e = S.emps.find(x => x.name === slug), host = $('#bot-onboard-host');
+  const e = botRow(slug), host = $('#bot-onboard-host');
   if (host) { host.innerHTML = frBotBannerHTML(e); frBotWire(slug); }
 }

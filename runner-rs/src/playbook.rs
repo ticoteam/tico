@@ -50,9 +50,12 @@ pub fn note(repo: &Path, attempt: &Value) -> String {
         return String::new();
     }
     let Some(path) = stale_playbook(repo, &text_of(&attempt["task"]["body"])) else { return String::new() };
-    let id = Some(text_of(&attempt["routine"]["id"])).filter(|i| !i.is_empty()).unwrap_or_else(|| "<id>".into());
+    // Routines are automations now (`hub automation`): one that moved names its automation; its text is the prompt of
+    // its turn step, changed by saving the steps again.
+    let routine = &attempt["routine"];
+    let id = [text_of(&routine["automation"]), text_of(&routine["id"])].into_iter().find(|i| !i.is_empty()).unwrap_or_else(|| "<id>".into());
     format!(
-        "This routine's text is an older copy of `{path}`, which has changed since the routine was saved. Follow the current `{path}` in your repository, not the task text. Then point the routine at the file so it cannot go stale again: hub routine update {id} --text 'Run {path}'"
+        "This routine's text is an older copy of `{path}`, which has changed since the routine was saved. Follow the current `{path}` in your repository, not the task text. Then point the routine at the file so it cannot go stale again: read it with `hub automation show {id}`, set its bot_turn step's prompt to `Run {path}`, and save the steps with `hub automation update {id} --file <flow.json>`."
     )
 }
 
@@ -142,7 +145,12 @@ mod tests {
         std::fs::write(dir.join("playbooks").join("checks.md"), "# Daily checks\n\nLook at the queue, then the inbox, then report.\n").unwrap();
         let old = "# Daily checks\n\nLook at the queue and report.\n";
         let attempt = json!({"routine": {"id": "r1"}, "task": {"body": old}});
-        assert!(note(&dir, &attempt).contains("hub routine update r1 --text 'Run playbooks/checks.md'"));
+        let told = note(&dir, &attempt);
+        assert!(told.contains("hub automation show r1") && told.contains("prompt to `Run playbooks/checks.md`"), "{told}");
+        assert!(told.contains("hub automation update r1 --file"), "{told}");
+        // a routine that moved to an automation is changed there
+        let moved = json!({"routine": {"id": "r1", "automation": "auto_1"}, "task": {"body": old}});
+        assert!(note(&dir, &moved).contains("hub automation update auto_1 --file"));
         assert_eq!(note(&dir, &json!({"routine": {"id": "r1"}, "task": {"body": "Run playbooks/checks.md"}})), "");
         let current = std::fs::read_to_string(dir.join("playbooks").join("checks.md")).unwrap();
         assert_eq!(note(&dir, &json!({"routine": {"id": "r1"}, "task": {"body": current}})), "");

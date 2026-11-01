@@ -16,8 +16,8 @@ function goalOwnerInfo(actor) {
   if (actor === GOAL_COMPANY) return {kind: 'company', id: GOAL_COMPANY, name: S.config?.company_name || 'Team', avatar: '', href: ''};
   const [kind, id] = String(actor || '').split(':');
   if (kind === 'bot') {
-    const e = S.emps.find(x => x.name === id);
-    return {kind, id, name: e?.display_name || id, avatar: avatar(id, 20, stateOf(id)), href: `#/bot/${encodeURIComponent(id)}`};
+    const e = botRow(id);
+    return {kind, id, name: e?.display_name || e?.slug || id, avatar: avatar(id, 20, stateOf(id)), href: `#/bot/${encodeURIComponent(id)}`};
   }
   const p = (S.people || []).find(x => x.id === id);
   return {kind: 'person', id, name: p?.name || id, avatar: personAvatar(p || {id, name: id}, 20), href: `#/person/${encodeURIComponent(id)}`};
@@ -27,7 +27,7 @@ function goalOwnerInfo(actor) {
 function goalOrgPlace(owner) {
   const up = {};
   for (const p of S.people || []) up['p:' + p.id] = orgBossKey({kind: 'person', person: p});
-  for (const e of S.emps || []) up['b:' + e.name] = orgBossKey({kind: 'bot', ...e});
+  for (const e of S.emps || []) up['b:' + e.id] = orgBossKey({kind: 'bot', ...e});
   const key = String(owner || '').startsWith('human:') ? 'p:' + owner.slice(6) : String(owner || '').startsWith('bot:') ? 'b:' + owner.slice(4) : '';
   const above = new Set();
   for (let at = up[key]; at && !above.has(at); at = up[at]) above.add(at);
@@ -137,7 +137,7 @@ function goalAddInline(host, owner, done) {
 // The Goals page's editor: one form for a new goal and an existing one. Goal, Owner (new goals),
 // Supports (optional, Nothing by default) and one Save.
 const goalEveryone = () => [...(S.people || []).filter(p => !p.hidden).map(p => ['human:' + p.id, p.name || p.id]),
-  ...shownEmps().filter(e => !isBuiltInBot(e.name)).map(e => ['bot:' + e.name, e.display_name || e.name])];
+  ...shownEmps().filter(e => !isBuiltInBot(e.id)).map(e => ['bot:' + e.id, e.display_name || e.slug])];
 function goalOwnerChoices(mine) {
   if (S.me?.role !== 'owner') return mine ? [[mine, 'Me']] : [];
   return goalEveryone();

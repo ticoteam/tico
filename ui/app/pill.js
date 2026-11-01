@@ -58,7 +58,7 @@ function pillRestore(P) {
 const activeEmps = () => shownEmps().filter(e => e.status === 'active');
 function toastSent(r) {
   const t = document.createElement('div'); t.className = 'toast';
-  t.textContent = r.pending ? `Saved. Sending to ${S.emps.find(e => e.name === r.slug)?.display_name || r.slug} in the background—you can close this page.` : `Sent to ${S.emps.find(e => e.name === r.slug)?.display_name || r.slug}`;
+  t.textContent = r.pending ? `Saved. Sending to ${botDisplayName(r.bot || r.slug)} in the background—you can close this page.` : `Sent to ${botDisplayName(r.bot || r.slug)}`;
 
   document.body.appendChild(t); setTimeout(() => t.remove(), 9000);
 }

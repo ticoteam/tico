@@ -15,7 +15,7 @@ function searchEntries() {
   for (const e of shownEmps()) {
     // label is the plain name for matching and sorting; html is the same name as shown elsewhere, flag and all
     out.push({kind: 'bot', label: String(e.display_name || '').replace(TEMP_RE, ''), html: shownName(e), temp: isTempBot(e),
-      alias: e.name, href: `#/bot/${encodeURIComponent(e.name)}`, avatar: avatar(e.name, 22, stateOf(e.name))});
+      alias: e.slug, href: `#/bot/${encodeURIComponent(e.id)}`, avatar: avatar(e.id, 22, stateOf(e.id))});
   }
   for (const p of (S.people || []).filter(p => !p.hidden)) {
     out.push({kind: 'person', label: p.name || p.id, alias: p.title || '', href: `#/person/${encodeURIComponent(p.id)}`, avatar: personAvatar(p, 22)});

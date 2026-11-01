@@ -14,9 +14,9 @@ const SLASH_TICO = [
 ];
 // Make my branch is offered on a shared bot that has no branch of the viewer's yet.
 function slashBranchAllowed(slug) {
-  const bot = (S.emps || []).find(e => e.name === slug);
+  const bot = botRow(slug);
   const original = bot?.shared_from || slug;
-  return !!(S.emps || []).find(e => e.name === original)?.shared
+  return !!botRow(original)?.shared
     && !(S.emps || []).some(e => e.shared_from === original && e.operator === S.me?.id);
 }
 function slashCommands(slug) {
@@ -123,7 +123,7 @@ function slashRun(P, text) {
   }
   if (name === 'branch' && cmd) {
     done();
-    const bot = S.emps.find(e => e.name === P.slug);
+    const bot = botRow(P.slug);
     void botBranchCreate(bot?.shared_from || P.slug);
     return true;
   }

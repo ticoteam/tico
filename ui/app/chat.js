@@ -20,7 +20,7 @@ function v2ChatStop() {
 // one room.
 function v2ChatMode(slug) {
   slug = botBranchChatTarget(slug);
-  const bot = (S.emps || []).find(e => e.name === slug);
+  const bot = botRow(slug);
   const configured = bot?.thread_mode;
   // A shared room belongs to the people the bot works for who may read it; anyone else talks to it in a room of their own.
   const member = S.me?.role === 'owner' || (bot?.users || []).some(u => u.id === S.me?.id);
@@ -422,7 +422,7 @@ function v2DeliveryHTML(m) {
   if (d.mode === 'steer') return `<div class="chat-delivery">Steering this turn</div>`;
   if (d.mode === 'redirect') return '<div class="chat-delivery">Stopping this turn; this message starts the next one</div>';
   const slug = String(m.to_actor || '').replace(/^bot:/, '');
-  const can = m.from_actor === myActor() && settingsCanManageBot(S.emps.find(e => e.name === slug));
+  const can = m.from_actor === myActor() && settingsCanManageBot(botRow(slug));
   return `<div class="chat-delivery">Queued for the next turn${can ? ` <button type="button" class="btn sm" data-redirect="${esc(m.id)}" data-redirect-bot="${esc(slug)}" data-redirect-attempt="${esc(d.attempt_id)}">Stop and redirect</button>` : ''}</div>`;
 }
 document.addEventListener('click', async ev => {
@@ -705,7 +705,7 @@ function chatStopSync(state) {
   if (!P || P.slug !== state.slug) return;
   const x = state.execution, own = ['leased', 'running'].includes(x?.state);
   const busy = own || x?.state === 'queued' && v2StatusOf(state.slug)?.state === 'running';
-  const running = busy && settingsCanManageBot(S.emps.find(e => e.name === state.slug)) ? {attempt_id: own ? x.attempt_id : null} : null;
+  const running = busy && settingsCanManageBot(botRow(state.slug)) ? {attempt_id: own ? x.attempt_id : null} : null;
   if (!running === !P.running && running?.attempt_id === P.running?.attempt_id) return;
   P.running = running; P.stopping = false;
   pillButtons(P);

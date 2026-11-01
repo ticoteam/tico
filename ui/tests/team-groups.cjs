@@ -14,6 +14,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile, beta} = require('./support/page.cjs');
+const LEDGER_ID = '01990000-0000-7000-8000-000000001ed9';
 const {unrouted} = require('./support/routes.cjs');
 
 const FULL = {see: true, read: true, write: true};
@@ -138,11 +139,12 @@ async function open(browser, me, branches = false) {
       if (seatSave.hire) return route.fulfill({status: seatSave.hire, contentType: 'application/json',
         body: JSON.stringify({error: {detail: 'Hiring failed'}})});
       seat.filled = true;
-      const slug = body.name.toLowerCase();
+      // A hired bot's id is not its slug (Ledger's here): the page opens by the id the reply gives.
+      const slug = body.name.toLowerCase(), id = slug === 'ledger' ? LEDGER_ID : slug;
       calls.push(['hired with', seat.description]);
       bots.push(bot(slug, body.name, '', seat.reports_to.startsWith('human:') ? 'p:' + seat.reports_to.slice(6) : 'b:' + seat.reports_to,
-        {reports_to: seat.reports_to, status: 'planned', onboarding_state: 'needs_setup', stage: 'onboarding'}));
-      return json({slug, name: body.name, seat: seat.id, stage: 'onboarding', reports_to: seat.reports_to, template: body.template, model: body.model});
+        {id, slug, reports_to: seat.reports_to, status: 'planned', onboarding_state: 'needs_setup', stage: 'onboarding'}));
+      return json({bot: id, slug, name: body.name, seat: seat.id, stage: 'onboarding', reports_to: seat.reports_to, template: body.template, model: body.model});
     }
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
@@ -627,8 +629,8 @@ async function teamAdd(browser) {
   assert.equal(await closeJob.textContent(), 'Close job');
   assert.equal(calls.some(c => c[1] === 'close'), false);
   await page.locator('[data-recruit-hire="bookkeeping"]').click();
-  await node(page, 'b:ledger').waitFor({state: 'attached'});
-  await page.waitForFunction(() => location.hash === '#/bot/ledger');
+  await node(page, 'b:' + LEDGER_ID).waitFor({state: 'attached'});
+  await page.waitForFunction(id => location.hash === '#/bot/' + id, LEDGER_ID);
   assert.deepEqual(recruits, [['POST', 'recruit', 'seat1', {}]]);
   assert.deepEqual(calls.filter(c => c[1] === 'hire'),
     [['POST', 'hire', 'seat1', {template: 'bookkeeping', model: '', name: 'Ledger'}]]);

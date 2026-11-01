@@ -80,7 +80,7 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('.bot-ident').waitFor();
     // A roster refresh removes both marks and restores full node opacity on unpause.
     bots[0].status = 'active';
-    await page.evaluate(async () => { S.emps = await get('/employees'); renderTree(); });
+    await page.evaluate(async () => { S.emps = namedRoster(await get('/employees')); renderTree(); });
     assert.equal(await node.locator('.bot-paused-badge').count(), 0);
     assert.equal(await node.evaluate(e => getComputedStyle(e).opacity), '1');
     await page.evaluate(() => { location.hash = '/settings'; });

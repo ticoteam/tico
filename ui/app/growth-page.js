@@ -25,12 +25,13 @@ const GR_RESULTS = ['won', 'lost', 'inconclusive', 'dropped'];
 // Who may change company-level growth records: the owner or an admin (the server checks and is the one that enforces it).
 const grAdmin = () => S.me?.role === 'owner' || !!S.me?.bot_admin;
 const grMe = () => myActor();
-// An owner ref as Tico writes them: bot:<slug>, human:<id>, or a bare bot slug.
+// An owner ref as Tico writes them: bot:<id>, human:<id>, or a bare bot id (older rows: a slug).
 const grWho = ref => {
   const s = String(ref || '');
   if (!s) return '';
   if (s.includes(':')) return actorLabel(s);
-  return (S.emps || []).some(e => e.name === s) ? botDisplayName(s) : personDisplay(s);
+  const bot = botByRef(s);
+  return bot ? botDisplayName(bot.id) : personDisplay(s);
 };
 const grSame = (a, b) => !!a && !!b && (a === b || a.replace(/^bot:/, '') === b.replace(/^bot:/, ''));
 const grUsd = v => v == null || v === '' ? '—' : (v < 0 ? '−$' : '$') + Math.abs(Number(v)).toLocaleString('en-US', {maximumFractionDigits: Math.abs(v) < 100 ? 2 : 0});
@@ -153,15 +154,15 @@ const GR_PROPOSE_BODY = `File 3–8 growth ideas. Start no tests.
 5. Close this task with the count and the top three by ICE; say so if the strategy has no bets.`;
 
 // The marketing lead: who "Propose ideas" asks.
-const grLead = () => (S.emps || []).find(e => e.status !== 'archived' && (e.template === 'marketing-lead' || e.name === 'marketing-lead'
+const grLead = () => (S.emps || []).find(e => e.status !== 'archived' && (e.template === 'marketing-lead' || e.slug === 'marketing-lead'
   || /^(head of marketing|growth lead|marketing lead)$/i.test(String(e.display_name || '').trim())));
 async function grPropose(button) {
   const lead = grLead();
   if (!lead) return;
   if (button) button.disabled = true;
   try {
-    await post('/v2/tasks', {title: 'Propose growth ideas', body: GR_PROPOSE_BODY, owner: lead.name});
-    toast(`Sent to ${lead.display_name || lead.name}`);
+    await post('/v2/tasks', {title: 'Propose growth ideas', body: GR_PROPOSE_BODY, owner: lead.id});
+    toast(`Sent to ${lead.display_name || lead.slug}`);
   } catch (e) { toast(e.message || 'Not sent', true); if (button) button.disabled = false; }
 }
 

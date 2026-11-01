@@ -1937,7 +1937,7 @@ def fleet_snapshot(c, auth, identity, task_view):
             continue
         if not access.get(slug, auth.FULL)["read"]:
             # A bot the person may only send requests to: its name and that it exists, not its work.
-            bots.append({"slug": slug, "name": row["display_name"], "state": row["state"], "focus": "",
+            bots.append({"id": slug, "slug": row["slug"], "name": row["display_name"], "state": row["state"], "focus": "",
                          "task_id": None, "online": None, "ready": None, "queued": None,
                          "active_attempt": None, "active_attempts": 0})
             continue
@@ -1948,7 +1948,7 @@ def fleet_snapshot(c, auth, identity, task_view):
         # A bot with task lanes can have several turns out; the newest is the one shown, beside the count.
         active = [a for a in live_by_bot.get(slug, ()) if index.attempt(a["id"])]
         attempt = active[0] if active else None
-        bots.append({"slug": slug, "name": row["display_name"],
+        bots.append({"id": slug, "slug": row["slug"], "name": row["display_name"],
                      "state": status.get("state") or row["state"],
                      "focus": status.get("focus") or "", "task_id": status.get("task_id"),
                      "online": location["online"], "ready": location["ready"],
@@ -2107,7 +2107,7 @@ def install_views(app, store, auth, mutate, task_view):
                 reports = (configs.get(slug, {}) or {}).get("reports_to") or ""
                 if reports and not str(reports).startswith("human:") and not access.get(reports, auth.FULL)["see"]:
                     reports = ""
-                rows.append({"name": bot["slug"], "display_name": bot["display_name"], "state": bot["state"],
+                rows.append({"id": bot["id"], "slug": bot["slug"], "name": bot["slug"], "display_name": bot["display_name"], "state": bot["state"],
                              "status": bot["state"], "description": (configs.get(slug, {}) or {}).get("description") or "",
                              "reports_to": reports, "my_access": level, **policy,
                              "private_tasks_default": H.private_tasks_default(c, "bot:" + slug, declared),
@@ -2145,7 +2145,8 @@ def install_views(app, store, auth, mutate, task_view):
                          "latest_runtime_model": latest_model if show_latest else "",
                          "latest_runtime_provider": providers.PROVIDER_BY_ID.get(latest_family, {}).get("label")
                          if show_latest and latest_family else "Unknown provider" if show_latest else "",
-                         "model_source": "" if not resolved_runtime else "bot" if own else "company", "name": bot["slug"], "display_name": bot["display_name"],
+                         "model_source": "" if not resolved_runtime else "bot" if own else "company",
+                         "id": bot["id"], "slug": bot["slug"], "name": bot["slug"], "display_name": bot["display_name"],
                          "state": bot["state"], "status": bot["state"],
                          "private_tasks_default": H.private_tasks_default(c, "bot:" + slug, declared),
                          "host": "keeper", "tasks": "hub", "has_repo": location["ready"],
@@ -2798,7 +2799,8 @@ def install_views(app, store, auth, mutate, task_view):
                       (tid, "bot:" + slug, who.actor, message["id"], H.shift(H.now(), hours=24)))
         tagged = [m for m in (privacy.page(c, who, conv["id"])["messages"] if conv else [])
                   if H.message_task_id(m) == tid]
-        recipient = {"slug": slug, "name": bot.get("display_name") or bot.get("slug") or slug, "can_chat": allowed} if slug else None
+        recipient = {"id": slug, "slug": bot.get("slug") or slug, "name": bot.get("display_name") or bot.get("slug") or slug,
+                     "can_chat": allowed} if slug else None
         return {"bot": slug, "recipient": recipient, "conversation": conv, "message": message, "messages": tagged}
 
     @app.get("/api/v2/tasks/{tid}/chat")

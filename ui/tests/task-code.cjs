@@ -363,7 +363,7 @@ async function desktop(browser) {
   const add = form.locator('input[name=title]');
   await add.fill('Check the receipts in the app'); await add.press('Enter');
   await rail.locator('.sub-row[data-sub="k5"]').waitFor();
-  assert.deepEqual(writes.at(-1), {method: 'POST', p: '/api/v2/tasks', body: {title: 'Check the receipts in the app', body: 'Check the receipts in the app', owner: 'api', relations: [{task: 't-checkout', kind: 'parent'}]}});
+  assert.deepEqual(writes.at(-1), {method: 'POST', p: '/api/v2/tasks', body: {title: 'Check the receipts in the app', body: 'Check the receipts in the app', owner: 'bot:api', relations: [{task: 't-checkout', kind: 'parent'}]}});
   assert.equal(await rail.locator('#task-subs-h .cnt').innerText(), '5');
   assert.equal(await form.locator('input[name=owner]').inputValue(), 'api', 'the pick stays for the next one');
   assert.equal(await page.evaluate(() => document.activeElement?.name), 'title', 'ready for the next subtask');

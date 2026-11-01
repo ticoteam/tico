@@ -1,13 +1,15 @@
 // Offline browser regression: a bot's Send never does nothing. Typed during the thread's load, the draft survives the
 // load and a redraw and sends once; a send the server refuses, or answers without a message (a sign-in page),
 // says so and keeps the draft; Return during a send that is still out sends after it; text that arrived without an
-// input event (autofill, a tool filling the box) still sends on a click.
+// input event (autofill, a tool filling the box) still sends on a click. The bot's id is not its slug: a link by slug moves to
+// the id, and the page, the team list and the send all name it by id.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+const SALES = '0192f0c4-7b1e-7cc2-9d1a-3f5e8a6b2c10';   // a bot made after ids: its id is not its slug
 
 (async () => {
   const browser = await launch();
@@ -26,13 +28,13 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
       if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-      if (p === '/api/employees') return json([{name: 'sales', display_name: 'Sales', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+      if (p === '/api/employees') return json([{id: SALES, slug: 'sales', name: 'sales', display_name: 'Sales', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/conversations')
-        return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:sales']}] : []});
+        return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:' + SALES]}] : []});
       if (p.endsWith('/snapshot')) { await snapshotHeld; return json({messages: [], execution: null}); }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      if (p === '/api/v2/chat/sales') {
+      if (p === '/api/v2/chat/' + SALES) {
         const text = route.request().postDataJSON().text;
         if (answer === 'error') return json({error: {code: 'internal', detail: 'Server error'}}, 500);
         if (answer === 'html') return route.fulfill({contentType: 'text/html', body: '<!doctype html><title>Sign in</title>'});
@@ -47,6 +49,11 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
     const value = () => box.inputValue();
     const toasts = () => page.locator('.toast.err').allInnerTexts();
     await box.waitFor();
+    assert.equal(await page.evaluate(() => location.hash), '#/bot/' + SALES, 'a link by slug moves to the id');
+    const node = page.locator('#tree a.node[data-org="b:' + SALES + '"]');
+    assert.equal(await node.getAttribute('href'), '#/bot/' + SALES);
+    assert.equal(await node.locator('.av').getAttribute('data-av'), SALES);
+    assert.match(await node.innerText(), /Sales/);
     assert.match(await page.locator('#conv-thread').innerText(), /Loading the thread/, 'still loading');
 
     // Typed while the thread loads; the page redraws and the load finishes under it; Return right after sends once.
@@ -94,6 +101,10 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
     assert.equal(sends.at(-1), 'Filled by a tool');
     const thread = await page.locator('#conv-thread').innerText();
     for (const text of [first, 'First of two', 'Second of two', 'Filled by a tool']) assert.match(thread, new RegExp(text));
+    // Its Info tab opens at the id too.
+    await page.evaluate(() => { location.hash = '#/bot/sales/info'; });
+    await page.waitForFunction(id => location.hash === '#/bot/' + id + '/info' && BOT?.slug === id && BOT.tab === 'info', SALES);
+    await page.locator('#bot-setup-card').waitFor();
     assert.deepEqual(errors, []);
     console.log('ok');
   } finally { await browser.close(); }

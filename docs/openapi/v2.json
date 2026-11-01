@@ -34501,6 +34501,10 @@
       "Bot": {
         "type": "object",
         "properties": {
+          "id": {
+            "type": "string",
+            "description": "The bot's stable id (its slug for a bot made before ids, else a UUIDv7); the slug is a renameable label"
+          },
           "slug": {
             "type": "string"
           },
@@ -34589,6 +34593,7 @@
         "required": [
           "access",
           "display_name",
+          "id",
           "owners",
           "slug",
           "state"
@@ -34844,6 +34849,10 @@
       "BotDetail": {
         "type": "object",
         "properties": {
+          "id": {
+            "type": "string",
+            "description": "The bot's stable id (its slug for a bot made before ids, else a UUIDv7); the slug is a renameable label"
+          },
           "slug": {
             "type": "string"
           },
@@ -46254,6 +46263,10 @@
           },
           "email": {
             "type": "string"
+          },
+          "slug": {
+            "type": "string",
+            "description": "A bot caller: its slug (a label; the actor holds its id)."
           }
         },
         "required": [

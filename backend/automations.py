@@ -518,6 +518,7 @@ def _checked(c, flow, settings=None, access=True, saved=None, aid=None, wake_ste
         flow = F.check(flow)
     except F.Invalid as exc:
         raise Problem("invalid", str(exc), 422)
+    flow = _bot_ids(c, flow)
     if flow["trigger"]["type"] == "due":
         # Stored on the flow, so a later change to the company's zone does not move the routine.
         flow["trigger"] = {"open_days": D.OPEN_DAYS, "tz": D.zone_of({}), **flow["trigger"]}
@@ -544,6 +545,62 @@ def _checked(c, flow, settings=None, access=True, saved=None, aid=None, wake_ste
                 raise Problem("forbidden", f"{flow['owner']} may not {do.replace('_', ' ')} {bot}: an automation "
                               "tells only its owner's own bots, bots in a group its owner leads, or the owner's "
                               "own Assistant", 403)
+    return flow
+
+
+BOT_ARGS = ("bot", "owner")   # action args that may name a bot (a person id or a template is kept as written)
+
+
+def _bot_ids(c, flow):
+    """The flow with every bot it names stored by id: its owner, a task_received trigger's `to`, bot_turn steps' bot,
+    an llm step's `as` and the actions' bot/owner args. A person may write a bot's slug; a rename never breaks it."""
+    def bot_ref(value, bare=False):
+        text = str(value or "")
+        if "{{" in text or not text:
+            return value
+        if text.startswith("bot:"):
+            found = H.resolve_bot(c, text)
+            return "bot:" + found["id"] if found else value
+        if bare:
+            found = H.resolve_bot(c, text)
+            if found and not (found["id"] != text and H.human(c, text)):
+                return found["id"]
+        return value
+
+    def steps_of(steps):
+        out = []
+        for step in steps or []:
+            step = dict(step)
+            if step.get("type") == "bot_turn" and step.get("bot"):
+                bot = str(step["bot"])
+                step["bot"] = bot_ref(bot) if bot.startswith("bot:") else bot_ref(bot, bare=True)
+            if step.get("type") == "llm" and str(step.get("as") or "").startswith("bot:"):
+                step["as"] = bot_ref(step["as"])
+            if step.get("type") == "action":
+                step["args"] = args_of(step.get("args"))
+            if step.get("rules"):
+                step["rules"] = [{**rule, "then": [{**a, "args": args_of(a.get("args"))} if a.get("args") else a
+                                                   for a in rule.get("then") or []]} for rule in step["rules"]]
+            if step.get("paths"):
+                step["paths"] = [{**path, "steps": steps_of(path.get("steps"))} for path in step["paths"]]
+            if (step.get("otherwise") or {}).get("steps"):
+                step["otherwise"] = {**step["otherwise"], "steps": steps_of(step["otherwise"]["steps"])}
+            out.append(step)
+        return out
+
+    def args_of(args):
+        if not isinstance(args, dict):
+            return args
+        return {k: (bot_ref(v, bare=True) if k in BOT_ARGS and isinstance(v, str) else v) for k, v in args.items()}
+
+    flow = {**flow, "owner": bot_ref(flow["owner"]), "steps": steps_of(flow.get("steps"))}
+    trigger = flow.get("trigger") or {}
+    if trigger.get("type") == "task_received" and isinstance(trigger.get("to"), str):
+        to = trigger["to"]
+        if to.startswith("bot:"):
+            flow["trigger"] = {**trigger, "to": bot_ref(to)}
+        elif ":" not in to and not H.human(c, to) and H.resolve_bot(c, to):
+            flow["trigger"] = {**trigger, "to": "bot:" + H.resolve_bot(c, to)["id"]}
     return flow
 
 

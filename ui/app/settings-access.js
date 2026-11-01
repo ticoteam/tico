@@ -64,7 +64,7 @@ function settingsAccessCell(e) {
 // without being listed. Any owner adds or removes humans here; the server checks it (docs/permissions.md).
 // `stage` (the bot editor): Done hands the save to the editor, which runs it with Save bot.
 async function settingsEditBotOwners(slug, {stage} = {}) {
-  const e = S.emps.find(row => row.name === slug);
+  const e = S.emps.find(row => row.id === slug);
   if (!e) return;
   let dialog = botSettingsPanel('bot-owners-editor', 'owner-picker', 'bot-owners-title') || $('#bot-owners-editor');
   if (!dialog) {
@@ -118,7 +118,7 @@ async function settingsMailSummary(root, slug) {
   } catch { cell.textContent = ''; }
 }
 async function settingsEditMail(slug, after, {stage} = {}) {
-  const e = S.emps.find(row => row.name === slug);
+  const e = S.emps.find(row => row.id === slug);
   if (!e) return;
   let dialog = botSettingsPanel('bot-mail-editor', 'owner-picker', 'bot-mail-title') || $('#bot-mail-editor');
   if (!dialog) {
@@ -169,7 +169,7 @@ function accessPresetOf(policy) {
   return 'custom';
 }
 async function settingsEditAccess(slug, {stage} = {}) {
-  const e = S.emps.find(row => row.name === slug);
+  const e = S.emps.find(row => row.id === slug);
   if (!e) return;
   let data;
   try { data = await get(`/v2/bots/${encodeURIComponent(slug)}/access`); }
@@ -181,7 +181,7 @@ async function settingsEditAccess(slug, {stage} = {}) {
     document.body.append(dialog);
   }
   const people = (SETTINGS_DATA.people?.length ? SETTINGS_DATA.people : (S.people || []).filter(p => !p.hidden));
-  const bots = S.emps.filter(row => row.name !== slug && row.status !== 'archived');
+  const bots = S.emps.filter(row => row.id !== slug && row.status !== 'archived');
   const teams = data.teams || [];
   const draft = {see: {...data.see}, read: {...data.read}, write: {...data.write}};
   let preset = accessPresetOf(draft);
@@ -198,7 +198,7 @@ async function settingsEditAccess(slug, {stage} = {}) {
     return `<fieldset class="access-level" data-access-levels="${levels.join(',')}"><legend>${esc(title)}${hint ? `<small>${esc(hint)}</small>` : ''}</legend>
       ${withEveryone ? `<label class="access-everyone"><input type="checkbox" data-access-everyone ${level.everyone ? 'checked' : ''}> Everyone</label>` : ''}
       <div data-access-lists ${level.everyone ? 'hidden' : ''}>${list(level, 'people', people.map(p => ({id: p.id, name: p.name || p.id})), 'Humans')}
-      ${teams.length ? list(level, 'teams', teams, 'Groups') : ''}${bots.length ? list(level, 'bots', bots.map(b => ({id: b.name, name: b.display_name || b.name})), 'Bots') : ''}</div></fieldset>`;
+      ${teams.length ? list(level, 'teams', teams, 'Groups') : ''}${bots.length ? list(level, 'bots', bots.map(b => ({id: b.id, name: b.display_name || b.slug})), 'Bots') : ''}</div></fieldset>`;
   };
   const paintPickers = () => {
     const host = dialog.querySelector('[data-access-pickers]');

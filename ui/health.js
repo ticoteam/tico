@@ -169,13 +169,13 @@ window.hlStuckHtml = function hlStuckHtml(rows) {
     // Refused words are manager-only context, not support diagnostics.
     const reportWhy = row.reason === 'quarantined' ? 'Quarantined: queued work waits for the quarantine to clear.' : row.why;
     return `<li class="hl-stuck" data-stuck="${esc(row.bot)}" data-reason="${esc(row.reason)}">
-    <a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${hlQueueWords(row).map(words => ' · ' + words).join('')}</span>
+    <a href="#/bot/${esc(encodeURIComponent(row.bot))}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${hlQueueWords(row).map(words => ' · ' + words).join('')}</span>
     ${row.fix ? hlFixHtml(row.fix) : ''}${['run_hold', 'budget'].includes(row.reason) && typeof botReleaseButton === 'function' ? botReleaseButton(row.bot, 'ghost') : ''}${hlReportHtml({kind: 'stuck', title: `${row.name}: ${reportWhy}`, detail: reportWhy, ref: row.bot, group: 'stuck:' + row.reason})}</li>`;
   }).join('');
 };
 
 async function hlStuckMove(button) {
-  const e = (S.emps || []).find(row => row.name === button.dataset.stuckMove);
+  const e = botRow(button.dataset.stuckMove);
   if (!e) { toast('Open Settings > Bots to move this bot', true); return; }
   if (!await settingsConfirmTransition(e, 'machine', button.dataset.machine)) return;
   await settingsBeginTransition(button, e, {kind: 'machine', runner_id: button.dataset.runner,
@@ -189,7 +189,7 @@ async function hlStuckFinish(button) {
   button.disabled = true; button.textContent = 'Finishing…';
   try {
     const result = await post(`/v2/bots/${encodeURIComponent(slug)}/onboarded`, {});
-    const bot = (S.emps || []).find(e => e.name === slug);
+    const bot = botRow(slug);
     if (bot) bot.onboarding_state = result.onboarding_state;
     toast(`${botDisplayName(slug)} finished onboarding`);
     void hlRefresh();
@@ -203,7 +203,7 @@ function hlPageDraw() {
   const host = $('#hl-page');
   if (!host) return;
   if (!HL) { host.innerHTML = '<div class="empty">Nothing to show yet.</div>'; return; }
-  const bots = list => list.map(row => `<li><a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${row.reason === 'no_computer' ? 'no computer is online' : row.reason === 'computer_offline' ? esc(row.computer) + ' is offline' : 'waiting since ' + esc(ago(row.oldest))}${hlQueueWords(row).map(words => ', ' + words).join('')}</span></li>`).join('');
+  const bots = list => list.map(row => `<li><a href="#/bot/${esc(encodeURIComponent(row.bot))}">${esc(row.name)}</a> <span class="muted">${row.reason === 'no_computer' ? 'no computer is online' : row.reason === 'computer_offline' ? esc(row.computer) + ' is offline' : 'waiting since ' + esc(ago(row.oldest))}${hlQueueWords(row).map(words => ', ' + words).join('')}</span></li>`).join('');
   // A stuck bot is listed once, with its reason; "waiting" keeps only the offline ones with nothing queued.
   const stuck = HL.stuck || [], idle = (HL.waiting || []).filter(row => !stuck.some(s => s.bot === row.bot));
   // Settings' own checks that need nobody (ui/app/settings.js shows only the ones that do).

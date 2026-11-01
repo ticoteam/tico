@@ -14,7 +14,7 @@ function tipBox() {
   return TIP;
 }
 function tipHTML(slug) {
-  const e = S.emps.find(x => x.name === slug), s = v2StatusOf(slug);
+  const e = botRow(slug), s = v2StatusOf(slug);
   const rows = [];
   if (s) {
     rows.push(['State', `<span class="pill ${V2_PILL[s.state] ?? ''}">${esc(V2_WORD[s.state] || s.state || 'unknown')}</span>${
@@ -44,7 +44,7 @@ function tipHTML(slug) {
     <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
 }
 function tipShow(el, slug) {
-  if (!slug || !S.emps.some(e => e.name === slug)) return;
+  if (!slug || !botRow(slug)) return;
   clearTimeout(TIP_TIMER); TIP_TIMER = null; TIP_PENDING = null;
   const tip = tipBox();
   tip.innerHTML = tipHTML(slug);

@@ -67,7 +67,7 @@ const isAssistantHelper = slug => ASSISTANT_HELPERS.includes(slug);
 const strategyDefaultName = () => 'Strategy Bot';
 const strategyDefaultish = name => !name || name === 'Goal Manager' || name === 'CEO Bot';
 const strategyBotName = () => {
-  const name = String((S.emps || []).find(e => e.name === 'goal-manager')?.display_name || '').trim();
+  const name = String(botRow('goal-manager')?.display_name || '').trim();
   return strategyDefaultish(name) ? strategyDefaultName() : name;
 };
 // Everyone's chat is their Assistant, the owner's too (backend/assistant.py): the Strategy Bot is a helper it asks.
@@ -186,7 +186,7 @@ function betaMark(root = document) {
 }
 // ----------------------------------------------------------------- derived state
 function stateOf(slug) {
-  const e = S.emps.find(x => x.name === slug);
+  const e = botRow(slug);
   if (!e || e.status === 'planned') return 'planned';
   if (e.status === 'paused') return 'paused';
   const live = S.v2?.status?.[slug];

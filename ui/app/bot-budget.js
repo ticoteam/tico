@@ -9,7 +9,7 @@ const BUDGET_KEYS = [['turns_per_hour', 'per hour'], ['turns_per_day', 'per day'
 const budgetNumber = n => Number(n || 0).toLocaleString();
 function budgetRowHTML(e) {
   if (e.agent || !settingsCanManageBot(e)) return '';
-  return `<div class="sb-row" data-bot-budget-row="${esc(e.name)}" hidden><span>Runs</span><div class="rel-line" data-bot-budget="${esc(e.name)}"></div><span></span></div>
+  return `<div class="sb-row" data-bot-budget-row="${esc(e.id)}" hidden><span>Runs</span><div class="rel-line" data-bot-budget="${esc(e.id)}"></div><span></span></div>
     <div class="sb-sub" data-bot-budget-sub hidden></div>`;
 }
 function budgetFieldsHTML(slug, b) {

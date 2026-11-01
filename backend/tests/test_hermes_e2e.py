@@ -137,6 +137,8 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
                                                    "description": "A Hermes profile."}, headers=headers())
     assert made.status_code == 200 and made.json()["harness"] == "hermes", made.text
     post(api, "bots/scout/go-live", {"setup": False})
+    scout = bot(api)["id"]          # a bot made now has a UUIDv7 id; `scout` is its slug
+    assert scout != "scout"
 
     # Pair: the connector prints a code and waits; BotOps approves it as the owner who read it out.
     def approve_as_botops(printed):
@@ -157,7 +159,8 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     assert (connector.profile / ".env").read_text().splitlines() == [f"TICO_AGENT_TOKEN={token}", f"TICO_URL={connector.url}"]
     for private in (connector.profile / ".env", connector.config_dir / "scout.json"):
         assert stat.S_IMODE(private.stat().st_mode) == 0o600
-    assert connector.credential()["token"] == token and connector.credential()["bot"] == "scout"
+    assert connector.credential()["token"] == token and connector.credential()["bot"] == scout
+    assert connector.credential()["slug"] == "scout"
     assert [c for c in connector.timer_calls if c[0] == "launchctl" and "bootstrap" in c or c[:3] == ["systemctl", "--user", "enable"]]
     # ... and the heartbeat it sent is what the hub shows.
     listed = bot(api)
@@ -176,13 +179,13 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     # The owner writes to the bot: it waits (no job), the heartbeat counts it, and the agent reads it over MCP.
     sent = post(api, "chat/scout", {"text": "What did you find today?"})
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='scout'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot=?", (scout,)).fetchone()[0] == 0
     assert connector.run("heartbeat", "--profile", "scout")[0] == 0
     assert connector.status()["last_reply"]["waiting"]["messages"] == 1
     (waiting,) = connector.tool("hub_message_list")["messages"]
     assert waiting["body"] == "What did you find today?"
     reply = connector.tool("hub_message_send", to="ana", text="Three leads, all in Austin.", conversation_id=sent["conversation_id"])
-    assert reply["from_actor"] == "bot:scout"
+    assert reply["from_actor"] == "bot:" + scout
     assert connector.tool("hub_message_mark_read", message_id=sent["id"]) == {"read": True}
     assert [m["body"] for m in get(api, f"conversations/{sent['conversation_id']}/messages")] == [
         "What did you find today?", "Three leads, all in Austin."]

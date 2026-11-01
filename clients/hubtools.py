@@ -3717,7 +3717,8 @@ def inbox_send(api, args):
       "BotOps acts as the person who asked, citing their message. "
       "A manager bot changes only its direct reports: their model, task model, name and description. Creating, archiving "
       "or restoring a report goes through BotOps the same way, within the weekly limit.",
-      {"slug": _s("The bot to change"), "on_behalf_of": _s("Id of the person's message to BotOps asking for it (default: the message that started this turn)"),
+      {"slug": _s("The bot to change (its slug or id)"), "on_behalf_of": _s("Id of the person's message to BotOps asking for it (default: the message that started this turn)"),
+       "new_slug": _s("Rename its slug (a label: its id, history and folder stay); not a built-in bot's"),
        "reports_to": _s("A bot slug, or human:<id>"), "display_name": _s("New display name"),
        "description": _s("New description"), "template": _s("Correct the template metadata; use hub_template_list"), "repo": _s("Its GitHub repository: <org>/bot-<slug>"),
        "shared": {"type": "boolean", "description": "Allow branches"},
@@ -3742,12 +3743,14 @@ def bot_set(api, args):
     delegated = _for_person(api)
     on_behalf = args.get("on_behalf_of") or "turn" if delegated else None
     # The bot's own revision, read as the person: BotOps may not see a bot they own but it does not.
-    row = next((b for b in api.get("bots") if (b.get("slug") or b.get("name")) == args["slug"]), None)
+    row = next((b for b in api.get("bots") if args["slug"] in (b.get("id"), b.get("slug") or b.get("name"))), None)
     if not row or row.get("revision") is None:
         row = api.get(f"bots/{args['slug']}", **({"on_behalf_of": on_behalf} if delegated else {}))
         if not row:
             raise ValueError("No bot " + args["slug"])
     change = {k: args[k] for k in ("reports_to", "display_name", "description", "template", "repo", "status", "shared", "session", "subtask_session", "task_goal", "review_model", "capture_stream", "update_subscriptions") if args.get(k) is not None}
+    if args.get("new_slug"):
+        change["slug"] = args["new_slug"]
     if args.get("app_delivery"):
         change["app_delivery"] = None if args["app_delivery"] == "off" else {"computer": args["app_delivery"], "app": "grok"}
     return api.post(f"bots/{args['slug']}/definition",
@@ -3977,7 +3980,7 @@ def org_reports_to(api, args):
         return who.post(f"humans/{quote(ref, safe='')}", {"reports_to": boss.removeprefix("human:")}, key=_key(args))
     if kind != "bot" or not ref:
         raise ValueError("Name the teammate as bot:<slug> or human:<id>")
-    row = next((b for b in api.get("bots") if (b.get("slug") or b.get("name")) == ref), None)
+    row = next((b for b in api.get("bots") if ref in (b.get("id"), b.get("slug") or b.get("name"))), None)
     if not row:
         raise ValueError("No bot " + ref)
     return who.post(f"bots/{quote(ref, safe='')}/definition",

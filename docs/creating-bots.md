@@ -216,7 +216,8 @@ A bot is **one durable git repository plus one row in the server**. Three parts:
 - The repository is `bot-<slug>`, checked out in the environment's workspace (where that
   environment keeps its repositories, alongside the shared repository and `secrets/`). It holds
   everything the bot knows and everything it has learned. Existing `emp-<slug>` repositories keep working under
-  their old names; only new bots get `bot-<slug>`.
+  their old names; only new bots get `bot-<slug>`. The name is the slug the bot was made with and stays when the
+  slug is renamed (ids, slugs and folders: docs/how-it-works.md).
 - The runner on a registered computer claims the bot's work, does each run inside that checkout with a
   model CLI signed in on that computer, and streams the reply back. Subscriptions never leave the computer.
 - The server holds the record: tasks, conversations, approvals, routines, runs and the bot's

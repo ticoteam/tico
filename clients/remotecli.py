@@ -935,7 +935,8 @@ def bots(client, args):
                                     ("subtask_session", getattr(args, "subtask_session", None)),
                                     ("task_goal", getattr(args, "task_goal", None)),
                                     ("review_model", getattr(args, "review_model", None)),
-                                    ("capture_stream", getattr(args, "capture_stream", None))) if v is not None}
+                                    ("capture_stream", getattr(args, "capture_stream", None)),
+                                    ("new_slug", getattr(args, "new_slug", None))) if v is not None}
         if getattr(args, "subscribe_updates", None) is not None:
             picked = [p.strip() for p in args.subscribe_updates.split(",") if p.strip() and p.strip() != "none"]
             fields["update_subscriptions"] = picked

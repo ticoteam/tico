@@ -440,7 +440,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub bot create --record-only --name N [<slug>] [--description D] [--reports-to R] [--template T]
                                            only register a new bot with Tico (planned), as the requester (BotOps)
     hub bot check <slug>                   what preflight would still refuse about that repository
-    hub bot update <slug> [--reports-to R] [--display-name N] [--description D] [--status S]
+    hub bot update <slug> [--new-slug S] [--reports-to R] [--display-name N] [--description D] [--status S]
                                            apply a person's bot-settings request as them (BotOps)
     hub bot access <slug> [--see V] [--read V] [--write V]
                                            show or set who sees, reads, writes (V: everyone, or ben,group:legal,bot:x)
@@ -2984,6 +2984,7 @@ def parser():
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID",
                    help="the person's message to BotOps asking for this change; by default the one that started this run")
     s.add_argument("--reports-to", help="a bot slug, or human:<id>")
+    s.add_argument("--new-slug", help="rename its slug (a label: its id, history and folder stay)")
     s.add_argument("--display-name")
     s.add_argument("--description")
     s.add_argument("--repo", help="its GitHub repository: <org>/bot-<slug>")

@@ -390,7 +390,7 @@ def test_what_the_app_shows_is_posted_once_without_echoes_and_a_question_reaches
                                                      "last_seq": 0}, token=computer["token"])
     bid = bot_id(api)
     assert get(api, "runners/me/app-delivery", token=computer["token"])["bots"] == [
-        {"slug": bid, "app": "grok", "bot": {"id": GROK_ID, "name": "Tico Designer"}, "after": None,
+        {"id": bid, "slug": "grok-designer", "app": "grok", "bot": {"id": GROK_ID, "name": "Tico Designer"}, "after": None,
          "error": False}]
     report = lambda *messages, error=None: post(api, "runners/me/app-delivery/grok-designer", {
         "app": "grok", "messages": list(messages), "error": error}, token=computer["token"])

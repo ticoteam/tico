@@ -249,14 +249,15 @@ def delivered(c, runner_id):
     """The bots delivered through an app on this computer, for GET /api/v2/runners/me/app-delivery. `error`: this
     computer's Health holds an error for the bot's app, which the next clean read clears."""
     out, errors = [], _errors(c, runner_id)
-    for row in c.execute("SELECT bc.bot,bc.config_json FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+    for row in c.execute("SELECT bc.bot,bc.config_json,b.slug FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                          "WHERE b.state<>'archived' AND json_extract(bc.config_json,'$.app_delivery.computer')=? "
                          "ORDER BY bc.bot", (runner_id,)):
         config = H._json(row["config_json"], {}) or {}
         bot = app_bot(config)
         if bot:
             app = setting(config)["app"]
-            out.append({"slug": row["bot"], "app": app, "bot": bot, "after": _seen(c, row["bot"])["after"],
+            # `id` is the bot the computer reports for (the path it posts to); `slug` its label for the log.
+            out.append({"id": row["bot"], "slug": row["slug"], "app": app, "bot": bot, "after": _seen(c, row["bot"])["after"],
                         "error": app in errors})
     return out
 

@@ -245,7 +245,8 @@ def poll_pairing(c, pairing_id, secret):
         token = open_held_token(record, secret)
         if token is None:
             return {"state": "expired"}      # nothing this secret opens: pair again
-        return {"state": "approved", "bot": record["bot"], "token": token}
+        return {"state": "approved", "bot": record["bot"], "slug": (H.bot(c, record["bot"]) or {}).get("slug"),
+                "token": token}
     return {"state": state}
 
 

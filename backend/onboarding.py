@@ -512,7 +512,8 @@ class Onboarding:
                          "status": bot.get("state") or "", "template": declared.get("template") or "",
                          "setup_task_id": declared.get("setup_task_id") or None,
                          "onboarding_state": row["onboarding_state"] or "",
-                         "reports_to": labels.get(row["reports_to"] or "", row["reports_to"] or ""),
+                         "reports_to": row["reports_to"] or "",
+                         "reports_to_slug": labels.get(row["reports_to"] or "", row["reports_to"] or ""),
                          "assigned_to": machine, "repository_present": present})
         return rows
 

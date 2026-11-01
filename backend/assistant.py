@@ -23,7 +23,7 @@ import secrets
 import unicodedata
 import uuid
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import httpx
 from fastapi import Request
@@ -108,7 +108,8 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     if direct and to_bot:
         chatting = re.fullmatch(r"/api/v2/chat/([^/]+)", path)
         if (chatting and (settings is None
-                          or chatting.group(1) not in (settings.assistant_bot, strategy_bot.SLUG))) or (
+                          or unquote(chatting.group(1)).removeprefix("bot:")
+                          not in (settings.assistant_bot, strategy_bot.SLUG))) or (
                 path == "/api/v2/messages" and to_bot(fields.get("to"))):
             return True
     commenting = re.fullmatch(r"/api/v2/tasks/([^/]+)/comments", path)

@@ -11,11 +11,11 @@ const settingsOwnerChips = list => (list || []).map(o => `<span class="pchip">${
 function settingsBotEditorRows(e) {
   const chips = settingsOwnerChips;
   const manage = settingsCanManageBot(e);
-  const change = (attr, what) => manage ? `<button class="ghost" type="button" ${attr}="${esc(e.name)}" aria-label="Change ${what} for ${esc(e.display_name)}">Change</button>` : '<span></span>';
+  const change = (attr, what) => manage ? `<button class="ghost" type="button" ${attr}="${esc(e.id)}" aria-label="Change ${what} for ${esc(e.display_name)}">Change</button>` : '<span></span>';
   return `<div class="sb-row"><span>Access</span><span data-access-summary>${esc(accessSummary(e.access_policy))}</span>${change('data-edit-access', 'access')}</div>
     <div class="sb-row"><span>Works for</span><div class="settings-owner-list" data-bot-users>${chips(e.users) || '<span class="muted">Nobody</span>'}</div>${change('data-edit-owners', 'who it works for')}</div>
     <div class="sb-row"><span>Owners</span><div class="settings-owner-list" data-bot-owners>${chips(e.bot_owners) || '<span class="muted">Its owner</span>'}</div>${change('data-edit-bot-owners', 'owners')}</div>
-    ${manage ? `<div class="sb-row"><span>Mail sending</span><span class="muted" data-mail-summary="${esc(e.name)}">…</span>${change('data-edit-mail', 'mail sending')}</div>` : ''}
+    ${manage ? `<div class="sb-row"><span>Mail sending</span><span class="muted" data-mail-summary="${esc(e.id)}">…</span>${change('data-edit-mail', 'mail sending')}</div>` : ''}
     ${profileRowHTML(e)}
     ${settingsKeepTasksRow(e)}
     ${settingsTurnsAtOnceRow(e)}
@@ -40,7 +40,7 @@ function settingsCompactRow(e) {
   if (harness && !(settingsHarness(harness)?.capabilities || harnessCaps(harness)).compaction) return '';
   const current = Number(e.compact_at) || SETTINGS_COMPACT_DEFAULT;
   const options = SETTINGS_COMPACT_AT.some(([value]) => value === current) ? SETTINGS_COMPACT_AT : [...SETTINGS_COMPACT_AT, [current, `${Math.round(current / 1000)}k`]];
-  return `<div class="sb-row sb-compact"><span>Compact at</span><select class="settings-inline-select" data-bot-compact="${esc(e.name)}" data-current="${current}" aria-label="Compact at for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
+  return `<div class="sb-row sb-compact"><span>Compact at</span><select class="settings-inline-select" data-bot-compact="${esc(e.id)}" data-current="${current}" aria-label="Compact at for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
       ${options.map(([value, label]) => `<option value="${value}" ${value === current ? 'selected' : ''}>${label}</option>`).join('')}
     </select><span></span></div>`;
 }
@@ -50,9 +50,9 @@ function settingsBrowserExitRow(e) {
   if (e.agent) return '';
   const current = e.browser_exit || '';
   const choices = (SETTINGS_DATA.machines || []).filter(m => m.id === current
-    || (!m.revoked_at && m.browser_exit?.sharing && m.browser_exit.bots.includes(e.name)));
+    || (!m.revoked_at && m.browser_exit?.sharing && m.browser_exit.bots.includes(e.id)));
   if (!choices.length) return '';
-  return `<div class="sb-row"><span>Browse through</span><select class="settings-inline-select" data-bot-browser-exit="${esc(e.name)}" data-current="${esc(current)}"
+  return `<div class="sb-row"><span>Browse through</span><select class="settings-inline-select" data-bot-browser-exit="${esc(e.id)}" data-current="${esc(current)}"
       aria-label="Browse through for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
       <option value=""${current ? '' : ' selected'}>None</option>
       ${choices.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(m.label)} · ${esc(settingsPersonName(m.operator))}</option>`).join('')}
@@ -71,7 +71,7 @@ function settingsKeepTasksRow(e) {
   if (e.agent) return '';
   const current = e.keep_tasks_going == null ? '' : String(e.keep_tasks_going);
   return `<div class="sb-row"><span>Keep N tasks going</span><input type="number" min="0" max="1000" step="1" class="settings-inline-select"
-    data-bot-keep-tasks="${esc(e.name)}" data-current="${esc(current)}" value="${esc(current)}" placeholder="No limit"
+    data-bot-keep-tasks="${esc(e.id)}" data-current="${esc(current)}" value="${esc(current)}" placeholder="No limit"
     aria-label="Keep N tasks going for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}><span></span></div>
     <div class="sb-sub muted">Blank: start assigned work whenever a turn is free. 0: off. Waiting work frees a place; reviews have no cap.</div>`;
 }
@@ -84,7 +84,7 @@ function settingsTurnsAtOnceRow(e) {
   if (e.agent) return '';
   const current = e.turns_at_once == null ? '' : String(e.turns_at_once);
   return `<div class="sb-row"><span>Turns at once</span><input type="number" min="1" max="256" step="1"
-    class="settings-inline-select" data-bot-turns-at-once="${esc(e.name)}" data-current="${esc(current)}"
+    class="settings-inline-select" data-bot-turns-at-once="${esc(e.id)}" data-current="${esc(current)}"
     value="${esc(current)}" placeholder="No limit" aria-label="Turns at once for ${esc(e.display_name)}"
     ${settingsCanManageBot(e) ? '' : 'disabled'}><span></span></div>
     <div class="sb-sub muted">Most turns it runs at once across all computers. Empty for no limit.</div>`;
@@ -99,7 +99,7 @@ function settingsTurnsAtOnceRun(input) {
 function settingsManagesReportsRow(e) {
   if (e.agent) return '';
   const on = e.manages_reports !== false;
-  return `<div class="sb-row"><span>Manages its reports</span><label class="settings-inline-check"><input type="checkbox" data-bot-manages-reports="${esc(e.name)}"
+  return `<div class="sb-row"><span>Manages its reports</span><label class="settings-inline-check"><input type="checkbox" data-bot-manages-reports="${esc(e.id)}"
     data-current="${on}" ${on ? 'checked' : ''} aria-label="Manages its reports for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
     <span>${on ? 'On' : 'Off'}</span></label><span></span></div>
     <div class="sb-sub muted">This bot changes its direct reports' model, task model, name and description, as itself. Off: it changes none of them.</div>`;
@@ -124,7 +124,7 @@ function settingsAppDeliveryRow(e) {
   const mine = !!S.me?.id && e.operator === S.me.id;
   const off = 'Off (daily sync)';
   if (!mine && !(current && settingsIsAdmin())) {
-    return `<div class="sb-row"><span>Deliver through the app on</span><span data-app-delivery-value="${esc(e.name)}">${current ? `${esc(label(current))} <span class="muted">· ${esc(name)} app</span>` : `<span class="muted">${off}</span>`}</span><span></span></div>`;
+    return `<div class="sb-row"><span>Deliver through the app on</span><span data-app-delivery-value="${esc(e.id)}">${current ? `${esc(label(current))} <span class="muted">· ${esc(name)} app</span>` : `<span class="muted">${off}</span>`}</span><span></span></div>`;
   }
   const own = mine ? SETTINGS_DATA.machines.filter(machine => !machine.revoked_at && machine.operator === S.me.id) : [];
   const options = own.map(machine => {
@@ -134,7 +134,7 @@ function settingsAppDeliveryRow(e) {
     return `<option value="${esc(machine.id)}" ${machine.id === current ? 'selected' : why ? 'disabled' : ''}>${esc(machine.label)}${why ? ` · ${esc(why)}` : ''}</option>`;
   });
   if (current && !own.some(machine => machine.id === current)) options.push(`<option value="${esc(current)}" selected>${esc(label(current))}</option>`);
-  return `<div class="sb-row"><span>Deliver through the app on</span><select class="settings-inline-select" data-bot-app-delivery="${esc(e.name)}" data-app="${esc(app)}" data-current="${esc(current)}" aria-label="Deliver ${esc(e.display_name)} through the ${esc(name)} app on">
+  return `<div class="sb-row"><span>Deliver through the app on</span><select class="settings-inline-select" data-bot-app-delivery="${esc(e.id)}" data-app="${esc(app)}" data-current="${esc(current)}" aria-label="Deliver ${esc(e.display_name)} through the ${esc(name)} app on">
       <option value="" ${current ? '' : 'selected'}>${off}</option>${options.join('')}
     </select><span></span></div>`;
 }
@@ -175,7 +175,7 @@ function settingsUpdateSubscriptionsChange(form, e) {
 }
 function settingsEditBot(slug = '', inline = false) {
   if (slug && !inline) { location.hash = `#/bot/${encodeURIComponent(slug)}/settings`; return; }
-  const editing = !!slug, e = editing ? S.emps.find(row => row.name === slug) : null;
+  const editing = !!slug, e = editing ? S.emps.find(row => row.id === slug) : null;
   const dialog = $('#bot-editor');
   if (!dialog || editing && (!e || !settingsCanManageBot(e))) return;
   if (e?.shared_from) return settingsEditBranch(e, dialog);
@@ -190,16 +190,18 @@ function settingsEditBot(slug = '', inline = false) {
   const effort = e?.reasoning_effort || e?.effort || fallbackModel.default_effort || 'high';
   const defaultHarness = e?.harness || fallbackModel.harnesses?.[0] || fallbackModel.runtime || '';
   const currentModel = settingsChoiceValue(defaultHarness, e?.model || fallbackModel.id, effort);
-  const parentOptions = S.emps.filter(row => row.name !== slug &&
+  const parentOptions = S.emps.filter(row => row.id !== slug &&
     (S.me?.role === 'owner' || settingsCanManageBot(row))).map(row =>
-    `<option value="${esc(row.name)}" ${e?.reports_to === row.name ? 'selected' : ''}>${esc(row.display_name || row.name)}</option>`).join('');
+    `<option value="${esc(row.id)}" ${e?.reports_to === row.id ? 'selected' : ''}>${esc(row.display_name || row.slug)}</option>`).join('');
   const operator = e?.operator || S.me?.id || SETTINGS_DATA.people[0]?.id || '';
   // A member's bot goes on a computer an admin has opened to members' bots (the server refuses the rest).
   const machineOptions = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at &&
     (settingsIsAdmin() || machine.accepts_member_bots)).map(machine =>
     `<option value="${esc(machine.id)}" data-operator="${esc(machine.operator)}">${esc(machine.label)} · ${esc(settingsPersonName(machine.operator))}</option>`).join('');
   // The Strategy Bot's name is the owner's alone, as the whole built-in bot is (backend/auth.py `bot_manager`).
-  const ownerNamesIt = editing && e.name === 'goal-manager' && S.me?.role !== 'owner';
+  const ownerNamesIt = editing && e.id === 'goal-manager' && S.me?.role !== 'owner';
+  // A built-in bot's slug is fixed (the server refuses its rename); any other bot's slug is renamed with its definition.
+  const fixedSlug = editing && isBuiltInBot(e.id);
   dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-editor-title" tabindex="-1">${editing ? 'Settings' : 'Add bot'}</h2><span class="spacer"></span>${inline ? '' : '<button class="ghost" type="button" data-bot-close aria-label="Close" title="Close (Esc)">✕</button>'}</div>
     <div class="bot-editor-body">
       <div class="bot-editor-grid">
@@ -225,13 +227,13 @@ function settingsEditBot(slug = '', inline = false) {
         <p class="bot-editor-wide muted">Everyone can use it. Change that under Access once it is added.</p>`}
         ${editing && !e.agent ? '<fieldset class="bot-editor-wide brepo" data-bot-repos hidden></fieldset>' : ''}
         <details class="bot-editor-wide" data-bot-advanced><summary>Advanced</summary><div class="bot-editor-grid">
-          <label>Slug<input name="slug" type="text" autocomplete="off" spellcheck="false" value="${esc(slug)}" placeholder="release-captain" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" maxlength="80" ${editing ? 'readonly' : ''}><small>${editing ? 'Its id in commands and paths.' : 'Picked from the name. Tico adds -2 when it is taken.'}</small></label>
-          <label>Repository<input name="repo" type="text" autocomplete="off" spellcheck="false" value="${esc(e?.repo || (slug ? `bot-${slug}` : ''))}" placeholder="bot-release-captain" maxlength="200" ${editing ? 'required' : ''}></label>
+          <label>Slug<input name="slug" type="text" autocomplete="off" spellcheck="false" value="${esc(e?.slug || '')}" placeholder="release-captain" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" maxlength="80" ${fixedSlug ? 'readonly' : ''}>${editing ? '' : '<small>Picked from the name. Tico adds -2 when it is taken.</small>'}</label>
+          <label>Repository<input name="repo" type="text" autocomplete="off" spellcheck="false" value="${esc(e?.repo || (e?.slug ? `bot-${e.slug}` : ''))}" placeholder="bot-release-captain" maxlength="200" ${editing ? 'required' : ''}></label>
         </div></details>
       </div>
     </div>
     ${editing ? '<p class="bot-editor-pending" data-bot-pending role="status" hidden></p>' : ''}
-    <div class="bot-editor-foot"><button class="primary" type="submit">${editing ? 'Save bot' : 'Add bot'}</button><button class="ghost" type="button" data-bot-close>Cancel</button><span class="muted" data-bot-status></span>${editing && !isBuiltInBot(e.name) ? `<span class="spacer"></span><select name="successor" aria-label="Hand its work to"><option value="">Hand its work to ${esc(settingsPersonName(e.operator))}</option>${S.emps.filter(row => row.name !== slug).map(row => `<option value="${esc(row.name)}">Hand its work to ${esc(row.display_name || row.name)}</option>`).join('')}</select>${['hermes', 'openclaw'].includes(e.agent?.harness) ? `<label class="bot-editor-check" title="Its agent stops either way; revoking makes it stop reporting in"><input type="checkbox" name="revoke_agent" checked> Revoke its credential</label>` : ''}<button class="ghost danger" type="button" data-bot-remove>Archive bot</button>` : ''}</div></form>`;
+    <div class="bot-editor-foot"><button class="primary" type="submit">${editing ? 'Save bot' : 'Add bot'}</button><button class="ghost" type="button" data-bot-close>Cancel</button><span class="muted" data-bot-status></span>${editing && !isBuiltInBot(e.id) ? `<span class="spacer"></span><select name="successor" aria-label="Hand its work to"><option value="">Hand its work to ${esc(settingsPersonName(e.operator))}</option>${S.emps.filter(row => row.id !== slug).map(row => `<option value="${esc(row.id)}">Hand its work to ${esc(row.display_name || row.slug)}</option>`).join('')}</select>${['hermes', 'openclaw'].includes(e.agent?.harness) ? `<label class="bot-editor-check" title="Its agent stops either way; revoking makes it stop reporting in"><input type="checkbox" name="revoke_agent" checked> Revoke its credential</label>` : ''}<button class="ghost danger" type="button" data-bot-remove>Archive bot</button>` : ''}</div></form>`;
   const form = dialog.querySelector('form'), status = dialog.querySelector('[data-bot-status]');
   dialog.querySelectorAll('[data-bot-close]').forEach(button => button.onclick = closeEditor);
   // Every row is held until Save bot (`pending`, and the model pickers' own pick), so a reload elsewhere redraws the
@@ -252,8 +254,8 @@ function settingsEditBot(slug = '', inline = false) {
   };
   const stage = (key, label, run) => { if (run) pending.set(key, {label, run}); else pending.delete(key); paintPending(); };
   if (rows) {
-    const paint = () => { rows.innerHTML = settingsBotEditorRows(S.emps.find(row => row.name === slug) || e); rows.querySelectorAll('[data-choice-apply]').forEach(button => button.remove()); settingsWireCombos(rows); void settingsMailSummary(rows, slug); void budgetMount(rows, slug, stage); void profileMount(rows, slug); void cloudMachineMount(rows, slug); paintPending(); };
-    const refresh = () => { if (!active() || !form.isConnected) { cleanup(); return; } if (pendingNames().length) return; if (touched) rev = (S.emps.find(row => row.name === slug) || e).revision; paint(); };
+    const paint = () => { rows.innerHTML = settingsBotEditorRows(S.emps.find(row => row.id === slug) || e); rows.querySelectorAll('[data-choice-apply]').forEach(button => button.remove()); settingsWireCombos(rows); void settingsMailSummary(rows, slug); void budgetMount(rows, slug, stage); void profileMount(rows, slug); void cloudMachineMount(rows, slug); paintPending(); };
+    const refresh = () => { if (!active() || !form.isConnected) { cleanup(); return; } if (pendingNames().length) return; if (touched) rev = (S.emps.find(row => row.id === slug) || e).revision; paint(); };
     paint();
     document.addEventListener('tico:settings-loaded', refresh);
     const cleanup = () => {
@@ -333,7 +335,7 @@ function settingsEditBot(slug = '', inline = false) {
     rows.addEventListener('tico:choice', event => {
       const box = event.target.closest('[data-bot-choice][data-kind=task]'), select = rows.querySelector('[data-task-effort]');
       if (!box?.picker?.valid() || !select) return;
-      const bot = S.emps.find(row => row.name === slug) || e, value = box.picker.value();
+      const bot = S.emps.find(row => row.id === slug) || e, value = box.picker.value();
       const choice = value ? settingsChoiceFromValue(value) : null, efforts = settingsModelEfforts(settingsTaskRunsOn(bot, choice?.model || ''));
       // Picking the task model back as it was shows its effort as it was, unless Task effort itself was changed.
       const held = box.picker.changed() || select.dataset.touched ? select.value : select.dataset.current || '';
@@ -379,7 +381,7 @@ function settingsEditBot(slug = '', inline = false) {
     });
     form.elements.operator.addEventListener('change', () => { operatorEdited = true; });
     form.elements.reports_to.addEventListener('change', event => {
-      const parent = S.emps.find(row => row.name === event.target.value);
+      const parent = S.emps.find(row => row.id === event.target.value);
       if (!operatorEdited && !form.elements.runner_id.value && parent?.operator) form.elements.operator.value = parent.operator;
     });
     form.elements.runner_id.addEventListener('change', event => {
@@ -415,7 +417,7 @@ function settingsEditBot(slug = '', inline = false) {
         const unfinished = [model, fallback, task].find(pick => pick && !pick.ready);
         if (unfinished) throw new Error(`Nothing saved: finish choosing the ${unfinished === model ? 'model' : unfinished === fallback ? 'fallback' : 'task model'}, or reset it.`);
         // A model change or a move starts a fresh session, so Save asks first; saying no saves nothing.
-        const bot = S.emps.find(row => row.name === slug) || e, target = model && settingsChoiceFromValue(model.value);
+        const bot = S.emps.find(row => row.id === slug) || e, target = model && settingsChoiceFromValue(model.value);
         if (model && !await settingsConfirmTransition(bot, 'model', settingsChoiceLabel(target.harness, target.model, target.effort)))
           throw new Error('Nothing saved: the model change was not confirmed. Reset the model, or press Save bot again.');
         const move = machinePick;
@@ -445,6 +447,7 @@ function settingsEditBot(slug = '', inline = false) {
           private_tasks_default: form.elements.private_tasks_default.checked,
           repo: form.elements.repo.value, thread_mode: form.elements.thread_mode.value,
           temp: form.elements.temp.checked, shared: form.elements.shared.checked, expected_revision: rev,
+          ...(!fixedSlug && form.elements.slug.value.trim() && form.elements.slug.value.trim() !== e.slug ? {slug: form.elements.slug.value.trim()} : {}),
           ...settingsUpdateSubscriptionsChange(form, e)}))?.revision ?? rev;
         saved = true;
         // The held rows, in the order they were changed; each one done leaves the list, so Save again never repeats it.
@@ -460,7 +463,7 @@ function settingsEditBot(slug = '', inline = false) {
         }
         if (move) {
           if (model) await loadSettings();
-          const now = S.emps.find(row => row.name === slug) || bot;
+          const now = S.emps.find(row => row.id === slug) || bot;
           transition = await post(`/v2/bots/${encodeURIComponent(slug)}/transitions`, {kind: 'machine', runner_id: move.id,
             expected_generation: now.machine?.generation || 0, expected_revision: model ? now.revision : rev});
           machinePick = null;
@@ -491,7 +494,7 @@ function settingsEditBot(slug = '', inline = false) {
     } catch (error) {
       status.innerHTML = `<span class="err">${esc(error.message)}</span>`; submit.disabled = false;
       // Part of it saved: the next Save starts from the bot as it is now, and sends only what is still waiting.
-      if (saved) { await loadSettings().catch(() => {}); rev = (S.emps.find(row => row.name === slug) || e).revision; paintPending(); }
+      if (saved) { await loadSettings().catch(() => {}); rev = (S.emps.find(row => row.id === slug) || e).revision; paintPending(); }
     }
   };
   if (!inline) {
@@ -513,7 +516,7 @@ function settingsEditorTaskParts(rows) {
     .map(([selector, name]) => [rows?.querySelector(selector), name]).filter(([select]) => select && select.value !== (select.dataset.current || ''));
 }
 function settingsEditOwners(slug, {stage} = {}) {
-  const e = S.emps.find(row => row.name === slug);
+  const e = S.emps.find(row => row.id === slug);
   const dialog = botSettingsPanel('owner-picker', 'owner-picker', 'owner-picker-title') || $('#owner-picker');
   if (!e || !dialog) return;
   const selected = new Set((e.users || []).map(person => person.id));
@@ -545,7 +548,7 @@ function settingsEditOwners(slug, {stage} = {}) {
   settingsPanelShow(dialog);
 }
 async function settingsMoveBot(select) {
-  const slug = select.dataset.botMachine, e = S.emps.find(row => row.name === slug);
+  const slug = select.dataset.botMachine, e = S.emps.find(row => row.id === slug);
   const current = select.dataset.current || '', machine = SETTINGS_DATA.machines.find(row => row.id === select.value);
   const pick = cloudMachinePick(select.value);
   if (e && pick && select.value !== current) {
@@ -606,7 +609,7 @@ async function settingsBeginTransition(control, e, body) {
   const current = control.dataset.current || '';
   if (input) input.disabled = true;
   try {
-    const transition = await post(`/v2/bots/${encodeURIComponent(e.name)}/transitions`, body);
+    const transition = await post(`/v2/bots/${encodeURIComponent(e.id)}/transitions`, body);
     settingsWatchTransition(transition.id, {control, current});
   } catch (error) {
     if (input) { input.value = input.defaultValue || current; input.disabled = false; }

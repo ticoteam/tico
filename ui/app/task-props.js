@@ -279,7 +279,7 @@ function taskPropsBind(d, task, change) {
           html: `<span class="tl-opt-face">${actorFace(o.value.includes(':') ? o.value : 'bot:' + o.value, 16)}</span><span>${esc(o.textContent)}</span>`}))
           .filter(it => !have.has(it.actor));
         propMenu(d, b, {label: 'Add as ' + roleWord(role), find: 'Find a person or bot', items, none: 'Everyone is on it',
-          onPick: it => void save('people', cur => ({roles: {[role]: [...((cur.roles || {})[role] || []), it.value]}}))});
+          onPick: it => void save('people', cur => ({roles: {[role]: [...((cur.roles || {})[role] || []), it.actor]}}))});
       };
       propMenu(d, b, {label: 'Role', entry: 'Role, like reviewer', none: 'Type a role, then Enter',
         items: Object.keys(task.roles || {}).map(k => ({value: k, text: k, html: `<span>${esc(roleWord(k))}</span>`})),
@@ -293,7 +293,7 @@ function taskPropsBind(d, task, change) {
       propMenu(d, b, {label: 'Owner', find: 'Find a person or bot', items: [...opts].map(o => {
         const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
         return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: task.owner === actor, actor};
-      }), onPick: it => { if (it.actor !== task.owner) void save('owner', {owner: it.value}); }});
+      }), onPick: it => { if (it.actor !== task.owner) void save('owner', {owner: it.actor}); }});
     } else if (key === 'due') {
       const input = $('[data-prop-date]', d);
       d.focusProp = 'due';

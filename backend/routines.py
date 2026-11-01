@@ -93,6 +93,7 @@ def create(c, actor, bot, fields, *, key=None, at=None):
     again updates it in place (a bot that sets up its own routines every turn makes one)."""
     bot = (H.resolve_bot(c, bot) or {}).get("id", bot)        # a routine names its bot by id or slug
     at = _clock(at)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", H.actor_id(bot))     # a routine names its bot by id
     entry = validate(fields)
     from . import strategy_acts
     # more runs cost more: the owner's

@@ -451,7 +451,7 @@ def sync(c, auth, settings_admin, who, body, images=None):
         c.execute("UPDATE bots SET display_name=? WHERE id=?", (name, slug))
         added, known = import_messages(c, provider, person, slug, ext_id, item.messages, images, who)
         H.event(c, who.actor, provider.id + ".synced", slug, {"id": ext_id, "created": created, "messages": added})
-        out.append({"id": ext_id, "grok_id": ext_id, "bot": slug, "created": created,
+        out.append({"id": ext_id, "grok_id": ext_id, "bot": slug, "slug": H.bot(c, slug)["slug"], "created": created,
                     "messages_added": added, "messages_known": known,
                     "instructions_changed": record.get("instructions_updated") == now,
                     "synced_through": synced_through(c, provider, person, slug),

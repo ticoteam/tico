@@ -288,8 +288,13 @@ document.addEventListener('visibilitychange', () => {
 // The built-in assistant reads as what it is (assistantName, ui/app/state.js).
 const assistantShownName = () => assistantName();
 // The Strategy Bot's old name never shows (state.js `strategyBotName`), wherever the roster is read.
-const namedRoster = rows => rows.map(e => e.name === assistantBot() ? {...e, display_name: assistantShownName()}
-  : e.name === 'goal-manager' && strategyDefaultish(String(e.display_name || '').trim()) ? {...e, display_name: strategyDefaultName()} : e);
+// Each row carries its bot's `id` (the key every route, API call and comparison uses) and its `slug` (the label people
+// type and read). A row without an id comes from before bots had one, when its name was both.
+const namedRoster = rows => rows.map(row => {
+  const e = row.id ? row : {...row, id: row.name, slug: row.slug || row.name};
+  return e.id === assistantBot() ? {...e, display_name: assistantShownName()}
+    : e.id === 'goal-manager' && strategyDefaultish(String(e.display_name || '').trim()) ? {...e, display_name: strategyDefaultName()} : e;
+});
 // Small compatibility hook for separately loaded UI modules. It exposes only deployment mode,
 // never identity or credentials.
 window.ticoIsCloud = () => !!S.me?.cloud;

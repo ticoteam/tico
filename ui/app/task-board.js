@@ -349,7 +349,7 @@ function taskBoardOwnerMenu(state, button) {
   }), onPick: it => {
     const cur = tasksById(state).get(String(t.id));
     if (!cur || it.actor === cur.owner) return;
-    taskBoardSave(state, cur, {version: cur.version, owner: it.value}, {owner: it.actor}, 'Not changed');
+    taskBoardSave(state, cur, {version: cur.version, owner: it.actor}, {owner: it.actor}, 'Not changed');
   }});
 }
 // A card as the board draws it: with its move while the server has not said otherwise (a copy no newer than the one

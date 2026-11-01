@@ -100,8 +100,9 @@ def _with_template(c, template):
 
 
 def _named(c, slug, template):
-    if slug:
-        return slug if (H.bot(c, slug) or {}).get("state") == "active" else None
+    if slug:       # the setting may name the bot by id or slug; the bot is its id
+        found = H.resolve_bot(c, slug) or {}
+        return found["id"] if found.get("state") == "active" else None
     found = _with_template(c, template)
     return found[0] if found else None
 
@@ -359,8 +360,8 @@ def may_release(c, who):
     slug = H.actor_id(who.actor)
     if slug == release_manager(c):
         return True
-    return bool(c.execute("SELECT 1 FROM task_types WHERE manager=? AND (role='engineering' OR name='Dev tickets') LIMIT 1",
-                          (slug,)).fetchone())
+    return any((H.resolve_bot(c, row[0]) or {}).get("id") == slug for row in c.execute(
+        "SELECT manager FROM task_types WHERE manager IS NOT NULL AND (role='engineering' OR name='Dev tickets')"))
 
 
 def view(c, who, auth, now=None):

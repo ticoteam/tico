@@ -237,7 +237,7 @@ class SettingsAdmin:
         config, row = self._config(c, bot), H.bot(c, bot)
         effective = shared_bots.follow(c, bot, _json(config["config_json"], {}) or {})
         repo = effective.get("repo") or config["repo"] or ("emp-" + row["slug"])
-        return {"slug": row["slug"], "display_name": row["display_name"],
+        return {"id": row["id"], "slug": row["slug"], "display_name": row["display_name"],
                 "template": (_json(config["config_json"], {}) or {}).get("template") or "",
                 "description": config["description"] or "", "reports_to": config["reports_to"],
                 "bot_contact": (_json(config["config_json"], {}) or {}).get("bot_contact") or "open",
@@ -479,6 +479,10 @@ class SettingsAdmin:
                   "private_tasks_default": (body.private_tasks_default if "private_tasks_default" in body.model_fields_set
                                             else body.template == "general-counsel"),
                   "model_managed_by": "cloud"}
+        if bot_id != body.slug:
+            # Its folder on a computer is named once, from the slug it was made with: a rename keeps the folder
+            # (the id is a UUID, not a name a person reads in a file list).
+            config["folder"] = "bot-" + body.slug
         profiles.apply(config, profiles.DOER, {})
         if body.template:
             config["template"] = body.template
@@ -800,6 +804,8 @@ class SettingsAdmin:
             declared["shared"] = bool(body.shared)
         if "template" in body.model_fields_set:
             declared["template"] = body.template or ""
+        if body.slug and body.slug != before["slug"]:
+            self.rename(c, who, bot, body.slug)
         declared.update({"name": (H.bot(c, bot) or {}).get("slug", bot), "display_name": values["display_name"],
                          "description": values["description"], "reports_to": values.get("reports_to"),
                          "bot_contact": values.get("bot_contact") or "open",
@@ -836,6 +842,18 @@ class SettingsAdmin:
         H.event(c, who.actor, "bot.definition_changed", bot,
                 {"before": before, "after": after})
         return {**after, "previous_thread_mode": before["thread_mode"]}
+
+    def rename(self, c, who, bot, slug):
+        """Give the bot a new slug. Its id stays, so its actor, its references and its history stay with it. A built-in
+        bot keeps its slug (code names it by that), and no bot takes a slug or an id another bot answers to."""
+        if bot in H.PRODUCT_BOT_SLUGS or bot == self.settings.assistant_bot or self.auth.system_bot(bot):
+            raise Problem("slug", "A built-in bot keeps its slug", 422)
+        other = H.resolve_bot(c, slug)
+        if other and other["id"] != bot:
+            raise Problem("duplicate", "That bot slug already exists", 409)
+        was = H.bot(c, bot)["slug"]
+        H.rename_bot(c, bot, slug)
+        H.event(c, who.actor, "bot.renamed", bot, {"from": was, "to": slug})
 
     @staticmethod
     def identity_of(definition):

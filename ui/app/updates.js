@@ -518,7 +518,7 @@ function updRender(state) {
     return;
   }
   const meId = S.me?.id;
-  const isMine = slug => { const e = S.emps.find(x => x.name === slug); return !e || e.operator === meId || (!e.operator && S.me?.role === 'owner'); };
+  const isMine = slug => { const e = botRow(slug); return !e || e.operator === meId || (!e.operator && S.me?.role === 'owner'); };
   // Unread first, then newest to oldest; the order is set when the page opens
   // (updOrder) and never moves while you read and scroll, only on the next visit.
   const rank = state.order || new Map();
