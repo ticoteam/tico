@@ -9129,14 +9129,13 @@ def prime_conversations(conn, ids):
 
 def conversations_for(conn, actor, limit=100):
     """Every conversation this actor is a participant in, newest first."""
+    # Filtered in SQL: a window of the newest conversations company-wide lost an older chat behind many newer ones.
     out = []
-    for row in _rows(conn.execute("SELECT * FROM conversations ORDER BY "
-                                  "COALESCE(last_message_at, created) DESC LIMIT ?", (limit * 5,))):
+    for row in _rows(conn.execute("SELECT * FROM conversations c WHERE EXISTS (SELECT 1 FROM "
+                                  "json_each(CASE WHEN json_valid(c.participants_json) THEN c.participants_json END) WHERE value=?) ORDER BY "
+                                  "COALESCE(c.last_message_at, c.created) DESC LIMIT ?", (actor, limit))):
         row["participants"] = _json(row.get("participants_json"), []) or []
-        if actor in row["participants"]:
-            out.append(row)
-        if len(out) >= limit:
-            break
+        out.append(row)
     return out
 
 

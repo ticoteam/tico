@@ -76,7 +76,7 @@ MAX_PAGE_BYTES = 512 * 1024
 POSTING = contextvars.ContextVar("threads_posting", default=None)
 
 _NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%fZ','now')"
-_MEETING_PREFIX = "live:"       # live_privacy.ROOM_PREFIX; checked against it in ensure()
+_MEETING_PREFIX = "live-meeting:"   # live_privacy.ROOM_PREFIX (test_threads_privacy checks they agree)
 
 
 def _q(value):
@@ -151,14 +151,18 @@ INDEXES = (
     "CREATE INDEX IF NOT EXISTS threads_root ON conversations(root_id)",
     "CREATE INDEX IF NOT EXISTS threads_path ON conversations(path)",
     "CREATE INDEX IF NOT EXISTS threads_recent ON conversations(root_id, last_seq) WHERE archived_at IS NULL",
-    "CREATE UNIQUE INDEX IF NOT EXISTS messages_seq ON messages(seq) WHERE seq IS NOT NULL",
-    "CREATE UNIQUE INDEX IF NOT EXISTS messages_origin ON messages(origin_id) WHERE origin_id IS NOT NULL",
+    # Not unique: an insert copying another row's seq or origin must not fail before the stamp trigger replaces them.
+    # The sequence makes seqs unique; message_revisions makes (origin_id, revision) unique.
+    "CREATE INDEX IF NOT EXISTS messages_seq ON messages(seq) WHERE seq IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS messages_origin ON messages(origin_id) WHERE origin_id IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS messages_thread_seq ON messages(conversation_id, seq)",
 )
 
 # The room a shared conversation belongs to, as SQL over a row named {r}: rooms.room_bot for a shared room.
 _ROOM_BOT = "substr({r}.room_key,1,instr({r}.room_key||':',':')-1)"
-_FIRST_HUMAN = "(SELECT value FROM json_each({r}.participants_json) WHERE value LIKE 'human:%' LIMIT 1)"
+_FIRST_HUMAN = ("(SELECT value FROM json_each(CASE WHEN json_valid({r}.participants_json) THEN {r}.participants_json END) "
+                "WHERE value LIKE 'human:%' LIMIT 1)")
+_PARTICIPANTS = "json_each(CASE WHEN json_valid({r}.participants_json) THEN {r}.participants_json END)"
 
 
 def _derived_audience(r):
@@ -180,26 +184,29 @@ def _carrier_sql(r):
 def _triggers():
     install = ("COALESCE((SELECT json_extract(value_json,'$.install_id') FROM registry_metadata "
                "WHERE key='usage-count'),'local')")
+    # No writer vouched for this row's origin: none given, or one copied from another row.
+    fresh = ("(NEW.origin_id IS NULL OR EXISTS (SELECT 1 FROM messages o WHERE o.origin_id=NEW.origin_id "
+             "AND o.id<>NEW.id))")
     state = ("CASE WHEN NEW.delivered_at IS NOT NULL AND NEW.read_at IS NOT NULL THEN 'read' "
              "WHEN NEW.delivered_at IS NOT NULL THEN 'delivered' ELSE 'pending' END")
     return {
-        # A conversation written by any writer gets its root, path, audience and owner (a thread made by `create`
-        # sets them itself).
+        # A conversation written by any other writer is a root. Its audience stays unset and is derived live from
+        # its legacy columns (audience_of, _derived_audience), since those writers set kind, task_id, scope and
+        # room_key after the insert.
         "threads_conversations_stamp": (
             "AFTER INSERT ON conversations WHEN NEW.root_id IS NULL",
-            f"UPDATE conversations SET root_id=NEW.id, path='/'||NEW.id||'/', "
-            f"audience=COALESCE(NEW.audience,{_derived_audience('NEW')}), "
-            f"owner_actor=COALESCE(NEW.owner_actor,{_derived_owner('NEW')}), "
-            f"updated_at=COALESCE(NEW.updated_at,NEW.created) WHERE id=NEW.id;"),
-        # Every message but a carrier takes the next seq, and its thread's counters follow. A message no writer
-        # stamped (no origin) is marked restricted: nothing vouched that its refs are harmless.
+            "UPDATE conversations SET root_id=NEW.id, path='/'||NEW.id||'/', "
+            "updated_at=COALESCE(NEW.updated_at,NEW.created) WHERE id=NEW.id;"),
+        # Every message but a carrier takes the next seq (a seq copied with a row is replaced), and its thread's
+        # counters follow. A message no writer stamped is marked restricted: nothing vouched that its refs are
+        # harmless.
         "threads_messages_stamp": (
-            f"AFTER INSERT ON messages WHEN NEW.seq IS NULL AND NOT {_carrier_sql('NEW')}",
+            f"AFTER INSERT ON messages WHEN NOT {_carrier_sql('NEW')}",
             "INSERT OR IGNORE INTO sequences(name,value) VALUES('messages',0);"
             "UPDATE sequences SET value=value+1 WHERE name='messages';"
             "UPDATE messages SET seq=(SELECT value FROM sequences WHERE name='messages'), "
-            f"origin_id=COALESCE(NEW.origin_id, lower(hex(randomblob(16)))||'@'||{install}), "
-            "restricted=CASE WHEN NEW.origin_id IS NULL THEN 1 ELSE NEW.restricted END WHERE id=NEW.id;"
+            f"origin_id=CASE WHEN {fresh} THEN lower(hex(randomblob(16)))||'@'||{install} ELSE NEW.origin_id END, "
+            f"restricted=CASE WHEN {fresh} THEN 1 ELSE NEW.restricted END WHERE id=NEW.id;"
             "UPDATE conversations SET last_seq=(SELECT value FROM sequences WHERE name='messages'), "
             "last_unread_seq=CASE WHEN NEW.from_actor LIKE 'human:%' OR COALESCE(NEW.to_actor,'')<>'' "
             "THEN (SELECT value FROM sequences WHERE name='messages') ELSE last_unread_seq END "
@@ -251,6 +258,10 @@ def ensure(c):
             continue
         c.execute(f"DROP TRIGGER IF EXISTS {name}")
         c.execute(sql)
+    for name in ("messages_seq", "messages_origin"):    # unique in an early build of this branch
+        found = c.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (name,)).fetchone()
+        if found and "UNIQUE" in str(found[0]).upper():
+            c.execute(f"DROP INDEX {name}")
     for statement in INDEXES:
         c.execute(statement)
 
@@ -602,10 +613,12 @@ def audience_has(c, thread, actor, *, viewer_=None):
     audience = audience_of(root)
     if audience == "task":
         return _task_readable(c, v, root.get("task_id"))
-    if audience == "meeting":
-        return False
     if actor in (root.get("participants") or []):
         return True
+    if audience == "meeting":
+        # A meeting's chat reaches the bots in it (live_privacy decides who reads the meeting).
+        from . import rooms
+        return rooms.room_bot(root) == H.actor_id(actor)
     if audience in ("members", "personal") and _is_member(c, v, root["id"]):
         return True
     if audience == "personal":
@@ -741,9 +754,9 @@ def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FR
         if not v.runner_turn:
             names = _qlist(v.member_names(c))
             terms = (f"({terms} OR COALESCE({x}root_id,{x}id) IN (SELECT r.id FROM {t('conversations')} r WHERE "
-                     f"EXISTS (SELECT 1 FROM json_each(r.participants_json) WHERE value={me}) OR "
-                     f"(r.audience='home' AND r.owner_actor={me}) OR "
-                     f"(r.audience IN ('members','personal') AND EXISTS (SELECT 1 FROM {t('thread_members')} tm "
+                     f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='r')} WHERE value={me}) OR "
+                     f"(COALESCE(r.audience,{_derived_audience('r')})='home' AND COALESCE(r.owner_actor,{_derived_owner('r')})={me}) "
+                     f"OR (COALESCE(r.audience,{_derived_audience('r')}) IN ('members','personal') AND EXISTS (SELECT 1 FROM {t('thread_members')} tm "
                      f"WHERE tm.thread_id=r.id AND tm.actor IN {names}))))")
         out = f"({terms}) AND {fence}"
         return f"({out}) AND {conversation(x + 'id')}" if conversation else out
@@ -752,10 +765,12 @@ def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FR
     person = v.is_person
     chain = _qlist(v.chain(c)) if person else "()"
     hidden = v.hidden_read(c) if (person or v.is_bot) else None
-    home = (f"r.owner_actor IS NOT NULL AND r.owner_actor NOT IN {_qlist(sorted(hidden))}" if hidden is not None
+    owner_sql = f"COALESCE(r.owner_actor,{_derived_owner('r')})"
+    home = (f"{owner_sql} IS NOT NULL AND {owner_sql} NOT IN {_qlist(sorted(hidden))}" if hidden is not None
             else "0")
     member = f"EXISTS (SELECT 1 FROM {t('thread_members')} tm WHERE tm.thread_id=r.id AND tm.actor IN {names})"
     meeting_term = meeting("r.id") if meeting else "0"
+    participant = "1" if owner else f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='r')} WHERE value={me})"
     root = (f"CASE COALESCE(r.audience,{_derived_audience('r')}) "
             f"WHEN 'company' THEN {1 if person else 0} "
             f"WHEN 'team' THEN {'1' if owner else ('r.audience_group_id IN ' + chain)} "
@@ -764,7 +779,7 @@ def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FR
             f"WHEN 'home' THEN {home} "
             f"WHEN 'personal' THEN (COALESCE(r.owner_actor,{_FIRST_HUMAN.format(r='r')})={me} OR {member}) "
             f"AND (COALESCE(r.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
-            f"WHEN 'participants' THEN {'1' if owner else f'EXISTS (SELECT 1 FROM json_each(r.participants_json) WHERE value={me})'} "
+            f"WHEN 'participants' THEN {participant} "
             f"WHEN 'meeting' THEN {meeting_term} ELSE 0 END")
     if not person or not v.in_good_standing(c):
         return "0"
@@ -1064,6 +1079,8 @@ def wake_mode(c, thread, message, bot, reason):
     §4.3): a DM, mention, ask or assign, then the bot's Home, then a sub-thread it posted in queue a run; a digest
     follower gets a digest. The existing wake engine still judges each queued delivery and may make it wait."""
     from . import rules
+    if quiet_notice(message):
+        return None, None
     if reason in ("dm", "mention", "ask", "assign", "home", "sub_thread", "routing", "addressed"):
         mode = "queue"
     elif reason == "digest":
@@ -1074,6 +1091,15 @@ def wake_mode(c, thread, message, bot, reason):
     if isinstance(origin, dict) and origin.get("actor") == bot:
         return None, None
     return rules.thread_wake(c, message, bot, thread, mode)
+
+
+NO_WAKE_REF_KEYS = ("follow_up", "card")
+
+
+def quiet_notice(message):
+    """A follow-up nudge or an update card (refs.follow_up, refs.card) is read, never a reason to start a run."""
+    refs = (message or {}).get("refs") or {}
+    return isinstance(refs, dict) and any(refs.get(k) for k in NO_WAKE_REF_KEYS)
 
 
 def _carrier(c, thread, message, bot, reason, rule):
@@ -1224,6 +1250,8 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
     refs = dict(refs or {})
     if via:
         refs["via"] = via
+    if quiet_notice({"refs": refs}):
+        refs["quiet"] = True            # nor does it start the addressed bot's run (the queue trigger reads quiet)
     if origin:
         refs["origin"] = {k: origin.get(k) for k in ("origin_id", "revision", "install", "actor") if origin.get(k)}
     found = mentions(c, thread, text, author=actor)
@@ -1387,6 +1415,11 @@ def home(c, owner_actor, *, create=True):
         raise Problem("not_found", "Unknown teammate", 404)
     row = c.execute("SELECT id FROM conversations WHERE audience='home' AND owner_actor=? AND closed_at IS NULL "
                     "AND archived_at IS NULL LIMIT 1", (owner,)).fetchone()
+    if row is None and owner.startswith("bot:"):
+        # A bot's shared room is its Home (the migration keeps one open per bot).
+        row = c.execute(f"SELECT id FROM conversations c WHERE c.scope='shared' AND c.closed_at IS NULL AND "
+                        f"c.archived_at IS NULL AND COALESCE(c.room_key,'')<>'' AND {_ROOM_BOT.format(r='c')}=? "
+                        "ORDER BY COALESCE(c.last_message_at,c.created) DESC LIMIT 1", (owner[4:],)).fetchone()
     if row:
         return thread_row(c, row[0])
     if not create:
@@ -1644,8 +1677,8 @@ def unread_dms(c, v, *, limit=50):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     out = []
     for r in c.execute("SELECT c.* FROM conversations c JOIN thread_followers f ON f.thread_id=c.id AND f.actor=? "
-                       "WHERE c.audience IN ('personal','participants') AND c.parent_id IS NULL AND "
-                       "c.last_unread_seq>f.last_read_seq ORDER BY c.last_unread_seq DESC LIMIT ?",
+                       f"WHERE COALESCE(c.audience,{_derived_audience('c')}) IN ('personal','participants') "
+                       "AND c.parent_id IS NULL AND c.last_unread_seq>f.last_read_seq ORDER BY c.last_unread_seq DESC LIMIT ?",
                        (v.actor, max(1, min(int(limit), MAX_PAGE)))).fetchall():
         if thread_readable(c, v, r["id"]):
             u = unread(c, v, r["id"])
@@ -1876,7 +1909,7 @@ def sidebar(c, v, *, cursor=None, limit=50):
     where = [f"r.parent_id IS NULL", "r.archived_at IS NULL", "r.closed_at IS NULL",
              f"(r.audience IN ('company','team') OR r.owner_actor=? OR EXISTS (SELECT 1 FROM thread_members m WHERE "
              f"m.thread_id=r.id AND m.actor IN ({marks})) OR EXISTS (SELECT 1 FROM thread_followers f WHERE "
-             f"f.thread_id=r.id AND f.actor=? AND f.following=1) OR EXISTS (SELECT 1 FROM json_each(r.participants_json) "
+             f"f.thread_id=r.id AND f.actor=? AND f.following=1) OR EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='r')} "
              f"WHERE value=?))"]
     args = [me, *names, me, me]
     if cursor:
@@ -1973,9 +2006,9 @@ def _migrate(c):
               "AND COALESCE(room_key,'')<>'' AND id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY "
               f"{_ROOM_BOT.format(r='conversations')} ORDER BY COALESCE(last_message_at,created) DESC, id DESC) AS n "
               "FROM conversations WHERE scope='shared' AND closed_at IS NULL AND archived_at IS NULL) WHERE n=1)", (now,))
-    c.execute(f"UPDATE conversations SET audience=COALESCE(audience,{_derived_audience('conversations')}), "
-              f"owner_actor=COALESCE(owner_actor,{_derived_owner('conversations')}), root_id=COALESCE(root_id,id), "
-              "path=COALESCE(path,'/'||id||'/'), updated_at=COALESCE(updated_at,last_message_at,created)")
+    # Audience and owner stay unset on existing conversations: derived live from their columns, as for new ones.
+    c.execute("UPDATE conversations SET root_id=COALESCE(root_id,id), path=COALESCE(path,'/'||id||'/'), "
+              "updated_at=COALESCE(updated_at,last_message_at,created)")
     install = install_id(c)
     safe = _qlist(sorted(SAFE_REF_KEYS))
     c.execute("UPDATE messages SET seq=rowid WHERE seq IS NULL")
@@ -1983,7 +2016,7 @@ def _migrate(c):
               "substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(2)))||'-'||lower(hex(randomblob(6)))||'@'||? "
               "WHERE origin_id IS NULL", (install,))
     c.execute("UPDATE messages SET restricted=CASE WHEN COALESCE(in_reply_to,'')<>'' THEN 1 "
-              "WHEN conversation_id IN (SELECT id FROM conversations WHERE audience IN ('task','meeting') "
+              f"WHEN conversation_id IN (SELECT id FROM conversations v WHERE {_derived_audience('v')} IN ('task','meeting') "
               "OR task_id IS NOT NULL) THEN 1 "
               "WHEN COALESCE(refs_json,'')<>'' AND (NOT json_valid(refs_json) OR json_type(refs_json)<>'object' OR "
               f"EXISTS (SELECT 1 FROM json_each(refs_json) WHERE key NOT IN {safe})) THEN 1 ELSE 0 END")
