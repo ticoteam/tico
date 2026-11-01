@@ -76,8 +76,11 @@ ALTER TABLE messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE messages ADD COLUMN restricted INTEGER NOT NULL DEFAULT 0;  -- needs the per-message check (§2.3)
 ALTER TABLE messages ADD COLUMN legacy_audience TEXT;              -- 'shared:<slug>' on migrated shared-room history
 -- edited_at, deleted_at already exist
-CREATE UNIQUE INDEX messages_seq ON messages(seq) WHERE seq IS NOT NULL;
-CREATE UNIQUE INDEX messages_origin ON messages(origin_id) WHERE origin_id IS NOT NULL;
+-- Not unique: an insert that copies another row's seq or origin_id must not fail; the stamp trigger replaces both
+-- (a copied origin also marks the row restricted). seq is unique by the sequence; (origin_id, revision) by
+-- message_revisions.
+CREATE INDEX messages_seq ON messages(seq) WHERE seq IS NOT NULL;
+CREATE INDEX messages_origin ON messages(origin_id) WHERE origin_id IS NOT NULL;
 CREATE INDEX messages_thread_seq ON messages(conversation_id, seq);
 ```
 
@@ -121,8 +124,8 @@ CREATE TABLE IF NOT EXISTS message_deliveries (
   attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT, error TEXT,
   delivered_at TEXT, read_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE (message_id, recipient));
-CREATE INDEX IF NOT EXISTS message_deliveries_inbox ON message_deliveries(recipient, created_at)
-  WHERE state IN ('pending','delivered');
+CREATE INDEX IF NOT EXISTS message_deliveries_waiting ON message_deliveries(recipient, created_at)
+  WHERE state IN ('pending','delivered','capped','held');
 CREATE INDEX IF NOT EXISTS message_deliveries_capped ON message_deliveries(root_id, created_at) WHERE state='capped';
 CREATE INDEX IF NOT EXISTS message_deliveries_loop ON message_deliveries(root_id, created_at)
   WHERE cause='bot' AND recipient LIKE 'bot:%' AND mode IN ('steer','queue');
@@ -193,6 +196,8 @@ threads.readable(c, viewer, thread_or_message) -> bool
     # thread row/dict/id: the audience predicate on its root. message row/dict/id: its thread's predicate, then
     # legacy audience, then (restricted only) task_privacy.message_readable.
 threads.require(c, viewer, thread_id, *, write=False) -> thread row   # 404 when unreadable (never 403: no leak)
+threads.denial(c, viewer, row) -> None | (404, "not_found", msg)      # Auth.conversation asks it: unreadable = 404;
+                                                                       # a person who left / sign-in off reads nothing
 threads.can_post(c, viewer, thread) -> bool                            # read + audience post rule (home: Write too)
 threads.can_manage(c, viewer, thread) -> bool                          # starter/owner member, or admin
 threads.readable_sql(c, viewer, alias="conversations") -> str          # SQL boolean over a conversations row
@@ -244,12 +249,16 @@ The legacy adapters keep working and pass through the same internals: `hubdb.say
 counters, followers, loop guard).
 
 ### 3.2 Creating threads
+Return values: `post` returns the message dict (`id`, `conversation_id` = thread id, `seq`, `origin_id`,
+`revision`, `refs`, ...; `duplicate: true` for a repeated origin). `create`, `dm`, `set_audience` and `update` return
+the thread view (§10, with `id`). `home` and `sub_thread` return the stored row (`id`, `subject`, `audience`,
+`root_id`, `path`, ...). Every one of them has `id`.
 
 ```python
 threads.create(c, principal, *, title="", audience="members", audience_group_id=None, members=(),
                parent_message_id=None, task_id=None, kind="chat") -> thread view
 threads.dm(c, principal, members, *, title="") -> thread view      # audience='personal', reuses an open DM with exactly these members
-threads.home(c, owner_actor, *, create=True) -> thread row          # lazy Home for bot:/human:/group:
+threads.home(c, owner_actor, *, create=True) -> thread row          # lazy Home for bot:/human:/group: (a bot's open shared room is its Home); None when create=False and none
 threads.sub_thread(c, principal, parent_message_id) -> thread row   # get-or-create, race-safe on the unique index
 ```
 - Roots default to `members` with the starter as `owner` member. Making a root public (`team`/`company`) is
@@ -313,8 +322,9 @@ Per (message, bot), deduplicated, first match wins:
 5. a following bot with `notify=digest` → `digest`;
 6. otherwise none (no row).
 
-Never wakes: the author itself, imports and replays (`refs.import`/`refs.replay`), and a message whose
-`refs.origin` names that same bot within the loop window. Today's bot-to-bot hold (`rules.bot_to_bot_decision`)
+Never wakes: the author itself, imports and replays (`refs.import`/`refs.replay`), a message whose
+`refs.origin` names that same bot within the loop window, and follow-up nudges and update cards (`refs.follow_up`,
+`refs.card`: `threads.quiet_notice`; `post` also marks them `quiet`, so not even the addressed bot's run starts). Today's bot-to-bot hold (`rules.bot_to_bot_decision`)
 and `wake_rules.judge` still run per delivery and may turn `queue` into `defer`.
 
 ### 4.4 Runs
@@ -367,7 +377,13 @@ threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
 - `message_revisions` holds every `(origin_id, revision)` seen, durable for the life of the message.
 - Local holds and screening change only local delivery state, never the canonical message.
 
-## 7. Migration (same release, `threads.migrate(c, auth=None)`, once)
+## 7. Migration (same release, `threads.migrate(c)`, once)
+Existing conversations (and conversations any legacy writer inserts later) keep `audience` NULL: their audience is
+derived live from `room_key`, `scope`, `kind` and `task_id` (`threads.audience_of`; SQL `COALESCE(audience, ...)`),
+because legacy writers set those columns after the insert. Likewise `owner_actor` stays as written and a shared
+room's owner is derived (`threads.home_owner`). Only threads made by `threads.create`/`home`/`sub_thread` store an
+audience.
+
 | today | audience | notes |
 |---|---|---|
 | `scope='personal'` (Assistant, Librarian, Strategy, legacy archives) | `personal` | `room_key` kept |
