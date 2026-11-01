@@ -249,15 +249,66 @@ def _criteria(own):
     return {f"line-{n}": line for n, line in enumerate(own["criteria"], 1)}
 
 
-def _judge(store, engine, qset, own, items, asker, person_name, title, text, kind, replay=False):
-    """One call on the set for one item, and its judge.call row (never the item's text): (answers, call id, error)."""
+def _line(value, limit):
+    """One field of a question, whitespace folded and cut to `limit` characters."""
+    return " ".join(str(value or "").split())[:limit]
+
+
+def _question_lines(questions, limit):
+    """The lines a structured question puts on the item: each question's line, its why, each option with what it
+    `then` does, and the recommended option(s). A why and a then are cut to `limit` characters."""
+    lines = []
+    for q in (questions or []):
+        if not isinstance(q, dict):
+            continue
+        line = _line(q.get("question"), 300)
+        if not line:
+            continue
+        lines.append(f"Question: {line}")
+        why = _line(q.get("why"), limit)
+        if why:
+            lines.append(f"Why: {why}")
+        options = [o for o in (q.get("options") if isinstance(q.get("options"), list) else []) if isinstance(o, dict)]
+        options = [(_line(o.get("label"), 60), o) for o in options]
+        options = [(label, o) for label, o in options if label]
+        for label, o in options:
+            then = _line(o.get("then"), limit)
+            lines.append(f"Option: {label}" + (f" (then: {then})" if then else ""))
+        recommended = [label for label, o in options if o.get("recommended") is True]
+        if recommended:
+            lines.append("Recommended: " + ", ".join(recommended))
+    return "\n".join(lines)
+
+
+def structured_text(questions, text):
+    """The text the model reads for an item. `questions` is the item's refs.questions as stored, or None. Without
+    them, the text is the item's text cut to MAX_TEXT, as before. With them, the lines come first, in order: each
+    question's line, its why, each option with its then, which option is recommended; then the item's text. Only the
+    item's text is cut to fit MAX_TEXT. The lines are cut only when they alone are longer than MAX_TEXT, and their
+    whys and thens shorten first."""
+    body = str(text or "")
+    head = _question_lines(questions, 200) if isinstance(questions, list) else ""
+    for limit in (120, 60, 20, 0):
+        if len(head) <= MAX_TEXT:
+            break
+        head = _question_lines(questions, limit)
+    if not head:
+        return body[:MAX_TEXT]
+    head = head[:MAX_TEXT]
+    room = MAX_TEXT - len(head) - 2
+    return f"{head}\n\n{body[:room]}" if room > 0 and body else head
+
+
+def _judge(store, engine, qset, own, items, asker, person_name, title, text, kind, replay=False, asked=None):
+    """One call on the set for one item, and its judge.call row (never the item's text): (answers, call id, error).
+    `asked` is the item's structured questions as stored (refs.questions), or None."""
     criteria = _criteria(own)
     questions = {qid: qset["questions"][qid] for qid in ("clear", "kind", "urgency", "recommends")}
     if criteria:
         questions["meets"] = J.with_options(qset["questions"]["meets"], criteria)
     if items:
         questions["covered"] = J.with_options(qset["questions"]["covered"], {name: t for name, (_, t) in items.items()})
-    state = {"item": {"title": str(title or "")[:300], "text": str(text or "")[:MAX_TEXT]},
+    state = {"item": {"title": str(title or "")[:300], "text": structured_text(asked, text)},
              "asker": asker, "person": person_name}
     result, error = _ask(calls_for(store), engine, state, questions, qset["label"])
     if error in REFUSED:
@@ -281,10 +332,11 @@ def _judge(store, engine, qset, own, items, asker, person_name, title, text, kin
     return answers, call["id"], error
 
 
-def preflight(store, primary, who, target, title, text, kind="task"):
+def preflight(store, primary, who, target, title, text, kind="task", asked=None):
     """Ask the set about one item for the person `target` names, outside any transaction. Returns the verdict
     `apply` reads: {person, asker, kind, mode, answers (typed values, None where under threshold), items, criteria,
-    call, error}; None when the write is not gated (a person's, not to a person, mode Off). Never raises."""
+    call, error}; None when the write is not gated (a person's, not to a person, mode Off). `asked` is the item's
+    structured questions (refs.questions), judged with its text. Never raises."""
     verdict = None
     try:
         if not target or not gated(who, store.settings.assistant_bot):
@@ -315,7 +367,8 @@ def preflight(store, primary, who, target, title, text, kind="task"):
             items = open_items(c, person)
             asker = _bot_line(c, who.actor)
             person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
-        answers, call, error = _judge(store, engine, qset, own, items, asker, person_name, title, text, kind)
+        answers, call, error = _judge(store, engine, qset, own, items, asker, person_name, title, text, kind,
+                                      asked=asked)
         verdict.update(answers=answers, call=call, error=error)
         return {**verdict, "items": {n: i for n, (i, _) in items.items()}, "criteria": _criteria(own)}
     except Exception as exc:          # the gate never stops the write
@@ -708,10 +761,12 @@ _ACTIVE_AT = ("owner=? AND created<? AND (done_at IS NULL OR done_at>?) AND (clo
 
 def replay_items(c, person, start, end, assistant_bot=None):
     """What bots put on this person between `start` and `end`, oldest first, as the gate would have seen each: tasks
-    filed for them and questions asked of them (on a task or loose). Today's owner stands in for the owner then."""
+    filed for them and questions asked of them (on a task or loose). Today's owner stands in for the owner then. A
+    question carries its structured questions (refs.questions); a task row carries none, its questions are the ask
+    messages replayed beside it."""
     skip = H.bot_actor(assistant_bot) if assistant_bot else ""
     out = [{"kind": "task", "ref": r["id"], "asker": r["requester"], "title": r["title"] or "", "text": r["body"] or "",
-            "created": r["created"]}
+            "asked": None, "created": r["created"]}
            for r in c.execute("SELECT id,title,body,requester,created FROM tasks WHERE owner=? AND created>=? AND "
                               "created<? AND requester LIKE 'bot:%' AND requester<>?", (person, start, end, skip))]
     for m in H._rows(c.execute("SELECT * FROM messages WHERE to_actor=? AND kind='ask' AND created>=? AND created<? "
@@ -720,8 +775,10 @@ def replay_items(c, person, start, end, assistant_bot=None):
         tid = H.message_task_id(msg)
         title = (H.task(c, tid) or {}).get("title", "") if tid else ""
         body = str(m.get("body") or "")
+        asked = H._json(m.get("refs_json"), {}) or {}
         out.append({"kind": "question" if tid else "loose", "ref": tid or m["id"], "asker": m["from_actor"],
-                    "title": title or body.strip().split("\n")[0][:300], "text": body, "created": m["created"]})
+                    "title": title or body.strip().split("\n")[0][:300], "text": body,
+                    "asked": asked.get("questions"), "created": m["created"]})
     return sorted(out, key=lambda it: it["created"])
 
 
@@ -770,7 +827,7 @@ def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, view
     out = []
     for it, plate, items, asker, shown in prepared:
         answers, _, error = _judge(store, engine, qset, own, items, asker, person_name, it["title"], it["text"],
-                                   it["kind"], replay=True)
+                                   it["kind"], replay=True, asked=it["asked"])
         would, reason = (FAILED_OPEN, error) if error else decide(answers, own["budget"], own["chores_budget"], plate, 0)
         out.append({"kind": it["kind"], "ref": it["ref"] if shown else None, "title": it["title"] if shown else "",
                     "private": not shown, "asker": it["asker"], "asker_name": asker, "created": it["created"],
