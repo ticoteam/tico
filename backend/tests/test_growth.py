@@ -271,3 +271,21 @@ def test_migration_applies_on_an_empty_file_and_on_one_at_the_previous_version(t
             raise AssertionError("two Unknown rows for one month")
         except sqlite3.IntegrityError:
             pass
+
+
+def test_a_member_cannot_move_the_north_star_off_a_kpi_they_may_not_edit_nor_read_a_hidden_one(api):
+    company = post(api, "kpis", {"name": "Active customers"})["kpi"]
+    post(api, f"kpis/{company['id']}", {"growth_role": "north_star"})
+    own = post(api, "kpis", {"name": "Cara's signups"})["kpi"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE kpis SET owner='human:cara' WHERE id=?", (own["id"],))
+    post(api, f"kpis/{own['id']}", {"growth_role": "north_star"}, token="cara-test", expected=403)
+    roles = {k["id"]: k["growth_role"] for k in get(api, "growth/kpis")["kpis"]}
+    assert roles[company["id"]] == "north_star" and roles[own["id"]] is None
+    # A bot's North Star is named only to those who may read that bot (the fixture restricts inbox to Ana).
+    put(api, "gtm/draft", {"sections": {"motion": {"primary": "local"}}})
+    post(api, "gtm/publish", {"note": "First"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE kpis SET owner='bot:inbox' WHERE id=?", (company["id"],))
+    assert "Active customers" in get(api, "gtm/summary")["text"]
+    assert "Active customers" not in get(api, "gtm/summary", "cara-test")["text"]

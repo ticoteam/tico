@@ -89,8 +89,9 @@ def _names(items, key, limit):
     return [str(i.get(key) or "").strip() for i in (items or [])[:limit] if str(i.get(key) or "").strip()]
 
 
-def summary_text(c, kind, current=None):
-    """About 300 characters a growth-facing bot reads on every run, or "" before the first version."""
+def summary_text(c, kind, current=None, hidden=None):
+    """About 300 characters a growth-facing bot reads on every run, or "" before the first version. `hidden`: the KPI
+    owners the reader may not see (None hides every bot's KPI, the safe default)."""
     current = current if current is not None else published(c, kind)
     if not current:
         return ""
@@ -116,7 +117,7 @@ def summary_text(c, kind, current=None):
         if buyer.get("who_buys"):
             parts.append("Buyer: " + buyer["who_buys"] + (f", {buyer['deal_size']}" if buyer.get("deal_size") else "") + ".")
         parts += _channels_line(c)
-        parts += _north_star_line(c)
+        parts += _north_star_line(c, hidden)
     text = " ".join(parts)
     return text if len(text) <= SUMMARY_MAX else text[:SUMMARY_MAX - 1].rstrip() + "…"
 
@@ -132,10 +133,13 @@ def _channels_line(c):
     return out
 
 
-def _north_star_line(c):
+def _north_star_line(c, hidden=None):
     from . import kpis as K
     row = H._one(c, "SELECT * FROM kpis WHERE growth_role='north_star' AND archived_at IS NULL LIMIT 1")
     if not row:
+        return []
+    owner = row.get("owner") or ""
+    if owner in (hidden or ()) or (hidden is None and owner.startswith("bot:")):
         return []
     newest = K.latest(K.readings(c, row["id"], effective=True))
     link = H._one(c, "SELECT target FROM goal_kpis WHERE kpi_id=? AND target IS NOT NULL ORDER BY updated DESC LIMIT 1",
@@ -309,10 +313,13 @@ def _routes(app, store, auth, mutate, kind, reader, editor):
         return row
 
     def summary(request: Request):
-        reader(request.state.identity)
+        from .goal_routes import _hidden_owners
+        who = request.state.identity
+        reader(who)
         with store.read() as c:
             current = published(c, kind)
-            return {"n": (current or {}).get("n", 0), "text": summary_text(c, kind, current)}
+            return {"n": (current or {}).get("n", 0),
+                    "text": summary_text(c, kind, current, _hidden_owners(c, auth, who))}
 
     def write_draft(request: Request, body: M.PageDraft):
         who = request.state.identity
