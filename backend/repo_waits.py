@@ -77,9 +77,7 @@ def create_url(org, name=""):
 
 def fixes(c, row, slug=""):
     """The two ways out, as links: create the repository (prefilled), or let BotOps create repositories."""
-    if slug:
-        slug = (H.resolve_bot(c, slug) or {}).get("slug", slug)     # a bot's repository is named for its slug
-    name = "bot-" + slug.removeprefix("emp-") if slug else ""
+    name = H.bot_repository_name(c, slug) if slug else ""      # named for the bot, id or slug in
     return {"repository": f"{row['org']}/{name}" if name else "",
             "create_url": create_url(row["org"], name), "permissions_url": permissions_url(c, row)}
 
@@ -168,11 +166,12 @@ def resume(service):
 def _resume_one(service, row, allowed, bot, wait):
     with service.store.read() as c:
         found = H.bot(c, bot) or {}
+        name = H.bot_repository_name(c, bot) if found else ""
     state = found.get("state")
     if state in (None, "archived"):
         _finish(service.store, bot, wait, "The bot was archived; nothing was created.")
         return "archived"
-    repository = wait.get("repository") or f"{row['org']}/bot-{found['slug']}"
+    repository = wait.get("repository") or f"{row['org']}/{name}"
     how = None
     try:
         service.mint([repository], {"metadata": "read"}, diagnose=False)

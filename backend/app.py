@@ -2378,6 +2378,8 @@ def create_app(settings=None):
                         "harness": resolve_harness(declared, bot.get("runtime")),
                         "reports_to": config["reports_to"], "repo": repo,
                         "repo_url": repo_url(repo, settings.github_owner),
+                        # Its checkout's folder on a computer: clients find its files by this, never by its slug.
+                        "folder": H.bot_folder(bot["id"], declared),
                         "bot_contact": declared.get("bot_contact") or "open",
                         "private_tasks_default": H.private_tasks_default(c, "bot:" + bot["id"], rows.declared),
                         "template": declared.get("template") or "",

@@ -244,6 +244,9 @@ class SettingsAdmin:
                 "private_tasks_default": H.private_tasks_default(c, "bot:" + bot),
                 "status": row["state"], "repo": repo,
                 "repo_url": repo_url(repo, self.settings.github_owner),
+                # Its checkout's folder on a computer, as recorded: clients find the bot's files by this, never by
+                # its slug, which a rename changes (H.bot_folder).
+                "folder": H.bot_folder(row["id"], _json(config["config"], {})),
                 "thread_mode": config["thread_mode"] or "personal",
                 "shared": bool((_json(config["config"], {}) or {}).get("shared")),
                 "shared_from": shared_bots.source_of(_json(config["config"], {})),
@@ -470,7 +473,11 @@ class SettingsAdmin:
             body = body.model_copy(update={"status": "planned"})
         if body.slug == self.settings.assistant_bot and body.thread_mode != "personal":
             raise Problem("thread_mode", self.settings.assistant_name + " must use personal rooms", 422)
-        repo = body.repo or ("bot-" + body.slug)
+        # A bot with a UUID id names its folder on a computer once, from the slug it is made with: a rename keeps the
+        # folder (the id is not a name a person reads in a file list). Another bot's checkout may have that name (a bot
+        # renamed away from this slug keeps its folder), so it is one no other bot has; its repository is named alike.
+        folder = H.free_bot_folder(c, body.slug, bot_id) if bot_id != body.slug else None
+        repo = body.repo or folder or ("bot-" + body.slug)
         config = {"name": body.slug, "display_name": body.display_name,
                   "description": body.description, "reports_to": body.reports_to,
                   "status": body.status, "repo": repo, "host": "keeper", "tasks": "hub",
@@ -479,10 +486,8 @@ class SettingsAdmin:
                   "private_tasks_default": (body.private_tasks_default if "private_tasks_default" in body.model_fields_set
                                             else body.template == "general-counsel"),
                   "model_managed_by": "cloud"}
-        if bot_id != body.slug:
-            # Its folder on a computer is named once, from the slug it was made with: a rename keeps the folder
-            # (the id is a UUID, not a name a person reads in a file list).
-            config["folder"] = "bot-" + body.slug
+        if folder:
+            config["folder"] = folder
         profiles.apply(config, profiles.DOER, {})
         if body.template:
             config["template"] = body.template

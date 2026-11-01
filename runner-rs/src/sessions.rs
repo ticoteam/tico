@@ -138,6 +138,17 @@ pub fn named_folder(bot_config: &Value) -> Option<String> {
     plain.then_some(folder)
 }
 
+/// Whether a bot's named folder was named from this slug: `bot-<slug>`, or `bot-<slug>-<hex>` when another bot's
+/// checkout already had `bot-<slug>` when it was made (backend/hubdb.py free_bot_folder).
+pub fn folder_named_from(folder: &str, slug: &str) -> bool {
+    let Some(rest) = folder.strip_prefix("bot-").and_then(|rest| rest.strip_prefix(slug)) else {
+        return false;
+    };
+    !slug.is_empty()
+        && (rest.is_empty()
+            || rest.strip_prefix('-').is_some_and(|hex| hex.len() >= 8 && hex.chars().all(|ch| ch.is_ascii_hexdigit())))
+}
+
 /// The checkout a shared bot, or a bot with a named folder, last resolved to (service.py `shared_checkouts`), for
 /// callers without its config.
 pub fn shared_path(bot: &str) -> Option<PathBuf> {
@@ -1322,6 +1333,14 @@ mod tests {
         assert_eq!(local_path(&config, "ops", &json!({"name": "ops"})), PathBuf::from("/w/projects/bot-ops"));
         assert_eq!(named_folder(&json!({"folder": "../etc"})), None);
         assert_eq!(named_folder(&json!({"folder": "a/b"})), None);
+        // a second bot made with a slug another bot's folder already had gets a folder of its own
+        let second = json!({"name": "sales-helper", "folder": "bot-sales-helper-9f3c2a1b"});
+        assert_eq!(local_path(&config, "01a19806-0460-77a7-860b-0c1d9f3c2a1b", &second), PathBuf::from("/w/projects/bot-sales-helper-9f3c2a1b"));
+        assert!(folder_named_from("bot-sales-helper", "sales-helper"));
+        assert!(folder_named_from("bot-sales-helper-9f3c2a1b", "sales-helper"));
+        assert!(!folder_named_from("bot-sales-helper-9f3c2a1b", "sales"));
+        assert!(!folder_named_from("bot-sales-helpers", "sales-helper"));
+        assert!(!folder_named_from("bot-sales-helper", ""));
     }
 
     #[test]

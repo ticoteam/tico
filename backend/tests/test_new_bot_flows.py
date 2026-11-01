@@ -273,3 +273,49 @@ def test_mcp_and_the_hub_cli_rename_a_bot_by_id_or_slug(api, sales, monkeypatch)
     assert get(api, "bots/" + sales)["slug"] == "pipeline-helper"
     config = json.loads(column(api, "SELECT config FROM bot_config WHERE bot=?", sales)[0])
     assert config["folder"] == "bot-sales-helper"                  # its folder keeps the name it was made with
+
+
+def config_of(api, bot_id):
+    return json.loads(column(api, "SELECT config FROM bot_config WHERE bot=?", bot_id)[0])
+
+
+def test_a_new_bot_given_a_renamed_bots_old_slug_gets_a_folder_and_repository_of_its_own(api, sales):
+    # sales-helper is renamed but keeps its folder; a new sales-helper must not land in that checkout (both bots would
+    # run in, and commit to, the same directory on a computer).
+    rename(api, sales, "revenue-helper")
+    newcomer = create_bot(api, "sales-helper")
+    first, second = config_of(api, sales), config_of(api, newcomer)
+    assert first["folder"] == "bot-sales-helper"
+    assert second["folder"] != first["folder"] and second["folder"].startswith("bot-sales-helper-")
+    assert second["folder"].removeprefix("bot-sales-helper-") in newcomer.replace("-", "")
+    assert get(api, "bots/sales-helper")["folder"] == second["folder"]      # clients read the folder, not the slug
+    assert get(api, "bots/revenue-helper")["folder"] == "bot-sales-helper"
+    # its repository is named alike, so GitHub never hands it the renamed bot's history
+    repos = column(api, "SELECT repo FROM bot_config WHERE bot IN (?,?)", sales, newcomer)
+    assert len(set(repos)) == 2
+    with api.app.state.store.read() as c:
+        assert H.bot_repository_name(c, "sales-helper") == second["folder"]
+        assert H.bot_repository_name(c, "revenue-helper") == "bot-sales-helper"
+        assert H.bot_repository_name(c, "coo") == "bot-coo"             # an older bot keeps bot-<slug>
+    # a third one, and a folder an older bot (id = slug) has, are taken too
+    third = create_bot(api, "sales-helper-2")
+    assert config_of(api, third)["folder"] == "bot-sales-helper-2"
+    with api.app.state.store.read() as c:
+        assert H.free_bot_folder(c, "coo", "01a19806-0460-77a7-860b-0c1d9f3c2a1b") == "bot-coo-9f3c2a1b"
+
+
+def test_two_bots_with_one_folder_are_never_placed_on_one_computer(api, sales):
+    # A bot whose recorded folder another bot on that computer already works in (data made before folders were kept
+    # unique) is refused there: the runner would resolve both to the same checkout.
+    machine = runner(api)
+    assign(api, machine, sales)
+    rename(api, sales, "revenue-helper")
+    newcomer = create_bot(api, "sales-helper", status="planned")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.folder','bot-sales-helper') WHERE bot=?", (newcomer,))
+    r = api.post(f"/api/v2/bots/{newcomer}/assignment", json={"runner_id": machine["runner_id"], "expected_generation": 0},
+                 headers=headers())
+    assert r.status_code == 409 and r.json()["error"]["code"] == "folder_taken", r.text
+    assert column(api, "SELECT count(*) FROM assignments WHERE bot=?", newcomer) == [0]
+    other = runner(api, label="Other Mac")
+    assign(api, other, newcomer)                                        # another computer has its own folder

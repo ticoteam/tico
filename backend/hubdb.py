@@ -3685,6 +3685,89 @@ def new_bot_id(slug):
     return slug if slug in PRODUCT_BOT_SLUGS or (assistant and slug == assistant) else uuid7()
 
 
+def bot_folder(bot_id, declared):
+    """The folder a bot's checkout has on a computer, as recorded: its config's `folder` for a bot made with a UUID id
+    (named once, when it was made), else `bot-<id>` for an older bot, whose id is its first slug (a computer that
+    still has that bot's older `emp-<id>` folder finds it, clients/manifest.py folder_dir)."""
+    folder = str((declared or {}).get("folder") or "").strip() if isinstance(declared, dict) else ""
+    return folder or "bot-" + str(bot_id)
+
+
+def bot_folders_taken(conn):
+    """Every folder name a bot's checkout has or may have on a computer, lowercased (a Mac's disk ignores case): each
+    bot's recorded folder, its older `emp-<id>` one, and the folder its recorded repository clones into."""
+    taken = set()
+    for row in conn.execute("SELECT b.id, bc.config, bc.repo FROM bots b LEFT JOIN bot_config bc ON bc.bot=b.id"):
+        try:
+            declared = json.loads(row["config"]) if row["config"] else {}
+        except ValueError:
+            declared = {}
+        taken.add(bot_folder(row["id"], declared).lower())
+        taken.add(("emp-" + str(row["id"])).lower())
+        repo = str(row["repo"] or "").strip().rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        if repo:
+            taken.add(repo.lower())
+    return taken
+
+
+def free_bot_folder(conn, slug, bot_id):
+    """The folder for a new bot with a UUID id: `bot-<slug>`, or `bot-<slug>-<8 hex of its id>` when another bot's
+    checkout has or had that name (a bot renamed away from this slug keeps its folder). The id's last hex digits are
+    its random part; its first ones are the time it was made, which two bots made within a minute share."""
+    taken = bot_folders_taken(conn)
+    folder = "bot-" + slug
+    if folder.lower() not in taken:
+        return folder
+    tail = str(bot_id).replace("-", "")
+    for width in (8, 12, 16, len(tail)):
+        folder = f"bot-{slug}-{tail[-width:]}"
+        if folder.lower() not in taken:
+            return folder
+    raise ValueError(f"no free folder for {slug}")
+
+
+def folder_clash(conn, bot_id, runner_id):
+    """The slug of another bot on this computer whose checkout would be this bot's folder, or None. A branch of a bot
+    with branches works in its original's checkout by design (shared_from), so it neither clashes nor is clashed with."""
+    def declared(raw):
+        try:
+            value = json.loads(raw) if raw else {}
+        except ValueError:
+            value = {}
+        return value if isinstance(value, dict) else {}
+    mine = _one(conn, "SELECT config FROM bot_config WHERE bot=?", (bot_id,))
+    config = declared(mine["config"] if mine else None)
+    if config.get("shared_from"):
+        return None
+    folder = bot_folder(bot_id, config).lower()
+    for row in conn.execute("SELECT b.id, b.slug, bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
+                            "LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE a.runner_id=? AND a.bot<>?",
+                            (runner_id, bot_id)):
+        other = declared(row["config"])
+        if not other.get("shared_from") and bot_folder(row["id"], other).lower() == folder:
+            return row["slug"]
+    return None
+
+
+def bot_repository_name(conn, ref):
+    """The GitHub repository name a bot's repository is created under: for a bot with a recorded folder, its recorded
+    repository's name (the folder's, unless a person gave another), so two bots that were once given the same slug
+    never share one; for an older bot, `bot-<its slug>`."""
+    found = resolve_bot(conn, ref)
+    slug = str((found or {}).get("slug") or ref or "").removeprefix("emp-")
+    if not found:
+        return "bot-" + slug
+    row = _one(conn, "SELECT config, repo FROM bot_config WHERE bot=?", (found["id"],))
+    try:
+        declared = json.loads(row["config"]) if row and row["config"] else {}
+    except ValueError:
+        declared = {}
+    if not isinstance(declared, dict) or not declared.get("folder"):
+        return "bot-" + slug
+    repo = str(row["repo"] or "").strip().rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+    return repo if re.fullmatch(r"[A-Za-z0-9._-]+", repo or "") else str(declared["folder"])
+
+
 
 def migrate_task_privacy(conn):
     """Classify pre-privacy rows from stored roster/config identities; keep ambiguity private."""

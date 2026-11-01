@@ -2668,6 +2668,10 @@ class Execution:
         if not old or old["runner_id"] != body.runner_id:
             from .views import roster
             inbox_isolation.check(c, bot, body.runner_id, roster(c))
+            if clash := H.folder_clash(c, bot, body.runner_id):
+                # Two bots in one folder would run in, and commit to, the same checkout.
+                raise Problem("folder_taken", f"{clash} already works in this bot's folder on that computer; "
+                              "place it on another computer", 409)
             if old and (blocked := stranded(c, self.store.settings, bot, old["runner_id"], body.runner_id)):
                 raise Problem("repository_unpublished", blocked, 409)
         self.expire(c)

@@ -700,9 +700,9 @@ class GitHubApp:
         row = self.row()
         if not row:
             raise Problem("github_not_connected", "GitHub is not connected. Connect it in Tools first.", 409)
-        with self.store.read() as c:      # the repository is named for the bot's slug (a label), whether an id or a slug came in
+        with self.store.read() as c:      # the repository is named for the bot (H.bot_repository_name), id or slug in
+            name = H.bot_repository_name(c, slug)
             slug = (H.resolve_bot(c, slug) or {}).get("slug", slug)
-        name = "bot-" + slug.removeprefix("emp-")
         if not self.can_create_repos(refresh=True):
             from .repo_waits import fixes
             with self.store.read() as c:
