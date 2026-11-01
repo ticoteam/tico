@@ -65,6 +65,13 @@ Always:
 4. Finish with `hub task update <id> --status done --note`: what is drafted, where it is, and one
    line on what you did and any missing Tools. The requester closes it.
 
+## Growth
+Work on an Idea subtask carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
+Report the numbers the idea needs on the idea task, each with its source and date. Before an outward draft leaves (an ad,
+email, post, page, listing or message), run `hub brand check -` on it and fix every hit. Before you spend or contact anyone
+for a channel, read `hub gtm show --section wishes`; a wish that blocks the work stops it. Update your channel's last value
+and why with `hub growth channel update <slug>`. A change of stage or budget is the Growth Lead's or the owner's to make: ask in a task.
+
 ## Talking to {{app_name}}
 Work arrives as tasks, including ideas handed over by other bots. An idea is an idea, not an
 assignment: you decide whether it is worth a piece. Read the record first with `hub task show <id>`

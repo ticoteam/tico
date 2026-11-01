@@ -31,7 +31,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/brand.md` from the answers
+Write each answer to `state.md` under `## Answers`, dated. Propose the first brand draft from the answers
 and any guide found, marking each rule with its source ("from the 2025 deck", "said by Dana on this
 task"). Mark what is still undecided under `## Open` rather than inventing it.
 
