@@ -88,6 +88,9 @@ Bot cost is what the channel's bot work cost. Each row says its quality: `actual
 **Unknown.** A customer with no source, or a source that is not a channel, goes to the **Unknown** row. Tico never decides
 which channel a customer came from. The Unknown row has no CAC and no LTV.
 
+**A month with no numbers** still lists every active channel and Unknown, each blank, so the owner can enter the first
+month from Growth › Channels (+ Month).
+
 **Guardrails.** A channel can name a KPI and a maximum (for example, first-month churn at most 10%). A breach shows on the
 channel and on the weekly page.
 

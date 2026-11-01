@@ -381,9 +381,19 @@ def economics(c, month=None, hidden=()):
         inputs.append(cohort)
         rows.append({"channel": cohort["channel"] or UNKNOWN, "name": ch["name"] if ch else "Unknown",
                      "track": ch["track"] if ch else None, **economics_row(cohort, conf)})
+    if not rows:
+        # A month with no numbers yet still lists every active channel and Unknown, each blank, for the first entry.
+        blank = {k: None for k in ("spend", "bot_cost", "new_customers", "cac", "kept_d30", "kept_d90", "kept_d180",
+                                   "expected_months", "ltv", "ltv_cac", "payback_months", "quality")}
+        rows = [{"channel": ch["slug"], "name": ch["name"], "track": ch["track"], **blank, "sources": {}}
+                for ch in by_slug.values() if not ch.get("retired_at")]
+        rows.append({"channel": UNKNOWN, "name": "Unknown", "track": None, **blank, "sources": {}})
     rows.sort(key=lambda r: (r["channel"] == UNKNOWN, (by_slug.get(r["channel"]) or {}).get("sort", 0), r["name"]))
+    total = economics_total(inputs, conf)
+    if not inputs:
+        total["quality"] = None
     return {"month": month, "months": months, "settings": conf, "rows": rows,
-            "total": economics_total(inputs, conf), "guardrails": guardrails(c, hidden)}
+            "total": total, "guardrails": guardrails(c, hidden)}
 
 
 def kpis(c, hidden=(), may_edit=lambda record: False):

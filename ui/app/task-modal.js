@@ -554,6 +554,9 @@ const TASK_EVENT_WORDS = {step: id => id ? `moved it to ${pipelineStepName(id)}`
 function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
   if (x.kind === 'event') {
     if (x.field === 'status' && x.old == null) return '';           // created: the header says so
+    // The type and first step a task is filed with are part of its creation too, not moves.
+    if ((x.field === 'type' || x.field === 'step') && x.old == null
+      && all?.some(y => y.kind === 'event' && y.field === 'status' && y.old == null && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 2000)) return '';
     if (x.field === 'comment' && x.new) return '';                  // an edit: the comment itself says edited
     // A step move already names where the task went; its status change would say it twice.
     if (x.field === 'status' && all?.some(y => y.kind === 'event' && y.field === 'step' && y.new && y.ts === x.ts)) return '';

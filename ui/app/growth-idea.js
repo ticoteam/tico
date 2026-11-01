@@ -15,6 +15,7 @@ function growthIdeaAdopt(d, task) {
   if (pipelineTypeId(task) !== 'idea') { slot.hidden = true; return; }
   if (d.giEl && d.giEl.dataset.task === id) {
     d.giEl.giTask = task; slot.replaceWith(d.giEl);
+    growthIdeaOneBody(d.giEl);
     if (d.giEl.dataset.ver !== ver) { d.giEl.dataset.ver = ver; void growthIdeaLoad(d.giEl, id); }
     return;
   }
@@ -39,6 +40,11 @@ async function growthIdeaLoad(slot, id) {
   if (slot.dataset.task !== id) return;
   slot.giIdea = idea; slot.giRefs = refs; slot.giTitles = titles;
   growthIdeaDraw(slot);
+}
+// An idea's task body starts as its hypothesis (bots read it there); the panel already shows it, so the page shows it once.
+function growthIdeaOneBody(slot) {
+  const desc = slot.parentElement?.querySelector(':scope > .tdesc.md'), hyp = String(slot.giIdea?.hypothesis || '').trim();
+  if (desc) desc.hidden = !slot.hidden && !!hyp && String(taskBody(slot.giTask || {})).trim() === hyp;
 }
 function growthIdeaDraw(slot) {
   const i = slot.giIdea, refs = slot.giRefs, titles = slot.giTitles, task = slot.giTask || {};
@@ -66,6 +72,7 @@ function growthIdeaDraw(slot) {
       ['Metric', kpi ? `${kpi.name} ${grKpiVal(kpi)}` : kpiName || ''], ['Channels', (i.channels || []).map(s => `<span class="gr-tag">${esc(grChanName(refs.channels, s))}</span>`).join(''), true],
       ['Follow-up of', i.follow_up_of ? link(i.follow_up_of) : '', true], ['Waits on', (i.depends_on || []).map(link).join(', '), true]])}</dl>${test}${verdict}`;
   slot.hidden = false;
+  growthIdeaOneBody(slot);
   growthIdeaBind(slot);
 }
 function growthIdeaBind(slot) {

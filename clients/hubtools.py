@@ -2194,7 +2194,7 @@ def growth_evidence(api, args):
     return api.get("growth/evidence")
 
 
-@tool("hub_growth_working", "What is working: won tests and their learnings, and channels by CAC.", {})
+@tool("hub_growth_working", "Work in progress: open tasks under an idea or labelled channel:<slug>, with their idea and channel.", {})
 def growth_working(api, args):
     return api.get("growth/working")
 

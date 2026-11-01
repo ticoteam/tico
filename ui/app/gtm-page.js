@@ -39,11 +39,17 @@ const gtBar = (now, target) => {
 };
 
 // ----------------------------------------------------------------- the Strategy page's card
+// Whether there is a go-to-market to show: a motion or buyer, or a live channel or source.
+function gtmCardEmpty(d, x = {}) {
+  const body = d?.published?.body || (grDocMay(d) ? d?.draft?.body : null);
+  return !body?.motion && !body?.buyer && !(x.channels || []).some(c => !c.retired_at) && !(x.sources || []).some(s => !s.retired_at);
+}
+// With none yet, the owner's way in (the Strategy page's setup row); others see nothing.
+const gtmSetupHtml = (d, x = {}) => d && grDocMay(d) && gtmCardEmpty(d, x) ? `<a class="ghost gr-btn" href="${GTM_ROUTE}">Set up go-to-market</a>` : '';
 function gtmCardHtml(d, x = {}) {
-  if (!d) return '';
+  if (!d || gtmCardEmpty(d, x)) return '';
   const may = grDocMay(d), body = d.published?.body || (may ? d.draft?.body : null);
   const chans = (x.channels || []).filter(c => !c.retired_at), srcs = (x.sources || []).filter(s => !s.retired_at);
-  if (!body?.motion && !body?.buyer && !chans.length && !srcs.length) return may ? `<a class="ghost gr-btn" href="${GTM_ROUTE}">Set up go-to-market</a>` : '';
   const m = body?.motion, ns = (x.kpis || []).find(k => k.growth_role === 'north_star'), n = may ? grDocChanged(d) : 0;
   const scaling = chans.filter(c => c.stage === 'scaling');
   const row = (k, v) => v ? `<div class="gt-cr"><span class="gr-k">${esc(k)}</span><span>${v}</span></div>` : '';

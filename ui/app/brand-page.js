@@ -10,16 +10,17 @@
 let BR = null;            // the open Brand page: {load, data, view, sub, props, hits, publishing}
 const BR_SUBS = [['positioning', 'Positioning'], ['voice', 'Voice'], ['tone', 'Tone'], ['words', 'Words'], ['naming', 'Naming'],
   ['visual', 'Visual'], ['claims', 'Claims'], ['examples', 'Examples']];
-// Each list editor's columns: [key, label, options | 'list' | 'color' | 'wide'].
+// Each list editor's columns: [key, label, options | 'list' | 'color' | 'long' | 'wide']. Long and wide are text that
+// wraps and grows (wide also takes twice the room); the rest are one line.
 const BR_COLS = {
-  voice: [['trait', 'Trait'], ['do', 'Do'], ['dont', "Don't"]],
+  voice: [['trait', 'Trait'], ['do', 'Do', 'long'], ['dont', "Don't", 'long']],
   tone: [['situation', 'Situation'], ['guide', 'Guide', 'wide']],
   use: [['word', 'Use'], ['not', 'Not']],
-  avoid: [['word', 'Avoid'], ['why', 'Why'], ['level', 'Level', ['warn', 'block']]],
-  naming: [['name', 'Name'], ['rule', 'Rule'], ['wrong', 'Never written', 'list']],
+  avoid: [['word', 'Avoid'], ['why', 'Why', 'long'], ['level', 'Level', ['warn', 'block']]],
+  naming: [['name', 'Name'], ['rule', 'Rule', 'long'], ['wrong', 'Never written', 'list']],
   colors: [['name', 'Name'], ['hex', 'Colour', 'color']],
-  allowed: [['claim', 'Claim'], ['proof', 'Proof'], ['check', 'Check'], ['status', 'Status', ['proven', 'due']]],
-  examples: [['text', 'Text', 'wide'], ['verdict', 'Verdict', ['on', 'off']], ['why', 'Why']],
+  allowed: [['claim', 'Claim', 'long'], ['proof', 'Proof', 'long'], ['check', 'Check'], ['status', 'Status', ['proven', 'due']]],
+  examples: [['text', 'Text', 'wide'], ['verdict', 'Verdict', ['on', 'off']], ['why', 'Why', 'long']],
   wishes: [['text', 'Wish', 'wide'], ['scope', 'Scope'], ['level', 'Level', ['block', 'warn', 'setting']]],
 };
 const BR_LEVEL = {block: 'fail', warn: 'waiting', setting: ''};
@@ -113,6 +114,7 @@ function grRowHtml(cols, row = {}) {
     const v = row[k] ?? '';
     const control = Array.isArray(kind) ? `<select data-k="${k}">${kind.map(o => `<option${o === v ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`
       : kind === 'color' ? `<input type="color" data-k="${k}" value="${esc(/^#[0-9a-f]{6}$/i.test(v) ? v : (brHex(v) && v.length === 4 ? '#' + v.slice(1).split('').map(c => c + c).join('') : '#888888'))}">`
+      : kind === 'long' || kind === 'wide' ? `<textarea data-k="${k}" rows="1" data-grow>${esc(v)}</textarea>`
       : `<input type="text" data-k="${k}"${kind === 'list' ? ' data-list' : ''} value="${esc(Array.isArray(v) ? v.join(', ') : v)}">`;
     return `<label class="gr-cell"><span class="gr-cap">${esc(label)}</span>${control}</label>`;
   }).join('')}<button type="button" class="gr-x" data-row-x aria-label="Remove">×</button></div>`;
@@ -120,7 +122,11 @@ function grRowHtml(cols, row = {}) {
 const grRowsHtml = (key, label, rows, addLabel = '+ Add') => `<fieldset class="gr-rows" data-rows="${key}"><legend class="gr-k">${esc(label)}</legend>
     <div class="gr-rows-list">${(rows || []).map(r => grRowHtml(BR_COLS[key], r)).join('')}</div>
     <button type="button" class="ghost small" data-row-add="${key}">${esc(addLabel)}</button></fieldset>`;
+// A long field is as tall as its text.
+const grGrow = t => { t.style.height = 'auto'; t.style.height = t.scrollHeight + 2 + 'px'; };
 function grRowsBind(form) {
+  form.querySelectorAll('textarea[data-grow]').forEach(grGrow);
+  form.addEventListener('input', ev => { if (ev.target.matches?.('textarea[data-grow]')) grGrow(ev.target); });
   form.addEventListener('click', ev => {
     const x = ev.target.closest('[data-row-x]');
     if (x) { x.closest('.gr-rowed').remove(); return; }
@@ -128,7 +134,8 @@ function grRowsBind(form) {
     if (add) {
       const list = form.querySelector(`[data-rows="${add.dataset.rowAdd}"] .gr-rows-list`);
       list.insertAdjacentHTML('beforeend', grRowHtml(BR_COLS[add.dataset.rowAdd]));
-      list.lastElementChild.querySelector('input,select')?.focus();
+      list.lastElementChild.querySelectorAll('textarea[data-grow]').forEach(grGrow);
+      list.lastElementChild.querySelector('input,select,textarea')?.focus();
     }
   });
 }
@@ -173,11 +180,17 @@ function brandBookHtml(body, {full = false} = {}) {
 }
 
 // ----------------------------------------------------------------- the Strategy page's strip
+// The brand a reader sees on Strategy: the published one, or the owner's draft before any publish; null when empty.
+function brandStripBody(d) {
+  const body = d?.published?.body || (grDocMay(d) ? d?.draft?.body : null);
+  return body && Object.values(body).some(v => v && (typeof v !== 'object' || Object.keys(v).length)) ? body : null;
+}
+// With no brand yet, the owner's way in (the Strategy page's setup row); others see nothing.
+const brandSetupHtml = d => d && grDocMay(d) && !brandStripBody(d) ? `<a class="ghost gr-btn" href="${BRAND_ROUTE}/edit">Set up brand</a>` : '';
 function brandStripHtml(d) {
-  if (!d) return '';
-  const may = grDocMay(d), body = d.published?.body || (may ? d.draft?.body : null);
-  if (!body || !Object.values(body).some(v => v && (typeof v !== 'object' || Object.keys(v).length)))
-    return may ? `<a class="ghost gr-btn" href="${BRAND_ROUTE}/edit">Set up brand</a>` : '';
+  const body = brandStripBody(d);
+  if (!body) return '';
+  const may = grDocMay(d);
   const colors = (body.visual?.colors || []).filter(c => brHex(c.hex)), hero = colors[0]?.hex, n = may ? grDocChanged(d) : 0;
   const traits = (body.voice || []).map(v => v.trait).filter(Boolean), never = (body.words?.avoid || []).map(w => w.word).filter(Boolean).slice(0, 4);
   return `<a class="br-strip" href="${BRAND_ROUTE}"><span class="br-strip-hero"${hero ? ` style="background:${brHex(hero)};color:${brInk(hero)}"` : ''}>
