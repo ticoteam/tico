@@ -431,6 +431,7 @@ fn subscribed(entry: &Value, runtime: &str) -> bool {
 /// Each assigned bot's row: what blocks its turns here (`problems`) and what only warns.
 pub async fn preflight(config: &Config, sign: &SignIn, assignments: &[Value], runtimes: &Map<String, Value>, computer_logins: bool) -> Vec<Map<String, Value>> {
     let mut rows = vec![];
+    let grants = crate::hosts::gemini::grant_names();
     for entry in assignments {
         let bot = text_of(&entry["bot"]);
         let expected = &entry["config"];
@@ -463,6 +464,7 @@ pub async fn preflight(config: &Config, sign: &SignIn, assignments: &[Value], ru
             .and_then(|r| r["data_problem"].as_str().map(String::from));
         // A bot-keyed runtime's key refused for this bot (signin.rs refusal_key); the runtime row never carries it.
         let refused = if signin::bot_keyed(&runtime) { sign.rejection(&runtime, profile.as_ref(), &bot) } else { None };
+        let mut sign_in = status.get("authenticated").cloned().unwrap_or(json!("unknown"));
         let mut problems: Vec<String> = vec![];
         let mut warnings: Vec<String> = crate::readiness_extra::credential_warnings(&bot);
         if !requested.is_empty() && !profiles::covers(expected) {
@@ -516,9 +518,16 @@ pub async fn preflight(config: &Config, sign: &SignIn, assignments: &[Value], ru
             // Signed in, but its turns can't save a session: the folder is the problem, not the sign-in.
             problems.push(problem.clone());
         } else if let Some(r) = refused {
+            sign_in = json!("rejected");
             problems.push(signed_out(format!("Sign-in rejected: {}", r.reason).chars().take(500).collect()));
         } else if status["authenticated"] == "rejected" {
             problems.push(signed_out(text_of(&status["detail"])));
+        } else if caps.sign_in_status.check == "bot-key" {
+            // Each bot holds its own key on this runtime, so the runtime's row (missing while any bot lacks one)
+            // does not decide for this bot: its own grant does, and another bot's missing key blocks nothing here.
+            let problem = crate::hosts::bot_key_problem(&runtime, expected, &bot, &grants);
+            sign_in = json!(if problem.is_some() { "missing" } else { "ready" });
+            problems.extend(problem);
         } else if (status["authenticated"] == "missing" || status["authenticated"] == "failed")
             && !(caps.api_key_in_turn && crate::harness_tools::api_key_env(&runtime).iter().any(|key| crate::hosts::gemini::has_grant(&bot, key)))
         {
@@ -565,7 +574,7 @@ pub async fn preflight(config: &Config, sign: &SignIn, assignments: &[Value], ru
         row.insert("repository".into(), json!(path.to_string_lossy()));
         row.insert("runtime".into(), json!(runtime));
         row.insert("profile".into(), json!(profile_name));
-        row.insert("sign_in".into(), status.get("authenticated").cloned().unwrap_or(json!("unknown")));
+        row.insert("sign_in".into(), sign_in);
         if let Some(problem) = data_problem {
             row.insert("data_problem".into(), json!(problem));
         }
@@ -829,5 +838,76 @@ mod tests {
         assert!(problems("readiness-alpha").contains("Sign-in rejected"), "{}", problems("readiness-alpha"));
         assert!(!problems("readiness-beta").contains("Sign-in rejected"), "{}", problems("readiness-beta"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A config whose projects folder holds a checkout (an AGENT.md) for each bot.
+    fn checkouts(bots: &[&str]) -> Config {
+        let root = std::env::temp_dir().join(format!("tico-preflight-{}", uuid::Uuid::new_v4().simple()));
+        for bot in bots {
+            let path = root.join(format!("bot-{bot}"));
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join("AGENT.md"), "# Bot\n").unwrap();
+        }
+        Config { path: PathBuf::new(), data: map(json!({"projects_dir": root.display().to_string()})) }
+    }
+
+    /// Each assigned bot's readiness row for `runtime`, with the runtime's row as its own sign-in check reports it.
+    async fn bot_rows(config: &Config, assignments: &[Value], runtime: &str) -> Vec<Map<String, Value>> {
+        let (state, detail) = crate::hosts::bot_key_sign_in(runtime, assignments);
+        let mut runtimes = Map::new();
+        runtimes.insert(runtime.into(), json!({"installed": true, "authenticated": state, "detail": detail}));
+        let sign = SignIn::new(Path::new(&config.str("projects_dir")));
+        preflight(config, &sign, assignments, &runtimes, false).await
+    }
+
+    fn row_of<'a>(rows: &'a [Map<String, Value>], bot: &str) -> &'a Map<String, Value> {
+        rows.iter().find(|r| r["bot"] == bot).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_bot_key_runtime_is_ready_per_bot_by_its_own_grant() {
+        use crate::hosts::gemini::set_credential_names;
+        let config = checkouts(&["has-key", "no-key", "gateway", "g-key", "g-none"]);
+        let pi_bots = [
+            json!({"bot": "has-key", "config": {"runtime": "pi", "harness": "pi", "model": "kimi-k3"}}),
+            json!({"bot": "no-key", "config": {"runtime": "pi", "harness": "pi", "model": "kimi-k3"}}),
+            json!({"bot": "gateway", "config": {"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"}}),
+        ];
+        let gemini_bots = [
+            json!({"bot": "g-key", "config": {"runtime": "gemini", "harness": "gemini", "model": "gemini-3.7-flash"}}),
+            json!({"bot": "g-none", "config": {"runtime": "gemini", "harness": "gemini", "model": "gemini-3.7-flash"}}),
+        ];
+        // The grants the server sent: one pi bot holds its OpenRouter key, one Gemini bot its Gemini key.
+        set_credential_names(&json!({"has-key": ["OPENROUTER_API_KEY"], "g-key": ["GEMINI_API_KEY"]}));
+        // One bot without its key marks the runtime missing, yet only that bot is not ready.
+        // The Tico model needs no key of its own.
+        assert_eq!(crate::hosts::bot_key_sign_in("pi", &pi_bots).0, "missing");
+        let rows = bot_rows(&config, &pi_bots, "pi").await;
+        let (has_key, no_key, gateway) = (row_of(&rows, "has-key"), row_of(&rows, "no-key"), row_of(&rows, "gateway"));
+        assert_eq!((has_key["ready"].clone(), has_key["problems"].clone()), (json!(true), json!([])));
+        assert_eq!(no_key["ready"], json!(false));
+        assert_eq!(no_key["problems"], json!(["OpenRouter API key required"]));
+        assert_eq!(no_key["sign_in"], json!("missing"));
+        assert_eq!((gateway["ready"].clone(), gateway["problems"].clone()), (json!(true), json!([])));
+        // The same for Gemini CLI bots.
+        assert_eq!(crate::hosts::bot_key_sign_in("gemini", &gemini_bots).0, "missing");
+        let rows = bot_rows(&config, &gemini_bots, "gemini").await;
+        let (g_key, g_none) = (row_of(&rows, "g-key"), row_of(&rows, "g-none"));
+        assert_eq!((g_key["ready"].clone(), g_key["problems"].clone()), (json!(true), json!([])));
+        assert_eq!(g_none["ready"], json!(false));
+        assert_eq!(g_none["problems"], json!(["Gemini API key required"]));
+        // Once every bot holds its key, the runtimes and every bot are ready.
+        set_credential_names(&json!({
+            "has-key": ["OPENROUTER_API_KEY"], "no-key": ["OPENROUTER_API_KEY"],
+            "g-key": ["GEMINI_API_KEY"], "g-none": ["GEMINI_API_KEY"]
+        }));
+        assert_eq!(crate::hosts::bot_key_sign_in("pi", &pi_bots).0, "ready");
+        let pi_rows = bot_rows(&config, &pi_bots, "pi").await;
+        let gemini_rows = bot_rows(&config, &gemini_bots, "gemini").await;
+        for row in pi_rows.iter().chain(gemini_rows.iter()) {
+            assert_eq!((row["ready"].clone(), row["problems"].clone()), (json!(true), json!([])), "{row:?}");
+        }
+        set_credential_names(&json!({}));
+        let _ = std::fs::remove_dir_all(config.str("projects_dir"));
     }
 }
