@@ -91,6 +91,16 @@ def add_routine(api, due, key="r1"):
                   (scheduler.stamp(sleep_idle.datetime.fromtimestamp(due, sleep_idle.timezone.utc)), aid))
 
 
+def online_computer(api):
+    """A runner that reports in now. Runner setup seeds the Librarian's and the market's daily routines with real next-due
+    times, so a run near one of them would see a routine blocker; these tests are about the computer, so the seeded
+    routines are taken off the clock."""
+    r = runner(api, "ana")
+    ready(api, r, [])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE automations SET next_due=NULL WHERE next_due IS NOT NULL")
+
+
 def quiet(api, minutes=60):
     with api.app.state.store.read() as c:
         return service(api).quiet(c, minutes, sleep_idle.now())
@@ -452,8 +462,7 @@ def test_a_failing_cell_backs_off_like_hq_and_reaches_health(api, hq, cell):
 
 def test_an_online_bot_computer_keeps_a_cell_company_up_until_it_goes_quiet(api, hq, cell):
     turn_on(api, 1)
-    r = runner(api, "ana")
-    ready(api, r, [])                        # the computer reports in now
+    online_computer(api)                     # the computer reports in now
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == "computer_online"
     tick(api)
@@ -487,8 +496,7 @@ def test_tico_updates_alone_is_not_a_cell_so_sleep_is_off_by_default(api, hq, ma
 def test_tico_updates_alone_asks_hq_with_runners_and_no_computer_blocker(api, hq, managed_only):
     state = turn_on(api, 1, runners=False)
     assert (state["minutes"], state["source"], state["managed"], state["active"]) == (60, "owner", False, True)
-    r = runner(api, "ana")
-    ready(api, r, [])                        # an online bot computer: only a cell counts it as a blocker
+    online_computer(api)                     # an online bot computer: only a cell counts it as a blocker
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == ""
     tick(api)
@@ -501,7 +509,6 @@ def test_outside_a_cell_nothing_is_defaulted_and_an_online_computer_does_not_blo
     assert (state["minutes"], state["source"], state["managed"]) == (0, "default", False)
     turn_on(api, 2)
     assert (get(api, "sleep")["sleep"]["minutes"], get(api, "sleep")["sleep"]["source"]) == (120, "owner")
-    r = runner(api, "ana")
-    ready(api, r, [])
+    online_computer(api)
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == ""
