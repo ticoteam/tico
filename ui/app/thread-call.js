@@ -12,6 +12,8 @@ const CALL_REFRESH_MS = 4 * 60 * 1000;
 const CALL_THREADS = new Map();
 let CALL = null;           // the call this tab is in: {id, threadId, title, connector, room, token, url, timer, muted, sharing}
 let CALL_LIB_LOAD = null;
+// Each join takes the next number; a join that a newer one overtook stops before it turns the microphone on.
+let CALL_GEN = 0;
 // Named here so scripts/build-icon-font.py keeps them in the icon subset.
 const CALL_ICONS = {mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', bot: 'smart_toy', leave: 'call_end'};
 
@@ -76,14 +78,20 @@ function callLib() {
   return CALL_LIB_LOAD;
 }
 async function callJoin(threadId, call, title) {
+  const gen = ++CALL_GEN;
   if (CALL) await callLeave();
+  if (gen !== CALL_GEN) return;
   const j = await post(callPath(call.id) + '/join', {});
+  // Overtaken while joining: this seat is given back and the newer join goes on.
+  const stale = () => { if (gen === CALL_GEN) return false; post(callPath(call.id) + '/leave', {}).catch(() => {}); return true; };
+  if (stale()) return;
   const LK = await callLib();
+  if (stale()) return;
   const room = new LK.Room({adaptiveStream: false, dynacast: false});
   CALL = {id: call.id, threadId, title: title || call.title || 'Call', connector: (j.call || call).connector, room,
-          token: j.token, url: j.url, muted: false, sharing: false, leaving: false, timer: 0};
+          token: j.token, url: j.url, muted: false, sharing: false, leaving: false, timer: 0, gen};
   const here = CALL;
-  room.on(LK.RoomEvent.TrackSubscribed, (track, pub, who) => callTrackOn(track, who));
+  room.on(LK.RoomEvent.TrackSubscribed, (track, pub, who) => { if (CALL === here) callTrackOn(track, who); });
   room.on(LK.RoomEvent.TrackUnsubscribed, track => { track.detach().forEach(el => el.remove()); callScreenSync(); });
   room.on(LK.RoomEvent.ParticipantConnected, callBarDraw);
   room.on(LK.RoomEvent.ParticipantDisconnected, callBarDraw);
@@ -97,11 +105,15 @@ async function callJoin(threadId, call, title) {
   try {
     await room.connect(j.url, j.token, {autoSubscribe: true});
   } catch (e) {
+    if (CALL !== here) return;
     callDone(here);
     throw e;
   }
+  // A newer join or a leave took over while this one connected: its room goes, and no microphone is turned on.
+  if (CALL !== here || gen !== CALL_GEN) { try { room.disconnect(); } catch {} return; }
   try { await room.localParticipant.setMicrophoneEnabled(true); }
   catch { here.muted = true; toast('Microphone blocked'); }
+  if (CALL !== here) { try { room.disconnect(); } catch {} return; }
   here.timer = setInterval(() => void callRefresh(here), CALL_REFRESH_MS);
   callBarDraw();
   callViewsDraw(threadId);
@@ -132,10 +144,22 @@ function callTrackOn(track, who) {
   callScreenSync();
 }
 function callScreenSync() { const box = $('#call-bar .call-screen'); if (box) box.hidden = !box.querySelector('video'); }
+// Leave always leaves. End must reach the server: when it does not, the call goes on, End stays and the error shows.
 async function callLeave({end = false} = {}) {
   const here = CALL; if (!here) return;
   here.leaving = true;
-  try { await post(callPath(here.id) + (end ? '/end' : '/leave'), {}); } catch {}
+  if (end) {
+    try { await post(callPath(here.id) + '/end', {}); }
+    catch (e) {
+      if (CALL !== here) return;
+      here.leaving = false;
+      toast(e?.message || 'Could not end the call', true);
+      callBarDraw();
+      return;
+    }
+  } else {
+    try { await post(callPath(here.id) + '/leave', {}); } catch {}
+  }
   callDone(here);
 }
 function callDone(here) {

@@ -56,8 +56,24 @@ const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'group:ops': ''};
 async function open(browser, who, {phone = false} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
-  const seen = {errors: [], posts: [], reads: [], homes: [], steps: []};
+  const seen = {errors: [], posts: [], reads: [], homes: [], steps: [], tasks: [], calls: []};
   page.on('pageerror', e => seen.errors.push(e.message));
+  page.on('dialog', d => d.accept());
+  // A stand-in media client: rooms connect after a moment and remember whether their microphone is on.
+  await page.addInitScript(() => {
+    window.__rooms = [];
+    window.LivekitClient = {
+      RoomEvent: {TrackSubscribed: 'ts', TrackUnsubscribed: 'tu', ParticipantConnected: 'pc', ParticipantDisconnected: 'pd', LocalTrackUnpublished: 'lu', Disconnected: 'd'},
+      Track: {Source: {ScreenShare: 'screen'}}, DisconnectReason: {PARTICIPANT_REMOVED: 'removed'},
+      Room: class {
+        constructor() { this.mic = false; this.gone = false; this.remoteParticipants = new Map(); const room = this;
+          this.localParticipant = {setMicrophoneEnabled: async on => { room.mic = on; }, setScreenShareEnabled: async () => {}}; window.__rooms.push(this); }
+        on() { return this; }
+        async connect(url, token) { this.token = token; await new Promise(r => setTimeout(r, 200)); }
+        disconnect() { this.gone = true; }
+      },
+    };
+  });
   const bob = who === 'bob';
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
@@ -96,6 +112,21 @@ async function open(browser, who, {phone = false} = {}) {
       return json({message: msg('n' + seen.posts.length, 9 + seen.posts.length, 'human:ana', body.text, {thread_id: send[1], parent_message_id: body.parent_message_id || null})});
     }
     if (p === '/api/v2/rule-holds/hold1') return json({id: 'hold1', can_send: false});
+    const react = p.match(/^\/api\/v2\/messages\/([^/]+)\/reactions\/(.+)$/);
+    // The server answers a reaction with the message's reactions, a bare list.
+    if (react) return json(method === 'PUT' ? [{emoji: decodeURIComponent(react[2]), count: 1, actors: ['human:ana']}] : []);
+    const task = p.match(/^\/api\/v2\/threads\/messages\/([^/]+)\/task$/);
+    if (task) { seen.tasks.push({message: task[1], ...JSON.parse(req.postData() || '{}')}); return json({id: 'task1', private: true}); }
+    if (p === '/api/v2/tasks' && method === 'POST') { seen.tasks.push({copied: true}); return json({id: 'task-copy'}); }
+    if (p === '/api/v2/threads/search') return json({hits: url.searchParams.get('q') === 'price' ? [{message_id: 'm2', thread_id: 't-plan', title: 'Launch plan',
+      from_actor: 'human:ana', created: at(58), excerpt: 'What price do we open with?'}] : [], next_cursor: null});
+    const call = p.match(/^\/api\/v2\/calls\/([^/]+)\/(join|leave|end|token)$/);
+    if (call) {
+      seen.calls.push(call[2] + ':' + call[1]);
+      if (call[2] === 'join') { await new Promise(r => setTimeout(r, 150)); return json({token: 'tok-' + call[1], url: 'wss://meet.acme.example', call: {id: call[1], connector: 'human:ana'}}); }
+      if (call[2] === 'end') return json({error: {code: 'internal', detail: 'Could not end'}}, 500);
+      return json({ok: true});
+    }
     const steps = p.match(/^\/api\/v2\/turns\/([^/]+)\/steps$/);
     if (steps) { seen.steps.push(steps[1]); return json({steps: [{kind: 'tool', tool: 'search', text: 'pricing notes', at: at(57)}]}); }
     return json(unrouted(p));
@@ -166,6 +197,54 @@ async function shot(page, name) {
     await page.waitForFunction(() => document.querySelectorAll('.th-reply').length === 0);
     assert.equal(seen.posts.at(-1).parent_message_id, 'm1');
 
+    // Acknowledge: mine comes from the reactors the server lists, and its bare-list answer settles the row.
+    await page.locator('.th-msg[data-mid="m1"]').hover();
+    await page.locator('.th-msg[data-mid="m1"] [data-th-ack]').click();
+    await page.locator('.th-msg[data-mid="m1"] .th-react.me[aria-pressed="true"]').waitFor();
+    await page.locator('.th-msg[data-mid="m1"] .th-react').click();
+    await page.waitForFunction(() => !document.querySelector('.th-msg[data-mid="m1"] .th-react'));
+
+    // Make task: the server makes it from the message; the page never copies the words into a task of its own.
+    await page.locator('.th-msg[data-mid="m1"]').hover();
+    await page.locator('.th-msg[data-mid="m1"] [data-th-more]').click();
+    await page.locator('.thv-pop').getByText('Make task').click();
+    await page.locator('#thread-task button[type="submit"]').click();
+    await page.waitForFunction(() => !document.querySelector('#thread-task[open]'));
+    assert.deepEqual(seen.tasks.map(t => t.message), ['m1']);
+    assert.ok(!seen.tasks.some(t => t.copied), 'no task made from copied text');
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+
+    // A late page from the server keeps a newer message the stream already showed.
+    await page.evaluate(() => threadViewsLive('messages', {id: 'live1', thread_id: 't-plan', root_id: 't-plan',
+      message: {id: 'live1', seq: 60, revision: 1, thread_id: 't-plan', from_actor: 'human:bea', body: 'Arrived live.', created: new Date().toISOString()}}));
+    await page.getByText('Arrived live.').waitFor();
+    await page.evaluate(() => thvRefresh([...THV_VIEWS].find(v => v.id === 't-plan')));
+    assert.equal(await page.locator('.th-msg[data-mid="live1"]').count(), 1, 'the refresh did not wipe the live message');
+
+    // Posting closed (archived) hides the composer; reopened, it is back with what was typed.
+    await page.locator('.thv-composer .p-text').fill('Kept while archived');
+    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); v.thread = {...v.thread, me: {...v.thread.me, can_post: false}}; thvDraw(v); });
+    assert.equal(await page.locator('.thv-composer').isHidden(), true);
+    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); v.thread = {...v.thread, me: {...v.thread.me, can_post: true}}; thvDraw(v); });
+    assert.equal(await page.locator('.thv-composer .p-text').inputValue(), 'Kept while archived');
+    await page.locator('.thv-composer .p-text').fill('');
+
+    // Two joins at once: the later one wins, the earlier seat is given back, and only one microphone is ever on.
+    await page.evaluate(() => { void callJoin('t-plan', {id: 'c1'}, 'A').catch(() => {}); void callJoin('t-plan', {id: 'c2'}, 'B').catch(() => {}); });
+    await page.locator('#call-bar [data-cb="end"]').waitFor();
+    await page.waitForFunction(() => window.__rooms.some(r => r.mic));
+    await page.waitForTimeout(400);
+    const rooms = await page.evaluate(() => window.__rooms.map(r => ({token: r.token, live: r.mic && !r.gone})));
+    assert.deepEqual(rooms.filter(r => r.live).map(r => r.token), ['tok-c2'], 'one live microphone: ' + JSON.stringify(rooms));
+    assert.ok(seen.calls.includes('leave:c1'), 'the overtaken join gives its seat back');
+    // End that fails is not Leave: the call goes on and End stays to try again.
+    await page.locator('#call-bar [data-cb="end"]').click();
+    await page.locator('.toast.err', {hasText: 'Could not end'}).waitFor();
+    assert.equal(await page.locator('#call-bar [data-cb="end"]').count(), 1);
+    await page.locator('#call-bar [data-cb="leave"]').click();
+    await page.waitForFunction(() => !document.querySelector('#call-bar'));
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+
     // Tapping a sub-thread message opens the sub-thread, with the way back.
     await page.locator('.th-msg[data-mid="s2"] .th-body').click();
     await page.waitForFunction(() => location.hash === '#/thread/t-sub');
@@ -187,12 +266,29 @@ async function shot(page, name) {
     await page.waitForFunction(() => location.hash === '#/bot/ops/dm');
     await page.locator('#pane-chat [data-talk="dm"][aria-selected="true"]').waitFor();
     await page.locator('#bot-thread .thv-composer .p-text').waitFor();
+    // The DM keeps its actions in a compact row: the thread menu is there without a title line.
+    await page.locator('#bot-thread .thv-compact [data-thv-menu]').waitFor();
     await shot(page, 'bot-dm-desktop');
+    // A draft survives a switch to Home and back.
+    await page.locator('#bot-thread .thv-composer .p-text').fill('Half a thought');
+    await page.locator('#pane-chat [data-talk="home"]').click();
+    await page.getByText('Weekly numbers are in the doc.').waitFor();
+    await page.locator('#pane-chat [data-talk="dm"]').click();
+    await page.locator('#pane-chat [data-talk="dm"][aria-selected="true"]').waitFor();
+    assert.equal(await page.locator('#bot-thread .thv-composer .p-text').inputValue(), 'Half a thought');
 
     // A person's Home under their profile, with the update card.
     await page.goto('https://tico-ui.test/#/person/bea');
     await page.locator('#person-home .th-update').waitFor();
     await shot(page, 'person-desktop');
+
+    // Search in Threads: hits from the threads search, each opening its thread at the message.
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#th-search').click();
+    await page.locator('#thp-q').fill('price');
+    await page.locator('.thp-hit').first().click();
+    await page.waitForFunction(() => location.hash === '#/thread/t-plan?m=m2');
+    await page.locator('.th-msg.th-focus[data-mid="m2"]').waitFor();
 
     // New DM: a picker of teammates.
     await page.goto('https://tico-ui.test/#/threads');

@@ -2418,6 +2418,9 @@ STABLE.extend([
     ("/api/v2/uploads/threads/{thread_id}/messages", "post", "Threads", "uploadThreadMessage",
      "A person's message with files in a thread (multipart: text, titles and the files); each file is linked to the "
      "message, under the chat upload limit", "ThreadUploaded"),
+    ("/api/v2/threads/messages/{message_id}/task", "post", "Threads", "makeTaskFromMessage",
+     "A task from a message I read: the server copies its text and a link back, and the task is private unless the "
+     "thread is company-wide", "TaskResult"),
 ])
 
 

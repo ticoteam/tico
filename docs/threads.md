@@ -110,6 +110,9 @@ and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The t
 - `POST /api/v2/threads/{id}/open-earlier`: a bot's manager opens its earlier messages to its Home readers.
 - `POST /api/v2/uploads/threads/{id}/messages`: a person posts a message with files attached (multipart, `text` and
   `files`), under the chat upload size caps. It is not in the CLI or MCP yet.
+- `POST /api/v2/threads/messages/{id}/task` with `title` and `owner`: a task made from a message you can read. The server
+  copies the message and a link back, and the task stays private unless the thread is company-wide. It is not in the
+  CLI or MCP yet.
 
 ## Webhooks
 

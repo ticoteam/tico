@@ -700,7 +700,7 @@ function botThreadShow(kind) {
   if (BOT.thread?.kind === kind && BOT.thread.view.host === host && !BOT.thread.view.gone) return;
   botThreadStop();
   const actor = 'bot:' + BOT.slug;
-  const view = threadMount(host, kind === 'home' ? {home: actor, header: false} : {dm: actor, header: false});
+  const view = threadMount(host, kind === 'home' ? {home: actor, header: 'compact'} : {dm: actor, header: 'compact'});
   BOT.thread = {kind, view};
 }
 function botThreadStop() {

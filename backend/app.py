@@ -7946,6 +7946,8 @@ def create_app(settings=None):
     org_rule_check.AUDIENCE["automation"] = replay_audience
     org_rule_check.install(app, store, auth, mutate)
     thread_api.install(app, store, auth, mutate, rule_check)     # thread routes (§3.4); /threads/search before /threads/{id}
+    from . import thread_tasks
+    thread_tasks.install(app, store, auth, create_task, settings.public_url or "")    # Make task from a message
     counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
     profiles.install(app, store, auth, mutate, settings_admin)

@@ -4,14 +4,18 @@
 'use strict';
 
 let THREAD_PAGE = null;
+// `?m=<message id>` (a search hit) opens the thread at that message.
 function pageThread(id) {
-  const main = $('#main');
+  const main = $('#main'), focus = new URLSearchParams(S.route.split('?')[1] || '').get('m') || '';
   main.classList.add('chat-layout', 'thread-layout');
-  if (THREAD_PAGE?.id === id && THREAD_PAGE.host.isConnected) return;
+  if (THREAD_PAGE?.id === id && THREAD_PAGE.host.isConnected) {
+    if (focus && THREAD_PAGE.view.state !== 'loading') void thvFocus(THREAD_PAGE.view, focus);
+    return;
+  }
   threadUnmount(THREAD_PAGE?.view);
   main.innerHTML = '<div class="thread-page" id="thread-page"></div>';
   const host = $('#thread-page');
-  THREAD_PAGE = {id, host, view: threadMount(host, {id})};
+  THREAD_PAGE = {id, host, view: threadMount(host, {id, ...(focus ? {focus} : {})})};
 }
 
 // ----------------------------------------------------------------- the list
@@ -24,9 +28,11 @@ async function pageThreads() {
       <button type="button" class="ghost thp-search" id="th-search" aria-label="Search" title="Search"><span class="nav-icon" aria-hidden="true">search</span></button>
       <button type="button" class="primary" data-thp-new>${dms ? 'New DM' : 'New thread'}</button></header>
     ${withActor ? `<p class="thp-filter"><a class="linkish" href="${THREADS_ROUTE}">All threads</a></p>` : ''}
+    <div class="thp-searchbar" hidden><input type="search" id="thp-q" placeholder="Search threads" aria-label="Search threads" autocomplete="off"></div>
+    <div id="thp-hits" hidden></div>
     <div id="threads-all"><div class="muted">Loading…</div></div>
     <button type="button" class="ghost small" id="threads-more" hidden>More</button></div>`;
-  $('#th-search').onclick = () => searchOpen();
+  threadSearchWire(main);
   main.querySelector('[data-thp-new]').onclick = () => threadNewOpen({dm: dms, members: withActor ? [withActor] : []});
   const route = S.route;
   const st = {attention: [], threads: [], dms: [], next: null};
@@ -56,6 +62,43 @@ async function pageThreads() {
   $('#threads-more').onclick = ev => { ev.currentTarget.disabled = true; load(st.next).finally(() => { ev.currentTarget.disabled = false; }); };
   try { await load(''); }
   catch (e) { if (S.route === route) $('#threads-all').innerHTML = `<p class="empty">${esc(e.status === 404 ? 'Threads are not on this server yet' : e.message)}</p>`; }
+}
+
+// ----------------------------------------------------------------- search
+// Words in the threads the viewer may read (GET /v2/threads/search); a hit opens its thread at that message.
+function threadSearchWire(main) {
+  const bar = main.querySelector('.thp-searchbar'), q = $('#thp-q'), hits = $('#thp-hits');
+  const route = S.route;
+  let n = 0, timer = 0, next = null;
+  const draw = (list, more, add) => {
+    const html = list.map(h => `<li><a class="thp-hit" href="${threadHref(h.thread_id)}?m=${encodeURIComponent(h.message_id)}">
+        <span class="thp-hit-head"><strong>${esc(h.title || 'Thread')}</strong><span class="muted">${esc(actorName(h.from_actor))}</span>
+        <time class="muted">${esc(ago(h.created))}</time></span><span class="thp-hit-x">${esc(h.excerpt || '')}</span></a></li>`).join('');
+    if (add) hits.querySelector('.thp-hits').insertAdjacentHTML('beforeend', html);
+    else hits.innerHTML = list.length ? `<ul class="thp-hits">${html}</ul>` : '<p class="empty">No matches</p>';
+    hits.querySelector('[data-thp-more]')?.remove();
+    if (more) hits.insertAdjacentHTML('beforeend', '<button type="button" class="ghost small" data-thp-more>More</button>');
+  };
+  const run = async (add = false) => {
+    const words = q.value.trim(), mine = ++n;
+    hits.hidden = !words; main.querySelector('.threads-page')?.classList.toggle('searching', !!words);
+    if (!words) return;
+    const p = new URLSearchParams({q: words, limit: '20'});
+    if (add && next) p.set('before', next);
+    try {
+      const r = await get('/v2/threads/search?' + p, {fresh: true});
+      if (mine !== n || S.route !== route) return;
+      next = r.next_cursor || null;
+      draw(r.hits || [], !!next, add);
+    } catch (e) { if (mine === n) hits.innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
+  };
+  q.oninput = () => { clearTimeout(timer); timer = setTimeout(() => void run(), 250); };
+  q.onkeydown = ev => { if (ev.key === 'Escape') { q.value = ''; void run(); bar.hidden = true; } };
+  hits.onclick = ev => { if (ev.target.closest('[data-thp-more]')) void run(true); };
+  $('#th-search').onclick = () => {
+    bar.hidden = !bar.hidden;
+    if (bar.hidden) { q.value = ''; void run(); } else q.focus();
+  };
 }
 
 // ----------------------------------------------------------------- choosing teammates
@@ -228,7 +271,8 @@ function threadShareOpen(view) {
 }
 
 // ----------------------------------------------------------------- make task
-// A task from a message: its text, a link back to the message, and an owner the viewer may give work to.
+// A task from a message: the server copies the message, keeps its privacy and links back; the viewer picks the title
+// and an owner they may give work to.
 function threadMakeTask(m, view) {
   const dlg = threadDialog('thread-task', 'Make task');
   const first = v2Firstline(m.body).slice(0, 120);
@@ -243,10 +287,8 @@ function threadMakeTask(m, view) {
   form.onsubmit = async ev => {
     ev.preventDefault();
     const title = form.elements.namedItem('title').value.trim(); if (!title) return;
-    const link = `${location.origin}${location.pathname}${threadHref(m.thread_id || view.id)}`;
-    const body = `${m.body || ''}\n\n[From ${actorName(m.from_actor)} in ${threadTitle(view.thread) || 'a thread'}](${link})`;
     try {
-      const r = await post('/v2/tasks', {title, body, owner: form.elements.namedItem('owner').value});
+      const r = await post('/v2/threads/messages/' + encodeURIComponent(m.id) + '/task', {title, owner: form.elements.namedItem('owner').value});
       dlg.close();
       const id = r?.task?.id || r?.id;
       toast('Task made', false, id ? {label: 'Open', run: () => { location.hash = '#/task/' + id; }} : undefined);
