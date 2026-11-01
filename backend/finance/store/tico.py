@@ -67,7 +67,7 @@ def _admins(c: sqlite3.Connection, people: Sequence[Mapping[str, Any]]) -> froze
     from ... import access as A
     stored = _metadata(c, A.ACCESS)
     stored = cast(dict[str, Any], stored) if isinstance(stored, dict) else {}
-    emails: list[str] = A.emails(stored["admins"] if "admins" in stored else stored.get("bot_admins"))
+    emails = cast(list[str], A.emails(stored["admins"] if "admins" in stored else stored.get("bot_admins")))
     by_email = {str(p.get("email") or "").strip().lower(): "human:" + str(p.get("id") or "") for p in people}
     for row in c.execute("SELECT lower(email), id FROM humans WHERE email IS NOT NULL AND email<>''"):
         by_email.setdefault(str(row[0]), "human:" + str(row[1]))
