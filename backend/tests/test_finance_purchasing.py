@@ -248,11 +248,15 @@ def test_a_queued_bill_payment_past_a_hold_payment_budget_waits_and_marking_the_
         pid = str(queued.result["payment_id"])
         assert act(c, OWNER, "budget_update", {"budget_id": budget.result["budget_id"],
                                                "amount": 50_000}).status == "committed"
+        c.execute("UPDATE fin_recipients SET provider_recipient_id='rcp-acme' WHERE id=?", (rid,))
         # Queued at Mercury, the payment waits (no send, no approval asked of a person) until the budget fits.
         assert FP.recheck(load(c, AT), SK.get(c, "fin_payments", pid)) == "wait"
         assert SK.get(c, "fin_payments", pid)["status"] == "queued"
         paid = act(c, OWNER, "bill_mark_paid", {"bill_id": bill})
         assert paid.status == "denied" and "waits until it fits" in str(paid.reason), paid
+        assert act(c, OWNER, "budget_update", {"budget_id": budget.result["budget_id"],
+                                               "amount": 100_000}).status == "committed"
+        assert FP.recheck(load(c, AT), SK.get(c, "fin_payments", pid)) == ""
 
 
 def test_an_order_no_budget_covers_is_approved_and_reports_it_not_held(books):
