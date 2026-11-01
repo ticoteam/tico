@@ -234,11 +234,18 @@ class SlackAPI:
         data = self.call("conversations.history", {"channel": channel, "oldest": oldest, "limit": limit, "cursor": cursor})
         return list(data.get("messages") or []), str((data.get("response_metadata") or {}).get("next_cursor") or "").strip()
 
-    def history_metadata(self, channel, oldest):
-        """One page of messages newer than `oldest` with their metadata: where an uncertain send's delivery id is looked for."""
+    def history_metadata_page(self, channel, oldest, cursor=""):
+        """One page of messages newer than `oldest` with their metadata, and the cursor for the next ("" at the end): where
+        an uncertain send's delivery id is looked for."""
         data = self.call("conversations.history", {"channel": channel, "oldest": oldest, "limit": HISTORY_PAGE,
-                                                   "include_all_metadata": "true"})
-        return list(data.get("messages") or [])
+                                                   "cursor": cursor, "include_all_metadata": "true"})
+        return list(data.get("messages") or []), str((data.get("response_metadata") or {}).get("next_cursor") or "").strip()
+
+    def replies_metadata_page(self, channel, thread_ts, oldest, cursor=""):
+        """One page of a thread's replies with their metadata, and the cursor for the next ("" at the end)."""
+        data = self.call("conversations.replies", {"channel": channel, "ts": thread_ts, "oldest": oldest,
+                                                   "limit": HISTORY_PAGE, "cursor": cursor, "include_all_metadata": "true"})
+        return list(data.get("messages") or []), str((data.get("response_metadata") or {}).get("next_cursor") or "").strip()
 
     def post_thread_message(self, channel, thread_ts, text, delivery_id):
         """A message as the Tico app, never as a person, carrying its delivery id so an uncertain send can be found."""
@@ -597,8 +604,8 @@ class Gateway:
             return why
         if not event["event_id"]:
             return "shape"
-        if event["op"] in ("store", "edit", "delete") and self.bridge.linked(event["channel"]):
-            return self.bridge.receive(event)       # a linked channel goes to its thread, not the readers' pass
+        if event["op"] in ("store", "edit", "delete", "route") and self.bridge.linked(event["channel"]):
+            return self.bridge.receive(event)       # every event of a linked channel, mentions too, goes to its thread
         if event["op"] in ("edit", "delete"):
             return self.amend(event)
         with self.store.transaction() as c:
@@ -674,7 +681,8 @@ class Gateway:
                 return []
             rows = [dict(r) for r in c.execute(
                 "SELECT * FROM slack_events WHERE state='stored' AND author='human' AND channel_kind='channel' "
-                "AND processed IS NULL AND received>=? ORDER BY received, ts LIMIT 50", (since,))]
+                "AND processed IS NULL AND received>=? AND channel NOT IN (SELECT channel_id FROM slack_thread_links "
+                "WHERE channel_id<>'' AND state IN ('active','suspended')) ORDER BY received, ts LIMIT 50", (since,))]
         out = []
         for event in rows:
             with self.store.read() as c:
@@ -1474,6 +1482,13 @@ class Gateway:
         return results
 
     # ------------------------------------------------------------------ the readers' pass
+    def linked_channels(self):
+        """The channel ids a thread link carries now (active or suspended). Their messages reach the thread through the
+        bridge, so the readers' pass (backfill, digest, automations) leaves them out, rows stored before the link included."""
+        with self.store.read() as c:
+            return {r[0] for r in c.execute("SELECT DISTINCT channel_id FROM slack_thread_links WHERE channel_id<>'' "
+                                            "AND state IN ('active','suspended')")}
+
     def readable(self):
         """The listed channels (Settings > Tools > Slack) that have readers, by channel id."""
         self.resolve_names()
@@ -1512,7 +1527,8 @@ class Gateway:
         and replies in every thread the gateway knows. Stores only; nothing found here is routed
         (the fast lane is the socket's), so an old mention never wakes a bot late."""
         stored = 0
-        channels = self.readable()
+        linked = self.linked_channels()
+        channels = {cid: entry for cid, entry in self.readable().items() if cid not in linked}
         with self.store.read() as c:
             since = {cid: self.newest_ts(c, cid) for cid in channels}
             threads = [(r["channel"], r["thread_ts"]) for r in c.execute(
@@ -1668,7 +1684,8 @@ class Gateway:
 
     def digest(self):
         """Every reader gets what is unread in its channels, once, and its cursors move with it."""
-        channels = self.readable()
+        linked = self.linked_channels()
+        channels = {cid: entry for cid, entry in self.readable().items() if cid not in linked}
         with self.store.read() as c:
             active = {r["slug"] for r in c.execute("SELECT slug FROM bots WHERE state='active'")}
         by_reader = {}
