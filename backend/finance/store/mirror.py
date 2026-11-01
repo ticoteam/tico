@@ -114,11 +114,23 @@ def unmatched_rows(c: sqlite3.Connection, book_id: str, most: int) -> list[Any]:
 
 
 def link_feed(c: sqlite3.Connection, old_entry: str, new_entry: str) -> None:
-    """Bank rows that pointed at an entry now point at its replacement, each at the replacement's line on the same
-    account for the same amount (none when there is no such line)."""
-    c.execute("UPDATE fin_feed_txns SET entry_id=?, entry_line_id=(SELECT n.id FROM fin_lines n JOIN fin_lines o ON "
-              "o.id=fin_feed_txns.entry_line_id WHERE n.entry_id=? AND n.account_id=o.account_id AND n.amount=o.amount "
-              "ORDER BY n.id LIMIT 1) WHERE entry_id=?", (new_entry, new_entry, old_entry))
+    """Bank rows that pointed at an entry now point at its replacement, each at the replacement's line for the leg it
+    was matched to: the same account and amount, nearest in position, and a line no other row has taken. Equal legs
+    stay separate lines. A row with no such line is left without one."""
+    news = c.execute("SELECT id, account_id, amount, line_no FROM fin_lines WHERE entry_id=? ORDER BY line_no, id",
+                     (new_entry,)).fetchall()
+    rows = c.execute("SELECT f.id, o.account_id, o.amount, o.line_no FROM fin_feed_txns f LEFT JOIN fin_lines o "
+                     "ON o.id=f.entry_line_id WHERE f.entry_id=? ORDER BY o.line_no, f.id", (old_entry,)).fetchall()
+    taken: set[str] = set()
+    moves: list[tuple[str, str | None, str]] = []
+    for fid, account, amount, position in rows:
+        options = [(abs(int(n_no) - int(position)), int(n_no), str(n_id)) for n_id, n_acc, n_amt, n_no in news
+                   if str(n_id) not in taken and account is not None and n_acc == account and n_amt == amount]
+        leg = min(options)[2] if options else None
+        if leg is not None:
+            taken.add(leg)
+        moves.append((new_entry, leg, str(fid)))
+    c.executemany("UPDATE fin_feed_txns SET entry_id=?, entry_line_id=? WHERE id=?", moves)
 
 
 def unlink_feed(c: sqlite3.Connection, entry_id: str, at: str) -> None:

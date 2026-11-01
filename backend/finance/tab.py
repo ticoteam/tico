@@ -99,15 +99,20 @@ def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, 
     if closed is not None:
         ctx = closed
     view = ctx.view(viewer)
-    whole = view.everything or view.balance_sheet
-    if not whole and not view.bs_lines:
+    granted = view.everything or view.balance_sheet
+    if not granted and not view.bs_lines:
         raise denied("the balance sheet is the owner's unless granted")
-    shown = [a for a in ctx.accounts.values() if a.type not in PNL_TYPES and (whole or a.id in view.bs_lines)]
+    # A private account (payroll by person) shows only to who has its full detail: its balance moves with each pay run,
+    # so one run's amount would show on it. A sheet that leaves one out is scoped, since its net income would show what
+    # the line holds.
+    cut = set(private_cut(ctx, view))
+    lines = [a for a in ctx.accounts.values() if a.type not in PNL_TYPES and (granted or a.id in view.bs_lines)]
+    shown = [a for a in lines if a.id not in cut]
+    whole = granted and len(shown) == len(lines)
     sums = SK.balances(c, ctx.book.id, day, [a.id for a in shown])
     kinds = SK.sources_by_account(c, ctx.book.id, day, [a.id for a in shown])
     money = [r for r in SK.money_accounts(c, ctx.book.id) if str(r["account_id"] or "") in {a.id for a in shown}]
     owed: dict[str, tuple[int, int]] = {}
-    cut = set(private_cut(ctx, view))
     for r in SK.live_payments(c, ctx.book.id):          # what is on its way out, as far as this viewer sees payments
         if payment_seen(ctx, view, cut, r):
             n, total = owed.get(str(r["money_account_id"]), (0, 0))

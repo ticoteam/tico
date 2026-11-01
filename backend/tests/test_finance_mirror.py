@@ -1409,6 +1409,36 @@ def test_wages_paid_through_a_quickbooks_payroll_liability_hide_their_bank_row_f
         assert c.execute("SELECT status FROM fin_feed_txns").fetchone()[0] == "matched"
 
 
+def test_a_payroll_liability_stays_off_the_balance_sheet_for_a_viewer_without_its_detail(books):
+    fake = FakeBooks()
+    _chart(fake)
+    base = {"SyncToken": "1", "Active": True}
+    fake.records["accounts"] += [
+        Q.account_record({**base, "Id": "7", "Name": "Wages", "AcctNum": "6200", "AccountType": "Expense",
+                          "AccountSubType": "PayrollExpenses"}),
+        Q.account_record({**base, "Id": "8", "Name": "Wages payable", "AcctNum": "2150",
+                          "AccountType": "Other Current Liability", "AccountSubType": "PayrollClearing"})]
+    fake.records["entries"] = [journal(71, 1, "2026-10-05", 123456, debit="Account:7", credit="Account:8"),
+                               journal(72, 1, "2026-10-12", 123456, debit="Account:8", credit="Account:1")]
+    cid = _connection(books)
+    with books.transaction() as c:
+        _bank_on(c, "1000", -123456, "2026-10-12", "Gusto")
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        assert act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "balance_sheet"}).status == "committed"
+    with books.read() as c:
+        def lines(who: str, day: str) -> list[tuple[str, int]]:
+            sheet = FR.balance_sheet(c, who, as_of=day, at=AT)
+            return [(str(r["code"]), int(r["balance"])) for kind in ("assets", "liabilities", "equity")
+                    for r in sheet[kind]]
+        assert ("2150", 123456) in lines(OWNER, "2026-10-06")          # the owner sees the balance the pay run leaves
+        assert all(code != "2150" for code, _ in lines("human:cara", "2026-10-06"))
+        sheet = FR.balance_sheet(c, "human:cara", as_of="2026-10-06", at=AT)
+        assert sheet["scoped"] is True                                   # no net income line that would reveal it
+        assert all(amount != 123456 for _, amount in lines("human:cara", "2026-10-06"))
+
+
 _TEAM_RULE = {
     "name": "No eng bills", "when": {"kind": "bill_create", "tags.team": "eng"},
     "outcome": {"outcome": "deny", "reason": "eng bills wait"},
@@ -1533,3 +1563,30 @@ def test_a_revised_transfer_keeps_each_bank_row_on_its_own_leg_of_the_new_entry(
                                             "ORDER BY amount").fetchall()]
         assert rows == [(-3000, "matched", new, leg[-3000]), (-2500, "matched", new, leg[-2500])]
         assert c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0] == 0
+
+
+def test_a_revised_journal_with_two_equal_legs_gives_each_bank_row_its_own_replacement_leg(books):
+    fake = FakeBooks()
+    _chart(fake)
+
+    def pair(rev: int) -> M.Journal:
+        return M.Journal(M.Ext("JournalEntry", "81", str(rev)), "2026-10-05", "Acme Software", "sync",
+                         (M.EntryLine("Account:2", 2500), M.EntryLine("Account:1", -2500),
+                          M.EntryLine("Account:2", 2500), M.EntryLine("Account:1", -2500)))
+    fake.records["entries"] = [pair(1)]
+    cid = _connection(books)
+    with books.transaction() as c:
+        _bank_rows(c, "1000", "Checking", [(-2500, "2026-10-05"), (-2500, "2026-10-05"), (-2500, "2026-10-05")])
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    fake.changes = [pair(2)]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        new = _entry_of(c, "JournalEntry:81")
+        checking = _local(c, "Account:1", "fin_accounts")
+        legs = sorted(str(r[0]) for r in c.execute(
+            "SELECT id FROM fin_lines WHERE entry_id=? AND account_id=?", (new, checking)).fetchall())
+        matched = sorted(str(r[0]) for r in c.execute(
+            "SELECT entry_line_id FROM fin_feed_txns WHERE status='matched'").fetchall())
+        assert len(legs) == 2 and matched == legs                         # each row on its own leg, none shared
+        assert [str(r[0]) for r in c.execute("SELECT status FROM fin_feed_txns WHERE status='new'").fetchall()] == ["new"]
