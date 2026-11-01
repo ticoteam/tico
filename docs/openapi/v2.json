@@ -8100,6 +8100,40 @@
             }
           },
           {
+            "name": "location_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          },
+          {
             "name": "view_as",
             "in": "query",
             "required": false,
@@ -10470,6 +10504,76 @@
         ]
       }
     },
+    "/api/v2/finance/contacts/{contact_id}": {
+      "get": {
+        "summary": "One vendor or customer, active or not, to whoever sees its side",
+        "operationId": "getFinanceContact",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceContact"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/expenses": {
       "get": {
         "summary": "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line. The owner may pass view_as",
@@ -10965,6 +11069,40 @@
               "minimum": 1,
               "default": 50,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "location_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
             }
           },
           {
@@ -22787,6 +22925,40 @@
             }
           },
           {
+            "name": "location_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          },
+          {
             "name": "view_as",
             "in": "query",
             "required": false,
@@ -22842,7 +23014,7 @@
     },
     "/api/v2/purchase-orders/{po_id}": {
       "get": {
-        "summary": "One purchase order with its lines and what each line has billed",
+        "summary": "One purchase order with its lines, what each line has billed, the bills on it and the approvals asked",
         "operationId": "getPurchaseOrder",
         "parameters": [
           {
@@ -40398,6 +40570,13 @@
               },
               "view_version": {
                 "type": "integer"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
               }
             },
             "required": [
@@ -42028,12 +42207,32 @@
           "more": {
             "type": "boolean"
           },
+          "classes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
           "view_version": {
             "type": "integer"
           }
         },
         "required": [
           "accounts",
+          "classes",
           "more",
           "view_version"
         ],
@@ -42203,6 +42402,95 @@
         "required": [
           "kind",
           "status"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceContact": {
+        "type": "object",
+        "properties": {
+          "contact": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "vendor",
+                  "customer",
+                  "both"
+                ]
+              },
+              "emails": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "default_account": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": true
+              },
+              "is_1099": {
+                "type": "boolean"
+              },
+              "has_tax_id": {
+                "type": "boolean"
+              },
+              "tax_id_last4": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "recipient_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "owed": {
+                "type": "object",
+                "properties": {
+                  "bills": {
+                    "type": "integer"
+                  },
+                  "invoices": {
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "additionalProperties": true
+              },
+              "created_at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "active",
+              "id",
+              "kind",
+              "name"
+            ],
+            "additionalProperties": true
+          },
+          "view_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "contact",
+          "view_version"
         ],
         "additionalProperties": true
       },
@@ -43135,6 +43423,50 @@
           },
           "memo": {
             "type": "string"
+          },
+          "billed": {
+            "type": "integer"
+          },
+          "held": {
+            "type": "integer"
+          },
+          "locations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
           }
         },
         "required": [
@@ -51560,6 +51892,48 @@
               },
               "view_version": {
                 "type": "integer"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "bills": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "vendor": {
+                      "type": "string"
+                    },
+                    "date": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "on_order": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "on_order",
+                    "total"
+                  ],
+                  "additionalProperties": true
+                }
               }
             },
             "required": [

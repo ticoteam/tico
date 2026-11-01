@@ -2132,6 +2132,7 @@ provider_users = tab_money.provider_users
 bills = tab_ap.bills
 invoices = tab_ap.invoices
 contacts = tab_ap.contacts
+contact = tab_ap.contact
 bill = tab_ap.bill
 invoice = tab_ap.invoice
 chart = tab_ap.chart

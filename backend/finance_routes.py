@@ -291,12 +291,15 @@ def install(app, store, auth, mutate):
     def finance_purchase_orders(request: Request, status: str | None = Query(None, max_length=80),
                                 vendor_id: str | None = Query(None, max_length=80),
                                 q: str = Query("", max_length=100), cursor: str | None = Query(None, max_length=600),
-                                limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+                                limit: int = Query(50, ge=1, le=200),
+                                location_id: str | None = Query(None, max_length=80),
+                                project_id: str | None = Query(None, max_length=80), view_as: str | None = None):
         """Purchase orders the caller sees (payables), newest first; `next_cursor` pages. `status` takes
-        draft|sent|approved|partial|closed|void, and `q` searches number, memo and vendor name."""
+        draft|sent|approved|partial|closed|void, `q` searches number, memo and vendor name, and `location_id` and
+        `project_id` keep those with a line tagged with it."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.orders(c, actor, status=status, vendor_id=vendor_id, q=q, cursor=cursor,
-                                                   limit=limit))
+                                                   limit=limit, location_id=location_id, project_id=project_id))
 
     @app.get("/api/v2/purchase-orders/{po_id}")
     def finance_purchase_order(request: Request, po_id: ID, view_as: str | None = None):
@@ -308,12 +311,15 @@ def install(app, store, auth, mutate):
     def finance_estimates(request: Request, status: str | None = Query(None, max_length=80),
                           customer_id: str | None = Query(None, max_length=80),
                           q: str = Query("", max_length=100), cursor: str | None = Query(None, max_length=600),
-                          limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+                          limit: int = Query(50, ge=1, le=200), location_id: str | None = Query(None, max_length=80),
+                          project_id: str | None = Query(None, max_length=80), view_as: str | None = None):
         """Estimates the caller sees (receivables), newest first; `next_cursor` pages. `status` takes
-        draft|sent|accepted|declined|invoiced, and `q` searches number, memo and customer name."""
+        draft|sent|accepted|declined|invoiced, `q` searches number, memo and customer name, and `location_id` and
+        `project_id` keep those with a line tagged with it."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.estimates(c, actor, status=status, customer_id=customer_id, q=q,
-                                                      cursor=cursor, limit=limit))
+                                                      cursor=cursor, limit=limit, location_id=location_id,
+                                                      project_id=project_id))
 
     @app.get("/api/v2/estimates/{estimate_id}")
     def finance_estimate(request: Request, estimate_id: ID, view_as: str | None = None):
@@ -452,13 +458,15 @@ def install(app, store, auth, mutate):
                          start: str | None = Query(None, pattern=DAY), end: str | None = Query(None, pattern=DAY),
                          aging: Aging | None = None, late: bool = False,
                          cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
-                         view_as: str | None = None):
+                         location_id: str | None = Query(None, max_length=80),
+                         project_id: str | None = Query(None, max_length=80), view_as: str | None = None):
         """Invoices the caller sees (receivables), newest first, with the open total by aging bucket. `status` takes
-        draft|sent|partial|paid|void|unpaid, comma-separated; `late` keeps those past due."""
+        draft|sent|partial|paid|void|unpaid, comma-separated; `late` keeps those past due; `location_id` and
+        `project_id` keep those with a line tagged with it."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.invoices(c, actor, status=status, customer_id=customer_id, q=q,
                                                      start=start, end=end, aging=aging, late=late, cursor=cursor,
-                                                     limit=limit))
+                                                     limit=limit, location_id=location_id, project_id=project_id))
 
     @app.get("/api/v2/finance/invoices/{invoice_id}")
     def finance_invoice(request: Request, invoice_id: ID, view_as: str | None = None):
@@ -475,6 +483,12 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.contacts(c, actor, kind=kind, q=q, active=active, cursor=cursor,
                                                      limit=limit))
+
+    @app.get("/api/v2/finance/contacts/{contact_id}")
+    def finance_contact(request: Request, contact_id: ID, view_as: str | None = None):
+        """One vendor or customer, active or not, to whoever sees its side."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.contact(c, actor, contact_id))
 
     @app.get("/api/v2/finance/chart")
     def finance_chart(request: Request, for_: Literal["bill", "invoice", "journal"] | None = Query(None, alias="for"),
