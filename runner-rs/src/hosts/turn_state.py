@@ -94,5 +94,5 @@ def copy(source, destination, source_uid, target_uid, gid):
 if __name__ == "__main__":
     try:
         copy(**json.load(sys.stdin))
-    except Exception:
+    except Exception:  # noqa: BLE001 - This process boundary must suppress private path tracebacks.
         sys.exit(1)

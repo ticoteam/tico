@@ -144,7 +144,7 @@ def main():
         die_with_parent(request.get("parent"))
         result = grant(request["kind"], request["minimum"], request.get("previous"), request.get("previousAccess"))
         print(json.dumps(result))
-    except Exception:
+    except Exception:  # noqa: BLE001 - This process boundary must suppress credential-bearing tracebacks.
         # Neither token bytes, filesystem paths nor the vendor's error text may reach a task/capture.
         sys.exit(1)
 
