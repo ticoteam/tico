@@ -3065,6 +3065,9 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
     target = _reach(conn, actor, to_actor, allow_held=True)
     refs = dict(refs or {})
     warnings = []
+    from . import threads
+    if threads.never_wakes(refs, target):
+        refs["quiet"] = True       # decided before anything below reads quiet: no hold, no note, no run
 
     if is_bot(actor) and actor == target:
         refuse(conn, actor, "self", "a bot cannot send work to itself")
@@ -3094,20 +3097,9 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
 
     # rules 4 and 7: what a person has to read
     if is_bot(actor) and is_human(target) and kind in ("say", "notice"):
-        parent = (_one(conn, "SELECT from_actor,conversation_id FROM messages WHERE id=?", (in_reply_to,))
-                  if in_reply_to else None)
-        replying_to_person = bool(parent and parent["from_actor"] == target and
-                                  parent["conversation_id"] == conv["id"])
-        solicited = (replying_to_person or _opener(conn, conv["id"]) == target or
-                     bool(refs.get("task") or refs.get("approval")))
-        if not solicited:
-            day = now()[:10]
+        if not threads.solicited(conn, conv["id"], actor, target, refs, in_reply_to):
             # Counted per delivery (backend/threads.py): what reached this person, addressed or not.
-            n = conn.execute(
-                "SELECT COUNT(*) FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
-                "WHERE m.from_actor=? AND d.recipient=? AND d.created_at>=? "
-                "AND m.refs_json LIKE '%\"unsolicited\": true%'",
-                (actor, target, day)).fetchone()[0]
+            n = threads.unsolicited_today(conn, actor, target)
             if n >= UNSOLICITED_PER_DAY:
                 refuse(conn, actor, "unsolicited",
                        f"{n} unsolicited messages to {actor_id(target)} today; the cap is "
@@ -3392,6 +3384,9 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         refs = {**(refs or {}), wake_rules.CAUSED_BY: wake_rules.CAUSE.get()}
     # Token saving 2/9: a wake its bot's own write caused, or news about a parked task, waits for the next run. The
     # rules engine (backend/rules.py) decides, names the rule on the message (refs.rule) and fails open.
+    from . import threads as thread_rules
+    if thread_rules.never_wakes(refs, target) and not (refs or {}).get("quiet"):
+        refs = {**refs, "quiet": True}      # a writer that came here without `say` (a remote author's post)
     from . import rules as wake_rule_engine
     if isinstance(refs, dict) and wake_rule_engine.PARKED_NOTICE in refs:
         refs = {k: v for k, v in refs.items() if k != wake_rule_engine.PARKED_NOTICE}
@@ -5851,7 +5846,7 @@ def _refresh_comment_replies(conn, msg):
     def refresh(value):
         if isinstance(value, dict):
             if value.get("id") == msg["id"] and "from_actor" in value:
-                return msg
+                return {**value, **msg}     # what the route added beside the message (thread_id, warnings) stays
             return {k: refresh(v) for k, v in value.items()}
         if isinstance(value, list):
             return [refresh(v) for v in value if not (msg.get("deleted_at") and isinstance(v, dict)

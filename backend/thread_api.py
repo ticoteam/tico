@@ -38,6 +38,7 @@ class ThreadPatch(BaseModel):
     archived: bool | None = None
     audience: str | None = None
     audience_group_id: str | None = None
+    retention_days: int | None = None             # sent as null: keep its messages for good
 
 
 class ThreadPost(BaseModel):
@@ -300,6 +301,8 @@ def install(app, store, auth, mutate, rule_check):
                 threads.update(c, v, thread_id, title=body.title, archived=body.archived)
             if body.audience is not None:
                 threads.set_audience(c, v, thread_id, body.audience, audience_group_id=body.audience_group_id)
+            if "retention_days" in body.model_fields_set:
+                threads.set_retention(c, v, thread_id, body.retention_days)
             return threads.get(c, v, thread_id)
         return mutate(request, body, work)
 

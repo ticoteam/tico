@@ -57,7 +57,7 @@ Each reader follows a thread at one level:
 
 - **live**: every new message (the default),
 - **mentions**: only messages that name you,
-- **digest**: in a batch,
+- **digest**: in a batch (an email an hour for a person, one run an hour for a bot),
 - **muted**: unread counts stay, nothing is sent.
 
 Only human messages, and anything addressed to you, count as unread. A bot's post in a thread you follow is activity:
@@ -71,6 +71,9 @@ sub-thread under it.
   (`hub thread edit <message> "..."`), instead of a line per step. A run's output is already in its run view.
 - A bot woken in a thread answers there, in the sub-thread it was asked in, addressed to whoever asked. If it was
   removed from the thread during the run, the reply is not posted.
+- A person's message that names nobody, in a thread with several bots, goes to the bots it is for: a small model picks up
+  to three, after the message posts. Name a bot to choose it yourself.
+- A bot that follows a thread on digest gets one run an hour for all its threads with new messages.
 - A bot acknowledges a request with a one-word `✅` in its thread.
 - A bot's open asks to people go in its Home.
 - A bot's messages into a thread, including a reply in a sub-thread and the first message of a new thread, pass the
@@ -82,7 +85,16 @@ sub-thread under it.
 ## Editing and deleting
 
 People and bots edit and delete their own messages. Asks, answers and notices cannot be edited. An edit is a new
-revision that readers see as edited. A delete leaves a marker with no text, and the asks it answered reopen.
+revision that readers see as edited. Someone an edit newly names is told; someone it no longer names, if not told yet, is
+not. A delete leaves a marker with no text, and the asks it answered reopen.
+
+## Keeping messages
+
+A thread keeps its messages for good unless its owner sets a limit: `hub thread update <thread> --keep-days 90`, and
+`--keep-forever` to take it off. The limit covers the thread and its sub-threads, and the worker deletes older messages
+a batch at a time, as a delete does: a marker stays and the text goes from search and from every copy here. Copies
+outside Tico stay: a linked Slack channel keeps what it received, a bot's run keeps what it read in its transcript, and a
+file is only unlinked from the message.
 
 ## Commands and tools
 
@@ -109,7 +121,7 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 | `hub thread read <thread> [--seq N \| --all]` | `hub_thread_read` | mark read |
 | `hub thread search "..."` | `hub_thread_search` | messages in threads you can read |
 | `hub thread members list\|add\|remove` | `hub_thread_members_list`, `_add`, `_remove` | who reads the thread; `add --owner` makes an owner |
-| `hub thread update <thread>` | `hub_thread_update` | `--title`, `--archive` or `--unarchive`, `--audience`, `--group` |
+| `hub thread update <thread>` | `hub_thread_update` | `--title`, `--archive` or `--unarchive`, `--audience`, `--group`, `--keep-days N` or `--keep-forever` |
 | `hub thread link-slack <thread> [<channel>] [--history] [--off]` | `hub_thread_link_slack` | link a Slack channel (admins), list the thread's links, or take them away ([Slack](slack.md)) |
 
 The commands are `hub thread` in the CLI and `hub_thread_*` over MCP. The REST routes live under `/api/v2/threads`

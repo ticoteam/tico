@@ -14,7 +14,7 @@ from clients import gateway, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
-from . import browser_exit, claim_holds, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, turn_budgets
+from . import browser_exit, claim_holds, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, thread_bot_digest, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
@@ -3522,6 +3522,7 @@ class Execution:
         c.execute("UPDATE attempts SET wake_json=?,handed_runtime=?,handed_model=? WHERE id=?",
                   (json.dumps(wake_presets.record(c, job, msg, row["bot"])), *handed, aid))
         c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, conv["id"]))
+        thread_bot_digest.grant(c, aid, msg)
         task_models.handed(c, aid, task["id"] if task else None, model_record)
         held = None
         source = source_continuation(c, row["id"])
@@ -4230,6 +4231,7 @@ class Execution:
             c.execute("UPDATE attempt_inputs SET attempt_id=?,acked_at=? WHERE message_id=?", (aid, H.now(), queued["id"]))
             c.execute("INSERT OR IGNORE INTO attempt_inputs VALUES(?,?,?)", (aid, queued["id"], H.now()))
             c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, queued["conversation_id"]))
+            thread_bot_digest.grant(c, aid, dict(queued))
             c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE id=?", (aid, queued["job_id"]))
             H.mark_delivered(c, H.KEEPER, queued["id"])
             text = str(queued["body"] or "")
@@ -4402,6 +4404,7 @@ class Execution:
                       "WHERE message_id=?", (aid, aid, row["id"]))
             c.execute("INSERT OR IGNORE INTO attempt_inputs VALUES(?,?,NULL)", (aid, row["id"]))
             c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, row["conversation_id"]))
+            thread_bot_digest.grant(c, aid, dict(row))
             claim_holds.clear(c, row["job_id"], "Its held run went into a running turn.")
             c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE message_id=?", (aid, row["id"]))
             taken += 1

@@ -41,7 +41,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub thread read <thread> [--seq N | --all]
     hub thread search "<words>" [--cursor C]   the messages in threads you can read
     hub thread members list|add|remove <thread> [<actor>] [--owner]   actors: human:<id>, bot:<slug>, group:<id>
-    hub thread update <thread> [--title T] [--archive|--unarchive] [--audience ...] [--group G]
+    hub thread update <thread> [--title T] [--archive|--unarchive] [--audience ...] [--group G] [--keep-days N|--keep-forever]
     hub thread link-slack <thread> [<channel>] [--history] [--off]
                                            a thread's Slack link (admins): with a channel, asks for it and Tico
                                            checks it; --history also brings the channel's earlier messages; --off
@@ -1067,6 +1067,9 @@ def parser():
     s.add_argument("--audience", choices=["members", "team", "company"],
                    help="team or company makes it public; only its starter or an admin can")
     s.add_argument("--group", dest="audience_group_id", help="with --audience team: the group's id")
+    s.add_argument("--keep-days", dest="retention_days", type=int,
+                   help="delete its messages after this many days, sub-threads included (a root thread's owner or admin)")
+    s.add_argument("--keep-forever", dest="keep_forever", action="store_true", help="keep its messages for good")
     s.set_defaults(fn="thread update")
     s = thread.add_parser("link-slack", help="link a thread to a Slack channel (admins), list its links, or --off to take them away")
     s.add_argument("thread", help="the thread's id")
