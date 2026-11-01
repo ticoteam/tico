@@ -14,6 +14,8 @@ signed-in person as they commit, filtered to what that person may read:
 - `messages`: a message as a conversation page shows it, a deleted one, or a chat goal change.
 - `runs`: a bot run's output step, or its state moving (queued, started, finished).
 - `bots`: a bot's status line, as `GET /api/v2/status` shows it.
+- `threads`: every thread the viewer reads, whatever is on screen: `conversation=` and `thread=` narrow `messages` and
+  `runs` only, so the sidebar stays live while a thread is open (docs/dev/threads-contract.md §9).
 - `needs`: the viewer's own Needs-you list, whole, when anything on it may have moved. A page that asks
   `needs=changes` is sent its `count`, `version`, and the ids `changed` and `removed` since `base` instead (both
   null when more than NEEDS_CHANGES_MAX moved: read the list whole), and reads only those items
@@ -120,6 +122,10 @@ _ANY_COLUMN = "__any_column_changed__"
 
 FAN_CAP = 100      # more tasks than this in one change: one `bulk` row, and lists read in full
 
+# A message that moves its thread's row for its readers: not a carrier, which a page does not show (contract §9).
+_NOT_CARRIER = ("NEW.conversation_id IS NOT NULL AND "
+                "COALESCE(json_extract(CASE WHEN json_valid(NEW.refs_json) THEN NEW.refs_json END,'$.carries'),'')=''")
+
 
 def _fan(kind, ids, whole=None):
     """A `tasks` row for each task id `ids` (a SELECT of one column, `id`) yields: a change to
@@ -218,11 +224,15 @@ TRIGGERS = [
      _fan("run", "SELECT id FROM tasks WHERE carried_by=NEW.id")),
     ("changes_messages_insert", "INSERT", "messages", None,
      _row("messages", "insert", "NEW.id", conversation="NEW.conversation_id")
+     + _row("threads", "activity", "NEW.conversation_id", ref="NEW.id", conversation="NEW.conversation_id",
+            where=_NOT_CARRIER)
      + _needs("ask", "NEW.to_actor", "NEW.from_actor", where="NEW.kind IN ('ask','answer')")),
     # Delivery and read receipts move on every message a bot takes; they are not a change to show.
     ("changes_messages_update", "UPDATE", "messages",
      _changed("body", "refs_json", "kind", "answered_by", "edited_at", "deleted_at", "conversation_id", "superseded_at"),
      _row("messages", "update", "NEW.id", conversation="NEW.conversation_id")
+     + _row("threads", "activity", "NEW.conversation_id", ref="NEW.id", conversation="NEW.conversation_id",
+            where=f"({_changed('deleted_at')}) AND {_NOT_CARRIER}")
      + _needs("ask", "NEW.to_actor", where="NEW.kind='ask'")),
     ("changes_messages_delete", "DELETE", "messages", None,
      _row("messages", "delete", "OLD.id", conversation="OLD.conversation_id")),
@@ -237,8 +247,9 @@ TRIGGERS = [
     # name would replace each other on every boot.
     ("changes_thread_followers_needs", "UPDATE", "thread_followers", _changed("last_read_seq"),
      _needs("thread", "NEW.actor")),
-    ("changes_org_rule_holds_insert", "INSERT", "org_rule_holds", None, _needs("hold", "NEW.reviewer")),
-    ("changes_org_rule_holds_update", "UPDATE", "org_rule_holds", _changed("state"), _needs("hold", "NEW.reviewer")),
+    ("changes_org_rule_holds_insert", "INSERT", "org_rule_holds", None, _needs("hold", "NEW.reviewer", "NEW.author")),
+    ("changes_org_rule_holds_update", "UPDATE", "org_rule_holds", _changed("state"),
+     _needs("hold", "NEW.reviewer", "NEW.author")),
     ("changes_chat_goals_insert", "INSERT", "chat_goals", None,
      _row("messages", "goal", "NEW.id", conversation="NEW.conversation_id", bot="NEW.bot")),
     ("changes_chat_goals_update", "UPDATE", "chat_goals", None,
@@ -410,9 +421,9 @@ RUNNER_TRIGGERS = [
 ]
 TRIGGERS += RUNNER_TRIGGERS
 
-# Threads (docs/dev/threads-contract.md §9): `subject_id` and `conversation_id` are the thread id. The per-message
-# counters move with every message, which the `messages` topic already carries, so `counters` is written only when a
-# message is not the cause (a migration or a repair).
+# Threads (docs/dev/threads-contract.md §9): `subject_id` and `conversation_id` are the thread id. A message's change
+# writes `activity` (in the messages triggers above), for a sidebar that follows no conversation; `counters` is written
+# only when a message is not the cause (a migration or a repair).
 _ATTENTION_WHERE = ("NEW.thread_id IS NOT NULL AND NEW.recipient LIKE 'human:%' "
                     "AND NEW.state IN ('pending','delivered','capped')")
 # A delivery that leaves the needs-you set (pending to read, say) is a change to that set too.
@@ -1220,8 +1231,8 @@ def _messages(view, rows, shared=None):
 
 def _threads(view, rows):
     """The `threads` topic (contract §9): one event per thread and kind, as it stands now. A `read` row goes only to
-    the reader it names; a thread the viewer cannot read sends nothing. A call's `call.*` rows go to the people who may
-    read the call's thread."""
+    the reader it names; a thread the viewer cannot read sends nothing, and an `activity` row only for a message the
+    viewer reads. A call's `call.*` rows go to the people who may read the call's thread."""
     from . import calls, threads
     out, last = [], {}
     for row in rows:
@@ -1236,6 +1247,7 @@ def _threads(view, rows):
         # Reactions are per message: one event for each message whose reactions moved.
         last[(row["subject_id"], row["kind"], row["ref"] if row["kind"] == "reactions" else None)] = row
     view.prime(subject for subject, _, _ in last)
+    H.prime_messages(view.c, [row["ref"] for (_, kind, _), row in last.items() if kind == "activity" and row["ref"]])
     for (tid, kind, ref), row in last.items():
         if not view.conversation(tid):
             continue
@@ -1253,6 +1265,11 @@ def _threads(view, rows):
                 continue
             entry["message_id"] = ref
             entry["reactions"] = view.known.reactions(threads.reactions(view.c, [ref]).get(ref, []), tid)
+        elif kind == "activity":
+            if not _activity_shown(view, found, row["ref"]):
+                continue
+            entry["counters"] = {"last_seq": found.get("last_seq") or 0,
+                                 "last_unread_seq": found.get("last_unread_seq") or 0}
         elif kind == "counters":
             entry["counters"] = {"last_seq": found.get("last_seq") or 0,
                                  "last_unread_seq": found.get("last_unread_seq") or 0}
@@ -1265,6 +1282,18 @@ def _threads(view, rows):
             entry["thread"] = threads.view(view.c, view.reader, found)
         out.append((row, entry))
     return out
+
+
+def _activity_shown(view, thread, message_id):
+    """Whether a message's change may move this viewer's row of its thread: they read the message, or read it before it
+    was deleted. Someone who opens a migrated Home only for its old history sees nothing new (threads.sidebar)."""
+    from . import threads
+    message = H.message(view.c, message_id, include_deleted=True) if message_id else None
+    if not message or threads.legacy_reader_only(view.c, view.reader, thread):
+        return False
+    if message.get("deleted_at"):
+        return not threads.legacy_hidden(view.c, view.reader, message) and _readable_before_deletion(view, dict(message))
+    return threads.message_readable(view.c, view.reader, message, thread_checked=True)
 
 
 def _readable_before_deletion(view, message):
@@ -1426,8 +1455,9 @@ class _Snapshot:
         for row in self.tail[bisect_right(self.seqs, after):]:
             topic = row["topic"]
             if (topic not in topics
-                    or conversations and topic in ("messages", "runs", "threads") and row["conversation_id"] not in conversations
-                    or threads_scope and topic in ("messages", "threads")
+                    or conversations and topic == "runs" and row["conversation_id"] not in conversations
+                    or (conversations or threads_scope) and topic == "messages"
+                    and row["conversation_id"] not in conversations
                     and not self._in_scope(row["conversation_id"], threads_scope)
                     or bots and topic in ("runs", "bots") and row["bot"] not in bots
                     or follow_tasks and topic == "tasks" and row["kind"] != "bulk" and row["subject_id"] not in tasks
@@ -1441,16 +1471,21 @@ class _Snapshot:
     def _read_changes(self, who, after, limit, topics, conversations, bots, tasks, parties, threads_scope):
         clauses, args = ["seq>?", "topic IN (%s)" % ",".join("?" * len(topics))], [after, *topics]
         if conversations:
-            clauses.append("(topic NOT IN ('messages','runs','threads') OR conversation_id IN (%s))"
-                           % ",".join("?" * len(conversations)))
+            clauses.append("(topic<>'runs' OR conversation_id IN (%s))" % ",".join("?" * len(conversations)))
             args += list(conversations)
-        if threads_scope:               # ?thread=: the messages and threads of these threads' subtrees (by path)
+        followed = []                   # the messages on screen: these conversations' and these threads' subtrees
+        if conversations:
+            followed.append("conversation_id IN (%s)" % ",".join("?" * len(conversations)))
+            args += list(conversations)
+        if threads_scope:
             # A path ends in '/', so its subtree is the index range [path, path with that '/' made '0').
-            clauses.append("(topic NOT IN ('messages','threads') OR conversation_id IN (SELECT d.id FROM conversations d "
-                           "JOIN conversations t ON t.id IN (%s) AND d.path>=t.path "
-                           "AND d.path<substr(t.path,1,length(t.path)-1)||'0' AND substr(d.path,1,length(t.path))=t.path))"
-                           % ",".join("?" * len(threads_scope)))
+            followed.append("conversation_id IN (SELECT d.id FROM conversations d "
+                            "JOIN conversations t ON t.id IN (%s) AND d.path>=t.path "
+                            "AND d.path<substr(t.path,1,length(t.path)-1)||'0' AND substr(d.path,1,length(t.path))=t.path)"
+                            % ",".join("?" * len(threads_scope)))
             args += list(threads_scope)
+        if followed:
+            clauses.append("(topic<>'messages' OR %s)" % " OR ".join(followed))
         if bots:
             clauses.append("(topic NOT IN ('runs','bots') OR bot IN (%s))" % ",".join("?" * len(bots)))
             args += list(bots)

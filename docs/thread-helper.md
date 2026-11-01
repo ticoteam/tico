@@ -11,8 +11,8 @@ Threads that need the person sit in the same **Needs you** list as their tasks, 
 |---|---|---|
 | **Question** | A bot or a person asked them something in a thread, and they have not answered it | They post in that thread after the ask, or the ask is answered or deleted |
 | **Mention** | Someone @mentioned them (a bot's mention counts too), or addressed a message to them | They post in that thread after it, or it is deleted |
-| **Direct message** | A DM (a one-to-one or a migrated group DM) has a message past their read point that they may read, from a person or addressed to them | They read the DM |
-| **Held** | A write held for review (org rules, `org_rule_holds`) that they review, or that their bot posted for them (the person its bot reports up to) | The reviewer sends or keeps it; the person withdraws it (keeps it blocked) |
+| **Direct message** | A DM (a one-to-one or a migrated group DM) has a message past their read point that they may read and that is unread for them: from a person, addressed to them, or a bot's post in a group DM they are in | They read the DM |
+| **Held** | A write held for review (org rules, `org_rule_holds`) that they review, their own held post, or one their bot posted for them (the person its bot reports up to) | The reviewer sends or keeps it; the person withdraws it (keeps it blocked) |
 | **Paused** | A thread's bot replies were held back by the loop guard (`TICO_THREAD_LOOP_GUARD`, 6 an hour by default) | Its held replies resume, when a person posts in the thread or the hour passes |
 
 Bot posts that name nobody are activity, not attention. A paused thread is listed once, to the people who can manage
@@ -27,7 +27,7 @@ The list moves live. A delivery to the person, a change in its state, their read
 or decided each write a change, so the list is read again.
 
 **Email digest.** A person who follows a thread on **digest** (the thread's notify setting) gets one email an hour
-that lists the threads with new messages for them: each title, its unread count and a link to the thread. The email
+that lists the threads with new unread messages for them, the same ones the thread counts (never their own or another bot's post): each title, its unread count and a link to the thread. The email
 carries no message text and no author names. A title goes only for a thread the person can still read, checked
 message by message when the email is sent, and nothing is sent when nothing is new. The person's **Email digests**
 switch, under **Notifications** on their page, turns it off; what is unread waits until it is on again. The mail is
@@ -40,8 +40,10 @@ kept per person (their id). A live change and a refresh both check it, one after
 
 ## Follow-ups
 
-A bot's question to a person that stays unanswered for a day gets one nudge in its thread: a short line from Tico,
-addressed to the person, quoting the question. The nudge is written once and recorded, so it is never sent twice.
+A question to a teammate, from a person or a bot, that stays unanswered for a day gets one nudge in its thread: a short
+line from Tico, addressed to whoever was asked, quoting the question. A bot reads its nudge on its next run; the nudge
+starts none. The nudge is written once and recorded, so it is never sent twice. A question older than a week when the
+watcher first sees it stays as it is.
 
 A nudge takes the question's restriction and migrated audience, so no one who cannot read the question reads the nudge.
 A restricted or migrated question is nudged without its quote. A question whose recipient can no longer read it gets no
@@ -87,7 +89,7 @@ The card is posted as the author, so a bot's card in its own Home does not wake 
 ## Who can do what
 
 - Needs attention: the person sees their own items only.
-- Follow-ups: the watcher posts as Tico; the nudge goes to the person who was asked.
+- Follow-ups: the watcher posts as Tico; the nudge goes to the teammate who was asked.
 - Catch up: a person, for their own threads. Bots and other callers get a 403.
 - Held writes: the reviewer and the person their bot reports to see the held item and its card. Only the reviewer
   sends one; the person may withdraw it.

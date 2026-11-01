@@ -1,5 +1,5 @@
-"""Follow-ups: an ask a bot put to a person, unanswered past the threshold, gets one nudge in its thread. The watcher
-is plain code: it never queues a model run, a quiet run writes nothing, and an answered ask is never nudged."""
+"""Follow-ups: an ask to a teammate, from a person or a bot, unanswered past the threshold, gets one nudge in its
+thread. The watcher is plain code: it never queues a model run, a quiet run writes nothing, and an answered ask is never nudged."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -159,3 +159,28 @@ def test_one_failed_follow_up_does_not_stop_the_others(api, monkeypatch):
                            "ORDER BY conversation_id").fetchall()
     assert {r["conversation_id"]: r["nudge_message_id"] is not None for r in nudged} == {
         first: False, second: True}
+
+
+def test_a_persons_ask_to_a_person_and_to_a_bot_are_each_nudged_once_and_a_bot_is_not_woken(api):
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        tid = threads.create(c, "human:ana", title="Books", audience="members", members=["human:ben", "bot:finance"])["id"]
+        to_person = threads.post(c, "human:ana", tid, "Ben, is the Q3 close done?", kind="ask", to_actor="human:ben")
+        to_bot = threads.post(c, "human:ana", tid, "Finance, where is the Q3 invoice?", kind="ask", to_actor="bot:finance")
+    jobs = counts(api)[0]
+    done = sweep(api, later(25))
+    assert {(d["message"], d["to"]) for d in done} == {(to_person["id"], "human:ben"), (to_bot["id"], "bot:finance")}
+    assert counts(api)[0] == jobs                        # plain code: the nudge starts no run
+    assert sweep(api, later(48)) == []
+
+
+def test_an_ask_answered_by_a_post_is_not_nudged_and_one_older_than_the_rollout_stays_as_it_is(api):
+    with api.app.state.store.transaction() as c:
+        tid = threads.create(c, "human:ana", title="Books", audience="members", members=["human:ben"])["id"]
+        answered = threads.post(c, "human:ana", tid, "Ben, ready?", kind="ask", to_actor="human:ben")
+        threads.post(c, "human:ben", tid, "Yes.")
+    assert answered["id"] not in {d["message"] for d in sweep(api, later(25))}
+    with api.app.state.store.transaction() as c:
+        tid = threads.create(c, "human:ana", title="Old", audience="members", members=["human:ben"])["id"]
+        threads.post(c, "human:ana", tid, "Ben, from long ago?", kind="ask", to_actor="human:ben")
+    assert sweep(api, later(24 * 8)) == []

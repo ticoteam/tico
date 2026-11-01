@@ -2528,7 +2528,8 @@ SCHEMAS.update({
 })
 STABLE.extend([
     ("/api/v2/threads", "get", "Threads", "listThreads",
-     "The viewer's sidebar: needs attention, threads (recent first) and DMs they may read, one page (`cursor`); with "
+     "The viewer's sidebar, threads and DMs they may read: needs attention, then unread, then recent, one page "
+     "(`cursor`); a root's row sums its sub-threads for the viewer; with "
      "`with=<actor>`, only the threads that teammate is a member of", "ThreadSidebar"),
     ("/api/v2/threads", "post", "Threads", "createThread",
      "Start a thread (audience members unless asked otherwise); with `parent_message_id` it is a sub-thread; with `body` "

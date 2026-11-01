@@ -136,12 +136,12 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
             raise Problem("cursor", "Unknown cursor", 422) from None
     sql = (f"SELECT r.*, {activity} AS activity FROM conversations r WHERE " + " AND ".join(where)
            + " AND " + threads.readable_sql(c, v, "r") + " ORDER BY activity DESC, r.id DESC LIMIT ?")
+    rows = [dict(r) for r in c.execute(sql, (*args, limit * 3))]
+    rows = [r for r in rows if threads.thread_readable(c, v, r["id"])]
+    summaries = threads.subtree_summaries(c, v, [r["id"] for r in rows[:limit + 1]])
     found, budget = [], threads.MAX_PAGE_BYTES
-    for r in c.execute(sql, (*args, limit * 3)):
-        r = dict(r)
-        if not threads.thread_readable(c, v, r["id"]):
-            continue
-        item = threads.view(c, v, r)
+    for r in rows:
+        item = threads.view(c, v, r, summary=summaries.get(r["id"]))
         item["activity_seq"] = r["activity"] or 0
         budget -= len(json.dumps(item, default=str))
         if budget < 0 or len(found) >= limit:
@@ -477,13 +477,8 @@ def install(app, store, auth, mutate, rule_check):
             posted = threads.post(c, v, thread_id, body.text, kind=body.kind, to_actor=body.to,
                                   parent_message_id=body.parent_message_id, checked=checked["rc"],
                                   attachments=items or None)
-            if "id" not in posted:          # held: no file is linked to a message that was not written
+            if "id" not in posted:          # held: its files are in the hold's replay, linked when it is released
                 return posted
-            for item in items:
-                c.execute("INSERT INTO message_assets VALUES(?,?)", (posted["id"], item["id"]))
-            message = H.message(c, posted["id"])
-            refs = {**(message.get("refs") or {}), "attachments": items}
-            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), posted["id"]))
             return {"thread": threads.get(c, v, thread_id), "message": _thread_message(H.message(c, posted["id"]))}
         return await asyncio.to_thread(app.state.uploads.write, request, body, uploads, work)
 

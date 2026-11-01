@@ -1,10 +1,11 @@
 """Follow-ups on unanswered asks (the thread helper, spec 3.6).
 
-A bot's ask to a person, in a thread, that stays unanswered for AFTER gets one nudge in that same thread: a keeper
-notice addressed to the person, quoting the ask. Plain code on the scheduler's fixed cadence (backend/scheduler.py
-FIXED, the same shape as the Bookkeeper's watch): no model is called or woken here, and a run with nothing to nudge
-writes nothing. A nudge is recorded in `thread_followups` in the same transaction as the post, so one ask gets one
-nudge even when runs overlap or a restart replays the sweep.
+An ask to a teammate, from a person or a bot, that stays unanswered in its thread for AFTER gets one nudge in that same
+thread: a keeper notice addressed to whoever was asked, quoting the ask. A bot takes its nudge on its next run: the
+notice starts none. Plain code on the scheduler's fixed cadence (backend/scheduler.py FIXED, the same shape as the
+Bookkeeper's watch): no model is called or woken here, and a run with nothing to nudge writes nothing. A nudge is
+recorded in `thread_followups` in the same transaction as the post, so one ask gets one nudge even when runs overlap or
+a restart replays the sweep.
 
 An ask whose recipient can no longer read it is retired with no nudge, and so is one whose nudge fails: the row stays,
 so later runs do not reconsider it. Each ask runs in its own savepoint, so a failure rolls back only that ask.
@@ -21,6 +22,7 @@ SCHEMA = [
     "CREATE INDEX IF NOT EXISTS thread_followups_conversation ON thread_followups(conversation_id, created_at)",
 ]
 AFTER = timedelta(hours=24)     # an ask unanswered this long gets its one nudge
+TOO_OLD = timedelta(days=7)     # an ask older than this when first seen is history, not something to nudge
 NUDGE_LIMIT = 50                # asks nudged per run; the rest wait for the next run
 QUOTE_CHARS = 160
 
@@ -37,21 +39,24 @@ def _quote(body):
 
 
 def due(c, at, limit=NUDGE_LIMIT):
-    """Asks due a nudge, oldest first. An ask is due when a bot asked a person, it is still open and not expired, the
-    person has not answered or written in its thread since, the thread is not a task's (a task's asks sit on its own
-    Needs you card), and nothing has nudged it yet."""
+    """Asks due a nudge, oldest first. An ask is due when a teammate asked another teammate of this install, it is still
+    open and not expired, whoever was asked has not answered or written in its thread since, the thread is not a task's
+    (a task's asks sit on its own Needs you card), and nothing has nudged it yet."""
     cutoff = H.shift(at, seconds=-int(AFTER.total_seconds()))
+    oldest = H.shift(at, seconds=-int(TOO_OLD.total_seconds()))
     return [dict(r) for r in c.execute(
         "SELECT m.id, m.conversation_id, m.from_actor, m.to_actor, m.body, m.created "
         "FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-        "WHERE m.kind='ask' AND m.from_actor LIKE 'bot:%' AND m.to_actor LIKE 'human:%' "
+        "WHERE m.kind='ask' AND (m.from_actor LIKE 'human:%' OR m.from_actor LIKE 'bot:%') "
+        "AND (m.to_actor LIKE 'human:%' OR m.to_actor LIKE 'bot:%') AND m.to_actor NOT LIKE '%@%' "
+        "AND m.to_actor<>m.from_actor "
         "AND m.deleted_at IS NULL AND m.superseded_at IS NULL AND m.answered_by IS NULL "
-        "AND (m.expires_at IS NULL OR m.expires_at>?) AND m.created<=? "
+        "AND (m.expires_at IS NULL OR m.expires_at>?) AND m.created<=? AND m.created>? "
         "AND cv.closed_at IS NULL AND cv.archived_at IS NULL AND cv.task_id IS NULL "
         "AND NOT EXISTS (SELECT 1 FROM thread_followups f WHERE f.message_id=m.id) "
         "AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.conversation_id=m.conversation_id "
         "AND r.from_actor=m.to_actor AND r.created>m.created AND r.deleted_at IS NULL) "
-        "ORDER BY m.created LIMIT ?", (at, cutoff, limit)).fetchall()]
+        "ORDER BY m.created LIMIT ?", (at, cutoff, oldest, limit)).fetchall()]
 
 
 def _nudge(c, ask):

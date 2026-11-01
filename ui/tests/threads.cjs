@@ -158,6 +158,12 @@ async function shot(page, name) {
     assert.match(await page.locator('#dm-list .th-row-title').textContent(), /Bea/);
     await shot(page, 'sidebar-desktop');
 
+    // A message below an old thread, with another thread on screen: its row moves up with a dot, unread rows stay first.
+    await page.evaluate(() => liveEmit('threads', {kind: 'activity', thread_id: 't0-sub', root_id: 't0', actor: 'human:bea', counters: {last_seq: 900}}));
+    const moved = await page.locator('#th-list .th-row .th-row-title').allTextContents();
+    assert.equal(moved[3], 'Thread 0', 'the row moves up, below what is unread');
+    assert.equal(await page.locator('#th-list .th-row').nth(3).locator('.th-activity').count(), 1);
+
     // One thread: its sub-threads inline under their message, indented, deepest capped.
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('And churn was low.').waitFor();

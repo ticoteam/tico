@@ -102,8 +102,9 @@ def test_a_bot_has_no_my_dashboard_and_an_unknown_person_is_no_place(api):
         assert H.human(c, "cara")
 
 
-def test_unread_threads_reads_cores_sidebar_and_only_what_has_something_new(api, monkeypatch):
-    """The card reads `threads.sidebar` (docs/dev/threads-contract.md §10), which lists only readable threads."""
+def test_unread_threads_reads_cores_sidebar_and_only_what_is_unread(api, monkeypatch):
+    """The card reads `threads.sidebar` (docs/dev/threads-contract.md §10), which lists only readable threads. Another
+    bot's post is activity, not unread."""
     from backend import threads
     seen = []
     monkeypatch.setattr(threads, "viewer", lambda auth, who: who)
@@ -119,8 +120,8 @@ def test_unread_threads_reads_cores_sidebar_and_only_what_has_something_new(api,
     monkeypatch.setattr(threads, "sidebar", sidebar)
     cards = {p["card"]["template"]: p["card"] for p in place(api, "person:me", "cara-test")["pins"]}
     data = cards["unread_threads"]["data"]
-    assert [t["id"] for t in data["threads"]] == ["th-a", "dm-1", "th-b"]          # unread first, then activity
-    assert data["count"] == 2 and data["threads"][0]["unread"] == 2 and data["threads"][2]["activity"] is True
+    assert [t["id"] for t in data["threads"]] == ["th-a", "dm-1"]                  # newest first; th-b is activity only
+    assert data["count"] == 2 and data["threads"][0]["unread"] == 2
     assert seen == ["human:cara"]
 
 
