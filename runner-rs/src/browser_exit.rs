@@ -136,14 +136,30 @@ fn refused_v4(ip: Ipv4Addr) -> Option<&'static str> {
     V4.iter().find(|(base, len, _)| in_prefix(value, u32::from(Ipv4Addr::from(*base)) as u128, *len, 32)).map(|r| r.2)
 }
 
-fn refused_v6(ip: Ipv6Addr, deny: &[IpAddr]) -> Option<&'static str> {
+fn v6_rule(ip: Ipv6Addr) -> Option<&'static ([u16; 8], u8, Rule)> {
     let value = u128::from(ip);
-    let rule = V6.iter().find(|(base, len, _)| in_prefix(value, u128::from(Ipv6Addr::from(*base)), *len, 128));
-    let carried = |bits: u128| IpAddr::V4(Ipv4Addr::from(bits as u32));
-    match rule.map(|r| (r.1, r.2)) {
+    V6.iter().find(|(base, len, _)| in_prefix(value, u128::from(Ipv6Addr::from(*base)), *len, 128))
+}
+
+/// The IPv4 address a connection to `ip` reaches: itself, or the one an IPv4-mapped, NAT64 (64:ff9b::/96) or 6to4
+/// address carries. None for an IPv6 address that reaches IPv6.
+fn carried_v4(ip: IpAddr) -> Option<Ipv4Addr> {
+    let v6 = match canonical(ip) {
+        IpAddr::V4(v4) => return Some(v4),
+        IpAddr::V6(v6) => v6,
+    };
+    let value = u128::from(v6);
+    match v6_rule(v6).map(|r| r.2) {
+        Some(Rule::Nat64) => Some(Ipv4Addr::from(value as u32)),
+        Some(Rule::SixToFour) => Some(Ipv4Addr::from((value >> 80) as u32)),
+        _ => None,
+    }
+}
+
+fn refused_v6(ip: Ipv6Addr, deny: &[IpAddr]) -> Option<&'static str> {
+    match v6_rule(ip).map(|r| (r.1, r.2)) {
         // A transition address is the IPv4 address it reaches: every IPv4 rule and this computer's own apply.
-        Some((_, Rule::Nat64)) => refused(carried(value), deny),
-        Some((_, Rule::SixToFour)) => refused(carried(value >> 80), deny),
+        Some((_, Rule::Nat64 | Rule::SixToFour)) => refused(IpAddr::V4(carried_v4(IpAddr::V6(ip))?), deny),
         Some((3, _)) => None,
         Some((_, Rule::Refuse(why))) => Some(why),
         None => Some("an unallocated address"),
@@ -187,8 +203,9 @@ const SEEN_PATH: &str = "/api/v2/runners/me/browser-exit/seen";
 /// address (the router's, behind NAT), which a name could resolve to. Refused until a probe over IPv4 succeeds.
 static V4_UNKNOWN: AtomicBool = AtomicBool::new(true);
 
+/// Applies to every address that reaches IPv4 (carried_v4): a NAT64 or 6to4 address reaches the same router.
 fn ipv4_unknown(ip: IpAddr) -> Option<&'static str> {
-    (canonical(ip).is_ipv4() && V4_UNKNOWN.load(Ordering::SeqCst))
+    (carried_v4(ip).is_some() && V4_UNKNOWN.load(Ordering::SeqCst))
         .then_some("an IPv4 address, refused while this computer's public IPv4 address is unknown (the relay has not answered over IPv4)")
 }
 
@@ -221,7 +238,9 @@ async fn probe_families(client: &Client) -> bool {
     let mut learned = false;
     for ipv4 in [true, false] {
         let Some(addr) = addrs.iter().find(|a| a.is_ipv4() == ipv4) else { continue };
+        // Directly, as the link and the sites are dialled: through a proxy the relay would see the proxy's address.
         let Ok(http) = crate::tls::http_builder()
+            .no_proxy()
             .resolve(&host, *addr)
             .timeout(DIAL)
             .redirect(reqwest::redirect::Policy::none())
@@ -236,7 +255,9 @@ async fn probe_families(client: &Client) -> bool {
         };
         if let Some(ip) = answer["seen"].as_str().and_then(|ip| ip.parse::<IpAddr>().ok()) {
             remember_seen(&[ip]);
-            learned |= canonical(ip).is_ipv4();
+            // Only a public IPv4 address is the one a site could reach this computer at. A private one (a hub
+            // reached over the home network) leaves the router's public address unknown.
+            learned |= matches!(canonical(ip), IpAddr::V4(v4) if refused_v4(v4).is_none());
         }
     }
     learned
@@ -565,7 +586,8 @@ struct Proxy {
     /// Connections open at once; the accept loop waits for room before taking another.
     room: Arc<Semaphore>,
     task: Mutex<Option<tokio::task::AbortHandle>>,
-    started: Instant,
+    /// When a turn last took it: the heartbeat's sweep stops only a proxy no turn has taken since that heartbeat began.
+    used: Mutex<Instant>,
 }
 
 const ALWAYS: usize = usize::MAX;
@@ -579,7 +601,7 @@ impl Proxy {
             users: Mutex::new(HashMap::new()),
             room: Arc::new(Semaphore::new(PROXY_CONNECTIONS)),
             task: Mutex::new(None),
-            started: Instant::now(),
+            used: Mutex::new(Instant::now()),
         }
     }
 
@@ -656,8 +678,8 @@ fn drop_proxy(bot: &str, only: Option<&Arc<Proxy>>) {
 }
 
 /// Stop the proxy of every bot the heartbeat doesn't name as having an exit here: its exit was cleared, or it moved to
-/// another computer, between turns. `asked` is when that heartbeat was sent: a proxy started since then came from a
-/// claim newer than the answer, and stays.
+/// another computer, between turns. `asked` is when that heartbeat was sent: a proxy a turn has taken since then came
+/// from a claim newer than the answer, and stays.
 pub fn keep_proxies(bots: &[String], asked: Instant) {
     let gone = stale_proxies(&proxies().lock().unwrap(), bots, asked);
     for (bot, proxy) in gone {
@@ -667,7 +689,7 @@ pub fn keep_proxies(bots: &[String], asked: Instant) {
 
 fn stale_proxies(all: &HashMap<String, Arc<Proxy>>, bots: &[String], asked: Instant) -> Vec<(String, Arc<Proxy>)> {
     all.iter()
-        .filter(|(bot, proxy)| proxy.started < asked && !bots.contains(bot))
+        .filter(|(bot, proxy)| *proxy.used.lock().unwrap() < asked && !bots.contains(bot))
         .map(|(bot, proxy)| (bot.clone(), proxy.clone()))
         .collect()
 }
@@ -715,6 +737,7 @@ pub async fn turn_proxy(bot: &str, attempt: &Value) -> Result<Option<Admission>,
         }
     };
     *proxy.exit.lock().unwrap() = name;
+    *proxy.used.lock().unwrap() = Instant::now();
     let url = format!("http://127.0.0.1:{}", proxy.port);
     Ok(Some(Admission { proxy, leased: Vec::new(), url }))
 }
@@ -1272,8 +1295,16 @@ mod tests {
         let mut all = HashMap::new();
         all.insert("gc-moved".to_string(), moved.clone());
         all.insert("gc-kept".to_string(), Arc::new(Proxy::new(0, "Cara's MacBook".into())));
+        let reused = Arc::new(Proxy::new(0, "Cara's MacBook".into()));
+        all.insert("gc-reused".to_string(), reused.clone());
+        for proxy in all.values() {
+            *proxy.used.lock().unwrap() -= Duration::from_secs(1); // taken before the heartbeat went
+        }
         let asked = Instant::now();
         all.insert("gc-newer".to_string(), Arc::new(Proxy::new(0, "Cara's MacBook".into())));
+        // A heartbeat that left out gc-reused was slow to answer: its exit was set again and a turn took the proxy
+        // (turn_proxy) before the answer came.
+        *reused.used.lock().unwrap() = Instant::now();
         let gone = stale_proxies(&all, &["gc-kept".into()], asked);
         assert_eq!(gone.iter().map(|(bot, _)| bot.as_str()).collect::<Vec<_>>(), ["gc-moved"], "a newer proxy stays");
         proxies().lock().unwrap().insert("gc-moved".into(), moved);
@@ -1422,9 +1453,34 @@ mod tests {
             assert!(why.contains("public IPv4 address is unknown"), "{why}");
         }
         assert_eq!(ipv4_unknown("2606:4700::1111".parse().unwrap()), None, "IPv6 sites go on");
+        if has_ipv4_route() {
+            // The IPv4 Internet reached through IPv6 is the same router: NAT64, 6to4 and IPv4-mapped addresses wait too.
+            for carried in ["64:ff9b::5102:45aa", "2002:5102:45aa::1", "::ffff:81.2.69.170"] {
+                assert!(ipv4_unknown(carried.parse().unwrap()).is_some(), "{carried}");
+            }
+            // A hub reached over the home network sees a private address: the public one is still unknown.
+            let hub = seen_hub("200 OK", r#"{"seen":"192.168.1.20"}"#).await;
+            probe_seen(&Client::new(&hub, "runner-token", 5, 0).unwrap()).await;
+            assert!(ipv4_unknown("93.184.215.14".parse().unwrap()).is_some());
+        }
         let hub = seen_hub("200 OK", r#"{"seen":"81.2.69.170"}"#).await;
         probe_seen(&Client::new(&hub, "runner-token", 5, 0).unwrap()).await;
         assert_eq!(ipv4_unknown("93.184.215.14".parse().unwrap()), None);
         assert_eq!(refused("81.2.69.170".parse().unwrap(), &own_and_seen()), Some("this computer's own address"));
+        assert_eq!(
+            refused("64:ff9b::5102:45aa".parse().unwrap(), &own_and_seen()),
+            Some("this computer's own address")
+        );
+    }
+
+    #[test]
+    fn the_ipv4_address_an_ipv6_address_reaches_is_read_the_way_the_registry_filter_reads_it() {
+        let v4 = |s: &str| carried_v4(s.parse().unwrap()).map(|a| a.to_string());
+        assert_eq!(v4("81.2.69.170").as_deref(), Some("81.2.69.170"));
+        assert_eq!(v4("::ffff:81.2.69.170").as_deref(), Some("81.2.69.170"));
+        assert_eq!(v4("64:ff9b::5102:45aa").as_deref(), Some("81.2.69.170"));
+        assert_eq!(v4("2002:5102:45aa::1").as_deref(), Some("81.2.69.170"));
+        assert_eq!(v4("2606:4700::1111"), None);
+        assert_eq!(refused("2002:c0a8:0101::1".parse().unwrap(), &[]), Some("a private network address"));
     }
 }
