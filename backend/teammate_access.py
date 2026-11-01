@@ -1,0 +1,540 @@
+"""Who may see, read, write to and manage each teammate: a bot, a person or a group (docs/permissions.md).
+
+Every teammate has the same four levels:
+
+    see     know they exist: the org chart, lists, the @mention picker, their page
+    read    read their Home (for a bot, also its activity, as backend/bot_access.py describes)
+    write   DM them, add them to a thread; posting in their Home needs Read too
+    manage  edit their settings and their access
+
+See, Read and Write each name an audience, in the shape bots have always had (`bot_access.audience`): Everyone, or
+lists of people (roster ids), groups (`teams`) and bots (slugs). Naming a group names every person and bot in it and
+in the groups nested under it, resolved live: leaving the group drops what it gave. Read or Write implies See; Write
+without Read is allowed (a bot's "Requests only"). Manage is not stored. It is a rule:
+
+    bot     its owners, the admins and the company owner, whoever it reports up to (`Auth.bot_manager`)
+    person  themselves, whoever they report up to (`people.manages`), the admins and the company owner
+    group   its leads (the lead of the group or of a group above it), the admins and the company owner
+
+and it carries full See, Read and Write. A bot also has full access to itself and to the bots below it in the
+`reports_to` chain, as before. A credential that is neither a person nor a bot (a runner) keeps the reach it always
+had: everything.
+
+Storage. A bot's audiences stay on the bot (`bot_config.access_json`). A person's or a group's are a row in
+`teammate_accesses`; no row means the defaults:
+
+    person  Everyone, Everyone, Everyone
+    group   Everyone, Everyone, members of the group
+
+Entry points, each taking a database connection, a viewer (an `auth.Identity`) and a target (`bot:<slug>`,
+`human:<id>` or `group:<id>`):
+
+  levels_for(c, viewer, target)         -> {see, read, write, manage}
+  levels_many(c, viewer, targets)       -> {target: {see, read, write, manage}}, one pass for a list
+  can(c, viewer, level, target)         -> bool
+  may_reply(c, viewer, target)          -> bool   the reply-back rule: the target wrote to the viewer, or the
+                                                  viewer holds open work the target asked for
+  group_member_actors(c, group_id)      -> {"human:<id>", "bot:<slug>"}, the group and the groups under it
+  readers(c, target, level="read")      -> "everyone" | {actor, ...}
+  hidden(c, viewer, level="see")        -> {target, ...} the viewer may not see (or read, ...)
+  sql_visible(c, viewer, column, ...)   -> a SQL condition that drops rows whose actor the viewer may not see
+
+`auth` is optional everywhere: the Auth instance when the caller has one, so a request's admin list is the one it
+already read. Without it the admins are read from the database (`access.owner_and_admin_emails`).
+"""
+import json
+
+from . import bot_access as A
+from . import people as P
+from .store import H, Problem
+
+LEVELS = ("see", "read", "write", "manage")
+AUDIENCE_LEVELS = A.LEVELS          # see, read, write: the stored ones
+KINDS = ("bot", "human", "group")
+FULL = {"see": True, "read": True, "write": True, "manage": True}
+NONE = {"see": False, "read": False, "write": False, "manage": False}
+
+SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS teammate_accesses (id TEXT PRIMARY KEY, target_type TEXT NOT NULL "
+    "CHECK (target_type IN ('human','group')), target_id TEXT NOT NULL, access TEXT NOT NULL, "
+    "revision INTEGER NOT NULL DEFAULT 1, updated_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS teammate_accesses_target ON teammate_accesses(target_type, target_id)",
+)
+
+
+def ensure(c):
+    for statement in SCHEMA:
+        c.execute(statement)
+
+
+# ----------------------------------------------------------------------------- targets and stored shape
+def parse_target(target):
+    """(kind, id) for `bot:<slug>`, `human:<id>` (or `person:<id>`) and `group:<id>`; a Problem for anything else."""
+    kind, _, ident = str(target or "").strip().partition(":")
+    kind = "human" if kind == "person" else kind
+    if kind not in KINDS or not ident:
+        raise Problem("validation", "A teammate is bot:<slug>, human:<id> or group:<id>", 422)
+    return kind, ident
+
+
+def default_document(kind, ident):
+    """The audiences a person or group has before anyone narrows them."""
+    everyone = dict(A.OPEN_LEVEL, people=[], teams=[], bots=[])
+    if kind == "group":
+        return {"see": dict(everyone), "read": dict(everyone),
+                "write": {"everyone": False, "people": [], "teams": [ident], "bots": []}}
+    return {level: dict(everyone) for level in AUDIENCE_LEVELS}
+
+
+def _complete(raw, kind, ident):
+    """A stored document with every level present; a level missing or unreadable takes its default."""
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        value = None
+    value = value if isinstance(value, dict) else {}
+    base = default_document(kind, ident)
+    return {level: A.audience(value[level]) if isinstance(value.get(level), dict) else base[level]
+            for level in AUDIENCE_LEVELS}
+
+
+def stored_rows(c, kind=None):
+    """{(target_type, target_id): row} for every stored person or group document."""
+    try:
+        if kind:
+            rows = c.execute("SELECT * FROM teammate_accesses WHERE target_type=?", (kind,)).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM teammate_accesses").fetchall()
+    except Exception:            # a database from before the table: everyone has the defaults
+        return {}
+    return {(r["target_type"], r["target_id"]): r for r in rows}
+
+
+def document(c, target):
+    """The three audiences of a teammate as stored (or defaulted), for the editor. A bot's come from its config."""
+    kind, ident = parse_target(target)
+    if kind == "bot":
+        row = c.execute("SELECT access_json FROM bot_config WHERE bot=?", (ident,)).fetchone()
+        return A.document(row["access_json"] if row else None)
+    row = stored_rows(c, kind).get((kind, ident))
+    return _complete(row["access"] if row else None, kind, ident)
+
+
+def revision(c, target):
+    kind, ident = parse_target(target)
+    row = stored_rows(c, kind).get((kind, ident))
+    return int(row["revision"]) if row else 0
+
+
+# ----------------------------------------------------------------------------- shared context
+class _Context:
+    """What deciding many targets for one viewer reads once: the roster, the bots' entries, the viewer's groups."""
+
+    def __init__(self, c, viewer, auth=None):
+        from . import views
+        self.c, self.viewer, self.auth = c, viewer, auth
+        self.roster = views.roster(c, shared=True)
+        self.entries = views.entries(c, shared=True)
+        self.archived = {r["slug"] for r in H.bots(c) if r.get("state") == "archived"}
+        self.parents = {slug: str(e.get("reports_to") or "") for slug, e in self.entries.items()}
+        self.actor = str(getattr(viewer, "actor", "") or "")
+        self.me = H.actor_id(self.actor)
+        self.role = getattr(viewer, "role", "")
+        self._stored = None
+        self._admin = None
+        self._chain = None
+        self._leads = None
+
+    @property
+    def stored(self):
+        if self._stored is None:
+            self._stored = stored_rows(self.c)
+        return self._stored
+
+    @property
+    def admin(self):
+        if self._admin is None:
+            self._admin = is_admin(self.c, self.viewer, self.auth)
+        return self._admin
+
+    @property
+    def chain(self):
+        """The groups the viewer is in: its own and every group that one is nested in."""
+        if self._chain is None:
+            if self.role == "bot" and self.actor.startswith("bot:"):
+                own = P.team_of(self.me, self.entries, self.roster) or ""
+            elif self.role in ("human", "owner"):
+                own = (P.person(self.me, self.roster) or {}).get("team") or ""
+            else:
+                own = ""
+            self._chain = P.group_chain(own, self.roster) or ([own] if own else [])
+        return self._chain
+
+    def names(self, level):
+        if self.role == "bot":
+            return A.names(level, bot=self.me, team=self.chain)
+        return A.names(level, person=self.me, team=self.chain)
+
+    def led(self):
+        """The groups the viewer leads, and every group below them."""
+        if self._leads is None:
+            from . import groups as G
+            out = set()
+            for gid in self.roster.get("org_groups") or {}:
+                lead = G.lead_of(gid, self.roster, self.entries)
+                if lead and _lead_actor(lead) == self.actor:
+                    out |= P.group_and_below(gid, self.roster)
+            self._leads = out
+        return self._leads
+
+
+def _lead_actor(ref):
+    text = str(ref or "").strip()
+    return "human:" + text[len("person:"):] if text.startswith("person:") else text
+
+
+def is_admin(c, viewer, auth=None):
+    """The company owner or an Admin (Tico support with app access reads as one), as `Auth.bot_admin` says."""
+    role = getattr(viewer, "role", "")
+    if role == "owner":
+        return True
+    if role != "human":
+        return False
+    if auth is not None:
+        return auth.bot_admin(viewer)
+    if getattr(viewer, "support", "") == "app":
+        return True
+    from . import access
+    return str(getattr(viewer, "email", "") or "").lower() in set(access.owner_and_admin_emails(c))
+
+
+def _above(parents, me, slug):
+    seen, parent = {slug}, parents.get(slug, "")
+    while parent and parent not in seen:
+        if parent == me:
+            return True
+        seen.add(parent)
+        parent = parents.get(parent, "")
+    return False
+
+
+# ----------------------------------------------------------------------------- bots
+def bot_levels(c, viewer, slugs=None, admin=None, auth=None, ctx=None):
+    """{slug: {see, read, write}} for this viewer, for `slugs` (default every bot with a configuration). The rules
+    `Auth.bot_accesses` has always applied, with one change: a bot viewer in a group matches that group in an audience
+    (it used to match only people)."""
+    from . import read_cache
+    wanted = list(dict.fromkeys(slugs)) if slugs is not None else None
+    rows = {r["bot"]: r for r in read_cache.configs(c, wanted)}
+    full = {"see": True, "read": True, "write": True}
+    role = getattr(viewer, "role", "")
+    if role not in ("human", "owner", "bot") or role == "owner":
+        return {slug: dict(full) for slug in (wanted if wanted is not None else rows)}
+    out = {}
+    for slug in (wanted if wanted is not None else rows):
+        row = rows.get(slug)
+        doc = A.document(row["access_json"]) if row else None
+        if doc is None or A.is_open(doc):
+            out[slug] = dict(full)
+            continue
+        ctx = ctx or _Context(c, viewer, auth)
+        if role == "bot":
+            me = ctx.me
+            if me == slug or _above(ctx.parents, me, slug):
+                out[slug] = dict(full)
+                continue
+            levels = {level: ctx.names(doc[level]) for level in AUDIENCE_LEVELS}
+            # A bot may answer one that wrote to it, or that holds work it asked for, so a
+            # private bot can still be replied to: nothing else about it opens up.
+            if not levels["write"] and may_reply(c, viewer, "bot:" + slug):
+                levels["write"] = True
+        else:
+            pid = ctx.me
+            admin_now = ctx.admin if admin is None else admin
+            managed = (admin_now or row["operator"] == pid or pid in A.owner_ids(row["bot_owners_json"])
+                       or P.manages(pid, "bot", slug, ctx.roster, ctx.entries, ctx.archived, True))
+            if managed:
+                out[slug] = dict(full)
+                continue
+            levels = {level: ctx.names(doc[level]) for level in AUDIENCE_LEVELS}
+        levels["see"] = levels["see"] or levels["read"] or levels["write"]
+        out[slug] = levels
+    return out
+
+
+def _bot_manage(c, viewer, slug, ctx):
+    """`Auth.bot_manager` (from the database when there is no Auth): who may edit the bot's settings and access."""
+    if ctx.auth is not None:
+        return ctx.auth.bot_manager(c, viewer, slug)
+    role = ctx.role
+    if role == "owner":
+        return True
+    if role != "human" or slug in _system_bots(c):
+        return False
+    if ctx.admin:
+        return True
+    row = c.execute("SELECT operator,bot_owners_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    if row and (row["operator"] == ctx.me or ctx.me in A.owner_ids(row["bot_owners_json"])):
+        return True
+    return P.manages(ctx.me, "bot", slug, ctx.roster, ctx.entries, ctx.archived, True)
+
+
+def _system_bots(c):
+    """The built-in bots, which only the company owner manages (`Auth.system_bot`)."""
+    from . import groups as G
+    return set(G.SYSTEM_BOTS)
+
+
+# ----------------------------------------------------------------------------- people and groups
+def _human_levels(ctx, pid):
+    if ctx.role == "owner" or ctx.admin:
+        return dict(FULL)
+    if ctx.role == "human" and P.manages(ctx.me, "person", pid, ctx.roster, ctx.entries, ctx.archived, True):
+        return dict(FULL)          # themselves, or someone they report up to
+    row = ctx.stored.get(("human", pid))
+    doc = _complete(row["access"] if row else None, "human", pid)
+    levels = {level: ctx.names(doc[level]) for level in AUDIENCE_LEVELS}
+    if ctx.role == "bot" and not levels["write"] and may_reply(ctx.c, ctx.viewer, "human:" + pid):
+        levels["write"] = True     # the reply-back rule, as for bots
+    levels["see"] = levels["see"] or levels["read"] or levels["write"]
+    return {**levels, "manage": False}
+
+
+def _group_levels(ctx, gid):
+    if ctx.role == "owner" or ctx.admin or gid in ctx.led():
+        return dict(FULL)
+    row = ctx.stored.get(("group", gid))
+    doc = _complete(row["access"] if row else None, "group", gid)
+    levels = {level: ctx.names(doc[level]) for level in AUDIENCE_LEVELS}
+    levels["see"] = levels["see"] or levels["read"] or levels["write"]
+    return {**levels, "manage": False}
+
+
+# ----------------------------------------------------------------------------- the entry points
+def levels_many(c, viewer, targets, auth=None):
+    """{target: {see, read, write, manage}} for every target, read in one pass."""
+    targets = list(dict.fromkeys(targets))
+    parsed = {t: parse_target(t) for t in targets}
+    role = getattr(viewer, "role", "")
+    if role not in ("human", "owner", "bot"):
+        # A runner or another system's key: the reach it always had, but it manages nothing.
+        return {t: {**FULL, "manage": False} for t in targets}
+    ctx = _Context(c, viewer, auth)
+    bots = [ident for kind, ident in parsed.values() if kind == "bot"]
+    bot_out = bot_levels(c, viewer, bots, auth=auth, ctx=ctx) if bots else {}
+    out = {}
+    for target, (kind, ident) in parsed.items():
+        if kind == "bot":
+            manage = _bot_manage(c, viewer, ident, ctx)
+            levels = dict(FULL) if manage else {**bot_out[ident], "manage": False}
+        elif kind == "human":
+            levels = _human_levels(ctx, ident)
+        else:
+            levels = _group_levels(ctx, ident)
+        out[target] = levels
+    return out
+
+
+def levels_for(c, viewer, target, auth=None):
+    """{see, read, write, manage} for this viewer on one teammate."""
+    target = _normal(target)
+    return levels_many(c, viewer, [target], auth)[target]
+
+
+def can(c, viewer, level, target, auth=None):
+    if level not in LEVELS:
+        raise ValueError(level)
+    return levels_for(c, viewer, target, auth)[level]
+
+
+def require(c, viewer, level, target, auth=None, missing=None):
+    """Refuse unless the viewer holds `level`: 404 when they cannot even see the teammate, 403 naming what is missing
+    when they can."""
+    levels = levels_for(c, viewer, target, auth)
+    kind, ident = parse_target(target)
+    noun = {"bot": "Bot", "human": "Person", "group": "Group"}[kind]
+    if not levels["see"]:
+        raise Problem("not_found", missing or f"{noun} not found", 404)
+    if not levels[level]:
+        raise Problem("forbidden", {
+            "read": f"You can see {ident} but not read their Home. Ask whoever manages them for Read access.",
+            "write": f"You can see {ident} but not message them. Ask whoever manages them for Write access.",
+            "manage": f"Only whoever manages {ident} changes this.",
+        }[level], 403)
+    return levels
+
+
+def _normal(target):
+    kind, ident = parse_target(target)
+    return f"{kind}:{ident}"
+
+
+def may_reply(c, viewer, target):
+    """The reply-back rule: the viewer may answer a teammate who wrote to it, or who asked it for work it still holds.
+    It is scoped to the two of them; nothing else about the target opens up."""
+    kind, ident = parse_target(target)
+    actor = str(getattr(viewer, "actor", "") or "")
+    if kind == "group" or not actor:
+        return False
+    other = f"{kind}:{ident}"
+    if c.execute("SELECT 1 FROM messages WHERE to_actor=? AND from_actor=? LIMIT 1", (actor, other)).fetchone():
+        return True
+    return bool(c.execute("SELECT 1 FROM tasks WHERE requester=? AND owner=? AND status NOT IN "
+                          "('done','closed','declined') LIMIT 1", (other, actor)).fetchone())
+
+
+def group_member_actors(c, group_id, roster=None, entries=None):
+    """Every person and bot in the group and in the groups nested under it, as actors."""
+    from . import views
+    roster = roster or views.roster(c, shared=True)
+    entries = entries if entries is not None else views.entries(c, shared=True)
+    below = P.group_and_below(group_id, roster)
+    if not below:
+        return set()
+    archived = {r["slug"] for r in H.bots(c) if r.get("state") == "archived"}
+    out = {"human:" + p["id"] for p in P.visible_people(roster) if p.get("team") in below}
+    out |= {"bot:" + slug for slug in entries
+            if slug not in archived and P.team_of(slug, entries, roster) in below}
+    return out
+
+
+def all_actors(c, roster=None, entries=None):
+    """Every person and non-archived bot: who a set-based answer can name."""
+    from . import views
+    roster = roster or views.roster(c, shared=True)
+    entries = entries if entries is not None else views.entries(c, shared=True)
+    archived = {r["slug"] for r in H.bots(c) if r.get("state") == "archived"}
+    return ({"human:" + p["id"] for p in roster.get("people") or []}
+            | {"bot:" + slug for slug in entries if slug not in archived})
+
+
+def readers(c, target, level="read", auth=None):
+    """Everyone who holds `level` on the teammate: "everyone" when its audience is Everyone, else a set of actors
+    (people, bots and its managers). For bulk filters (the SSE view, a fan-out) that ask about many readers at once."""
+    if level not in LEVELS:
+        raise ValueError(level)
+    kind, ident = parse_target(target)
+    if level != "manage":
+        doc = document(c, target)
+        if doc[level]["everyone"]:
+            return "everyone"
+        if level == "see" and (doc["read"]["everyone"] or doc["write"]["everyone"]):
+            return "everyone"
+    out = set()
+    for actor in sorted(all_actors(c)):
+        viewer = _viewer_for(c, actor)
+        if viewer is not None and levels_for(c, viewer, target, auth)[level]:
+            out.add(actor)
+    return out
+
+
+def _viewer_for(c, actor):
+    """An identity for an actor, without elevating it: the owner when it is the owner's address."""
+    from .auth import Identity
+    if actor.startswith("bot:"):
+        return Identity(actor, "bot")
+    human = H.human(c, H.actor_id(actor))
+    if not human:
+        return None
+    from . import access
+    email = str(human.get("email") or "").lower()
+    owner = str((access._load_json(c, access.OWNER) or {}).get("email") or "").lower()
+    return Identity(actor, "owner" if email and email == owner else "human", email=email)
+
+
+def hidden(c, viewer, level="see", kinds=KINDS, auth=None):
+    """Every teammate (as `kind:id`) the viewer lacks `level` on, of these kinds. Empty for the owner, the admins and
+    a credential that is neither a person nor a bot."""
+    role = getattr(viewer, "role", "")
+    if role not in ("human", "bot") or is_admin(c, viewer, auth):
+        return set()
+    from . import views
+    targets = []
+    roster = views.roster(c, shared=True)
+    if "human" in kinds:
+        targets += ["human:" + p["id"] for p in roster.get("people") or []]
+    if "group" in kinds:
+        targets += ["group:" + gid for gid in roster.get("org_groups") or {}]
+    if "bot" in kinds:
+        targets += ["bot:" + r["bot"] for r in c.execute("SELECT bot FROM bot_config")]
+    if not targets:
+        return set()
+    return {t for t, levels in levels_many(c, viewer, targets, auth).items() if not levels[level]}
+
+
+def sql_visible(c, viewer, column, level="see", kinds=KINDS, bare=None, auth=None, unseen=None):
+    """A SQL condition, true when the teammate in `column` is one the viewer holds `level` on. `column` holds actors
+    (`human:<id>`, `bot:<slug>`); `bare` ("human", "bot" or "group") says it holds bare ids of that kind instead.
+    `unseen` is `hidden(...)` when the caller has it already. Always "1" when nothing is hidden."""
+    unseen = hidden(c, viewer, level, kinds, auth) if unseen is None else unseen
+    if bare:
+        values = sorted(t.split(":", 1)[1] for t in unseen if t.startswith(bare + ":"))
+    else:
+        values = sorted(t for t in unseen if not t.startswith("group:"))
+    if not values:
+        return "1"
+    return f"coalesce({column},'') NOT IN {A.qlist(values)}"
+
+
+# ----------------------------------------------------------------------------- writing a person's or group's access
+def save(c, who, target, body, auth=None, via=None):
+    """Set a person's or a group's three audiences: Manage on them, the revision the editor read, an audit row and an
+    event. `body` has `see`, `read` and `write` (each Everyone or lists) and `revision`. A bot's access is written by
+    `SettingsAdmin.set_access`, as before."""
+    kind, ident = parse_target(target)
+    if kind == "bot":
+        raise Problem("validation", "A bot's access is set on the bot", 422)
+    require(c, who, "manage", target, auth)
+    if not _exists(c, kind, ident):
+        raise Problem("not_found", ("Person" if kind == "human" else "Group") + " not found", 404)
+    row = stored_rows(c, kind).get((kind, ident))
+    current = int(row["revision"]) if row else 0
+    if int(body.get("revision") or 0) != current:
+        raise Problem("version_conflict", "Access changed; refresh before saving", 409)
+    from . import views
+    roster = views.roster(c, shared=True)
+    people = {p["id"] for p in roster.get("people") or []} | {h["id"] for h in H.humans(c)}
+    groups = set(roster.get("org_groups") or {})
+    bots = {r["slug"] for r in H.bots(c)}
+    doc = A.parse({level: body.get(level) for level in AUDIENCE_LEVELS}, people, groups, bots)
+    before = _complete(row["access"] if row else None, kind, ident)
+    if before == doc:
+        raise Problem("unchanged", "That is already who has access", 409)
+    now = H.now()
+    text = json.dumps(doc, sort_keys=True, separators=(",", ":"))
+    if row:
+        c.execute("UPDATE teammate_accesses SET access=?,revision=revision+1,updated_by=?,updated_at=? WHERE id=?",
+                  (text, who.actor, now, row["id"]))
+    else:
+        c.execute("INSERT INTO teammate_accesses (id,target_type,target_id,access,revision,updated_by,created_at,"
+                  "updated_at) VALUES (?,?,?,?,1,?,?,?)", (H.new_id(), kind, ident, text, who.actor, now, now))
+    from . import audit_log
+    audit_log.write(c, who.actor, f"{kind}:{ident}:access", before, doc, via)
+    H.event(c, who.actor, f"{'person' if kind == 'human' else 'group'}.access_changed", ident,
+            {"before": A.summary(before), "after": A.summary(doc)})
+    return view(c, who, target, auth)
+
+
+def view(c, who, target, auth=None):
+    """What the Access editor reads: the three audiences, the revision, what the viewer holds, and the groups an
+    audience can name. For whoever manages the teammate."""
+    kind, ident = parse_target(target)
+    require(c, who, "manage", target, auth)
+    if not _exists(c, kind, ident):
+        raise Problem("not_found", ("Person" if kind == "human" else "Group") + " not found", 404)
+    from . import views
+    roster = views.roster(c, shared=True)
+    names = {gid: g.get("name") or gid for gid, g in (roster.get("org_groups") or {}).items()}
+    return {"target": f"{kind}:{ident}", **document(c, target), "default": default_document(kind, ident),
+            "revision": revision(c, target), "you": levels_for(c, who, target, auth),
+            "teams": [{"id": gid, "name": name} for gid, name in sorted(names.items())]}
+
+
+def _exists(c, kind, ident):
+    from . import views
+    roster = views.roster(c, shared=True)
+    if kind == "human":
+        return bool(P.person(ident, roster) or H.human(c, ident))
+    if kind == "group":
+        return ident in (roster.get("org_groups") or {})
+    return bool(H.bot(c, ident))
