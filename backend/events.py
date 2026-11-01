@@ -40,9 +40,12 @@ unsigned.
 """
 
 import asyncio
+import contextvars
+import functools
 import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import Request
 from fastapi.responses import StreamingResponse
@@ -56,6 +59,8 @@ KEEP_HOURS = 24           # a client away longer than this reads in full
 FALLBACK_SECONDS = 1.5    # the shared look for changes another process wrote
 RUNNER_FALLBACK_SECONDS = 5  # the same for computers' streams: work another process queued waits this long at most
 BACKLOG_MAX = 5000        # changes a stream may fall behind before it is reset rather than replayed (a slow consumer)
+POLL_THREADS = 6          # people's streams read on these threads alone: more only wait for the interpreter lock,
+                          # and each holds a database connection the store's pool would close and open again
 GONE_SECONDS = 1.0        # a stream asks whether its client hung up at most this often
 STALL_SECONDS = 5.0       # a frame the client took longer than this to take: a slow consumer, reset rather than replayed
 READ_BYTES = 256 * 1024   # event bytes one read sends; the rest of its changes wait for the next read
@@ -585,6 +590,20 @@ def sweep(store, now=None, batch=5000):
         deleted += removed
         if removed < batch:
             return deleted
+
+
+_polls, _polls_lock = None, threading.Lock()
+
+
+async def _on_poll_thread(function, *args):
+    """`asyncio.to_thread` on the streams' own few threads (POLL_THREADS)."""
+    global _polls
+    if _polls is None:
+        with _polls_lock:
+            if _polls is None:
+                _polls = ThreadPoolExecutor(max_workers=POLL_THREADS, thread_name_prefix="events-read")
+    call = functools.partial(contextvars.copy_context().run, function, *args)
+    return await asyncio.get_running_loop().run_in_executor(_polls, call)
 
 
 class Doorbell:
@@ -1401,7 +1420,7 @@ def install(app, store, auth, task_views, task_view):
                     if due or doorbell.latest > cursor:
                         read_at = time.monotonic()
                         try:
-                            sent, next_cursor, reset, more = await asyncio.to_thread(poll, cursor)
+                            sent, next_cursor, reset, more = await _on_poll_thread(poll, cursor)
                         except Problem:
                             yield "event: expired\ndata: {}\n\n"
                             return
@@ -1419,7 +1438,7 @@ def install(app, store, auth, task_views, task_view):
                                     stalled = True     # the rest of this read and what came meanwhile are not replayed
                                     break
                             if stalled:
-                                cursor = await asyncio.to_thread(newest)
+                                cursor = await _on_poll_thread(newest)
                                 yield _frame(cursor, "reset", {"seq": cursor})
                                 due = False
                                 doorbell.observe(cursor)
