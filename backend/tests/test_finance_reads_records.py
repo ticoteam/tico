@@ -176,7 +176,7 @@ def test_a_teammate_sees_an_items_price_and_its_accounts_only_where_they_see_the
         assert "income_account_id" not in gadget
 
 
-def test_a_guest_is_refused_the_records_and_their_search(books):
+def test_x11b_a_guest_is_refused_the_records_and_their_search(books):
     with books.transaction() as c:
         locations = _records(c)["location"]
         assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"

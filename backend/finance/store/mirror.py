@@ -38,6 +38,19 @@ def refs_of_kind(c: sqlite3.Connection, cid: str, local_table: str, kind: str) -
                      (cid, local_table, kind)).fetchall()
 
 
+def record_providers(c: sqlite3.Connection, table: str, ids: Sequence[str]) -> dict[str, str]:
+    """Where each record came from: the provider whose books hold it (its active external ref), by record id. A record
+    with no ref is Tico's own, so it has no entry."""
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    rows = c.execute("SELECT r.local_id, b.provider FROM fin_external_refs r "
+                     "JOIN fin_connections b ON b.id=r.connection_id "
+                     f"WHERE r.local_table=? AND r.status='active' AND r.local_id IN ({marks}) ORDER BY r.created_at",
+                     [table, *ids]).fetchall()
+    return {str(row[0]): str(row[1]) for row in rows}
+
+
 def ref_drop_unmapped(c: sqlite3.Connection, cid: str, external_id: str, keep: str) -> None:
     """Drop the unmapped rows a record left in other tables: once it is in the books, its mapped row is the one that counts."""
     c.execute("DELETE FROM fin_external_refs WHERE connection_id=? AND external_id=? AND local_table<>? "

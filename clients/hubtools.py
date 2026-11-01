@@ -6435,7 +6435,8 @@ FINANCE_CHARS = 16000            # about 4k tokens
 FIN_OTHER = " other"             # an "Other · n" row's key, as backend/finance/reads.py OTHER: no real key starts
                                  # with a space, so a vendor named Other stays its own row
 FINANCE_MAX_CHARS = 64000        # about 16k tokens
-FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close"]
+FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by",
+                   "revenue_by_item", "close"]
 FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
                    "ar_overdue", "uncategorized_count", "unreconciled_days"]
 FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card", "po", "estimate", "item", "location",
@@ -6651,7 +6652,8 @@ def finance_search(api, args):
 
 
 @tool("hub_finance_report", "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
-      "ar_aging, spend_by, or close (a month's close checklist). Rows past top_n fold into \"Other · n\".",
+      "ar_aging, spend_by, revenue_by_item (posted invoices by item; receivables view), or close (a month's close "
+      "checklist). Rows past top_n fold into \"Other · n\".",
       {"kind": _s("The report", enum=FINANCE_REPORTS), "start": FIN_DAY, "end": FIN_DAY,
        "period": _s("Column size", enum=["day", "week", "month", "quarter", "year"]),
        "basis": _s("cash or accrual (default: the company's)", enum=["cash", "accrual"]),

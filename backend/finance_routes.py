@@ -27,7 +27,8 @@ Group = Literal["department", "team", "teammate", "bot", "person", "vendor", "ac
                 "location_class", "location_project", "class_project"]
 DAY = r"^\d{4}-\d{2}-\d{2}$"
 Aging = Literal["current", "1_30", "31_60", "61_90", "over_90"]
-Report = Literal["pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by"]
+Report = Literal["pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by",
+                 "revenue_by_item"]
 Metric = Literal["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
                  "ar_overdue", "uncategorized_count", "unreconciled_days"]
 
@@ -348,6 +349,22 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.record(c, actor, kind="project", record_id=project_id))
 
+    @app.get("/api/v2/customers")
+    def finance_customers(request: Request, q: str = Query("", max_length=100),
+                          cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
+                          view_as: str | None = None):
+        """Active customers by name then id, for pickers: id and name only, to every teammate. `q` matches a name or an
+        email; `next_cursor` pages."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.customers(c, actor, q=q, cursor=cursor, limit=limit))
+
+    @app.get("/api/v2/customers/{contact_id}")
+    def finance_customer(request: Request, contact_id: ID, view_as: str | None = None):
+        """A customer's panel: the contact, its active locations, and its open estimates and unpaid invoices where the
+        caller sees receivables (null where not)."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.customer_panel(c, actor, contact_id))
+
     @app.get("/api/v2/finance/invoices")
     def finance_invoices(request: Request, status: str | None = Query(None, max_length=80),
                          customer_id: str | None = Query(None, max_length=80), q: str = Query("", max_length=100),
@@ -416,7 +433,8 @@ def install(app, store, auth, mutate):
                        basis: Literal["cash", "accrual"] | None = None, compare: Literal["prior"] | None = None,
                        top_n: int = Query(20, ge=1, le=200), by: Group | None = None, view_as: str | None = None):
         """One report cut to the caller's view: pnl, pnl_by, balance_sheet, cash_flow, budget_vs_actual, ap_aging,
-        ar_aging or spend_by (`by` picks the grouping; pnl_by defaults to location, spend_by to vendor).
+        ar_aging, spend_by or revenue_by_item (`by` picks the grouping; pnl_by defaults to location, spend_by to vendor;
+        revenue_by_item needs the receivables view).
         `compare=prior` adds the window before; rows past `top_n` fold into "Other · n"."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.report(c, actor, kind, start=start, end=end, period=period, basis=basis,

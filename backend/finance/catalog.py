@@ -54,12 +54,14 @@ def _archive_flag(ctx: Ctx, p: V.Payload) -> dict[str, object]:
 
 
 def _customer(ctx: Ctx, who: str, value: str) -> str:
-    """A customer contact a record names. Refused as a missing one when the asker's view does not cover customers, so
-    a refusal never says that a contact exists (the same rule an account follows)."""
+    """A customer contact a record names. A records holder names any customer (the customer's name is operational, so
+    every teammate reads it); anyone else needs a view that covers customers. Refused as a missing one otherwise, so a
+    refusal never says that a contact exists (the same rule an account follows)."""
     row = SAP.get(ctx.c, "fin_contacts", value)
     view = ctx.view(who)
+    may_name = R.has(ctx.org, who, R.RECORDS, ctx.rights(who)) or view.everything or view.receivables
     if row is None or str(row["book_id"]) != ctx.book.id or str(row["kind"]) not in ("customer", "both") or \
-            not (view.everything or view.receivables):
+            not may_name:
         raise FinanceError(NOT_FOUND, "no such customer")
     return str(row["id"])
 
