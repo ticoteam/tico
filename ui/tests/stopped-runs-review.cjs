@@ -38,12 +38,12 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     // Keep a safe default first, with supporting evidence folded.
     const job = (id, title, stopped, acted, tools) => ({id, run_id: `a-${id}`, readable: true, stopped, acted,
       task: {id: `t-${id}`, title, status: 'doing', owner: 'bot:builder', owner_name: 'Builder'},
-      request: 'Ship Billing 3/5.', attempt: {started: '2026-10-22T08:12:00Z', final_text: 'Merged #25; deploying next.'},
+      request: 'Ship Billing 3/5.', run: {started: '2026-10-22T08:12:00Z', final_text: 'Merged #25; deploying next.'},
       output: [], tools: tools.map(tool => ({tool, summary: '', status: 'completed'})),
       reason: 'The run stopped after using a tool that can change things (Bash). Tico cannot tell whether it finished.'});
     const jobs = {builder: [job('j1', 'Billing 3/5', 'changed', ['Bash'], ['Read', 'Bash'])],
       writer: [job('j2', 'Weekly digest', 'read', [], ['Read'])]};
-    jobs.writer[0].attempt.final_text = '';
+    jobs.writer[0].run.final_text = '';
     jobs.writer[0].output = ['The ', 'saved ', 'answer ', 'is ', 'one paragraph.\n\nA second paragraph.'].map(text => ({kind: 'message', text}));
     // Builder's work behind its stopped runs is Health's Stuck row too, its queue split as Pipeline splits it.
     const health = {audience: 'owner', attention: 0, checks: [], computers: [], waiting: [], slow: [], failures: [],

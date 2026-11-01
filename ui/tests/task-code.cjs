@@ -63,11 +63,11 @@ function fixtures() {
   const others = [task('t-review', {title: 'Review the pricing copy', pr_state: 'changes_requested'}),
     task('t-open', {title: 'Upgrade the image library', pr_state: 'open'}),
     task('t-none', {title: 'Write the release notes', pr_state: null})];
-  // As backend/run_view.py answers: newest attempt first; a lapsed try the hub resumed, then the live retry.
+  // As backend/run_view.py answers: newest run first; a lapsed try the hub resumed, then the live retry.
   const ago = s => new Date(Date.now() - s * 1000).toISOString();
   const runView = {task_id: 't-checkout', checkpoint: {text: 'Summary step built; receipts next.', at: ago(300), by: 'bot:eng'},
-    attempts: [
-      {run: 'a2', bot: 'eng', job: 'j1', try: 2, tries: 2, state: 'running', outcome: null, created: ago(120), started: ago(118), finished: null,
+    runs: [
+      {id: 'a2', bot: 'eng', job: 'j1', try: 2, tries: 2, state: 'running', outcome: null, created: ago(120), started: ago(118), finished: null,
        took_s: null, ran_on: {segments: [{model: 'claude-opus-5-5', effort: 'high'}],
          task_model: {source: 'fallback', note: "Ran on the bot's model claude-opus-5-5 (high): task model grok-4.6 (low) could not run (grok is not signed in on this bot's computer)"}},
        lease: [], reason: null, next: null,
@@ -76,14 +76,14 @@ function fixtures() {
          {id: 'g2', parent_id: 'g1', type: 'Explore', model: 'claude-haiku-5-5', status: null, background: false, tool_uses: null, duration_ms: null, running: true}],
        background: [{id: 'b1', tool: 'Bash', summary: 'npm', status: null, started: ago(60), ended: null, running: true},
          {id: 'b2', tool: 'Monitor', summary: 'tail', status: 'completed', started: ago(90), ended: ago(80), running: false}]},
-      {run: 'a1', bot: 'eng', job: 'j1', try: 1, tries: 2, state: 'expired', outcome: 'interrupted', created: ago(900), started: ago(898), finished: ago(600),
+      {id: 'a1', bot: 'eng', job: 'j1', try: 1, tries: 2, state: 'expired', outcome: 'interrupted', created: ago(900), started: ago(898), finished: ago(600),
        took_s: 298, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [{kind: 'grace', at: ago(610)}],
        reason: 'Lease expired before completion', next: {kind: 'resumed', by: 'keeper', at: ago(130), note: 'Resumed automatically: it recorded no tool call.'},
        // Resumed by Tico, then the job ran try 2: the decision is history, with no state of the later try.
        job_state: 'running', decision: {decision: 'resume', run_id: 'a1', current: false, state: null, by: 'keeper', by_kind: 'tico',
          at: '2026-10-26T07:05:00Z', note: 'Resumed automatically: it recorded no tool call.'}, subagents: [], background: []},
       // The Dev 563 shape: cut at its time limit, then dismissed by BotOps with a note (job_recovery).
-      {run: 'a0', bot: 'eng', job: 'j0', try: 1, tries: 1, state: 'interrupted', outcome: 'interrupted', created: ago(5400), started: ago(5398), finished: ago(1800),
+      {id: 'a0', bot: 'eng', job: 'j0', try: 1, tries: 1, state: 'interrupted', outcome: 'interrupted', created: ago(5400), started: ago(5398), finished: ago(1800),
        took_s: 3598, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [], reason: 'Timeout: max_run_minutes (60 minutes)',
        next: {kind: 'dismissed', by: 'bot:botops', at: '2026-10-26T09:50:45.103088Z', note: 'Finished before the 60-min limit. Nothing to redo.'},
        job_state: 'canceled', decision: {decision: 'dismiss', run_id: 'a0', current: true, state: 'canceled', by: 'bot:botops', by_kind: 'botops',
