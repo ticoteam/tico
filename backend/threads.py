@@ -940,13 +940,16 @@ def _grant_sql(v, id_sql, root_sql, t):
 
 
 def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FROM tasks", meeting=None,
-                 conversation=None):
+                 conversation=None, only=None):
     """A SQL boolean over a conversations row named `alias` (bare columns when alias is ''): the thread is readable.
 
     `inner(table)` names an unfiltered table (hub sql's temp views); `tasks` is a SELECT of the task ids the viewer
     reads (hub sql passes its filtered view); `meeting(id_sql)` renders the meeting-room check (hub sql's function),
     and without it meeting threads are left to Python (`readable_ids`). `conversation(id_sql)`, when given, is the
-    meeting-provenance check every thread also passes."""
+    meeting-provenance check every thread also passes. `only` (readable_ids) is every stored audience the roots of
+    the rows asked about have (None for a root that predates threads), plus "home" when a row is a Home itself: the
+    Home and legacy terms no such row can take are rendered false without reading what they need (every teammate's
+    access, every bot's shared room), which only ever narrows."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     t = inner or (lambda name: name)
     x = (alias + ".") if alias else ""
@@ -979,8 +982,10 @@ def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FR
     names = _qlist(v.member_names(c))
     owner = v.role == "owner"
     person = v.is_person
+    homes = only is None or "home" in only
+    legacies = only is None or None in only or "home" in only
     chain = _qlist(v.chain(c)) if person else "()"
-    hidden = v.hidden_read(c) if (person or v.is_bot) else None
+    hidden = v.hidden_read(c) if (person or v.is_bot) and homes else None
     owner_sql = f"COALESCE(r.owner_actor,{_derived_owner('r')})"
     home = (f"{owner_sql} IS NOT NULL AND {owner_sql} NOT IN {_qlist(sorted(hidden))}" if hidden is not None
             else "0")
@@ -988,7 +993,7 @@ def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FR
     meeting_term = meeting("r.id") if meeting else "0"
     participant = "1" if owner else f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='r')} WHERE value={me})"
     # A legacy root (no stored audience) reads as _legacy_denial: by scope, with shared rooms' members read live.
-    shared = sorted(v.shared_slugs(c, [b["slug"] for b in H.bots(c)])) if person else []
+    shared = sorted(v.shared_slugs(c, [b["slug"] for b in H.bots(c)])) if person and legacies else []
     legacy = (f"(CASE COALESCE(r.scope,'direct') WHEN 'personal' THEN COALESCE(r.owner_actor,{_FIRST_HUMAN.format(r='r')})={me} "
               f"AND (COALESCE(r.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
               f"WHEN 'shared' THEN {_LEGACY_ROOM_BOT.format(r='r')} IN {_qlist(shared)} ELSE {participant} END "
@@ -1055,12 +1060,16 @@ def readable_ids(c, v, ids):
     for start in range(0, len(ids), 500):
         part = ids[start:start + 500]
         marks = ",".join("?" * len(part))
-        rows = c.execute(f"SELECT x.id, COALESCE(r.audience,{_derived_audience('r')}) AS audience, x.task_id "
+        rows = c.execute(f"SELECT x.id, COALESCE(r.audience,{_derived_audience('r')}) AS audience, x.task_id, "
+                         f"r.audience AS stored, x.audience AS own "
                          f"FROM conversations x JOIN conversations r ON r.id=COALESCE(x.root_id,x.id) "
                          f"WHERE x.id IN ({marks})", part).fetchall()
+        # The terms only these rows can take (an id missing here is decided by nothing below).
+        only = ({r["stored"] for r in rows} | {"home" for r in rows if r["own"] == "home"}
+                if c.in_transaction else None)
         candidates = {r["id"] for r in c.execute(
             f"SELECT x.id FROM conversations x WHERE x.id IN ({marks}) AND "
-            + readable_sql(c, v, "x", tasks="SELECT id FROM tasks"), part)}
+            + readable_sql(c, v, "x", tasks="SELECT id FROM tasks", only=only), part)}
         for row in rows:
             cid = row["id"]
             needs_python = row["audience"] in ("meeting", "task") or row["task_id"] or v.is_bot

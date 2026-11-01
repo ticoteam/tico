@@ -195,6 +195,23 @@ def test_a_client_further_behind_than_the_log_keeps_is_told_to_reset(api, live):
 
 
 @pytest.mark.slow
+def test_a_consumer_that_leaves_a_frame_unread_is_reset_rather_than_replayed(api, live, monkeypatch):
+    """A slow consumer is sent `reset` and the newest change number, not the rest of the backlog it fell behind on."""
+    with api.app.state.store.read() as c:
+        cursor = E.latest(c)
+    made = [post(api, "tasks", {"owner": "ben", "title": f"Stall item {n}", "body": "Please."})["id"] for n in range(3)]
+    with api.app.state.store.read() as c:
+        newest = E.latest(c)
+    monkeypatch.setattr(E, "STALL_SECONDS", -1.0)     # every read's frames count as ones the client was slow to take
+    monkeypatch.setattr(E, "ROUND_ROWS", 1)           # and each read holds one change
+    stream = live("ben-test", f"?topics=tasks&after={cursor}")
+    reset = stream.until(topic("reset"))
+    assert reset["data"]["seq"] >= newest
+    sent = [e["data"]["id"] for e in stream.seen if e["event"] == "tasks"]
+    assert len(sent) == 1 and sent[0] in made
+
+
+@pytest.mark.slow
 def test_a_stream_ends_with_expired_when_sign_in_lapses_and_ends_on_its_own(api, live, monkeypatch):
     monkeypatch.setattr(E, "SIGN_IN_RECHECK_SECONDS", 0)     # every poll checks, so the lapse ends it before its data
     stream = live("ben-test")

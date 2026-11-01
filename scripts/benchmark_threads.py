@@ -6,12 +6,17 @@ holds, for --seconds: --viewers live streams on one room (GET /api/v2/events?thr
 at --rate messages a second each (POST /api/v2/threads/{id}/messages), one writer on a thread with --followers
 followers, a --burst of clients reconnecting together halfway through, and one slow consumer that never reads.
 
+--preset names a scenario: `default` (the flags' defaults: 20 writers at 5 a second, 100 offered writes a second) or
+`realistic` (20 writers at 1 a second, 20 writes a second, with the same 50 viewers and 200-client burst), whose
+targets are a write p95 of 150 ms, an event p95 of 1 s and a burst ready p95 of 2 s. Flags given after it override it.
+
 --path conversation runs the same load on the write path that predates threads: a direct conversation, streams with
 ?conversation= and POST /api/v2/conversations/{id}/messages. It is the baseline, run on a commit without threads.
 
 The server runs in a child process (--serve), so the load generator's threads never share its interpreter lock: the
 latencies are the server's. BENCH_PROFILE=1 makes the server time its write and fan-out functions and print the totals
-when the run ends. Writer and viewers share one clock, so latencies are exact to the scheduler, not a network estimate.
+when the run ends; BENCH_SAMPLE=<file> (Python 3.15 and later) writes the server's stacks, sampled while they hold the
+interpreter lock, to <file> in collapsed form. Writer and viewers share one clock, so latencies are exact to the scheduler, not a network estimate.
 Run it on a clean VM with scripts/remote.py, not on a laptop, and keep the output with the commit it measured.
 """
 
@@ -21,6 +26,7 @@ import functools
 import http.client
 import importlib
 import json
+import multiprocessing
 import os
 import platform
 import re
@@ -42,16 +48,20 @@ import uvicorn  # noqa: E402
 from backend import hubdb as H  # noqa: E402
 from backend.tests import test_api  # noqa: E402
 
-WRITE_P95_MS, EVENT_P95_S = 150, 1.0
+WRITE_P95_MS, EVENT_P95_S, BURST_P95_S = 150, 1.0, 2.0
+PRESETS = {"default": {}, "realistic": {"viewers": 50, "writers": 20, "rate": 1.0, "burst": 200}}
 SENT = re.compile(r"sent=([0-9.]+)")
 TOKENS = ["ana-test", "ben-test", "cara-test"]          # the fixture's people; members of both threads
 DM_TOKENS = ["ana-test", "ben-test"]                    # the two people of the baseline's direct conversation
 # What the server times when BENCH_PROFILE=1: the write path, its fan-out and the stream's reads.
+SLOW_READ_SECONDS = 30     # how long the slow consumer may take over its backlog once it reads
 PROFILED = (("backend.threads", ("post", "deliver", "mentions", "audience_has", "_followers", "_insert_delivery",
                                  "_follow", "wake_mode", "thread_row", "can_post", "denial", "_outside", "view",
                                  "message_readable", "readable_ids")),
-            ("backend.events", ("read", "latest", "oldest", "_Viewer.__init__", "_Viewer.prime", "_Viewer.conversation",
-                                "_Viewer.bot_readable", "_messages", "_threads", "_bots", "_tasks", "_needs_list")),
+            ("backend.events", ("read_in", "Rounds._round", "_Snapshot.__init__", "read", "latest", "oldest", "_Viewer.__init__", "_Viewer.prime", "_Viewer.conversation",
+                                "_Viewer.bot_readable", "_messages", "_threads", "_bots", "_tasks", "_needs_list",
+                                "_change_rows", "_stored_messages", "encode")),
+            ("backend.store", ("Store.connect",)),
             ("backend.message_links", ("refresh_dirty",)),
             ("backend.org_rule_check", ("in_force", "apply", "preflight")))
 
@@ -148,6 +158,10 @@ def boot(directory):
 def serve():
     """The server alone, in this process: prints its port and database, serves until stdin closes, then prints the
     profile (when BENCH_PROFILE is set) as its last line."""
+    for setting in filter(None, os.environ.get("BENCH_SET", "").split(",")):   # module.NAME=int, to tune a constant
+        name, _, value = setting.partition("=")
+        module, _, attr = name.rpartition(".")
+        setattr(importlib.import_module(module), attr, type(getattr(importlib.import_module(module), attr))(value))
     with tempfile.TemporaryDirectory(prefix="threads-benchmark-") as directory:
         generator, server, thread, port, app = boot(directory)
         profile = Profile(sys.modules["backend.store"]) if os.environ.get("BENCH_PROFILE") else None
@@ -212,32 +226,43 @@ def stream(port, token, query, state, started=None):
 
 
 def slow_consumer(port, token, query, state, stop):
-    """Opens a stream with a small receive buffer and reads nothing until the run ends, then reads what came."""
+    """Opens a stream with a small receive buffer and reads nothing until the run ends, then reads what came, with an
+    ordinary buffer so its backlog arrives in seconds, until `reset` or until it is hung up on (SLOW_READ_SECONDS)."""
     state.update({"status": None, "events_after_wait": 0, "reset": False, "closed": False, "error": None})
     try:
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=300)
         state["conn"] = conn
-        conn.connect()
+        # Loopback's 64 KB segments dwarf a small buffer: Linux would hold back the window update once reading starts,
+        # and its next probe can be a minute away. Ordinary segments keep the wait the server's, not the kernel's.
+        conn.sock = socket.socket()
+        with contextlib.suppress(OSError):
+            conn.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, 1400)
         conn.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        conn.sock.connect(("127.0.0.1", port))
         conn.request("GET", "/api/v2/events" + query, headers={"Authorization": f"Bearer {token}"})
         response = conn.getresponse()
         state["status"] = response.status
         stop.wait()
+        conn.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
         for raw in response:
             line = raw.decode().rstrip("\n")
             if line.startswith("event: "):
                 state["events_after_wait"] += 1
-                state["reset"] = state["reset"] or line == "event: reset"
+                state["last_event"] = line[7:]
+                if line == "event: reset":
+                    state["reset"] = True
+                    break
         state["closed"] = True
     except (OSError, ValueError, http.client.HTTPException) as error:
         state["error"] = repr(error)
 
 
-def writer(port, token, path, tag, seconds, rate, state):
-    """Posts at `rate` a second for `seconds`; each message carries its send time for the viewers to measure."""
+def writer(port, token, path, tag, seconds, rate, state, phase=0.0):
+    """Posts at `rate` a second for `seconds`; each message carries its send time for the viewers to measure. `phase`
+    (a share of the period) spreads the writers over it: people do not all press send at the same instant."""
     state.update({"writes": [], "ok": 0, "statuses": {}, "error": None})
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
-    period, end, next_at, n = 1 / rate, time.time() + seconds, time.time(), 0
+    period, end, next_at, n = 1 / rate, time.time() + seconds, time.time() + phase / rate, 0
     while time.time() < end:
         time.sleep(max(0, next_at - time.time()))
         next_at += period
@@ -293,6 +318,57 @@ def start(target, *args):
     return thread
 
 
+class Readers:
+    """The live streams, read in processes of their own: at a busy run they parse tens of thousands of events a second,
+    and in the writers' process their interpreter lock would be counted as the server's write and event latency."""
+
+    PROCESSES = 6
+    FIELDS = ("ready", "ready_seq", "latencies", "reset", "error", "status")
+
+    def __init__(self):
+        context = multiprocessing.get_context("fork")     # before this process has threads
+        self.pipes, self.count = [], 0
+        for _ in range(self.PROCESSES):
+            ours, theirs = context.Pipe()
+            context.Process(target=self._serve, args=(theirs,), daemon=True).start()
+            self.pipes.append(ours)
+
+    @classmethod
+    def _serve(cls, pipe):
+        states = {}
+        while True:
+            command, *rest = pipe.recv()
+            if command == "open":
+                key, port, token, query = rest
+                states[key] = {}
+                start(stream, port, token, query, states[key])
+            elif command == "ready":
+                pipe.send({key: {name: state.get(name) for name in ("ready", "ready_seq", "error")}
+                           for key, state in states.items()})
+            else:
+                for state in states.values():
+                    hang_up(state)
+                pipe.send({key: {**{name: state.get(name) for name in cls.FIELDS}, "delivered": len(state.get("ids", ()))}
+                           for key, state in states.items()})
+                return
+
+    def open(self, port, token, query):
+        key, self.count = self.count, self.count + 1
+        self.pipes[key % len(self.pipes)].send(("open", key, port, token, query))
+        return key
+
+    def _ask(self, command):
+        for pipe in self.pipes:
+            pipe.send((command,))
+        return {key: state for pipe in self.pipes for key, state in pipe.recv().items()}
+
+    def ready(self):
+        return self._ask("ready")
+
+    def close(self):
+        return self._ask("close")
+
+
 def scenario(args, port, db):
     def connect():
         return http.client.HTTPConnection("127.0.0.1", port, timeout=60)
@@ -314,16 +390,19 @@ def scenario(args, port, db):
         scope, post_path, people = f"?conversation={room}", f"/api/v2/conversations/{room}/messages", DM_TOKENS
         big_path = None
 
-    viewers = [{} for _ in range(args.viewers)]
-    for i, state in enumerate(viewers):
-        start(stream, port, people[i % len(people)], scope, state)
+    readers = Readers()
+    viewer_keys = [readers.open(port, people[i % len(people)], scope) for i in range(args.viewers)]
     deadline = time.time() + 60
-    while time.time() < deadline and any(v.get("ready") is None for v in viewers):
+    opened = {}
+    while time.time() < deadline:
+        opened = readers.ready()
+        if len(opened) == args.viewers and all(v["ready"] is not None for v in opened.values()):
+            break
         time.sleep(0.05)
-    subscribed = sum(1 for v in viewers if v.get("ready") is not None)
+    subscribed = sum(1 for v in opened.values() if v["ready"] is not None)
     if subscribed < args.viewers:
         raise SystemExit(f"only {subscribed} of {args.viewers} viewers were ready within 60 seconds")
-    resume = next(v["ready_seq"] for v in viewers if v.get("ready_seq") is not None)
+    resume = next(v["ready_seq"] for v in opened.values() if v["ready_seq"] is not None)
 
     stop, slow = threading.Event(), {}
     start(slow_consumer, port, people[0], scope, slow, stop)
@@ -332,21 +411,24 @@ def scenario(args, port, db):
     room_writers = [{} for _ in range(args.writers)]
     big_writer = {}
     threads = [start(writer, port, people[i % len(people)], post_path, f"{room[:8]}-{i}", args.seconds, args.rate,
-                     state) for i, state in enumerate(room_writers)]
+                     state, 0.0 if args.same_instant else i / len(room_writers)) for i, state in enumerate(room_writers)]
     if big_path:
         threads.append(start(writer, port, "ana-test", big_path, "big", args.seconds, args.rate, big_writer))
 
     time.sleep(args.seconds / 2)                       # a reconnect burst, halfway through the run
-    burst = [{} for _ in range(args.burst)]
-    for i, state in enumerate(burst):
-        start(stream, port, people[i % len(people)], f"{scope}&after={resume}", state)
+    burst_keys = [readers.open(port, people[i % len(people)], f"{scope}&after={resume}") for i in range(args.burst)]
     for thread in threads:
         thread.join()
     stop.set()
     time.sleep(3)
     deadline = time.time() + 60
-    while time.time() < deadline and any(b.get("ready") is None and b.get("error") is None for b in burst):
+    while time.time() < deadline:
+        opened = readers.ready()
+        if all(opened[key]["ready"] is not None or opened[key]["error"] is not None for key in burst_keys):
+            break
         time.sleep(0.05)
+    final = readers.close()
+    viewers, burst = [final[key] for key in viewer_keys], [final[key] for key in burst_keys]
 
     posted_ok = sum(w.get("ok", 0) for w in room_writers)
     statuses = {}
@@ -355,10 +437,12 @@ def scenario(args, port, db):
             statuses[str(code)] = statuses.get(str(code), 0) + count
     write_ms = [x for w in room_writers for x in w.get("writes", [])]
     latencies = [x for v in viewers for x in v.get("latencies", [])]
-    per_viewer = [len(v.get("ids", ())) for v in viewers]
+    per_viewer = [v["delivered"] for v in viewers]
     ready = [b["ready"] for b in burst if b.get("ready") is not None]
-    for state in viewers + burst + [slow]:
-        hang_up(state)
+    deadline = time.time() + SLOW_READ_SECONDS
+    while time.time() < deadline and not slow.get("closed") and not slow.get("error"):
+        time.sleep(0.05)
+    hang_up(slow)
     return {
         "path": args.path,
         "room_writes": {"posted_ok": posted_ok, "achieved_per_second": round(posted_ok / args.seconds, 2),
@@ -372,16 +456,18 @@ def scenario(args, port, db):
                     "delivered_max": max(per_viewer) if per_viewer else 0, "expected_each": posted_ok,
                     "event_seconds": summary(latencies), "event_p95_target_s": EVENT_P95_S,
                     "event_p95_met": (percentile(latencies, .95) or 1e9) < EVENT_P95_S},
-        "reconnect_burst": {"clients": args.burst, "ready_seconds": summary(ready),
+        "reconnect_burst": {"clients": args.burst, "ready_seconds": summary(ready), "p95_target_s": BURST_P95_S,
+                            "p95_met": (percentile(ready, .95) or 1e9) < BURST_P95_S,
                             "failed": sum(1 for b in burst if b.get("error") or b.get("status") != 200),
                             "resets": sum(1 for b in burst if b.get("reset"))},
-        "slow_consumer": {k: slow.get(k) for k in ("status", "events_after_wait", "reset", "closed", "error")},
+        "slow_consumer": {k: slow.get(k) for k in ("status", "events_after_wait", "last_event", "reset", "closed", "error")},
         "resume_cursor": resume,
     }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--preset", choices=sorted(PRESETS), default="default")
     parser.add_argument("--path", choices=("threads", "conversation"), default="threads")
     parser.add_argument("--seconds", type=int, default=60)
     parser.add_argument("--viewers", type=int, default=50)
@@ -389,16 +475,26 @@ def main():
     parser.add_argument("--rate", type=float, default=5.0)
     parser.add_argument("--followers", type=int, default=500)
     parser.add_argument("--burst", type=int, default=200)
+    parser.add_argument("--same-instant", action="store_true", help="every writer posts at the start of its period")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--serve", action="store_true", help=argparse.SUPPRESS)
+    preset = parser.parse_known_args()[0].preset
+    parser.set_defaults(**PRESETS[preset])          # explicit flags still win over the preset
     args = parser.parse_args()
     if args.serve:
         return serve()
     if min(args.seconds, args.viewers, args.writers, args.followers, args.burst) < 1 or args.rate <= 0:
         parser.error("counts and seconds must be positive")
-    child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--serve"], cwd=str(ROOT),
+    command = [sys.executable, str(Path(__file__).resolve()), "--serve"]
+    if os.environ.get("BENCH_SAMPLE"):             # Python 3.15+: which code holds the interpreter lock, sampled
+        command[1:1] = ["-m", "profiling.sampling", "run", "-a", "--mode", "gil", "-r", "500", "--collapsed",
+                        "-o", os.environ["BENCH_SAMPLE"]]
+    child = subprocess.Popen(command, cwd=str(ROOT),
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-    ready = json.loads(child.stdout.readline() or "{}")
+    line = child.stdout.readline()
+    while line and not line.startswith("{"):
+        line = child.stdout.readline()
+    ready = json.loads(line or "{}")
     if "port" not in ready:
         child.kill()
         raise SystemExit("the server process did not start")
@@ -409,11 +505,12 @@ def main():
         child.stdin.close()
         tail = child.stdout.read()
         child.wait(timeout=300)
-    lines = [line for line in tail.splitlines() if line.strip()]
+    lines = [line for line in tail.splitlines() if line.startswith("{")]   # the sampler prints its own lines too
     result["server_profile"] = json.loads(lines[-1]).get("profile") if lines else None
     result.update({"platform": platform.platform(), "python": sys.version.split()[0], "cpu_count": os.cpu_count(),
                    "load_average": os.getloadavg(), "parameters": {k: str(v) for k, v in vars(args).items()},
-                   "targets": {"write_p95_ms": WRITE_P95_MS, "event_p95_s": EVENT_P95_S}})
+                   "targets": {"write_p95_ms": WRITE_P95_MS, "event_p95_s": EVENT_P95_S,
+                               "burst_ready_p95_s": BURST_P95_S}})
     text = json.dumps(result, indent=2)
     if args.output:
         args.output.write_text(text + "\n", encoding="utf-8")

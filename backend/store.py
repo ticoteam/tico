@@ -978,7 +978,7 @@ class Problem(Exception):
         self.extra = extra or {}
 
 
-POOL_IDLE = 16     # read connections kept open between reads
+POOL_IDLE = 32     # read connections kept open between reads
 
 
 def _pooled(base):
