@@ -5731,6 +5731,11 @@ def _thread_path(thread, *more):
     return "/".join(["threads", quote(str(thread), safe="")] + list(more))
 
 
+def _reaction_path(args):
+    """The route of one reaction: the message's id, then the emoji (its shortcode's colons and plus sign stay as they are)."""
+    return "messages/" + quote(args["message_id"], safe="") + "/reactions/" + quote(args["emoji"], safe=":+")
+
+
 def _thread_message(args, **more):
     """A message body for a thread post or reply: the text, its kind, who it is addressed to and its references."""
     body = {"text": args["text"], "kind": args.get("kind") or "say", "to": args.get("to"), **more}
@@ -5740,10 +5745,12 @@ def _thread_message(args, **more):
 
 
 @tool("hub_thread_list", "Your threads: Needs attention first, then unread, then recent; direct messages are listed "
-      "apart. Paged: next_cursor says whether more follow.",
-      {"cursor": THREAD_CURSOR, "limit": THREAD_LIMIT})
+      "apart. With with, only the threads shared with that person, bot or group. Paged: next_cursor says whether more "
+      "follow.",
+      {"with": _s("Only the threads shared with this person, bot or group: human:<id>, bot:<slug> or group:<id>"),
+       "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT})
 def thread_list(api, args):
-    return api.get("threads", cursor=args.get("cursor"), limit=args.get("limit"))
+    return api.get("threads", **{"with": args.get("with")}, cursor=args.get("cursor"), limit=args.get("limit"))
 
 
 @tool("hub_thread_show", "One thread in tree order: each message is followed by the sub-thread that branched from it, "
@@ -5805,6 +5812,24 @@ def thread_sub(api, args):
     return api.post("threads", {"parent_message_id": args["message"]}, key=_key(args))
 
 
+@tool("hub_thread_react", "Add your reaction to a message, such as :+1:. The answer is the message's reactions: each "
+      "emoji, its count and who reacted with it.",
+      {"message_id": _s("The message's id"),
+       "emoji": _s("The reaction: an emoji, or its shortcode such as :+1:")},
+      required=("message_id", "emoji"), writes=True)
+def thread_react(api, args):
+    return api.call("PUT", _reaction_path(args), None, key=_key(args))
+
+
+@tool("hub_thread_unreact", "Remove your reaction from a message. The answer is the message's reactions, as "
+      "hub_thread_react gives them.",
+      {"message_id": _s("The message's id"),
+       "emoji": _s("The reaction to remove: the emoji, or its shortcode such as :+1:")},
+      required=("message_id", "emoji"), writes=True)
+def thread_unreact(api, args):
+    return api.call("DELETE", _reaction_path(args), None, key=_key(args))
+
+
 @tool("hub_thread_follow", "Follow a thread, so its activity reaches you at the level you choose. Following never gives "
       "access: a thread you cannot read stays hidden whatever you follow.",
       {"thread": THREAD_ID,
@@ -5848,7 +5873,7 @@ def thread_search(api, args):
       "them; without it the answer is the same as for someone who does not exist.",
       {"actor": _s("Whose Home: bot:<slug>, human:<id> or group:<id>")}, required=("actor",))
 def thread_home(api, args):
-    return api.get("threads/home", actor=args["actor"])
+    return api.get("threads/home/" + quote(args["actor"], safe=":"))
 
 
 @tool("hub_thread_dm", "Your direct message with one person or bot: the open one with exactly you two, or a new one. "
@@ -5856,6 +5881,19 @@ def thread_home(api, args):
       {"actor": _s("Who: human:<id> or bot:<slug>")}, required=("actor",))
 def thread_dm(api, args):
     return api.get("threads/dm", **{"with": args["actor"]})
+
+
+@tool("hub_thread_dm_group", "A group direct message: you and the people or bots in members, with an optional first "
+      "message in body. The answer is the thread, with the message when a body was given.",
+      {"members": {"type": "array", "items": {"type": "string"}, "minItems": 1,
+                   "description": "The people or bots, as human:<id> or bot:<slug>: at least one"},
+       "body": _s("The first message, optional")},
+      required=("members",), writes=True)
+def thread_dm_group(api, args):
+    members = args.get("members") or []
+    if not members:
+        raise APIError("invalid", "Give at least one member: human:<id> or bot:<slug>", 422)
+    return api.post("threads/dm", {"members": members, "body": args.get("body")}, key=_key(args))
 
 
 @tool("hub_thread_members_list", "Who can read a thread: its people, bots and groups, with each one's role. Paged.",
@@ -5891,6 +5929,13 @@ def thread_members_remove(api, args):
 def thread_update(api, args):
     body = {key: args[key] for key in ("title", "archived", "audience", "audience_group_id") if args.get(key) is not None}
     return api.patch(_thread_path(args["thread"]), body, key=_key(args))
+
+
+@tool("hub_thread_open_earlier", "Open a bot's earlier messages to the people who read its Home. Only a manager of the "
+      "bot may. The answer is its Home and the messages.",
+      {"thread_id": THREAD_ID}, required=("thread_id",), writes=True)
+def thread_open_earlier(api, args):
+    return api.post(_thread_path(args["thread_id"], "open-earlier"), {}, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- the Assistant

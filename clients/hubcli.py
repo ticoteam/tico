@@ -22,16 +22,20 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            what was said in a conversation: the newest 200, oldest
                                            first; has_more says there is an older page, --before
                                            its next_before reads it. The run's prompt names it
-    hub thread list [--cursor C] [--limit N]   your threads: needs attention, then unread, then recent; DMs apart
+    hub thread list [--with ACTOR] [--cursor C] [--limit N]   your threads: needs attention, then unread, then recent;
+                                               DMs apart; --with: only the threads shared with that actor
     hub thread show <thread> [--cursor C]      one thread in tree order: a message's sub-thread sits under it
     hub thread home <actor>                    a teammate's Home thread, made on first use (needs Read on them)
     hub thread dm <actor>                      your DM with one person or bot: the open one, or a new one (needs Write)
+    hub thread dm-group <actor> <actor> [...] [--body "<text>"]   a group DM with these people or bots; --body is the first message
     hub thread create ["<title>"] [--audience members|team|company|personal] [--group G] [--member ACTOR ...]
                     [--body "<text>"]          the first message goes in with --body
     hub thread post <thread> "<text>" [--kind say|ask] [--to ACTOR] [--ref KIND:ID ...]
     hub thread reply <thread> <message> "<text>"   a side topic: the reply goes in that message's sub-thread
     hub thread edit <message> "<text>"         edit a message you wrote: a new revision
     hub thread sub <message>                   open a message's sub-thread without posting
+    hub thread react|unreact <message-id> <emoji>   your reaction to a message, such as :+1:
+    hub thread open-earlier <thread>           a bot's manager opens its earlier messages to its Home readers
     hub thread follow|unfollow <thread> [--notify live|mentions|digest|muted]
     hub thread read <thread> [--seq N | --all]
     hub thread search "<words>" [--cursor C]   the messages in threads you can read
@@ -953,6 +957,7 @@ def parser():
                    help="this thread only, not its sub-threads")
     s.set_defaults(fn="thread catchup")
     s = thread.add_parser("list", help="your threads: needs attention first, then unread, then recent; DMs apart")
+    s.add_argument("--with", dest="with", metavar="ACTOR", help="only the threads shared with this person, bot or group")
     thread_page_flags(s)
     s.set_defaults(fn="thread list")
     s = thread.add_parser("show", help="one thread in tree order: each message, then the sub-threads under it")
@@ -962,6 +967,10 @@ def parser():
     s = thread.add_parser("home", help="a teammate's Home thread, made on first use (needs Read on them)")
     s.add_argument("actor", help="bot:<slug>, human:<id> or group:<id>")
     s.set_defaults(fn="thread home")
+    s = thread.add_parser("dm-group", help="a group DM with several people or bots, with an optional first message")
+    s.add_argument("members", nargs="+", metavar="ACTOR", help="human:<id> or bot:<slug>; one or more")
+    s.add_argument("--body", help="the first message")
+    s.set_defaults(fn="thread dm-group")
     s = thread.add_parser("dm", help="your DM with one person or bot: the open one, or a new one")
     s.add_argument("actor", help="human:<id> or bot:<slug>")
     s.set_defaults(fn="thread dm")
@@ -993,6 +1002,17 @@ def parser():
     s = thread.add_parser("sub", help="open a message's sub-thread without posting; it is made if it does not exist")
     s.add_argument("message")
     s.set_defaults(fn="thread sub")
+    s = thread.add_parser("react", help="add your reaction to a message, such as :+1:")
+    s.add_argument("message_id")
+    s.add_argument("emoji", help="an emoji, or its shortcode such as :+1:")
+    s.set_defaults(fn="thread react")
+    s = thread.add_parser("unreact", help="remove your reaction from a message")
+    s.add_argument("message_id")
+    s.add_argument("emoji", help="an emoji, or its shortcode such as :+1:")
+    s.set_defaults(fn="thread unreact")
+    s = thread.add_parser("open-earlier", help="open a bot's earlier messages to the people who read its Home (a manager of the bot)")
+    s.add_argument("thread_id")
+    s.set_defaults(fn="thread open-earlier")
     s = thread.add_parser("follow", help="follow a thread: live, mentions, digest or muted")
     s.add_argument("thread")
     s.add_argument("--notify", choices=["live", "mentions", "digest", "muted"], help="live by default")

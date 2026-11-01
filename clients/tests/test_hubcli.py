@@ -84,9 +84,15 @@ def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
     runs = [
         (["thread", "list", "--limit", "10"], ("GET", "threads", {"limit": 10})),
+        (["thread", "list", "--with", "bot:ops", "--cursor", "c2", "--limit", "5"],
+         ("GET", "threads", {"with": "bot:ops", "cursor": "c2", "limit": 5})),
         (["thread", "show", "th1", "--cursor", "c2"], ("GET", "threads/th1/timeline", {"cursor": "c2"})),
-        (["thread", "home", "bot:ops"], ("GET", "threads/home", {"actor": "bot:ops"})),
+        (["thread", "home", "bot:ops"], ("GET", "threads/home/bot:ops", {})),
+        (["thread", "home", "group:x"], ("GET", "threads/home/group:x", {})),
         (["thread", "dm", "human:ben"], ("GET", "threads/dm", {"with": "human:ben"})),
+        (["thread", "dm-group", "human:ana", "bot:ops", "--body", "Hi all"],
+         ("POST", "threads/dm", {"members": ["human:ana", "bot:ops"], "body": "Hi all"})),
+        (["thread", "dm-group", "human:ben"], ("POST", "threads/dm", {"members": ["human:ben"], "body": None})),
         (["thread", "create", "Refund policy", "--audience", "team", "--group", "grp1", "--member", "human:ana",
           "--member", "bot:legal", "--body", "Hi"],
          ("POST", "threads", {"title": "Refund policy", "audience": "team", "audience_group_id": "grp1",
@@ -111,6 +117,9 @@ def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
         (["thread", "update", "th1", "--title", "Refunds", "--archive"],
          ("PATCH", "threads/th1", {"title": "Refunds", "archived": True})),
         (["thread", "update", "th1", "--unarchive"], ("PATCH", "threads/th1", {"archived": False})),
+        (["thread", "react", "m7", ":+1:"], ("PUT", "messages/m7/reactions/:+1:", None)),
+        (["thread", "unreact", "m7", ":+1:"], ("DELETE", "messages/m7/reactions/:+1:", None)),
+        (["thread", "open-earlier", "th1"], ("POST", "threads/th1/open-earlier", {})),
     ]
     for words, expected in runs:
         calls.clear()
@@ -119,7 +128,13 @@ def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
     assert {"hub_thread_list", "hub_thread_show", "hub_thread_create", "hub_thread_post", "hub_thread_reply",
             "hub_thread_sub", "hub_thread_edit", "hub_thread_follow", "hub_thread_unfollow", "hub_thread_read", "hub_thread_search",
             "hub_thread_members_list", "hub_thread_members_add", "hub_thread_members_remove", "hub_thread_update",
-            "hub_thread_link_slack"} <= set(hubtools.BY_NAME)
+            "hub_thread_link_slack", "hub_thread_dm_group", "hub_thread_react", "hub_thread_unreact",
+            "hub_thread_open_earlier"} <= set(hubtools.BY_NAME)
+
+
+def test_dm_group_needs_at_least_one_member_on_the_command_line():
+    with pytest.raises(SystemExit):
+        hubcli.parser().parse_args(["thread", "dm-group"])
 
 
 def test_review_command_and_mcp_preserve_head_body_and_retry_identity(tmp_path, monkeypatch):

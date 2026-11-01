@@ -225,8 +225,16 @@ def test_the_thread_answers_match_the_live_ones(api):
     thread_id = created["id"]
     call("listThreads", "get", "/api/v2/threads")
     call("getThread", "get", f"/api/v2/threads/{thread_id}", who="ben-test")
-    call("getThreadHome", "get", "/api/v2/threads/home", params={"actor": "human:ben"})
+    call("getThreadHome", "get", "/api/v2/threads/home/human:ben")
     call("openThreadDm", "get", "/api/v2/threads/dm", params={"with": "human:ben"})
+    call("createThreadDm", "post", "/api/v2/threads/dm", json={"members": ["human:ben"], "body": "Quick question"})
+    call("listThreads", "get", "/api/v2/threads", params={"with": "human:ben"})
+    ops_home = call("getThreadHome", "get", "/api/v2/threads/home/bot:ops")
+    call("openEarlierMessages", "post", f"/api/v2/threads/{ops_home['id']}/open-earlier")
+    uploaded = call("uploadThreadMessage", "post", f"/api/v2/uploads/threads/{thread_id}/messages",
+                    data={"text": "Notes attached"}, files={"files": ("notes.txt", b"budget notes", "text/plain")})
+    call("reactToMessage", "put", f"/api/v2/messages/{uploaded['message']['id']}/reactions/:+1:", who="ben-test")
+    call("unreactToMessage", "delete", f"/api/v2/messages/{uploaded['message']['id']}/reactions/:+1:", who="ben-test")
     call("getThreadTimeline", "get", f"/api/v2/threads/{thread_id}/timeline", who="ben-test")
     call("listThreadMembers", "get", f"/api/v2/threads/{thread_id}/members")
     call("searchThreads", "get", "/api/v2/threads/search", who="ben-test", params={"q": "budget"})

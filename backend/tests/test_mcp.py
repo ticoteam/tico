@@ -81,7 +81,8 @@ THREAD_READS = {"hub_thread_list", "hub_thread_show", "hub_thread_search", "hub_
                 "hub_thread_home", "hub_thread_dm"}
 THREAD_WRITES = {"hub_thread_create", "hub_thread_post", "hub_thread_reply", "hub_thread_edit", "hub_thread_sub",
                  "hub_thread_follow", "hub_thread_unfollow", "hub_thread_read", "hub_thread_members_add",
-                 "hub_thread_members_remove", "hub_thread_update", "hub_thread_link_slack"}
+                 "hub_thread_members_remove", "hub_thread_update", "hub_thread_link_slack", "hub_thread_dm_group",
+                 "hub_thread_react", "hub_thread_unreact", "hub_thread_open_earlier"}
 
 
 def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
@@ -94,12 +95,61 @@ def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
         assert ("operation_id" in schema["properties"]) == (name in THREAD_WRITES), name
     assert tools["hub_thread_post"]["inputSchema"]["properties"]["kind"]["enum"] == ["say", "ask"]
     assert tools["hub_thread_update"]["inputSchema"]["properties"]["audience"]["enum"] == ["members", "team", "company"]
+    assert "with" in tools["hub_thread_list"]["inputSchema"]["properties"]
 
 
 def test_link_slack_says_it_is_not_available_until_the_slack_bridge_lands(api):
     isError, payload = call(api, "hub_thread_link_slack", {"thread": "t1", "channel": "#ops"})
     assert isError is True
     assert "not available" in json.dumps(payload)
+
+
+class RecordingApi:
+    """The API a thread tool calls, with each request recorded as (method, route, body) and no server behind it."""
+    def __init__(self):
+        self.calls = []
+
+    def get(self, path, **query):
+        self.calls.append(("GET", path, {k: v for k, v in query.items() if v is not None}))
+        return {}
+
+    def post(self, path, body=None, key=None):
+        self.calls.append(("POST", path, body))
+        return {}
+
+    def call(self, method, path, body=None, key=None, query=None, delegate=False):
+        self.calls.append((method, path, body))
+        return {}
+
+
+def test_thread_tools_reach_the_routes_of_the_contract():
+    recorder = RecordingApi()
+    run = lambda name, args: hubtools.BY_NAME[name]["fn"](recorder, args)
+    run("hub_thread_home", {"actor": "bot:ops"})
+    run("hub_thread_list", {"with": "human:ben", "limit": 5})
+    run("hub_thread_dm_group", {"members": ["human:ana", "bot:coo"], "body": "Hi"})
+    run("hub_thread_dm_group", {"members": ["human:cara"]})
+    run("hub_thread_react", {"message_id": "m7", "emoji": ":+1:"})
+    run("hub_thread_unreact", {"message_id": "m7", "emoji": ":+1:"})
+    run("hub_thread_open_earlier", {"thread_id": "th1"})
+    assert recorder.calls == [
+        ("GET", "threads/home/bot:ops", {}),
+        ("GET", "threads", {"with": "human:ben", "limit": 5}),
+        ("POST", "threads/dm", {"members": ["human:ana", "bot:coo"], "body": "Hi"}),
+        ("POST", "threads/dm", {"members": ["human:cara"], "body": None}),
+        ("PUT", "messages/m7/reactions/:+1:", None),
+        ("DELETE", "messages/m7/reactions/:+1:", None),
+        ("POST", "threads/th1/open-earlier", {}),
+    ]
+
+
+def test_a_group_dm_needs_at_least_one_member(api):
+    tools = {t["name"]: t for t in rpc(api, "tools/list")["result"]["tools"]}
+    schema = tools["hub_thread_dm_group"]["inputSchema"]
+    assert schema["required"] == ["members"] and schema["properties"]["members"]["minItems"] == 1
+    isError, payload = call(api, "hub_thread_dm_group", {"members": []})
+    assert isError is True
+    assert payload["error"] == "validation" and "members" in payload["detail"]
 
 
 def test_task_update_status_choices_follow_the_api_and_bot_restrictions():

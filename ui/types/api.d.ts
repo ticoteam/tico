@@ -982,6 +982,12 @@ export type ConversationList = {
   conversations: Array<Conversation>;
 };
 
+export type DmCreate = {
+  body?: string | null;
+  members: Array<string>;
+  title?: string;
+};
+
 export type DocCreate = {
   body?: string;
   note?: string;
@@ -4629,6 +4635,11 @@ export type ThreadCreate = {
   title?: string;
 };
 
+export type ThreadEarlier = {
+  home: string;
+  messages: number;
+};
+
 export type ThreadFollow = {
   following: boolean;
   notify?: string;
@@ -4689,6 +4700,12 @@ export type ThreadPost = {
   to?: string | null;
 };
 
+export type ThreadReactions = Array<{
+  actors: Array<unknown>;
+  count: number;
+  emoji: string;
+}>;
+
 export type ThreadRead = {
   last_read_seq: number;
   thread_id: string;
@@ -4724,6 +4741,11 @@ export type ThreadTimeline = {
   thread: ThreadView;
 };
 
+export type ThreadUploaded = {
+  message: ThreadMessage;
+  thread: ThreadView;
+};
+
 export type ThreadView = {
   archived_at?: string | null;
   audience: string;
@@ -4735,6 +4757,7 @@ export type ThreadView = {
   last_seq: number;
   last_unread_seq: number;
   me?: Record<string, unknown>;
+  members?: Record<string, unknown>;
   owner_actor?: string | null;
   parent_id?: string | null;
   parent_message_id?: string | null;
@@ -5701,6 +5724,13 @@ export type CreateThreadParams = {
 };
 export type CreateThreadBody = ThreadCreate;
 export type CreateThreadResponse = ThreadView;
+
+/** POST /api/v2/threads/dm */
+export type CreateThreadDmParams = {
+  "Idempotency-Key": string;
+};
+export type CreateThreadDmBody = DmCreate;
+export type CreateThreadDmResponse = ThreadView;
 
 /** POST /api/v2/triggers */
 export type CreateTriggerParams = {
@@ -6703,7 +6733,7 @@ export type GetThreadParams = {
 export type GetThreadBody = never;
 export type GetThreadResponse = ThreadView;
 
-/** GET /api/v2/threads/home */
+/** GET /api/v2/threads/home/{actor} */
 export type GetThreadHomeParams = {
   actor: string;
 };
@@ -7654,6 +7684,7 @@ export type ListThreadMembersResponse = ThreadMembers;
 export type ListThreadsParams = {
   cursor?: string | null;
   limit?: number | null;
+  with?: string | null;
 };
 export type ListThreadsBody = never;
 export type ListThreadsResponse = ThreadSidebar;
@@ -7772,6 +7803,14 @@ export type ModerateTaskCommentParams = {
 export type ModerateTaskCommentBody = Moderate;
 export type ModerateTaskCommentResponse = unknown;
 
+/** POST /api/v2/threads/{thread_id}/open-earlier */
+export type OpenEarlierMessagesParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type OpenEarlierMessagesBody = never;
+export type OpenEarlierMessagesResponse = ThreadEarlier;
+
 /** GET /api/v2/threads/dm */
 export type OpenThreadDmParams = {
   with: string;
@@ -7869,6 +7908,14 @@ export type RankRoadmapTasksParams = {
 };
 export type RankRoadmapTasksBody = never;
 export type RankRoadmapTasksResponse = unknown;
+
+/** PUT /api/v2/messages/{message_id}/reactions/{emoji} */
+export type ReactToMessageParams = {
+  emoji: string;
+  message_id: string;
+};
+export type ReactToMessageBody = never;
+export type ReactToMessageResponse = ThreadReactions;
 
 /** POST /api/v2/assistant/read-back */
 export type ReadBackAssistantApprovalsParams = {
@@ -8979,6 +9026,15 @@ export type UnlinkSlackLinkParams = {
 export type UnlinkSlackLinkBody = never;
 export type UnlinkSlackLinkResponse = SlackLink;
 
+/** DELETE /api/v2/messages/{message_id}/reactions/{emoji} */
+export type UnreactToMessageParams = {
+  "Idempotency-Key": string;
+  emoji: string;
+  message_id: string;
+};
+export type UnreactToMessageBody = never;
+export type UnreactToMessageResponse = ThreadReactions;
+
 /** POST /api/v2/tasks/{tid}/unsnooze */
 export type UnsnoozeTaskParams = {
   "Idempotency-Key": string;
@@ -9198,6 +9254,20 @@ export type UploadBotFileBody = {
   title?: string;
 };
 export type UploadBotFileResponse = BotFileResult;
+
+/** POST /api/v2/uploads/threads/{thread_id}/messages */
+export type UploadThreadMessageParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type UploadThreadMessageBody = {
+  kind?: string;
+  parent_message_id?: string | null;
+  text?: string;
+  titles?: Array<string>;
+  to?: string | null;
+};
+export type UploadThreadMessageResponse = ThreadUploaded;
 
 /** POST /api/v2/inbound/tasks */
 export type UpsertInboundTaskParams = {
