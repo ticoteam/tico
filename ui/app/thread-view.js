@@ -94,6 +94,11 @@ async function thvLoad(view) {
     thvDraw(view);
   }
 }
+// A message posted elsewhere (Start onboarding) into a DM on screen: that DM reads itself again, finding the thread
+// if it was not there yet.
+function threadsReloadDM(actor) {
+  for (const v of THV_VIEWS) if (v.opts.dm === actor && !v.gone) { if (v.id) void thvRefresh(v); else void thvLoad(v); }
+}
 // The viewer's own held writes in this thread come back after a reload, still with Edit and Discard.
 async function thvHoldsLoad(view) {
   if (!view.id) return;

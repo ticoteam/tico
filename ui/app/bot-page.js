@@ -630,7 +630,7 @@ BOT_PHONE.addEventListener('change', placeBotHead);
 function showBotTab(tab) {
   if (!BOT || !$('#btabs')) return;
   const wantTools = tab === 'tools';
-  const aliases = {more: 'info', docs: 'instructions', session: 'history', tools: 'info', chat: 'home'};
+  const aliases = {more: 'info', docs: 'instructions', session: 'history', tools: 'info', chat: 'dm'};
   const tabs = botTabs(BOT.slug);
   const view = tabs.includes(aliases[tab] || tab) ? aliases[tab] || tab : tabs[0];
   BOT.tab = view;
