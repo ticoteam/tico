@@ -2,7 +2,8 @@
 and its records come in the way a customer's own files would: through `POST /api/v2/imports/commit`, one CSV file per
 record type, in one format. Its contacts are made by the Finance action that makes them.
 
-`python -m backend.demo --company heating-air` (or `kitchen`, `works`). The files are in backend/demo_data/<company>/."""
+`python -m backend.demo --company heating-air` (or `kitchen`, `works`). The files are in
+backend/demo_data/<company>/."""
 import dataclasses
 from pathlib import Path
 
