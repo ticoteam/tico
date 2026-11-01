@@ -5772,6 +5772,20 @@ def thread_search(api, args):
     return api.get("threads/search", q=args["q"], cursor=args.get("cursor"), limit=args.get("limit"))
 
 
+@tool("hub_thread_home", "A teammate's Home: their thread for what comes to them, made on first use. You need Read on "
+      "them; without it the answer is the same as for someone who does not exist.",
+      {"actor": _s("Whose Home: bot:<slug>, human:<id> or group:<id>")}, required=("actor",))
+def thread_home(api, args):
+    return api.get("threads/home", actor=args["actor"])
+
+
+@tool("hub_thread_dm", "Your direct message with one person or bot: the open one with exactly you two, or a new one. "
+      "You need Write on them, since the reply-back rule applies. A person you cannot see is not found.",
+      {"actor": _s("Who: human:<id> or bot:<slug>")}, required=("actor",))
+def thread_dm(api, args):
+    return api.get("threads/dm", **{"with": args["actor"]})
+
+
 @tool("hub_thread_members_list", "Who can read a thread: its people, bots and groups, with each one's role. Paged.",
       {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("thread",))
 def thread_members_list(api, args):

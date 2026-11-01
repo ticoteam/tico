@@ -77,7 +77,8 @@ def test_every_cli_command_has_a_tool_of_the_same_name():
     assert hubtools.SHELL_ONLY <= names
 
 
-THREAD_READS = {"hub_thread_list", "hub_thread_show", "hub_thread_search", "hub_thread_members_list"}
+THREAD_READS = {"hub_thread_list", "hub_thread_show", "hub_thread_search", "hub_thread_members_list",
+                "hub_thread_home", "hub_thread_dm"}
 THREAD_WRITES = {"hub_thread_create", "hub_thread_post", "hub_thread_reply", "hub_thread_edit", "hub_thread_sub",
                  "hub_thread_follow", "hub_thread_unfollow", "hub_thread_read", "hub_thread_members_add",
                  "hub_thread_members_remove", "hub_thread_update", "hub_thread_link_slack"}

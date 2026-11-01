@@ -85,6 +85,8 @@ def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
     runs = [
         (["thread", "list", "--limit", "10"], ("GET", "threads", {"limit": 10})),
         (["thread", "show", "th1", "--cursor", "c2"], ("GET", "threads/th1/timeline", {"cursor": "c2"})),
+        (["thread", "home", "bot:ops"], ("GET", "threads/home", {"actor": "bot:ops"})),
+        (["thread", "dm", "human:ben"], ("GET", "threads/dm", {"with": "human:ben"})),
         (["thread", "create", "Refund policy", "--audience", "team", "--group", "grp1", "--member", "human:ana",
           "--member", "bot:legal", "--body", "Hi"],
          ("POST", "threads", {"title": "Refund policy", "audience": "team", "audience_group_id": "grp1",
