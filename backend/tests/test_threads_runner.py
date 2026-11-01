@@ -133,3 +133,17 @@ def test_a_carrier_turns_reply_is_rule_checked_as_going_to_the_carried_sender(ap
 def test_only_the_keepers_notice_is_a_carrier():
     msg = {"id": "m1", "conversation_id": "t1", "from_actor": "human:ana", "refs": {"carries": "m0"}}
     assert execution.reply_source(None, msg) is msg, "a carries ref on a person's message is ignored"
+
+
+def test_a_sub_thread_turn_carries_its_roots_session_epoch(api):
+    # The sub-thread continues the root's session, so a Clear on the root (its epoch) must start that session anew
+    # whichever of its threads the next turn comes from.
+    r = bot_runner(api)
+    tid = make_thread(api, title="Launch", members=["bot:cpo"])
+    parent = say(api, tid, "Kickoff notes")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO session_epochs VALUES(?,1,?)", (tid, H.now()))
+    say(api, tid, "@cpo list the risks", parent=parent["id"])
+    attempt = claim(api, r, "cpo")
+    assert attempt["conversation"]["id"] != tid and attempt["conversation"]["root_id"] == tid
+    assert attempt["session_epoch"] == 1

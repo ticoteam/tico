@@ -3570,6 +3570,11 @@ class Execution:
         # hub keeps no pointer to the bot's session and rebuilds nothing on its behalf.
         epoch = c.execute("SELECT epoch,updated FROM session_epochs WHERE conversation_id=?", (conv["id"],)).fetchone()
         bot_epoch = c.execute("SELECT epoch FROM bot_session_epochs WHERE bot=?", (row["bot"],)).fetchone()
+        # A sub-thread's turn continues its root's session (clients/sessions.py root keys), so the epoch that clears
+        # that session is the root's: a Clear on the chat starts its sub-threads' next turn anew too.
+        root_id = conv.get("root_id") or conv["id"]
+        session_epoch = epoch if root_id == conv["id"] else c.execute(
+            "SELECT epoch FROM session_epochs WHERE conversation_id=?", (root_id,)).fetchone()
         bot_who = Identity("bot:" + row["bot"], "bot", attempt_id=aid)
         history = privacy.page(c, bot_who, conv["id"], limit=HISTORY_PAGE * (2 if lanes else 1),
                                since=epoch["updated"] if epoch else None)["messages"]
@@ -3754,7 +3759,7 @@ class Execution:
                             "config": rooms.session_config(conv, row["bot"], config),
                             # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
                             # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).
-                            "session_epoch": epoch["epoch"] if epoch else 0,
+                            "session_epoch": session_epoch["epoch"] if session_epoch else 0,
                             # Moved by any clear or reset of this bot: the runner starts the bot's shared thread anew.
                             "bot_session_epoch": bot_epoch[0] if bot_epoch else 0}}
 
