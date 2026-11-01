@@ -58,7 +58,8 @@ async function restrictBot(hub) {
     await dana.getByText('Monday works.').waitFor({timeout: t(15000)});
 
     // Dana: the sub-thread shows inline under its message, and its header opens the sub-thread on its own page.
-    const head = dana.locator('.th-subhead', {hasText: 'Sub question about the risks'});
+    // A sub-thread's header is titled by its parent's first line (threads contract), so it names the kickoff message.
+    const head = dana.locator('.th-subhead', {hasText: KICKOFF});
     await head.waitFor({timeout: t(15000)});
     assert.match(await head.innerText(), /1 reply/, 'the sub-thread header counts its one reply');
     await dana.locator('.th-msg', {hasText: RISKS}).first().waitFor({timeout: t(15000)});
@@ -70,7 +71,7 @@ async function restrictBot(hub) {
 
     // Dana: the bot page's Home and DM are two tabs, and each one selects on its own.
     const bot = await pageAs(browser, hub, 'dana');
-    await bot.goto(hub.url + '/#/bot/' + BOT);
+    await bot.goto(hub.url + '/#/bot/' + BOT + '/home');
     await bot.locator('#bot-work').waitFor({timeout: t(15000)});
     const homeTab = bot.locator('.bot-talk-switch [data-talk="home"]');
     const dmTab = bot.locator('.bot-talk-switch [data-talk="dm"]');
@@ -94,8 +95,9 @@ async function restrictBot(hub) {
     await omar.goto(hub.url + '/#/thread/' + secret.id);
     await omar.getByText('Not found').waitFor({timeout: t(15000)});
     assert.ok(!(await omar.content()).includes(SECRET), 'the members-only text is not on Omar\'s page');
-    await omar.goto(hub.url + '/#/bot/' + BOT);
-    await omar.locator('#bot-work').waitFor({timeout: t(15000)});
+    await omar.goto(hub.url + '/#/bot/' + BOT + '/dm');
+    await omar.locator('#btabs').waitFor({timeout: t(15000)});
+    await omar.waitForLoadState('networkidle');
     assert.equal(await omar.locator('.bot-talk-switch [data-talk="home"]').count(), 0,
       'a peer with See only on the bot gets no Home tab');
     await omar.context().close();

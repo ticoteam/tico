@@ -5,7 +5,7 @@ The Computer, its fake harnesses on PATH and the release binary are the conforma
 (runner/tests/test_conformance.py): every test starts a real `tico-runner run` against the live API, and the fake
 `claude` or `codex` records each provider turn it is given. The tests here answer the threads questions: who a
 wake starts, which sub-thread the reply lands in, when the loop guard holds a wake, and which provider session a
-turn continues. A peer bot whose turns the test finishes by hand (ops2) makes bot-caused wakes without a second
+turn continues. A peer bot whose turns the test finishes by hand (cpo) makes bot-caused wakes without a second
 computer.
 
 Slow: it builds the release binary once per session and starts runner processes.
@@ -111,9 +111,9 @@ def test_the_loop_guard_holds_a_bots_wakes_and_a_persons_message_resumes_them(ap
     monkeypatch.setattr(threads, "LOOP_GUARD_PER_HOUR", 2)
     computer.start()
     peer = runner(api)
-    assign(api, peer, "ops2")
-    ready(api, peer, ["ops2"])
-    t = create_thread(api, title="Ping pong", members=["bot:ops", "bot:ops2"])
+    assign(api, peer, "cpo")
+    ready(api, peer, ["cpo"])
+    t = create_thread(api, title="Ping pong", members=["bot:ops", "bot:cpo"])
 
     def started():
         return len(computer.attempts())
@@ -124,9 +124,9 @@ def test_the_loop_guard_holds_a_bots_wakes_and_a_persons_message_resumes_them(ap
                              "AND state='capped'", (t["id"],)).fetchone()[0]
 
     for n in range(1, 7):
-        say(api, "ana-test", t["id"], f"@ops2 round {n}")
-        turn = claim(api, peer, "ops2")
-        assert turn is not None, f"round {n}: a person's mention wakes ops2"
+        say(api, "ana-test", t["id"], f"@cpo round {n}")
+        turn = claim(api, peer, "cpo")
+        assert turn is not None, f"round {n}: a person's mention wakes cpo"
         before = started()
         finish(api, peer, turn, f"@ops ping {n}")
         until(lambda: started() > before or held() > 0, f"round {n}: ops runs, or its wake is held")
@@ -185,5 +185,8 @@ def test_the_first_turn_after_an_update_starts_fresh_and_recovers_only_its_roots
     kind, thread = provider_turns(computer)[-1]
     assert kind == "new" and thread != "old-bot-thread-0001", "the old shared thread is never resumed by a root"
     prompt = computer.prompts()[-1]["prompt"]
-    assert "ROOM-B note" in prompt, "the fresh thread is told this root's history"
-    assert "OTHER-ROOM" not in prompt, "the recovery pack is built only from this root's readable history"
+    # The fresh thread has none of the room's history inline: it is pointed at this root's conversation, which the
+    # bot reads through `hub conversation show` under the same readability rules (runner-rs/src/prompt.rs, history).
+    assert f"hub conversation show {room['id']}" in prompt, "the fresh thread is pointed at this root's history"
+    assert elsewhere["id"] not in prompt and "OTHER-ROOM" not in prompt, \
+        "nothing from another root reaches the fresh thread's prompt"
