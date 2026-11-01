@@ -23,7 +23,9 @@ signed-in person as they commit, filtered to what that person may read:
 
 `after` (or the browser's `Last-Event-ID`) resumes from the last change number seen, so a
 reconnect misses nothing; a client further behind than the log keeps (24 h), or more than BACKLOG_MAX changes behind
-(a slow consumer), is sent `reset` and reads its page in full. One read sends at most READ_BYTES of events and leaves
+(a slow consumer), is sent `reset` and reads its page in full. So is one that leaves a frame unread for STALL_SECONDS:
+what waits for it is the socket's buffer and no more, and it is sent `reset` and the newest change number instead of
+the backlog once it reads again. One read sends at most READ_BYTES of events and leaves
 the rest for the next read, so one poll's work and its payload stay bounded however busy the team is.
 
 Delivery has no per-client polling. `Store.mutate` and `Store.write` ring an in-process doorbell
@@ -54,6 +56,7 @@ KEEP_HOURS = 24           # a client away longer than this reads in full
 FALLBACK_SECONDS = 1.5    # the shared look for changes another process wrote
 RUNNER_FALLBACK_SECONDS = 5  # the same for computers' streams: work another process queued waits this long at most
 BACKLOG_MAX = 5000        # changes a stream may fall behind before it is reset rather than replayed (a slow consumer)
+STALL_SECONDS = 5.0       # a frame the client took longer than this to take: a slow consumer, reset rather than replayed
 READ_BYTES = 256 * 1024   # event bytes one read sends; the rest of its changes wait for the next read
 LIFETIME_SECONDS = 900    # bounded; each read and keepalive re-checks the sign-in, so this only caps stale state
 RUNNER_LIFETIME_SECONDS = 300
@@ -1354,6 +1357,10 @@ def install(app, store, auth, task_views, task_view):
                             visuals=None if agent else lambda c, who, rows: V.for_reader(app, auth.settings, c, who, rows),
                             threads_scope=threads_scope, shared=shared)
 
+        def newest():
+            with store.read() as c:
+                return latest(c)
+
         now_seq = await asyncio.to_thread(start)
         doorbell.observe(now_seq)
         cursor = after if after is not None and after >= 0 else now_seq
@@ -1387,8 +1394,20 @@ def install(app, store, auth, task_views, task_view):
                             yield _frame(cursor, "reset", {"seq": cursor})
                             quiet_since = time.monotonic()
                         elif next_cursor != cursor:
+                            stalled = False
                             for seq, topic, data in sent:
+                                began = time.monotonic()
                                 yield _frame(seq, topic, data)
+                                if time.monotonic() - began > STALL_SECONDS:
+                                    stalled = True     # the rest of this read and what came meanwhile are not replayed
+                                    break
+                            if stalled:
+                                cursor = await asyncio.to_thread(newest)
+                                yield _frame(cursor, "reset", {"seq": cursor})
+                                due = False
+                                doorbell.observe(cursor)
+                                quiet_since = time.monotonic()
+                                continue
                             # The cursor moves past changes this viewer may not see, so it resumes there.
                             if not sent or sent[-1][0] != next_cursor:
                                 yield _frame(next_cursor, "cursor", {"seq": next_cursor})

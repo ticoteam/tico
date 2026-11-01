@@ -392,7 +392,7 @@ def main():
     command = [sys.executable, str(Path(__file__).resolve()), "--serve"]
     if os.environ.get("BENCH_SAMPLE"):             # Python 3.15+: which code holds the interpreter lock, sampled
         command[1:1] = ["-m", "profiling.sampling", "run", "-a", "--mode", "gil", "-r", "500", "--collapsed",
-                        "--no-summary", "-o", os.environ["BENCH_SAMPLE"]]
+                        "-o", os.environ["BENCH_SAMPLE"]]
     child = subprocess.Popen(command, cwd=str(ROOT),
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     ready = json.loads(child.stdout.readline() or "{}")
