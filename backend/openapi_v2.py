@@ -1446,7 +1446,8 @@ STABLE.extend([
      "Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies, for a finance admin who sees "
      "sources; the ordinary trigger routes refuse them", "FinanceWebhookDeliveries"),
     ("/api/v2/finance/access", "get", "Finance", "getFinanceAccess",
-     "Who can see what in Finance: teams, each teammate's default, grants and rights, private lines, the defaults",
+     "Who can see what in Finance: teams, each teammate's default, grants and rights, whether the caller may grant "
+     "them more (may_grant), private lines, the defaults",
      "FinanceAccess"),
     ("/api/v2/finance/payments", "get", "Finance", "listFinancePayments",
      "Payments the caller made or whose line they see, newest first, with a cursor; errors only for the payer or a "
@@ -1479,7 +1480,8 @@ STABLE.extend([
      "them; external_rule_id lists those linked to one external rule", "FinanceRules"),
     ("/api/v2/finance/bills", "get", "Finance", "listFinanceBills",
      "Bills the caller sees (payables: a view grant or finance.ap), newest first, filtered by status (comma-separated, "
-     "or unpaid), vendor, dates, aging bucket and a search, with the open total by aging bucket and a cursor",
+     "or unpaid), vendor, dates, aging bucket or late, and a search, with the open total by aging bucket and a cursor; "
+     "order=paid_on lists the last paid first",
      "FinanceBills"),
     ("/api/v2/finance/bills/{bill_id}", "get", "Finance", "getFinanceBill",
      "One bill with its lines, the payments settled against it, its attachments and the actions and approvals on it",
@@ -1509,7 +1511,8 @@ STABLE.extend([
      "FinanceInbox"),
     ("/api/v2/finance/reports/{kind}", "get", "Finance", "getFinanceReport",
      "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the "
-     "caller's view; compare=prior adds the window before; rows past top_n fold into one Other row",
+     "caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the "
+     "group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
      "FinanceReportOf"),
     ("/api/v2/finance/search", "get", "Finance", "searchFinance",
      "Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees; with kind it pages by "
@@ -1532,9 +1535,9 @@ STABLE.extend([
      "view_as", "FinanceReport"),
     ("/api/v2/finance/lines/{account_id}", "get", "Finance", "getFinanceLine",
      "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's "
-     "projection, as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and "
-     "unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). The owner may "
-     "pass view_as",
+     "projection (next_month; by vendor, team and teammate in next_by, named in next_labels), as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and "
+     "unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). Rows past top_n "
+     "fold into one Other row keyed \" other\", and the group with none is keyed \" unattributed\". The owner may pass view_as",
      "FinanceReport"),
     ("/api/v2/finance/actions", "post", "Finance", "requestFinanceAction",
      "Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key is "
@@ -1610,7 +1613,8 @@ SCHEMAS.update({
                                 "default": {"type": "string", "enum": ["everything", "team_expenses", "own_expenses",
                                                                        "none"]},
                                 "grants": items({"type": "object", "additionalProperties": True}),
-                                "rights": {"type": ["array", "null"], "items": {"type": "string"}}})),
+                                "rights": {"type": ["array", "null"], "items": {"type": "string"}},
+                                "may_grant": "b"})),
         "private_lines": items(obj({"account_id": "s", "name": "s", "others_see": "s",
                                     "full_detail": {"type": ["array", "null"], "items": {"type": "string"}}})),
         "defaults": obj({"manager": "s", "member": "s", "manager_payroll": "s"}),
@@ -1706,7 +1710,8 @@ SCHEMAS.update({
         "total": "i", "paid": "i", "remaining": "i", "aging": "n", "days_late": "i", "memo": "s", "entry_id": "n",
         "attachments": "i", "created_by": "s", "created_at": "s", "origin": "s", "approved_by": "n",
         "approved_at": "n", "pay_on": "n", "payment": DOC_PAYMENT, "sent_at": "n", "written_off": "i",
-        "payment_link": "n"},
+        "payment_link": "n", "account": {"type": ["object", "null"], "additionalProperties": True}, "split": "b",
+        "team": "n", "paid_on": "n", "paid_by": "n"},
         required=["id", "kind", "number", "date", "status", "currency", "total", "paid", "remaining"]),
     "FinanceDocument": {"allOf": [ref("FinanceDocumentRow"), obj({
         "lines": items(obj({"id": "s", "account": {"type": ["object", "null"], "additionalProperties": True},
