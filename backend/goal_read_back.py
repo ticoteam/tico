@@ -128,8 +128,13 @@ def stored(c, message_id):
                     (EVENT, message_id)).fetchone()
     if not row:
         return None
+    changes = (H._json(row["detail_json"], {}) or {}).get("changes") or []
+    # Old drafts cannot prove whose words they named after a parent/owner move.
+    # Require a fresh draft rather than show or save an unverifiable read-back.
+    if any("read_owners" not in change for change in changes):
+        raise not_agreed("This read-back predates its access checks")
     return {"id": row["id"], "created": row["created"], "conversation_id": row["conversation_id"],
-            "changes": (H._json(row["detail_json"], {}) or {}).get("changes") or []}
+            "changes": changes}
 
 
 def saves(c, back_id):
@@ -218,6 +223,12 @@ def step_path(step, change, done):
     return step["path"].replace(NEW, created) if NEW in step["path"] and created else step["path"]
 
 
+def editor_words(actor):
+    # A visible goal may have been edited by a bot the helper cannot read.
+    # Naming the editor is unnecessary to explain the conflicting change.
+    return "someone" if H.is_bot(actor or "") else H.actor_id(actor or "") or "someone"
+
+
 def changed_since(c, back, change, done):
     """What someone changed on this change's goals since the read-back, other than its own saves, in words."""
     mine = {m for d in done.values() for m in d.get("marks") or []}
@@ -230,7 +241,7 @@ def changed_since(c, back, change, done):
         p = m and G.proposal(c, m.group(1))
         if p and p["status"] != "pending":
             did = {"confirmed": "accepted", "rejected": "turned down"}.get(p["status"])
-            said.append(f"{H.actor_id(p['decided_by'] or '') or 'someone'} {did} the suggestion" if did
+            said.append(f"{editor_words(p['decided_by'])} {did} the suggestion" if did
                         else f"the suggestion was {p['status']}")
     for gid in dict.fromkeys(goals):
         for r in c.execute("SELECT id, actor, field, old, new, status_source FROM goal_events WHERE goal_id=? AND ts>? "
@@ -238,7 +249,7 @@ def changed_since(c, back, change, done):
             if r["id"] in mine or r["field"] in ("rank", "checkin", "status_source") or (
                     r["field"] == "status" and r["status_source"] == "auto") or r["field"] == "proposal":
                 continue
-            who = H.actor_id(r["actor"])
+            who = editor_words(r["actor"])
             if r["field"] in ("title", "why", "owner", "status", "kpi_target"):
                 said.append(f"{who} changed the {r['field'].replace('kpi_', '')} from “{r['old'] or 'none'}” to "
                             f"“{r['new'] or 'none'}”")

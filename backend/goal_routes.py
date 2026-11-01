@@ -1447,7 +1447,7 @@ def install(app, store, auth, mutate, settings):
     @app.post("/api/v2/goal-proposals")
     def proposal_create(request: Request, body: M.GoalProposal):
         """Propose a change the caller may not make: clearer wording, a KPI for a goal, a new definition,
-        a target, or a flag (vague, duplicate, unmeasured). The owner confirms or rejects."""
+        a target, or a flag (vague or duplicate). The owner confirms or rejects."""
         who = request.state.identity
         def work(c):
             auth.domain(who)
