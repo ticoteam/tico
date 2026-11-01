@@ -31,3 +31,9 @@ def class_set_active(c: sqlite3.Connection, dimension_id: str, active: bool) -> 
 def class_names(c: sqlite3.Connection) -> dict[str, str]:
     """Every class's name by id, active or not: a line keeps naming the class it was tagged with."""
     return {str(r[0]): str(r[1]) for r in c.execute("SELECT id, name FROM fin_dimensions WHERE kind='class'")}
+
+
+def classes_active(c: sqlite3.Connection) -> list[tuple[str, str]]:
+    """The classes a new line may name, by name: (id, name)."""
+    return [(str(r[0]), str(r[1])) for r in c.execute(
+        "SELECT id, name FROM fin_dimensions WHERE kind='class' AND active=1 ORDER BY name, id")]

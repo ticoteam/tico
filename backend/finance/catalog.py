@@ -53,13 +53,14 @@ def _archive_flag(ctx: Ctx, p: V.Payload) -> dict[str, object]:
     return {"archived_at": None if V.flag(p, "active", True) else ctx.at}
 
 
-def _customer(ctx: Ctx, who: str, value: str) -> str:
+def record_customer(ctx: Ctx, who: str, value: str, holder: bool = False) -> str:
     """A customer contact a record names. A records holder names any customer (the customer's name is operational, so
     every teammate reads it); anyone else needs a view that covers customers. Refused as a missing one otherwise, so a
-    refusal never says that a contact exists (the same rule an account follows)."""
+    refusal never says that a contact exists (the same rule an account follows). `holder` says the request already
+    waits for a records holder (a bot's ask does), so the asker names any customer too."""
     row = SAP.get(ctx.c, "fin_contacts", value)
     view = ctx.view(who)
-    may_name = R.has(ctx.org, who, R.RECORDS, ctx.rights(who)) or view.everything or view.receivables
+    may_name = holder or R.has(ctx.org, who, R.RECORDS, ctx.rights(who)) or view.everything or view.receivables
     if row is None or str(row["book_id"]) != ctx.book.id or str(row["kind"]) not in ("customer", "both") or \
             not may_name:
         raise FinanceError(NOT_FOUND, "no such customer")
@@ -125,7 +126,7 @@ def _location_fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str
         out["parent_id"] = RS.resolve(ctx.c, "locations", parent) if parent else None
     if create or "customer_id" in p:
         customer = V.opt_text(p, "customer_id", 80) or ""
-        out["customer_id"] = _customer(ctx, who, customer) if customer else None
+        out["customer_id"] = record_customer(ctx, who, customer) if customer else None
     if create or "address" in p:
         address = V.obj(p.get("address") or {}, "an address")
         if any(not isinstance(v, str) or len(v) > 200 for v in address.values()) or len(address) > 10:
@@ -144,7 +145,7 @@ def _project_fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str,
         out["status"] = RC.choice(V.opt_text(p, "status", 20) or "open", RC.PROJECT_STATUSES, "a project status")
     if create or "customer_id" in p:
         customer = V.opt_text(p, "customer_id", 80) or ""
-        out["customer_id"] = _customer(ctx, who, customer) if customer else None
+        out["customer_id"] = record_customer(ctx, who, customer) if customer else None
     if not create:
         out.update(_archive_flag(ctx, p))
     return out
@@ -229,6 +230,8 @@ def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise invalid("an item the provider holds keeps its accounts: change them in the books")
     if _mirrored(ctx) and "sku" in f and old["sku"] and not f["sku"]:
         raise invalid("an item the provider holds keeps its SKU: set another one")
+    if _mirrored(ctx) and "active" in p and not V.flag(p, "active") and not mirror.item_archive_taken(ctx):
+        raise invalid("an item Xero holds is archived in Xero: archive it there")
     if _mirrored(ctx) and "kind" in f and f["kind"] != old["kind"]:
         _books_kind_change(str(old["kind"]), str(f["kind"]))
     gate = K.default_gate(ctx.org, who, "item_update")

@@ -1,0 +1,25 @@
+name,sku,kind,unit,price
+Steel bar 1 in,RM-100,raw_material,foot,3.20
+Aluminum sheet 4x8,RM-101,raw_material,sheet,85
+Hex bolt M8,RM-102,raw_material,each,0.35
+Hex nut M8,RM-103,raw_material,each,0.12
+Steel plate 1/4 in,RM-104,raw_material,sheet,140
+Copper wire 12 AWG,RM-105,raw_material,foot,0.85
+Bearing 6205,RM-106,raw_material,each,4.60
+Shaft 1 in ground,RM-107,raw_material,foot,11.80
+Gearbox housing casting,RM-108,raw_material,each,96
+Gearbox assembly,ASM-200,assembly,each,420
+Drive frame assembly,ASM-201,assembly,each,615
+Control panel assembly,ASM-202,assembly,each,780
+Motor mount assembly,ASM-203,assembly,each,165
+Conveyor section,ASM-204,assembly,each,1350
+Finished widget A,FG-300,inventory,each,120
+Finished widget B,FG-301,inventory,each,155
+Spare gearbox,FG-302,inventory,each,540
+Packaging crate,PKG-400,inventory,each,18
+Cutting oil 5 gal,CON-400,non_inventory,pail,64
+Cutting tool insert,CON-401,non_inventory,each,21.50
+Shop rag box,CON-402,non_inventory,box,31
+Machine maintenance service,SVC-500,service,hour,95
+Shipping labor,SVC-501,service,hour,70
+Forklift rental,SVC-502,service,day,180

@@ -1,0 +1,4 @@
+name,kind,email
+Sample Steel Supply,vendor,orders@steel.acme.example
+Sample Fasteners Inc,vendor,orders@fasteners.acme.example
+Sample Industrial Customer,customer,purchasing@industrial.acme.example

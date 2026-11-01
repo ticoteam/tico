@@ -1,0 +1,28 @@
+{
+  "projects": [
+    {"name": "Dental office rooftop unit replacement", "customer": "Sample Dental Group"},
+    {"name": "Ridge boiler replacement", "customer": "Sample Apartments Ridge"},
+    {"name": "Church hall furnace replacement", "customer": "Sample Church Hall"},
+    {"name": "Main shop ductwork refresh"},
+    {"name": "North shop heat pump install"}
+  ],
+  "purchase_orders": [
+    {"vendor": "Sample Parts Depot", "po_date": "2026-10-27",
+     "memo": "Filters and capacitors for September service calls", "send": true,
+     "lines": [{"item": "Furnace filter 16x25x1", "amount": 36000}, {"item": "Capacitor 45/5 uF", "amount": 24000}]},
+    {"vendor": "Sample Plumbing Supply", "po_date": "2026-10-29",
+     "memo": "Condensate pump and insulation for the Ridge boiler job",
+     "lines": [{"item": "Condensate pump", "amount": 21500}, {"item": "Pipe insulation 1/2 in", "amount": 4200}]},
+    {"vendor": "Sample Parts Depot", "po_date": "2026-10-30",
+     "memo": "Refrigerant for the church hall install",
+     "lines": [{"item": "Refrigerant R-410A 25 lb", "amount": 46000}]}
+  ],
+  "estimates": [
+    {"customer": "Sample Dental Group", "estimate_date": "2026-10-28",
+     "memo": "Rooftop unit tune-up and air check",
+     "lines": [{"item": "Heat pump service", "amount": 22500}, {"item": "Air quality test", "amount": 15000}]},
+    {"customer": "Sample Church Hall", "estimate_date": "2026-10-29",
+     "memo": "Furnace and AC replacement",
+     "lines": [{"item": "Furnace and AC install package", "amount": 485000}]}
+  ]
+}

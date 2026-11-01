@@ -14,12 +14,15 @@ from fastapi import Path, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import Field
 
-from . import company_server, hook_relay
+from . import company_server, files, hook_relay
 from .finance import actions as finance
 from .finance import books_link
 from .finance import due_dates as finance_due_dates
+from .finance import equipment as equipment_planner
+from .finance import record_imports
 from .finance import reads as finance_reads
 from .models import ID, Contract
+from .records import csvimport
 from .store import Problem
 
 STATUS = {"not_found": 404, "denied": 403, "invalid": 422, "conflict": 409, "not_available": 409,
@@ -59,12 +62,28 @@ class FinanceBooksRequest(Contract):
     provider: Literal["quickbooks", "xero"]
 
 
+class RecordsImportRequest(Contract):
+    """A CSV file of shared records: the kind its rows are, the file's text, a location or a customer to give every row
+    that does not name one (`location_id`, `customer_id`), and the lines to import although they look like a record
+    already here."""
+    record_type: Literal["locations", "items", "equipment", "due_dates"]
+    csv: str = Field(min_length=1)
+    assign: dict[str, str] = Field(default_factory=dict)
+    include_lines: list[int] = Field(default_factory=list, max_length=2000)
+    report: Literal["json", "csv"] = "json"
+
+
 BOOKS_RETURN = "/api/v2/finance/books/return"    # HQ sends the browser here, with the flow id the connect added
 CLAIM = r"^[A-Za-z0-9._~-]{1,200}$"
 
 
 def problem(e):
     return Problem(e.code, e.message, STATUS.get(e.code, 400))
+
+
+def import_problem(e: csvimport.FileRefused) -> Problem:
+    """A whole file refused: too big is 413, anything else wrong with the file is 422."""
+    return Problem(e.code, e.message, 413 if e.code == "too_large" else 422)
 
 
 def books_problem(e: books_link.BrokerFailed) -> Problem:
@@ -87,6 +106,9 @@ def books_problem(e: books_link.BrokerFailed) -> Problem:
 
 
 def install(app, store, auth, mutate):
+    # Equipment photos are Library files: the read check needs this app's Auth (files.readable_by).
+    equipment_planner.set_file_check(lambda c, actor, file_id: files.readable_by(c, auth, actor, file_id))
+
     def viewer(request):
         who = request.state.identity
         auth.domain(who)
@@ -269,12 +291,15 @@ def install(app, store, auth, mutate):
     def finance_purchase_orders(request: Request, status: str | None = Query(None, max_length=80),
                                 vendor_id: str | None = Query(None, max_length=80),
                                 q: str = Query("", max_length=100), cursor: str | None = Query(None, max_length=600),
-                                limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+                                limit: int = Query(50, ge=1, le=200),
+                                location_id: str | None = Query(None, max_length=80),
+                                project_id: str | None = Query(None, max_length=80), view_as: str | None = None):
         """Purchase orders the caller sees (payables), newest first; `next_cursor` pages. `status` takes
-        draft|sent|approved|partial|closed|void, and `q` searches number, memo and vendor name."""
+        draft|sent|approved|partial|closed|void, `q` searches number, memo and vendor name, and `location_id` and
+        `project_id` keep those with a line tagged with it."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.orders(c, actor, status=status, vendor_id=vendor_id, q=q, cursor=cursor,
-                                                   limit=limit))
+                                                   limit=limit, location_id=location_id, project_id=project_id))
 
     @app.get("/api/v2/purchase-orders/{po_id}")
     def finance_purchase_order(request: Request, po_id: ID, view_as: str | None = None):
@@ -286,12 +311,15 @@ def install(app, store, auth, mutate):
     def finance_estimates(request: Request, status: str | None = Query(None, max_length=80),
                           customer_id: str | None = Query(None, max_length=80),
                           q: str = Query("", max_length=100), cursor: str | None = Query(None, max_length=600),
-                          limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+                          limit: int = Query(50, ge=1, le=200), location_id: str | None = Query(None, max_length=80),
+                          project_id: str | None = Query(None, max_length=80), view_as: str | None = None):
         """Estimates the caller sees (receivables), newest first; `next_cursor` pages. `status` takes
-        draft|sent|accepted|declined|invoiced, and `q` searches number, memo and customer name."""
+        draft|sent|accepted|declined|invoiced, `q` searches number, memo and customer name, and `location_id` and
+        `project_id` keep those with a line tagged with it."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.estimates(c, actor, status=status, customer_id=customer_id, q=q,
-                                                      cursor=cursor, limit=limit))
+                                                      cursor=cursor, limit=limit, location_id=location_id,
+                                                      project_id=project_id))
 
     @app.get("/api/v2/estimates/{estimate_id}")
     def finance_estimate(request: Request, estimate_id: ID, view_as: str | None = None):
@@ -361,6 +389,33 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.record(c, actor, kind="item", record_id=item_id))
 
+    @app.get("/api/v2/equipment")
+    def finance_equipment(request: Request, q: str = Query("", max_length=100),
+                          archived: Literal["hide", "only", "all"] = "hide",
+                          kind: Literal["owned", "customer"] | None = None,
+                          customer_id: str | None = Query(None, max_length=80),
+                          location_id: str | None = Query(None, max_length=80),
+                          warranty_ends_by: str | None = Query(None, pattern=DAY),
+                          warranty: Literal["ending"] | None = None,
+                          due: Literal["soon", "overdue"] | None = None,
+                          cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
+                          view_as: str | None = None):
+        """Equipment and vans by name, serial, make or model; `kind`, `customer_id` and `location_id` narrow it, and
+        `warranty_ends_by` keeps the warranties ending on or before that day. `warranty=ending` keeps the warranties
+        ending within the next 90 days; `due=soon|overdue` keeps the pieces with a due date soon or past due (each
+        row's `next_due_on`). `archived` as on locations; paging counts the filtered list."""
+        actor = as_viewer(request, view_as)
+        filters = {"kind": kind, "customer_id": customer_id, "location_id": location_id,
+                   "warranty_ends_by": warranty_ends_by, "warranty": warranty, "due": due}
+        return read(lambda c: finance_reads.records(c, actor, kind="equipment", q=q, archived=archived, cursor=cursor,
+                                                    limit=limit, filters={k: v for k, v in filters.items() if v}))
+
+    @app.get("/api/v2/equipment/{equipment_id}")
+    def finance_equipment_one(request: Request, equipment_id: ID, view_as: str | None = None):
+        """One piece of equipment, archived or not."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.record(c, actor, kind="equipment", record_id=equipment_id))
+
     @app.get("/api/v2/projects")
     def finance_projects(request: Request, q: str = Query("", max_length=100),
                          archived: Literal["hide", "only", "all"] = "hide",
@@ -403,13 +458,15 @@ def install(app, store, auth, mutate):
                          start: str | None = Query(None, pattern=DAY), end: str | None = Query(None, pattern=DAY),
                          aging: Aging | None = None, late: bool = False,
                          cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
-                         view_as: str | None = None):
+                         location_id: str | None = Query(None, max_length=80),
+                         project_id: str | None = Query(None, max_length=80), view_as: str | None = None):
         """Invoices the caller sees (receivables), newest first, with the open total by aging bucket. `status` takes
-        draft|sent|partial|paid|void|unpaid, comma-separated; `late` keeps those past due."""
+        draft|sent|partial|paid|void|unpaid, comma-separated; `late` keeps those past due; `location_id` and
+        `project_id` keep those with a line tagged with it."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.invoices(c, actor, status=status, customer_id=customer_id, q=q,
                                                      start=start, end=end, aging=aging, late=late, cursor=cursor,
-                                                     limit=limit))
+                                                     limit=limit, location_id=location_id, project_id=project_id))
 
     @app.get("/api/v2/finance/invoices/{invoice_id}")
     def finance_invoice(request: Request, invoice_id: ID, view_as: str | None = None):
@@ -426,6 +483,12 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.contacts(c, actor, kind=kind, q=q, active=active, cursor=cursor,
                                                      limit=limit))
+
+    @app.get("/api/v2/finance/contacts/{contact_id}")
+    def finance_contact(request: Request, contact_id: ID, view_as: str | None = None):
+        """One vendor or customer, active or not, to whoever sees its side."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.contact(c, actor, contact_id))
 
     @app.get("/api/v2/finance/chart")
     def finance_chart(request: Request, for_: Literal["bill", "invoice", "journal"] | None = Query(None, alias="for"),
@@ -512,7 +575,7 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/finance/search")
     def finance_search(request: Request,
                        kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location",
-                                     "project", "po", "estimate", "due_date"] | None = None,
+                                     "project", "po", "estimate", "equipment", "due_date"] | None = None,
                        q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
                        vendor: str | None = Query(None, max_length=120),
                        contact_id: str | None = Query(None, max_length=80),
@@ -522,14 +585,21 @@ def install(app, store, auth, mutate):
                        aging: Aging | None = None,
                        contact_kind: Literal["vendor", "customer", "both"] | None = None, active: bool | None = None,
                        rule_kind: Literal["gate", "posting"] | None = None,
+                       equipment_kind: Literal["owned", "customer"] | None = None,
+                       customer_id: str | None = Query(None, max_length=80),
+                       location_id: str | None = Query(None, max_length=80),
+                       warranty_ends_by: str | None = Query(None, pattern=DAY),
                        cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
                        view_as: str | None = None):
-        """Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees. With `kind` it
-        pages by `cursor`; without, it returns the first few of each kind."""
+        """Search entries, bank and card rows, bills, invoices, contacts, rules and equipment the caller sees. With
+        `kind` it pages by `cursor`; without, it returns the first few of each kind. Equipment takes equipment_kind,
+        customer_id, location_id and warranty_ends_by (a day)."""
         actor = as_viewer(request, view_as)
         named = {"status": status, "contact_id": contact_id, "account_id": account_id, "vendor": vendor,
                  "money_account_id": money_account_id, "start": start, "end": end, "aging": aging,
-                 "kind": contact_kind if kind == "contact" else rule_kind if kind == "rule" else None,
+                 "kind": contact_kind if kind == "contact" else rule_kind if kind == "rule" else
+                 equipment_kind if kind == "equipment" else None,
+                 "customer_id": customer_id, "location_id": location_id, "warranty_ends_by": warranty_ends_by,
                  "active": None if active is None else ("1" if active else "0")}
         filters = {k: v for k, v in named.items() if v is not None}
         return read(lambda c: finance_reads.search(c, actor, kind=kind, q=q, filters=filters, limit=limit,
@@ -731,3 +801,36 @@ def install(app, store, auth, mutate):
         if found is None:
             raise Problem("not_found", "No such Finance action", 404)
         return found
+
+    @app.post("/api/v2/imports/preview")
+    def records_import_preview(request: Request, body: RecordsImportRequest):
+        """Each row of a CSV file of records, checked and nothing written: what it would create, what is already here
+        (imported before, or the same address, SKU or serial as a record held), and each row's error. `report: csv`
+        adds the same lines as a CSV that is safe to open in a spreadsheet."""
+        who = viewer(request)
+        try:
+            with store.transaction() as c:
+                return record_imports.preview(c, who.actor, body.record_type, body.csv, body.assign,
+                                              report=body.report == "csv")
+        except finance.FinanceError as e:
+            raise problem(e) from None
+        except csvimport.FileRefused as e:
+            raise import_problem(e) from None
+
+    @app.post("/api/v2/imports/commit")
+    def records_import_commit(request: Request, body: RecordsImportRequest):
+        """Import a CSV file of records: each new row is one Finance action, as hand entry is, so rights and approvals
+        apply. A row already imported says `already_there` and creates nothing; a row with an error is reported and
+        the others still import, so the same file again finishes what failed. A possible duplicate is skipped unless
+        its line is in `include_lines`. The Idempotency-Key is the request's key."""
+        who = viewer(request)
+        include = frozenset(body.include_lines)
+
+        def work(c):
+            return record_imports.commit(c, who.actor, body.record_type, body.csv, body.assign, include)
+        try:
+            return mutate(request, body, work)
+        except finance.FinanceError as e:
+            raise problem(e) from None
+        except csvimport.FileRefused as e:
+            raise import_problem(e) from None

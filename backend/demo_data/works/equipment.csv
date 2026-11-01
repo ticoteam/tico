@@ -1,0 +1,5 @@
+name,kind,location,customer,make,model,serial,installed_on,warranty_ends_on
+CNC mill 1,owned,Acme Works - Plant,,Haas,VF-2,MCH-001,2021-04-01,2026-04-01
+CNC lathe 1,owned,Acme Works - Plant,,Haas,ST-20,MCH-002,2020-08-12,
+Press brake 1,owned,Acme Works - Plant,,Amada,HFE-400,MCH-003,2022-01-10,2027-01-10
+Forklift 1,owned,Acme Works - Warehouse,,Toyota,8FGU25,FLT-001,2023-05-05,2028-05-05

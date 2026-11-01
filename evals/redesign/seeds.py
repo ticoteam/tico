@@ -262,3 +262,18 @@ def counsel(world):
     _ok(world.api("post", "/api/v2/runners/heartbeat", {
         "version": "test", "platform": "test",
         "readiness": {slug: True for slug in [*world.bot_slugs, H.COUNSEL]}}, who=world.runner["token"]), "heartbeat")
+
+
+@seed("finance")
+def finance(world):
+    """Finance set up with Dana as its owner, and two classes (they only come from a linked book, so no action makes
+    one)."""
+    from backend.finance import actions as FA
+    from backend.finance.store import catalog as SC
+    from backend.finance.store import ledger as SL
+    from backend.finance.store import tico
+    with world.store.transaction() as c:
+        FA.setup(c, "human:dana")
+        for value, name in (("residential", "Residential"), ("commercial", "Commercial")):
+            SC.class_insert(c, dimension_id=SL.new_id(), value=value, name=name, active=True, at=tico.now(),
+                            by="human:dana")

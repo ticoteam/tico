@@ -4,6 +4,7 @@ and states; this module writes rows and reads sums. A stored status is what was 
 reader sees can be derived: an approved order billed in part is partial, and an estimate with an invoice is invoiced."""
 import json
 import sqlite3
+from collections.abc import Sequence
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -158,6 +159,23 @@ def billed_total(c: sqlite3.Connection, po_id: str) -> int:
     return int(c.execute(_BILLED_ON.format(po="?"), (po_id, po_id)).fetchone()[0])
 
 
+def held_total(c: sqlite3.Connection, po_id: str) -> int:
+    """What an order's live holds keep of its budgets now (a hold shrinks as bills take it over)."""
+    return int(c.execute("SELECT COALESCE(SUM(h.amount), 0) FROM fin_po_lines l JOIN fin_holds h "
+                         "ON h.source='purchase_order' AND h.source_id=l.po_id || ':' || l.line_no AND h.status='held' "
+                         "WHERE l.po_id=?", (po_id,)).fetchone()[0])
+
+
+def order_bills(c: sqlite3.Connection, po_id: str) -> list[sqlite3.Row]:
+    """The bills that bill an order's lines (a void one bills nothing), oldest first, with what each bills on it."""
+    return c.execute(
+        "SELECT b.*, k.name AS contact_name, SUM(x.amount) AS on_order FROM (SELECT bill_id, po_line_id, amount FROM "
+        "fin_bill_lines UNION ALL SELECT bill_id, po_line_id, amount FROM fin_bill_retained) x "
+        "JOIN fin_po_lines l ON l.id=x.po_line_id JOIN fin_bills b ON b.id=x.bill_id "
+        "LEFT JOIN fin_contacts k ON k.id=b.vendor_id WHERE l.po_id=? AND b.status!='void' "
+        "GROUP BY b.id ORDER BY b.bill_date, b.id", (po_id,)).fetchall()
+
+
 def shown_po(status: str, billed_so_far: int, total: int) -> str:
     """The status a reader sees of an order: an approved order billed in part is partial."""
     return "partial" if status == "approved" and 0 < billed_so_far < total else status
@@ -203,11 +221,13 @@ def _status_clause(kind: str, status: str) -> tuple[str, list[object]]:
 
 
 def listing(c: sqlite3.Connection, kind: str, *, book_id: str, status: str = "", contact_id: str = "", q: str = "",
-            before: tuple[str, str] | None = None, most: int = 200) -> list[sqlite3.Row]:
+            before: tuple[str, str] | None = None, most: int = 200,
+            tagged: Sequence[tuple[str, Sequence[str]]] = ()) -> list[sqlite3.Row]:
     """A book's orders or estimates, newest first by date (then id), with the contact's name and what each order has
-    billed. A status (as shown), a contact, a search over number, memo and contact name, and a cursor (the date and id
-    of the last row before) narrow them."""
+    billed. A status (as shown), a contact, a search over number, memo and contact name, a line's tags (tag name, any
+    of these values) and a cursor (the date and id of the last row before) narrow them."""
     table, contact, dated = HEAD[kind], CONTACT[kind], DATED[kind]
+    lines_table, parent = LINES[kind]
     sql = (f"SELECT d.*, k.name AS contact_name, {_billed_expr(kind)} AS billed FROM {table} d "
            f"JOIN fin_contacts k ON k.id = d.{contact} WHERE d.book_id=?")
     args: list[object] = [book_id]
@@ -218,6 +238,11 @@ def listing(c: sqlite3.Connection, kind: str, *, book_id: str, status: str = "",
     if contact_id:
         sql += f" AND d.{contact}=?"
         args.append(contact_id)
+    for tag, values in tagged:
+        marks = ",".join("?" * len(values))
+        sql += (f" AND EXISTS (SELECT 1 FROM {lines_table} x WHERE x.{parent}=d.id "
+                f"AND json_extract(x.tags_json, '$.' || ?) IN ({marks}))")
+        args += [tag, *values]
     if q:
         sql += " AND (d.number LIKE ? ESCAPE '\\' OR d.memo LIKE ? ESCAPE '\\' OR k.name LIKE ? ESCAPE '\\')"
         args += [like(q)] * 3
