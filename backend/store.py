@@ -1142,6 +1142,8 @@ class Store:
             c.executescript(_task_rules.SCHEMA)
             from . import audit_log as _audit_log
             c.executescript(_audit_log.SCHEMA)
+            from . import teammate_access as _teammate_access
+            _teammate_access.ensure(c)              # people's and groups' See/Read/Write (docs/permissions.md)
             from . import rules as _rules
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)

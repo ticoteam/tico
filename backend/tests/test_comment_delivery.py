@@ -181,7 +181,7 @@ def test_the_goal_route_sets_no_task_sessions_goal_for_someone_off_the_task(api)
     cid = get(api, f"tasks/{tid}")["task"]["conversation_id"]
     r = api.post(f"/api/v2/conversations/{cid}/goal", json={"action": "set", "objective": "Drop the billing work."},
                  headers=headers("ben-test"))
-    assert r.status_code == 403, r.text
+    assert r.status_code == 404, r.text       # an unreadable thread looks missing (backend/threads.py denial)
     assert get(api, f"conversations/{cid}/goal")["goal"] is None
     # Ana, on the task, sets it.
     done = post(api, f"conversations/{cid}/goal", {"action": "set", "objective": "Finish the billing work."})

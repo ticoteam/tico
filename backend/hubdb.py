@@ -1641,6 +1641,9 @@ def migrate(conn, adopt_legacy=False):
                  "value_json TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(actor, key))")
     # Which messages could be about a task, so a task's page does not read its whole room (backend/message_links.py).
     from . import message_links
+    from . import threads
+    threads.ensure(conn)
+    threads.migrate(conn)
     message_links.ensure(conn)
     clear_finished_close_times(conn)
     return len(MIGRATIONS)
@@ -3405,9 +3408,13 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
            "read_at": read_at, "expires_at": expires_at, "wait_s": wait_s}
     if delivered_at is None:
         _held_queue_admit(conn, actor, target, row["body"], row["refs_json"])
+    # Native threads (backend/threads.py): the origin, revision and restricted flag; the insert trigger adds the seq.
+    from . import threads
+    threads.stamp(conn, row, conv, refs)
     # Capacity waiting is not loop misconduct, even when this conversation also hit its cap.
-    # rule 3: the loop caps
-    if check_cap and is_bot(actor) and is_bot(target):
+    # rule 3: the loop caps. A message written through threads.post is held by the thread loop guard instead, which
+    # makes the run it would start wait (`capped`) rather than refusing the message.
+    if check_cap and is_bot(actor) and is_bot(target) and threads.POSTING.get() is None:
         since = shift(now(), hours=-1)
         # The cap stops two bots talking in circles, so it counts bot-to-bot messages only: the
         # keeper's notices (a routine's "new task", "finished") and a person's messages are not a
@@ -3421,10 +3428,12 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
                    f"{n} messages in this conversation in the last hour; the cap is {CAP_PER_HOUR}")
     conn.execute(
         "INSERT INTO messages (id, conversation_id, from_actor, to_actor, kind, body, refs_json, "
-        "in_reply_to, created, delivered_at, read_at, expires_at, wait_s) VALUES (:id, "
-        ":conversation_id, :from_actor, :to_actor, :kind, :body, :refs_json, :in_reply_to, "
-        ":created, :delivered_at, :read_at, :expires_at, :wait_s)", row)
+        "in_reply_to, created, delivered_at, read_at, expires_at, wait_s, origin_id, revision, restricted, "
+        "legacy_audience) VALUES (:id, :conversation_id, :from_actor, :to_actor, :kind, :body, :refs_json, "
+        ":in_reply_to, :created, :delivered_at, :read_at, :expires_at, :wait_s, :origin_id, :revision, "
+        ":restricted, :legacy_audience)", row)
     conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created"], conv["id"]))
+    threads.record(conn, message(conn, row["id"]), conv)
     # Notes, comments and runner final replies all pass here, including quiet ones
     # and checks requested by a person. Only the check owner may supply its verdict.
     if kind in ("say", "notice") and wake_rules.VERDICT_FIELDS.search(str(body or "")):
@@ -9120,14 +9129,13 @@ def prime_conversations(conn, ids):
 
 def conversations_for(conn, actor, limit=100):
     """Every conversation this actor is a participant in, newest first."""
+    # Filtered in SQL: a window of the newest conversations company-wide lost an older chat behind many newer ones.
     out = []
-    for row in _rows(conn.execute("SELECT * FROM conversations ORDER BY "
-                                  "COALESCE(last_message_at, created) DESC LIMIT ?", (limit * 5,))):
+    for row in _rows(conn.execute("SELECT * FROM conversations c WHERE EXISTS (SELECT 1 FROM "
+                                  "json_each(CASE WHEN json_valid(c.participants_json) THEN c.participants_json END) WHERE value=?) ORDER BY "
+                                  "COALESCE(c.last_message_at, c.created) DESC LIMIT ?", (actor, limit))):
         row["participants"] = _json(row.get("participants_json"), []) or []
-        if actor in row["participants"]:
-            out.append(row)
-        if len(out) >= limit:
-            break
+        out.append(row)
     return out
 
 
