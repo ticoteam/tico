@@ -1482,3 +1482,18 @@ def test_another_operation_in_progress_beside_a_merge_is_kept(trees, tmp_path):
     with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
         W.act(workspace, row, 'remove', os.environ.copy())
     git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
+
+
+@pytest.mark.parametrize('side, kept', [('--ours', 'task file'), ('--theirs', 'main file')])
+def test_a_resolution_taking_either_side_beside_a_conflict_is_kept(trees, tmp_path, side, kept):
+    workspace, base, remote, row, client = trees
+    path = _merge_in_progress(trees, tmp_path, conflicts=('file', 'second'))
+    git(path, 'checkout', side, '--', 'file')
+    git(path, 'add', 'file')
+    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
+        W.act(workspace, row, 'remove', os.environ.copy())
+    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
+    assert git(path, 'symbolic-ref', '--short', 'HEAD') == row['branch']
+    assert (path / 'file').read_text() == kept
+    assert git(path, 'show', ':file') == kept
+    assert W.wip_branch(row) not in git(remote, 'show-ref', '--heads')

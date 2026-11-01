@@ -1192,12 +1192,25 @@ async fn clear_merge(path: &Path, release: bool, env: &Env) -> R<()> {
             return Err(WtErr::msg(UNRESOLVED));
         }
     }
-    // Every other staged path must already hold main's version: a clean merge's change, never the bot's own resolution.
-    let staged = git(path, env, &["diff", "--cached", "--name-only", "-z"], true).await?.stdout;
-    for name in staged.split('\0').filter(|name| !name.is_empty() && !unmerged.contains(*name)) {
+    // The index must hold git's own merge result for every path the merge touched, conflicts aside. Any other entry is
+    // a resolution, which the abort would discard. Equal blobs prove nothing: a resolution can select either side.
+    let merged = git(path, env, &["merge-tree", "--write-tree", "HEAD", "MERGE_HEAD"], false).await?;
+    let tree = merged.stdout.lines().next().unwrap_or("").trim().to_string();
+    let tree_ok = (merged.code == 0 || merged.code == 1) && (tree.len() == 40 || tree.len() == 64) && tree.bytes().all(|b| b.is_ascii_hexdigit());
+    if !tree_ok {
+        return Err(WtErr::msg(UNRESOLVED));
+    }
+    let mut touched: BTreeSet<String> = BTreeSet::new();
+    for listing in [
+        git(path, env, &["diff", "--name-only", "-z", "HEAD", "MERGE_HEAD"], true).await?.stdout,
+        git(path, env, &["diff", "--cached", "--name-only", "-z"], true).await?.stdout,
+    ] {
+        touched.extend(listing.split('\0').filter(|name| !name.is_empty()).map(str::to_string));
+    }
+    for name in touched.iter().filter(|name| !unmerged.contains(*name)) {
         let ours = git(path, env, &["rev-parse", "--verify", "-q", &format!(":{name}")], false).await?.stdout;
-        let theirs = git(path, env, &["rev-parse", "--verify", "-q", &format!("MERGE_HEAD:{name}")], false).await?.stdout;
-        if ours.trim() != theirs.trim() {
+        let expected = git(path, env, &["rev-parse", "--verify", "-q", &format!("{tree}:{name}")], false).await?.stdout;
+        if ours.trim() != expected.trim() {
             return Err(WtErr::msg(UNRESOLVED));
         }
     }
@@ -2033,5 +2046,29 @@ mod tests {
         let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
         assert_eq!(err.text(), UNRESOLVED);
         sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+    }
+
+    async fn resolution_beside_a_conflict_is_kept(side: &str, kept: &str) {
+        let folder = temp_folder(&format!("side-{}", side.trim_start_matches("--")));
+        let mut m = merge_in_progress(&folder.0, &["file", "second"], &[]);
+        sh(&m.path, &["checkout", side, "--", "file"]);
+        sh(&m.path, &["add", "file"]);
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert_eq!(sh(&m.path, &["symbolic-ref", "--short", "HEAD"]), "tico/12345678-build");
+        assert_eq!(std::fs::read_to_string(m.path.join("file")).unwrap(), format!("{kept}\n"));
+        assert_eq!(sh(&m.path, &["show", ":file"]), kept);
+        assert!(!sh(&m.remote, &["show-ref", "--heads"]).contains("wip/"));
+    }
+
+    #[tokio::test]
+    async fn a_resolution_taking_our_side_beside_a_conflict_is_kept() {
+        resolution_beside_a_conflict_is_kept("--ours", "task file").await;
+    }
+
+    #[tokio::test]
+    async fn a_resolution_taking_main_beside_a_conflict_is_kept() {
+        resolution_beside_a_conflict_is_kept("--theirs", "main file").await;
     }
 }

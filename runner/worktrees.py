@@ -955,13 +955,18 @@ def _clear_merge(path, row, env):
     unmerged = {entry.split('\t', 1)[1] for entry in listed if '\t' in entry}
     if not unmerged or not all(_untouched_conflict(path, gitdir, name, env) for name in unmerged):
         raise ValueError(unresolved)
-    # Every other staged path must already hold main's version: a clean merge's change, never the bot's own resolution.
-    for name in filter(None, git(path, 'diff', '--cached', '--name-only', '-z', env=env).stdout.split('\0')):
-        if name in unmerged:
-            continue
+    # The index must hold git's own merge result for every path the merge touched, conflicts aside. Any other entry is
+    # a resolution, which the abort would discard. Equal blobs prove nothing: a resolution can select either side.
+    merged = git(path, 'merge-tree', '--write-tree', 'HEAD', 'MERGE_HEAD', env=env, check=False)
+    tree = merged.stdout.split('\n', 1)[0].strip() if merged.returncode in (0, 1) else ''
+    if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', tree):
+        raise ValueError(unresolved)
+    touched = set(filter(None, git(path, 'diff', '--name-only', '-z', 'HEAD', 'MERGE_HEAD', env=env).stdout.split('\0')))
+    touched |= set(filter(None, git(path, 'diff', '--cached', '--name-only', '-z', env=env).stdout.split('\0')))
+    for name in touched - unmerged:
         ours = git(path, 'rev-parse', '--verify', '-q', ':' + name, env=env, check=False).stdout.strip()
-        theirs = git(path, 'rev-parse', '--verify', '-q', 'MERGE_HEAD:' + name, env=env, check=False).stdout.strip()
-        if ours != theirs:
+        expected = git(path, 'rev-parse', '--verify', '-q', f'{tree}:{name}', env=env, check=False).stdout.strip()
+        if ours != expected:
             raise ValueError(unresolved)
     git(path, 'merge', '--abort', env=env)
 
