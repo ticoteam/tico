@@ -828,13 +828,14 @@ def save_place(ctx, place, audience=None):
     if audience is not None:
         if kind != "team":
             raise bad("Everyone sees the Dashboard")
-        # The page's audience is its group's See and Read: set there, with the group's Manage check and audit row.
+        # The page's audience is its group's Read (See, being on the chart, is left as it is): set there, with the
+        # group's Manage check and audit row.
         from . import teammate_access
         target = "group:" + ident
         level = A.audience(audience.model_dump())
         current = teammate_access.document(ctx.c, target)
-        if (current["see"], current["read"]) != (level, level):
-            teammate_access.save(ctx.c, ctx.who, target, {"see": level, "read": level, "write": current["write"],
+        if current["read"] != level:
+            teammate_access.save(ctx.c, ctx.who, target, {**current, "read": level,
                                                          "revision": teammate_access.revision(ctx.c, target)}, ctx.auth)
         ctx.c.execute("UPDATE pin_places SET saved=?, saved_by=? WHERE place=?", (H.now(), ctx.who.actor, place))
         H.event(ctx.c, ctx.who.actor, "place.audience", place, {"everyone": level["everyone"]})

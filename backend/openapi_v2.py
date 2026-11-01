@@ -2231,7 +2231,7 @@ STABLE.extend([
     ('/api/v2/places/{place}', 'get', 'Cards and pins', 'getPlace', 'A place\'s pins in order (dashboard, team:<group>, '
      'bot:<slug>, task:<id>), each card with what it shows the caller; unreadable pages are left out', 'Place'),
     ('/api/v2/places/{place}', 'put', 'Cards and pins', 'savePlace', 'Save a Dashboard or team page (its default cards '
-     'become pins); a team page\'s audience sets its group\'s See and Read', 'Place'),
+     'become pins); a team page\'s audience sets its group\'s Read', 'Place'),
     ('/api/v2/places/{place}/order', 'post', 'Cards and pins', 'orderPlace', 'Put every pin at a place in this order', 'Place'),
     ('/api/v2/pins', 'post', 'Cards and pins', 'addPin', 'Pin page:<file id> or card:<id> at a place: a bot its own, to '
      'its sidebar or task; a person who arranges the Dashboard or a team page there', 'Place'),

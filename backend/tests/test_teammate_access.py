@@ -312,18 +312,26 @@ def test_hiding_reaches_task_columns_events_the_stream_and_bot_rows(acme):
 def test_a_team_page_is_seen_by_its_groups_read_and_old_audiences_move_there(acme):
     api, tokens = acme
     store = api.app.state.store
-    # "Seen by" on the team page sets the group's See and Read; Write stays the members.
+    # "Seen by" on the team page sets the group's Read; See (the chart) and Write (the members) stay.
     api.put("/api/v2/places/team:sales", json={}, headers=headers("ana-test"))
     r = api.put("/api/v2/places/team:sales", json={"audience": {"everyone": False, "people": ["dee"]}},
                 headers=headers("ana-test"))
     assert r.status_code == 200, r.text
     assert r.json()["audience"]["people"] == ["dee"]
     doc = get(api, "groups/sales/access", "ana-test")
-    assert doc["see"]["people"] == ["dee"] and doc["read"]["people"] == ["dee"] and doc["write"]["teams"] == ["sales"]
+    assert doc["see"]["everyone"] and doc["read"]["people"] == ["dee"] and doc["write"]["teams"] == ["sales"]
+    assert any(g["id"] == "sales" for g in get(api, "groups", "fay-test"))     # still on everyone's chart
     assert api.get("/api/v2/places/team:sales", headers=headers("dee-test")).status_code == 200
     assert api.get("/api/v2/places/team:sales", headers=headers("fay-test")).status_code in (403, 404)
-    # An install from before: a narrowed page audience moves into its group once, never widening a level.
+    # An install from before: a narrowed page audience moves into its group's Read once, never widening it.
     set_access(api, "groups/legal", see=EVERYONE, read={"people": ["cara"]}, write={"teams": ["legal"]})
+    with store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO pin_places(place, audience_json, saved, saved_by) VALUES "
+                  "('team:sales', ?, ?, 'human:ana')", (encode({"everyone": False, "people": ["eve"]}), H.now()))
+        c.execute("DELETE FROM teammate_accesses WHERE target_type='group' AND target_id='sales'")
+        TA.migrate_team_pages(c)
+        sales = TA.document(c, "group:sales")
+    assert sales["see"]["everyone"] and sales["read"]["people"] == ["eve"]   # on the chart as before; page narrowed
     with store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO pin_places(place, audience_json, saved, saved_by) VALUES "
                   "('team:legal', ?, ?, 'human:ana'), ('team:contracts', ?, ?, 'human:ana')",
@@ -334,7 +342,7 @@ def test_a_team_page_is_seen_by_its_groups_read_and_old_audiences_move_there(acm
         legal, contracts = TA.document(c, "group:legal"), TA.document(c, "group:contracts")
         audits = c.execute("SELECT count(*) FROM audit_log WHERE object='group:legal:access' AND actor='system'").fetchone()[0]
         left = c.execute("SELECT count(*) FROM pin_places WHERE audience_json IS NOT NULL").fetchone()[0]
-    assert legal["see"]["people"] == ["fay"] and not legal["see"]["everyone"]
+    assert legal["see"]["everyone"]                 # See is left as it was
     assert legal["read"]["people"] == ["cara"]      # already narrower: kept, not widened
     assert contracts == TA.default_document("group", "contracts")
-    assert audits == 1 and left == 0
+    assert audits == 0 and left == 0               # nothing changed for Legal

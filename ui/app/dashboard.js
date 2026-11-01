@@ -123,7 +123,7 @@ async function pageDashboard(place) {
   state.view = view;
   dashDraw(state);
 }
-// "Seen by" is the group's See and Read (backend/teammate_access.py): it opens the group's Access editor, for its leads
+// "Seen by" is the group's Read (backend/teammate_access.py): it opens the group's Access editor, for its leads
 // and the admins (the same people who arrange the page), and the page is read again after a save.
 function dashAccessEdit(state) {
   const gid = state.place.slice(5);

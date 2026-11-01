@@ -69,8 +69,9 @@ def ensure(c):
 
 
 def migrate_team_pages(c):
-    """A team page's "Seen by" (pin_places.audience_json) is now its group's See and Read. Each narrowed page moves
-    into its group once, narrowing a level that is still Everyone and never widening one, then is cleared."""
+    """A team page's "Seen by" (pin_places.audience_json) is now its group's Read: the page is the group's content,
+    while See (being on the chart) stays as it was. Each narrowed page moves into its group's Read once, only when
+    Read is still Everyone, so nothing widens; then it is cleared."""
     try:
         rows = c.execute("SELECT place, audience_json FROM pin_places "
                          "WHERE place LIKE 'team:%' AND audience_json IS NOT NULL").fetchall()
@@ -87,7 +88,7 @@ def migrate_team_pages(c):
             row = c.execute("SELECT id, access FROM teammate_accesses WHERE target_type='group' AND target_id=?",
                             (gid,)).fetchone()
             before = _complete(row[1] if row else None, "group", gid)
-            doc = {key: (dict(level) if key in ("see", "read") and before[key].get("everyone") else before[key])
+            doc = {key: (dict(level) if key == "read" and before[key].get("everyone") else before[key])
                    for key in AUDIENCE_LEVELS}
             if doc != before:
                 text, now = json.dumps(doc, sort_keys=True, separators=(",", ":")), H.now()

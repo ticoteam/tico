@@ -155,10 +155,10 @@ read its value, and share it with their other bots ([Bot owners](#bot-owners)).
 ## Dashboard, team pages and pins
 
 The owner and admins arrange the Dashboard. A team page is arranged by them and by a person who leads the group or a group
-above it; it is seen by whoever may Read the group. **Seen by** on the page opens the group's Access editor
-([People and groups](#people-and-groups)); `PUT /api/v2/places/team:<group>` with an `audience` sets the group's See and
-Read to it. A page audience narrowed before this release moved into its group's See and Read once on upgrade, narrowing a
-level that was still Everyone and never widening one. A bot pins only its own pages and cards, to its own
+above it; it is the group's content, so it is seen by whoever may Read the group (See is only being on the chart).
+**Seen by** on the page opens the group's Access editor ([People and groups](#people-and-groups));
+`PUT /api/v2/places/team:<group>` with an `audience` sets the group's Read to it. A page audience narrowed before this
+release moved into its group's Read once on upgrade, when Read was still Everyone; See was left as it was. A bot pins only its own pages and cards, to its own
 sidebar or a task it holds or asked for; a person who manages a bot may pin another bot's page to its sidebar. A page a
 person pins to the Dashboard or a team page may be read by that place's audience, and a private task's file is never
 pinned there ([Overview](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who
