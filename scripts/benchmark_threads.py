@@ -156,6 +156,10 @@ def boot(directory):
 def serve():
     """The server alone, in this process: prints its port and database, serves until stdin closes, then prints the
     profile (when BENCH_PROFILE is set) as its last line."""
+    for setting in filter(None, os.environ.get("BENCH_SET", "").split(",")):   # module.NAME=int, to tune a constant
+        name, _, value = setting.partition("=")
+        module, _, attr = name.rpartition(".")
+        setattr(importlib.import_module(module), attr, type(getattr(importlib.import_module(module), attr))(value))
     with tempfile.TemporaryDirectory(prefix="threads-benchmark-") as directory:
         generator, server, thread, port, app = boot(directory)
         profile = Profile(sys.modules["backend.store"]) if os.environ.get("BENCH_PROFILE") else None
