@@ -70,7 +70,11 @@ KEY_FILES = ("github-app.key", "slack.key")
 GENERATION_FIELD = "generation"
 GENERATION_PATTERN = re.compile(r"gen-\d{8}T\d{6}Z")
 GENERATION_PROBE = ".tico-generation"
+# The generation the data is in, in the data volume beside the database: "" for the root, else the folder's name. It is what
+# a start reads (no network), kept equal to environment.json by the reset job, which runs before Litestream does.
+GENERATION_CACHE = ".tico-backup-generation"
 URL_LINE = re.compile(r"^([ \t]+)url: .*$", re.M)
+GENERATION_SUFFIX = re.compile("/" + GENERATION_PATTERN.pattern + "$")
 # The heal. A copy is stuck when its local state holds more L0 copies than a healthy install keeps (about 200) and the newest
 # of them is more than HEAL_LAG ahead of the replica. The replication loop asks for a heal once the replica has not moved for
 # HEAL_AFTER while the database kept changing, and stops Litestream so the container restarts. At most one heal per
@@ -279,7 +283,10 @@ def mirror_from_env(env=None):
     if parsed.scheme != "s3" or not parsed.netloc:
         raise ValueError("TICO_BACKUP_URL must be s3://bucket/prefix")
     import boto3
-    client = boto3.client("s3", endpoint_url=env.get("TICO_BACKUP_ENDPOINT") or None,
+    from botocore.config import Config
+    # The starts and seeds wait on this client, so an unreachable bucket fails in seconds, not the SDK's default minutes.
+    timeouts = Config(connect_timeout=3, read_timeout=10, retries={"total_max_attempts": 2})
+    client = boto3.client("s3", endpoint_url=env.get("TICO_BACKUP_ENDPOINT") or None, config=timeouts,
                           region_name=env.get("TICO_BACKUP_REGION") or ("us-east-1" if env.get("TICO_BACKUP_ENDPOINT") else None),
                           aws_access_key_id=env.get("LITESTREAM_ACCESS_KEY_ID") or None,
                           aws_secret_access_key=env.get("LITESTREAM_SECRET_ACCESS_KEY") or None)
@@ -420,9 +427,9 @@ def restore_key_files(env, replace=False, mirror=None):
 
 
 def is_empty(data_dir):
-    """True when nothing of an install is in the data volume."""
+    """True when nothing of an install is in the data volume. The generation cache alone does not make it an install."""
     root = Path(data_dir)
-    return not root.is_dir() or not any(root.iterdir())
+    return not root.is_dir() or not any(p.name != GENERATION_CACHE for p in root.iterdir())
 
 
 def _marker_text(environment_id):
@@ -453,6 +460,88 @@ def replica_generation(mirror):
     if value and not GENERATION_PATTERN.fullmatch(value):
         raise ValueError("environment.json names a backup generation this version does not know")
     return value
+
+
+def cache_path(data_dir):
+    return Path(data_dir) / GENERATION_CACHE
+
+
+def read_generation_cache(data_dir):
+    """The generation the data volume's cache names: None when there is no cache, "" for the root layout, else the folder's
+    name. Raises when the file cannot be read or does not name a generation."""
+    try:
+        text = cache_path(data_dir).read_text().strip()
+    except FileNotFoundError:
+        return None
+    if text and not GENERATION_PATTERN.fullmatch(text):
+        raise ValueError("the file does not name a backup generation")
+    return text
+
+
+def write_generation_cache(data_dir, generation):
+    _write_file(cache_path(data_dir), generation + "\n")
+
+
+def _has_database(db):
+    try:
+        return os.path.getsize(db) > 0
+    except OSError:
+        return False
+
+
+def sync_generation(config, db, env=None):
+    """Makes the Litestream config and the data volume's cache name the backup generation that environment.json names. This
+    is the start's one read of environment.json: backup_configuration reads only the cache, so a slow bucket cannot hold up
+    the start, and the reset job (run before Litestream starts) corrects the config here.
+
+    Returns what it went on: "none" (no backup location); "read" (environment.json says which generation); "kept" (it could
+    not be read, or it lacks the generation while the cache names one, so the cache's generation is used: reading a marker
+    never moves a copy off its generation); or "root" (it could not be read, there is no cache, and the database exists).
+    The root case is for a database from before the cache: the cache and the database share the data volume, so a database
+    with no cache has no generation to lose. Raises GenerationUnknown when nothing says which generation the data is in, or
+    when the config names another location than the backup settings do: the config is then left as it is."""
+    env = os.environ if env is None else env
+    if no_mirror(env):
+        return "none"
+    data_dir = Path(db).parent
+    try:
+        cached = read_generation_cache(data_dir)
+    except (OSError, ValueError) as exc:
+        raise GenerationUnknown("the backup generation file cannot be used (" + str(exc)[:160] + ")") from None
+    root = replica_root_url(env)
+    try:
+        named = config_root(config)
+    except (OSError, ValueError) as exc:
+        raise GenerationUnknown("the Litestream config could not be read (" + str(exc)[:160] + ")") from None
+    if named != root:    # one location for both: a reset never re-targets the replica to the wrong folder
+        raise GenerationUnknown("the Litestream config names " + named + " but the backup settings name " + root
+                                + "; the config is left as it is")
+    try:
+        generation, outcome = replica_generation(mirror_from_env(env)), "read"
+    except Exception as exc:
+        reason = type(exc).__name__ + ": " + str(exc)[:160]
+        if cached is not None:
+            generation, outcome = cached, "kept"
+            what = "keeping the backup generation the data volume names (" + (generation or "the root") + ")"
+        elif _has_database(db):
+            generation, outcome = "", "root"
+            what = "this database has no backup generation file, so the root of the backup location is used"
+        else:
+            raise GenerationUnknown("environment.json could not be read (" + reason + ") and nothing on this volume says which "
+                                    "backup generation the data is in") from None
+        print("tico: warning: could not read environment.json (" + reason + "); " + what, file=sys.stderr, flush=True)
+    if outcome == "read" and not generation and cached:
+        generation, outcome = cached, "kept"
+    try:
+        point_config_at(config, root + ("/" + generation if generation else ""))
+    except Exception as exc:
+        raise GenerationUnknown("the Litestream config could not name the backup generation (" + type(exc).__name__ + ")") from None
+    if outcome == "read" and cached != generation:
+        try:
+            write_generation_cache(data_dir, generation)
+        except OSError as exc:
+            raise GenerationUnknown("the backup generation file could not be written (" + str(exc)[:160] + ")") from None
+    return outcome
 
 
 def _put_text(mirror, key, text):
@@ -491,7 +580,9 @@ def check_new_company(data_dir, mirror, restore_failed=False, initialize_empty=F
         found = False
     else:
         try:
-            found = mirror.exists(MARKER) or mirror.newest(db_levels(replica_generation(mirror))) is not None
+            cached = read_generation_cache(data_dir) or ""    # the generation a start already synced, if it is not the root
+            found = mirror.exists(MARKER) or any(mirror.newest(db_levels(g)) is not None
+                                                 for g in {replica_generation(mirror), cached})
         except Exception as exc:
             found, problem = False, "could not read " + where + " (" + type(exc).__name__ + ": " + str(exc)[:160] + ")"
     if initialize_empty:
@@ -662,6 +753,10 @@ class GenerationSwitchFailed(Exception):
     read environment.json again and pointed its config at the same place."""
 
 
+class GenerationUnknown(Exception):
+    """Nothing says which backup generation the data is in, so Litestream and a restore may not start on a guess."""
+
+
 def new_generation_name(epoch):
     return "gen-" + datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
@@ -669,6 +764,15 @@ def new_generation_name(epoch):
 def replica_root_url(env):
     """The backup location as backup_configuration (docker/entrypoint.sh) names it, before any generation is added."""
     return (env.get("TICO_BACKUP_URL") or "file://" + (env.get("TICO_BACKUP_DIR") or "/backups")).rstrip("/")
+
+
+def config_root(config):
+    """The backup location the Litestream config's replica url names, without a generation folder. Raises when the config
+    does not hold exactly one replica url."""
+    urls = re.findall(r"^[ \t]+url: (.*)$", Path(config).read_text(), re.M)
+    if len(urls) != 1:
+        raise ValueError("the Litestream config does not hold exactly one replica url")
+    return GENERATION_SUFFIX.sub("", urls[0].strip())
 
 
 def point_config_at(config, url):
@@ -687,7 +791,8 @@ def start_generation(config, db, env, now, mirror=None):
       2. the Litestream config names the new folder (a failure leaves the old config in place);
       3. environment.json names the new folder. This is the commit. If the write failed and did not land, the old config is
          put back (GenerationRefused); if it may have landed, the start must read it again (GenerationSwitchFailed);
-      4. the local state is removed (a failure is GenerationSwitchFailed).
+      4. the data volume's cache names the new folder (a failure is GenerationSwitchFailed, as the start reads it again);
+      5. the local state is removed (a failure is GenerationSwitchFailed).
     Litestream reads its config when it starts, so it always runs against the folder environment.json names. The old folder
     is kept, and nothing is written to it again. Returns the line to print."""
     mirror = mirror_from_env(env) if mirror is None else mirror
@@ -725,6 +830,11 @@ def start_generation(config, db, env, now, mirror=None):
                                          "back") from None
         raise GenerationRefused("environment.json could not be written (" + type(exc).__name__ + ")") from None
     try:
+        write_generation_cache(Path(db).parent, new)
+    except OSError as exc:
+        raise GenerationSwitchFailed("the backup generation file could not be written (" + str(exc)[:160] + "); the next start "
+                                     "reads environment.json again") from None
+    try:
         shutil.rmtree(litestream_state_dir(db))
     except OSError as exc:
         raise GenerationSwitchFailed("the local Litestream state could not be removed (" + str(exc)[:160] + ")") from None
@@ -742,8 +852,10 @@ def reset_stale_litestream(config, db, binary="litestream", env=None, now=None):
     A populated replica whose local state is stuck (stuck_by_local_state), or for which the replication loop asked for a
     heal, gets a new backup generation instead (start_generation). The copy it had stays where it is, and there is at most
     one such heal per HEAL_INTERVAL. Returns the line to print, or None when there is nothing to say. Raises
-    GenerationSwitchFailed when a generation switch broke off after it began."""
+    GenerationSwitchFailed when a generation switch broke off after it began. First, the config is made to name the generation
+    environment.json names (sync_generation): GenerationUnknown propagates when nothing says which generation that is."""
     env = os.environ if env is None else env
+    sync_generation(config, db, env)
     state = litestream_state_dir(db)
     flag_path = heal_flag_path(db)
     flag = read_heal_flag(flag_path)
@@ -927,23 +1039,35 @@ def main(argv=None):
             return 1
     elif command == "mark-environment":    # DIR ID
         write_markers(argv[1], argv[2], None if no_mirror(env) else mirror_from_env(env))
-    elif command == "generation":    # prints the backup generation the replica is in; empty for the root layout
+    elif command == "cached-generation":    # DIR: the generation the data volume's cache names; empty for the root (no network)
         try:
-            print(replica_generation(mirror_from_env(env)))
-        except Exception as exc:
-            print("tico: warning: could not read the backup generation: " + type(exc).__name__ + ": " + str(exc)[:200],
-                  file=sys.stderr, flush=True)
-            return 1
-    elif command == "reset-stale-litestream":    # CONFIG DB: run before `litestream replicate`; 3 = do not start Litestream
+            print(read_generation_cache(argv[1]) or "")
+        except (OSError, ValueError) as exc:
+            print("tico: error: the backup generation file cannot be used (" + str(exc)[:160] + ")", file=sys.stderr)
+            return 2
+    elif command == "sync-generation":    # CONFIG DB: 0 when the generation is known, 5 for the root by fallback, 4 when unknown
+        try:
+            outcome = sync_generation(argv[1], argv[2], env)
+        except GenerationUnknown as exc:
+            print("tico: error: " + str(exc), file=sys.stderr, flush=True)
+            return 4
+        if outcome == "root":
+            print("tico: error: the backup location cannot be read and this database has no backup generation file, so the "
+                  "generation to restore is not known", file=sys.stderr, flush=True)
+            return 5
+    elif command == "reset-stale-litestream":    # CONFIG DB: run before `litestream replicate`; 3 and 4 = do not start Litestream
         try:
             message = reset_stale_litestream(argv[1], argv[2], env=env)
         except GenerationSwitchFailed as exc:
             print("tico: error: a new backup generation did not start cleanly: " + str(exc), file=sys.stderr, flush=True)
             return 3
+        except GenerationUnknown as exc:
+            print("tico: error: " + str(exc), file=sys.stderr, flush=True)
+            return 4
         if message:
             print(message, flush=True)
     else:
-        print("usage: python -m backend.replication loop|restore-blobs|restore-credential-key|is-empty DIR|check-new-company DIR|mark-environment DIR ID|generation|reset-stale-litestream CONFIG DB", file=sys.stderr)
+        print("usage: python -m backend.replication loop|restore-blobs|restore-credential-key|is-empty DIR|check-new-company DIR|mark-environment DIR ID|cached-generation DIR|sync-generation CONFIG DB|reset-stale-litestream CONFIG DB", file=sys.stderr)
         return 2
     return 0
 

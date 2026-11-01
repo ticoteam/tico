@@ -135,7 +135,9 @@ def restored_ids(binary, replica, tmp_path):
 
 def reset_stale_state(tmp_path, config, source, **extra_env):
     """The command as the entrypoint runs it: `python -m backend.replication`, with `litestream` on PATH."""
-    env = {**os.environ, "PATH": str(tmp_path / "bin") + os.pathsep + os.environ["PATH"], **extra_env}
+    env = {**os.environ, "PATH": str(tmp_path / "bin") + os.pathsep + os.environ["PATH"]}
+    env.pop("TICO_BACKUP_URL", None)    # the backup settings are the ones the test passes, as the config was written with them
+    env.update(extra_env)
     return subprocess.run([sys.executable, "-m", "backend.replication", "reset-stale-litestream", str(config), str(source)],
                           cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
 
@@ -164,7 +166,7 @@ def test_a_moved_replica_takes_new_writes_after_the_reset(tmp_path):
     binary = litestream_binary()
     config, source, replica, state = stale_state_setup(tmp_path, binary)
     replica.rename(tmp_path / "replica-moved")
-    result = reset_stale_state(tmp_path, config, source)
+    result = reset_stale_state(tmp_path, config, source, TICO_BACKUP_DIR=str(replica))
     assert result.returncode == 0, result.stderr
     assert "removed Litestream's stale local state" in result.stdout and not state.exists()
     with replicating(binary, config):
@@ -176,7 +178,7 @@ def test_a_moved_replica_takes_new_writes_after_the_reset(tmp_path):
 def test_a_populated_replica_is_left_alone_by_the_reset(tmp_path):
     binary = litestream_binary()
     config, source, replica, state = stale_state_setup(tmp_path, binary)
-    result = reset_stale_state(tmp_path, config, source)
+    result = reset_stale_state(tmp_path, config, source, TICO_BACKUP_DIR=str(replica))
     assert result.returncode == 0, result.stderr
     assert result.stdout == "" and state.is_dir()
     with replicating(binary, config):

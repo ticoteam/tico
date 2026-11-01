@@ -2,10 +2,12 @@
 exited is Litestream stopped, so its last sync covers every write. A server or Litestream that exits on its own ends
 the container, the other stopped in the same order."""
 import contextlib
+import json
 import os
 import shlex
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
@@ -42,9 +44,11 @@ if [ "$1 $2 $3" = "-m backend.replication reset-stale-litestream" ] && [ -n "$ST
 exec %s "$@"
 """
 
-# Litestream: restore finds no replica; replicate runs until SIGTERM, then takes a moment for its last sync.
+# Litestream: restore finds no replica; replicate logs the replica url its config names, then runs until SIGTERM, then takes
+# a moment for its last sync.
 LITESTREAM = """#!/bin/sh
 [ "$1" = replicate ] || exit 0
+echo "replica $(sed -n 's/^ *url: //p' "$3")" >> "$STUB_LOG"
 trap 'echo "litestream TERM" >> "$STUB_LOG"; sleep 0.3; echo "litestream synced" >> "$STUB_LOG"; exit 0' TERM
 echo "litestream up" >> "$STUB_LOG"
 [ -z "$STUB_LITESTREAM_EXIT" ] || { sleep 1; echo "litestream died" >> "$STUB_LOG"; exit 2; }

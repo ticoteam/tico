@@ -246,7 +246,6 @@ BACKUPS=${TICO_BACKUP_DIR:-/backups}
 
 backup_configuration() {  # writes $LITESTREAM_CONFIG; returns 1 when backups are off
   local url region sync interval_seconds unit generation
-  BACKUP_GENERATION_UNREADABLE=
   if [ "${TICO_BACKUP:-}" = off ]; then
     TICO_BACKUP_MODE=off
   elif [ -n "${TICO_BACKUP_URL:-}" ]; then
@@ -265,14 +264,13 @@ backup_configuration() {  # writes $LITESTREAM_CONFIG; returns 1 when backups ar
   interval_seconds=$(( 10#${BASH_REMATCH[1]} * unit ))
   { [ "$interval_seconds" -ge 1 ] && [ "$interval_seconds" -le 3600 ]; } || die "TICO_BACKUP_SYNC_INTERVAL must be between 1s and 1h; got '$sync'"
   url="${TICO_BACKUP_URL:-file://$BACKUPS}"
-  # The backup generation the data is in (backend/replication.py): the root unless environment.json names one. When it
-  # cannot be read, the root is used and nothing is changed; seed and restore then refuse to read the backup.
-  if generation=$(python -m backend.replication generation); then
-    url="${url%/}${generation:+/$generation}"
-  else
-    BACKUP_GENERATION_UNREADABLE=1
-    log "WARNING: could not read the backup generation; using the root of the backup location"
-  fi
+  # The backup generation the data is in, from the cache beside the database (backend/replication.py). Reading it needs no
+  # network, so a slow or unreachable bucket cannot hold up the start. No cache means the root layout, and the reset job that
+  # starts Litestream reads environment.json and corrects this file before Litestream starts. A cache that cannot be read
+  # stops the start: a guess could replicate over the copy the data is in.
+  generation=$(python -m backend.replication cached-generation "$DATA") \
+    || die "the backup generation file in $DATA cannot be read; fix it, or remove it so the next start reads environment.json"
+  url="${url%/}${generation:+/$generation}"
   region="${TICO_BACKUP_REGION:-}"
   [ -n "$region" ] || [ -z "${TICO_BACKUP_ENDPOINT:-}" ] || region=us-east-1
   {
@@ -312,12 +310,13 @@ seed() {
   case "${TICO_INITIALIZE_EMPTY:-}" in 1|true|yes) guard+=(--initialize-empty) ;; esac
   if [ ! -s "$TICO_DB" ]; then
     if backup_configuration; then
-      if [ -n "${BACKUP_GENERATION_UNREADABLE:-}" ]; then
-        # Restoring from the root could bring back an older copy than the current one. Refuse instead, as a failed restore.
-        restore_failed=(--restore-failed)
-      else
+      # The restore reads the generation the data is in, as environment.json names it now: a copy from another folder could be
+      # an older one. A generation that cannot be known fails the restore, as a restore that failed does.
+      if python -m backend.replication sync-generation "$LITESTREAM_CONFIG" "$TICO_DB"; then
         log "restoring the database from its backup, if there is one"
         litestream restore -if-db-not-exists -if-replica-exists -config "$LITESTREAM_CONFIG" "$TICO_DB" || restore_failed=(--restore-failed)
+      else
+        restore_failed=(--restore-failed)
       fi
     fi
     if [ -s "$TICO_DB" ]; then
@@ -442,12 +441,13 @@ supervise() {
   reap() { while :; do wait "$1" && rc=0 || rc=$?; [ "$rc" -gt 128 ] && kill -0 "$1" 2>/dev/null || return 0; done; }
   trap 'requested=1; stopping' TERM INT
   if [ "$backups" = 1 ]; then
-    # Stale Litestream state beside the database is cleared first when the backup location is empty, and moved to a new
-    # backup generation when the copy is stuck. It runs here, in the job that starts Litestream, so the server does not
-    # wait for it. exec makes the job Litestream itself: $! is its pid. Exit 3 from the reset means a generation switch
-    # broke off after it began, so Litestream does not start on a config that may not match environment.json.
+    # The reset first makes the config name the backup generation that environment.json names. Then stale Litestream state
+    # beside the database is cleared when the backup location is empty, and a new backup generation is started when the copy
+    # is stuck. It runs here, in the job that starts Litestream, so the server does not wait for it. exec makes the job
+    # Litestream itself: $! is its pid. Exit 3 means a generation switch broke off after it began, and exit 4 that nothing
+    # says which generation the data is in; Litestream does not start on either, since its config may not match.
     ( rc=0; python -m backend.replication reset-stale-litestream "$LITESTREAM_CONFIG" "$TICO_DB" || rc=$?
-      [ "$rc" != 3 ] || exit 1
+      case "$rc" in 3|4) exit 1 ;; esac
       exec litestream replicate -config "$LITESTREAM_CONFIG" ) &
     litestream=$!
     # The loop gets Litestream's pid: a copy that has stopped moving is healed by stopping Litestream, and the container
@@ -546,7 +546,8 @@ restore() {
     [ "$force" = 1 ] || die "the data volume is not empty; restore would replace it. Re-run with --force to keep the current database aside and restore over it"
   fi
   backup_configuration || die "backups are off (TICO_BACKUP=off); there is nothing to restore from"
-  [ -z "${BACKUP_GENERATION_UNREADABLE:-}" ] || die "could not read the backup generation, so the restore would read an older copy; try again when the backup location is reachable"
+  python -m backend.replication sync-generation "$LITESTREAM_CONFIG" "$TICO_DB" \
+    || die "could not find the backup generation the data is in, so the restore would read an older copy; try again when the backup location is reachable"
   if [ -e "$TICO_DB" ]; then
     local aside
     aside="$TICO_DB.before-restore.$(date +%s)"
