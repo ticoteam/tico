@@ -220,6 +220,16 @@ const expectValue = (field, value) => field.evaluate((el, want) => new Promise((
   const start = Date.now(), check = () => el.value === want ? resolve() : Date.now() - start > 5000 ? reject(new Error('value: ' + el.value)) : setTimeout(check, 25);
   check();
 }), value);
+// Opening a seat page asks for its applicants (POST /api/v2/seats/<id>/recruit), and that call lands on its own time.
+// A step that clears or lists `calls` right after opening a seat waits for the seat's own call first, or it leaks into
+// the next step's list.
+async function recruitLanded(calls, seat) {
+  const start = Date.now();
+  while (!calls.some(c => c[1] === 'recruit' && c[2] === seat)) {
+    if (Date.now() - start > 5000) throw new Error('no recruit call for ' + seat);
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
 // A real drag, with a pause after it starts: the "No group" row only shows once a drag has begun.
 // `edge` 'top' or 'bottom' drops on that edge of a fellow report (before or after it); else on its middle.
 async function drag(page, from, to, edge) {
@@ -663,6 +673,7 @@ async function teamAdd(browser) {
   await hireForm.locator('.rc-settings summary').click();
   await hireForm.locator('[name=model]').selectOption('other-model');
   await shot(page, 'team-add-bot-applicant');
+  await recruitLanded(calls, 'seat2');
   calls.length = 0;
   seatSave.hire = 403;
   await hireForm.locator('.rc-hire-go').click();
@@ -693,6 +704,7 @@ async function teamAdd(browser) {
   release();
   await page.waitForFunction(() => location.hash === '#/seat/seat3');
   assert.deepEqual(calls.find(c => c[1] === 'seats')[2].description, 'Keeps the books and closes each month.');
+  await recruitLanded(calls, 'seat3');
   calls.length = 0;
   await page.evaluate(() => { location.hash = '#/updates'; });
   await page.waitForFunction(() => location.hash === '#/updates');
@@ -700,8 +712,10 @@ async function teamAdd(browser) {
   await post.locator('[name=title]').fill('Treasurer');
   await post.locator('[name=title]').press('Enter');
   await page.waitForFunction(() => location.hash === '#/seat/seat4');
-  assert.deepEqual(calls.map(c => c[1]), ['draft', 'seats']);
-  assert.deepEqual(calls[1][2].description, 'Keeps the books and closes each month.');
+  await recruitLanded(calls, 'seat4');
+  const posted = calls.filter(c => c[1] !== 'recruit');   // seat4's own applicants call is not part of this step
+  assert.deepEqual(posted.map(c => c[1]), ['draft', 'seats']);
+  assert.deepEqual(posted[1][2].description, 'Keeps the books and closes each month.');
   calls.length = 0;
   await page.evaluate(() => { location.hash = '#/updates'; });
   await page.waitForFunction(() => location.hash === '#/updates');
@@ -723,6 +737,7 @@ async function teamAdd(browser) {
   seatSave.draftText = body => 'Drafted for ' + body.title + '.';
   const postedAs = async seat => {
     await page.waitForFunction(id => location.hash === '#/seat/' + id, seat);
+    await recruitLanded(calls, seat);
     const posted = calls.find(c => c[1] === 'seats')[2];
     calls.length = 0;
     await page.evaluate(() => { location.hash = '#/updates'; });
