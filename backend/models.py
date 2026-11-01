@@ -2507,9 +2507,16 @@ class Empty(Contract):
     pass
 
 
+class MemoryTidyPilot(Contract):
+    bot: str = Field(min_length=1, max_length=100)
+    model: str = Field(min_length=1, max_length=100)
+    effort: Literal["low"] = "low"
+
+
 class SystemRoutineUpdate(Contract):
     """One system routine's switch, schedule preset or daily time (backend/system_routines.py); only what is sent
     changes."""
+    pilots: list[MemoryTidyPilot] | None = Field(default=None, max_length=3)
     on: bool | None = None
     preset: Literal["15m", "hourly", "4h", "daily", "business"] | None = None
     at: str | None = Field(default=None, max_length=5)
