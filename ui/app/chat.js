@@ -638,6 +638,8 @@ function v2ChatRender(state) {
     });
   }
   // A goal's controls (the /goal messages the server sends for Set, Pause, Clear) are the bar above, not bubbles.
+  // The chat's held messages are read once per conversation, when it is drawn (ui/app/org-rule-holds.js).
+  if (state.loaded && state.holdsFor !== state.conv?.id) { state.holdsFor = state.conv?.id; void ruleChatHoldsLoad(state); }
   const shown = v2WithBotTalk(state, state.messages.filter(m => m.refs?.maintenance !== 'checkpoint' && !chatGoalControl(m)));
   state.lastMain = shown.findLast(m => !chatSideKind(m, state.slug)) || null;
   const goalLine = chatGoalLine(state, shown);
@@ -648,7 +650,8 @@ function v2ChatRender(state) {
     ? `<div class="conv-run chat"><div class="bubble bot reply"><span class="who">${empName(state.slug)}</span>
         <div class="md" id="v2-live">${safeMd(state.live.text, {shortLinks: true})}</div>${chatCopyHTML(state.live.text)}</div></div>`
     : pending ? `<div class="conv-run chat">${pending}</div>` : '';
-  const html = (groups + live) || (state.failed ? '<div class="empty">Could not load the conversation yet; trying again…</div>'
+  const held = (state.holds || []).map(ruleHoldHTML).join('');
+  const html = (groups + live + held) || (state.failed ? '<div class="empty">Could not load the conversation yet; trying again…</div>'
     : !state.loaded ? '<div class="empty">Loading the thread…</div>' : state.empty || '<div class="empty">Nothing yet. Say something below.</div>');
   // A poll or snapshot that changed nothing leaves the thread alone: no rebuild, nothing to jump.
   if (html !== state.html) {
@@ -658,6 +661,7 @@ function v2ChatRender(state) {
       const focused = thread.contains(document.activeElement) ? document.activeElement : null;
       // Only the messages that changed are redrawn; cards both trees share keep their node (ui/app/visual-cards.js).
       patchHTML(thread, html, visualSwap);
+      if (thread.querySelector('[data-hold]')) ruleChatWire(state, thread);
       if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast,
         reload: () => v2ChatMessages(state).then(() => { if (V2C === state) v2ChatRender(state); })});
       if (focused?.isConnected && document.activeElement !== focused) focused.focus({preventScroll: true});
@@ -774,11 +778,22 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
   // the box says it is still going, and whether it is trying again.
   if (btn) { btn.disabled = true; btn.classList.add('p-sending'); btn.setAttribute('aria-busy', 'true'); pillBtnSay(btn, 'Sending…'); }
   const watch = chatSendWatch(P, files.length);
+  // Org rules check a message before it is sent: a send still out after a moment says so (ui/app/org-rule-holds.js).
+  const checking = setTimeout(() => void ruleChecksOn().then(on => {
+    if (on && P.sending && btn?.isConnected) pillBtnSay(btn, 'Checking…');
+  }), 400);
   try {
     let refs = {...extraRefs};
     const j = await cloudCompose(`/v2/chat/${encodeURIComponent(slug)}`, {text: text || 'Attached files.', refs, ...extra}, files,
       {timeout: P.unconfirmed ? Math.min(CHAT_SEND.timeout, CHAT_REPLAY_MS - (Date.now() - P.unconfirmed.at)) : CHAT_SEND.timeout,
         onRetry: watch.retry, onResponse: watch.response, operationId: P.unconfirmed?.key});
+    // An org rule held the message: nothing was sent, the box keeps the text, and the chat shows the hold with its rule.
+    if (j?.held) {
+      if (pending) pending.refused = true;          // Edit and resend is a new request, and a new check
+      watch.end('held');
+      if (V2C?.slug === slug) ruleChatHeld(V2C, j.held);
+      return false;
+    }
     // A 200 that created nothing (a sign-in page in front of the API) is not a send: the draft stays.
     if (!j?.message?.id) throw new Error('the server did not confirm it');
     watch.end('sent');
@@ -806,6 +821,7 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     return false;
   }
   finally {
+    clearTimeout(checking);
     if (pending) pending.inFlight = null;
     P.sending = false; P.sent = null; sent();
     if (btn) { btn.disabled = false; btn.classList.remove('p-sending'); btn.removeAttribute('aria-busy'); pillBtnSay(btn, label); }

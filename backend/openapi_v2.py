@@ -2253,10 +2253,11 @@ STABLE.extend([
     ('/api/v2/bots/{bot}/rules', 'get', 'Rules', 'getBotRules', 'A bot\'s Rules tab: its settings as sentences, then internal and external rules, each paged by its own cursor', None),
     ('/api/v2/rules/stats', 'get', 'Rules', 'getRuleCheckStats', 'Rule checks today: checks, unchecked, blocked, dollars left in the rules budget, and whether checks are on', None),
     ('/api/v2/rules/check', 'post', 'Rules', 'checkRuleDraft', 'A bot checks a draft as the write it will be; sending that exact draft then costs no second check', None),
-    ('/api/v2/rule-holds', 'get', 'Rules', 'listRuleHolds', 'The holds on one review task, as its reviewer or the author bot reads them: summaries, a page at a time (next_cursor)', None),
-    ('/api/v2/rule-holds/{hold_id}', 'get', 'Rules', 'getRuleHold', 'One held output: only the author bot and the reviewer read it', None),
+    ('/api/v2/rule-holds', 'get', 'Rules', 'listRuleHolds', 'The held writes the caller may read, as summaries, a page at a time: a review task\'s holds (task), a conversation\'s held writes (thread), or every held write the caller may read', None),
+    ('/api/v2/rule-holds/{hold_id}', 'get', 'Rules', 'getRuleHold', 'One held output as its reader sees it: the author reads the writes they made, a person or a bot; the reviewer reads the rest', None),
     ('/api/v2/rule-holds/{hold_id}/keep', 'post', 'Rules', 'keepRuleHold', 'The reviewer keeps it blocked', None),
-    ('/api/v2/rule-holds/{hold_id}/send', 'post', 'Rules', 'sendRuleHold', 'The reviewer sends it anyway, once, with the hold\'s nonce', None),
+    ('/api/v2/rule-holds/{hold_id}/withdraw', 'post', 'Rules', 'withdrawRuleHold', 'The author takes a held write back to edit and resend it; nothing is sent', None),
+    ('/api/v2/rule-holds/{hold_id}/send', 'post', 'Rules', 'sendRuleHold', 'The reviewer sends it anyway, once, with the hold\'s nonce; for a person\'s write that is the rule\'s author, its editors or an admin', None),
     ('/api/v2/rule-holds/{hold_id}/appeal', 'post', 'Rules', 'appealRuleHold', 'The author bot asks the reviewer to look, with why', None),
 ])
 SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done_per_week', 'needs_you', 'spend', 'kpi',
@@ -2360,8 +2361,12 @@ SCHEMAS.update({
     "ThreadView": obj({"id": "s", "title": "s", "audience": "s", "audience_group_id": "n", "owner_actor": "n",
                        "parent_id": "n", "parent_message_id": "n", "root_id": "s", "path": "a", "kind": "n",
                        "task_id": "n", "created_at": "s", "last_message_at": "n", "archived_at": "n",
-                       "last_seq": "i", "last_unread_seq": "i", "me": "o"},
+                       "last_seq": "i", "last_unread_seq": "i", "me": "o", "members": "o"},
                       required=["id", "title", "audience", "root_id", "last_seq", "last_unread_seq"]),
+    "ThreadReactions": items(obj({"emoji": "s", "count": "i", "actors": "a"}, required=["emoji", "count", "actors"])),
+    "ThreadEarlier": obj({"home": "s", "messages": "i"}, required=["home", "messages"]),
+    "ThreadUploaded": obj({"thread": ref("ThreadView"), "message": ref("ThreadMessage")},
+                          required=["thread", "message"]),
     "ThreadSidebar": obj({"attention": items({"type": "object"}), "threads": items(ref("ThreadView")),
                           "dms": items({"type": "object"}), "next_cursor": "n"},
                          required=["attention", "threads", "dms"]),
@@ -2387,14 +2392,25 @@ SCHEMAS.update({
 })
 STABLE.extend([
     ("/api/v2/threads", "get", "Threads", "listThreads",
-     "The viewer's sidebar: needs attention, threads (recent first) and DMs they may read, one page (`cursor`)", "ThreadSidebar"),
+     "The viewer's sidebar: needs attention, threads (recent first) and DMs they may read, one page (`cursor`); with "
+     "`with=<actor>`, only the threads that teammate is a member of", "ThreadSidebar"),
     ("/api/v2/threads", "post", "Threads", "createThread",
      "Start a thread (audience members unless asked otherwise); with `parent_message_id` it is a sub-thread; with `body` "
      "its first message is posted too", "ThreadView"),
     ("/api/v2/threads/search", "get", "Threads", "searchThreads",
      "Messages whose text matches every word of `q`, newest first, only in threads and messages the viewer may read", "ThreadSearch"),
+    ("/api/v2/threads/home/{actor}", "get", "Threads", "getThreadHome",
+     "A teammate's Home (`actor` in the path: bot:<slug>, human:<id> or group:<id>), made on first use; needs Read on "
+     "that teammate, else the same 404 whether or not they exist", "ThreadView"),
+    ("/api/v2/threads/dm", "get", "Threads", "openThreadDm",
+     "My DM with `with`: the open one with exactly those two, or a new one; needs Write on them (the reply-back rule "
+     "applies)", "ThreadView"),
+    ("/api/v2/threads/dm", "post", "Threads", "createThreadDm",
+     "A DM with these teammates (`members`), the open one or a new one, with an optional first message (`body`); needs "
+     "Write on each of them, and a bot's or person's first message passes the org rules", "ThreadView"),
     ("/api/v2/threads/{thread_id}", "get", "Threads", "getThread",
-     "A thread as the viewer sees it: its unread count, read mark and what they may do", "ThreadView"),
+     "A thread as the viewer sees it: its unread count, read mark, what they may do and its first page of members",
+     "ThreadView"),
     ("/api/v2/threads/{thread_id}", "patch", "Threads", "updateThread",
      "Rename, archive or unarchive a thread, or change who it is for; its managers only", "ThreadView"),
     ("/api/v2/threads/{thread_id}/timeline", "get", "Threads", "getThreadTimeline",
@@ -2419,6 +2435,16 @@ STABLE.extend([
      "Edit one's own message in a thread; the search index and the timeline follow", "ThreadMessage"),
     ("/api/v2/messages/{message_id}", "delete", "Threads", "deleteMessage",
      "Delete one's own message in a thread", "ThreadMessageDeleted"),
+    ("/api/v2/messages/{message_id}/reactions/{emoji}", "put", "Threads", "reactToMessage",
+     "Add my reaction to a message I read (the same emoji twice is one); answers the message's reactions", "ThreadReactions"),
+    ("/api/v2/messages/{message_id}/reactions/{emoji}", "delete", "Threads", "unreactToMessage",
+     "Remove my reaction from a message (a no-op without one); answers the message's reactions", "ThreadReactions"),
+    ("/api/v2/threads/{thread_id}/open-earlier", "post", "Threads", "openEarlierMessages",
+     "A manager of a bot opens its Home's earlier shared-room messages to the Home's readers; a bot's Home only (422 "
+     "otherwise), managers only (403)", "ThreadEarlier"),
+    ("/api/v2/uploads/threads/{thread_id}/messages", "post", "Threads", "uploadThreadMessage",
+     "A person's message with files in a thread (multipart: text, titles and the files); each file is linked to the "
+     "message, under the chat upload limit", "ThreadUploaded"),
 ])
 
 

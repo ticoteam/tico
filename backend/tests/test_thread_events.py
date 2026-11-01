@@ -6,6 +6,7 @@ an agent token gets only the topics it may read. In-process through events.read,
 from backend import events as E
 from backend import task_privacy
 from backend.auth import Identity
+from backend.store import H
 from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
 from backend.tests.test_automation_api import as_bot
 
@@ -101,7 +102,7 @@ def test_the_threads_topic_says_what_changed_for_the_people_who_may_read_the_thr
     created = [d for _, topic, d in read_as(api, ben, after, ("threads",)) if d.get("thread_id") == thread["id"]]
     assert [d["kind"] for d in created][:1] == ["created"]
     assert created[0]["thread"]["title"] == "Launch"
-    assert any(d["kind"] == "counters" and d["counters"]["last_seq"] >= 1 for d in created)
+    assert not any(d["kind"] == "counters" for d in created)      # counters are written for migrations and repairs only
     after = cursor(api)
     assert api.patch(f"/api/v2/threads/{thread['id']}", json={"title": "Launch day"},
                      headers=headers("ana-test")).status_code == 200
@@ -109,10 +110,10 @@ def test_the_threads_topic_says_what_changed_for_the_people_who_may_read_the_thr
     assert [d["kind"] for d in renamed if d["kind"] == "renamed"] == ["renamed"]
     assert next(d for d in renamed if d["kind"] == "renamed")["thread"]["title"] == "Launch day"
     after = cursor(api)
-    say(api, thread["id"], "One more")
-    last_seq = api.get(f"/api/v2/threads/{thread['id']}", headers=headers("ben-test")).json()["last_seq"]
-    counted = [d for _, topic, d in read_as(api, ben, after, ("threads",)) if d.get("thread_id") == thread["id"]]
-    assert any(d["kind"] == "counters" and d["counters"]["last_seq"] == last_seq == 2 for d in counted)
+    posted = say(api, thread["id"], "One more")
+    assert not [d for _, topic, d in read_as(api, ben, after, ("threads",)) if d.get("kind") == "counters"]
+    carried = [d for _, topic, d in read_as(api, ben, after, ("messages",)) if d.get("id") == posted["id"]]
+    assert carried and carried[0]["thread_id"] == thread["id"] and isinstance(carried[0]["message_seq"], int)
     cara = who(api, "cara-test")
     assert not [d for _, topic, d in read_as(api, cara, 0, ("threads",)) if d.get("thread_id") == thread["id"]]
 
@@ -124,3 +125,38 @@ def test_a_bot_token_gets_only_the_topics_it_may_read_and_no_thread_it_is_not_in
     new_thread(api, title="Private", body="Only ben")
     bot = Identity("bot:ops", "bot", agent="test")
     assert not [1 for _, topic, _d in read_as(api, bot, after, E.AGENT_TOPICS) if topic in ("messages", "threads")]
+
+
+def add_delivery(api, delivery_id, message_id, recipient, thread_id, mode, state):
+    """A delivery row as core writes it (the message id is a stand-in: the triggers read only the delivery)."""
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO message_deliveries (id, message_id, recipient, thread_id, root_id, mode, reason, cause, "
+                  "state, created_at, updated_at) VALUES (?,?,?,?,?,?,'test','human',?,?,?)",
+                  (delivery_id, message_id, recipient, thread_id, thread_id, mode, state, H.now(), H.now()))
+
+
+def threads_kind(api, token, after, kind):
+    return [d for _, topic, d in read_as(api, who(api, token), after, ("threads",)) if d.get("kind") == kind]
+
+
+def test_a_person_is_sent_attention_for_their_own_delivery_and_nobody_elses(api):
+    thread = new_thread(api, members=("human:ben", "human:cara"))
+    after = cursor(api)
+    add_delivery(api, "d-att-1", "m-att-1", "human:ben", thread["id"], "none", "pending")
+    add_delivery(api, "d-att-2", "m-att-2", "bot:ops", thread["id"], "queue", "pending")     # a wake is nobody's attention
+    assert len([d for d in threads_kind(api, "ben-test", after, "attention") if d["thread_id"] == thread["id"]]) == 1
+    assert threads_kind(api, "cara-test", after, "attention") == []
+    after = cursor(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE message_deliveries SET state='read', read_at=? WHERE id='d-att-1'", (H.now(),))
+    assert len(threads_kind(api, "ben-test", after, "attention")) == 1          # leaving the needs-you set is a change too
+
+
+def test_a_capped_root_says_how_many_are_capped_to_the_people_who_may_read_it(api):
+    thread = new_thread(api, members=("human:ben",))
+    after = cursor(api)
+    add_delivery(api, "d-cap-1", "m-cap-1", "bot:ops", thread["id"], "queue", "capped")
+    add_delivery(api, "d-cap-2", "m-cap-2", "bot:coo", thread["id"], "queue", "capped")
+    capped = threads_kind(api, "ben-test", after, "capped")
+    assert [d["capped"] for d in capped] == [2] and capped[0]["thread_id"] == thread["id"]    # one event, current count
+    assert threads_kind(api, "cara-test", after, "capped") == []

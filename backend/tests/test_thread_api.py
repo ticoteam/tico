@@ -2,7 +2,9 @@
 read state (unread is human or addressed only, a sibling is not cleared, max wins, joining reads up to now), and search
 that follows edits and deletes. Fictional people only: ana (owner), ben and cara (humans)."""
 
-from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
+from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the fixture and its helpers)
+from backend.tests.test_org_rule_check import COLOR, bodies, hold_row, ruled  # noqa: F401  (the Judge fixture)
+from backend.tests.test_org_rules import rule
 from backend import threads
 
 
@@ -123,3 +125,208 @@ def test_context_search_finds_a_thread_message_the_viewer_may_read_and_never_a_h
     assert [h["kind"] for h in hits] == ["thread_message"] and hits[0]["url"].startswith("#/thread/")
     assert context("secret", "cara-test") == [] and context("secret", "ben-test") == []
     assert context("secret", "ana-test")
+
+
+def set_bot_access(api, slug, see, read, write):
+    revision = api.get(f"/api/v2/bots/{slug}/access", headers=headers()).json()["revision"]
+    response = api.put(f"/api/v2/bots/{slug}/access", headers=headers(),
+                       json={"see": see, "read": read, "write": write, "revision": revision})
+    assert response.status_code == 200, response.text
+
+
+def home_as(api, actor, token="ana-test"):
+    return api.get(f"/api/v2/threads/home/{actor}", headers=headers(token))
+
+
+def dm_as(api, peer, token="ana-test"):
+    return api.get("/api/v2/threads/dm", params={"with": peer}, headers=headers(token))
+
+
+def test_a_teammates_home_is_made_once_and_its_owner_may_read_it(api):
+    first = home_as(api, "human:ben")
+    assert first.status_code == 200, first.text
+    assert first.json()["audience"] == "home" and first.json()["owner_actor"] == "human:ben"
+    assert home_as(api, "human:ben").json()["id"] == first.json()["id"]          # the same Home, not a second one
+    assert home_as(api, "human:ben", "ben-test").json()["id"] == first.json()["id"]
+
+
+def test_a_home_the_viewer_may_not_read_is_the_same_404_as_a_missing_teammate_and_makes_nothing(api):
+    set_bot_access(api, "ops", {"people": ["ben"]}, {"people": ["ben"]}, {"people": ["ben"]})
+    hidden = home_as(api, "bot:ops", "cara-test")
+    missing = home_as(api, "bot:nobody", "cara-test")
+    assert hidden.status_code == missing.status_code == 404
+    assert hidden.json() == missing.json()
+    assert "ops" not in hidden.text and "nobody" not in missing.text
+    with api.app.state.store.read() as c:       # a refused viewer leaves no Home behind
+        assert c.execute("SELECT COUNT(*) FROM conversations WHERE audience='home' AND owner_actor='bot:ops'"
+                         ).fetchone()[0] == 0
+    assert home_as(api, "bot:ops", "ben-test").status_code == 200                # someone who may read it
+
+
+def test_a_dm_is_the_open_one_with_exactly_those_two(api):
+    first = dm_as(api, "human:ben")
+    assert first.status_code == 200, first.text
+    assert first.json()["audience"] == "personal"
+    assert dm_as(api, "human:ben").json()["id"] == first.json()["id"]
+    assert dm_as(api, "human:ana", "ben-test").json()["id"] == first.json()["id"]   # the other side opens the same DM
+    assert dm_as(api, "human:cara").json()["id"] != first.json()["id"]               # a different pair, a different DM
+
+
+def test_a_dm_needs_write_on_the_other_teammate_and_a_hidden_one_is_404(api):
+    set_bot_access(api, "ops", {"people": ["cara"]}, {"people": ["cara"]}, {"people": ["ben"]})
+    refused = dm_as(api, "bot:ops", "cara-test")                  # cara can see and read ops, not message it
+    assert refused.status_code == 403 and "Write" in refused.text
+    assert dm_as(api, "bot:ops", "ben-test").status_code == 200   # ben has Write
+    assert dm_as(api, "human:nobody", "cara-test").status_code == 404
+    assert dm_as(api, "human:ana", "ana-test").status_code == 422   # a DM with yourself names nobody
+
+
+GOLD = "Our favorite color is gold."
+
+
+def message_in(api, thread_id, token="ana-test"):
+    return api.get(f"/api/v2/threads/{thread_id}/timeline", headers=headers(token)).json()["messages"]
+
+
+def test_a_block_holds_a_persons_thread_post_through_rest_and_writes_nothing(ruled):
+    api, judge = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
+    thread = new_thread(api, members=("human:cara",))
+    calls = len(judge.calls)
+    got = api.post(f"/api/v2/threads/{thread['id']}/messages", json={"text": GOLD}, headers=headers("cara-test"))
+    assert got.status_code == 200, got.text
+    assert got.json()["held"]["outcome"] == "blocked"
+    assert len(judge.calls) == calls + 1 and not any(judge.locked[calls:])   # checked as cara, outside the write
+    hold = hold_row(api, got.json()["held"]["id"])
+    assert hold["author"] == "human:cara" and hold["state"] == "held"
+    assert bodies(api, "favorite color is gold") == []                 # the hold is the only trace
+    assert not any("favorite color" in str(m.get("body")) for m in message_in(api, thread["id"]))
+
+
+def test_a_held_thread_post_is_sent_by_its_rule_author_as_its_person(ruled):
+    api, judge = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
+    thread = new_thread(api, members=("human:cara",))
+    held = api.post(f"/api/v2/threads/{thread['id']}/messages", json={"text": GOLD},
+                    headers=headers("cara-test")).json()["held"]
+    calls = len(judge.calls)
+    view = get(api, f"rule-holds/{held['id']}")
+    sent = post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]}, token="ana-test")
+    assert sent["hold"]["state"] == "sent"
+    assert len(judge.calls) == calls                                  # sent, not checked again
+    posted = [m for m in message_in(api, thread["id"]) if "favorite color is gold" in str(m.get("body"))]
+    assert len(posted) == 1 and posted[0]["from_actor"] == "human:cara"
+
+
+def test_a_warn_delivers_a_persons_thread_post_with_the_warning_on_it(ruled):
+    api, _ = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "if_broken": "warn"})
+    thread = new_thread(api, members=("human:cara",))
+    got = api.post(f"/api/v2/threads/{thread['id']}/messages", json={"text": GOLD}, headers=headers("cara-test"))
+    assert got.status_code == 200 and "held" not in got.json()
+    delivered = [m for m in message_in(api, thread["id"]) if "favorite color is gold" in str(m.get("body"))]
+    assert len(delivered) == 1 and delivered[0]["body"].startswith("Warning:")   # the warning heads the recipient's copy
+
+
+def test_a_group_dm_is_the_open_one_with_exactly_those_people_and_its_first_message_is_posted(api):
+    got = api.post("/api/v2/threads/dm", json={"members": ["human:ben", "human:cara"], "body": "Budget call at 3"},
+                   headers=headers("ana-test"))
+    assert got.status_code == 200, got.text
+    dm = got.json()
+    assert dm["audience"] == "personal" and dm["message"]["body"] == "Budget call at 3"
+    again = api.post("/api/v2/threads/dm", json={"members": ["human:cara", "human:ben"]}, headers=headers("ana-test"))
+    assert again.status_code == 200 and again.json()["id"] == dm["id"] and "message" not in again.json()
+    view = get_thread(api, dm["id"], token="cara-test").json()
+    assert {m["actor"] for m in view["members"]["members"]} >= {"human:ben", "human:cara"}
+
+
+def test_a_group_dm_needs_write_on_each_teammate_and_a_hidden_one_is_404(api):
+    set_bot_access(api, "ops", {"people": ["cara"]}, {"people": ["cara"]}, {"people": ["ben"]})
+    refused = api.post("/api/v2/threads/dm", json={"members": ["human:ben", "bot:ops"]}, headers=headers("cara-test"))
+    assert refused.status_code == 403 and "Write" in refused.text
+    assert api.post("/api/v2/threads/dm", json={"members": ["human:ben"]}, headers=headers("cara-test")).status_code == 200
+    assert api.post("/api/v2/threads/dm", json={"members": ["bot:nobody"]}, headers=headers("ana-test")).status_code == 404
+    assert api.post("/api/v2/threads/dm", json={"members": []}, headers=headers("ana-test")).status_code == 422
+
+
+def test_a_block_holds_a_group_dm_first_message_and_writes_no_message(ruled):
+    api, judge = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
+    calls = len(judge.calls)
+    got = api.post("/api/v2/threads/dm", json={"members": ["human:ben"], "body": GOLD}, headers=headers("cara-test"))
+    assert got.status_code == 200, got.text
+    assert got.json()["held"]["outcome"] == "blocked"
+    assert len(judge.calls) == calls + 1 and not any(judge.locked[calls:])   # checked as cara, outside the write
+    assert not any("favorite color" in str(m.get("body")) for m in message_in(api, got.json()["id"], token="cara-test"))
+    assert hold_row(api, got.json()["held"]["id"])["author"] == "human:cara"
+
+
+def test_a_reaction_is_one_per_person_and_needs_read_on_the_message(api):
+    thread = new_thread(api, members=("human:ben",))
+    message = say(api, thread["id"], "Shall we ship?")
+    path = f"/api/v2/messages/{message['id']}/reactions/:+1:"
+    first = api.put(path, headers=headers("ben-test"))
+    assert first.status_code == 200 and first.json() == [{"emoji": ":+1:", "count": 1, "actors": ["human:ben"]}], first.text
+    assert api.put(path, headers=headers("ben-test")).json() == first.json()          # the same emoji twice is one
+    both = api.put(path, headers=headers("ana-test")).json()
+    assert both == [{"emoji": ":+1:", "count": 2, "actors": ["human:ben", "human:ana"]}]
+    assert api.delete(path, headers=headers("ben-test")).json() == [{"emoji": ":+1:", "count": 1, "actors": ["human:ana"]}]
+    assert api.put(path, headers=headers("cara-test")).status_code == 404               # not a member: unreadable
+    assert api.put(f"/api/v2/messages/{message['id']}/reactions/bad%20emoji", headers=headers("ben-test")).status_code == 422
+
+
+def test_open_earlier_is_a_bot_homes_and_only_its_managers_open_it(api):
+    home = api.get("/api/v2/threads/home/bot:ops", headers=headers()).json()
+    opened = api.post(f"/api/v2/threads/{home['id']}/open-earlier", headers=headers())
+    assert opened.status_code == 200 and opened.json() == {"home": "bot:ops", "messages": 0}, opened.text
+    thread = new_thread(api, members=("human:ben",))
+    assert api.post(f"/api/v2/threads/{thread['id']}/open-earlier", headers=headers()).status_code == 422
+    set_bot_access(api, "ops", {"people": ["cara"]}, {"people": ["cara"]}, {"people": ["cara"]})
+    assert api.post(f"/api/v2/threads/{home['id']}/open-earlier", headers=headers("cara-test")).status_code == 403
+    set_bot_access(api, "ops", {"people": ["cara"]}, {"people": []}, {"people": []})
+    assert api.post(f"/api/v2/threads/{home['id']}/open-earlier", headers=headers("cara-test")).status_code == 404
+
+
+def test_the_sidebar_with_an_actor_lists_the_threads_they_are_in_that_the_viewer_reads(api):
+    shared = new_thread(api, title="With Ben", members=("human:ben",))
+    other = new_thread(api, title="Cara only", members=("human:cara",))
+    listed = api.get("/api/v2/threads", params={"with": "human:ben"}, headers=headers("ana-test")).json()
+    ids = {t["id"] for t in listed["threads"] + listed["dms"]}
+    assert shared["id"] in ids and other["id"] not in ids and listed["attention"] == []
+    stranger = api.get("/api/v2/threads", params={"with": "human:ben"}, headers=headers("cara-test")).json()
+    assert shared["id"] not in {t["id"] for t in stranger["threads"] + stranger["dms"]}
+
+
+def test_a_file_with_a_message_is_linked_to_its_thread_and_a_stranger_gets_404(api):
+    thread = new_thread(api, members=("human:ben",))
+    sent = api.post(f"/api/v2/uploads/threads/{thread['id']}/messages", data={"text": "Budget draft"},
+                    files={"files": ("budget.txt", b"line items", "text/plain")}, headers=headers("ana-test"))
+    assert sent.status_code == 200, sent.text
+    message = sent.json()["message"]
+    assert message["body"] == "Budget draft" and message["refs"]["attachments"][0]["name"] == "budget.txt"
+    assert sent.json()["thread"]["id"] == thread["id"]
+    assert any(m.get("id") == message["id"] for m in message_in(api, thread["id"], token="ben-test"))
+    stranger = api.post(f"/api/v2/uploads/threads/{thread['id']}/messages", data={"text": "x"},
+                        files={"files": ("x.txt", b"x", "text/plain")}, headers=headers("cara-test"))
+    assert stranger.status_code == 404
+
+
+def test_a_thread_view_carries_its_first_page_of_members(api):
+    thread = new_thread(api, members=("human:ben", "human:cara"))
+    page = get_thread(api, thread["id"], token="ana-test").json()["members"]
+    assert {"human:ben", "human:cara"} <= {m["actor"] for m in page["members"]}
+    assert "next_cursor" in page
+
+
+def bot_rows(api, token):
+    body = api.get("/api/employees", headers=headers(token)).json()
+    rows = body if isinstance(body, list) else body["employees"]
+    return {r["name"]: r for r in rows if "my_access" in r}
+
+
+def test_the_people_list_says_my_access_with_see_read_write_and_manage(api):
+    set_bot_access(api, "ops", {"people": ["cara"]}, {"people": ["cara"]}, {"people": ["cara"]})
+    cara = bot_rows(api, "cara-test")
+    assert cara["ops"]["my_access"] == {"see": True, "read": True, "write": True, "manage": False}
+    assert "inbox" not in cara                                          # the mail bot is Ana's alone
+    assert bot_rows(api, "ana-test")["ops"]["my_access"]["manage"] is True

@@ -152,6 +152,10 @@ KEEP = frozenset((
     "brand_drafts", "brand_versions", "gtm_drafts", "gtm_versions", "gtm_sources", "growth_channels", "growth_ideas",
     "growth_idea_channels", "growth_cohorts", "growth_settings", "growth_segments", "growth_channel_segments",
     "growth_idea_segments",
+    # Native threads (backend/threads.py) and teammate permissions (backend/teammate_access.py). A delivery to an
+    # outside destination that has not gone is made moot below, so the copy never sends it.
+    "message_deliveries", "message_mentions", "message_reactions", "message_revisions", "sequences",
+    "teammate_accesses", "thread_followers", "thread_members",
 ))
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
@@ -359,9 +363,13 @@ def prune(c, days, keep_automations=False):
                 touched.add(child)
                 frontier.add(child)
     if "messages" in present:
-        for table in ("message_links", "message_links_dirty", "message_links_seen"):
+        for table in ("message_links", "message_links_dirty", "message_links_seen", "message_deliveries",
+                      "message_mentions", "message_reactions", "message_revisions"):
             if table in present:
                 delete(table, "message_id NOT IN (SELECT id FROM messages)")
+    if "message_deliveries" in present:
+        c.execute("UPDATE message_deliveries SET state='moot' WHERE state IN ('pending','capped','held') "
+                  "AND (recipient LIKE 'slack:%' OR recipient LIKE 'peer:%')")
     return {t: n for t, n in removed.items() if n}
 
 

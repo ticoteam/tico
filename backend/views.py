@@ -362,7 +362,11 @@ def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
     # This chat's turns continue the bot's thread every direct chat shares: the next turn of any of them
     # starts a new one, while each other chat keeps its own history.
     from .shared_bots import follow
-    if sessions.session_key(follow(c, bot, cfg), bot, None, conversation_id) == sessions.BOT_THREAD:
+    from . import threads
+    room = threads.thread_row(c, conversation_id) or {}
+    key = sessions.session_key(follow(c, bot, cfg), bot, None, conversation_id, room.get("root_id") or conversation_id,
+                               "private" if threads.private_task_thread(c, room) else threads.audience_class(room))
+    if key in (sessions.BOT_THREAD, sessions.PUBLIC_THREAD):
         bump_bot_session_epoch(c, bot)
     H.event(c, actor, "session.clear", conversation_id, detail)
     # A new session is said in the task's history: a task room's own, or the task of the run that failed (run_triggers).
@@ -2046,6 +2050,10 @@ def install_views(app, store, auth, mutate, task_view):
             latest_models[slug] = (family, ", ".join(providers.MODEL_BY_ID.get(model, {}).get("label") or model for model in models))
         rows = []
         access = auth.bot_accesses(c, who)
+        # The viewer's own access to each bot, {see, read, write, manage}, from the teammate rules in one pass (the
+        # `my_access` a row shows). The gates below still read `access`, which applies the same rules.
+        from . import teammate_access
+        mine = teammate_access.levels_many(c, who, ["bot:" + bot["slug"] for bot in bots], auth=auth)
         # What the loop reads per bot, read for every bot at once: its computer, its open and doing tasks, and its
         # declared configuration from the rows above.
         shown = [bot["slug"] for bot in bots if bot.get("state") != "archived"
@@ -2090,6 +2098,7 @@ def install_views(app, store, auth, mutate, task_view):
         for bot in bots:
             slug = bot["slug"]
             level = access.get(slug, auth.FULL)
+            mine_level = mine.get("bot:" + slug) or {**level, "manage": False}
             if bot.get("state") == "archived" or not level["see"]:
                 continue
             registry = registries.get(slug)
@@ -2110,7 +2119,7 @@ def install_views(app, store, auth, mutate, task_view):
                     reports = ""
                 rows.append({"name": slug, "display_name": bot["display_name"], "state": bot["state"],
                              "status": bot["state"], "description": (configs.get(slug, {}) or {}).get("description") or "",
-                             "reports_to": reports, "my_access": level, **policy,
+                             "reports_to": reports, "my_access": mine_level, **policy,
                              "private_tasks_default": H.private_tasks_default(c, "bot:" + slug, declared),
                              "team": P.team_of(slug, configs, people),
                              "org_parent": P.org_parent("bot", slug, people, chart, archived, bare),
@@ -2169,7 +2178,7 @@ def install_views(app, store, auth, mutate, task_view):
                          # What Settings and the branch editor show and pick from (backend/wake_presets.py).
                          "wake": wake_presets.effective(config),
                          "profile": profiles.effective(config),
-                         "my_access": level, **policy,
+                         "my_access": mine_level, **policy,
                          "can_chat": level["write"] and slug not in (auth.settings.assistant_bot, STRATEGY_BOT),
                          # Onboarding or Active, and whether this person may mark onboarding complete (backend/lifecycle.py).
                          "stage": lifecycle.stage(config.get("onboarding_state")),
