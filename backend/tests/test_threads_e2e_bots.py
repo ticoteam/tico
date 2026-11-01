@@ -6,7 +6,7 @@ remote browser and runner journeys (scripts/remote.py --setup rust); these tests
 """
 
 from backend.tests.test_api import api, claim, assign, post, ready, runner  # noqa: F401  (the api fixture)
-from backend.tests.threads_e2e import (HOME_ROUTE, call, create_thread, ok, read_status, require_threads_api,
+from backend.tests.threads_e2e import (call, create_thread, home_id, ok, read_status, require_threads_api,
                                        say, timeline)
 
 
@@ -29,7 +29,7 @@ def finish(api, r, attempt, text):
 
 
 def home_of(api, slug, token="ana-test"):
-    return ok(call(api, "GET", HOME_ROUTE.format(slug=slug), token))["id"]
+    return home_id(api, slug)
 
 
 def test_a_bot_answers_in_the_sub_thread_it_was_asked_in_and_nowhere_else(api):
@@ -40,13 +40,24 @@ def test_a_bot_answers_in_the_sub_thread_it_was_asked_in_and_nowhere_else(api):
     asked = say(api, "ana-test", t["id"], "@cpo list the risks", parent_message_id=m["id"])
     attempt = claim(api, r, "cpo")
     assert attempt is not None, "a mention in a sub-thread wakes the bot"
-    assert attempt["message"]["id"] == asked["id"]
+    # A mention without `to` wakes the bot through a keeper carrier that names the message (contract 4.4): the run
+    # starts from the carrier, and the carrier carries the asked message.
+    woke = attempt["message"]
+    assert ((woke.get("refs") or {}).get("carries") or woke["id"]) == asked["id"], woke
     finish(api, r, attempt, "Risks: pricing, timing")
     rows = timeline(api, "ana-test", t["id"])
-    reply = next(row for row in rows if row["body"] == "Risks: pricing, timing")
-    assert reply["thread_id"] == asked["thread_id"], "the reply stays in the sub-thread that asked"
-    assert reply["depth"] == 1, "the reply is shown under its parent, indented"
-    assert [row["body"] for row in rows if row["depth"] == 0] == ["Kickoff notes"]
+    parent = next(row for row in rows if row["id"] == m["id"])
+    sub_id = parent["sub_thread"]["id"]
+    assert sub_id == asked["thread_id"], "the parent's summary points at the sub-thread the question went into"
+    replies = timeline(api, "ana-test", sub_id)
+    reply = next((row for row in replies if row.get("body") == "Risks: pricing, timing"), None)
+    assert reply is not None, ("the answer never reached the sub-thread; it holds "
+                               f"{[row.get('body') for row in replies]}")
+    assert reply["thread_id"] == sub_id, "the answer lands in the sub-thread that asked"
+    assert "depth" in reply, "every timeline message carries depth (contract 10)"
+    assert parent["sub_thread"]["count"] == len(replies), "the parent's summary counts the sub-thread's messages"
+    assert "Risks: pricing, timing" not in [row.get("body") for row in rows], "the root shows the answer only via the summary"
+    assert [row["body"] for row in rows] == ["Kickoff notes"]
 
 
 def test_a_mention_in_a_bots_home_wakes_it_once_for_that_message(api):
@@ -78,8 +89,9 @@ def test_the_loop_guard_stops_bots_pinging_each_other_and_a_person_resumes_them(
     # TICO_THREAD_LOOP_GUARD): the first run plus six bot-caused runs, and then the guard holds the rest.
     assert 1 <= runs <= 7, f"the loop ran {runs} times"
     assert claim(api, r, "cpo") is None and claim(api, r, "product-design") is None
-    needs = ok(call(api, "GET", "needs-you", "ana-test"))
-    assert t["id"] in str(needs), "the capped thread is one Needs-you item for its owner"
+    # The sidebar's `attention` is the Needs-you list for threads: it names each root with capped wakes (contract 4.5, 10).
+    attention = ok(call(api, "GET", "threads", "ana-test"))["attention"]
+    assert [row["root_id"] for row in attention if row.get("root_id") == t["id"]] == [t["id"]], attention
     say(api, "ana-test", t["id"], "@cpo carry on")
     assert claim(api, r, "cpo") is not None, "a person's message resumes the deferred wakes"
 

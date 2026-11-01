@@ -7,7 +7,7 @@ and SSE renderings in core's privacy fixture; these tests check the API a sideba
 """
 
 from backend.tests.test_api import api, restrict  # noqa: F401  (the api fixture)
-from backend.tests.threads_e2e import (HOME_ROUTE, add_member, call, can_read, create_thread, make_group, ok,
+from backend.tests.threads_e2e import (add_member, home_id, call, can_read, create_thread, make_group, ok,
                                        read_status, remove_member, require_threads_api, say, search_ids, sidebar_ids,
                                        timeline)
 
@@ -90,9 +90,9 @@ def test_a_person_without_a_bots_access_cannot_open_its_home(api):
         restrict(c, "cpo", see={"everyone": True, "people": [], "teams": [], "bots": []},
                  read={"everyone": False, "people": ["ana"], "teams": [], "bots": []},
                  write={"everyone": False, "people": ["ana"], "teams": [], "bots": []})
-    home = call(api, "GET", HOME_ROUTE.format(slug="cpo"), "ana-test")
+    thread_id = home_id(api, "cpo")
+    home = call(api, "GET", f"threads/{thread_id}", "ana-test")
     assert home.status_code == 200, "the owner reads the bot's Home: " + home.text
-    thread_id = home.json()["id"]
     assert read_status(api, "cara-test", thread_id) == 404
     assert thread_id not in sidebar_ids(api, "cara-test")
 
