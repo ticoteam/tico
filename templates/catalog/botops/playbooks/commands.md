@@ -2,7 +2,7 @@
 
 Use these instead of sending a human to a settings page. Commands use the requester's rights directly.
 
-- The commands are `hub api`, `hub bot place|go-live|model|access|owners|pause|resume`, `hub routine update --enable|--disable`,
+- The commands are `hub api`, `hub bot place|go-live|model|access|owners|pause|resume`, `hub automation update --enable|--disable`,
   `hub human add`, `hub tool add|update`, `hub credential request|set|list|grant|revoke|import|delete`, `hub computer list`,
   `hub bot archive|restore`, `hub bot copy|update-from-original|suggest-to-original`, `hub skill copy`,
   `hub agent pair approve|decline`, `hub slack channel add|list|remove|import`.

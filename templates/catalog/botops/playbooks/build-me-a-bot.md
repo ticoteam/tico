@@ -34,7 +34,7 @@ not waiting on it. The human reads one message at the end.
    as far as it can without it, and it is a follow-up in the report.
 4. **Who sees it.** Default is everyone. If they said otherwise, `hub bot access <slug> ...` now. Do
    not ask a question they did not raise.
-5. **Verify the live Routines.** Read them as the requester with `hub routine list --bot <slug>`.
+5. **Verify the live Routines.** Read them as the requester with `hub automation list --owner bot:<slug>`.
    Apply the requested schedule, disable unrelated template Routines, and read back each title,
    timing, time zone and enabled state. A local `bot.yaml` edit does not prove the live schedule
    changed. For an explicit no-schedule request, disable all Routines and pass `routines: []` to
@@ -92,7 +92,7 @@ off) happen at once, and each can be undone from Settings > Bots history.
   The bot's own repository stays write. If a requested repository is not ticked, tick it with
   `hub_repo_update` as the requester, then verify again. A Tool declaration (`hub tool update`,
   `tools:`) describes allowed actions separately; changing it does not grant repository access.
-- "Turn off the Monday routine": `hub routine update <key> --disable --bot <bot>`.
+- "Turn off the Monday routine": `hub automation update <id> --disable` (the id from `hub automation list --owner bot:<bot>`).
 - "Pause X": `hub bot pause <bot>`. "Why isn't X live?": `hub health check`, then fix or explain.
 - "Delete X" or "remove X": `hub bot archive <bot>`. Say that its history stays. A repository is
   separate: delete one only when asked, with `hub api DELETE github/repos/<owner>/<repo>` using the

@@ -6,7 +6,7 @@ a file, a status page. One watcher per task. Budget 30 minutes. The outcome is a
 
 A watcher is a program Tico runs on the bot's computer on a schedule (docs/watchers.md). It costs no model tokens. It
 looks, and only when it finds something new does it print an event, which opens a task for the bot or adds a note to one.
-Use a routine (`hub routine set`) when the bot should think on a schedule; use a watcher when the bot should think only when
+Use a routine (`hub automation create`) when the bot should think on a schedule; use a watcher when the bot should think only when
 something happened.
 
 ---

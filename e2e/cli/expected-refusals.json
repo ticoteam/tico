@@ -9,6 +9,7 @@
  "approval request": "lint",
  "approval show": "not_found",
  "assistant propose": "operation",
+ "automation create": "file",
  "bot branch": "not_found",
  "bot copy": "forbidden",
  "bot go-live": "no_computer",

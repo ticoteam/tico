@@ -12,7 +12,7 @@ slack_channel: "#agents"
 # Outbound sends (email, DMs, posts, calendar invites to anyone outside the team) are off
 # until an owner sets this true. Drafts go on the task instead.
 outbound_send: false
-# Routines are rows in Tico, not lines here: `hub routine set <key> --title... --cron...`
+# Routines are rows in Tico, not lines here: `hub automation create --file <flow.json>`
 # from a run, or the bot's Routines card on the site (docs/routines.md).
 # What this bot may touch. Shown in the Tico app. Not listed = not allowed. See Tico policies/access.md.
 # tools:

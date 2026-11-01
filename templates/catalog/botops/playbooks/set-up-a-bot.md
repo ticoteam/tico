@@ -44,7 +44,7 @@ human asked for the bot in chat, it also registers the bot with the server as th
 them an owner (`playbooks/build-me-a-bot.md`); for a task with no human behind it, the owner registered
 it already.
 Read what it produced before you change anything: the template is a starting point, not the
-answer. From here on a routine is changed with `hub routine set`, not by editing the file.
+answer. From here on a routine is changed with `hub automation update`, not by editing the file.
 
 ## 3. Put the real instructions in
 
