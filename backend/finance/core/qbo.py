@@ -170,7 +170,9 @@ def project_record(row: dict[str, Any]) -> M.Project:
 
 
 def _is_job(row: Mapping[str, Any]) -> bool:
-    return str(row.get("Job", False)).lower() == "true"
+    """A customer is a project when it is a job (a sub-customer with Job set) or a project made in the QuickBooks UI
+    (IsProject, read when the provider sends it)."""
+    return str(row.get("Job", False)).lower() == "true" or str(row.get("IsProject", False)).lower() == "true"
 
 
 def journal_record(row: dict[str, Any]) -> M.Journal:

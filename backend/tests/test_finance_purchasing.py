@@ -1,17 +1,21 @@
 """Purchase orders and estimates: an approved order holds its unbilled lines, a bill takes over the part it bills,
 billing the rest closes the order, closing or voiding releases what is held, a large order asks the owner, and an
 accepted estimate becomes one invoice draft once (a declined one never does)."""
+import pytest
+
 from backend import hubdb as H
 from backend.finance import actions as FA
+from backend.finance import reads as FR
 from backend.finance.core import qbo as Q
+from backend.finance.core.errors import FinanceError
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, OWNER, account, act, books, budget, finance_template, store)
+    AT, OWNER, FakeMercury, account, act, books, budget, connect, finance_template, store)
 
 EVE = "human:eve"
 
 
-def _vendor(c, name="Acme Supplies") -> str:
-    made = act(c, OWNER, "contact_create", {"name": name, "kind": "vendor"})
+def _vendor(c, name="Acme Supplies", **more) -> str:
+    made = act(c, OWNER, "contact_create", {"name": name, "kind": "vendor", **more})
     assert made.status == "committed", made
     return str(made.result["contact_id"])
 
@@ -157,6 +161,81 @@ def test_a_large_order_asks_the_owner_and_the_owner_approval_runs_it(books):
         assert _status(c, small) == ("approved", "") and _state(c) == (0, 200_000, 300_000)
 
 
+def _budget_at(c, amount, at_limit) -> None:
+    made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": amount,
+                                           "at_limit": at_limit, "parent_id": None})
+    assert made.status == "committed", made
+
+
+def test_an_order_past_a_warn_budget_is_held_and_warns(books):
+    with books.transaction() as c:
+        _budget_at(c, 50_000, "warn")
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 80_000)])
+        assert _status(c, po) == ("approved", "") and _state(c) == (0, 80_000, -30_000)
+        assert c.execute("SELECT COUNT(*) FROM fin_events WHERE name='finance.budget.warn'").fetchone()[0] == 1
+
+
+def test_an_order_past_an_ask_budget_asks_a_finance_admin_and_holds_once_approved(books):
+    with books.transaction() as c:
+        _budget_at(c, 50_000, "ask")
+        assert act(c, OWNER, "right_grant", {"teammate": EVE, "right": "finance.ap"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": EVE, "what": "everything", "whose": "company"}).status == \
+            "committed"
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 80_000)], who=EVE, approve=False)
+        assert act(c, EVE, "po_send", {"po_id": po}).status == "committed"
+        asked = act(c, EVE, "po_approve", {"po_id": po})
+        assert asked.status == "needs_approval", asked
+        assert _status(c, po) == ("sent", "") and _state(c) == (0, 0, 50_000)
+        H.approval_decide(c, str(asked.approver), str(asked.approval_id), "approved")
+        done = FA.approval_decided(c, str(asked.approval_id), AT)
+        assert done is not None and done.status == "committed", done
+        assert _status(c, po) == ("approved", "") and _state(c) == (0, 80_000, -30_000)
+
+
+def test_an_order_past_a_decline_budget_is_refused_with_the_reason(books):
+    with books.transaction() as c:
+        _budget_at(c, 50_000, "decline")
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 80_000)], approve=False)
+        assert act(c, OWNER, "po_send", {"po_id": po}).status == "committed"
+        refused = act(c, OWNER, "po_approve", {"po_id": po})
+        assert refused.status == "denied" and "Software" in str(refused.reason), refused
+        assert _status(c, po) == ("sent", "") and _state(c) == (0, 0, 50_000)
+
+
+def test_an_order_past_a_hold_payment_budget_is_held_and_its_bill_waits_to_be_paid(books):
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        _budget_at(c, 50_000, "hold_payment")
+        money = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+        rid = str(act(c, OWNER, "recipient_add", {"name": "Acme Supplies", "method": "ach",
+                                                  "account_number": "000099998888",
+                                                  "routing_number": "000000000"}).result["recipient_id"])
+        vendor = _vendor(c, recipient_id=rid)
+        po = _order(c, vendor, [_line(c, 80_000)])
+        assert _status(c, po) == ("approved", "") and _state(c) == (0, 80_000, -30_000)
+        billed = _bill(c, vendor, [{"po_line_id": _po_lines(c, po)[0], "amount": 80_000}])
+        assert billed.status == "committed", billed
+        assert act(c, OWNER, "bill_approve", {"bill_id": billed.result["bill_id"]}).status == "committed"
+        paid = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 80_000, "money_account_id": money,
+                                                "obligation": f"bill:{billed.result['bill_id']}",
+                                                "account_id": account(c, "2000")})
+        assert paid.status == "denied" and "waits until it fits" in str(paid.reason), paid
+
+
+def test_an_order_no_budget_covers_is_approved_and_reports_it_not_held(books):
+    with books.transaction() as c:
+        c.execute("UPDATE fin_budgets SET active=0")
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 40_000)], approve=False)
+        assert act(c, OWNER, "po_send", {"po_id": po}).status == "committed"
+        approved = act(c, OWNER, "po_approve", {"po_id": po})
+        assert approved.status == "committed" and approved.result.get("not_held"), approved
+        assert _status(c, po) == ("approved", "")
+
+
 def test_an_estimate_becomes_one_invoice_draft_once_and_a_declined_one_never_does(books):
     with books.transaction() as c:
         customer = str(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}).result["contact_id"])
@@ -184,6 +263,44 @@ def test_an_estimate_becomes_one_invoice_draft_once_and_a_declined_one_never_doe
         refused = act(c, OWNER, "estimate_convert", {"estimate_id": str(declined)})
         assert refused.code == "conflict" and "declined" in refused.reason, refused
         assert c.execute("SELECT COUNT(*) FROM fin_invoices").fetchone()[0] == 1
+
+
+def test_an_estimate_line_keeps_its_taxable_flag_onto_the_invoice(books):
+    with books.transaction() as c:
+        customer = str(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}).result["contact_id"])
+        made = act(c, OWNER, "estimate_create", {"customer_id": customer, "estimate_date": "2026-10-10", "lines": [
+            {"account_id": account(c, "4000"), "amount": 90_000, "taxable": True},
+            {"account_id": account(c, "4000"), "amount": 10_000, "taxable": False}]})
+        assert made.status == "committed", made
+        eid = str(made.result["estimate_id"])
+        assert [tuple(r) for r in c.execute("SELECT amount, taxable FROM fin_estimate_lines ORDER BY amount")] == \
+            [(10_000, 0), (90_000, 1)]
+        for kind in ("estimate_send", "estimate_accept"):
+            assert act(c, OWNER, kind, {"estimate_id": eid}).status == "committed"
+        assert act(c, OWNER, "estimate_convert", {"estimate_id": eid}).status == "committed"
+        assert [tuple(r) for r in c.execute("SELECT amount, taxable FROM fin_invoice_lines ORDER BY amount")] == \
+            [(10_000, 0), (90_000, 1)]
+
+
+def test_orders_and_estimates_read_behind_the_finance_right_and_the_view(books):
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 40_000)])
+        customer = str(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}).result["contact_id"])
+        eid = str(act(c, OWNER, "estimate_create", {"customer_id": customer, "estimate_date": "2026-10-10", "lines": [
+            {"account_id": account(c, "4000"), "amount": 9_000, "taxable": False}]}).result["estimate_id"])
+        with pytest.raises(FinanceError) as refused:
+            FR.orders(c, EVE)
+        assert refused.value.code == "denied"
+        for right in ("finance.ap", "finance.ar"):
+            assert act(c, OWNER, "right_grant", {"teammate": EVE, "right": right}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": EVE, "what": "everything", "whose": "company"}).status == \
+            "committed"
+        assert [o["id"] for o in FR.orders(c, EVE, status="approved")["orders"]] == [po]
+        assert FR.order(c, EVE, po)["lines"][0]["amount"] == 40_000
+        assert [e["id"] for e in FR.estimates(c, EVE)["estimates"]] == [eid]
+        assert FR.estimate(c, EVE, eid)["lines"][0]["taxable"] is False
+        assert [r["id"] for r in FR.search(c, EVE, kind="po")["results"]] == [po]
 
 
 def test_an_estimate_sent_by_a_teammate_asks_the_owner(books):

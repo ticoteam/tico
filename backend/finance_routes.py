@@ -259,6 +259,34 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.bill(c, actor, bill_id))
 
+    @app.get("/api/v2/finance/purchase-orders")
+    def finance_purchase_orders(request: Request, status: str | None = Query(None, max_length=80),
+                                vendor_id: str | None = Query(None, max_length=80),
+                                limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+        """Purchase orders the caller sees (payables), newest first. `status` takes draft|sent|approved|partial|closed|void."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.orders(c, actor, status=status, vendor_id=vendor_id, limit=limit))
+
+    @app.get("/api/v2/finance/purchase-orders/{po_id}")
+    def finance_purchase_order(request: Request, po_id: ID, view_as: str | None = None):
+        """One purchase order with its lines and what each line has billed."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.order(c, actor, po_id))
+
+    @app.get("/api/v2/finance/estimates")
+    def finance_estimates(request: Request, status: str | None = Query(None, max_length=80),
+                          customer_id: str | None = Query(None, max_length=80),
+                          limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+        """Estimates the caller sees (receivables), newest first. `status` takes draft|sent|accepted|declined|invoiced."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.estimates(c, actor, status=status, customer_id=customer_id, limit=limit))
+
+    @app.get("/api/v2/finance/estimates/{estimate_id}")
+    def finance_estimate(request: Request, estimate_id: ID, view_as: str | None = None):
+        """One estimate with its lines; each line says whether it is taxable."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.estimate(c, actor, estimate_id))
+
     @app.get("/api/v2/finance/invoices")
     def finance_invoices(request: Request, status: str | None = Query(None, max_length=80),
                          customer_id: str | None = Query(None, max_length=80), q: str = Query("", max_length=100),
@@ -371,7 +399,7 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/finance/search")
     def finance_search(request: Request,
                        kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "place",
-                                     "project"] | None = None,
+                                     "project", "po", "estimate"] | None = None,
                        q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
                        vendor: str | None = Query(None, max_length=120),
                        contact_id: str | None = Query(None, max_length=80),

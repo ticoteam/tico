@@ -87,3 +87,24 @@ def claim_invoice(c: sqlite3.Connection, estimate_id: str, invoice_id: str, at: 
     """Link an accepted estimate to the invoice made from it. Only an estimate not yet invoiced takes the link."""
     return c.execute("UPDATE fin_estimates SET status='invoiced', invoice_id=?, updated_at=? "
                      "WHERE id=? AND status='accepted' AND invoice_id IS NULL", (invoice_id, at, estimate_id)).rowcount
+
+
+CONTACT = {"po": "vendor_id", "estimate": "customer_id"}
+HEAD = {"po": "fin_purchase_orders", "estimate": "fin_estimates"}
+DATED = {"po": "po_date", "estimate": "estimate_date"}
+
+
+def listing(c: sqlite3.Connection, kind: str, *, book_id: str, status: str, contact_id: str,
+            most: int) -> list[sqlite3.Row]:
+    """A book's orders or estimates, newest first, with the contact's name; a status or contact narrows them."""
+    table, contact, dated = HEAD[kind], CONTACT[kind], DATED[kind]
+    return c.execute(f"SELECT d.*, k.name AS contact_name FROM {table} d JOIN fin_contacts k ON k.id = d.{contact} "
+                     f"WHERE d.book_id=? AND (?='' OR d.status=?) AND (?='' OR d.{contact}=?) "
+                     f"ORDER BY d.{dated} DESC, d.created_at DESC LIMIT ?",
+                     (book_id, status, status, contact_id, contact_id, most)).fetchall()
+
+
+def head(c: sqlite3.Connection, kind: str, doc_id: str) -> sqlite3.Row | None:
+    """One order or estimate with its contact's name."""
+    return c.execute(f"SELECT d.*, k.name AS contact_name FROM {HEAD[kind]} d JOIN fin_contacts k "
+                     f"ON k.id = d.{CONTACT[kind]} WHERE d.id=?", (doc_id,)).fetchone()

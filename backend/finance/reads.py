@@ -12,6 +12,7 @@ from typing import Any, cast
 
 from ..records import reads as RR
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
+from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
 from . import closing as CL
 from . import context as _context
 from .store import usage as SU
@@ -1258,7 +1259,8 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 
 
 # ------------------------------------------------------------------------------------------------ search
-SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "place", "project")
+SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "place", "project", "po",
+              "estimate")
 RECORD_KINDS = {"item": "rec_items", "place": "rec_places", "project": "rec_projects"}
 SEARCH_EACH = 10            # results per kind when no kind is named
 
@@ -1332,6 +1334,16 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                 results += [{**r, "label": str(r.get("counterparty") or r.get("description") or r.get("account") or "")}
                             for r in rows]
                 nxt = cast(str | None, found["next"])
+            elif k == "po":
+                listed = orders(c, viewer, status=_filter(f, "status"), vendor_id=_filter(f, "contact_id"),
+                                limit=most, at=at)
+                results += [cast(Row, {**r, "label": f"{cast(Mapping[str, object], r['contact'])['name']} "
+                                                     f"{r['number']}"}) for r in listed["orders"]]
+            elif k == "estimate":
+                listed = estimates(c, viewer, status=_filter(f, "status"), customer_id=_filter(f, "contact_id"),
+                                   limit=most, at=at)
+                results += [cast(Row, {**r, "label": f"{cast(Mapping[str, object], r['contact'])['name']} "
+                                                     f"{r['number']}"}) for r in listed["estimates"]]
             elif k in ("bill", "invoice"):
                 if not tab_ap.sees_side(ctx, view, k):
                     continue

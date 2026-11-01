@@ -8,6 +8,7 @@ from . import budgeting
 from . import documents as DOC
 from .context import Ctx
 from .core import ap as AP
+from .core import budgets as B
 from .core import kinds as K
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
@@ -17,7 +18,6 @@ from .store import banking as SK
 from .store import ledger as SL
 from .store import purchasing as SP
 
-PO_ASK_OVER = 100_000        # minor units: an order over $1,000 asks the owner, as a payment over that amount does
 OPEN_ORDER = ("approved", "partial")
 
 
@@ -34,22 +34,25 @@ def _row(ctx: Ctx, table: str, row_id: str, what: str) -> Any:
 
 def _lines_of(ctx: Ctx, kind: str, parent_id: str) -> list[AP.DocLine]:
     return [AP.DocLine(str(r["account_id"]), int(r["amount"]), str(r["description"]),
-                       cast(dict[str, str], SK.loads(r["tags_json"])), None, str(r["item_id"] or ""))
+                       cast(dict[str, str], SK.loads(r["tags_json"])),
+                       None if kind != "estimate" or r["taxable"] is None else bool(r["taxable"]),
+                       str(r["item_id"] or ""))
             for r in SP.lines(ctx.c, kind, parent_id)]
 
 
-def _plain_lines(raw: object) -> list[AP.DocLine]:
-    """Order and estimate lines: a bill line's po_line_id has no meaning here, so it is refused rather than dropped."""
-    lines = AP.doc_lines(raw)
+def _plain_lines(raw: object, *, invoice: bool = False) -> list[AP.DocLine]:
+    """Order and estimate lines: a bill line's po_line_id has no meaning here, so it is refused rather than dropped. An
+    estimate's lines are an invoice's, so they say whether they are taxable."""
+    lines = AP.doc_lines(raw, invoice=invoice)
     if any(x.po_line_id for x in lines):
         raise invalid("a line names a purchase order line only on a bill")
     return lines
 
 
-def _line_rows(lines: Sequence[AP.DocLine], who: str, at: str) -> list[dict[str, object]]:
+def _line_rows(lines: Sequence[AP.DocLine], who: str, at: str, *, invoice: bool = False) -> list[dict[str, object]]:
     return [{"account_id": x.account_id, "item_id": x.item_id or None, "amount": x.amount,
-             "description": x.description, "tags_json": SK.dump(dict(x.tags)), "created_at": at, "created_by": who}
-            for x in lines]
+             "description": x.description, "tags_json": SK.dump(dict(x.tags)), "created_at": at, "created_by": who,
+             **({"taxable": None if x.taxable is None else int(x.taxable)} if invoice else {})} for x in lines]
 
 
 def _visible(ctx: Ctx, who: str, lines: Sequence[AP.DocLine]) -> None:
@@ -63,10 +66,10 @@ def _release(ctx: Ctx, po_id: str, lines: Sequence[Any]) -> None:
         budgeting.release_for(ctx, "purchase_order", f"{po_id}:{int(line['line_no'])}")
 
 
-def _settle(ctx: Ctx, who: str, po_id: str) -> list[str]:
+def _settle(ctx: Ctx, who: str, po_id: str, force: bool = False) -> list[str]:
     """Bring an order's holds and status up to date with its bills. While it is open each line holds what is still
     unbilled; a closed, voided or draft order holds nothing. Billed in part makes it partial; billed in full closes it.
-    Returns why a hold was not placed (the budget at its limit)."""
+    Returns why a hold was not placed (no budget covers the line, or the budget is at its limit)."""
     po = SP.get(ctx.c, "fin_purchase_orders", po_id)
     lines = SP.lines(ctx.c, "po", po_id)
     status, closed_by = str(po["status"]), str(po["closed_by"])
@@ -95,9 +98,9 @@ def _settle(ctx: Ctx, who: str, po_id: str) -> list[str]:
         d = budgeting.place(ctx, budget_scope={"account_id": account.id, **DOC.scope_tags(tags),
                                                "vendor": str(po["vendor_id"])},
                             amount=left, currency=ctx.book.base_currency, source="purchase_order",
-                            source_id=f"{po_id}:{int(line['line_no'])}", expires_at=None, by=who)
-        if not d.allowed:
-            refused.append(d.reason)
+                            source_id=f"{po_id}:{int(line['line_no'])}", expires_at=None, by=who, force=force)
+        if not d.allowed or d.hold_id is None:
+            refused.append(d.reason or "no budget covers this spend")
     return refused
 
 
@@ -187,6 +190,30 @@ def po_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     return Plan(K.default_gate(ctx.org, who, "po_send"), f"Mark purchase order {po['number']} sent", apply)
 
 
+def _budget_gate(ctx: Ctx, po: Any, lines: Sequence[Any]) -> K.Gate:
+    """What the budgets the order's expense lines meet ask of approving it, the check a card or a bill makes:
+    decline refuses the order, ask routes it to a finance admin, and warn or hold_payment goes ahead (approval holds
+    the spend; a hold_payment bill waits for its payment)."""
+    budgets = ctx.budgets()
+    worst: tuple[int, str, str] = (-1, "", "")
+    for line in lines:
+        account = ctx.accounts.get(str(line["account_id"] or ""))
+        if account is None or account.type != "expense":
+            continue
+        tags = cast(dict[str, str], SK.loads(line["tags_json"]))
+        d = budgeting.would_place(ctx, budget_scope={"account_id": account.id, **DOC.scope_tags(tags),
+                                                     "vendor": str(po["vendor_id"])}, amount=int(line["amount"]))
+        if d is None or d.action in ("ok", "warn"):
+            continue
+        if B.STRICTNESS[d.action] > worst[0]:
+            worst = (B.STRICTNESS[d.action], d.action, d.limit_budget)
+    if worst[1] == "decline":
+        raise denied(f"it does not fit the {budgets[worst[2]].name} budget")
+    if worst[1] == "ask":
+        return K.Gate("needs_approval", "finance_admin", f"budget:{worst[2]}")
+    return K.ALLOW
+
+
 def po_approve(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Approve a draft or sent order: its unbilled lines hold budget. Approving an order again changes nothing."""
     V.only(p, ("po_id",))
@@ -203,16 +230,16 @@ def po_approve(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     _visible(ctx, who, lines)
     total = int(po["total"])
     vendor = SAP.get(ctx.c, "fin_contacts", str(po["vendor_id"]))
-    gate = K.default_gate(ctx.org, who, "po_approve")
-    if total > PO_ASK_OVER:
-        gate = K.Gate("needs_approval", "owner", "default:po-over-threshold")
+    gate = _budget_gate(ctx, po, SP.lines(ctx.c, "po", po_id))
+    if gate.outcome == "allow":
+        gate = K.default_gate(ctx.org, who, "po_approve")
 
     def apply(aid: str) -> Result:
         if SP.update(ctx.c, "fin_purchase_orders", po_id,
                      {"status": "approved", "approved_by": who, "approved_at": ctx.at, "updated_at": ctx.at},
                      "status IN ('draft','sent')") != 1:
             raise FinanceError(CONFLICT, "that order moved on")
-        refused = _settle(ctx, who, po_id)
+        refused = _settle(ctx, who, po_id, force=True)
         out: Result = {"po_id": po_id, "status": "approved"}
         if refused:
             out["not_held"] = refused
@@ -269,7 +296,7 @@ def estimate_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("customer_id", "number", "estimate_date", "memo", "lines"))
     customer = DOC.contact_for(ctx, V.text(p, "customer_id", 80), "invoice")
     day = V.day(p, "estimate_date")
-    lines, _ = DOC.resolve_lines(ctx, who, "invoice", customer, _plain_lines(p.get("lines")))
+    lines, _ = DOC.resolve_lines(ctx, who, "invoice", customer, _plain_lines(p.get("lines"), invoice=True))
     number = V.opt_text(p, "number", 80) or SP.next_number(ctx.c, "fin_estimates", ctx.book.id, "EST")
     if SP.number_taken(ctx.c, "fin_estimates", ctx.book.id, number):
         raise FinanceError(CONFLICT, f"estimate {number} exists")
@@ -281,7 +308,7 @@ def estimate_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "id": eid, "book_id": ctx.book.id, "customer_id": str(customer["id"]), "number": number,
             "estimate_date": day, "status": "draft", "currency": ctx.book.base_currency, "total": total,
             "memo": V.opt_text(p, "memo", 500) or "", "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
-        SP.insert_lines(ctx.c, "estimate", eid, _line_rows(lines, who, ctx.at))
+        SP.insert_lines(ctx.c, "estimate", eid, _line_rows(lines, who, ctx.at, invoice=True))
         return {"estimate_id": eid, "number": number, "status": "draft", "total": total}
     return Plan(K.default_gate(ctx.org, who, "estimate_create"),
                 f"Draft estimate {number} for {_money(total)} {ctx.book.base_currency} to {customer['name']}"[:200],
@@ -347,7 +374,8 @@ def estimate_convert(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     inner = DOC.invoice_create(ctx, who, {
         "customer_id": str(est["customer_id"]), "invoice_date": ctx.today, "memo": str(est["memo"] or ""),
         "lines": [{"account_id": x.account_id, "item_id": x.item_id, "amount": x.amount,
-                   "description": x.description, "tags": dict(x.tags)} for x in lines]})
+                   "description": x.description, "tags": dict(x.tags),
+                   **({"taxable": x.taxable} if x.taxable is not None else {})} for x in lines]})
 
     def apply(aid: str) -> Result:
         out = inner.apply(aid)

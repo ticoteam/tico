@@ -7859,7 +7859,7 @@ export type SearchFinanceParams = {
   contact_kind?: "vendor" | "customer" | "both" | null;
   cursor?: string | null;
   end?: string | null;
-  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "place" | "project" | null;
+  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "place" | "project" | "po" | "estimate" | null;
   limit?: number;
   money_account_id?: string | null;
   q?: string;

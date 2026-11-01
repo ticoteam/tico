@@ -366,6 +366,9 @@ class QuickBooks:
             return Sent(True, kind=kind, external_id=str(made.get("Id") or ""),
                         revision=str(made.get("SyncToken") or ""))
         final = reply.status == 400 and "Fault" in reply.body      # a validation refusal: a retry says the same thing
+        if final and op == "invoice.create" and body.get("linked_estimate"):
+            # The estimate link is best effort: a refusal sends the invoice again without it, under its own key.
+            return self.send(op, {k: v for k, v in body.items() if k != "linked_estimate"}, f"{key}:unlinked")
         return Sent(False, error=_fault(reply.body, reply.status), final=final)
 
 

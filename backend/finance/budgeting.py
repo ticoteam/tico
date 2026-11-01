@@ -474,8 +474,20 @@ def decide(ctx: Ctx, leaf_id: str, amount: int, target: str = "") -> B.Decision:
     return B.decide(chain, amount)
 
 
+def would_place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int,
+                target: str = "") -> B.Decision | None:
+    """What a hold of `amount` would meet, with nothing written: None when no budget covers the spend."""
+    if not target and isinstance(budget_scope, Mapping) and budget_scope.get("teammate"):
+        target = f"teammate:{budget_scope['teammate']}"
+    b = _scope(ctx, budget_scope)
+    return None if b is None else decide(ctx, b.id, amount, target)
+
+
 def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, currency: str, source: str,
-          source_id: str, expires_at: str | None, target: str = "", by: str = SYSTEM) -> HoldDecision:
+          source_id: str, expires_at: str | None, target: str = "", by: str = SYSTEM,
+          force: bool = False) -> HoldDecision:
+    """A hold for a spend. `force` holds it past an ask or hold_payment limit, for a spend someone approved; decline
+    still refuses."""
     money.minor(amount)
     if amount <= 0:
         raise invalid("a hold is for a positive amount")
@@ -495,7 +507,7 @@ def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, cu
     if b is None:
         return HoldDecision(allowed=True, action="ok", reason="no budget covers this spend")
     verdict = decide(ctx, b.id, amount, target)
-    if not verdict.allowed:
+    if not verdict.allowed and not (force and verdict.action in ("ask", "hold_payment")):
         crossings(ctx, [verdict.limit_budget], by)
         limit = ctx.budgets()[verdict.limit_budget]
         return HoldDecision(allowed=False, action=verdict.action, budget_id=b.id, limit_budget_id=limit.id,

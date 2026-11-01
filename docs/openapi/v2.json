@@ -11447,7 +11447,9 @@
                     "card",
                     "item",
                     "place",
-                    "project"
+                    "project",
+                    "po",
+                    "estimate"
                   ],
                   "type": "string"
                 },

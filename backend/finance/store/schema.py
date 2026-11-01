@@ -587,7 +587,7 @@ CREATE TABLE IF NOT EXISTS fin_estimates (
 CREATE TABLE IF NOT EXISTS fin_estimate_lines (
   id TEXT PRIMARY KEY, estimate_id TEXT NOT NULL REFERENCES fin_estimates(id), line_no INTEGER NOT NULL,
   account_id TEXT REFERENCES fin_accounts(id), item_id TEXT, amount BIGINT NOT NULL CHECK (amount > 0),
-  description TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '{}',
+  description TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '{}', taxable INTEGER,
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE (estimate_id, line_no));
 
 CREATE UNIQUE INDEX IF NOT EXISTS fin_estimates_invoice ON fin_estimates(invoice_id) WHERE invoice_id IS NOT NULL;

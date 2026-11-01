@@ -39,6 +39,7 @@ from .store import ap as SAP
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import purchasing as SP
 from .store import tico
 
 RECEIVED, DUE_SOON, OVERDUE = "finance.bill.received", "finance.bill.due_soon", "finance.invoice.overdue"
@@ -880,6 +881,9 @@ def bill_payment(ctx: Ctx, who: str, obligation: str, rec: Any, amount: int, lin
         raise invalid("a bill's payment posts to accounts payable (the bill recorded the expense)")
     if not _pays_vendor(ctx, bill, rec):
         raise denied("that recipient is not this bill's vendor")
+    _, bid = _bill_worst(ctx, bill)
+    if bid and ctx.budgets()[bid].at_limit == "hold_payment" and SP.bill_orders(ctx.c, str(bill["id"])):
+        raise denied(f"the {ctx.budgets()[bid].name} budget is past its amount: this bill's payment waits until it fits")
     return _bill_budget_gate(ctx, bill)
 
 
@@ -903,7 +907,8 @@ def bill_budget(ctx: Ctx, bill_id: str) -> K.Gate:
     return _bill_budget_gate(ctx, bill) if bill is not None else K.ALLOW
 
 
-def _bill_budget_gate(ctx: Ctx, bill: Any) -> K.Gate:
+def _bill_worst(ctx: Ctx, bill: Any) -> tuple[int, str]:
+    """The strictest at-limit a bill's expense budgets are past (their level, budget id), or (-1, "") when none is."""
     at = dates.day(str(bill["bill_date"]))
     worst: tuple[int, str] = (-1, "")
     for x in doc_lines_of(ctx, "bill", str(bill["id"])):
@@ -918,7 +923,12 @@ def _bill_budget_gate(ctx: Ctx, bill: Any) -> K.Gate:
             level = B.STRICTNESS[budget.at_limit]
             if st.remaining is not None and st.remaining < 0 and budget.at_limit != "warn" and level > worst[0]:
                 worst = (level, bid)
-    return K.Gate("needs_approval", "finance_admin", f"budget:{worst[1]}") if worst[1] else K.ALLOW
+    return worst
+
+
+def _bill_budget_gate(ctx: Ctx, bill: Any) -> K.Gate:
+    _, bid = _bill_worst(ctx, bill)
+    return K.Gate("needs_approval", "finance_admin", f"budget:{bid}") if bid else K.ALLOW
 
 
 def payment_ended(ctx: Ctx, pay: Any) -> None:

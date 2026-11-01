@@ -2,11 +2,13 @@
 transactions carry their place, class, job and item, renames and deletions change the records without reversing an
 entry, and what the books send carries the same references back to the provider."""
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from backend.finance import mirror
+from backend.finance import qbo as QC
 from backend.finance.core import mirror as M
 from backend.finance.core import qbo as Q
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
@@ -189,9 +191,30 @@ def test_quickbooks_items_departments_classes_and_jobs_map_to_their_records_and_
         M.Place(M.Ext("Department", "3", "1"), "Austin")]
     job = {"Id": "12", "SyncToken": "1", "DisplayName": "Kitchen remodel", "Job": True, "ParentRef": {"value": "4"}}
     customer = {"Id": "4", "SyncToken": "3", "DisplayName": "Beta Client", "Job": False}
-    assert Q.records("Customer", [job, customer]) == [
+    website = {"Id": "30", "SyncToken": "0", "DisplayName": "Website", "IsProject": True}
+    assert Q.records("Customer", [job, customer, website]) == [
         M.Project(M.Ext("Project", "12", "1"), "Kitchen remodel", customer="Customer:4"),
-        M.Party(M.Ext("Customer", "4", "3"), "Beta Client", "customer")]
+        M.Party(M.Ext("Customer", "4", "3"), "Beta Client", "customer"),
+        M.Project(M.Ext("Project", "30", "0"), "Website", customer="")]
+
+
+def test_an_invoice_the_provider_refuses_with_its_estimate_link_is_sent_again_without_it(monkeypatch):
+    sent: list[dict[str, Any]] = []
+
+    def call(self: Any, method: str, path: str, **kw: Any) -> Any:
+        sent.append(kw["body"])
+        if "LinkedTxn" in kw["body"]:
+            return SimpleNamespace(status=400, body={"Fault": {"Error": [{"Message": "LinkedTxn is not valid"}]}})
+        return SimpleNamespace(status=200, body={"Invoice": {"Id": "9", "SyncToken": "0"}})
+
+    monkeypatch.setattr(QC.QuickBooks, "_call", call)
+    monkeypatch.setattr(QC.QuickBooks, "_item_accounts", lambda self: {"Item:5": {"income": "Account:33"}})
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base="http://127.0.0.1:1")
+    body = {"day": "2026-10-06", "memo": "", "party": "Customer:4", "number": "", "due": "", "linked_estimate": "7",
+            "lines": [{"item": "Item:5", "amount": 1500, "description": "work", "project": ""}]}
+    made = client.send("invoice.create", body, "invoice:one")
+    assert made.ok and made.external_id == "9", made
+    assert ["LinkedTxn" in x for x in sent] == [True, False]
 
 
 def test_a_bill_names_its_item_class_job_and_one_location_and_refuses_two_locations():
