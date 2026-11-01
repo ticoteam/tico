@@ -221,3 +221,47 @@ def test_sql_fragment_and_reader_sets_agree_with_levels(acme):
         assert fragment == "coalesce(from_actor,'') NOT IN ('human:cara')"
         assert TA.sql_visible(c, who(api, "fay"), "from_actor", kinds=("human",), auth=auth) == "1"
         assert TA.sql_visible(c, who(api, "eve"), "id", bare="human", auth=auth) == "coalesce(id,'') NOT IN ('cara')"
+
+
+def test_the_tools_and_the_cli_set_access_as_whoever_asked(acme):
+    from backend.tests.test_automation_cli import Client
+    from backend.tests.test_mcp import call as mcp
+    from clients import hubcli, remotecli
+
+    api, tokens = acme
+    err, view = mcp(api, "hub_human_access", {"human": "cara", "see": "dee,group:legal,bot:counsel"}, "cara-test")
+    assert not err, view
+    assert view["see"]["people"] == ["dee"] and view["see"]["teams"] == ["legal"] and view["see"]["bots"] == ["counsel"]
+    assert view["read"]["everyone"] and view["write"]["everyone"]          # left out: unchanged
+    err, _ = mcp(api, "hub_human_access", {"human": "cara", "see": "everyone"}, "eve-test")
+    assert err                                                             # a peer may not
+    err, view = mcp(api, "hub_group_access", {"group": "legal", "read": "group:legal"}, "ana-test")
+    assert not err and view["read"]["teams"] == ["legal"] and view["see"]["everyone"]
+    shown = remotecli.via_tool(Client(api, "dee-test"), hubcli.parser().parse_args(["human", "access", "cara"]))
+    assert shown["see"]["people"] == ["dee"] and shown["you"]["manage"]
+    changed = remotecli.via_tool(Client(api, "dee-test"), hubcli.parser().parse_args(
+        ["human", "access", "cara", "--write", "group:legal"]))
+    assert changed["write"]["teams"] == ["legal"]
+    assert not levels(api, "eve", "human:cara")["write"]
+    group = remotecli.via_tool(Client(api, "ana-test"), hubcli.parser().parse_args(["group", "access", "sales"]))
+    assert group["write"]["teams"] == ["sales"]
+
+
+def test_botops_sets_access_with_the_rights_of_the_person_who_asked(acme):
+    from backend.tests.test_botops_parity import act
+    from backend.tests.test_member_bots import botops as make_botops, finish, turn
+
+    api, tokens = acme
+    machine = make_botops.__wrapped__(api)
+    body = {"see": EVERYONE, "read": NOBODY, "write": EVERYONE}
+    eve = turn(api, machine, person="eve-test", text="Hide Cara's Home")
+    assert act(api, eve, "GET", "humans/cara/access").status_code == 403    # only for whoever manages Cara
+    revision = 0                                                            # never set: the defaults
+    assert act(api, eve, "PUT", "humans/cara/access", {**body, "revision": revision}).status_code == 403
+    finish(api, machine, eve)
+    dee = turn(api, machine, person="dee-test", text="Hide Cara's Home")
+    changed = act(api, dee, "PUT", "humans/cara/access", {**body, "revision": revision})
+    assert changed.status_code == 200, changed.text
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT actor,detail_json FROM events WHERE action='person.access_changed' ORDER BY rowid DESC").fetchone()
+        assert row["actor"] == "human:dee" and '"via": "botops"' in row["detail_json"]

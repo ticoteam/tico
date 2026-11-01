@@ -293,7 +293,7 @@ def run(args, who=None):
         return via_tool(client, Namespace(**fields), **more)
     if args.cmd == "template" or (args.cmd == "bot" and args.sub not in ("status", "recent", "repo-create")):
         return bots(client, args)
-    if fn in ("bot repo-create", "human add", "human list", "group list", "group update", "group delete", "tool list", "tool learn", "tool add", "tool update", "tool remove",
+    if fn in ("bot repo-create", "human add", "human list", "human access", "group list", "group update", "group delete", "group access", "tool list", "tool learn", "tool add", "tool update", "tool remove",
               "update create", "update redo", "update list", "update show", "update mark-read", "update reply", "update settings",
               "changelog list", "changelog mark-read",
               "needs-you start", "needs-you next", "needs-you respond", "needs-you commit", "needs-you abandon",

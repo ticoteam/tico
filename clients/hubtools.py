@@ -3880,14 +3880,40 @@ def bot_register(api, args):
        "write": _s("Who may send it messages and tasks")},
       required=("slug",), writes=True)
 def bot_access(api, args):
+    return _teammate_access(api, f"bots/{args['slug']}", args)
+
+
+def _teammate_access(api, path, args):
+    """Show, or set, a bot's, person's or group's See, Read and Write: levels left out stay as they are."""
     on_behalf = _for_person(api)
-    current = api.get(f"bots/{args['slug']}/access", **on_behalf)
+    current = api.get(f"{path}/access", **on_behalf)
     wanted = {level: args[level] for level in ("see", "read", "write") if args.get(level)}
     if not wanted:
         return current
     body = {level: audience(wanted[level]) if level in wanted else {k: current[level][k] for k in ("everyone", "people", "teams", "bots")}
             for level in ("see", "read", "write")}
-    return api.post(f"bots/{args['slug']}/access", {**body, "revision": current["revision"], **on_behalf}, key=_key(args))
+    return api.post(f"{path}/access", {**body, "revision": current["revision"], **on_behalf}, key=_key(args))
+
+
+@tool("hub_human_access", "Show, or set, who may see, read and write to a person, as the person who asked you (it must be "
+      "them, someone they report up to, or an admin). See: on the chart and lists; Read: their Home; Write: DM them or add "
+      "them to a thread. Each is `everyone`, or a comma list of person ids, `group:<id>` and `bot:<slug>`; a group names "
+      "the people and bots in it and the groups under it. Levels you leave out stay as they are.",
+      {"human": _s("The person's id"), "see": _s("everyone, or ben,group:legal,bot:analyst"),
+       "read": _s("Who may read their Home"), "write": _s("Who may DM them or add them to a thread")},
+      required=("human",), writes=True)
+def human_access(api, args):
+    return _teammate_access(api, f"humans/{quote(str(args['human']), safe='')}", args)
+
+
+@tool("hub_group_access", "Show, or set, who may see, read and write to a group, as the person who asked you (a lead of "
+      "the group or one above it, or an admin). By default everyone sees and reads it and its members write to it. Each "
+      "level is `everyone`, or a comma list of person ids, `group:<id>` and `bot:<slug>`. Levels left out stay as they are.",
+      {"group": _s("The group's id"), "see": _s("everyone, or ben,group:legal,bot:analyst"),
+       "read": _s("Who may read its Home"), "write": _s("Who may post to it or add it to a thread")},
+      required=("group",), writes=True)
+def group_access(api, args):
+    return _teammate_access(api, f"groups/{quote(str(args['group']), safe='')}", args)
 
 
 @tool("hub_bot_mail", "Show, or set, whether a bot sends mail without a per-message approval and its forward targets. "
@@ -6978,7 +7004,8 @@ AUDIENCE = {
                                     "hub_bot_keep_tasks_going", "hub_stall_triage", "hub_bot_budget",
                                     "hub_bot_profile", "hub_bot_release", "hub_bot_pause",
                                     "hub_bot_scope",
-                                    "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add",
+                                    "hub_bot_resume", "hub_bot_access", "hub_human_access", "hub_group_access",
+                                    "hub_bot_owners", "hub_human_add",
                                     "hub_tool_add", "hub_tool_update", "hub_tool_remove",
                                     "hub_bot_copy", "hub_bot_update_from_original", "hub_bot_suggest_to_original", "hub_skill_copy")},
     **{name: REQUESTER_READ for name in ("hub_credential_list", "hub_health_check")},
