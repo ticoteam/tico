@@ -2334,8 +2334,12 @@ SCHEMAS.update({
     "ThreadView": obj({"id": "s", "title": "s", "audience": "s", "audience_group_id": "n", "owner_actor": "n",
                        "parent_id": "n", "parent_message_id": "n", "root_id": "s", "path": "a", "kind": "n",
                        "task_id": "n", "created_at": "s", "last_message_at": "n", "archived_at": "n",
-                       "last_seq": "i", "last_unread_seq": "i", "me": "o"},
+                       "last_seq": "i", "last_unread_seq": "i", "me": "o", "members": "o"},
                       required=["id", "title", "audience", "root_id", "last_seq", "last_unread_seq"]),
+    "ThreadReactions": items(obj({"emoji": "s", "count": "i", "actors": "a"}, required=["emoji", "count", "actors"])),
+    "ThreadEarlier": obj({"home": "s", "messages": "i"}, required=["home", "messages"]),
+    "ThreadUploaded": obj({"thread": ref("ThreadView"), "message": ref("ThreadMessage")},
+                          required=["thread", "message"]),
     "ThreadSidebar": obj({"attention": items({"type": "object"}), "threads": items(ref("ThreadView")),
                           "dms": items({"type": "object"}), "next_cursor": "n"},
                          required=["attention", "threads", "dms"]),
@@ -2361,20 +2365,25 @@ SCHEMAS.update({
 })
 STABLE.extend([
     ("/api/v2/threads", "get", "Threads", "listThreads",
-     "The viewer's sidebar: needs attention, threads (recent first) and DMs they may read, one page (`cursor`)", "ThreadSidebar"),
+     "The viewer's sidebar: needs attention, threads (recent first) and DMs they may read, one page (`cursor`); with "
+     "`with=<actor>`, only the threads that teammate is a member of", "ThreadSidebar"),
     ("/api/v2/threads", "post", "Threads", "createThread",
      "Start a thread (audience members unless asked otherwise); with `parent_message_id` it is a sub-thread; with `body` "
      "its first message is posted too", "ThreadView"),
     ("/api/v2/threads/search", "get", "Threads", "searchThreads",
      "Messages whose text matches every word of `q`, newest first, only in threads and messages the viewer may read", "ThreadSearch"),
-    ("/api/v2/threads/home", "get", "Threads", "getThreadHome",
-     "A teammate's Home (`actor`: bot:<slug>, human:<id> or group:<id>), made on first use; needs Read on that teammate, "
-     "else the same 404 whether or not they exist", "ThreadView"),
+    ("/api/v2/threads/home/{actor}", "get", "Threads", "getThreadHome",
+     "A teammate's Home (`actor` in the path: bot:<slug>, human:<id> or group:<id>), made on first use; needs Read on "
+     "that teammate, else the same 404 whether or not they exist", "ThreadView"),
     ("/api/v2/threads/dm", "get", "Threads", "openThreadDm",
      "My DM with `with`: the open one with exactly those two, or a new one; needs Write on them (the reply-back rule "
      "applies)", "ThreadView"),
+    ("/api/v2/threads/dm", "post", "Threads", "createThreadDm",
+     "A DM with these teammates (`members`), the open one or a new one, with an optional first message (`body`); needs "
+     "Write on each of them, and a bot's or person's first message passes the org rules", "ThreadView"),
     ("/api/v2/threads/{thread_id}", "get", "Threads", "getThread",
-     "A thread as the viewer sees it: its unread count, read mark and what they may do", "ThreadView"),
+     "A thread as the viewer sees it: its unread count, read mark, what they may do and its first page of members",
+     "ThreadView"),
     ("/api/v2/threads/{thread_id}", "patch", "Threads", "updateThread",
      "Rename, archive or unarchive a thread, or change who it is for; its managers only", "ThreadView"),
     ("/api/v2/threads/{thread_id}/timeline", "get", "Threads", "getThreadTimeline",
@@ -2399,6 +2408,16 @@ STABLE.extend([
      "Edit one's own message in a thread; the search index and the timeline follow", "ThreadMessage"),
     ("/api/v2/messages/{message_id}", "delete", "Threads", "deleteMessage",
      "Delete one's own message in a thread", "ThreadMessageDeleted"),
+    ("/api/v2/messages/{message_id}/reactions/{emoji}", "put", "Threads", "reactToMessage",
+     "Add my reaction to a message I read (the same emoji twice is one); answers the message's reactions", "ThreadReactions"),
+    ("/api/v2/messages/{message_id}/reactions/{emoji}", "delete", "Threads", "unreactToMessage",
+     "Remove my reaction from a message (a no-op without one); answers the message's reactions", "ThreadReactions"),
+    ("/api/v2/threads/{thread_id}/open-earlier", "post", "Threads", "openEarlierMessages",
+     "A manager of a bot opens its Home's earlier shared-room messages to the Home's readers; a bot's Home only (422 "
+     "otherwise), managers only (403)", "ThreadEarlier"),
+    ("/api/v2/uploads/threads/{thread_id}/messages", "post", "Threads", "uploadThreadMessage",
+     "A person's message with files in a thread (multipart: text, titles and the files); each file is linked to the "
+     "message, under the chat upload limit", "ThreadUploaded"),
 ])
 
 

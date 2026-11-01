@@ -381,6 +381,11 @@ TRIGGERS += RUNNER_TRIGGERS
 # Threads (docs/dev/threads-contract.md §9): `subject_id` and `conversation_id` are the thread id. The per-message
 # counters move with every message, which the `messages` topic already carries, so `counters` is written only when a
 # message is not the cause (a migration or a repair).
+_ATTENTION_WHERE = ("NEW.thread_id IS NOT NULL AND NEW.recipient LIKE 'human:%' "
+                    "AND NEW.state IN ('pending','delivered','capped')")
+# A delivery that leaves the needs-you set (pending to read, say) is a change to that set too.
+_ATTENTION_CHANGE_WHERE = ("NEW.thread_id IS NOT NULL AND NEW.recipient LIKE 'human:%' "
+                           "AND (NEW.state IN ('pending','delivered','capped') OR OLD.state IN ('pending','delivered','capped'))")
 THREAD_TRIGGERS = [
     ("changes_threads_insert", "INSERT", "conversations", None,
      _row("threads", "created", "NEW.id", conversation="NEW.id", where="NEW.parent_id IS NULL")
@@ -409,6 +414,21 @@ THREAD_TRIGGERS = [
     ("changes_thread_followers_update", "UPDATE", "thread_followers",
      _changed("last_read_seq", "following", "notify"),
      _row("threads", "read", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
+    # `attention` (a person's needs-you set moved) and `capped` (a root's loop-guard count moved). A wake to a bot is
+    # nobody's attention, so only a human recipient's delivery counts; a read or a follow moves the reader's own set.
+    ("changes_threads_attention_deliveries_insert", "INSERT", "message_deliveries", None,
+     _row("threads", "attention", "NEW.thread_id", ref="NEW.recipient", conversation="NEW.thread_id",
+          where=_ATTENTION_WHERE)
+     + _row("threads", "capped", "NEW.root_id", conversation="NEW.root_id",
+            where="NEW.state='capped' AND NEW.root_id IS NOT NULL")),
+    ("changes_threads_attention_deliveries_update", "UPDATE", "message_deliveries", _changed("state"),
+     _row("threads", "attention", "NEW.thread_id", ref="NEW.recipient", conversation="NEW.thread_id",
+          where=_ATTENTION_CHANGE_WHERE)
+     + _row("threads", "capped", "NEW.root_id", conversation="NEW.root_id",
+            where="(OLD.state='capped' OR NEW.state='capped') AND NEW.root_id IS NOT NULL")),
+    ("changes_threads_attention_followers", "UPDATE", "thread_followers",
+     _changed("last_read_seq", "following"),
+     _row("threads", "attention", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
 ]
 TRIGGERS += THREAD_TRIGGERS
 
@@ -939,7 +959,7 @@ def _threads(view, rows):
     from . import threads
     last = {}
     for row in rows:
-        if row["kind"] == "read" and row["ref"] != view.who.actor:
+        if row["kind"] in ("read", "attention") and row["ref"] != view.who.actor:
             continue
         # Reactions are per message: one event for each message whose reactions moved.
         last[(row["subject_id"], row["kind"], row["ref"] if row["kind"] == "reactions" else None)] = row
@@ -965,6 +985,11 @@ def _threads(view, rows):
         elif kind == "counters":
             entry["counters"] = {"last_seq": found.get("last_seq") or 0,
                                  "last_unread_seq": found.get("last_unread_seq") or 0}
+        elif kind == "attention":
+            pass        # the reader's needs-you set moved: the client re-reads its sidebar, nothing else is sent
+        elif kind == "capped":
+            entry["capped"] = view.c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND state='capped'",
+                                             (tid,)).fetchone()[0]
         else:
             entry["thread"] = threads.view(view.c, view.reader, found)
         out.append((row, entry))

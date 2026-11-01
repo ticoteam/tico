@@ -32,6 +32,8 @@ A thread's audience is one of these:
   Making a thread public changes its audience, so it needs no Write on the group.
 - Adding a person, bot or group needs **Write** on them. Removing someone needs the thread's owner or an admin.
 - A group added to a thread is resolved live: whoever leaves the group loses the thread.
+- A bot's earlier messages reach its Home readers only once a manager of the bot opens them
+  (`hub thread open-earlier <thread>`).
 - Sub-threads follow the audience of the thread they branch from.
 - Mentions and follows never give access. Naming someone outside the thread leaves a warning for the author, and
   nothing else happens until that person is added.
@@ -76,15 +78,19 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 
 | Command | Tool | What it does |
 |---|---|---|
-| `hub thread list` | `hub_thread_list` | your threads: needs attention, then unread, then recent; DMs apart |
+| `hub thread list [--with ACTOR]` | `hub_thread_list` | your threads: needs attention, then unread, then recent; DMs apart; `--with` only the threads shared with that person, bot or group |
 | `hub thread show <thread>` | `hub_thread_show` | the messages in tree order, each sub-thread under its message |
 | `hub thread home <actor>` | `hub_thread_home` | a teammate's Home, made on first use; needs Read on them |
 | `hub thread dm <actor>` | `hub_thread_dm` | your DM with one person or bot, the open one or a new one; needs Write |
+| `hub thread dm-group <actor> <actor> ... [--body "..."]` | `hub_thread_dm_group` | a group DM with these people or bots; `--body` is the first message |
 | `hub thread create ["title"]` | `hub_thread_create` | start a thread: `--audience`, `--group`, `--member` (repeat), `--body` |
 | `hub thread post <thread> "..."` | `hub_thread_post` | a message: `--kind say\|ask`, `--to`, `--ref KIND:ID` (repeat) |
 | `hub thread reply <thread> <message> "..."` | `hub_thread_reply` | a reply in that message's sub-thread |
 | `hub thread edit <message> "..."` | `hub_thread_edit` | a new revision of your own message |
 | `hub thread sub <message>` | `hub_thread_sub` | open a message's sub-thread without posting |
+| `hub thread react <message-id> <emoji>` | `hub_thread_react` | your reaction to a message, such as `:+1:` |
+| `hub thread unreact <message-id> <emoji>` | `hub_thread_unreact` | remove your reaction |
+| `hub thread open-earlier <thread>` | `hub_thread_open_earlier` | a manager of a bot opens its earlier messages to its Home readers |
 | `hub thread follow <thread> [--notify ...]` | `hub_thread_follow` | follow at a level |
 | `hub thread unfollow <thread>` | `hub_thread_unfollow` | stop following |
 | `hub thread read <thread> [--seq N \| --all]` | `hub_thread_read` | mark read |
@@ -94,7 +100,14 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 | `hub thread link-slack <thread>` | `hub_thread_link_slack` | not available yet: see [Slack](slack.md) |
 
 The commands are `hub thread` in the CLI and `hub_thread_*` over MCP. The REST routes live under `/api/v2/threads`
-and `/api/v2/messages/{id}`, and are described in the [API guide](api.md).
+and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The thread routes a client calls are:
+
+- `GET /api/v2/threads/home/{actor}`: a teammate's Home, with the actor in the path (`bot:ops` keeps its colon).
+- `GET /api/v2/threads/dm?with=<actor>`: your DM with one person or bot. `POST /api/v2/threads/dm` with `members` and an
+  optional `body` makes a group DM.
+- `GET /api/v2/threads?with=<actor>&cursor=&limit=`: the threads shared with that actor that you can read.
+- `PUT` and `DELETE /api/v2/messages/{id}/reactions/{emoji}`: add or remove your reaction.
+- `POST /api/v2/threads/{id}/open-earlier`: a bot's manager opens its earlier messages to its Home readers.
 
 ## Webhooks
 
