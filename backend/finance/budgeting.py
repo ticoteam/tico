@@ -466,11 +466,13 @@ def _scope(ctx: Ctx, budget_scope: str | Mapping[str, object]) -> B.Budget | Non
                 vendor_text(p, "vendor"))
 
 
-def decide(ctx: Ctx, leaf_id: str, amount: int, target: str = "") -> B.Decision:
-    """What a new spend of `amount` meets across its budget and every parent."""
+def decide(ctx: Ctx, leaf_id: str, amount: int, target: str = "", path: Sequence[str] | None = None) -> B.Decision:
+    """What a new spend of `amount` meets across its budget and every parent. `path` is the budgets the spend sits on
+    (default: the chain of `leaf_id`). An aggregate over several leaves passes the leaves' paths, so the target's own
+    allocations on any of them are not held against it, as a spend on one leaf would not be."""
     at = dates.day(ctx.today)
-    path = chain_of(ctx, leaf_id)
-    chain = [(b, state(ctx, b.id, at, target, path)) for b in B.chain(ctx.budgets(), leaf_id)]
+    spent_on = chain_of(ctx, leaf_id) if path is None else list(path)
+    chain = [(b, state(ctx, b.id, at, target, spent_on)) for b in B.chain(ctx.budgets(), leaf_id)]
     return B.decide(chain, amount)
 
 

@@ -674,3 +674,49 @@ def test_a_teammate_who_cannot_see_an_estimate_learns_nothing_from_its_state(boo
             assert made.status == "denied", (kind, made)
             assert made.result == {}, (kind, made)
         assert c.execute("SELECT COUNT(*) FROM fin_invoices").fetchone()[0] == 0
+
+
+def test_a_teammate_without_the_detail_of_a_private_order_gets_not_found_from_every_order_action(books):
+    with books.transaction() as c:
+        payroll = _expense(c, "6200")
+        assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}).status == \
+            "committed"
+        vendor = _vendor(c)
+        draft = _order(c, vendor, [{"account_id": payroll, "amount": 4_000}], approve=False)
+        approved = _order(c, vendor, [{"account_id": payroll, "amount": 5_000}])
+        assert act(c, OWNER, "right_grant", {"teammate": EVE, "right": "finance.ap"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": EVE, "what": "payables"}).status == "committed"
+        # Company expenses are in her view, so the payroll line passes the view check: only its private detail hides it.
+        assert act(c, OWNER, "view_grant", {"subject": EVE, "what": "expenses", "whose": "company"}).status == \
+            "committed"
+        new_po = {"vendor_id": vendor, "po_date": "2026-10-10", "lines": [{"account_id": payroll, "amount": 1}]}
+        for kind, payload, dry in (
+                ("po_send", {"po_id": draft}, False), ("po_approve", {"po_id": draft}, True),
+                ("po_approve", {"po_id": approved}, True), ("po_close", {"po_id": approved}, True),
+                ("po_void", {"po_id": approved}, True), ("po_create", new_po, True)):
+            made = act(c, EVE, kind, payload, dry_run=dry)
+            assert (made.status, made.code, made.result) == ("failed", NOT_FOUND, {}), (kind, dry, made)
+        # A bill that bills the hidden order's line is refused the same way, and the order's room is not taken.
+        billed = act(c, EVE, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10",
+                                             "lines": [{"po_line_id": _po_lines(c, approved)[0], "amount": 1}]},
+                     dry_run=True)
+        assert (billed.status, billed.code, billed.result) == ("failed", NOT_FOUND, {}), billed
+        assert _status(c, draft) == ("draft", "") and _status(c, approved) == ("approved", "")
+
+
+def test_a_spend_within_the_room_set_aside_for_its_teammate_fits_the_budget_and_an_untargeted_one_does_not(books):
+    with books.transaction() as c:
+        _software(c, amount=100_000)
+        assert act(c, OWNER, "allocation_set", {"budget_id": budget(c, "Software"), "target_kind": "teammate",
+                                                "target_id": EVE, "amount": 100_000}).status == "committed"
+        vendor = _vendor(c)
+        untargeted = _order(c, vendor, [_line(c, 40_000)], approve=False)
+        assert act(c, OWNER, "po_send", {"po_id": untargeted}).status == "committed"
+        refused = act(c, OWNER, "po_approve", {"po_id": untargeted})
+        assert refused.status == "denied" and "Software" in str(refused.reason), refused
+        targeted = _order(c, vendor, [_line(c, 40_000, tags={"teammate": EVE})], approve=False)
+        assert act(c, OWNER, "po_send", {"po_id": targeted}).status == "committed"
+        approved = act(c, OWNER, "po_approve", {"po_id": targeted})
+        assert approved.status == "committed", approved
+        assert [a for _, a in _holds(c, targeted)] == [40_000]
+        assert _status(c, targeted) == ("approved", "")

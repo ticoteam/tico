@@ -1653,6 +1653,23 @@ def queue_record(ctx: Ctx, who: str, aid: str, op: str, body: Mapping[str, Any])
     return _queue(ctx.c, _cid(ctx), op, body, by=who, action_id=aid, at=ctx.at)
 
 
+def queue_record_update(ctx: Ctx, who: str, aid: str, op: str, record_id: str, fields: Mapping[str, Any],
+                        row: Mapping[str, Any]) -> str:
+    """A changed shared record's write, carrying the record as it will stand once the writes already owed for it are
+    confirmed. The local row changes only when a write is confirmed, so a later change builds on the newest open write
+    for the record (every change owed before it is in that write), not on the row: otherwise confirming the later write
+    would send the record back to its older fields. A write not yet claimed is amended in place."""
+    columns = RECORD_COLUMNS[op.partition(".")[0]]
+    latest = SK.record_write_latest(ctx.c, op, record_id)
+    base: dict[str, Any] = {k: row[k] for k in columns}
+    if latest is not None:
+        base.update({k: v for k, v in SK.loads(latest["payload_json"]).items() if k in columns})
+    body = {**base, **fields, "local_id": record_id, "day": ctx.today}
+    if latest is not None and SK.outbox_amend(ctx.c, str(latest["id"]), body, ctx.at):
+        return str(latest["id"])
+    return queue_record(ctx, who, aid, op, body)
+
+
 def record_in_provider(ctx: Ctx, table: str, local_id: str) -> None:
     """A shared record a write changes must be one the provider holds already: its create was confirmed."""
     ref = SX.ref_for_local(ctx.c, _cid(ctx), table, RS.resolve(ctx.c, table, local_id))
@@ -2601,6 +2618,8 @@ def _order_planner(kind: str) -> handlers.Planner:
         if any(x.po_line_id for x in lines):
             raise invalid("a line names a purchase order line only on a bill")
         lines, asked = documents.resolve_lines(ctx, who, "bill" if po else "invoice", contact, lines)
+        if any(handlers.private_hidden(ctx, who, x.account_id) for x in lines):
+            raise FinanceError(NOT_FOUND, "no such line or account in your view")
         if asked:
             raise invalid("say which account each line posts to")
         if len({dict(x.tags).get("location", "") for x in lines} - {""}) > 1:
@@ -2637,6 +2656,17 @@ def _estimate_convert(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     est = SP.get(ctx.c, "fin_estimates", eid)
     if est is None or str(est["book_id"]) != ctx.book.id:
         raise FinanceError(NOT_FOUND, "no such estimate")
+    # The lines come first: a teammate who cannot see them is refused whatever state the estimate is in, an invoiced one
+    # included, so the refusal says nothing about that state.
+    lines = [AP.DocLine(str(r["account_id"]), int(r["amount"]), str(r["description"]),
+                        cast(dict[str, str], SK.loads(r["tags_json"])),
+                        None if r["taxable"] is None else bool(r["taxable"]), str(r["item_id"] or ""))
+             for r in SP.lines(ctx.c, "estimate", eid)]
+    if any(handlers.private_hidden(ctx, who, x.account_id) for x in lines):
+        raise FinanceError(NOT_FOUND, "no such estimate")
+    for x in lines:
+        if not handlers.may_write(ctx, who, x.account_id, x.tags):
+            raise denied("a line's account or tags are outside your view")
     if est["invoice_id"]:
         raise FinanceError(CONFLICT, "that estimate is invoiced already")
     if str(est["status"]) != "accepted":
@@ -2648,13 +2678,6 @@ def _estimate_convert(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     if SK.outbox_by_key(ctx.c, key) is not None:
         raise FinanceError(CONFLICT, "that estimate's invoice is already on its way to the provider, or was refused")
     customer = documents.contact_of(ctx, str(est["customer_id"]), "invoice")
-    lines = [AP.DocLine(str(r["account_id"]), int(r["amount"]), str(r["description"]),
-                        cast(dict[str, str], SK.loads(r["tags_json"])),
-                        None if r["taxable"] is None else bool(r["taxable"]), str(r["item_id"] or ""))
-             for r in SP.lines(ctx.c, "estimate", eid)]
-    for x in lines:
-        if not handlers.may_write(ctx, who, x.account_id, x.tags):
-            raise denied("a line's account or tags are outside your view")
     body = {"by": who, "party": str(customer["id"]), "number": documents.next_number(ctx, str(customer["id"])),
             "day": ctx.today, "due": AP.due_date(ctx.today, None, None) or "", "memo": str(est["memo"] or ""),
             "estimate_id": eid,

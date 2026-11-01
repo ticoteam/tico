@@ -131,11 +131,11 @@ def _create(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, f
 
 def _update(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, fields: dict[str, object],
             row: Any, key: str, *, books: bool) -> Result:
-    """A changed record: written here, or queued for the provider with the record as it will be (its columns, changed)."""
+    """A changed record: written here, or queued for the provider with the record as it will be (its columns, changed,
+    and any change still owed to it before this one)."""
     if books:
-        columns = mirror.RECORD_COLUMNS[op.partition(".")[0]]
-        body = {**{k: row[k] for k in columns}, **fields, "local_id": record_id, "day": ctx.today}
-        return {key: record_id, "outbox_id": mirror.queue_record(ctx, who, aid, op, body), "status": "queued"}
+        return {key: record_id, "outbox_id": mirror.queue_record_update(ctx, who, aid, op, record_id, fields, row),
+                "status": "queued"}
     RS.update(ctx.c, table, record_id, {**fields, "updated_at": ctx.at, "updated_by_id": who})
     return {key: record_id}
 

@@ -717,6 +717,24 @@ def record_write_open(c: sqlite3.Connection, op: str, local_id: str) -> bool:
     return False
 
 
+def record_write_latest(c: sqlite3.Connection, op: str, local_id: str) -> Any:
+    """The newest write of this op for a shared record that is still open (held, or unknown), or None. A later change of
+    the record builds on it: each such write carries the changes owed to the record before it."""
+    for row in c.execute("SELECT * FROM fin_outbox WHERE op=? AND "
+                         "NOT (status='sent' OR (status='failed' AND unknown=0)) AND instr(payload_json, ?) > 0 "
+                         "ORDER BY rowid DESC", (op, local_id)):
+        if loads(row["payload_json"]).get("local_id") == local_id:
+            return row
+    return None
+
+
+def outbox_amend(c: sqlite3.Connection, outbox_id: str, payload: Mapping[str, object], at: str) -> bool:
+    """Replace a write's payload before it is first sent, so the write carries a later change of its record too. False
+    (and nothing changed) once it is claimed, sent, or has been tried."""
+    return c.execute("UPDATE fin_outbox SET payload_json=?, updated_at=? WHERE id=? AND status='pending' AND "
+                     "claimed_at IS NULL AND attempts=0", (dump(payload), at, outbox_id)).rowcount == 1
+
+
 def outbox_repoint(c: sqlite3.Connection, local_id: str, record_id: str) -> None:
     """Name a record by the row it is an alias of in every write not yet sent, so a write queued under the alias sends
     what a write queued under the row would."""

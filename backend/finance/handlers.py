@@ -114,6 +114,12 @@ def private_scope(ctx: Ctx, who: str, b: B.Budget) -> bool:
     return any(a in private and a not in detail for a in budgeting.scope_accounts(ctx, b))
 
 
+def private_hidden(ctx: Ctx, who: str, account_id: str) -> bool:
+    """Whether a line on this account is private to `who`, who lacks its detail: the reads leave such a line out, so a
+    document with one is not theirs to see or act on (raw_totals._sees takes the same view for the totals)."""
+    return account_id in ctx.private() and account_id not in ctx.view(who).full_detail
+
+
 def shows_numbers(ctx: Ctx, who: str, b: B.Budget) -> bool:
     """Whether `who` may see a budget's remaining, spend and holds: in their view and over no private lines."""
     return sees_budget(ctx, who, b) and not private_scope(ctx, who, b)

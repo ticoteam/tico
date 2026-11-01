@@ -12,7 +12,7 @@ from backend.finance import qbo as QC
 from backend.finance.core import mirror as M
 from backend.finance.core import qbo as Q
 from backend.finance.core import xero as X
-from backend.finance.core.errors import CONFLICT, FinanceError
+from backend.finance.core.errors import CONFLICT, NOT_FOUND, FinanceError
 from backend.finance.store import banking as SK
 from backend.finance.store import mirror as SX
 from backend.finance.store import purchasing as SP
@@ -322,6 +322,86 @@ def test_an_item_change_in_a_mirrored_book_leaves_the_row_as_it_was_until_the_pr
     assert _drain(books, fake, cid, now=LATER) == []
     with books.read() as c:
         assert c.execute("SELECT price FROM items WHERE id=?", (item,)).fetchone()[0] == 21_000
+
+
+def test_two_changes_to_an_item_before_the_provider_confirms_both_reach_the_provider_and_the_row(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item = _local(c, "Item:5", "items")
+        assert act(c, OWNER, "item_update", {"item_id": item, "name": "Consulting Pro"}).status == "committed"
+        assert act(c, OWNER, "item_update", {"item_id": item, "price": 20_000}).status == "committed"
+    assert _drain(books, fake, cid, now=LATER) == []
+    # The second write carries the first one's rename: the provider is never sent the old name after it.
+    sent = [(body["name"], body["price"]) for op, body, _ in fake.sent if op == "item.update"]
+    assert sent[-1] == ("Consulting Pro", 20_000), sent
+    with books.read() as c:
+        assert tuple(c.execute("SELECT name, price FROM items WHERE id=?", (item,)).fetchone()) == \
+            ("Consulting Pro", 20_000)
+
+
+def test_two_changes_to_a_location_before_the_provider_confirms_both_reach_the_row(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        location = _local(c, "Department:3", "locations")
+        assert act(c, OWNER, "location_update", {"location_id": location, "name": "Austin HQ"}).status == "committed"
+        assert act(c, OWNER, "location_update", {"location_id": location,
+                                                 "address": {"line1": "1 Main St"}}).status == "committed"
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        name, address = c.execute("SELECT name, address FROM locations WHERE id=?", (location,)).fetchone()
+    assert (name, json.loads(address)) == ("Austin HQ", {"line1": "1 Main St"})
+
+
+def test_a_teammate_without_the_estimate_lines_is_denied_converting_it_and_not_told_it_is_invoiced(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "estimate_create", {
+            "customer_id": _local(c, "Customer:4", "fin_contacts"), "estimate_date": "2026-10-05", "number": "EST-9",
+            "lines": [{"item_id": _local(c, "Item:5", "items"), "amount": 1500, "description": "seats"}]})
+        assert made.status == "committed", made
+    estimate = str(made.result["estimate_id"])
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.transaction() as c:
+        assert act(c, OWNER, "estimate_send", {"estimate_id": estimate}).status == "committed"
+        assert act(c, OWNER, "estimate_accept", {"estimate_id": estimate}).status == "committed"
+        assert act(c, OWNER, "estimate_convert", {"estimate_id": estimate}).status == "committed"
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.transaction() as c:
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.ar"}).status == "committed"
+        refused = act(c, "human:dan", "estimate_convert", {"estimate_id": estimate})
+        assert (refused.status, refused.result) == ("denied", {}), refused
+
+
+def test_a_teammate_without_the_detail_of_a_private_account_cannot_order_on_it_in_a_mirrored_book(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["accounts"].append(acct(4, "6200", "Payroll", "expense"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        payroll = _local(c, "Account:4", "fin_accounts")
+        assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}).status == \
+            "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.ap"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "expenses",
+                                            "whose": "company"}).status == "committed"
+        made = act(c, "human:dan", "po_create", {
+            "vendor_id": _local(c, "Vendor:9", "fin_contacts"), "po_date": "2026-10-05",
+            "lines": [{"account_id": payroll, "amount": 4_000}]}, dry_run=True)
+        assert (made.status, made.code, made.result) == ("failed", NOT_FOUND, {}), made
 
 
 def test_a_purchase_order_made_here_is_written_to_quickbooks_and_its_row_comes_in_once_the_provider_confirms(books):
