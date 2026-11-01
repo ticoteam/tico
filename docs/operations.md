@@ -69,7 +69,8 @@ names the columns; a column not listed here is ignored.
 A `customer` names a customer on the books. A name the books lack is added as a customer by the import, once per file; the
 preview counts those new customers. A name close to a customer or contact already here is a likely duplicate: it is not
 linked to that one, and its line imports only when a person names it. In a book that QuickBooks or Xero mirrors, add the
-customer there first.
+customer there first. A vendor is matched only for someone who sees bills. A bot without the records right sends each
+row for approval, as its own entries do.
 
 ## Due dates
 

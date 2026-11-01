@@ -153,10 +153,12 @@ def number_taken(c: sqlite3.Connection, kind: str, contact_id: str, number: str,
 def invoice_item_revenue(c: sqlite3.Connection, book_id: str, start: str, end: str,
                          cut: Sequence[str] = ()) -> list[Any]:
     """The lines of the posted invoices dated in the window, summed by the item each names (item_id NULL is the lines
-    that name none). Draft and void invoices count for nothing. An invoice with a line on a `cut` account is left out
-    whole, as the aging reads leave it (tab_ap.keep_docs)."""
+    that name none). Only lines on income accounts are revenue: a sales-tax line is a liability and counts for nothing.
+    Draft and void invoices count for nothing. An invoice with a line on a `cut` account is left out whole, as the aging
+    reads leave it (tab_ap.keep_docs)."""
     sql = ("SELECT l.item_id, MAX(it.name) AS item_name, SUM(l.amount) AS amount "
            "FROM fin_invoice_lines l JOIN fin_invoices v ON v.id=l.invoice_id "
+           "JOIN fin_accounts a ON a.id=l.account_id AND a.type='income' "
            "LEFT JOIN items it ON it.id=l.item_id "
            "WHERE v.book_id=? AND v.status IN ('sent','partial','paid') AND v.invoice_date BETWEEN ? AND ?")
     args: list[object] = [book_id, start, end]

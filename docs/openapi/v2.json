@@ -12224,7 +12224,7 @@
     },
     "/api/v2/finance/reports/{kind}": {
       "get": {
-        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or revenue_by_item (posted invoices by the item each line names; receivables view), cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
+        "summary": "pnl (cash or accrual), pnl_by_account (by=location|project and id: that record's row by account), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or revenue_by_item (posted invoices by the item each line names; receivables view), cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
         "operationId": "getFinanceReport",
         "parameters": [
           {
@@ -12235,6 +12235,7 @@
               "enum": [
                 "pnl",
                 "pnl_by",
+                "pnl_by_account",
                 "balance_sheet",
                 "cash_flow",
                 "budget_vs_actual",
@@ -12376,6 +12377,23 @@
                 }
               ],
               "title": "By"
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id"
             }
           },
           {
@@ -44096,6 +44114,7 @@
             "enum": [
               "pnl",
               "pnl_by",
+              "pnl_by_account",
               "balance_sheet",
               "cash_flow",
               "budget_vs_actual",
@@ -47749,6 +47768,18 @@
               "string",
               "null"
             ]
+          },
+          "quantity_on_hand": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "quantity_synced_at": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -49345,6 +49376,9 @@
               "string",
               "null"
             ]
+          },
+          "in_books": {
+            "type": "boolean"
           }
         },
         "required": [

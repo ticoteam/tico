@@ -1610,10 +1610,11 @@ def _sales_tax_accounts(c: sqlite3.Connection) -> set[str]:
 
 def _doc_out(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any]) -> dict[str, Any]:
     """A bill, invoice, purchase order or estimate as the provider takes it: its party and each line's account by their
-    provider keys. An invoice made from an estimate names that estimate. An invoice's sales tax goes as its tax, not as
-    a line: the provider has no item to sell the tax on."""
+    provider keys. An invoice made from an estimate names that estimate. On QuickBooks an invoice's sales tax goes as its
+    tax, not as a line, since it has no item to sell the tax on; Xero's document takes no tax, so there it stays a line."""
     lines: list[dict[str, Any]] = []
-    taxes = _sales_tax_accounts(c) if op == "invoice.create" else set()
+    quickbooks = any(row[0] == cid and row[1] == "quickbooks" for row in SX.books_connections(c))
+    taxes = _sales_tax_accounts(c) if op == "invoice.create" and quickbooks else set()
     tax = 0
     for x in cast(list[dict[str, Any]], local["lines"]):
         if str(x["account_id"]) in taxes and not x.get("item_id"):

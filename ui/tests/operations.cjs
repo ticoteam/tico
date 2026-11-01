@@ -28,7 +28,7 @@ function world() {
   return {
     hidden: [], business: 'field_service', actions: [], uploads: [], sidebarPuts: [], imports: [],
     locations: [
-      {id: 'loc-1', name: 'Acme North Store', kind: 'store', parent_id: null, address: {street: '1 Main St', city: 'Portland', state: 'OR'}, source: 'quickbooks', archived_at: null},
+      {id: 'loc-1', name: 'Acme North Store', kind: 'store', in_books: true, parent_id: null, address: {street: '1 Main St', city: 'Portland', state: 'OR'}, source: 'quickbooks', archived_at: null},
       {id: 'loc-2', name: 'Acme Old Depot', kind: 'warehouse', parent_id: null, address: {city: 'Salem', state: 'OR'}, source: 'tico', archived_at: '2026-10-01T00:00:00Z'},
       {id: 'loc-3', name: 'Beta Foods Site', kind: 'customer_site', parent_id: null, customer_id: 'c-1', customer_name: 'Beta Foods', address: {city: 'Bend', state: 'OR'}, source: 'csv', archived_at: null}],
     items: [{id: 'it-1', name: 'Filter change', sku: 'SVC-10', kind: 'service', unit: 'each', currency: 'USD', price: 8900, source: 'stripe', archived_at: null},
@@ -156,6 +156,7 @@ const close = async (o, label) => { assert.deepEqual(o.errors, [], label + ' pag
     await page.evaluate(() => { location.hash = '#/operations/locations'; });
     await page.locator('#ops-table tr[data-ops-row]').first().waitFor();
     assert.equal(await rows(page), 2, 'X2: same data back');
+    assert.equal(await page.locator('#ops-table th', {hasText: 'In books'}).count(), 1, 'a mirrored book shows In books');
     // Hiding a section this way takes each optional link: Meetings under Library, and Strategy leaves Growth its own link.
     w.hidden = ['strategy', 'meetings'];
     await page.evaluate(() => { S.config.hidden_sections = ['strategy', 'meetings']; redesignSections(); });

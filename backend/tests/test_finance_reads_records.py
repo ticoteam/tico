@@ -85,6 +85,42 @@ def test_the_pnl_by_location_adds_up_to_the_pnl(books):
             "Denver": (9_000, 3_500), "Office": (0, 7_000), "Unattributed": (0, 300)}
 
 
+def test_a_projects_pnl_by_account_keeps_to_the_view_and_adds_up_to_its_row(books):
+    with books.transaction() as c:
+        job = _records(c)["job"]["Job 12"]
+        pay = str(act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                                   "parent_id": account(c, "6000")}).result["account_id"])
+        assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
+        _post(c, 1_000, {"project": job, "teammate": "human:eve"})
+        _post(c, 7_000, {"project": job, "teammate": "human:ben"}, "6100")
+        _post(c, 4_000, {"project": job, "teammate": "human:ben"}, "6200")
+        _post(c, 300, {"teammate": "human:eve"})                     # no project: not in this row
+        sale = act(c, OWNER, "journal", {"date": DAY, "memo": "Sale", "lines": [
+            {"account_id": account(c, "4000"), "amount": -9_000, "tags": {"project": job}},
+            {"account_id": account(c, "1000"), "amount": 9_000}]})
+        assert sale.status == "committed", sale.reason
+
+        def both(viewer):
+            of = FR.report(c, viewer, "pnl_by_account", start=WINDOW[0], end=WINDOW[1], by="project", record_id=job,
+                           basis="accrual", at=AT)
+            rows = FR.pnl_by(c, viewer, "project", *WINDOW, basis="accrual", top_n=50, at=AT)["rows"]
+            return of, next((r for r in rows if r["key"] == job), {"income": 0, "expense": 0, "net": 0})
+        mine, row = both(OWNER)
+        assert {r["account_id"] for r in mine["rows"]} == {account(c, "4000"), account(c, "5100"), account(c, "6100"), pay}
+        assert (mine["income"], mine["expense"], mine["net"]) == (row["income"], row["expense"], row["net"])
+        assert (mine["income"], mine["expense"]) == (9_000, 12_000)
+        eve, row = both("human:eve")
+        assert [(r["account_id"], r["amount"]) for r in eve["rows"]] == [(account(c, "5100"), 1_000)]
+        assert (eve["income"], eve["expense"], eve["net"]) == (row["income"], row["expense"], row["net"])
+        # A private line in a viewer's window: its account stays out and the read says something was left out.
+        assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "expenses"}).status == "committed"
+        wide, row = both("human:eve")
+        assert pay not in {r["account_id"] for r in wide["rows"]} and wide["excluded"]
+        assert (wide["income"], wide["expense"]) == (row["income"], row["expense"])
+        with pytest.raises(FinanceError):
+            FR.report(c, OWNER, "pnl_by_account", start=WINDOW[0], end=WINDOW[1], by="project", at=AT)
+
+
 def test_a_teammate_sees_only_their_own_lines_however_they_group(books):
     with books.transaction() as c:
         ids = _records(c)
@@ -303,3 +339,13 @@ def test_a_teammate_without_a_finance_view_narrows_the_locations_by_customer(boo
         rest = FR.records(c, "human:eve", kind="location", equal={"customer_id": acme}, limit=1,
                           cursor=first["next_cursor"], at=AT)
         assert [r["name"] for r in rest["locations"]] == ["Acme Denver"] and rest["next_cursor"] is None
+
+
+def test_a_location_detail_carries_its_next_due_day_as_its_list_does(books):
+    with books.transaction() as c:
+        denver = _made(c, "location_create", {"name": "Denver", "kind": "store"}, "location_id")
+        due = act(c, OWNER, "due_date_create", {"name": "Permit", "subject_type": "location", "subject_id": denver,
+                                                "repeats": "once", "starts_on": "2026-11-05", "assignee_id": OWNER})
+        assert due.status == "committed", due.reason
+        assert FR.records(c, OWNER, kind="location", at=AT)["locations"][0]["next_due_on"] == "2026-11-05"
+        assert FR.record(c, OWNER, kind="location", record_id=denver, at=AT)["location"]["next_due_on"] == "2026-11-05"

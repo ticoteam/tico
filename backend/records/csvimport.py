@@ -50,44 +50,48 @@ def _column(header: str) -> str:
 
 def read(text: str, columns: Sequence[str], required: Sequence[str]) -> tuple[list[Row], list[str]]:
     """The data rows of a CSV file, and the columns it has that this import does not use (ignored, and reported). A
-    file over MAX_BYTES or MAX_ROWS, one with no header, or one missing a required column is refused whole."""
+    file over MAX_BYTES or MAX_ROWS, one with no header, one missing a required column, or one that is not valid CSV is
+    refused whole. Parsing is strict: a quote that never closes is refused, not read as the rest of the file."""
     if len(text.encode("utf-8")) > MAX_BYTES:
         raise FileRefused("too_large", f"The file is over {MAX_BYTES // 1_000_000} MB: split it into files of "
                           f"{MAX_ROWS:,} rows or fewer")
-    reader = csv.reader(io.StringIO(text.lstrip("﻿")))
-    header = next(reader, None)
-    if not header or not any(cell.strip() for cell in header):
-        raise FileRefused("invalid", "The file has no header row: the first line names the columns")
-    names = [_column(cell) for cell in header]
-    twice = sorted({name for name in names if name and names.count(name) > 1})
-    if twice:
-        raise FileRefused("invalid", f"The column {twice[0]} is in the file more than once")
-    missing = [name for name in required if name not in names]
-    if missing:
-        raise FileRefused("invalid", f"The file needs a column named {', '.join(missing)}")
-    ignored = sorted({name for name in names if name and name not in columns})
-    where = {name: i for i, name in enumerate(names) if name in columns}
-    rows: list[Row] = []
-    while True:
-        start = reader.line_num + 1
-        raw = next(reader, None)
-        if raw is None:
-            break
-        if not any(cell.strip() for cell in raw):
-            continue
-        if len(rows) == MAX_ROWS:
-            raise FileRefused("too_large", f"The file has more than {MAX_ROWS:,} rows: split it into smaller files")
-        problems = []
-        cells = {name: "" for name in columns}
-        for name, i in where.items():
-            value = raw[i].strip() if i < len(raw) else ""
-            if len(value) > MAX_CELL:
-                problems.append(f"{name} is over {MAX_CELL} characters")
-            cells[name] = value
-        if any(cell.strip() for cell in raw[len(names):]):
-            problems.append("a value has no column name")
-        rows.append(Row(line=start, cells=cells, problems=tuple(problems)))
-    return rows, ignored
+    reader = csv.reader(io.StringIO(text.lstrip("﻿")), strict=True)
+    try:
+        header = next(reader, None)
+        if not header or not any(cell.strip() for cell in header):
+            raise FileRefused("invalid", "The file has no header row: the first line names the columns")
+        names = [_column(cell) for cell in header]
+        twice = sorted({name for name in names if name and names.count(name) > 1})
+        if twice:
+            raise FileRefused("invalid", f"The column {twice[0]} is in the file more than once")
+        missing = [name for name in required if name not in names]
+        if missing:
+            raise FileRefused("invalid", f"The file needs a column named {', '.join(missing)}")
+        ignored = sorted({name for name in names if name and name not in columns})
+        where = {name: i for i, name in enumerate(names) if name in columns}
+        rows: list[Row] = []
+        while True:
+            start = reader.line_num + 1
+            raw = next(reader, None)
+            if raw is None:
+                break
+            if not any(cell.strip() for cell in raw):
+                continue
+            if len(rows) == MAX_ROWS:
+                raise FileRefused("too_large", f"The file has more than {MAX_ROWS:,} rows: split it into smaller files")
+            problems = []
+            cells = {name: "" for name in columns}
+            for name, i in where.items():
+                value = raw[i].strip() if i < len(raw) else ""
+                if len(value) > MAX_CELL:
+                    problems.append(f"{name} is over {MAX_CELL} characters")
+                cells[name] = value
+            if any(cell.strip() for cell in raw[len(names):]):
+                problems.append("a value has no column name")
+            rows.append(Row(line=start, cells=cells, problems=tuple(problems)))
+        return rows, ignored
+    except csv.Error as exc:
+        raise FileRefused("invalid", f"The file is not valid CSV at line {reader.line_num}: {exc}") from None
 
 
 def money(text: str, what: str) -> int:

@@ -51,6 +51,18 @@ def record_providers(c: sqlite3.Connection, table: str, ids: Sequence[str]) -> d
     return {str(row[0]): str(row[1]) for row in rows}
 
 
+def mapped_refs(c: sqlite3.Connection, cid: str, table: str, ids: Sequence[str]) -> set[str]:
+    """Which records this connection's books hold, as ref_for_local reads one: each record's first ref, if not unmapped."""
+    if not ids:
+        return set()
+    marks = ",".join("?" * len(ids))
+    first: dict[str, str] = {}
+    for row in c.execute(f"SELECT local_id, status FROM fin_external_refs WHERE connection_id=? AND local_table=? "
+                         f"AND local_id IN ({marks}) ORDER BY created_at", [cid, table, *ids]):
+        first.setdefault(str(row[0]), str(row[1]))
+    return {local for local, status in first.items() if status != "unmapped"}
+
+
 def ref_drop_unmapped(c: sqlite3.Connection, cid: str, external_id: str, keep: str) -> None:
     """Drop the unmapped rows a record left in other tables: once it is in the books, its mapped row is the one that counts."""
     c.execute("DELETE FROM fin_external_refs WHERE connection_id=? AND external_id=? AND local_table<>? "

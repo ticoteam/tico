@@ -2,6 +2,8 @@
 action, a file imported again creates nothing (X19), a bad row does not stop the rest, a likely duplicate waits for a
 person, and an imported item keeps what a person changed (M1). A teammate who is not a company Admin lacks the
 records right: `api_settings` makes ben an Admin."""
+import json
+
 import pytest
 
 from backend.finance import actions as FA
@@ -282,3 +284,80 @@ def test_the_import_routes_refuse_a_member_without_the_right_and_replay_a_retry_
     assert first["summary"] == {"created": 2}
     assert post(api, "imports/commit", body, key="import-once")["summary"] == first["summary"]
     assert post(api, "imports/commit", body)["summary"] == {"already_there": 2}
+
+
+@pytest.mark.parametrize("text", ['name,kind\n"Shop,store\nDepot,warehouse\n', 'name,kind\n"Shop"x,store\n'])
+def test_a_malformed_csv_file_is_refused_not_read_as_more_rows(text):
+    """A quote that never closes, or text after a closing quote, refuses the file at its line: lenient parsing would
+    swallow the rows after it (the import's own check, not the parser's wording)."""
+    with pytest.raises(CI.FileRefused) as e:
+        CI.read(text, ("name", "kind"), ("name", "kind"))
+    assert e.value.code == "invalid" and "line" in e.value.message
+
+
+def test_a_cell_over_the_csv_field_limit_refuses_the_file_instead_of_failing_the_request():
+    with pytest.raises(CI.FileRefused) as e:
+        CI.read("name,kind\nAcme," + "x" * 131_073 + "\n", ("name", "kind"), ("name", "kind"))
+    assert e.value.code == "invalid"
+
+
+def _customers(c, name: str) -> int:
+    return int(c.execute("SELECT count(*) FROM fin_contacts WHERE kind='customer' AND name=?", (name,)).fetchone()[0])
+
+
+def test_a_customer_row_never_names_a_vendor_the_teammate_cannot_see(books):
+    """A teammate with the records and receivables rights and no payables view is told nothing about a vendor that a
+    customer row is close to: no id, no name (a vendor needs a payables view, tab_ap.sees_contact_kind). The owner gets
+    the match, so the case is real."""
+    text = "name,kind,customer\nRidge court,customer_site,Sample Privat Vendor\n"
+    with books.transaction() as c:
+        vendor = str(act(c, OWNER, "contact_create", {"name": "Sample Private Vendor", "kind": "vendor"})
+                     .result["contact_id"])
+        for right in (R.RECORDS, R.AR):
+            assert act(c, OWNER, "right_grant", {"teammate": "human:eve", "right": right}).status == "committed"
+        owner_view = RI.preview(c, OWNER, "locations", text, {})
+        teammate_view = RI.preview(c, "human:eve", "locations", text, {})
+    told = json.dumps(teammate_view)
+    assert owner_view["summary"] == {"possible_duplicate": 1}
+    assert teammate_view["summary"] == {"new": 1}
+    assert vendor not in told and "Sample Private Vendor" not in told
+
+
+def test_a_bot_without_the_records_right_sends_each_row_for_approval_instead_of_refusing_the_file(books):
+    """A bot lacks the records right, so its rows need an approval, as its hand entry does (test_x13). The file is not
+    refused whole, and a preview asks for nothing: the commit makes the approvals."""
+    with books.transaction() as c:
+        preview = RI.preview(c, "bot:coder", "locations", LOCATIONS, {})
+        assert preview["summary"] == {"needs_approval": 2}
+        assert {line["approval_id"] for line in preview["lines"]} == {""}
+        done = RI.commit(c, "bot:coder", "locations", LOCATIONS, {}, frozenset())
+        assert count(c, "locations") == 0
+    assert done["summary"] == {"needs_approval": 2}
+    assert all(line["approval_id"] for line in done["lines"])
+
+
+def test_a_customer_equipment_row_adds_its_new_customer_once_and_a_preview_writes_nothing(books):
+    text = "name,kind,customer\nFurnace,customer,Ridge Apartments\nBoiler,customer,ridge apartments\n"
+    with books.transaction() as c:
+        preview = RI.preview(c, OWNER, "equipment", text, {})
+        assert preview["summary"] == {"new": 2} and preview["new_customers"] == 1
+        assert _customers(c, "Ridge Apartments") == 0
+        out = RI.commit(c, OWNER, "equipment", text, {}, frozenset())
+        owners = {row[0] for row in c.execute("SELECT customer_id FROM equipment WHERE archived_at IS NULL")}
+        made = _customers(c, "Ridge Apartments")
+    assert out["summary"] == {"created": 2} and made == 1
+    assert len(owners) == 1 and None not in owners
+
+
+def test_a_customer_equipment_row_refused_at_its_location_adds_no_customer(books):
+    """The location belongs to another customer, so the row is refused in the preview and the commit alike, and the
+    customer it names is never added."""
+    text = "name,kind,location,customer\nFurnace,customer,Dental roof,Ridge Apartments\n"
+    with books.transaction() as c:
+        RI.commit(c, OWNER, "locations", "name,kind,customer\nDental roof,customer_site,Sample Dental Group\n", {},
+                  frozenset())
+        preview = RI.preview(c, OWNER, "equipment", text, {})
+        out = RI.commit(c, OWNER, "equipment", text, {}, frozenset())
+        made = _customers(c, "Ridge Apartments")
+    assert preview["summary"] == {"error": 1} and "another customer" in preview["lines"][0]["reason"]
+    assert out["summary"] == {"error": 1} and made == 0
