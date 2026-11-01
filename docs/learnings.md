@@ -123,3 +123,105 @@ today (the chat, the task, the mailbox, the meeting); anything else is counted a
 - `GET /api/v2/learnings?before=&limit=`: nights, newest first.
 - `GET /api/v2/learnings/{id}`: one night's sections.
 - `GET /api/v2/learnings/{id}/packets/{bot}`: one recipient's packet.
+
+## Nightly memory tidy contract (developer integration)
+
+`backend.memory_tidy` is the read-only proposal boundary. It does not schedule a
+pass, call a model, create a reviewer card, persist a run, or apply Keep. Those callers
+must enforce the pilot list, named model without fallback, low effort and the $50
+estimated-cost stop before calling a model. Ordinary bot/task model settings remain
+unchanged. This module requires no database or model spending.
+
+### Inputs and child isolation
+
+The orchestrator supplies a pushed snapshot mapping paths to UTF-8 text, including
+`AGENT.md` for the trusted conflict check. `build_packet(snapshot, since=...)` returns
+only rules, recent log entries and entries cited by rules; only `model_input()` may
+be sent to the edit-producing child. Do not send the snapshot, `Packet.all_logs`, run
+transcripts, evidence files or arbitrary knowledge. The initial pass uses `since=None`.
+Later passes should supply `previous_learnings`, the exact learnings snapshot at the
+last completed kept or discarded pass, to select changed undated notes. Without that
+snapshot, undated log history fails closed. Same-day dated notes remain included
+because their dates do not identify which appeared after a timestamp. Source dates,
+entry IDs and exact heading titles select cited logs; unresolved external references
+are never fetched.
+
+The exact rule headings are `Working rules` and `Standing rules`, optionally followed
+by parenthetical guidance. Top-level Working rules end at the first dated heading;
+second-level sections end at the next peer heading. Dated headings/bullets inside
+Standing rules are logs; a subsequent undated top-level bullet resumes rules. Imported
+`Working rules from ...` headings are log, never rules. Unrecognized prose remains
+untouched. This is a Markdown-entry contract, not a generic Markdown rewriter.
+
+Run the child without write tools, in a disposable checkout with no publication or
+main-branch credentials. Independently collect before/after manifests of **every**
+checkout path: tracked, untracked, ignored, symlink targets and file modes. Manifest
+values must identify content AND kind/mode. Pass these to `evaluate`; any difference,
+even under memory, flags the proposal. Always discard the whole child checkout at
+settlement, on success, failure or cancellation. An attachment is returned through the
+child result channel, never written into that checkout. The module trusts these
+manifests, not a child's claim that it wrote nothing.
+
+### JSON attachment
+
+Return one object with `edits` and `diary` (at most three lines). Numbers are consecutive
+integers starting at 1. Each edit contains:
+
+```json
+{
+  "number": 1,
+  "operation": "generalise",
+  "targets": [{"entry_id": "packet entry ID", "old_text": "exact packet text"}],
+  "replacement": "- One rule. [sources: packet entry ID]\n",
+  "sources": ["packet entry ID"]
+}
+```
+
+Operations are `merge`, `generalise`, `resolve_contradiction`, `retire`, `archive_log`,
+`move_fact` and `move_log`. Targets are individual whole entries from the packet;
+repeated targets, wrong old text and whole-file rewrites fail. Every replaced entry
+must be a source. New rules list each source ID in their replacement text, retaining
+links to exact originals. Retire/archive/move-log edits have empty replacements.
+A fact move supplies its unchanged original as replacement and a normalized
+`knowledge/*.md` `destination`. Other operations cannot set a destination. Paths
+containing traversal, backslashes or control characters are rejected.
+
+### Checks and output
+
+`evaluate(snapshot, raw_json, since, today, checkout_before, checkout_after,
+conflict_check, previous_learnings)` applies anchored edits to an in-memory scratch
+copy, archives every removed original verbatim, and computes a unified diff. Retired
+rules include a retirement date and replacement edit number. Dated-note moves append
+the original under a Log heading. More than a quarter of actual working rules touched
+flags the proposal; exactly a quarter is permitted. Dated notes do not enter that
+count. Log entries strictly older than 30 days must be removed and present verbatim
+in the archive before an offer. Thirty-day-old entries remain eligible to stay.
+Historical old entries outside the packet cannot be edited by the model: they produce
+a review flag rather than silently widening the read scope.
+
+`conflict_check(agent_text, rules)` is a required trusted semantic check of both old
+and proposed rules against AGENT.md. It returns a list of conflict descriptions. Its
+absence, failure or any conflicts flag the proposal; the public diary reports only
+the count. Do not substitute the edit-producing child's unchecked 'no conflicts'
+claim. This module does not pretend lexical matching proves semantic consistency.
+The orchestration slice must provide this check before enabling offers.
+
+Token/key patterns share the company-file detector, including labelled and opaque
+values. Newly introduced secret-shaped strings anywhere in the submitted JSON or
+scratch changes are rejected unless already in memory. Flag results expose no raw
+attachment, diff, scratch files or secret values. Existing secrets are not newly
+introduced; this does not grant permission to transmit them to a model or person.
+
+The server-generated diary contains operation counts, working-rule character sizes
+before/after, the 20,000-character target and check outcome, in at most three lines.
+The child diary is validated but never trusted for counts, budget or flags. Results:
+
+| Status | Caller action |
+| --- | --- |
+| `offer` | Persist numbered attachment, diff and diary for the named reviewer; Keep remains a separate action. |
+| `flagged` | Record the sanitized reasons and notify the reviewer; never show Keep or apply scratch changes. |
+| `no_change` | Log `no change`; create no card and no edit attachment. |
+
+No UI, API endpoint, schema, runner setting or everyday memory is modified by this
+module. Caller integration and independent conflict checking remain separate from
+these pure checks. Focused synthetic regressions live in `backend/tests/test_memory_tidy.py`.
