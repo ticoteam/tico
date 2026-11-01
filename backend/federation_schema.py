@@ -9,13 +9,20 @@ like backend/strategy.py: an older release never reads these tables.
 - `federation_threads`: a thread shared over HQ. `thread_id` is this install's conversation; `origin_id` is the id the
   home gave it. The home numbers the stream (`high_seq`); a replica records how far it has applied the stream
   (`applied_through`). `removed_at_seq` is the membership tombstone on a removed install.
-- `federation_members`: which installs the home shares a thread with, and from which home number (`joined_at_seq`).
+- `federation_members`: which installs the home shares a thread with, and from which home number (`joined_at_seq`). A
+  message is for a member only when it was created after the member joined: `joined_message_seq` is the newest core
+  message when the member joined, so eligibility is fixed at creation, not by when the home numbers it.
+- `federation_threads.subtree_seq`: how far the sub-threads of a shared thread have been looked at for deliveries.
+- `federation_messages.sent_revision`: the newest revision of the message HQ took from this install (a tombstone is sent
+  only when an earlier revision may have gone out).
 - `federation_items`: the home's stream, one row per number. Each keeps the signed payload it was sent with, so a
   catch-up re-sends exactly what was signed.
 - `federation_messages`: which local message an origin id is, its author and revision, and its home number once known.
 - `federation_receipts`: every envelope processed, by (sender, envelope id), for replay refusal.
 - `federation_outbox`: what this install still has to send: a delivery from core (a replica's post to the home), an
   item (the home's stream to a member), a catch-up request, or a refusal receipt for a message this install did not take.
+  A delivery is rebuilt from the message as it is when it is sent; an item to a member the message was not for goes as
+  a signed skip, so the member's stream has no hole.
 """
 
 SCHEMA = """
@@ -36,13 +43,13 @@ CREATE TABLE IF NOT EXISTS federation_directory (
 CREATE TABLE IF NOT EXISTS federation_threads (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL UNIQUE, home_install TEXT NOT NULL, origin_id TEXT NOT NULL,
   applied_through INTEGER NOT NULL DEFAULT 0, high_seq INTEGER NOT NULL DEFAULT 0, removed_at_seq INTEGER,
-  catch_up_requested_at REAL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  catch_up_requested_at REAL, subtree_seq INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE (home_install, origin_id));
 CREATE TABLE IF NOT EXISTS federation_members (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, install TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('active','removed')),
-  joined_at_seq INTEGER NOT NULL, removed_at_seq INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-  UNIQUE (thread_id, install));
+  joined_at_seq INTEGER NOT NULL, joined_message_seq INTEGER NOT NULL DEFAULT 0, removed_at_seq INTEGER,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (thread_id, install));
 CREATE TABLE IF NOT EXISTS federation_items (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, home_seq INTEGER NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('message','membership')),
@@ -53,7 +60,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS federation_items_revision ON federation_items(
   WHERE origin_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS federation_messages (
   id TEXT PRIMARY KEY, origin_id TEXT NOT NULL UNIQUE, message_id TEXT NOT NULL, thread_id TEXT NOT NULL,
-  author TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, home_seq INTEGER,
+  author TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, home_seq INTEGER, sent_revision INTEGER,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS federation_messages_message ON federation_messages(message_id);
 CREATE TABLE IF NOT EXISTS federation_receipts (
@@ -76,7 +83,10 @@ INSERT OR IGNORE INTO federation_state(singleton) VALUES (1);
 
 # Columns added after their table first existed: a database created before them gets them on open.
 COLUMNS = (("federation_peerings", "peer_company", "TEXT NOT NULL DEFAULT ''"), ("federation_peerings", "approved_by", "TEXT"),
-           ("federation_state", "company", "TEXT NOT NULL DEFAULT ''"))
+           ("federation_state", "company", "TEXT NOT NULL DEFAULT ''"),
+           ("federation_threads", "subtree_seq", "INTEGER NOT NULL DEFAULT 0"),
+           ("federation_members", "joined_message_seq", "INTEGER NOT NULL DEFAULT 0"),
+           ("federation_messages", "sent_revision", "INTEGER"))
 
 
 def ensure(c):
