@@ -1257,6 +1257,17 @@ def test_a_computer_that_will_not_follow_the_server_is_not_woken_to_update(cloud
     assert cloud.tick(600) == [] and cloud.row()["state"] == "stopped"
 
 
+def test_a_blocked_update_wakes_nothing_for_its_release_but_once_for_a_newer_one(cloud, monkeypatch):
+    """A block (say, changed files in the checkout) can clear by itself; the release after it gets its one wake."""
+    monkeypatch.setenv("TICO_VERSION", "0.5.23")
+    computer = enrolled(cloud)
+    reported(cloud, computer, "0.5.21", update="blocked", target="0.5.23")
+    stopped_when_idle(cloud)
+    assert cloud.tick(600) == [] and cloud.row()["state"] == "stopped" and cloud.row()["problem"] == ""
+    monkeypatch.setenv("TICO_VERSION", "0.5.30")
+    assert cloud.tick(10) == ["start"] and cloud.row()["wake_key"] == "update:0.5.30"
+
+
 @pytest.mark.parametrize("update", ["failed", "rolled_back"])
 def test_an_update_that_failed_for_this_release_wakes_nothing_until_a_newer_one(cloud, monkeypatch, update):
     """Its runner waits hours before it tries the same release again: a wake now would spend this release's one."""
