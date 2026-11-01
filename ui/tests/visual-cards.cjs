@@ -8,6 +8,7 @@ const path = require('node:path');
 const {execFileSync} = require('node:child_process');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 const fs = require('node:fs');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -85,6 +86,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     let hold = null, gen = 1;
     const signed = () => gen === 1 ? messages : messages.map(m => ({...m, refs: {...m.refs, attachments: m.refs.attachments.map(a => a.src ? {...a, src: `${a.src}.${gen}`} : a)}}));
     page.on('pageerror', e => { if (!/sandboxed/i.test(e.message)) errors.push(e.message); });
+    const threads = threadsFake({bot: 'designer', messages: () => signed()});
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -115,8 +117,8 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       if (p === '/api/issues') return json([]);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/events') { held.push(route); return; }      // live events (ui/app/live.js), held open
-      if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c-designer', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:designer']}] : []});
-      if (p === '/api/v2/conversations/c-designer/snapshot') return json({messages: signed(), execution: null});
+      const answer = threads(p, url, req.method());
+      if (answer !== undefined) return json(answer);
       if (p === '/api/v2/tasks' && req.method() === 'GET') return json({tasks: [task], next_offset: null});
       if (p === '/api/v2/tasks/t1/files') return json({files: taskFiles});
       if (p === '/api/v2/tasks/t1') return json({task, comments: taskComments, events: [], children: [], parent: null, mover: true, messages: [], can_comment: true});
@@ -137,7 +139,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     };
     // ---- chat: hold the chart so its held space can be measured before it loads
     let release; hold = new Promise(r => { release = r; });
-    await page.goto('https://tico-ui.test/#/bot/designer/chat');
+    await page.goto('https://tico-ui.test/#/bot/designer/dm');
     const m1 = page.locator('[data-message="m1"]');
     await m1.locator('figure.vcard').nth(3).waitFor();
     const chart = m1.locator('figure.vcard[data-kind="image"] .vcard-body');
@@ -291,7 +293,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     }
 
     // ---- Expand: full screen, zoom, Esc / swipe down back to the same place
-    const thread = page.locator('#conv-thread');
+    const thread = page.locator('#bot-thread .thv-scroll');
     await m1.locator('figure.vcard[data-kind="image"] .vcard-hit').click();
     const full = page.locator('#vcard-full[open]');
     await full.locator('img.vcard-full-img').waitFor();
@@ -342,7 +344,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     // ---- a redraw keeps a card's node (and its loaded page); a new version is a new card
     const kept = await page.evaluate(() => {
       const old = document.querySelector('figure.vcard[data-file="f-tall"]');
-      V2C.html = ''; v2ChatRender(V2C);
+      for (const v of THV_VIEWS) { PATCH_SRC.delete(v.el.querySelector('.thv-list')); thvDraw(v); }
       const a = document.createElement('div'), b = document.createElement('div');
       a.innerHTML = '<figure class="vcard" data-visual-key="m:f@1" data-state="ready" data-fresh-src="old"></figure>';
       b.innerHTML = '<figure class="vcard" data-visual-key="m:f@2" data-state="ready" data-fresh-src="new"></figure><figure class="vcard" data-visual-key="m:f@1" data-state="ready" data-fresh-src="fresh"></figure>';
@@ -390,7 +392,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       let loads = 0;
       f.addEventListener('load', () => loads++);
       const before = await new Promise((go, fail) => {
-        const redraw = () => { const b = h(); V2C.html = ''; v2ChatRender(V2C); go(b); };
+        const redraw = () => { const b = h(); for (const v of THV_VIEWS) { PATCH_SRC.delete(v.el.querySelector('.thv-list')); thvDraw(v); } go(b); };
         if (!pin) return redraw();
         const t = setTimeout(() => fail(new Error(`the card never took the height ${pin} its page sent`)), 10000);
         addEventListener('message', function took() { if (f.visualHeight !== pin) return; removeEventListener('message', took); clearTimeout(t); redraw(); });
@@ -451,7 +453,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     assert(held.length, `${label}: the page follows the live event stream`);
     gen = 2;
     messages.push({id: 'm6', from_actor: 'bot:designer', body: 'Live one.', created: now, refs: {attachments: [A('f-live', 'image', {width: 400, height: 200}), A('f-live-page', 'page')]}});
-    await held.at(-1).fulfill({contentType: 'text/event-stream', body: `id: 9\nevent: messages\ndata: ${JSON.stringify({seq: 9, conversation_id: 'c-designer'})}\n\n`});
+    await held.at(-1).fulfill({contentType: 'text/event-stream', body: `id: 9\nevent: messages\ndata: ${JSON.stringify({seq: 9, thread_id: 't-dm-designer'})}\n\n`});
     const m6 = page.locator('[data-message="m6"]');
     await m6.locator('figure.vcard[data-kind="page"] .vcard-body.ready').waitFor();
     assert.deepEqual(await m6.locator('img.vcard-img, iframe.vcard-frame').evaluateAll(els => els.map(e => e.getAttribute('src'))),

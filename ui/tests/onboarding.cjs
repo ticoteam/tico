@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile, harnesses} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 // TICO_SCREENSHOT_DIR=<dir> saves screenshots of the first-run screens.
 // TICO_SHOT_SCHEME=dark takes them in the dark theme.
@@ -187,6 +188,8 @@ function recruitFor({department, briefing, share}) {
     const puts = [], tourPosts = [], completes = [], definitions = [], created = [], enrollments = [], chats = [], invites = [], owners = [];
     let refuseSetup = false;   // the next PUT /api/v2/setup is refused once (set on the team chart)
     const recruits = [], opened = {};
+    // Each bot's DM reads what Set up wrote to it (the chat the first message opened).
+    const dms = ['support', 'meeting-notes'].map(bot => threadsFake({bot, messages: () => opened[bot]?.messages || []}));
     let hq = {available: true, off_by: ''}, recruitHeld = null, releaseRecruit = () => {};   // a recruit answer the test holds
     let record = {
       names: {company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace'},
@@ -270,7 +273,7 @@ function recruitFor({department, briefing, share}) {
       if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: enrollCode, expires: '2026-09-16T10:15:00Z'}); }
       if (p === '/api/v2/bots' && request.method() === 'POST') { created.push(request.postDataJSON()); return json({bot: {slug: request.postDataJSON().slug}}); }
       if (p === '/api/v2/bots') return json(v2bots());
-      // A person's chat with a bot: the first message opens it, and the bot page's Chat tab lists it from then on.
+      // A person's chat with a bot: the first message opens it, and the bot page's DM tab shows it from then on.
       if (/^\/api\/v2\/chat\/[^/]+$/.test(p)) {
         const bot = p.split('/')[4], text = request.postDataJSON().text;
         chats.push([bot, request.postDataJSON()]);
@@ -281,14 +284,7 @@ function recruitFor({department, briefing, share}) {
         opened[bot] = {conversation, messages: [message]};
         return json({message, conversation});
       }
-      if (p === '/api/v2/conversations') {
-        const chat = opened[url.searchParams.get('chat_with')];
-        return json({conversations: chat ? [chat.conversation] : []});
-      }
-      if (/^\/api\/v2\/conversations\/chat-[^/]+\/(snapshot|messages)$/.test(p)) {
-        const chat = opened[p.split('/')[4].slice(5)];
-        return json({messages: chat ? chat.messages : [], has_more: false, next_before: null, execution: null});
-      }
+      for (const dm of dms) { const answer = dm(p, url, request.method()); if (answer !== undefined) return json(answer); }
       if (p === '/api/v2/access/humans') { invites.push(['add', request.postDataJSON()]); return json({person: 'sam', email: 'sam@initech.test', name: 'Sam Ortiz'}); }
       if (p === '/api/v2/access/humans/sam') { invites.push(['role', request.postDataJSON()]); return json({person: 'sam'}); }
       if (/^\/api\/v2\/bots\/[^/]+\/co-owners$/.test(p)) { owners.push([p.split('/')[4], request.postDataJSON()]); return json({bot_owners: [{id: 'ana', name: 'Ana Rivera'}, {id: 'ben', name: 'Ben Cole'}], revision: 4}); }
@@ -956,15 +952,16 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await page.locator('#bot-onboard p').count(), 0);                                    // the pill and the button, no paragraph
     assert.equal(await page.locator('#bot-start-setup').textContent(), 'Start onboarding');
     assert.equal(await page.locator('#bot-onboard [data-setup-help="bot"]').textContent(), 'Want help onboarding it?');
-    // The Chat tab shows the setup conversation: the person's line, in the chat Set up wrote to.
-    await page.locator('#conv-thread .bubble.you', {hasText: "Let's set you up."}).waitFor();
+    // The DM tab shows the setup conversation: the person's line, in the chat Set up wrote to.
+    await page.goto('https://tico-ui.test/#/bot/support/dm');
+    await page.locator('#bot-thread .th-msg.th-mine', {hasText: "Let's set you up."}).waitFor();
     // A planned starter is activated first (an owner's call), then told the same line.
-    await page.goto('https://tico-ui.test/#/bot/meeting-notes');
+    await page.goto('https://tico-ui.test/#/bot/meeting-notes/dm');
     await page.locator('#bot-start-setup').click();
     await page.locator('#bot-start-setup', {hasText: 'Onboarding started'}).waitFor();
-    // Its Chat tab was open and empty when Set up was pressed: the message shows at once, not after a reload.
-    await page.locator('#conv-thread .bubble.you', {hasText: "Let's set you up."}).waitFor({timeout: t(3000)});
-    assert.equal(await page.locator('#conv-thread .empty').count(), 0);
+    // Its DM tab was open and empty when Set up was pressed: the message shows at once, not after a reload.
+    await page.locator('#bot-thread .th-msg.th-mine', {hasText: "Let's set you up."}).waitFor({timeout: t(3000)});
+    assert.equal(await page.locator('#bot-thread .th-empty').count(), 0);
     assert.deepEqual(definitions, [{path: '/api/v2/bots/meeting-notes/definition', body: {status: 'active', expected_revision: 4}}]);
     assert.deepEqual(chats.at(-1), ['meeting-notes', {text: "Let's set you up."}]);
     // The mark clears when the bot says it is set up: the page follows the bot's state.

@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const zlib = require('node:zlib');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 
 // A plain picture of w x h, so a wrong fit or a crop shows in the numbers.
 function png(w, h) {
@@ -44,6 +45,7 @@ const A = (id, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1', titl
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
+    const threads = threadsFake({bot: 'designer', messages: () => messages});
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -60,11 +62,11 @@ const A = (id, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1', titl
       if (p === '/api/issues') return json([]);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/events') return;                                 // live events, held open
-      if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c-designer', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:designer']}] : []});
-      if (p === '/api/v2/conversations/c-designer/snapshot') return json({messages, execution: null});
+      const answer = threads(p, url, req.method());
+      if (answer !== undefined) return json(answer);
       return json(unrouted(p));
     });
-    await page.goto('https://tico-ui.test/#/bot/designer/chat');
+    await page.goto('https://tico-ui.test/#/bot/designer/dm');
     const m1 = page.locator('[data-message="m1"]');
     await m1.locator('figure.vcard .vcard-body.ready').nth(2).waitFor();
 
@@ -82,7 +84,7 @@ const A = (id, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1', titl
     }
     assert(cards.every(c => Math.abs(c.top - cards[0].top) < 1), `${label}: three pictures sit side by side ${cards.map(c => c.top)}`);
     // the words above keep the column
-    const words = await m1.locator('.bubble').evaluate(b => b.getBoundingClientRect().height);
+    const words = await m1.locator('.th-body').evaluate(b => b.getBoundingClientRect().height);
     assert(words < 120, `${label}: the reply's words are not pushed away ${words}`);
     // your own upload too, on your side
     const mine = await page.locator('[data-message="m2"] figure.vcard').evaluate(c => [c.getBoundingClientRect().width, c.closest('.vcards').getBoundingClientRect().width,
@@ -94,7 +96,7 @@ const A = (id, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1', titl
     await page.waitForFunction(() => document.querySelector('[data-message="m3"] .chat-thumb img')?.naturalWidth > 0);
     const thumb = await t.evaluate(b => {
       const r = b.getBoundingClientRect(), i = b.querySelector('img').getBoundingClientRect();
-      return {w: r.width, col: b.closest('.conv-run').getBoundingClientRect().width, ratio: i.width / i.height, fit: getComputedStyle(b.querySelector('img')).objectFit};
+      return {w: r.width, col: b.closest('.th-main').getBoundingClientRect().width, ratio: i.width / i.height, fit: getComputedStyle(b.querySelector('img')).objectFit};
     });
     assert(thumb.w <= Math.min(thumb.col, 800) * 0.3 && thumb.w >= 60, `${label}: the fallback thumbnail is about a quarter of the column ${JSON.stringify(thumb)}`);
     assert(Math.abs(thumb.ratio - 700 / 2100) < 0.03 || thumb.fit === 'contain', `${label}: the fallback thumbnail is whole, not cropped ${JSON.stringify(thumb)}`);

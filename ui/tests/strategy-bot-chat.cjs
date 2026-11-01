@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 
 const now = new Date().toISOString();
 const msg = (id, from, body) => ({id, from_actor: from, body, refs: {}, created: now, kind: 'say'});
@@ -18,6 +19,7 @@ async function open(browser, me, view, strategyName) {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], {origin: 'https://tico-ui.test'});
   const page = await context.newPage();
   const errors = [], read = [], sent = [];
+  const helpers = ['botops', 'goal-manager'].map(bot => threadsFake({bot, home: [{id: 'h-' + bot, from_actor: 'bot:' + bot, body: 'Nothing to report.'}]}));
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
@@ -34,6 +36,7 @@ async function open(browser, me, view, strategyName) {
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations') return json({conversations: []});
+    for (const answer of helpers.map(h => h(p, url, route.request().method()))) if (answer !== undefined) return json(answer);
     if (p === '/api/v2/assistant') return json(view);
     // A send: words as JSON, files as a form, like any bot chat (ui/app/api.js cloudCompose).
     if (/^\/api\/v2\/(?:uploads\/)?assistant\/messages$/.test(p)) {
@@ -130,12 +133,11 @@ const view = (over) => ({available: true, state: 'active', can_turn_on: false, r
       await page.waitForFunction(() => !document.querySelector('#chat-composer .p-text').value);
       await page.waitForFunction(() => !document.querySelector('#chat-composer .p-chips')?.children.length);
       assert.deepEqual(sent.map(s => s.path), ['/api/v2/uploads/assistant/messages'], 'admin: words and the picture together');
-      // A helper's own page still opens for an admin, with no composer: the Assistant hands it its work.
+      // A helper's own page still opens for an admin, with its Home but no DM: the Assistant hands it its work.
       for (const helper of ['botops', 'goal-manager']) {
         await page.goto('https://tico-ui.test/#/bot/' + helper);
-        await page.locator('#chat-composer [data-ask-open]').waitFor();
-        assert.equal(await page.locator('#chat-composer .p-text').count(), 0, `admin: no composer on ${helper}'s page`);
-        assert.match(await page.locator('#chat-composer').innerText(), /The Assistant hands .+ its work/);
+        await page.locator('#bot-thread .th-msg', {hasText: 'Nothing to report.'}).waitFor();
+        assert.equal(await page.locator('#btabs [data-bt=dm]').count(), 0, `admin: no DM tab on ${helper}'s page`);
       }
       assert.deepEqual(errors, [], 'admin: no page errors');
       await page.close();
