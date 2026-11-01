@@ -2700,8 +2700,8 @@ def test_an_invoice_sales_tax_stays_a_line_on_a_xero_book_whose_document_takes_n
     with books.transaction() as c:
         tax = str(c.execute("SELECT id FROM fin_accounts WHERE subtype=?", (M.SALES_TAX,)).fetchone()[0])
         local = {"party": _local(c, "Customer:4", "fin_contacts"), "number": "INV-1", "day": "2026-10-06", "due": None,
-                 "memo": "", "lines": [{"account_id": _local(c, "Account:3", "fin_accounts"), "amount": 9000},
-                                       {"account_id": tax, "amount": 150}]}
+                 "memo": "", "lines": [{"account_id": _local(c, "Account:3", "fin_accounts"), "amount": 9000, "description": ""},
+                                       {"account_id": tax, "amount": 150, "description": ""}]}
         quickbooks = mirror._doc_out(c, cid, "invoice.create", local)
         assert quickbooks["tax"] == 150 and [x["amount"] for x in quickbooks["lines"]] == [9000]
         c.execute("UPDATE fin_connections SET provider='xero' WHERE id=?", (cid,))
