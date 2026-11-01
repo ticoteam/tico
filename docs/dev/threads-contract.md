@@ -177,22 +177,41 @@ CREATE TABLE IF NOT EXISTS sequences (name TEXT PRIMARY KEY, value INTEGER NOT N
 Sub-threads are evaluated through their **root** row (same audience by §1.1, but the root is the authority).
 
 ### 2.2 Bots
-- **In a turn** (runner token): the bot reads a thread when its attempt holds a grant on any thread with the same
-  `root_id` (`attempt_conversations` joined through `conversations.root_id`). Task threads it may read are added as
-  today (`auth.task`). Its own open asks to a person stay readable (`_own_ask_to_a_person`).
-- **Outside a turn** (agent token): access membership (`thread_members`, including via a group), the participant
-  grant (`participants_json`), or `home` when the bot is the Home's owner or holds Read on its owner.
+Bots are AI employees: an internal bot reads what a person in the same seat reads.
+- **Every bot** reads by access membership (`thread_members`, including via a group), the participant grant
+  (`participants_json`), `home` when it is the Home's owner or holds Read on its owner, or a task thread it may read
+  (`auth.task`). Its own open asks to a person stay readable (`_own_ask_to_a_person`). `members`, `personal` and
+  `participants` threads open to nothing else.
+- **Internal bots** (runner token, any turn) also read every `company` thread, and the `team` threads of the group
+  they are in or any group above it (`Viewer.chain`, nested groups included). The turn's grant (`attempt_conversations`,
+  any thread with the same `root_id`) adds the woken tree when the bot could not otherwise read it. A legacy root (no
+  stored audience) still opens to an internal bot only by that grant, and migrated shared-room history only to the
+  room's bot, a participant or a granted turn.
+- **External agents** (agent token) never get `company` or `team` standing read: there only their participation
+  counts. A bot in a thread's wake audience (`threads.audience_has`: company bots, the group's bots) may still be
+  woken there.
+- **Posting in a Home** takes Write on its owner for bots as for people (`can_post`). Only the Home's own bot and a
+  run replying into the thread its attempt was granted skip it.
 - There is no `threads: read_open`. Membership is the grant.
 - The Assistant acts with its person's rights (`auth.tico_principal`); the Librarian keeps its principal.
 
 ### 2.3 Per-message checks (inside the audience)
 - Unchanged rule: `task_privacy.message_readable` (meeting provenance, referenced private tasks, bot limits).
 - **`restricted`** is computed at write time: 1 when the message has `legacy_audience`, an `in_reply_to`, any
-  `refs` key outside `threads.SAFE_REF_KEYS`, sits in a `task` or `meeting` thread, or attaches files. A message with
+  `refs` key outside `threads.SAFE_REF_KEYS`, structure under a safe key other than one level under
+  `threads.NESTED_REF_KEYS` (`origin`, `mentions`, `warnings`), any string in refs that names a task (`task:`, a task
+  link, or any task's id), sits in a `task` or `meeting` thread, or attaches files. The migration computes the same in
+  SQL (`json_tree`). A message with
   `restricted=0` skips `message_readable` once the audience check passed (the SSE and timeline fast path).
-- **`legacy_audience='shared:<slug>'`**: readable only by today's live predicate,
-  `rooms.shared_member(c, auth, actor, slug)` (primary users ∩ bot Read, plus the company owner). Others in the Home
-  see one collapsed **Earlier messages** row (`{"id", "seq", "hidden": true}` in a timeline; nothing on SSE).
+- **`legacy_audience='shared:<slug>'`**: readable by exactly today's live predicate, no more and no less:
+  `rooms.shared_member(c, auth, actor, slug)` with bot Read for people; participants and the room's bot for an
+  agent; a run's grant. Home readers outside it see one collapsed **Earlier messages** row (`{"id", "seq", "hidden":
+  true}` in a timeline; nothing on SSE).
+- **A migrated Home** (the bot's open shared room, `audience='home'` stored): everything new (`legacy_audience`
+  NULL, any sub-thread) follows Home Read. An old reader without Home Read still opens the Home's root
+  (`threads.legacy_reader_only`) but sees only that history: the timeline lists only legacy messages, `last_seq`
+  and `last_message_at` are the history's, unread is 0, no sub-thread opens, and SSE, `hub sql` and the legacy
+  per-message check (`task_privacy.message_readable` → `threads.legacy_gate`) hide new messages from them.
 - A hidden message renders as a quiet "not shown" row in timelines and is skipped on SSE.
 - New posts can't widen anything (`H.path_mentioned`, `guard_write` keep running in the write door).
 
@@ -239,7 +258,8 @@ threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_mes
   in-audience mention or ask target, otherwise NULL.
 - `via`: who really acts (`assistant`, `botops`, `slack`, `peer`), recorded in `refs.via`. `origin`:
   `{"origin_id", "revision", "install", "actor"}` for replicated inbound (Slack, federation); a repeat
-  `(origin_id, revision)` returns the existing message and writes nothing.
+  `(origin_id, revision)`, once the writer is authorized, returns the existing message (`duplicate: true`) and writes
+  nothing. A repeat whose message is in another thread or from another signer is 409 `origin_taken`.
 - `checked`: the org-rule verdict from `org_rule_check.preflight` (step 5, done by the caller **outside** the
   transaction, operation `threads`). `post` applies it with `org_rule_check.apply(c, checked, body, replay)` (the
   payload is the body text) and reads **apply's return**: held → returns `org_rule_check.answer(gate)` and writes no
@@ -355,7 +375,14 @@ and `wake_rules.judge` still run per delivery and may turn `queue` into `defer`.
 The primary bot recipient (`to_actor`) is queued by the existing `queue_bot_message` trigger (job id = message id).
 Each further woken bot gets a **carrier**: a keeper notice to that bot in the same thread, `refs={"carries": <id>,
 "wake": "thread", "reason": ...}`, no `seq`; its job starts the run, and the delivery's `carrier_id` names it.
-`jobs.message_id` stays unique.
+`jobs.message_id` stays unique. No carrier is written when the bot may not read the message (audience and the
+per-message check); the delivery is `moot`. The per-message check reads a carrier as the message it carries, and a
+claim refuses a carrier whose message is gone, moved or no longer readable (`threads.carrier_current`).
+
+Every message write fans out the same way, through `post` or a legacy writer (`hubdb.say`, runner replies, old
+routes): mentions, DM members, the Home's owner, sub-thread repliers and outside destinations, under the loop guard.
+A legacy write in a `task` thread leaves its mentions to the task rules, and a legacy notice or keeper write wakes no
+further bot.
 
 ### 4.5 Loop guard
 `threads.LOOP_GUARD_PER_HOUR` (default 6, `TICO_THREAD_LOOP_GUARD`): bot-caused wakes (`cause='bot'`, bot
@@ -410,9 +437,11 @@ bound meeting room by the meeting; an agent bot by participation or `rooms.room_
 The only narrowing: a person who left, or whose sign-in is off, reads nothing. The e2e reader-set goldens
 (`backend/tests/fixtures/threads/reader-sets-*.json`) pin it. The audience *label* is still derived live from
 `room_key`, `scope`, `kind` and `task_id` (`threads.audience_of`) for sessions, wakes and posting rules,
-because legacy writers set those columns after the insert. A sub-thread of such a root reads as its root. Likewise `owner_actor` stays as written and a shared
-room's owner is derived (`threads.home_owner`). Only threads made by `threads.create`/`home`/`sub_thread` store an
-audience.
+because legacy writers set those columns after the insert. A sub-thread of such a root reads as its root. Likewise `owner_actor` stays as written.
+Threads made by `threads.create`/`home`/`sub_thread` store an audience, and so does each bot's open shared room: the
+migration stores `audience='home'`, `owner_actor='bot:<slug>'` on it. Archived duplicate shared rooms, and a shared
+room `rooms.sync_shared_room` opens after the migration (a bot newly in shared mode), stay unstored and read by the
+live shared-room rule as before.
 
 | today | audience | notes |
 |---|---|---|
