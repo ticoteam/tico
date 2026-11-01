@@ -323,7 +323,8 @@ def test_renamed_bots_are_found_in_the_folders_they_were_made_with(api, botops, 
     # A new bot given the renamed copy's first slug is built in a folder of its own, not into that checkout.
     again = tool("hub_bot_copy", bot="note-taker", slug="cara-helper")
     assert again["folder"].startswith("bot-cara-helper-") and (workspace / again["folder"] / "AGENT.md").is_file()
-    assert "skills/minutes/SKILL.md" in git(workspace / "bot-cara-helper", "ls-files")
+    # The renamed copy's own checkout is untouched: its committed skill is still there.
+    assert git(workspace / "bot-cara-helper", "show", "HEAD:skills/minutes/SKILL.md") == "Minutes."
 
 
 def test_botops_is_given_a_read_only_token_for_a_bot_on_another_computer_only_for_a_person_who_may_read_it(api, botops, scribe, monkeypatch, tmp_path):
