@@ -5034,8 +5034,8 @@ class Execution:
             # The followed config, as the turn's runner keyed it (a branch's session keys come from its original).
             from .shared_bots import follow
             followed_config = follow(c, row["bot"], json.loads(bot_config[0]) if bot_config else {})
-            own = sessions.session_key(followed_config, row["bot"],
-                                       checkpoint_task["id"], conv["id"]) == "task:" + checkpoint_task["id"]
+            own = sessions.session_key(followed_config, row["bot"], checkpoint_task["id"], conv["id"],
+                                       task_private=H.task_private(c, checkpoint_task)) == "task:" + checkpoint_task["id"]
             # Only a turn in the task's own session leaves a checkpoint: a shared bot thread carries
             # other tasks. And a session that once took in another private task may carry it in every
             # later turn, even one that does not, so that task never gets a checkpoint again (a private

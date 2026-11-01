@@ -7,8 +7,24 @@ This page explains how they fit together. [Tasks](tasks.md#subtasks-and-prs) has
 ## The main chat and task sessions
 
 - **Home**: the bot's thread on its page. Its session reads only Home messages and short task reports.
+- **Thread session**: every other thread with the bot keeps a session of its own, shared by its sub-threads. A private
+  thread's session (a DM, a members-only thread, a meeting, a private task's thread) never serves a public one, and
+  the other way round.
 - **Task session**: each task the bot owns. It has its own thread (the task's thread), its own git worktree of the
   bot's repository, and a primary session link on the task.
+
+Which session a turn continues depends on the bot's `session` setting:
+
+| `session` | A task's turn | A turn in a public thread | A turn in a private thread |
+|---|---|---|---|
+| unset (default) | the task's session | that thread's session | that thread's session |
+| `task` (BotOps) | the task's session | that thread's session | that thread's session |
+| `bot` | the bot's shared session; a private task's own session | the bot's one public session | that thread's session |
+
+On `session: bot`, a private task, or a task worked from a private thread, never enters the shared session: that
+session serves the Home and public threads, so private work stays out of it. A stateless bot keeps every task in its
+own session. A turn from a Tico server before native threads keys as it did before: one shared session on
+`session: bot` (a private task still gets its own), and on `session: task` one per conversation.
 
 Task traffic never enters two context windows. What you say in a task stays in that task's session, and what you
 say in the Home stays in the main one.
@@ -82,9 +98,9 @@ clears the session for the next run. `/compact` keeps its session.
 Older runners also started a new session once a session passed a size (`rotate_at`, `rotate_after_turns`); those
 settings are gone, and a saved config that still carries them is ignored.
 
-**Clear** on a bot's thread starts that thread over: the next turn opens a new provider thread and reads only what was
-said after the clear. The Home is one thread shared by the bot's threads, so a clear in one person's DM starts
-that shared thread over too; others' DMs then continue from their own history in Tico. A bot's computer must run
+**Clear** on a bot's thread starts that thread's session over, its sub-threads' included: the next turn opens a new
+provider thread and reads only what was said after the clear. On `session: bot`, a Clear in a thread that uses the
+shared session starts that shared session over too; other threads then continue from their own history in Tico. A bot's computer must run
 a runner from this release or later; an older runner keeps resuming the old thread.
 
 In a long DM with a bot, when you change subject, Tico may start a fresh session, as if you pressed **Clear**,
@@ -160,7 +176,7 @@ The task's ⋯ menu has **Copy session ID** for the primary session, to resume i
 
 | Setting | Values | What it does |
 |---|---|---|
-| `session` | unset (default), `task`, `bot` | Unset: each task is its own session and the Home shares one. `task`: each thread also gets its own (BotOps). `bot`: one session for everything. |
+| `session` | unset (default), `task`, `bot` | Unset and `task`: each task and each thread is its own session. `bot`: one shared session for public threads and non-private tasks; private tasks and private threads keep their own. See [the table above](#the-main-chat-and-task-sessions). |
 | `subtask_session` | `parent` (default), `own` | Whether a subtask someone else files continues its parent's session or gets its own; one the bot files for itself always gets its own. |
 | `task_goal` | `off` (default), `on` | Work each task as a native goal until it is met. |
 | `review_model` | `own` (default), `check` | Run a subtask handed to it under another's task on the company's check model ([Tasks](tasks.md#a-subtask-on-a-check-model)). |

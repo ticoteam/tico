@@ -44,7 +44,7 @@ def root_key(root_id, audience_class):
     return f"root:{root_id}:{PRIVATE if audience_class == PRIVATE else PUBLIC}"
 
 
-def session_key(config, bot, task_id, conversation_id, root_id=None, audience_class=None):
+def session_key(config, bot, task_id, conversation_id, root_id=None, audience_class=None, task_private=False):
     """The provider thread this turn continues. A turn on a task continues that task's own session,
     so a task never carries every earlier task into each call; a wake about the same task (a stalled
     nudge, a reconcile, a reply) resumes it. `session: bot` opts out (one thread for everything), except
@@ -53,17 +53,23 @@ def session_key(config, bot, task_id, conversation_id, root_id=None, audience_cl
     A turn from a server with native threads names its thread's root and audience class: a turn with no task
     continues that thread tree's session (`root_key`), and `session: bot` keeps one public thread (`public`) while
     each private thread keeps its own. From an older server (no root): other turns share the bot's one thread, and
-    `session: task`, BotOps's default, keys a wake with no task on its conversation."""
+    `session: task`, BotOps's default, keys a wake with no task on its conversation.
+
+    On `session: bot` a private task (`task_private`), or a task turn in a private thread, keeps its own session
+    (`task:<id>`): the shared thread serves Home and public turns, so private work never enters it."""
     mode = (config or {}).get("session") or ("task" if bot == "botops" else None)
+    on_bot = mode == "bot" and not stateless(config)
+    if on_bot and task_id and (task_private or (root_id and audience_class == PRIVATE)):
+        return "task:" + task_id
     if root_id:
-        if mode == "bot" and not stateless(config):
+        if on_bot:
             if task_id:
                 return BOT_THREAD
             return root_key(root_id, PRIVATE) if audience_class == PRIVATE else PUBLIC_THREAD
         if task_id:
             return "task:" + task_id
         return root_key(root_id, audience_class)
-    if mode == "bot" and not stateless(config):
+    if on_bot:
         return BOT_THREAD
     if task_id:
         return "task:" + task_id
@@ -84,6 +90,7 @@ def adopted_key(key):
 
 def lane(config, bot, task_id, conversation_id, root_id=None, audience_class=None):
     """A task-keyed turn has its own session, so it runs in its own lane beside the bot's other
-    tasks; everything else shares the main lane."""
+    tasks; everything else shares the main lane. A private task on `session: bot` keeps its own session but stays in
+    the main lane, in the bot's one checkout (the server passes no `task_private` here)."""
     key = session_key(config, bot, task_id, conversation_id, root_id, audience_class)
     return key if key.startswith("task:") else MAIN_LANE
