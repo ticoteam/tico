@@ -196,7 +196,7 @@ pub async fn activate(url: &str, token: &str, state_dir: &Path, attempt: &Value,
         .find(|s| s["activate"] == true && s["runtime"].as_str() == Some(runtime))
         .ok_or("No automatic subscription candidate")?;
     // Runtime names originate in claim metadata, but still must not become arbitrary query text.
-    if !matches!(runtime, "claude" | "codex") { return Err("Unknown subscription runtime".into()); }
+    if !safe_id(runtime) { return Err("Invalid subscription runtime".into()); }
     let client = crate::client::Client::new(url, token, 15, 1)?;
     let response = client.get(&format!("credential-runtime?subscription_runtime={runtime}")).await
         .map_err(|_| "Could not activate automatic subscription")?;
@@ -571,6 +571,10 @@ mod tests {
         let state = dir();
         let attempt = json!({"subscriptions": [{"id":"auto-login", "runtime":"codex", "activate":true}]});
         let mut env = Env::new();
+        let injected_runtime = "runtime&other=value";
+        let injected = json!({"subscriptions": [{"id":"auto-login", "runtime":injected_runtime, "activate":true}]});
+        assert_eq!(activate("http://127.0.0.1:1", "run-token", &state, &injected, injected_runtime, &mut env)
+            .await.unwrap_err(), "Invalid subscription runtime");
         let config = json!({"runtime":"claude", "harness":"claude", "model":"primary"});
         let choices = vec![json!({"runtime":"codex", "harness":"codex", "model":"fallback"})];
         let choice = crate::fallback::default_choice(&config, &choices, &env, |rt| available(&[], &attempt, rt)).unwrap();
