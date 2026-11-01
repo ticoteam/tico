@@ -741,17 +741,23 @@ def _default_of(org_led: bool, defaults: VW.Defaults, owner: bool) -> str:
 
 
 def default_team(org: Org, manager: str) -> str | None:
-    """The one top team a manager's default covers, which the page names ("Engineering expenses"): the team they lead
-    (with the teams under it) or the single team their reports sit in. None when it spans several teams or reaches a
-    report on no team."""
-    covered = set(org.led_by(manager))
-    for mate in org.reports(manager):
+    """The one top team a manager's default covers whole, which the page names ("Engineering expenses"): the team they
+    lead (with the teams under it), or the single team their reports sit in when they are everyone on it. None when it
+    spans several teams, reaches a report on no team, or leaves out anyone on that team (a sub-team lead with one
+    report in the parent team, say)."""
+    led, mates = org.led_by(manager), org.reports(manager)
+    covered = set(led)
+    for mate in mates:
         team = org.team_of.get(mate, "")
         if team not in org.teams:
             return None
         covered.add(team)
     tops = {t for t in covered if not covered.intersection(org.chain(t)[1:])}
-    return next(iter(tops)) if len(tops) == 1 else None
+    if len(tops) != 1:
+        return None
+    top = next(iter(tops))
+    seen = org.members(led) | mates | {manager}
+    return top if org.members(org.below(top)) <= seen else None
 
 
 def _grant_row(g: VW.Grant, ctx: Ctx) -> Row:
