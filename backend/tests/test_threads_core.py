@@ -198,6 +198,8 @@ def test_revisions_apply_highest_first_and_a_delete_is_final(world):
         assert threads.apply_revision(c, {**origin, "revision": 4}, body="back") is None     # a delete is final
         row = H.message(c, message["id"], include_deleted=True)
         assert row["deleted_at"] and not row["body"]
+        kept = [r[0] for r in c.execute("SELECT body FROM message_revisions WHERE message_id=?", (message["id"],))]
+        assert kept and not any(kept), "a deleted message keeps no words in its history"
 
 
 # ----------------------------------------------------------------------------- C3: loop guard
