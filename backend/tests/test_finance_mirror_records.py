@@ -243,3 +243,74 @@ def test_an_invoice_for_a_job_is_to_the_job_and_a_journal_line_names_its_locatio
     assert detail["DepartmentRef"] == {"value": "3"}
     assert detail["ClassRef"] == {"value": "7"}
     assert detail["Entity"] == {"Type": "Customer", "EntityRef": {"type": "Customer", "value": "12"}}
+
+
+def test_a_record_made_here_waits_for_the_provider_and_its_row_takes_the_id_it_was_sent_under(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        customer = _local(c, "Customer:4", "fin_contacts")
+        made = act(c, OWNER, "item_create", {"name": "Design", "kind": "service", "price": 9000})
+        placed = act(c, OWNER, "place_create", {"name": "Dallas"})
+        job = act(c, OWNER, "project_create", {"name": "Deck build", "customer_id": customer})
+        assert [made.status, placed.status, job.status] == ["committed"] * 3, (made, placed, job)
+        assert c.execute("SELECT COUNT(*) FROM rec_items WHERE name='Design'").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM rec_places WHERE name='Dallas'").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM rec_projects WHERE name='Deck build'").fetchone()[0] == 0
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert _sent(fake, "item.create")["price"] == 9000
+    with books.read() as c:
+        assert c.execute("SELECT price FROM rec_items WHERE id=?", (made.result["item_id"],)).fetchone()[0] == 9000
+        assert c.execute("SELECT name FROM rec_places WHERE id=?", (placed.result["place_id"],)).fetchone()[0] == "Dallas"
+        assert c.execute("SELECT name FROM rec_projects WHERE id=?",
+                         (job.result["project_id"],)).fetchone()[0] == "Deck build"
+
+
+def test_a_job_made_here_is_sent_to_quickbooks_as_a_job_under_its_customer(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "project_create",
+                   {"name": "Deck build", "customer_id": _local(c, "Customer:4", "fin_contacts")})
+        assert made.status == "committed", made
+    assert _drain(books, fake, cid, now=LATER) == []
+    kind, path, out, _ = QC._write_of("project.create", _sent(fake, "project.create"), {})
+    assert (kind, path) == ("Customer", "customer")
+    assert out["Job"] is True and out["DisplayName"] == "Deck build"
+    assert out["ParentRef"] == {"value": "4"}
+
+
+def test_an_item_change_in_a_mirrored_book_leaves_the_row_as_it_was_until_the_provider_confirms_or_refuses(
+        books, monkeypatch):
+    asks: list[tuple[str, str]] = []
+    monkeypatch.setattr(mirror.tico, "needs_you", lambda c, person, title, body: asks.append((person, title)))
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item = _local(c, "Item:5", "rec_items")
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
+        assert act(c, "human:dan", "item_update", {"item_id": item, "price": 20_000}).status == "needs_approval"
+        assert act(c, OWNER, "item_update", {"item_id": item, "price": 20_000}).status == "committed"
+        assert c.execute("SELECT price FROM rec_items WHERE id=?", (item,)).fetchone()[0] == 15_000
+    fake.replies.append(mirror.Sent(False, error="Price is not allowed on this item", final=True))
+    problems = _drain(books, fake, cid, now=LATER)
+    assert any("Price is not allowed on this item" in p for p in problems), problems
+    with books.read() as c:
+        assert c.execute("SELECT price FROM rec_items WHERE id=?", (item,)).fetchone()[0] == 15_000
+        status, error = c.execute("SELECT status, last_error FROM fin_outbox WHERE op='item.update'").fetchone()
+        assert (status, error) == ("failed", "Price is not allowed on this item")
+    assert len(asks) == 1, asks
+    with books.transaction() as c:
+        assert act(c, OWNER, "item_update", {"item_id": item, "price": 21_000}).status == "committed"
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert c.execute("SELECT price FROM rec_items WHERE id=?", (item,)).fetchone()[0] == 21_000

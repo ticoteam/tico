@@ -47,7 +47,9 @@ REFUSED = ("bill_update", "bill_approve", "bill_schedule", "invoice_send",
            "account_create", "account_update", "feed_match",
            # purchase orders and estimates are local until the mirror writes them (not built)
            "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
-           "estimate_accept", "estimate_decline", "estimate_convert")
+           "estimate_accept", "estimate_decline", "estimate_convert",
+           # a job's edits are not written to the provider yet (its create is, through RECORD_KINDS)
+           "project_update")
 
 Record = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Item | M.Place | M.Dimension | M.Project
           | M.Refused | M.Ext)
@@ -1410,12 +1412,84 @@ def _writeoff_out(c: sqlite3.Connection, cid: str, local: Mapping[str, Any]) -> 
             "total": int(local["amount"]), "invoice": invoice}
 
 
+# The shared records a Tico write sends to the provider first (catalog.py): a QuickBooks item, department or job. Each
+# kind's table, the provider kind its record is bound under, and the local columns a write sets.
+RECORD_KINDS: dict[str, tuple[str, str, str]] = {"item": ("rec_items", "Item", "item"),
+                                                 "place": ("rec_places", "Department", "location"),
+                                                 "project": ("rec_projects", "Project", "job")}
+RECORD_COLUMNS = {
+    "item": ("name", "sku", "kind", "unit", "price", "currency", "income_account_id", "expense_account_id",
+             "asset_account_id", "active"),
+    "place": ("name", "kind", "parent_id", "address_json", "active"),
+    "project": ("name", "customer_id", "status", "active")}
+RECORD_OPS = ("item.create", "item.update", "place.create", "place.update", "project.create")
+ITEM_ACCOUNTS = (("income_account_id", "income"), ("expense_account_id", "expense"), ("asset_account_id", "asset"))
+
+
+def queue_record(ctx: Ctx, who: str, aid: str, op: str, body: Mapping[str, Any]) -> str:
+    """A shared record's write queued for the provider (its id is in the body as local_id). The local record changes
+    only when the provider confirms the write (_confirm_record)."""
+    return _queue(ctx.c, _cid(ctx), op, body, by=who, action_id=aid, at=ctx.at)
+
+
+def record_in_provider(ctx: Ctx, table: str, local_id: str) -> None:
+    """A shared record a write changes must be one the provider holds already: its create was confirmed."""
+    ref = SX.ref_for_local(ctx.c, _cid(ctx), table, local_id)
+    if ref is None or str(ref["status"]) != "active":
+        raise FinanceError(CONFLICT, "that is not in the provider yet")
+
+
+def _record_out(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any]) -> dict[str, Any]:
+    """A shared record as the provider takes it: its name and state, its accounts or parent customer by their provider
+    keys, and for an update the provider's id and revision. An update waits while the record is not in the provider."""
+    kind, verb = op.split(".")
+    table, _, _ = RECORD_KINDS[kind]
+    out: dict[str, Any] = {"name": str(local["name"]), "active": bool(local.get("active", 1)),
+                           "day": str(local.get("day") or "")}
+    if kind == "item":
+        out.update({"kind": str(local["kind"]), "sku": str(local.get("sku") or ""),
+                    "price": None if local.get("price") is None else int(local["price"])})
+        for field, key in ITEM_ACCOUNTS:
+            account = str(local.get(field) or "")
+            out[key] = _need(_key(c, cid, "fin_accounts", account), f"account {account}") if account else ""
+    elif kind == "project":
+        customer = str(local.get("customer_id") or "")
+        out["customer"] = _need(_key(c, cid, "fin_contacts", customer), f"contact {customer}") if customer else ""
+    if verb == "update":
+        ref = SX.ref_for_local(c, cid, table, str(local["local_id"]))
+        if ref is None or str(ref["status"]) != "active":
+            raise _Missing(f"{table} {local['local_id']} is not in the provider yet")
+        out.update({"ext": str(ref["external_id"]), "revision": str(ref["revision"])})
+    return out
+
+
+def _confirm_record(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any], sent: Sent, now: str) -> None:
+    """The provider confirmed a shared record Tico wrote: the local record takes the fields it was sent with, under the id
+    its planner gave it. A create the change feed brought in first stands, so the record is not made twice."""
+    kind = op.split(".")[0]
+    table, provider, _ = RECORD_KINDS[kind]
+    ext = M.Ext(kind=provider, external_id=sent.external_id, revision=sent.revision)
+    local_id = str(local["local_id"])
+    fields = {k: local[k] for k in RECORD_COLUMNS[kind] if k in local}
+    if op.endswith(".update"):
+        RS.update(c, table, local_id, {**fields, "updated_at": now, "updated_by": SYSTEM})
+    else:
+        row = SX.ref(c, cid, table, ext.key)
+        if row is not None and str(row["status"]) == "active":
+            return
+        RS.insert(c, table, {**fields, "id": local_id, "created_at": now, "created_by": SYSTEM, "updated_at": now,
+                             "updated_by": SYSTEM})
+    _bind(c, cid, table, local_id, ext, now)
+
+
 def _translate(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any]) -> dict[str, Any]:
     """What the provider is sent: its keys for accounts and parties, and the tags as its classes when that is on. A
     write waits (_Missing) while an account or party it names is not in the provider yet; an export drops a contact
     the provider does not hold."""
     if op in ("bill.create", "invoice.create"):
         return _doc_out(c, cid, local)
+    if op in RECORD_OPS:
+        return _record_out(c, cid, op, local)
     if op in ("bill.void", "invoice.void"):
         return _void_out(c, cid, DOC_TABLES["Bill" if op.startswith("bill") else "Invoice"], local)
     if op in ("payment.bill", "payment.invoice"):
@@ -1660,6 +1734,8 @@ def _confirm(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any],
         _confirm_writeoff(c, cid, local, provider, sent, now)
     elif op == "credit.apply":
         _confirm_apply(c, cid, provider, sent, now)
+    elif op in RECORD_OPS:
+        _confirm_record(c, cid, op, local, sent, now)
 
 
 def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], provider: Mapping[str, Any],
@@ -1667,6 +1743,7 @@ def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], p
     """A write's answer recorded: sent (confirmed here unless the provider's record is taken in as it is), refused for
     good (unknown when the provider could not tell whether it landed), or to be tried again."""
     oid, attempts = str(o["id"]), int(o["attempts"]) + 1
+    kind = str(o["op"]).partition(".")[0]
     if sent.ok:
         SK.update(c, "fin_outbox", oid, {"status": "sent", "attempts": attempts, "claimed_at": None,
                                          "last_error": None, "updated_at": now})
@@ -1676,6 +1753,10 @@ def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], p
         SK.update(c, "fin_outbox", oid, {"status": "failed", "attempts": attempts, "claimed_at": None,
                                          "last_error": sent.error[:300], "unknown": int(sent.unknown),
                                          "updated_at": now})
+        if kind in RECORD_KINDS:
+            # The local record never changed: the owner sees why the provider refused it.
+            tico.needs_you(c, SX.connection_owner(c, cid), f"QuickBooks refused the {RECORD_KINDS[kind][2]} write",
+                           sent.error[:300])
     else:
         delay = RETRY[min(attempts, len(RETRY)) - 1]
         SK.update(c, "fin_outbox", oid, {"attempts": attempts, "claimed_at": None, "last_error": sent.error[:300],
@@ -1685,7 +1766,8 @@ def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], p
 # The creates a provider may already hold when a retry comes: a cut-off call can have landed, and a provider's
 # idempotency key is only kept for a while.
 RETRIED_CREATES = ("bill.create", "invoice.create", "journal.create", "party.create", "account.create",
-                   "payment.bill", "payment.invoice", "writeoff.create", "credit.apply")
+                   "payment.bill", "payment.invoice", "writeoff.create", "credit.apply",
+                   "item.create", "place.create", "project.create")
 # The revision a provider gives a record it has just created (QuickBooks SyncToken). A provider without counters has
 # none: its found record is confirmed as sent (Xero stamps times, which are not a count of changes).
 INITIAL_REVISION = {"quickbooks": "0"}

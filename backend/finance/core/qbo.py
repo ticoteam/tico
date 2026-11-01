@@ -697,6 +697,46 @@ def item_body(name: str, account: str) -> dict[str, Any]:
     return {"Name": name, "Type": "NonInventory", "IncomeAccountRef": {"value": account}}
 
 
+ITEM_TYPES = {"service": "Service", "inventory": "Inventory", "non_inventory": "NonInventory", "bundle": "Group",
+              "category": "Category"}
+
+
+def _head(body: Mapping[str, Any], kind: str) -> dict[str, Any]:
+    """The id and revision a sparse update names: QuickBooks checks the SyncToken, so a stale write is refused."""
+    return {"Id": _keyed(body["ext"], kind), "SyncToken": str(body["revision"]), "sparse": True}
+
+
+def item_write(body: Mapping[str, Any], *, update: bool = False) -> dict[str, Any]:
+    """An item as QuickBooks takes it. Its type is set on create only (QuickBooks does not change it). An inventory item
+    starts at zero on the day it is made, as QuickBooks requires."""
+    out: dict[str, Any] = {"Name": str(body["name"])[:100], "Active": bool(body.get("active", True))}
+    if body.get("sku"):
+        out["Sku"] = str(body["sku"])[:100]
+    if body.get("price") is not None:
+        out["UnitPrice"] = decimal_text(int(body["price"]))
+    for key, field in (("income", "IncomeAccountRef"), ("expense", "ExpenseAccountRef"), ("asset", "AssetAccountRef")):
+        if body.get(key):
+            out[field] = {"value": _keyed(body[key], "Account")}
+    if update:
+        return {**out, **_head(body, "Item")}
+    out["Type"] = ITEM_TYPES[str(body["kind"])]
+    if str(body["kind"]) == "inventory":
+        out.update({"TrackQtyOnHand": True, "QtyOnHand": 0, "InvStartDate": str(body["day"])})
+    return out
+
+
+def place_write(body: Mapping[str, Any], *, update: bool = False) -> dict[str, Any]:
+    """A location as a QuickBooks department: its name and whether it is active."""
+    out: dict[str, Any] = {"Name": str(body["name"])[:100], "Active": bool(body.get("active", True))}
+    return {**out, **_head(body, "Department")} if update else out
+
+
+def job_write(body: Mapping[str, Any]) -> dict[str, Any]:
+    """A project as a QuickBooks job: a customer with Job set, under its parent customer (the one QuickBooks requires)."""
+    return {"DisplayName": str(body["name"])[:500], "Job": True, "Active": bool(body.get("active", True)),
+            "ParentRef": {"value": _keyed(body.get("customer"), "Customer")}}
+
+
 def writeoff_body(body: Mapping[str, Any]) -> dict[str, Any]:
     """A write-off as a credit memo: one line billed by the write-off item. QuickBooks does not apply a credit through its
     lines, so the memo is applied to its invoice by credit_apply_body once it is saved."""

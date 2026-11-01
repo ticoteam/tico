@@ -1,18 +1,22 @@
 """Shared records as Finance writes them (backend/records): items, places and projects. Each planner checks the payload
-and the asker's right, then writes the record when the action commits. The gate for an item's price change asks a
-finance admin, since a price changes what every new line posts."""
+and the asker's right, then writes the record when the action commits. In a mirrored book the write goes to the provider
+first (mirror.queue_record) and the local record changes when the provider confirms it. The gate for an item's price
+change asks a finance admin, since a price changes what every new line posts."""
 import json
 from collections.abc import Callable
+from typing import Any
 
 from ..records import core as RC
 from ..records import reads as RR
 from ..records import store as RS
+from . import mirror
 from .context import Ctx
 from .core import kinds as K
 from .core import validate as V
 from .core.errors import NOT_FOUND, FinanceError, invalid
 from .handlers import Plan, Planner, Result
 from .store import ap as SAP
+from .store import ledger as SL
 
 ITEM_FIELDS = ("name", "sku", "kind", "unit", "price", "income_account_id", "expense_account_id", "asset_account_id")
 PLACE_FIELDS = ("name", "kind", "parent_id", "address")
@@ -99,25 +103,43 @@ def _project_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
     return out
 
 
-def _live_book(ctx: Ctx) -> None:
-    """Records in a mirrored book are written to the provider first (mirror.py); the local write waits for that."""
-    if ctx.book.mode == "mirror":
-        raise invalid("records in a mirrored book are written through the provider; that is not built yet")
+def _mirrored(ctx: Ctx) -> bool:
+    return ctx.book.mode == "mirror"
+
+
+def _create(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, fields: dict[str, object],
+            key: str) -> Result:
+    """A new record: written here, or queued for the provider under the id it will have once confirmed."""
+    if _mirrored(ctx):
+        oid = mirror.queue_record(ctx, who, aid, op, {"local_id": record_id, "day": ctx.today, **fields})
+        return {key: record_id, "outbox_id": oid, "status": "queued"}
+    RS.insert(ctx.c, table, {**fields, "id": record_id, "created_at": ctx.at, "created_by": who})
+    return {key: record_id}
+
+
+def _update(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, fields: dict[str, object],
+            row: Any, key: str) -> Result:
+    """A changed record: written here, or queued for the provider with the record as it will be (its columns, changed)."""
+    if _mirrored(ctx):
+        columns = mirror.RECORD_COLUMNS[op.partition(".")[0]]
+        body = {**{k: row[k] for k in columns}, **fields, "local_id": record_id, "day": ctx.today}
+        return {key: record_id, "outbox_id": mirror.queue_record(ctx, who, aid, op, body), "status": "queued"}
+    RS.update(ctx.c, table, record_id, {**fields, "updated_at": ctx.at, "updated_by": who})
+    return {key: record_id}
 
 
 def item_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ITEM_FIELDS)
-    _live_book(ctx)
     f = _shape(lambda: _item_fields(ctx, p, create=True))
+    item_id = SL.new_id()
 
     def apply(aid: str) -> Result:
-        return {"item_id": RS.insert(ctx.c, "rec_items", {**f, "created_at": ctx.at, "created_by": who})}
+        return _create(ctx, who, aid, "item.create", "rec_items", item_id, f, "item_id")
     return Plan(K.default_gate(ctx.org, who, "item_create"), f"Add item {f['name']}"[:200], apply)
 
 
 def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("item_id", *ITEM_FIELDS, "active"))
-    _live_book(ctx)
     item_id = V.text(p, "item_id", 80)
     old = RR.get(ctx.c, "rec_items", item_id)
     if old is None:
@@ -126,60 +148,63 @@ def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     gate = K.default_gate(ctx.org, who, "item_update")
     if "price" in f and f["price"] != old["price"] and who != ctx.org.owner:
         gate = K.Gate("needs_approval", "finance_admin", "default:item-price")
+    if _mirrored(ctx):
+        mirror.record_in_provider(ctx, "rec_items", item_id)
 
     def apply(aid: str) -> Result:
-        RS.update(ctx.c, "rec_items", item_id, {**f, "updated_at": ctx.at, "updated_by": who})
-        return {"item_id": item_id}
+        return _update(ctx, who, aid, "item.update", "rec_items", item_id, f, old, "item_id")
     return Plan(gate, f"Change item {old['name']}"[:200], apply)
 
 
 def place_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, PLACE_FIELDS)
-    _live_book(ctx)
     f = _shape(lambda: _place_fields(ctx, p, create=True))
+    place_id = SL.new_id()
 
     def apply(aid: str) -> Result:
-        return {"place_id": RS.insert(ctx.c, "rec_places", {**f, "created_at": ctx.at, "created_by": who})}
+        return _create(ctx, who, aid, "place.create", "rec_places", place_id, f, "place_id")
     return Plan(K.default_gate(ctx.org, who, "place_create"), f"Add place {f['name']}"[:200], apply)
 
 
 def place_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("place_id", *PLACE_FIELDS, "active"))
-    _live_book(ctx)
     place_id = V.text(p, "place_id", 80)
-    if RR.get(ctx.c, "rec_places", place_id) is None:
+    old = RR.get(ctx.c, "rec_places", place_id)
+    if old is None:
         raise FinanceError(NOT_FOUND, "no such place")
     if p.get("parent_id") == place_id:
         raise invalid("a place cannot sit under itself")
     f = _shape(lambda: _place_fields(ctx, p, create=False))
+    if _mirrored(ctx):
+        mirror.record_in_provider(ctx, "rec_places", place_id)
 
     def apply(aid: str) -> Result:
-        RS.update(ctx.c, "rec_places", place_id, {**f, "updated_at": ctx.at, "updated_by": who})
-        return {"place_id": place_id}
+        return _update(ctx, who, aid, "place.update", "rec_places", place_id, f, old, "place_id")
     return Plan(K.default_gate(ctx.org, who, "place_update"), f"Change place {place_id}"[:200], apply)
 
 
 def project_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, PROJECT_FIELDS)
-    _live_book(ctx)
     f = _shape(lambda: _project_fields(ctx, p, create=True))
+    if _mirrored(ctx) and not f.get("customer_id"):
+        raise invalid("a job in a mirrored book sits under a customer")
+    project_id = SL.new_id()
 
     def apply(aid: str) -> Result:
-        return {"project_id": RS.insert(ctx.c, "rec_projects", {**f, "created_at": ctx.at, "created_by": who})}
+        return _create(ctx, who, aid, "project.create", "rec_projects", project_id, f, "project_id")
     return Plan(K.default_gate(ctx.org, who, "project_create"), f"Add project {f['name']}"[:200], apply)
 
 
 def project_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("project_id", *PROJECT_FIELDS, "active"))
-    _live_book(ctx)
     project_id = V.text(p, "project_id", 80)
-    if RR.get(ctx.c, "rec_projects", project_id) is None:
+    old = RR.get(ctx.c, "rec_projects", project_id)
+    if old is None:
         raise FinanceError(NOT_FOUND, "no such project")
     f = _shape(lambda: _project_fields(ctx, p, create=False))
 
     def apply(aid: str) -> Result:
-        RS.update(ctx.c, "rec_projects", project_id, {**f, "updated_at": ctx.at, "updated_by": who})
-        return {"project_id": project_id}
+        return _update(ctx, who, aid, "project.update", "rec_projects", project_id, f, old, "project_id")
     return Plan(K.default_gate(ctx.org, who, "project_update"), f"Change project {project_id}"[:200], apply)
 
 
