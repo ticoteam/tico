@@ -4,6 +4,11 @@ The rollout updates the server first, so a computer may run an older `tico-runne
 turn tests and two conformance chat and task turns, run unchanged with the old binary in place of the release build.
 The binary path comes from OLD_RUNNER_BINARY (built from origin/main's runner-rs by the check, never from this tree);
 without it the module is skipped. Only the claude and codex harnesses run: they are the threads suite's own.
+
+Known failures on an old runner (run on RunsOn, origin/main 672057c92, 2026-11-01): replies land in the right thread
+and every turn completes, but the old runner resumes one provider session per bot, so a turn in another thread or
+another person's private thread continues the first one. These 6 tests fail until a computer that keeps sessions per
+thread is required for thread turns (the gate the report describes). Every other test here passes.
 """
 
 import os
