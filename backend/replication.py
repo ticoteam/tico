@@ -694,10 +694,14 @@ def _next_lag(saved, local_txid, replica_txid, now):
     replica must reach. A busy install is behind at nearly every round (Litestream writes local TXIDs every second and
     uploads once per sync interval), so once the replica reaches the pending TXID that interval is retired and a new one
     starts if it is still behind. Real lag then reads as at most a sync interval plus a round, while a replica that stops
-    advancing keeps its first time."""
+    advancing keeps its first time. Local TXIDs that fall below the saved pending or local TXID went backwards: a reset
+    cleared the files the interval was timed against, so the interval starts over."""
     if local_txid is None or (replica_txid is not None and local_txid <= replica_txid):
         return None, None
     since, pending = saved.get("behind_since"), _txid(saved.get("pending_txid"))
+    saved_local = _txid(saved.get("local_txid"))
+    if (pending is not None and local_txid < pending) or (saved_local is not None and local_txid < saved_local):
+        since, pending = None, None
     if since and pending is not None and not (replica_txid is not None and replica_txid >= pending):
         return since, pending
     return _stamp(now), local_txid

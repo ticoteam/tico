@@ -1198,3 +1198,17 @@ def test_a_status_the_loop_has_not_checked_for_too_long_is_a_warning_then_bad(mo
     stale = check_at(15)
     assert stale["status"] == "warn" and stale["summary"].startswith("Backup status not checked since ")
     assert check_at(120)["status"] == "bad"
+
+
+def test_a_pile_up_is_judged_against_two_sync_intervals_of_local_files(monkeypatch):
+    from types import SimpleNamespace
+
+    from backend import health
+    remote = {"mode": "remote", "target_kind": "s3", "last_replicated_at": H.now()}
+    check = lambda unsent: health._backups({"backup": {**remote, "unsent_files": unsent}}, SimpleNamespace(loopback=False))
+    monkeypatch.setenv("TICO_BACKUP_SYNC_INTERVAL", "1m")
+    assert check(1000)["status"] == "ok" and check(1001)["status"] == "warn"
+    monkeypatch.setenv("TICO_BACKUP_SYNC_INTERVAL", "1h")    # a busy database writes about 3,600 files an hour; the limit is 7,200
+    assert check(3600)["status"] == "ok" and check(7200)["status"] == "ok"
+    stuck = check(7201)
+    assert stuck["status"] == "warn" and "7,201 unsent files" in stuck["summary"]

@@ -1151,3 +1151,16 @@ def test_a_generation_change_between_rounds_switches_levels_and_drops_the_old_la
     assert after["generation"] == gen
     assert after["last_replicated_at"] is None and after["reason"] == replication.NO_RECENT_COPY    # not the root's copy
     assert after["behind_since"] not in (None, "2026-10-31T00:00:00Z")                              # old lag dropped
+
+
+@pytest.mark.parametrize("locals_seen", [(100_000, 30), (50, 100, 60)])
+def test_local_txids_that_go_back_start_the_lag_over(tmp_path, locals_seen):
+    # A reset can write the new generation's cache while old local files are still there, so their high TXID becomes the
+    # pending one. Then the reset clears them and local falls back: below the pending TXID, or below the last local TXID.
+    # The replica stays at 29, so an interval kept from the old TXIDs would never end.
+    path, replica, start, gen = tmp_path / "status.json", ReplicaStub(29), 1_793_000_000.0, "gen-20261101T000000Z"
+    for round_no, local in enumerate(locals_seen):
+        replication.write_status(replica, path, local_txid=local, generation=gen, now=start + 60 * round_no)
+    saved = json.loads(path.read_text())
+    assert saved["behind_since"] == replication._stamp(start + 60 * (len(locals_seen) - 1))
+    assert saved["pending_txid"] == f"{locals_seen[-1]:016x}"
