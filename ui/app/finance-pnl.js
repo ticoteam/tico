@@ -58,10 +58,13 @@ function finPnlPage() {
         <form class="fin-pop" id="fin-range" hidden><label>From<input type="date" name="start" value="${p.start}" required></label>
           <label>To<input type="date" name="end" value="${p.end}" required></label><button type="submit" class="primary">Apply</button></form></span>
       ${finSeg('basis', 'Basis', [['accrual', 'Accrual'], ['cash', 'Cash']], p.basis)}<span id="fin-pl-marks" class="fin-marks"></span>
-      ${view === 'company' ? `<label class="fin-inline"><span class="muted">Compare</span><select data-fin-compare>${finCompareOptions().map(([v, l]) =>
-        `<option value="${v}"${v === p.compare ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>` : ''}
+      ${view === 'company' ? `<label class="fin-inline"><span class="muted">Compare</span><span class="fin-sel"><span class="fin-sel-v" aria-hidden="true">${esc((finCompareOptions().find(([v]) => v === p.compare) || finCompareOptions()[0])?.[1] || '')}</span><select data-fin-compare>${finCompareOptions().map(([v, l]) =>
+        `<option value="${v}"${v === p.compare ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></span></label>` : ''}
       <span class="spacer"></span><button type="button" class="ghost" data-fin-export>Export</button></div>
-    ${filters}` + finSplit(`<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>`, '', view === 'company' ? 'Selected cell' : 'Breakdown');
+    ${filters}` + finSplit(view === 'expenses'
+      // The org-chart picker: a column beside the table on a wide screen, "+ Filter" on a phone (finance.css).
+      ? `<div class="fin-exp"><div class="fin-tree fin-tree-col" id="fin-tree-col" role="group" aria-label="Filter"></div><div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div></div>`
+      : `<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>`, '', view === 'company' ? 'Selected cell' : 'Breakdown');
   const body = $('#fin-body');
   body.onclick = ev => finPnlClick(ev);
   body.ondblclick = ev => { const td = ev.target.closest('td[data-fin-budget]'); if (td) finPnlEdit(td); };
@@ -76,7 +79,11 @@ function finPnlPage() {
     p.start = a; p.end = z; p.sel = null; p.budgetCol = -1;
     finPnlPage();
   };
-  body.querySelector('[data-fin-compare]')?.addEventListener('change', ev => { p.compare = ev.target.value; void finPnlLoad(); });
+  body.querySelector('[data-fin-compare]')?.addEventListener('change', ev => {
+    p.compare = ev.target.value;
+    const shown = ev.target.parentElement.querySelector('.fin-sel-v'); if (shown) shown.textContent = ev.target.selectedOptions[0]?.textContent || '';
+    void finPnlLoad();
+  });
   if (view === 'expenses') finFiltersDraw();
   void finPnlLoad();
 }
@@ -199,7 +206,7 @@ function finPnlDraw() {
   const state = FIN.pnl, box = $('#fin-pl'); if (!box || !state?.data) return;
   const data = state.data, cols = data.columns || [], p = FIN_PNL, bi = p.budgetCol, caps = finCaps();
   const {sections} = state.model;
-  if (!sections.length) { box.innerHTML = finNote(state.view === 'expenses' ? 'No expenses in this filter.' : 'No lines yet.'); return; }
+  if (!sections.length) { box.innerHTML = finNote(state.view !== 'expenses' ? 'No lines yet.' : finFilterAny(state.snap || p) ? 'No expenses in this filter.' : 'No expenses.'); return; }
   const years = new Set(cols.map(c => c.start.slice(0, 4))).size > 1;
   const past = cols.filter(c => c.state !== 'future').length, cur = cols.find(c => c.state === 'current');
   const imported = finImportedCols(data, cols);
@@ -451,32 +458,36 @@ function finFiltersDraw() {
   const p = FIN_PNL, acc = FIN.acc, caps = finCaps(), on = new Set(finPicked(p));
   const kind = {bots: 'bot', people: 'person'}[p.who];
   const teams = acc.teams || [], members = (acc.teammates || []).filter(t => !kind || t.kind === kind);
-  const kids = id => teams.filter(t => (t.parent || '') === (id || '') || (!id && t.parent && !teams.some(x => x.id === t.parent)));
-  const count = id => { const ids = finTeamsBelow(id); return members.filter(m => ids.has(m.team)).length; };
+  const kids = id => finTeamKids(teams, id);
+  const helpers = members.filter(m => finHelper(m.teammate)), staff = members.filter(m => !finHelper(m.teammate));
+  const count = id => { const ids = finTeamsBelow(id); return staff.filter(m => ids.has(m.team)).length; };
   const pick = (k, label, d) => `<label class="fin-tree-r" style="--d:${d}"><input type="checkbox" data-fin-pick="${esc(k)}"${on.has(k) ? ' checked' : ''}>${label}</label>`;
   const mate = (m, d) => pick('mate:' + m.teammate, finAvatar(m.teammate, 16) + esc(finWho(m.teammate)), d);
   const out = [`<label class="fin-tree-r"><input type="checkbox" data-fin-pick=""${!on.size ? ' checked' : ''}>Everyone</label>`];
   const walk = (team, d) => {
     const n = count(team.id);
     out.push(pick('team:' + team.id, `${esc(team.name)}${n ? `<span class="muted fin-n">${n}</span>` : ''}`, d));
-    for (const m of members.filter(m => m.team === team.id)) out.push(mate(m, d + 1));
+    for (const m of staff.filter(m => m.team === team.id)) out.push(mate(m, d + 1));
     for (const k of kids(team.id)) if (d < 12) walk(k, d + 1);
   };
   for (const t of kids('')) walk(t, 0);
-  for (const m of members.filter(m => !m.team || !teams.some(t => t.id === m.team))) out.push(mate(m, 0));
+  for (const m of staff.filter(m => !m.team || !teams.some(t => t.id === m.team))) out.push(mate(m, 0));
+  if (helpers.length) out.push('<div class="fin-tree-h">Helpers</div>', ...helpers.map(m => mate(m, 0)));
   if (caps?.companyExpenses) out.push(pick('none:', 'Unattributed', 0));
-  box.innerHTML = `<span class="fin-chips" id="fin-chips"></span><span class="fin-pop-at"><button type="button" class="ghost fin-pill" data-fin-filter aria-expanded="false" aria-controls="fin-tree">+ Filter</button>
+  box.innerHTML = `<span class="fin-chips" id="fin-chips"></span><span class="fin-pop-at fin-filter-pop"><button type="button" class="ghost fin-pill" data-fin-filter aria-expanded="false" aria-controls="fin-tree">+ Filter</button>
       <div class="fin-pop fin-tree" id="fin-tree" role="group" aria-label="Filter" hidden>${out.join('')}</div></span>
     ${finSeg('who', 'Who', [['both', 'Bots + people'], ['bots', 'Bots'], ['people', 'People']], p.who)}`;
+  const col = $('#fin-tree-col'); if (col) col.innerHTML = out.join('');
   finChipsDraw();
-  const tree = box.querySelector('#fin-tree');
-  tree.onchange = ev => {
+  const trees = [box.querySelector('#fin-tree'), col].filter(Boolean);
+  const change = ev => {
     const k = ev.target.dataset.finPick; if (k == null) return;
     finPickSet(k, ev.target.checked);
     const now = new Set(finPicked(p));
-    tree.querySelectorAll('[data-fin-pick]').forEach(x => { x.checked = x.dataset.finPick ? now.has(x.dataset.finPick) : !now.size; });
+    for (const t of trees) t.querySelectorAll('[data-fin-pick]').forEach(x => { x.checked = x.dataset.finPick ? now.has(x.dataset.finPick) : !now.size; });
     p.sel = null; finChipsDraw(); void finPnlLoad();
   };
+  for (const t of trees) t.onchange = change;
 }
 
 // ----------------------------------------------------------------- a line's page
@@ -562,7 +573,9 @@ function finLineDraw() {
     : finLineBudget(state.id, state.budgets) ? '' : '<button type="button" class="primary" data-fin-line-add>+ Line budget</button>';
   if (!L.sel || !rows.some(r => r.key === L.sel)) L.sel = rows[0]?.key || '';
   const [cm, pm] = [finDate(L.month + '-01').getMonth(), finDate(finPrevMonth(L.month) + '-01').getMonth()];
-  const head = `<tr><th>${{vendor: 'Vendor', team: 'Team', teammate: 'Teammate'}[L.by]}</th>${vendor ? '<th>Team</th>' : ''}<th class="fin-n">${FIN_MON[pm]}</th><th class="fin-n">${FIN_MON[cm]}</th>${vendor ? `<th class="fin-n fin-b">Budget / mo${finExcl(state.budgetsRead)}</th><th>At limit</th>` : ''}</tr>`;
+  // Next month's projection for each row (the line's default method on that row's history).
+  const nm = state.cur.next_month?.month, proj = state.cur.next_by?.[L.by] || {};
+  const head = `<tr><th>${{vendor: 'Vendor', team: 'Team', teammate: 'Teammate'}[L.by]}</th>${vendor ? '<th>Team</th>' : ''}<th class="fin-n">${FIN_MON[pm]}</th><th class="fin-n">${FIN_MON[cm]}</th>${nm ? `<th class="fin-n fin-p">${FIN_MON[Number(nm.slice(5, 7)) - 1]} proj.</th>` : ''}${vendor ? `<th class="fin-n fin-b">Budget / mo${finExcl(state.budgetsRead)}</th><th>At limit</th>` : ''}</tr>`;
   const body = rows.map(r => {
     const b = vendor && finIsVendor(r.key) ? finVendorBudget(r.key) : null;
     const amount = b?.state?.amount ?? null;
@@ -570,7 +583,7 @@ function finLineDraw() {
     const per = b && b.period !== 'month' ? ` <span class="muted">/ ${FIN_PER[b.period] || b.period}</span>` : '';
     const budgetCell = !vendor ? '' : !finIsVendor(r.key) ? '<td class="fin-n fin-b"></td><td></td>'
       : `<td class="fin-n fin-b">${edit ? `<input class="fin-in" inputmode="decimal" autocomplete="off" data-fin-vb="${esc(r.key)}" value="${finCentsField(amount)}" aria-label="${esc(r.label)} budget a month from ${esc(FIN_MONTH[cm])}">` : finNum(amount) + per}</td><td${b ? '' : ' class="muted"'}>${b ? esc(FIN_AT_LIMIT[b.at_limit] || b.at_limit) : ''}</td>`;
-    return `<tr data-fin-key="${esc(r.key)}"${L.sel === r.key ? ' class="fin-on"' : ''}><td>${esc(finLineLabel(r.key, r.label))}</td>${vendor ? `<td>${b ? esc(b.team ? finTeamName(b.team) : 'All') : ''}</td>` : ''}<td class="fin-n">${r.prev == null ? '<span class="muted">—</span>' : finNum(r.prev)}</td><td class="fin-n">${r.cur == null ? '<span class="muted">—</span>' : finNum(r.cur)}</td>${budgetCell}</tr>`;
+    return `<tr data-fin-key="${esc(r.key)}"${L.sel === r.key ? ' class="fin-on"' : ''}><td>${esc(finLineLabel(r.key, r.label))}</td>${vendor ? `<td>${b ? esc(b.team ? finTeamName(b.team) : 'All') : ''}</td>` : ''}<td class="fin-n">${r.prev == null ? '<span class="muted">—</span>' : finNum(r.prev)}</td><td class="fin-n">${r.cur == null ? '<span class="muted">—</span>' : finNum(r.cur)}</td>${nm ? `<td class="fin-n fin-p">${proj[r.key] == null ? '<span class="muted">—</span>' : finNum(proj[r.key])}</td>` : ''}${budgetCell}</tr>`;
   }).join('');
   box.innerHTML = rows.length ? `<table class="fin-t"><thead>${head}</thead><tbody>${body}</tbody></table>` : finNote('No spend on this line yet.');
 }

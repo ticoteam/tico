@@ -159,7 +159,22 @@ function finWho(ref) {
   if (s.startsWith('human:')) return personDisplay(s.slice(6));
   return s;
 }
-const finTeamName = id => ((FIN?.acc || FIN_ACCESS)?.teams || []).find(t => t.id === id)?.name || id || '';
+const finTeamName = id => ((FIN?.acc || FIN_ACCESS)?.teams || []).find(t => t.id === id)?.name
+  || (S.orgGroups || []).find(g => g.id === id)?.name || id || '';
+// The teams directly under `id` ('' for the top, which takes in teams whose parent isn't shown), in the org chart's
+// order (S.orgGroups), then by name.
+function finTeamKids(teams, id) {
+  const rank = t => (S.orgGroups || []).find(g => g.id === t.id)?.order ?? 1e9;
+  return teams.filter(t => (t.parent || '') === (id || '') || (!id && t.parent && !teams.some(x => x.id === t.parent)))
+    .sort((a, b) => rank(a) - rank(b) || String(a.name).localeCompare(String(b.name)));
+}
+// A built-in helper (the Assistant, BotOps, Strategy Bot, Librarian, Task Manager, Bookkeeper, Health Monitor…; ui/app/sidebar.js
+// isHelperBot): listed together as Helpers, after the org chart.
+function finHelper(actor) {
+  if (!String(actor || '').startsWith('bot:')) return false;
+  const slug = actor.slice(4), e = (S.emps || []).find(x => x.name === slug);
+  return e ? isHelperBot(e) : isBuiltInBot(slug);
+}
 const finAvatar = (ref, size = 18) => String(ref || '').startsWith('bot:') ? avatar(ref.slice(4), size)
   : personAvatar((S.people || []).find(p => p.id === String(ref).slice(6)) || {name: finWho(ref)}, size);
 
