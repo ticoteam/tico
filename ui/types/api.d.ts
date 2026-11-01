@@ -648,6 +648,61 @@ export type BrowserExitUsage = {
 }>;
 };
 
+export type Call = {
+  bots: Array<string>;
+  connector: string;
+  end_reason: string | null;
+  ended_at: string | null;
+  id: string;
+  meeting_id: string;
+  participants: Array<CallParticipant>;
+  speak_replies: boolean;
+  started_at: string;
+  state: "live" | "ended";
+  thread_id: string;
+  title: string;
+};
+
+export type CallBots = {
+  bots: Array<string>;
+};
+
+export type CallJoin = {
+  call: Call;
+  expires_in: number;
+  token: string;
+  url: string;
+};
+
+export type CallList = {
+  calls: Array<CallSummary>;
+  next_before: string | null;
+};
+
+export type CallParticipant = {
+  actor: string;
+  joined_at: string;
+  left_at: string | null;
+  removed_at: string | null;
+};
+
+export type CallSummary = {
+  connector: string;
+  end_reason: string | null;
+  ended_at: string | null;
+  id: string;
+  started_at: string;
+  state: "live" | "ended";
+  thread_id: string;
+  title: string;
+};
+
+export type CallToken = {
+  expires_in: number;
+  token: string;
+  url: string;
+};
+
 export type Card = {
   data: Record<string, unknown> | null;
   heading: string;
@@ -3749,6 +3804,11 @@ export type StaleShown = {
   version: number;
 };
 
+export type StartCall = {
+  speak_replies?: boolean;
+  title?: string;
+};
+
 export type Storage = {
   bucket: string;
   bytes: number;
@@ -5294,6 +5354,14 @@ export type AskRulesParams = {
 export type AskRulesBody = RuleAsk;
 export type AskRulesResponse = unknown;
 
+/** POST /api/v2/calls/{call_id}/bots */
+export type AttachCallBotsParams = {
+  "Idempotency-Key": string;
+  call_id: string;
+};
+export type AttachCallBotsBody = CallBots;
+export type AttachCallBotsResponse = Call;
+
 /** POST /api/v2/tasks/{tid}/files */
 export type AttachTaskFileParams = {
   "Idempotency-Key": string;
@@ -5733,6 +5801,15 @@ export type DeleteWebhookRelayParams = {
 export type DeleteWebhookRelayBody = Empty;
 export type DeleteWebhookRelayResponse = WebhookRelayDeleted;
 
+/** DELETE /api/v2/calls/{call_id}/bots/{bot} */
+export type DetachCallBotParams = {
+  "Idempotency-Key": string;
+  bot: string;
+  call_id: string;
+};
+export type DetachCallBotBody = Empty;
+export type DetachCallBotResponse = Call;
+
 /** GET /api/v2/strategy/diff */
 export type DiffStrategyVersionsParams = Record<string, never>;
 export type DiffStrategyVersionsBody = never;
@@ -5833,6 +5910,14 @@ export type EndAutomationHoldParams = {
 };
 export type EndAutomationHoldBody = HeldAction;
 export type EndAutomationHoldResponse = AutomationHeld;
+
+/** POST /api/v2/calls/{call_id}/end */
+export type EndCallParams = {
+  "Idempotency-Key": string;
+  call_id: string;
+};
+export type EndCallBody = Empty;
+export type EndCallResponse = Call;
 
 /** POST /auth/token */
 export type ExchangeCodeParams = Record<string, never>;
@@ -5972,6 +6057,13 @@ export type GetBotUpdateSettingsParams = {
 };
 export type GetBotUpdateSettingsBody = never;
 export type GetBotUpdateSettingsResponse = unknown;
+
+/** GET /api/v2/calls/{call_id} */
+export type GetCallParams = {
+  call_id: string;
+};
+export type GetCallBody = never;
+export type GetCallResponse = Call;
 
 /** GET /api/v2/cards/choices */
 export type GetCardChoicesParams = {
@@ -6693,6 +6785,14 @@ export type ImportMeetingBody = {
 };
 export type ImportMeetingResponse = unknown;
 
+/** POST /api/v2/calls/{call_id}/join */
+export type JoinCallParams = {
+  "Idempotency-Key": string;
+  call_id: string;
+};
+export type JoinCallBody = Empty;
+export type JoinCallResponse = CallJoin;
+
 /** POST /api/v2/rule-holds/{hold_id}/keep */
 export type KeepRuleHoldParams = {
   "Idempotency-Key": string;
@@ -6700,6 +6800,14 @@ export type KeepRuleHoldParams = {
 };
 export type KeepRuleHoldBody = HoldEmpty;
 export type KeepRuleHoldResponse = unknown;
+
+/** POST /api/v2/calls/{call_id}/leave */
+export type LeaveCallParams = {
+  "Idempotency-Key": string;
+  call_id: string;
+};
+export type LeaveCallBody = Empty;
+export type LeaveCallResponse = Call;
 
 /** POST /api/v2/goals/{gid}/kpis */
 export type LinkGoalKpiParams = {
@@ -6796,6 +6904,15 @@ export type ListBotsParams = {
 };
 export type ListBotsBody = never;
 export type ListBotsResponse = BotList;
+
+/** GET /api/v2/threads/{thread_id}/calls */
+export type ListCallsParams = {
+  before?: string;
+  limit?: number;
+  thread_id: string;
+};
+export type ListCallsBody = never;
+export type ListCallsResponse = CallList;
 
 /** GET /api/v2/cards */
 export type ListCardsParams = {
@@ -7765,6 +7882,14 @@ export type RedoUpdatesParams = {
 export type RedoUpdatesBody = UpdateRedo;
 export type RedoUpdatesResponse = unknown;
 
+/** POST /api/v2/calls/{call_id}/token */
+export type RefreshCallTokenParams = {
+  "Idempotency-Key"?: string;
+  call_id: string;
+};
+export type RefreshCallTokenBody = never;
+export type RefreshCallTokenResponse = CallToken;
+
 /** POST /api/v2/doc-sources/{source_id}/refresh */
 export type RefreshDocSourceParams = {
   "Idempotency-Key": string;
@@ -8603,6 +8728,14 @@ export type SnoozeTaskParams = {
 };
 export type SnoozeTaskBody = TaskSnooze;
 export type SnoozeTaskResponse = TaskResult;
+
+/** POST /api/v2/threads/{thread_id}/calls */
+export type StartCallParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type StartCallBody = StartCall;
+export type StartCallResponse = Call;
 
 /** POST /api/v2/chat/{bot}/new */
 export type StartNewChatParams = {

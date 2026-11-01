@@ -342,6 +342,11 @@ def create_app(settings=None):
                 except Exception as exc:
                     telemetry.capture("live_meeting_sweep", exc)
                 try:
+                    # Calls keep to their threads: people and bots whose access ended, and a LiveKit that restarted.
+                    await asyncio.to_thread(app.state.calls.sweep)
+                except Exception as exc:
+                    telemetry.capture("calls_sweep", exc)
+                try:
                     await asyncio.wait_for(stop.wait(), timeout=10)
                 except TimeoutError:
                     pass
@@ -8009,6 +8014,8 @@ def create_app(settings=None):
     outcome_stats.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)
+    from .calls import install_calls
+    install_calls(app, store, auth, mutate)      # Tico Meet calls in threads (backend/calls.py)
     from .recorder_relay import install_recorder_relay
     install_recorder_relay(app, store, auth, settings)
     from .mail import install_mail

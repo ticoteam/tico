@@ -33,6 +33,8 @@ TAGS = {
     "Changelog": "Shipped Tico releases, product announcements and the signed-in person's read state (docs/updates.md).",
     "Needs you": "What is waiting on the signed-in person: questions, tasks, approvals.",
     "Meetings": "Recorded meetings.",
+    "Calls": "Tico Meet calls (docs/meet.md): audio and screen share in a thread, a live transcript posted to it when it "
+             "ends, and bots that listen. Joining hands back a token for audio and screen share only, never a camera.",
     "Files": "What a bot creates, revises or delivers, listed on its page (docs/files.md).",
     "Pages": "HTML pages bots publish and keep current (docs/pages.md): a file with a cadence, a data date and a status line.",
     "Docs": "The team's docs (docs/docs.md): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them.",
@@ -2415,7 +2417,7 @@ STABLE.extend([
     ("/api/v2/threads/{thread_id}/members/{actor}", "delete", "Threads", "removeThreadMember",
      "Remove a member from a thread (its managers)", "ThreadMemberChange"),
     ("/api/v2/threads/{thread_id}/messages", "post", "Threads", "postThreadMessage",
-     "Post a message in a thread, or in a sub-thread with `parent_message_id`; a bot's post passes the org rules first", "ThreadMessage"),
+     "Post a message in a thread, or in a sub-thread with `parent_message_id`; it passes the org rules first", "ThreadMessage"),
     ("/api/v2/threads/{thread_id}/read", "post", "Threads", "markThreadRead",
      "Read up to `seq` in the thread; the highest mark wins, so a device that is ahead keeps its place", "ThreadRead"),
     ("/api/v2/threads/{thread_id}/read-all", "post", "Threads", "markThreadAndSubthreadsRead",
@@ -2429,6 +2431,34 @@ STABLE.extend([
     ("/api/v2/messages/{message_id}", "delete", "Threads", "deleteMessage",
      "Delete one's own message in a thread", "ThreadMessageDeleted"),
 ])
+# Tico Meet calls (docs/meet.md): a call belongs to a thread. Joining hands back a token for audio and screen share only.
+STABLE.extend([
+    ("/api/v2/threads/{thread_id}/calls", "get", "Calls", "listCalls",
+     "The calls in a thread, newest first, a page at a time: before=<next_before> reads the next page", "CallList"),
+    ("/api/v2/threads/{thread_id}/calls", "post", "Calls", "startCall", "Start a call in a thread you can write to", "Call"),
+    ("/api/v2/calls/{call_id}", "get", "Calls", "getCall", "A call: its state, people, bots and how it ended", "Call"),
+    ("/api/v2/calls/{call_id}/join", "post", "Calls", "joinCall", "Join a call: its media URL and a token good for 5 minutes",
+     "CallJoin"),
+    ("/api/v2/calls/{call_id}/token", "post", "Calls", "refreshCallToken", "A fresh token for a call you have joined", "CallToken"),
+    ("/api/v2/calls/{call_id}/leave", "post", "Calls", "leaveCall", "Leave a call you joined", "Call"),
+    ("/api/v2/calls/{call_id}/end", "post", "Calls", "endCall", "End a call you started; its transcript is posted to the thread",
+     "Call"),
+    ("/api/v2/calls/{call_id}/bots", "post", "Calls", "attachCallBots", "Let bots listen to a call and reply in its thread", "Call"),
+    ("/api/v2/calls/{call_id}/bots/{bot}", "delete", "Calls", "detachCallBot", "Take a bot out of a call", "Call"),
+])
+SCHEMAS.update({
+    "CallParticipant": obj({"actor": "s", "joined_at": "s", "left_at": "n", "removed_at": "n"}),
+    "CallSummary": obj({"id": "s", "thread_id": "s", "title": "s", "state": {"enum": ["live", "ended"]}, "connector": "s",
+                        "started_at": "s", "ended_at": "n", "end_reason": "n"}),
+    "Call": obj({"id": "s", "thread_id": "s", "title": "s", "state": {"enum": ["live", "ended"]}, "connector": "s",
+                 "meeting_id": "s", "started_at": "s", "ended_at": "n", "end_reason": "n",
+                 "participants": items(ref("CallParticipant")), "bots": items({"type": "string"})},
+                speak_replies={"type": "boolean", "description": "Whether bots were asked to speak their replies "
+                               "on this call; off unless the call asked. Spoken replies are not sent yet"}),
+    "CallList": obj({"calls": items(ref("CallSummary")), "next_before": "n"}),
+    "CallJoin": obj({"call": ref("Call"), "url": "s", "expires_in": "i", "token": "s"}),
+    "CallToken": obj({"url": "s", "expires_in": "i", "token": "s"}),
+})
 
 
 def spec(app):
@@ -2504,6 +2534,12 @@ def spec(app):
                                 "Optional. Sync uses a two-minute debounce; connecting starts a new device sign-in."
                                 if granola else
                                 "1-200 characters. Reusing a key with the same body replays the first answer.")})
+        if method == "post" and path.startswith("/api/v2/calls/") and path.endswith("/token"):
+            # A refresh writes nothing, so the key is optional and ignored.
+            for param in op["parameters"]:
+                if param.get("name") == "Idempotency-Key":
+                    param["required"] = False
+                    param["description"] = "Not needed: a refresh writes nothing; the header is ignored."
         paths.setdefault(path, {})[method] = op
     used = set()
     _refs(paths, used)

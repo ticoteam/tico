@@ -29,6 +29,7 @@ MARKER_PREFIX = "tico-caddy-generation:"
 TOKEN_PATH = r"^/visuals/[A-Za-z0-9_-]+[.][A-Za-z0-9_-]{43}$"
 RAW_TOKEN_PATH = r"^/visuals/[A-Za-z0-9_-]+[.][A-Za-z0-9_-]+$"
 AUTH_HEADERS = ["Cookie", "Authorization", "Proxy-Authorization", "Cf-Access-*", "X-Amzn-Oidc-*", "X-Tico-*"]
+SIGNAL_PATHS = ["/rtc", "/rtc/*"]     # LiveKit's websocket signal, which clients reach at <TICO_MEET_URL>/rtc
 LOG = logging.getLogger("tico.caddy")
 HOLD_FOR, HOLD_EVERY = "30s", "250ms"
 HOLD_BODY = "Tico is starting. Try again in a few seconds."
@@ -77,7 +78,7 @@ def _encoded(config):
     return json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
 
 
-def _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals):
+def _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals, signal=None):
     if type(serve_visuals) is not bool:
         raise ValueError("serve_visuals_invalid")
     app = _hostname(app_hostname, allow_ip=True) if app_hostname else ""
@@ -98,6 +99,11 @@ def _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals):
         hold = {"try_duration": HOLD_FOR, "try_interval": HOLD_EVERY}
         proxy = {"handler": "reverse_proxy", "upstreams": [{"dial": "server:8765"}], "load_balancing": hold}
         routes = [{"match": [{"host": [app]}], "handle": [proxy], "terminal": True}]
+        if signal:
+            # Tico Meet's signal goes through the app's own address, so browsers need no port of their own.
+            routes.insert(0, {"match": [{"host": [app], "path": SIGNAL_PATHS}],
+                              "handle": [{"handler": "reverse_proxy", "upstreams": [{"dial": signal}]}],
+                              "terminal": True})
         if visual:
             asset_proxy = {"handler": "reverse_proxy", "upstreams": [{"dial": "server:8765"}], "load_balancing": dict(hold),
                            "headers": {"request": {"delete": list(AUTH_HEADERS)},
@@ -127,14 +133,14 @@ def _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals):
     return config, generation, bool(visual), reason
 
 
-def render(app_hostname, visual_origin="", runner_hostname="", *, serve_visuals=False):
+def render(app_hostname, visual_origin="", runner_hostname="", *, serve_visuals=False, signal=None):
     """Return deterministic JSON data; an empty app while off removes public sites.
 
     Invalid required app/runner names raise reason-only ValueError. An invalid
     optional visual origin produces app-only configuration, never an old site.
     External visual origins have no local effect unless serve_visuals is True.
     """
-    return _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals)[0]
+    return _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals, signal=signal)[0]
 
 
 def _runner_host(value, app):
@@ -178,6 +184,20 @@ def _present(path):
     return True
 
 
+def _signal_dial(environ):
+    """LiveKit's address for the /rtc signal route (TICO_MEET_INTERNAL_URL's host and port), or None while calls are not
+    set up. Browsers reach LiveKit's signal through this app host, so no signal port is published."""
+    from . import call_media
+    config = call_media.config_from_env(environ)
+    if config is None:
+        return None
+    netloc = urlsplit(config.internal_url).netloc
+    if not re.fullmatch(r"[A-Za-z0-9.-]+:[0-9]{1,5}", netloc):
+        LOG.warning("The Tico Meet signal route is off: TICO_MEET_INTERNAL_URL needs a host and port")
+        return None
+    return netloc
+
+
 def prepare(environ=os.environ):
     """Atomically replace desired config before health; return nonsecret metadata.
 
@@ -215,7 +235,8 @@ def prepare(environ=os.environ):
         except ValueError:
             runner_reason = "runner_url_invalid"
     config, generation, serving, reason = _configuration(
-        app, environ.get("TICO_VISUAL_ORIGIN", ""), runner, enabled and runner_reason is None)
+        app, environ.get("TICO_VISUAL_ORIGIN", ""), runner, enabled and runner_reason is None,
+        signal=_signal_dial(environ))
     reason = runner_reason or reason
     if reason:
         LOG.warning("Caddy visual serving disabled: %s", reason)

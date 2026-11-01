@@ -23,7 +23,7 @@ from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 SUBCOMMANDS = ["whoami", "inbound", "mail", "meeting", "message", "conversation", "question", "note", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
-               "proposal", "rules", "strategy", "brand", "gtm", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
+               "proposal", "rules", "strategy", "brand", "gtm", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "call", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "health-monitor", "finance", "task-manager", "stall-triage", "roadmap", "service-key"]
 
@@ -901,3 +901,34 @@ def test_a_json_flag_no_command_takes_is_ignored(monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", io.StringIO('{"vendor": "v_1"}'))                # stdin is read once
     args = hubcli.parse(p, ["finance", "act", "bill_create", "--payload", "-", "--json"])
     assert args.payload == {"vendor": "v_1"}
+
+
+def test_call_commands_run_the_call_tools_on_their_routes(monkeypatch):
+    from clients import remotecli
+    sent = []
+
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+
+        def get(self, path, **query):
+            sent.append(("GET", path, query))
+            return {"kind": "owner"} if path == "me" else {"calls": [], "next_before": None}
+
+        def post(self, path, body=None, key=None):
+            sent.append(("POST", path, body, key))
+            return {"id": "call-1", "state": "live"}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            sent.append((method, path, body, key))
+            return {"id": "call-1"}
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    for words in (["call", "start", "thread-1", "--title", "Acme standup"], ["call", "bot", "add", "call-1", "ops", "finance"],
+                  ["call", "bot", "remove", "call-1", "ops"], ["call", "list", "thread-1", "--limit", "5"]):
+        remotecli.run(hubcli.parser().parse_args(words))
+    assert sent == [("POST", "threads/thread-1/calls", {"title": "Acme standup"}, None),
+                    ("POST", "calls/call-1/bots", {"bots": ["ops", "finance"]}, None),
+                    ("DELETE", "calls/call-1/bots/ops", {}, None),
+                    ("GET", "threads/thread-1/calls", {"limit": 5})]

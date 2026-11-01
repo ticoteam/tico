@@ -145,6 +145,11 @@ services:
       AWS_DEFAULT_REGION:
       TICO_EXPECTED_AWS_ACCOUNT:
       TICO_EXPECTED_AWS_ROLE:
+      # Tico Meet (backend/call_media.py): the LiveKit that the meet profile runs. Calls are off unless all four are set.
+      TICO_MEET_URL:
+      TICO_MEET_INTERNAL_URL: ${TICO_MEET_INTERNAL_URL:-http://livekit:7880}
+      TICO_MEET_API_KEY:
+      TICO_MEET_API_SECRET:
     volumes:
       - tico-data:/data
       - tico-control:/control
@@ -341,6 +346,50 @@ services:
         }
     networks: [edge]
 
+  # Tico Meet's media server (LiveKit, Apache-2.0), for audio and screen-share calls. Off unless COMPOSE_PROFILES
+  # includes meet; one per cell host. The server calls its API at http://livekit:7880, and Caddy proxies browsers'
+  # signal connection from the app host's /rtc path to that same port (backend/caddy_assets.py), so only the media
+  # and TURN ports are published. The key and secret come from .env and go to this service and the server only. The
+  # image is pinned by digest, so a retagged upstream image cannot change it. It joins edge at a fixed address outside
+  # the dynamic range, so the server does not trust it as a front door, and Caddy and the tunnel reach it there.
+  livekit:
+    <<: *hardening
+    profiles: [meet]
+    image: ${TICO_MEET_IMAGE:-livekit/livekit-server:v1.8.4@sha256:621fd87bd64a0c83e1f2418ee0323eb920d00acdd73e5f79b303c64f6cc532af}
+    read_only: true
+    tmpfs: [/tmp]
+    networks:
+      default: {}
+      edge: {ipv4_address: "${TICO_LIVEKIT_ADDRESS:-172.30.254.4}"}
+    environment:
+      LIVEKIT_KEYS: "${TICO_MEET_API_KEY:-}: ${TICO_MEET_API_SECRET:-}"
+      LIVEKIT_CONFIG: |
+        port: 7880
+        rtc:
+          tcp_port: 7881
+          port_range_start: 50000
+          port_range_end: 50100
+          use_external_ip: true
+        turn:
+          enabled: true
+          domain: ${TICO_MEET_DOMAIN:-meet.invalid}
+          tls_port: 5349
+          udp_port: 3478
+          cert_file: /certs/fullchain.pem
+          key_file: /certs/privkey.pem
+          external_tls: false
+        logging:
+          json: true
+    # TURN over TLS needs a certificate for TICO_MEET_DOMAIN here: fullchain.pem and privkey.pem. Set
+    # TICO_MEET_CERT_DIR to a host folder, or leave it for an empty named volume (the service then will not start).
+    volumes:
+      - ${TICO_MEET_CERT_DIR:-tico-meet-certs}:/certs:ro
+    ports:
+      - "7881:7881"
+      - "3478:3478/udp"
+      - "5349:5349"
+      - "50000-50100:50000-50100/udp"
+
   # Behind the in-app "Update now" button. It holds the Docker socket, which is root on this host; the
   # server runs no bots, so nothing untrusted shares the host. On through COMPOSE_PROFILES and
   # TICO_UPDATER_URL in .env; it has no published port. An update also replaces this file and the rest of the
@@ -366,9 +415,11 @@ services:
       - ./:/project
 
 # The front doors reach the server only over this network, from fixed addresses the server trusts for forwarded
-# client addresses (TICO_TRUSTED_PROXIES above). Nothing else joins it. Containers given no fixed address (the server
+# client addresses (TICO_TRUSTED_PROXIES above). The media server (meet profile) joins at a fixed address the
+# server does not trust. Containers given no fixed address (the server
 # and the hold) draw from the upper half of the range, so they never take a front door's. If the subnet clashes with a
-# network on this computer, set TICO_EDGE_SUBNET, TICO_EDGE_DYNAMIC_RANGE, TICO_CADDY_ADDRESS and TICO_CLOUDFLARED_ADDRESS in .env.
+# network on this computer, set TICO_EDGE_SUBNET, TICO_EDGE_DYNAMIC_RANGE, TICO_CADDY_ADDRESS, TICO_CLOUDFLARED_ADDRESS
+# and TICO_LIVEKIT_ADDRESS in .env.
 networks:
   edge:
     ipam:
@@ -379,6 +430,7 @@ networks:
 volumes:
   tico-data:
   tico-company-file:
+  tico-meet-certs:
   tico-backups:
   tico-control:
   tico-tunnel:

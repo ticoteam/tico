@@ -52,6 +52,45 @@ def test_external_origin_does_not_enable_local_serving_and_marker_is_private_and
         assert hosts(assets.render(domain)) == [domain]
 
 
+MEET_ENV = {"TICO_MEET_URL": "wss://" + APP, "TICO_MEET_INTERNAL_URL": "http://livekit:7880",
+            "TICO_MEET_API_KEY": "APIacme", "TICO_MEET_API_SECRET": "acme-secret-0123456789abcdef0123456789abcdef"}
+
+
+def test_the_meet_signal_is_proxied_on_the_app_host_at_rtc_and_only_while_calls_are_set_up():
+    server = assets.render(APP, "", "", signal="livekit:7880")["apps"]["http"]["servers"]["tico"]
+    assert server["routes"][0] == {
+        "match": [{"host": [APP], "path": ["/rtc", "/rtc/*"]}],
+        "handle": [{"handler": "reverse_proxy", "upstreams": [{"dial": "livekit:7880"}]}],
+        "terminal": True}
+    plain = assets.render(APP, "", "")["apps"]["http"]["servers"]["tico"]
+    assert "path" not in plain["routes"][0]["match"][0]
+    assert assets._signal_dial({}) is None
+    assert assets._signal_dial(MEET_ENV) == "livekit:7880"
+    assert assets._signal_dial({**MEET_ENV, "TICO_MEET_INTERNAL_URL": "http://bad host:7880"}) is None
+
+
+def test_the_tunnel_sends_the_meet_signal_straight_to_the_media_server_only_for_calls_on_the_app_host(tmp_path):
+    # A tunnel install has no Caddy in front of the media server, so cloudflared's ingress carries /rtc itself: ahead of
+    # the app's own route, and only when calls are set up on the app host. Otherwise browsers cannot connect, and the
+    # install says so in its log.
+    def ingress(**env):
+        run = subprocess.run(["bash", str(ENTRYPOINT), "tunnel-config"], capture_output=True, text=True, check=True,
+                             env={"PATH": os.environ["PATH"], "TICO_TUNNEL_DIR": str(tmp_path), "TICO_DOMAIN": APP,
+                                  **env})
+        return (tmp_path / "ingress.yml").read_text(), run.stderr
+
+    text, stderr = ingress(**MEET_ENV)
+    rtc = "  - hostname: acme.example\n    path: '^/rtc(?:/.*)?$'\n    service: http://livekit:7880\n"
+    assert text == ("ingress:\n" + rtc + "  - hostname: acme.example\n    service: http://hold:8080\n"
+                    "  - service: http_status:404\n")
+    assert stderr == ""
+    for env in ({**MEET_ENV, "TICO_MEET_URL": "wss://meet.acme.example"}, {**MEET_ENV, "TICO_MEET_API_KEY": ""}):
+        text, stderr = ingress(**env)
+        assert "/rtc" not in text and "calls cannot connect over this tunnel" in stderr
+    text, stderr = ingress()
+    assert "/rtc" not in text and stderr == ""
+
+
 def test_both_proxies_hold_a_request_through_a_server_restart_like_the_cell_router_and_never_answer_502():
     from setup import cell
     public = assets.render(APP, "https://" + VISUAL, RUNNER, serve_visuals=True)["apps"]["http"]["servers"]["tico"]
