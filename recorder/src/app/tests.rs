@@ -996,3 +996,44 @@ fn the_open_meetings_bot_notices_show_with_the_bots_name() {
     app.context.live_id = "live-other".into();
     assert_eq!(full_view(&mut app)["live"]["notices"], json!([]));
 }
+
+#[test]
+fn send_requires_review_of_paused_quotes_and_discard_keeps_the_local_recording() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    seed_demo(&store).unwrap();
+    let mut app = app(store, directory.path());
+    let id = app
+        .records
+        .iter()
+        .find(|r| r.chunks > r.silent && r.deliveries.is_empty())
+        .unwrap()
+        .id
+        .clone();
+    app.config.destinations = vec![connection("first", "acme.example")];
+    app.store
+        .update_context(&id, |c| {
+            c.paused_windows = vec![(5000, Some(10000))];
+            c.items.push(Item {
+                quote: "Paused quote".into(),
+                at_ms: 6000,
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    app.send_meeting(&id, "first");
+    assert!(app.error.contains("quotes paused speech"));
+    assert!(!app.busy);
+    assert!(app.store.get(&id).unwrap().deliveries.is_empty());
+    app.store
+        .update_context(&id, |c| {
+            c.live_discarded = true;
+            Ok(())
+        })
+        .unwrap();
+    app.send_meeting_confirmed(&id, "first", true);
+    assert!(app.error.contains("discarded"));
+    assert!(!app.busy);
+    assert!(!app.store.get(&id).unwrap().chunks.is_empty());
+}

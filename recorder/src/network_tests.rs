@@ -1338,6 +1338,12 @@ fn uncertain_pause_stays_local_and_discard_never_finalizes_or_sends() {
         vec![word(6000, 6300, "Private words", "")],
     );
     store.state(id, "stopped").unwrap();
+    let (tico, _, worker) = server(vec![None]);
+    assert!(tico.control_live(&store, id, "discard", 10000).is_err());
+    worker.join().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    assert!(store.context(id).unwrap().live_discarded);
+    assert!(tico.finish_live(&store, id).is_err());
     let (tico, seen, worker) = server(vec![Some(json!({"state":"ended"}))]);
     tico.control_live(&store, id, "discard", 10000).unwrap();
     worker.join().unwrap();

@@ -1120,3 +1120,36 @@ impl<'a> Queue<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod pause_tests {
+    use super::*;
+
+    #[test]
+    fn pause_boundaries_filter_both_channels_and_untimed_chunks_without_changing_local_text() {
+        let local: Recording = serde_json::from_value(json!({
+            "id":"synthetic", "title":"Pause boundaries", "started_at":"", "state":"stopped",
+            "microphone":"", "meeting_audio":true, "warning":"", "deliveries":[],
+            "chunks":[
+                {"id":"me", "recording_id":"synthetic", "channel":"me", "speaker":"Me", "start_ms":0, "end_ms":12000,
+                 "file":"", "status":"done", "signal":{"samples":0,"nonzero":0,"peak":0.,"rms":0.,"duration_ms":0,"sample_rate":16000},
+                 "text":"before crossing paused resumed", "error":"", "attempts":1,"provider":{},
+                 "words":[
+                     {"start_ms":1000,"end_ms":2000,"text":"before"},
+                     {"start_ms":4990,"end_ms":5010,"text":"crossing"},
+                     {"start_ms":6000,"end_ms":6100,"text":"paused"},
+                     {"start_ms":10000,"end_ms":10100,"text":"resumed"}]},
+                {"id":"them", "recording_id":"synthetic", "channel":"them", "speaker":"Meeting audio", "start_ms":4000, "end_ms":11000,
+                 "file":"", "status":"done", "signal":{"samples":0,"nonzero":0,"peak":0.,"rms":0.,"duration_ms":0,"sample_rate":16000},
+                 "text":"untimed private speech", "error":"", "attempts":1,"provider":{}}
+            ]
+        })).unwrap();
+        let shared = shareable(&local, &[(5000, Some(10000))]);
+        assert_eq!(shared.chunks[0].text, "before resumed");
+        assert!(shared.chunks[1].text.is_empty());
+        assert_eq!(local.chunks[0].words.len(), 4);
+        assert_eq!(local.chunks[1].text, "untimed private speech");
+        let open = shareable(&local, &[(5000, None)]);
+        assert_eq!(open.chunks[0].text, "before");
+    }
+}

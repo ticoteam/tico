@@ -2109,6 +2109,8 @@ impl Recorder {
                 } else {
                     Some(("Tico sync needs attention".into(), "amber"))
                 };
+                let context = self.store.context(&record.id).unwrap_or_default();
+                let status = if context.live_discarded { Some(("Discarded · saved locally".into(), "muted")) } else { status };
                 let sent = self.sent_everywhere(&record.deliveries);
                 json!({
                     "id": record.id,
@@ -2116,11 +2118,11 @@ impl Recorder {
                     "started_at": record.started_at,
                     "duration_ms": record.duration_ms,
                     "recording": recording,
-                    "paused_warning": self.store.context(&record.id).is_ok_and(|c| !c.paused_windows.is_empty()),
+                    "paused_warning": !context.paused_windows.is_empty(),
                     "status": status.map(|(label, tone)| json!({"label":label,"tone":tone})),
                     "sync_error": sync_error,
                     "sent": sent,
-                    "can_send": !self.config.destinations.is_empty() && !sent && !recording && record.chunks > 0 && !self.busy,
+                    "can_send": !context.live_discarded && !self.config.destinations.is_empty() && !sent && !recording && record.chunks > 0 && !self.busy,
                     "targets": self.targets(&record.live_destination, &record.deliveries),
                 })
             })

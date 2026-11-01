@@ -1276,11 +1276,11 @@ def test_recorder_discard_ends_without_filing_or_bot_runs(live):
     post(live, f"live-meetings/{mid}/control", {"action": "pause"})
     with live.app.state.store.read() as c:
         filed_before = c.execute("SELECT count(*) FROM meetings").fetchone()[0]
-        runs_before = c.execute("SELECT count(*) FROM runs").fetchone()[0]
+        runs_before = c.execute("SELECT count(*) FROM live_meeting_turns").fetchone()[0]
     assert post(live, f"live-meetings/{mid}/control", {"action": "end"})["state"] == "ended"
     assert post(live, f"live-meetings/{mid}/control", {"action": "end"})["state"] == "ended"
     assert settle(live)
     assert mid not in {m["id"] for m in get(live, "live-meetings")["meetings"]}
     with live.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM meetings").fetchone()[0] == filed_before
-        assert c.execute("SELECT count(*) FROM runs").fetchone()[0] == runs_before
+        assert c.execute("SELECT count(*) FROM live_meeting_turns").fetchone()[0] == runs_before
