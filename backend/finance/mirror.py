@@ -291,9 +291,9 @@ def _local_account(ctx: Ctx, row: Any, code: str) -> L.Account | None:
 def _account(c: sqlite3.Connection, ctx: Ctx, cid: str, a: M.ChartAccount, at: str) -> None:
     row = SX.ref(c, cid, "fin_accounts", a.ext.key)
     if M.decide(_have(row), a.ext) in (M.SAME, M.OLDER, M.GONE):
-        _payroll_private(c, str(row["local_id"]) if row is not None else "", a, at)
         return
     current = _local_account(ctx, row, a.code)
+    first = row is None or not str(row["local_id"])     # the first import of this account, before it is bound
     if current is None:
         new = L.Account(id=SL.new_id(), book_id=ctx.book.id, code=a.code, name=a.name, type=a.type,
                         subtype=a.subtype, active=a.active)
@@ -305,12 +305,13 @@ def _account(c: sqlite3.Connection, ctx: Ctx, cid: str, a: M.ChartAccount, at: s
         L.check_account(new, ctx.accounts)
         SL.update_account(c, new, at)
     _bind(c, cid, "fin_accounts", new.id, a.ext, at)
-    _payroll_private(c, new.id, a, at)
+    if first:
+        _payroll_private(c, new.id, a, at)
 
 
 def _payroll_private(c: sqlite3.Connection, account_id: str, a: M.ChartAccount, at: str) -> None:
-    """A payroll expense account's lines are private (spec §7.5), as an owner's private account is: set when the account
-    comes in, and never cleared here, so a change at the provider never unhides what is private."""
+    """A payroll account's lines are private from its first import (spec §7.5), as an owner's private account is. The
+    caller calls this on the first import only, so a later one never makes private again what the owner made public."""
     if a.payroll and account_id and SA.mark_private(c, account_id, SYSTEM, at):
         SA.bump_view(c, f"payroll account {account_id}", at)
 
@@ -988,15 +989,16 @@ def _settlement(c: sqlite3.Connection, ctx: Ctx, cid: str, s: M.Settlement, at: 
 
 
 # ------------------------------------------------------------------------------------------------ bank rows
-def _match(ctx: Ctx, gl: str, amount: int, txn_date: str) -> str | None:
-    """The provider's entry a bank row is: a line on its account for the same amount, dated near it."""
+def _match(ctx: Ctx, gl: str, amount: int, txn_date: str) -> tuple[str, str] | None:
+    """The provider's entry line a bank row is: a line on its account for its amount, dated near it. (entry, line)"""
     day = dates.day(txn_date)
     start, end = (day - timedelta(days=M.MATCH_DAYS)).isoformat(), (day + timedelta(days=M.MATCH_DAYS)).isoformat()
     return M.match_row(amount, txn_date, SX.candidates(ctx.c, ctx.book.id, gl, amount, start, end))
 
 
-def _link(ctx: Ctx, fid: str, entry_id: str) -> None:
-    SK.update(ctx.c, "fin_feed_txns", fid, {"status": "matched", "entry_id": entry_id, "updated_at": ctx.at})
+def _link(ctx: Ctx, fid: str, entry_id: str, line_id: str) -> None:
+    SK.update(ctx.c, "fin_feed_txns", fid, {"status": "matched", "entry_id": entry_id, "entry_line_id": line_id,
+                                            "updated_at": ctx.at})
     SX.cancel_feed_writes(ctx.c, fid, "the provider's entry for this bank row came first", ctx.at)
 
 
@@ -1008,7 +1010,7 @@ def _link_open_rows(c: sqlite3.Connection, cid: str, at: str) -> None:
     for row in SX.unmatched_rows(c, ctx.book.id, MATCH_MOST):
         hit = _match(ctx, str(row["gl_id"]), int(row["amount"]), str(row["txn_date"]))
         if hit:
-            _link(ctx, str(row["id"]), hit)
+            _link(ctx, str(row["id"]), *hit)
 
 
 def _still_matches(ctx: Ctx, row: Any, money: Any) -> bool:
@@ -1021,8 +1023,12 @@ def _still_matches(ctx: Ctx, row: Any, money: Any) -> bool:
     near = abs((dates.day(entered) - dates.day(txn)).days) <= M.MATCH_DAYS
     if not near and entered != banking.open_day(ctx, txn):
         return False
-    gl = str(money["account_id"])
-    moved = sum(x.amount for _, x in SL.entry_lines(ctx.c, str(row["entry_id"])) if x.account_id == gl)
+    lines = SL.entry_lines(ctx.c, str(row["entry_id"]))
+    line = str(row["entry_line_id"] or "")
+    if line:
+        moved = sum(x.amount for r, x in lines if str(r["id"]) == line)
+    else:       # matched without its line: the entry's lines on the bank's account, as before lines were kept
+        moved = sum(x.amount for _, x in lines if x.account_id == str(money["account_id"]))
     return moved == banking.left_of(ctx, row)
 
 
@@ -1032,17 +1038,19 @@ def settle_row(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> None:
     fid = str(row["id"])
     if t.void or t.reversed:
         SX.cancel_feed_writes(ctx.c, fid, "the bank cancelled this transaction", ctx.at)
-        SK.update(ctx.c, "fin_feed_txns", fid, {"status": "ignored", "entry_id": None, "updated_at": ctx.at})
+        SK.update(ctx.c, "fin_feed_txns", fid,
+                  {"status": "ignored", "entry_id": None, "entry_line_id": None, "updated_at": ctx.at})
         return
     if t.pending or str(row["status"]) == "ignored":
         return
     if row["entry_id"]:
         if _still_matches(ctx, row, money):
             return
-        SK.update(ctx.c, "fin_feed_txns", fid, {"status": "new", "entry_id": None, "updated_at": ctx.at})
+        SK.update(ctx.c, "fin_feed_txns", fid,
+                  {"status": "new", "entry_id": None, "entry_line_id": None, "updated_at": ctx.at})
     hit = _match(ctx, str(money["account_id"]), int(row["amount"]), str(row["txn_date"]))
     if hit:
-        _link(ctx, fid, hit)
+        _link(ctx, fid, *hit)
 
 
 def check_feed(ctx: Ctx, row: Any, *, ignore: bool) -> None:
@@ -1057,7 +1065,8 @@ def check_feed(ctx: Ctx, row: Any, *, ignore: bool) -> None:
 def ignore_feed(ctx: Ctx, row: Any) -> None:
     fid = str(row["id"])
     SX.cancel_feed_writes(ctx.c, fid, "the bank row was ignored", ctx.at)
-    SK.update(ctx.c, "fin_feed_txns", fid, {"status": "ignored", "entry_id": None, "updated_at": ctx.at})
+    SK.update(ctx.c, "fin_feed_txns", fid,
+              {"status": "ignored", "entry_id": None, "entry_line_id": None, "updated_at": ctx.at})
 
 
 def write_feed(ctx: Ctx, row: Any, account: L.Account, tags: Mapping[str, str], gl: L.Account, *, by: str,
@@ -1070,8 +1079,8 @@ def write_feed(ctx: Ctx, row: Any, account: L.Account, tags: Mapping[str, str], 
         raise FinanceError(CONFLICT, "that bank row is already applied in full")
     hit = _match(ctx, gl.id, amount, str(row["txn_date"]))
     if hit:
-        _link(ctx, fid, hit)
-        return {"feed_id": fid, "entry_id": hit, "matched": True}
+        _link(ctx, fid, *hit)
+        return {"feed_id": fid, "entry_id": hit[0], "matched": True}
     lines = [L.Line(account_id=gl.id, amount=amount, currency=ctx.book.base_currency, original_amount=amount,
                     role=L.MONEY_ROLE),
              L.Line(account_id=account.id, amount=-amount, currency=ctx.book.base_currency, original_amount=-amount,

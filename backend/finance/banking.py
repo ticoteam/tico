@@ -614,7 +614,8 @@ def _combined_row(ctx: Ctx, row: Any) -> bool:
 
 def mark_posted(ctx: Ctx, ids: Sequence[str], entry_id: str) -> None:
     for fid in ids:
-        SK.update(ctx.c, "fin_feed_txns", fid, {"status": "posted", "entry_id": entry_id, "updated_at": ctx.at})
+        SK.update(ctx.c, "fin_feed_txns", fid, {"status": "posted", "entry_id": entry_id, "entry_line_id": None,
+                                                "updated_at": ctx.at})
 
 
 def _unchanged(ctx: Ctx, row: Any, money: Any) -> bool:
@@ -648,7 +649,7 @@ def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
     from .stripe_post import SUMMARY, SUMMARY_ENTRY  # local: stripe_post imports this module
     for r in SK.rows_of_entry(ctx.c, entry_id):
         raw = dict(SK.loads(r["raw_json"]))
-        changes: dict[str, object] = {"status": "new", "entry_id": None, "updated_at": ctx.at}
+        changes: dict[str, object] = {"status": "new", "entry_id": None, "entry_line_id": None, "updated_at": ctx.at}
         if raw.get(SUMMARY):
             # The summary is reversed, but its closed period still holds this row's amount (see store row_effects).
             raw[SUMMARY_ENTRY] = entry_id
@@ -669,7 +670,8 @@ def undo(ctx: Ctx, row: Any) -> None:
         SB.void_settled(ctx.c, str(row["hold_id"]), ctx.at)
     if row["entry_id"]:
         _unpost(ctx, row, "the bank cancelled this transaction")
-    SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"status": "ignored", "entry_id": None, "updated_at": ctx.at})
+    SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"status": "ignored", "entry_id": None, "entry_line_id": None,
+                                                       "updated_at": ctx.at})
 
 
 def _counterpart(ctx: Ctx, row: Any, money: Any) -> Any:

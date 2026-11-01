@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from backend.finance import books_sync, mirror
+from backend.finance import reads as FR
 from backend.finance.context import load
 from backend.finance.core import mirror as M
 from backend.finance.core import qbo as Q
@@ -1259,15 +1260,23 @@ def test_a_bill_recovered_from_its_lost_answer_keeps_the_tags_its_local_write_ca
 
 
 
-def _bank_on(c: sqlite3.Connection, code: str, amount: int, day: str, name: str) -> None:
-    """A bank account on the chart line `code`, and one new bank row on it (what the bank feed brings in)."""
-    money, fid = SL.new_id(), SL.new_id()
+def _bank_rows(c: sqlite3.Connection, code: str, name: str, rows: list[tuple[int, str]]) -> None:
+    """One bank account on the chart line `code`, and a new bank row on it for each (amount, day): what the bank feed
+    brings in."""
+    money = SL.new_id()
     book = SL.book(c)
     c.execute("INSERT INTO fin_money_accounts(id, book_id, kind, name, provider, account_id, created_at, created_by) "
               "VALUES(?,?,?,?,?,?,?,?)", (money, book.id, "bank", name, "mercury", account(c, code), AT, OWNER))  # type: ignore[union-attr]
-    c.execute("INSERT INTO fin_feed_txns(id, money_account_id, provider_id, txn_date, amount, currency, counterparty, "
-              "status, created_at, created_by) VALUES(?,?,?,?,?,?,?,?,?,?)",
-              (fid, money, f"txn-{fid[:8]}", day, amount, book.base_currency, name, "new", AT, OWNER))  # type: ignore[union-attr]
+    for amount, day in rows:
+        fid = SL.new_id()
+        c.execute("INSERT INTO fin_feed_txns(id, money_account_id, provider_id, txn_date, amount, currency, counterparty, "
+                  "status, created_at, created_by) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  (fid, money, f"txn-{fid[:8]}", day, amount, book.base_currency, name, "new", AT, OWNER))  # type: ignore[union-attr]
+
+
+def _bank_on(c: sqlite3.Connection, code: str, amount: int, day: str, name: str) -> None:
+    """A bank account on the chart line `code`, and one new bank row on it (what the bank feed brings in)."""
+    _bank_rows(c, code, name, [(amount, day)])
 
 
 def test_a_payroll_expense_account_is_private_when_it_is_imported_and_so_is_its_salary_line(books):
@@ -1369,4 +1378,158 @@ def test_both_legs_of_an_imported_transfer_match_the_one_entry_and_neither_block
         rows = c.execute("SELECT status, entry_id FROM fin_feed_txns ORDER BY amount").fetchall()
         assert [tuple(r) for r in rows] == [("matched", entry), ("matched", entry)]
         assert c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0] == 1
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0] == 0
+
+
+def test_wages_paid_through_a_quickbooks_payroll_liability_hide_their_bank_row_from_a_bank_line_viewer(books):
+    fake = FakeBooks()
+    _chart(fake)
+    base = {"SyncToken": "1", "Active": True}
+    fake.records["accounts"] += [
+        Q.account_record({**base, "Id": "7", "Name": "Wages", "AcctNum": "6200", "AccountType": "Expense",
+                          "AccountSubType": "PayrollExpenses"}),
+        Q.account_record({**base, "Id": "8", "Name": "Wages payable", "AcctNum": "2150",
+                          "AccountType": "Other Current Liability", "AccountSubType": "PayrollClearing"})]
+    fake.records["entries"] = [journal(71, 1, "2026-10-05", 123456, debit="Account:7", credit="Account:8"),
+                               journal(72, 1, "2026-10-12", 123456, debit="Account:8", credit="Account:1")]
+    cid = _connection(books)
+    with books.transaction() as c:
+        _bank_on(c, "1000", -123456, "2026-10-12", "Gusto")
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        bank = account(c, "1000")
+        assert act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "bs_lines",
+                                            "account_ids": [bank]}).status == "committed"
+    with books.read() as c:
+        def amounts(who: str) -> list[int]:
+            return [int(r["amount"]) for r in FR.transactions(c, who, at=AT)["rows"] if r["kind"] == "feed"]
+        assert -123456 in amounts(OWNER)
+        assert -123456 not in amounts("human:cara")
+        assert c.execute("SELECT status FROM fin_feed_txns").fetchone()[0] == "matched"
+
+
+_TEAM_RULE = {
+    "name": "No eng bills", "when": {"kind": "bill_create", "tags.team": "eng"},
+    "outcome": {"outcome": "deny", "reason": "eng bills wait"},
+    "examples": [{"input": {"kind": "bill_create", "tags.team": "eng"}, "expect": "deny"},
+                 {"input": {"kind": "bill_create", "tags.team": "web"}, "expect": "allow"}]}
+
+
+def _two_team_lines(c: sqlite3.Connection) -> list[dict[str, Any]]:
+    """A bill whose first line is web and whose second is eng: a rule on eng must see the second line too."""
+    return [{"account_id": account(c, "6100"), "amount": 1000, "description": "web seats", "tags": {"team": "web"}},
+            {"account_id": account(c, "6100"), "amount": 500, "description": "eng seats", "tags": {"team": "eng"}}]
+
+
+def test_a_deny_rule_on_a_team_tag_stops_a_bill_with_any_line_on_that_team_in_mirror_mode(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        assert act(c, OWNER, "rule_create", _TEAM_RULE).status == "committed"
+        refused = act(c, OWNER, "bill_create", {
+            "vendor_id": _local(c, "Vendor:9", "fin_contacts"), "number": "B-79", "bill_date": "2026-10-05",
+            "due_date": "2026-11-05", "lines": _two_team_lines(c)})
+        assert (refused.status, refused.reason) == ("denied", "eng bills wait")
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op='bill.create'").fetchone()[0] == 0
+
+
+def test_a_deny_rule_on_a_team_tag_stops_a_native_bill_with_any_line_on_that_team(books):
+    with books.transaction() as c:
+        vendor = str(act(c, OWNER, "contact_create", {"name": "Acme Parts", "kind": "vendor"}).result["contact_id"])
+        assert act(c, OWNER, "rule_create", _TEAM_RULE).status == "committed"
+        refused = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-05",
+                                                "due_date": "2026-11-05", "lines": _two_team_lines(c)})
+        assert (refused.status, refused.reason) == ("denied", "eng bills wait")
+
+
+def test_a_reimport_does_not_make_an_account_private_again_once_the_owner_has_made_it_public(books):
+    fake = FakeBooks()
+    _chart(fake)
+    fake.records["accounts"].append(M.ChartAccount(M.Ext("Account", "7", "1"), "6200", "Wages", "expense",
+                                                   payroll=True))
+    fake.records["entries"] = [journal(71, 1, "2026-10-05", 123456, debit="Account:7", credit="Account:1")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        wages = _local(c, "Account:7", "fin_accounts")
+        assert act(c, OWNER, "private_lines_set", {"account_id": wages, "private": False}).status == "committed"
+    fake.changes = [M.ChartAccount(M.Ext("Account", "7", "2"), "6200", "Wages and salaries", "expense", payroll=True)]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert c.execute("SELECT name FROM fin_accounts WHERE id=?", (wages,)).fetchone()[0] == "Wages and salaries"
+        assert wages not in SA.private_lines(c)
+
+
+def test_two_transfers_on_one_account_in_one_journal_each_match_their_own_leg_and_a_second_pass_keeps_them(books):
+    fake = FakeBooks()
+    _chart(fake)
+    fake.records["accounts"].append(acct(4, "1150", "Savings", "asset"))
+    fake.records["entries"] = [M.Journal(M.Ext("JournalEntry", "80", "1"), "2026-10-05", "Acme Software", "sync",
+                                         (M.EntryLine("Account:4", 2500), M.EntryLine("Account:1", -2500),
+                                          M.EntryLine("Account:4", 3000), M.EntryLine("Account:1", -3000)))]
+    cid = _connection(books)
+    with books.transaction() as c:
+        assert act(c, OWNER, "account_create", {"code": "1150", "name": "Savings", "type": "asset"}).status == "committed"
+        _bank_rows(c, "1000", "Checking", [(-2500, "2026-10-05"), (-3000, "2026-10-05")])
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        entry = _entry_of(c, "JournalEntry:80")
+        rows = c.execute("SELECT amount, status, entry_id FROM fin_feed_txns ORDER BY amount").fetchall()
+        assert [tuple(r) for r in rows] == [(-3000, "matched", entry), (-2500, "matched", entry)]
+        assert c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0] == 1
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0] == 0
+
+
+def test_migration_75_gives_a_row_matched_before_lines_were_kept_its_line_and_running_it_again_changes_nothing(books):
+    with books.transaction() as c:
+        entry = act(c, OWNER, "journal", {"date": "2026-10-05", "memo": "rent", "lines": [
+            {"account_id": account(c, "6100"), "amount": 1500}, {"account_id": account(c, "1000"), "amount": -1500}]})
+        assert entry.status == "committed", entry
+        _bank_on(c, "1000", -1500, "2026-10-05", "Acme Software")
+        row = str(c.execute("SELECT id FROM fin_feed_txns").fetchone()[0])
+        line = str(c.execute("SELECT id FROM fin_lines WHERE entry_id=? AND account_id=?",
+                             (entry.result["entry_id"], account(c, "1000"))).fetchone()[0])
+        c.execute("UPDATE fin_feed_txns SET status='matched', entry_id=? WHERE id=?", (entry.result["entry_id"], row))
+        c.execute("DROP INDEX fin_feed_txns_entry_line")
+        c.execute("ALTER TABLE fin_feed_txns DROP COLUMN entry_line_id")
+        schema.feed_lines(c)
+        schema.feed_lines(c)
+        assert c.execute("SELECT entry_line_id FROM fin_feed_txns WHERE id=?", (row,)).fetchone()[0] == line
+
+
+def test_a_revised_transfer_keeps_each_bank_row_on_its_own_leg_of_the_new_entry(books):
+    fake = FakeBooks()
+    _chart(fake)
+    fake.records["accounts"].append(acct(4, "1150", "Savings", "asset"))
+
+    def transfers(rev: int) -> M.Journal:
+        return M.Journal(M.Ext("JournalEntry", "80", str(rev)), "2026-10-05", "Acme Software", "sync",
+                         (M.EntryLine("Account:4", 2500), M.EntryLine("Account:1", -2500),
+                          M.EntryLine("Account:4", 3000), M.EntryLine("Account:1", -3000)))
+    fake.records["entries"] = [transfers(1)]
+    cid = _connection(books)
+    with books.transaction() as c:
+        made = act(c, OWNER, "account_create", {"code": "1150", "name": "Savings", "type": "asset"})
+        assert made.status == "committed"
+        _bank_rows(c, "1000", "Checking", [(-2500, "2026-10-05"), (-3000, "2026-10-05")])
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    fake.changes = [transfers(2)]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        new = _entry_of(c, "JournalEntry:80")
+        checking = _local(c, "Account:1", "fin_accounts")
+        leg = {int(r[1]): str(r[0]) for r in c.execute(
+            "SELECT id, amount FROM fin_lines WHERE entry_id=? AND account_id=?", (new, checking))}
+        rows = [tuple(r) for r in c.execute("SELECT amount, status, entry_id, entry_line_id FROM fin_feed_txns "
+                                            "ORDER BY amount").fetchall()]
+        assert rows == [(-3000, "matched", new, leg[-3000]), (-2500, "matched", new, leg[-2500])]
         assert c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0] == 0

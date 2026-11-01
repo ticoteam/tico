@@ -167,16 +167,17 @@ def decide(have: tuple[str, str] | None, ext: Ext) -> str:
     return REPLACE if order > 0 else SAME if order == 0 else OLDER
 
 
-def match_row(amount: int, day: str, candidates: Sequence[tuple[str, str, int]]) -> str | None:
-    """The entry a bank row is: among (entry id, entry date, line amount) candidates, the one with the row's amount whose
-    date is nearest the row's (within MATCH_DAYS; the smaller id on a tie). None when no entry fits."""
+def match_row(amount: int, day: str, candidates: Sequence[tuple[str, str, str, int]]) -> tuple[str, str] | None:
+    """The line a bank row is: among (line id, entry id, entry date, line amount) candidates, the one with the row's
+    amount whose entry date is nearest the row's (within MATCH_DAYS; the smaller entry id, then line id, on a tie).
+    Returns (entry id, line id), or None when no line fits."""
     here = dates.day(day)
-    best: tuple[int, str] | None = None
-    for entry_id, entry_day, line in candidates:
+    best: tuple[int, str, str] | None = None
+    for line_id, entry_id, entry_day, line in candidates:
         gap = abs((dates.day(entry_day) - here).days)
-        if line == amount and gap <= MATCH_DAYS and (best is None or (gap, entry_id) < best):
-            best = (gap, entry_id)
-    return best[1] if best else None
+        if line == amount and gap <= MATCH_DAYS and (best is None or (gap, entry_id, line_id) < best):
+            best = (gap, entry_id, line_id)
+    return (best[1], best[2]) if best else None
 
 
 def backfill_next(state: Mapping[str, object], entity: str) -> int | None:

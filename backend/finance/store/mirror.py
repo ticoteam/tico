@@ -91,17 +91,19 @@ def set_mirror_state(c: sqlite3.Connection, cid: str, fields: Mapping[str, objec
 
 
 def candidates(c: sqlite3.Connection, book_id: str, gl_account_id: str, amount: int, start: str,
-               end: str) -> list[tuple[str, str, int]]:
-    """Live entries with a line on the bank's account for this amount in a window: (entry id, entry date, line amount).
-    A line is taken out once a bank row on that same account is its match; the other legs of the entry (a transfer's
-    second account) are still offered, so each leg matches on its own."""
+               end: str) -> list[tuple[str, str, str, int]]:
+    """Live entries' lines on the bank's account for this amount in a window: (line id, entry id, entry date, line
+    amount). A line is taken out once a bank row is matched to it, and only that line: the other legs of the entry,
+    even on the same account, are still offered. A row matched without its line (before lines were kept, or whose
+    line was replaced) takes out its entry's lines on the bank's account, as it always did."""
     rows = c.execute(
-        "SELECT e.id, e.entry_date, l.amount FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
+        "SELECT l.id, e.id, e.entry_date, l.amount FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
         "WHERE e.book_id=? AND l.account_id=? AND l.amount=? AND e.entry_date BETWEEN ? AND ? AND e.status='posted' "
         "AND e.reverses_id IS NULL AND NOT EXISTS (SELECT 1 FROM fin_feed_txns f JOIN fin_money_accounts m "
-        "ON m.id=f.money_account_id WHERE f.entry_id=e.id AND (m.account_id=l.account_id OR m.account_id IS NULL)) "
-        "ORDER BY e.entry_date, e.id LIMIT 200", (book_id, gl_account_id, amount, start, end)).fetchall()
-    return [(str(r[0]), str(r[1]), int(r[2])) for r in rows]
+        "ON m.id=f.money_account_id WHERE f.entry_id=e.id AND (f.entry_line_id=l.id OR (f.entry_line_id IS NULL "
+        "AND (m.account_id=l.account_id OR m.account_id IS NULL)))) "
+        "ORDER BY e.entry_date, e.id, l.id LIMIT 200", (book_id, gl_account_id, amount, start, end)).fetchall()
+    return [(str(r[0]), str(r[1]), str(r[2]), int(r[3])) for r in rows]
 
 
 def unmatched_rows(c: sqlite3.Connection, book_id: str, most: int) -> list[Any]:
@@ -112,14 +114,17 @@ def unmatched_rows(c: sqlite3.Connection, book_id: str, most: int) -> list[Any]:
 
 
 def link_feed(c: sqlite3.Connection, old_entry: str, new_entry: str) -> None:
-    """Bank rows that pointed at an entry now point at its replacement."""
-    c.execute("UPDATE fin_feed_txns SET entry_id=? WHERE entry_id=?", (new_entry, old_entry))
+    """Bank rows that pointed at an entry now point at its replacement, each at the replacement's line on the same
+    account for the same amount (none when there is no such line)."""
+    c.execute("UPDATE fin_feed_txns SET entry_id=?, entry_line_id=(SELECT n.id FROM fin_lines n JOIN fin_lines o ON "
+              "o.id=fin_feed_txns.entry_line_id WHERE n.entry_id=? AND n.account_id=o.account_id AND n.amount=o.amount "
+              "ORDER BY n.id LIMIT 1) WHERE entry_id=?", (new_entry, new_entry, old_entry))
 
 
 def unlink_feed(c: sqlite3.Connection, entry_id: str, at: str) -> None:
     """Bank rows that pointed at an entry the provider deleted wait again for a match or a categorization."""
-    c.execute("UPDATE fin_feed_txns SET status='new', entry_id=NULL, updated_at=? WHERE entry_id=? AND "
-              "status IN ('matched','posted')", (at, entry_id))
+    c.execute("UPDATE fin_feed_txns SET status='new', entry_id=NULL, entry_line_id=NULL, updated_at=? WHERE entry_id=? "
+              "AND status IN ('matched','posted')", (at, entry_id))
 
 
 def writes_for_feed(c: sqlite3.Connection, feed_id: str) -> list[Any]:

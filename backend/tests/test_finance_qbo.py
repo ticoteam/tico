@@ -621,3 +621,11 @@ def test_a_quickbooks_payroll_expenses_account_is_marked_payroll_and_an_ordinary
     base = {"Id": "7", "SyncToken": "1", "Name": "Payroll expenses", "AccountType": "Expense", "Active": True}
     assert Q.account_record({**base, "AccountSubType": "PayrollExpenses"}).payroll is True
     assert Q.account_record({**base, "AccountSubType": "OtherMiscellaneousServiceExpense"}).payroll is False
+
+
+def test_a_quickbooks_payroll_liability_that_wages_pass_through_is_marked_payroll_and_an_ordinary_one_is_not():
+    base = {"Id": "8", "SyncToken": "1", "Name": "Wages payable", "AccountType": "Other Current Liability",
+            "Active": True}
+    assert Q.account_record({**base, "AccountSubType": "PayrollClearing"}).payroll is True
+    assert Q.account_record({**base, "AccountSubType": "PayrollTaxPayable"}).payroll is True
+    assert Q.account_record({**base, "AccountSubType": "OtherCurrentLiabilities"}).payroll is False

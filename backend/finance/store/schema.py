@@ -416,6 +416,7 @@ CREATE INDEX IF NOT EXISTS fin_feed_txns_account ON fin_feed_txns(money_account_
 CREATE INDEX IF NOT EXISTS fin_feed_txns_card ON fin_feed_txns(card_id, txn_date);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_request ON fin_feed_txns(request_id);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_entry ON fin_feed_txns(entry_id);
+CREATE INDEX IF NOT EXISTS fin_feed_txns_entry_line ON fin_feed_txns(entry_line_id);
 CREATE INDEX IF NOT EXISTS fin_money_accounts_provider ON fin_money_accounts(connection_id, provider_account_id);
 CREATE INDEX IF NOT EXISTS fin_cards_provider ON fin_cards(provider, provider_card_id);
 CREATE INDEX IF NOT EXISTS fin_card_saves_vendor ON fin_card_saves(book_id, vendor_key, active);
@@ -535,6 +536,8 @@ ADDED = (
     ("fin_transfers", "settled_at", "TEXT"), ("fin_transfers", "submitted_at", "TEXT"),
     ("fin_transfers", "counted_json", "TEXT NOT NULL DEFAULT '[]'"),
     ("fin_transfers", "provider_credit_txn_id", "TEXT"), ("fin_transfers", "find_after", "TEXT"),
+    # the journal line a bank row matched (migration 75), so a transfer's two legs on one account match one at a time
+    ("fin_feed_txns", "entry_line_id", "TEXT"),
 )
 
 
@@ -638,6 +641,16 @@ def phase2(c: sqlite3.Connection) -> None:
     same statements as `create` again, then the vendor names phase 1 posted as written (vendor_keys_folded)."""
     create(c)
     vendor_keys_folded(c)
+
+
+def feed_lines(c: sqlite3.Connection) -> None:
+    """Cloud migration 75: the journal line each matched bank row took (fin_feed_txns.entry_line_id). A row matched
+    before it takes the entry's line on its bank account for its amount, if the entry has one. Idempotent."""
+    create(c)
+    c.execute("UPDATE fin_feed_txns SET entry_line_id=(SELECT l.id FROM fin_lines l JOIN fin_money_accounts m ON "
+              "m.id=fin_feed_txns.money_account_id WHERE l.entry_id=fin_feed_txns.entry_id AND "
+              "l.account_id=m.account_id AND l.amount=fin_feed_txns.amount ORDER BY l.id LIMIT 1) "
+              "WHERE entry_id IS NOT NULL AND entry_line_id IS NULL")
 
 
 def phase4(c: sqlite3.Connection) -> None:

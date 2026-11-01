@@ -38,6 +38,9 @@ TYPES: dict[str, tuple[str, str]] = {
     "Other Income": ("income", "other_income"), "Cost of Goods Sold": ("expense", ""), "Expense": ("expense", ""),
     "Other Expense": ("expense", "other_expense"),
 }
+# Payroll expenses, and the liabilities and clearing accounts wages pass through: their lines are private as payroll is
+# (spec §7.5), so the bank row that pays wages is private with the expense it came from.
+PAYROLL_SUBTYPES = frozenset({"PayrollExpenses", "PayrollClearing", "PayrollTaxPayable"})
 _OUT: dict[tuple[str, str], str] = {("asset", "bank"): "Bank", ("income", "other_income"): "Other Income",
                                     ("expense", "other_expense"): "Other Expense",
                                     ("liability", "payable"): "Accounts Payable",
@@ -105,7 +108,7 @@ def account_record(row: dict[str, Any]) -> M.ChartAccount | None:
         subtype = M.SALES_TAX           # where a taxed record's tax lands (the books' sales tax account)
     return M.ChartAccount(ext, code=code, name=_id(row.get("Name")), type=mapped[0], subtype=subtype,
                           active=bool(row.get("Active", True)),
-                          payroll=_id(row.get("AccountSubType")) == "PayrollExpenses")
+                          payroll=_id(row.get("AccountSubType")) in PAYROLL_SUBTYPES)
 
 
 def party_record(row: dict[str, Any], kind: str) -> M.Party:

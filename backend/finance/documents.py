@@ -327,10 +327,14 @@ def _attach_files(p: V.Payload) -> list[str]:
 
 def _facts(kind: str, contact: Any, lines: Sequence[AP.DocLine], ctx: Ctx, **more: object) -> Result:
     codes = sorted({ctx.accounts[x.account_id].code for x in lines if x.account_id in ctx.accounts})
-    tags: dict[str, object] = {}
+    seen: dict[str, list[str]] = {}
     for x in lines:
         for k, v in x.tags.items():
-            tags.setdefault(f"tags.{k}", v)
+            values = seen.setdefault(f"tags.{k}", [])
+            if v not in values:
+                values.append(v)
+    # Every line's value of a tag counts: a rule on a tag matches a document with any line carrying that value.
+    tags: dict[str, object] = {k: vs[0] if len(vs) == 1 else sorted(vs) for k, vs in seen.items()}
     return {"amount": sum(x.amount for x in lines), "counterparty": str(contact["name"]),
             f"{CONTACT_OF[kind]}.id": str(contact["id"]), "accounts": codes, **tags, **more}
 

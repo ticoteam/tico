@@ -1784,6 +1784,12 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.create(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(74,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=75").fetchone():
+                    # The journal line each matched bank row took (fin_feed_txns.entry_line_id), on an install that
+                    # took migrations 64 to 74 before it. Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.feed_lines(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(75,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the
