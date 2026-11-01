@@ -19,6 +19,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            what was said in a conversation: the newest 200, oldest
                                            first; has_more says there is an older page, --before
                                            its next_before reads it. The run's prompt names it
+    hub thread link-slack <thread> [<channel>] [--history] [--off]
+                                           a thread's Slack link (admins): with a channel, asks for it and Tico
+                                           checks it; --history also brings the channel's earlier messages; --off
+                                           takes it away; with the thread alone, lists its links
     hub question ask <bot> [<bot>...] "<question>" --wait 60
     hub question answer <message-id> "<text>" [--unknown "needs X"] [--on-behalf-of turn]
     hub note create <bot> "<text>" [--text-file f] [--defer 4h]  a deferred message: wakes nobody; the bot's next
@@ -892,6 +896,14 @@ def parser():
     s.add_argument("--before", help="the page before this message id: a page's next_before")
     s.add_argument("--since", help="only messages sent after this time (ISO 8601)")
     s.set_defaults(fn="conversation show")
+
+    thread = sub.add_parser("thread", help="threads: link a thread to a Slack channel").add_subparsers(dest="sub")
+    s = thread.add_parser("link-slack", help="link a thread to a Slack channel (admins), list its links, or --off to take them away")
+    s.add_argument("thread", help="the thread's id")
+    s.add_argument("channel", nargs="?", help="#name or id (C0123456789); left out, the thread's links are listed")
+    s.add_argument("--history", action="store_true", help="also bring in the channel's earlier messages")
+    s.add_argument("--off", action="store_true", help="take the thread's Slack link away")
+    s.set_defaults(fn="thread link-slack")
 
     question = sub.add_parser("question", help="ask other bots a question and wait; answer one asked of you").add_subparsers(dest="sub")
     s = question.add_parser("ask")

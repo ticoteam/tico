@@ -22,7 +22,7 @@ import pytest
 from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
-SUBCOMMANDS = ["whoami", "inbound", "mail", "meeting", "message", "conversation", "question", "note", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
+SUBCOMMANDS = ["whoami", "inbound", "mail", "meeting", "message", "conversation", "thread", "question", "note", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
                "proposal", "rules", "strategy", "brand", "gtm", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "health-monitor", "finance", "task-manager", "stall-triage", "roadmap", "service-key"]
@@ -654,6 +654,40 @@ def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_
     assert calls[0][2] == {'entity_id': 'company/example-co', 'url': 'https://example.test/pricing', 'kind': 'pricing'}
     assert calls[-1][2] == {'week': '2026-W44', 'title': 'Week 44', 'body': '# Week 44\n',
                             'items': [{'text': 'Example Co raised prices.', 'kind': 'change', 'entity_ids': ['company/example-co']}]}
+
+
+def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(monkeypatch):
+    """`hub thread link-slack` runs `hub_thread_link_slack` (clients/hubtools.py): a channel asks for the link, the thread
+    alone lists its links, and --off lists them and deletes each one."""
+    from clients import remotecli
+    calls = []
+
+    class Api:
+        def get(self, path, /, **query):
+            if path == "me":
+                return {"actor": "human:ana", "role": "owner", "kind": "owner"}
+            calls.append(("GET", path, query))
+            return {"links": [{"id": "L1", "state": "active"}]}
+
+        def post(self, path, body=None, key=None):
+            calls.append(("POST", path, body))
+            return {"id": "L2", "state": "requested"}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            calls.append((method, path))
+            return {"id": "L1", "state": "unlinked"}
+
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: Api())
+    for argv in (["thread", "link-slack", "T1", "#marketing", "--history"], ["thread", "link-slack", "T1"],
+                 ["thread", "link-slack", "T1", "--off"]):
+        remotecli.run(hubcli.parser().parse_args(argv))
+    assert calls == [
+        ("POST", "slack/links", {"thread_id": "T1", "channel": "#marketing", "history": True}),
+        ("GET", "slack/links", {"thread": "T1", "limit": 100}),
+        ("GET", "slack/links", {"thread": "T1", "limit": 100}),
+        ("DELETE", "slack/links/L1"),
+    ]
 
 
 WEBHOOK_LEAVES = [  # every leaf of the command table in docs/webhooks.md, with the arguments it needs
