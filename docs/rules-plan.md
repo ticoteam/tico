@@ -195,6 +195,10 @@ ahead of time so it doesn't try.
     tool steps, not the reply text, until the verdict says deliver. On Block or Escalate the text lives only on the
     `org_rule_holds` row; `final_text`, `result_json`, the run log and the bot session show the one-line note. The
     privacy withhold keeps text on the attempt; this doesn't.
+  - thread writes ([Threads](threads.md)): a post into a thread (`POST /api/v2/threads/{id}/messages`, a sub-thread reply
+    included), a thread started with a first message (`POST /api/v2/threads`), and an edit (`PATCH /api/v2/messages/{id}`)
+    are judged as a message to a person is, before the write; on Block the message is held and does not reach the thread
+    until a reviewer releases it (`message.held` tells the owners and admins);
   - `hub message send` (`POST /api/v2/messages`, and `POST /api/v2/chat/{bot}` through the same check and write),
     task comments, task create and owner change: the routes `ask_ingest` already gates;
   - task questions (`POST /api/v2/task-questions`): title, body, question and why as one output to the person asked;

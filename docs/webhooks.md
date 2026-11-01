@@ -283,6 +283,7 @@ description and an example (`--group task` narrows it). A few:
 | `approval` | `approval.requested`, `decided`, `withdrawn` |
 | `needs_you` | `needs_you.created`, `answered` |
 | `bot` | `bot.run_failed`, `held`, `released` |
+| `thread` | `thread.created`, `message.created` (outgoing webhooks only), `message.held` ([Threads](threads.md)) |
 | other | `release.published`, `meeting.ready`, `strategy.published`, `market.insight.urgent`, `market.briefing`, `inbound.received`, `health.finding` |
 | `custom` | `custom.<name>`, which only a person or a rule sends (below) |
 
@@ -438,8 +439,9 @@ is refused (`hub webhook example` too); turn the endpoint back on first.
 - Bots can list endpoints without the full address. They cannot read send logs.
 - A bot sends a custom event only while its **outbound send** switch is on (Settings → Bots → Mail sending, or
   `hub bot mail <slug> --send`), and only to an endpoint that listens for it. The Strategy Bot sends nothing.
-- An endpoint hears about a task, approval or bot only if its owner could read it. Health, inbound and webhook events go only to
-  owner and admin endpoints.
+- An endpoint hears about a task, approval or bot only if its owner could read it. A thread or message event goes only to an
+  endpoint whose owner may read that thread. `message.held` goes to owner and admin endpoints, as does a health, inbound or
+  webhook event. Thread events carry ids and facts, never a message's words.
 - A person can have 50 endpoints.
 
 More in [Permissions](permissions.md#outgoing-webhooks) and the [API](api.md#outgoing-webhooks).

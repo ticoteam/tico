@@ -1,32 +1,32 @@
 # Sessions
 
 A **session** is one model conversation a bot resumes: a Claude Code or Codex thread on its computer.
-A bot has more than one. Its main chat is one session, and every task it owns is another.
+A bot has more than one. Its Home is one session, and every task it owns is another.
 This page explains how they fit together. [Tasks](tasks.md#subtasks-and-prs) has the exact rules.
 
 ## The main chat and task sessions
 
-- **Main chat**: the bot's chat on its page. Its session reads only main-chat messages and short task reports.
-- **Task session**: each task the bot owns. It has its own room (the task's thread), its own git worktree of the
+- **Home**: the bot's thread on its page. Its session reads only Home messages and short task reports.
+- **Task session**: each task the bot owns. It has its own thread (the task's thread), its own git worktree of the
   bot's repository, and a primary session link on the task.
 
 Task traffic never enters two context windows. What you say in a task stays in that task's session, and what you
-say in the main chat stays in the main one.
+say in the Home stays in the main one.
 
-When you ask a bot for something in chat and it files a task, the work moves to the task's room. The chat gets one
-quiet line, "Started task: <title>". Tap that line, or any task row in the bot chat, to open the task's thread.
+When you ask a bot for something in a thread and it files a task, the work moves to the task's thread. The thread gets one
+quiet line, "Started task: <title>". Tap that line, or any task row in the bot's Home, to open the task's thread.
 Messages you write there go to that task's session.
 
 ## Reports in the main chat
 
-The main chat hears where each task got to in one quiet line: **started**, **blocked**, **done**, **declined** or
+The Home hears where each task got to in one quiet line: **started**, **blocked**, **done**, **declined** or
 **stuck**, with the start of the note. These lines start no run. The main session reads them the next time
 something wakes it. The same state is not reported twice in a row, and a private task is reported only where every
-reader of the chat may read it.
+reader of the Home may read it.
 
 ## Subtasks
 
-A subtask someone else files for a bot under its task continues the parent's session by default: same room, same
+A subtask someone else files for a bot under its task continues the parent's session by default: same thread, same
 worktree, same checkpoint. The bot's turns on the parent and that subtask take turns. A subtask the bot filed for
 itself is new work, so it starts its own session and runs beside the parent. A subtask whose parent belongs to
 someone else, or has different readers, also starts its own session.
@@ -40,7 +40,7 @@ Set `subtask_session: own` to give every subtask its own session instead.
 
 Each turn on a task leaves a **checkpoint**: the turn's final reply, kept on the task.
 
-A bot's chat and a task each keep one session, however long it runs. The harness compacts it on its own when it nears
+A bot's Home and a task each keep one session, however long it runs. The harness compacts it on its own when it nears
 the bot's `compact_at`, and that is the only size limit: Tico never starts a new session to save tokens. The next turn
 resumes the saved session. If the host refuses, Tico asks once more after a short pause.
 
@@ -60,10 +60,10 @@ session compacts during a shortened turn anyway, the turn is given the lines it 
 again on a new session, after any compaction (the harness's own or `compact_first`), after a side session or an
 interrupted turn, and after a turn that did not complete; the repo rules go again after a compaction or a turn that did
 not complete. A resumed session that turns out to be missing starts again with what a replacing session gets: the
-repo rules, the checkpoint and the room since its last turn. Other harnesses get the whole prompt every turn.
+repo rules, the checkpoint and the thread since its last turn. Other harnesses get the whole prompt every turn.
 
 A stateless bot (`stateless` in its config; Counsel by its template) keeps no session across tasks. Each task starts its
-own session and resumes only that task's, and a chat message to it starts a new session that is not saved. It gets the
+own session and resumes only that task's, and a message to it starts a new session that is not saved. It gets the
 whole prompt every turn and is never told to read `memory/` or `state.md`. A new session for a task still starts from
 the task's checkpoint, as above.
 
@@ -82,15 +82,15 @@ clears the session for the next run. `/compact` keeps its session.
 Older runners also started a new session once a session passed a size (`rotate_at`, `rotate_after_turns`); those
 settings are gone, and a saved config that still carries them is ignored.
 
-**Clear** on a bot's chat starts that chat over: the next turn opens a new provider thread and reads only what was
-said after the clear. The main chat is one thread shared by the bot's chats, so a clear in one person's chat starts
-that shared thread over too; others' chats then continue from their own history in Tico. A bot's computer must run
+**Clear** on a bot's thread starts that thread over: the next turn opens a new provider thread and reads only what was
+said after the clear. The Home is one thread shared by the bot's threads, so a clear in one person's DM starts
+that shared thread over too; others' DMs then continue from their own history in Tico. A bot's computer must run
 a runner from this release or later; an older runner keeps resuming the old thread.
 
-In a long direct chat with a bot, when you change subject, Tico may start a fresh session, as if you pressed **Clear**,
+In a long DM with a bot, when you change subject, Tico may start a fresh session, as if you pressed **Clear**,
 and shows a quiet **Topic changed** line above your message. The bot no longer carries the old conversation, which keeps
-long chats cheaper and on topic. An owner or an admin turns this on or off in **Settings > System**, **Start fresh when
-the topic changes** (off by default). It never happens in task chats or group chats, and there is no undo. If Tico isn't
+long DMs cheaper and on topic. An owner or an admin turns this on or off in **Settings > System**, **Start fresh when
+the topic changes** (off by default). It never happens in task threads or group threads, and there is no undo. If Tico isn't
 sure, or the check takes over 1.5 seconds, nothing changes and your message goes to the same session.
 
 Nothing closes on its own. A task with no activity for 7 days gets one **Still wanted?** question, with **Keep** and
@@ -100,7 +100,7 @@ Nothing closes on its own. A task with no activity for 7 days gets one **Still w
 
 Tico watches running tasks. A task with no progress for 30 minutes gets a status check in its session: checkpoint,
 or mark it blocked or done. With still no progress, Tico retries the bot once. Thirty minutes later, still nothing, the
-main chat gets a **stuck** line and BotOps gets a task to find out why ([Work that is waiting](tasks.md#work-that-is-waiting)).
+Home gets a **stuck** line and BotOps gets a task to find out why ([Work that is waiting](tasks.md#work-that-is-waiting)).
 Tico asks no person about a stuck bot. These count toward the stalled-task limit of three a day.
 
 An idle task unchanged since its owner's last settled checkpoint skips a plain automatic stall or status check.
@@ -112,11 +112,11 @@ wake the bot as before, and leased or running sessions keep their recovery check
 
 With `task_goal: on`, a bot works each task it owns as a goal: keep going until the task's title and acceptance
 criteria hold, then mark it done. On Claude Code and Codex this is the harness's native goal (`/goal`, Codex goals),
-set in the task's room; other harnesses get it as a line in the prompt. A met goal marks the task done. A paused or
-stopped goal leaves the task open, with a **blocked** or **stuck** line in the main chat.
+set in the task's thread; other harnesses get it as a line in the prompt. A met goal marks the task done. A paused or
+stopped goal leaves the task open, with a **blocked** or **stuck** line in the Home.
 
 A `goal:on` or `goal:off` label on a task overrides the bot's setting. A person who clears or edits the goal in the
-task's room takes it over, and Tico leaves it alone after that. Goals in chat work the same way:
+task's thread takes it over, and Tico leaves it alone after that. Goals in chat work the same way:
 see [Chat goals](chat-goals.md).
 
 ## Many tasks at once
@@ -125,14 +125,14 @@ A bot works its tasks at the same time, each in its own session and worktree. Th
 runs at once from its size (`capacity` in [runner.json](environments.md#runnerjson)). An owner or an admin can set
 **Turns at once** on the computer instead (Settings > Computers), up to 256; clearing it goes back to the size. A runner
 that predates `turns_at_once_v1` runs at most the capacity it reports, and Settings says so. Turns on the same task,
-and in the main chat, still take turns.
+and in the Home, still take turns.
 
 Nothing caps a bot below the computer's turns. When a turn frees, it goes to the bot holding the fewest turns
 there, then to the work that has waited longest, so bots that share a computer take turns between them. A bot's own
 **Turns at once** (set in its editor) caps its turns across every computer together, a person's message included: at
 its limit its queued work waits on every computer, and its other bots keep their turns. Work held back this way says
 "Waiting for a
-free turn on <computer>" in its chat and on its task. The task shows the same waiting reason as the chat (a paused bot,
+free turn on <computer>" in its thread and on its task. The task shows the same waiting reason as the thread (a paused bot,
 an update, a computer being set up) to anyone who can read the task.
 
 Each task session has a git worktree at `sessions/bot-<slug>/<task>` on branch `tico-session/<task>`. A bot can hold
@@ -152,7 +152,7 @@ upstream: a checkout with no remote gives it a copy of its own `HEAD`.
 
 You can link other sessions to a task to track them: a Bot Desk or Orca thread URL, a `claude --resume <id>` or
 `codex resume <id>` command. Use **Sessions +** on the task or `hub task link <task> <value> --session`. Linked
-sessions are for tracking only. Task chat and comments always go to the owning bot's primary session.
+sessions are for tracking only. Task thread and comments always go to the owning bot's primary session.
 
 The task's ⋯ menu has **Copy session ID** for the primary session, to resume it by hand.
 
@@ -160,7 +160,7 @@ The task's ⋯ menu has **Copy session ID** for the primary session, to resume i
 
 | Setting | Values | What it does |
 |---|---|---|
-| `session` | unset (default), `task`, `bot` | Unset: each task is its own session and chat shares one. `task`: each chat conversation also gets its own (BotOps). `bot`: one session for everything. |
+| `session` | unset (default), `task`, `bot` | Unset: each task is its own session and the Home shares one. `task`: each thread also gets its own (BotOps). `bot`: one session for everything. |
 | `subtask_session` | `parent` (default), `own` | Whether a subtask someone else files continues its parent's session or gets its own; one the bot files for itself always gets its own. |
 | `task_goal` | `off` (default), `on` | Work each task as a native goal until it is met. |
 | `review_model` | `own` (default), `check` | Run a subtask handed to it under another's task on the company's check model ([Tasks](tasks.md#a-subtask-on-a-check-model)). |
@@ -197,8 +197,8 @@ An older runner can report only the failure evidence it has; historical runs are
 
 ## FAQ
 
-**Why didn't my main chat see what I said in a task?**
-Each task has its own session. The main chat sees only a one-line report when the task starts, is blocked, done,
+**Why didn't my Home see what I said in a task?**
+Each task has its own session. The Home sees only a one-line report when the task starts, is blocked, done,
 declined or stuck. To give the task more to go on, write in the task's thread.
 
 **Can a bot work on two of my tasks at once?**

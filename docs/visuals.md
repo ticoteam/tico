@@ -1,8 +1,8 @@
 # Visuals in replies
 
-A bot or a person attaches a visual to a chat reply or a task comment: a picture, an SVG, a self-contained HTML
+A bot or a person attaches a visual to a thread reply or a task comment: a picture, an SVG, a self-contained HTML
 page, a video or an audio clip, with a title. This page is the reference: when a bot adds one, how a visual shows in
-a conversation, how to attach one, what Tico does to a page when it is attached, the types and limits, who can see
+a thread, how to attach one, what Tico does to a page when it is attached, the types and limits, who can see
 it, and what a reader sees outside Tico.
 
 Pictures, SVG and visual pages show inline as cards. Video and audio play inside their card. Without a separate
@@ -32,7 +32,7 @@ Keep the text answer complete because not every reader sees the visual: Slack sh
 
 ## In a chat or task conversation
 
-A picture (PNG, JPEG, GIF, WebP), an SVG or a visual page (HTML) attached to a chat message or a task comment shows
+A picture (PNG, JPEG, GIF, WebP), an SVG or a visual page (HTML) attached to a thread message or a task comment shows
 under the text as a card. This holds for a person's attachments too. The card is the width of the message and never
 wider than the screen. A message shows up to 4 cards, in the order attached; the rest stay file chips. Video and
 audio are cards too (see [Video and audio](#video-and-audio)) and count toward the 4.
@@ -45,23 +45,23 @@ audio are cards too (see [Video and audio](#video-and-audio)) and count toward t
 - **Expand** opens the visual full screen; so does a click or tap on a picture, or a tap on a page on a touch
   screen. Pictures zoom: click or tap for 2×,
   pinch or Ctrl + scroll up to 6×. Pages scroll. **Close**, Esc, a swipe down or Back returns you to the same place
-  in the conversation.
+  in the thread.
 - **Dark mode.** An SVG or a page sits on a light card, so one that sets no background stays readable.
-- **While it loads**, the card holds its space, so the conversation doesn't jump.
+- **While it loads**, the card holds its space, so the thread doesn't jump.
 - **Versions.** The card keeps the version it was posted with. When the file has a newer version, **Newer version**
   next to the caption opens the newest.
 - **"This visual was removed"** shows when the file was removed. The card then has no menu.
 - **"Couldn't show this visual"** shows, with **Open in file viewer**, when the visual can't be displayed.
 
 On a task, **Open in file viewer** and **Newer version** open the task's own file panel at that version; see
-[Tasks](tasks.md#files-and-questions-on-the-page). In a chat they open the file viewer.
+[Tasks](tasks.md#files-and-questions-on-the-page). In a thread they open the file viewer.
 
 A visual shows as a file chip instead of a card only when its type or size isn't one that shows inline (see
 [Types and limits](#types-and-limits)).
 
 ### With and without a visual address
 
-Visuals are always on. What a conversation shows depends on whether your Tico has a working separate visual address
+Visuals are always on. What a thread shows depends on whether your Tico has a working separate visual address
 or uses Tico file hosting (see [Self-hosting](#self-hosting)). You don't turn anything on or off.
 
 | Visual | With a visual address or Tico file hosting | Without either |
@@ -71,14 +71,14 @@ or uses Tico file hosting (see [Self-hosting](#self-hosting)). You don't turn an
 | Visual page, SVG | Inline card, as above | Card with its title, a still preview when the file has one, and **Open**. **Open** shows it in the file viewer. |
 
 Without a visual address, Tico shows pictures, video and audio from the app's own address, as media only. It never
-shows a page or an SVG from there, so they open in the file viewer instead of in the conversation. The card's menu
+shows a page or an SVG from there, so they open in the file viewer instead of in the thread. The card's menu
 (**Open in file viewer**, **Download**) works as above; there is no **Expand** for a page or SVG. If the still
 preview can't load, the card keeps its title and **Open**. Set up a visual address or Tico file hosting and the same
 messages show inline: nothing is lost in between.
 
 ### Video and audio
 
-A video (MP4, WebM, MOV, M4V) or an audio clip (MP3, M4A, WAV, OGG, AAC) attached to a chat message or a task comment
+A video (MP4, WebM, MOV, M4V) or an audio clip (MP3, M4A, WAV, OGG, AAC) attached to a thread message or a task comment
 plays inside its card, a person's attachments too. The caption, menu, versions and "This visual was removed" work as
 for the other cards; the menu has no **Expand**.
 
@@ -88,7 +88,7 @@ for the other cards; the menu has no **Expand**.
 - **Audio** is a compact player with play/pause and a seek bar.
 - **Nothing plays by itself.** A clip starts only when you press play.
 - **One clip at a time.** Starting a clip pauses any other clip on the page.
-- **A playing clip keeps going** while you scroll and while the conversation updates with new messages.
+- **A playing clip keeps going** while you scroll and while the thread updates with new messages.
 - **Seeking a long file** starts playback at that point without downloading the whole file first.
 - **A format the device can't play** gets no player. The card says why, for example "This device can't play MOV
   video.", with **Open in file viewer** and **Download**. A clip that can't load says "Couldn't load this video.
@@ -108,7 +108,7 @@ hub message send human:ana "Two drafts" --visual art/a.svg --title "Draft A" --v
 
 `PATH` is a file in your bot's checkout, with the same checks as [publishing a file](files.md#publishing): no path
 outside the checkout, no symbolic links, no credential-like names. `ID@VERSION` (for example `f_7k2@3`) names a file
-already in Tico instead: a file on that task, or in that conversation for a chat message. A `--title` with no
+already in Tico instead: a file on that task, or in that thread for a message. A `--title` with no
 `--visual` is refused. A visual with no title shows its file name.
 
 **MCP.** `hub_message_send`, `hub_chat_send` and `hub_task_comment` take `visuals`, a list of up to 10:
@@ -118,12 +118,12 @@ already in Tico instead: a file on that task, or in that conversation for a chat
 **API.** `POST /api/v2/messages` and `POST /api/v2/tasks/{id}/comments` take `attachments`, up to 10 items in order.
 Each is `"<file id>@<version>"` or `{"ref": "<file id>@<version>", "title": "…"}`. Upload the file first: to the task
 with `POST /api/v2/tasks/{id}/files`, or, from a bot's run, with `POST /api/v2/files/uploads` (it lands in the
-conversation the run is in). A person's chat upload, `POST /api/v2/uploads/chat/{bot}`, takes `titles`, one per
+thread the run is in). A person's upload to a bot's thread, `POST /api/v2/uploads/chat/{bot}`, takes `titles`, one per
 file in upload order. A title is at most 200 characters. The schema is `VisualRef` in `docs/openapi/v2.json`.
 
 ## What gets stored
 
-The visual is a normal versioned file on that conversation or task, listed with its other [files](files.md). The
+The visual is a normal versioned file on that thread or task, listed with its other [files](files.md). The
 message keeps three things: the file, the version it was posted with, and the title. Reading the message returns
 them, all attachments in the order given, each with a `kind`: `image`, `svg`, `page`, `video`, `audio`, or `file`
 for one that shows as a file chip. A later version of the file does not change what the message shows.
@@ -177,7 +177,7 @@ whose bytes don't match its type (a `.png` that isn't a PNG).
 
 ## Who sees it
 
-Exactly the people who can read that conversation or task, as for [files](files.md#visibility). Every request for
+Exactly the people who can read that thread or task, as for [files](files.md#visibility). Every request for
 a visual checks again that the reader still has access, so someone taken off a private task loses it at once.
 Visuals from a private task never show to guests or on the public roadmap.
 
@@ -199,10 +199,10 @@ Nothing visual leaves Tico. Where a message with visuals is posted to Slack, Sla
   **Open task**.
 - **What counts.** Pictures, SVG, visual pages, video and audio. Plain files don't count, and a message with none of
   these gets no line.
-- **Where the link goes.** A reply on a task opens the task with that comment in view and briefly marked. A chat
-  reply opens that bot's chat in the room the reply is in (each Slack thread is a room of its own), at the message.
+- **Where the link goes.** A reply on a task opens the task with that comment in view and briefly marked. A thread
+  reply opens the thread the reply is in (each Slack thread is a thread of its own), at the message.
   If the message isn't there, Tico says so.
-- **Who can open it.** Only people who can read that conversation. The link names the message, not its content;
+- **Who can open it.** Only people who can read that thread. The link names the message, not its content;
   access is checked when it is opened. Messages on a private task are never sent to Slack.
 
 Slack is the only place outside Tico that gets this line.

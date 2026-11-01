@@ -19,6 +19,20 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            what was said in a conversation: the newest 200, oldest
                                            first; has_more says there is an older page, --before
                                            its next_before reads it. The run's prompt names it
+    hub thread list [--cursor C] [--limit N]   your threads: needs attention, then unread, then recent; DMs apart
+    hub thread show <thread> [--cursor C]      one thread in tree order: a message's sub-thread sits under it
+    hub thread create ["<title>"] [--audience members|team|company|personal] [--group G] [--member ACTOR ...]
+                    [--body "<text>"]          the first message goes in with --body
+    hub thread post <thread> "<text>" [--kind say|ask] [--to ACTOR] [--ref KIND:ID ...]
+    hub thread reply <thread> <message> "<text>"   a side topic: the reply goes in that message's sub-thread
+    hub thread edit <message> "<text>"         edit a message you wrote: a new revision
+    hub thread sub <message>                   open a message's sub-thread without posting
+    hub thread follow|unfollow <thread> [--notify live|mentions|digest|muted]
+    hub thread read <thread> [--seq N | --all]
+    hub thread search "<words>" [--cursor C]   the messages in threads you can read
+    hub thread members list|add|remove <thread> [<actor>] [--owner]   actors: human:<id>, bot:<slug>, group:<id>
+    hub thread update <thread> [--title T] [--archive|--unarchive] [--audience ...] [--group G]
+    hub thread link-slack <thread> [<channel>] [--off]   not available in this build yet
     hub question ask <bot> [<bot>...] "<question>" --wait 60
     hub question answer <message-id> "<text>" [--unknown "needs X"] [--on-behalf-of turn]
     hub note create <bot> "<text>" [--text-file f] [--defer 4h]  a deferred message: wakes nobody; the bot's next
@@ -772,6 +786,12 @@ def _finance_payload(text):
     return value
 
 
+def thread_page_flags(s):
+    """The paging flags of a thread list: a page's next_cursor reads on, and --limit sets the size."""
+    s.add_argument("--cursor", help="the page after this cursor: a page's next_cursor")
+    s.add_argument("--limit", type=int, help="items in the page (50 by default, 100 at most)")
+
+
 def parser():
     p = argparse.ArgumentParser(prog="hub", description="the company hub: messages, tasks, status")
     sub = p.add_subparsers(dest="cmd")
@@ -890,6 +910,88 @@ def parser():
     s.add_argument("--before", help="the page before this message id: a page's next_before")
     s.add_argument("--since", help="only messages sent after this time (ISO 8601)")
     s.set_defaults(fn="conversation show")
+
+    thread = sub.add_parser("thread", help="threads: list yours, read one, post, reply in a sub-thread, follow, search").add_subparsers(dest="sub")
+    s = thread.add_parser("list", help="your threads: needs attention first, then unread, then recent; DMs apart")
+    thread_page_flags(s)
+    s.set_defaults(fn="thread list")
+    s = thread.add_parser("show", help="one thread in tree order: each message, then the sub-threads under it")
+    s.add_argument("thread")
+    thread_page_flags(s)
+    s.set_defaults(fn="thread show")
+    s = thread.add_parser("create", help="start a thread: its audience decides who reads it")
+    s.add_argument("title", nargs="?")
+    s.add_argument("--audience", choices=["members", "team", "company", "personal"], help="members (private) by default")
+    s.add_argument("--group", dest="audience_group_id", help="with --audience team: the group's id")
+    s.add_argument("--member", dest="members", action="append", metavar="ACTOR",
+                   help="a person, bot or group to add: human:<id>, bot:<slug> or group:<id>; repeat for more")
+    s.add_argument("--body", help="the first message")
+    s.set_defaults(fn="thread create")
+    s = thread.add_parser("post", help="post a message to a thread")
+    s.add_argument("thread")
+    s.add_argument("text")
+    s.add_argument("--kind", choices=["say", "ask"], help="ask: wants an answer from --to")
+    s.add_argument("--to", help="the person or bot it is addressed to: human:<id> or bot:<slug>")
+    s.add_argument("--ref", dest="refs", action="append", metavar="KIND:ID", help="a reference such as task:<id>; repeat for more")
+    s.set_defaults(fn="thread post")
+    s = thread.add_parser("reply", help="reply in a message's sub-thread: a side topic under that message")
+    s.add_argument("thread")
+    s.add_argument("message", help="the message the reply branches from")
+    s.add_argument("text")
+    s.add_argument("--ref", dest="refs", action="append", metavar="KIND:ID", help="a reference such as task:<id>; repeat for more")
+    s.set_defaults(fn="thread reply")
+    s = thread.add_parser("edit", help="edit a message you wrote: its text becomes a new revision")
+    s.add_argument("message")
+    s.add_argument("text")
+    s.set_defaults(fn="thread edit")
+    s = thread.add_parser("sub", help="open a message's sub-thread without posting; it is made if it does not exist")
+    s.add_argument("message")
+    s.set_defaults(fn="thread sub")
+    s = thread.add_parser("follow", help="follow a thread: live, mentions, digest or muted")
+    s.add_argument("thread")
+    s.add_argument("--notify", choices=["live", "mentions", "digest", "muted"], help="live by default")
+    s.set_defaults(fn="thread follow")
+    s = thread.add_parser("unfollow", help="stop following a thread; you keep what you can read")
+    s.add_argument("thread")
+    s.set_defaults(fn="thread unfollow")
+    s = thread.add_parser("read", help="mark a thread read to a message's seq, or all of it")
+    s.add_argument("thread")
+    s.add_argument("--seq", type=int, help="the seq of the last message you read")
+    s.add_argument("--all", action="store_true", help="read the thread and every sub-thread under it")
+    s.set_defaults(fn="thread read")
+    s = thread.add_parser("search", help="search the threads you can read")
+    s.add_argument("q")
+    thread_page_flags(s)
+    s.set_defaults(fn="thread search")
+    members = thread.add_parser("members", help="who can read a thread: list, add, remove").add_subparsers(dest="subsub")
+    s = members.add_parser("list", help="the people, bots and groups in a thread, with their roles")
+    s.add_argument("thread")
+    thread_page_flags(s)
+    s.set_defaults(fn="thread members list")
+    s = members.add_parser("add", help="add a person, bot or group so it can read the thread")
+    s.add_argument("thread")
+    s.add_argument("actor", help="human:<id>, bot:<slug> or group:<id>")
+    s.add_argument("--owner", dest="role", action="store_const", const="owner",
+                   help="as an owner: may remove members")
+    s.set_defaults(fn="thread members add")
+    s = members.add_parser("remove", help="remove a person, bot or group: they stop reading the thread (owner or admin)")
+    s.add_argument("thread")
+    s.add_argument("actor")
+    s.set_defaults(fn="thread members remove")
+    s = thread.add_parser("update", help="rename, archive or unarchive a thread, or change who may read it")
+    s.add_argument("thread")
+    s.add_argument("--title")
+    s.add_argument("--archive", dest="archived", action="store_const", const=True)
+    s.add_argument("--unarchive", dest="archived", action="store_const", const=False)
+    s.add_argument("--audience", choices=["members", "team", "company"],
+                   help="team or company makes it public; only its starter or an admin can")
+    s.add_argument("--group", dest="audience_group_id", help="with --audience team: the group's id")
+    s.set_defaults(fn="thread update")
+    s = thread.add_parser("link-slack", help="link a Slack channel to a thread, or unlink with --off (not available yet)")
+    s.add_argument("thread")
+    s.add_argument("channel", nargs="?")
+    s.add_argument("--off", action="store_true")
+    s.set_defaults(fn="thread link-slack")
 
     question = sub.add_parser("question", help="ask other bots a question and wait; answer one asked of you").add_subparsers(dest="sub")
     s = question.add_parser("ask")

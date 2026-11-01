@@ -23,16 +23,16 @@ shapes below are part of the contract; change them only with a reviewed contract
   Write access and contact policy, so keeper transport does not create bot-to-bot contact. Any joined
   human can remove an attached bot from this meeting; removal revokes that meeting-only grant and
   settles outstanding turns without changing ordinary bot permissions.
-- Meeting-derived conversations, messages and run artifacts retain the meeting's current access
+- Meeting-derived threads, messages and run artifacts retain the meeting's current access
   restriction, including on retries and after a bot is removed. Company-owner inspection does not
   override private meeting membership. An already downloaded copy cannot be retracted.
 - Private meeting executions can publish their scoped reply and retain files tied to that run.
-  File writes are limited to uploads/imports in the turn's own conversation, with no task/bot scope
+  File writes are limited to uploads/imports in the turn's own thread, with no task/bot scope
   override, link registration or metadata edits. They cannot publish ordinary messages, tasks,
   comments or company status from that context.
   This server-side restriction does not change ordinary team-meeting executions.
-- Authorized meeting members can read a generated bot room's meeting-scoped prompt and reply
-  without broader bot Read access. This grants no posting or goal-setting authority in that room:
+- Authorized meeting members can read a generated bot thread's meeting-scoped prompt and reply
+  without broader bot Read access. This grants no posting or goal-setting authority in that thread:
   people use live meeting Chat, and bots name their claimed turn when replying there.
 - A bot acting for a person must also be explicitly attached before accessing that person's private
   meeting. Both memberships remain required on retries and event streams. Connect a private meeting
@@ -222,10 +222,10 @@ cannot reach the Gateway's meeting models), a Gateway meeting model falls back t
 `inception/mercury-3`, low effort, on pi) when the company has OpenRouter on; if that cannot run either,
 the reply uses the bot's own model. `meeting.model` records each step.
 
-Each bot has one conversation per meeting, kept for the meeting's turns while the bot stays attached, and
-every turn runs on that conversation's own thread whatever the bot's session setting. So a bot's turns in
+Each bot has one thread per meeting, kept for the meeting's turns while the bot stays attached, and
+every turn runs on that thread's own harness thread whatever the bot's session setting. So a bot's turns in
 one meeting continue each other, and nothing said in a meeting (private or team) reaches the bot's other
-meetings or its ordinary chats through the harness thread. Removing and re-adding a bot starts a new one.
+meetings or its ordinary threads through the harness thread. Removing and re-adding a bot starts a new one.
 
 A private meeting's bot turns change nothing shared; they read as any turn does (memory, instructions,
 knowledge, docs, hub reads). The meeting's owner shares its notes and action items after the meeting, by
@@ -233,7 +233,7 @@ review. Enforced, not left to the bot, on any harness:
 
 - **Hub writes.** Every write a private meeting's turn makes through the hub API or `/api/v2/mcp` is refused
   with HTTP 403 `privacy`, detail "This is a private meeting: nothing from it is saved or shared until its
-  owner reviews it." (docs, pages, tasks, messages to other rooms, mail, status, approvals, settings). What it
+  owner reviews it." (docs, pages, tasks, messages to other threads, mail, status, approvals, settings). What it
   may still write is one list, `task_privacy.PRIVATE_MEETING_WRITES`: reads over POST (`sql`,
   `tasks/dry-run`), the MCP door, run files (they keep the run's provenance, so only the meeting's readers see
   them), a GitHub token (read-only for it), and its own meeting's `chat` and `turns/{turn_id}/claim`. The
