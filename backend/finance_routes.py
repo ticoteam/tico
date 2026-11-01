@@ -365,13 +365,17 @@ def install(app, store, auth, mutate):
                           customer_id: str | None = Query(None, max_length=80),
                           location_id: str | None = Query(None, max_length=80),
                           warranty_ends_by: str | None = Query(None, pattern=DAY),
+                          warranty: Literal["ending"] | None = None,
+                          due: Literal["soon", "overdue"] | None = None,
                           cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
                           view_as: str | None = None):
         """Equipment and vans by name, serial, make or model; `kind`, `customer_id` and `location_id` narrow it, and
-        `warranty_ends_by` keeps the warranties ending on or before that day. `archived` as on locations."""
+        `warranty_ends_by` keeps the warranties ending on or before that day. `warranty=ending` keeps the warranties
+        ending within the next 90 days; `due=soon|overdue` keeps the pieces with a due date soon or past due (each
+        row's `next_due_on`). `archived` as on locations; paging counts the filtered list."""
         actor = as_viewer(request, view_as)
         filters = {"kind": kind, "customer_id": customer_id, "location_id": location_id,
-                   "warranty_ends_by": warranty_ends_by}
+                   "warranty_ends_by": warranty_ends_by, "warranty": warranty, "due": due}
         return read(lambda c: finance_reads.records(c, actor, kind="equipment", q=q, archived=archived, cursor=cursor,
                                                     limit=limit, filters={k: v for k, v in filters.items() if v}))
 

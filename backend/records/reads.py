@@ -1,7 +1,7 @@
 """Reads of the locations, items and projects tables on the caller's connection. Rows only: who may see them is the
 caller's question."""
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .store import ROW_TABLES, resolve
@@ -38,12 +38,17 @@ def names(c: sqlite3.Connection, table: str) -> dict[str, str]:
 
 def search(c: sqlite3.Connection, table: str, text: str = "", *, active: bool | None = True,
            after: tuple[str, str] | None = None, most: int = 200, equal: Mapping[str, str] | None = None,
-           by: Mapping[str, str] | None = None) -> list[Any]:
+           by: Mapping[str, str] | None = None, between: Mapping[str, tuple[str, str]] | None = None,
+           ids: Sequence[str] | None = None) -> list[Any]:
     """Rows whose name (or sku, for items) contains the text, by name then id, past the cursor `after`. `active` None
-    lists archived rows too; an empty text lists every row. `equal` and `by` narrow by the FILTER_COLUMNS of a table."""
+    lists archived rows too; an empty text lists every row. `equal`, `by` (on or before) and `between` (from, to) narrow
+    by the FILTER_COLUMNS of a table; `ids` keeps only those ids, so a list paged in SQL counts right. Empty `ids`
+    matches nothing."""
     assert table in ROW_TABLES
     columns = SEARCH_COLUMNS[table]
-    assert set(equal or {}) | set(by or {}) <= FILTER_COLUMNS.get(table, set())
+    assert set(equal or {}) | set(by or {}) | set(between or {}) <= FILTER_COLUMNS.get(table, set())
+    if ids is not None and not ids:
+        return []
     needle = text.strip().lower()
     clause = " OR ".join(f"instr(lower({column}), ?) > 0" for column in columns)
     where = f"({clause})"
@@ -56,6 +61,12 @@ def search(c: sqlite3.Connection, table: str, text: str = "", *, active: bool | 
     for column, value in (by or {}).items():
         where += f" AND {column} IS NOT NULL AND {column}<=?"
         args.append(value)
+    for column, (low, high) in (between or {}).items():
+        where += f" AND {column} IS NOT NULL AND {column}>=? AND {column}<=?"
+        args += [low, high]
+    if ids is not None:
+        where += f" AND id IN ({','.join('?' * len(ids))})"
+        args += list(ids)
     if after is not None:
         where += " AND (name, id) > (?, ?)"
         args += list(after)

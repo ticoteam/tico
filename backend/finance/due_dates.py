@@ -295,3 +295,46 @@ def due_date(c: Any, viewer: str, *, due_date_id: str, at: str | None = None) ->
                        "completed_by_id": h["completed_by_id"], "task_id": h["task_id"]}
                       for h in RD.history(c, str(row["id"]))]
     return {"due_date": out}
+
+
+def today_of(ctx: Ctx) -> date:
+    """The day the install's zone calls today at the context's time: what due dates and warranty windows count from."""
+    return RD.local_day(datetime.fromisoformat(ctx.at), FLOW.zone())
+
+
+def equipment_due(ctx: Ctx, state: str) -> list[str]:
+    """The equipment ids with a live due date in `state`: `soon` (its next day is within the date's lead time, not yet
+    past) or `overdue`. Read in Python from every live due date, so the ids are exact; the equipment list keeps them in
+    SQL, so its paging counts right."""
+    want = {"soon": "due", "overdue": "overdue"}[state]
+    today = today_of(ctx)
+    ids: set[str] = set()
+    for row in RD.live(ctx.c):
+        if str(row["subject_type"]) != "equipment":
+            continue
+        if RD.status(row, RD.next_open(row, RD.completed_days(ctx.c, str(row["id"]))), today) == want:
+            ids.add(str(row["subject_id"]))
+    return sorted(ids)
+
+
+def customer_due_dates(ctx: Ctx, viewer: str, *, contact_id: str, location_ids: list[str],
+                       equipment_ids: list[str]) -> list[Row]:
+    """The live due dates on a customer's contact, its locations (their merged ids too) and its equipment, as this
+    viewer may read them (_can_read), the next day due first and none last."""
+    c = ctx.c
+    loc_all = sorted({i for loc in location_ids for i in RD.subject_ids(c, "location", loc)})
+    groups = [("contact", [contact_id]), ("location", loc_all), ("equipment", list(equipment_ids))]
+    clauses: list[str] = []
+    args: list[object] = []
+    for subject_type, ids in groups:
+        if ids:
+            clauses.append(f"(subject_type=? AND subject_id IN ({','.join('?' * len(ids))}))")
+            args += [subject_type, *ids]
+    if not clauses:
+        return []
+    rows = c.execute("SELECT * FROM due_dates WHERE archived_at IS NULL AND (" + " OR ".join(clauses) + ")",
+                     args).fetchall()
+    today = today_of(ctx)
+    out = [_out(c, row, today) for row in rows if _can_read(ctx, viewer, row)]
+    out.sort(key=lambda r: (r["next_due_on"] is None, str(r["next_due_on"] or ""), str(r["name"]), str(r["id"])))
+    return out

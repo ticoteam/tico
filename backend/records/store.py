@@ -106,10 +106,13 @@ def resolve(c: sqlite3.Connection, table: str, row_id: str) -> str:
 
 def alias(c: sqlite3.Connection, table: str, alias_id: str, record_id: str, at: str) -> None:
     """Another id for a row that exists. A record the books took under two ids keeps the one row, and the id the other
-    was made with resolves to it on reads and writes; nothing that names the alias is rewritten."""
+    was made with resolves to it on reads and writes; nothing that names the alias is rewritten, except a location's
+    equipment: a local record with no history of its own, so the pieces kept at the alias move to the row."""
     assert table in ROW_TABLES
     c.execute("INSERT OR IGNORE INTO record_aliases(table_name, alias_id, record_id, created_at) VALUES(?,?,?,?)",
               (table, alias_id, record_id, at))
+    if table == "locations":
+        c.execute("UPDATE equipment SET location_id=? WHERE location_id=?", (record_id, alias_id))
 
 
 def update(c: sqlite3.Connection, table: str, row_id: str, fields: Mapping[str, object]) -> None:
