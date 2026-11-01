@@ -41,7 +41,7 @@ def test_previous_release_database_boots_twice_and_keeps_rows(tmp_path):
     boot(path, adopt_legacy=True)
     assert state(path) == first
     with sqlite3.connect(path) as c:
-        assert [r[0] for r in c.execute("SELECT slug FROM bots ORDER BY slug")] == ["coo", "cmo", "seo"][::-1][::-1] or True
+        assert [r[0] for r in c.execute("SELECT slug FROM bots ORDER BY slug")] == ["cmo", "coo", "seo"]
         assert c.execute("SELECT count(*) FROM bots").fetchone()[0] == 3
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 3
         assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == 2

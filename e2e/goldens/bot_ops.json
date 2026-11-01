@@ -1,0 +1,135 @@
+{
+  "body": {
+    "access": {
+      "read": true,
+      "see": true,
+      "write": true
+    },
+    "agent": null,
+    "app_delivery": null,
+    "app_delivery_app": null,
+    "assignment": {
+      "bot": "ops",
+      "generation": 1,
+      "label": "Test Mac",
+      "last_seen": "<time>",
+      "operator": "ana",
+      "revoked_at": null,
+      "runner_id": "<id1>"
+    },
+    "bot_contact": "open",
+    "bot_owners": [
+      {
+        "id": "ana",
+        "name": "Ana"
+      }
+    ],
+    "claim_scoped": false,
+    "claim_task": null,
+    "compact_at": 250000,
+    "created": "<time>",
+    "description": "",
+    "display_name": "ops",
+    "draining": false,
+    "effort": "",
+    "goals": "",
+    "harness": "fake",
+    "host": "dispatcher",
+    "keep_tasks_going": null,
+    "last_turn_at": "<time>",
+    "manages_reports": true,
+    "model": "",
+    "next_run": 0,
+    "notes": 0,
+    "onboarding_state": "",
+    "online": true,
+    "operator": "ana",
+    "operator_name": "Ana",
+    "owners": [
+      {
+        "email": "ana@acme.example",
+        "id": "ana",
+        "name": "Ana"
+      },
+      {
+        "email": "ben@acme.example",
+        "id": "ben",
+        "name": "Ben"
+      }
+    ],
+    "private_tasks_default": false,
+    "profile": {
+      "batch_scope": "conversation",
+      "batch_seconds": "<volatile>",
+      "chosen": true,
+      "description": "Works the tasks it is given. News about them is batched; people and hand-offs wake it at once.",
+      "digest_hour": null,
+      "label": "Doer",
+      "name": "doer",
+      "options": {},
+      "pulls": "all",
+      "summary": "News about its tasks waits up to 15 min; a stall check or routine runs at most every 15 min.",
+      "sweep_seconds": "<volatile>",
+      "sweeps": true,
+      "takes": "all"
+    },
+    "queued": 8,
+    "repo": "emp-ops",
+    "repo_url": "",
+    "reports_to": null,
+    "revision": 3,
+    "runtime": "fake",
+    "shared": false,
+    "shared_from": "",
+    "slug": "ops",
+    "stage": "active",
+    "state": "active",
+    "status": {
+      "bot": "ops",
+      "focus": "",
+      "last_result": null,
+      "last_turn_at": "<time>",
+      "needs_human": 1,
+      "next_due": null,
+      "open_tasks": 1,
+      "since": "<time>",
+      "state": "idle",
+      "task_id": "",
+      "updated_at": "<time>"
+    },
+    "task_flow": {
+      "going": 0,
+      "waiting": 0
+    },
+    "task_model": null,
+    "task_model_warning": "",
+    "team": null,
+    "temp": false,
+    "template": "",
+    "template_version": "",
+    "thread_mode": "personal",
+    "turns_at_once": null,
+    "update_subscriptions": [],
+    "wake": {
+      "batch_scope": "conversation",
+      "batch_seconds": "<volatile>",
+      "chosen": true,
+      "digest_hour": null,
+      "immediate": [
+        "A person's message or request",
+        "An assignment",
+        "A direct question",
+        "An awaited dependency resolving (a blocker done, an awaited review, a release)",
+        "An actionable blocker",
+        "A review, QA or Security request"
+      ],
+      "label": "Performance",
+      "preset": "performance",
+      "profile": "doer",
+      "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine or stall check runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
+      "sweep_seconds": "<volatile>"
+    }
+  },
+  "request": "GET /api/v2/bots/ops",
+  "status": 200
+}

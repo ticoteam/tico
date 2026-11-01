@@ -33,7 +33,7 @@ def conforms(value, schema, root, where="$"):
             if key in value and (error := conforms(value[key], sub, root, where + "." + key)):
                 return error
     if isinstance(value, list) and "items" in schema:
-        for i, item in enumerate(value[:5]):
+        for i, item in enumerate(value):
             if error := conforms(item, schema["items"], root, "%s[%d]" % (where, i)):
                 return error
     return None

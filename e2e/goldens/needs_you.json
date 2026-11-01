@@ -1,0 +1,59 @@
+{
+  "body": {
+    "actor": "human:ana",
+    "actor_name": "Ana",
+    "actors": {
+      "bot:ops": "ops",
+      "human:ana": "Ana"
+    },
+    "count": 1,
+    "items": [
+      {
+        "age_s": "<volatile>",
+        "consumed_at": null,
+        "conversation_id": "<id2>",
+        "created": "<time>",
+        "decided_at": null,
+        "decided_by": null,
+        "decided_for_json": null,
+        "decided_via": null,
+        "decision": null,
+        "decision_owner": "human:ana",
+        "decision_owner_name": "Ana",
+        "from_person": "human:ana",
+        "id": "<pending_approval>",
+        "kind": "approval",
+        "message_id": "<id1>",
+        "need": "pay",
+        "payload": {
+          "account": "ads",
+          "amount": 9,
+          "what": "Second test"
+        },
+        "payload_hash": "<digest>",
+        "payload_json": "{\"account\": \"ads\", \"amount\": 9, \"what\": \"Second test\"}",
+        "pressing": false,
+        "ready_since": "<time>",
+        "requested_by": "bot:ops",
+        "requester": "bot:ops",
+        "requester_name": "ops",
+        "task_id": "<open_task>",
+        "tier": 2,
+        "title": "Pay 9: Second test",
+        "what": "spend"
+      }
+    ],
+    "next": null,
+    "older": [],
+    "version": "<opaque>",
+    "went_away": {
+      "assistant": 0,
+      "days": 7,
+      "expired": 0,
+      "total": 0,
+      "withdrawn": 0
+    }
+  },
+  "request": "GET /api/v2/needs-you",
+  "status": 200
+}

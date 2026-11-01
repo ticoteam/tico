@@ -1,0 +1,28 @@
+{
+  "body": {
+    "has_more": false,
+    "next_cursor": "<volatile>",
+    "pages": [
+      {
+        "archived": false,
+        "as_of": null,
+        "bot": "ops",
+        "bot_name": "ops",
+        "cadence": "weekly",
+        "file_id": "<page>",
+        "replaced_by": null,
+        "replaced_by_title": null,
+        "src": null,
+        "stale_days": null,
+        "task_id": null,
+        "title": "Launch weekly",
+        "updated": "<time>",
+        "updated_by": "bot:ops",
+        "updated_by_name": "ops",
+        "version": 1
+      }
+    ]
+  },
+  "request": "GET /api/v2/pages",
+  "status": 200
+}
