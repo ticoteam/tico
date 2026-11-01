@@ -225,12 +225,13 @@ def summary(c, runner_id, settings, default=None, *, classify=True):
                  lambda: _summaries(c, (runner_id,), settings, default, classify)[runner_id])
 
 
-def summaries(c, runner_ids, settings, default=None):
+def summaries(c, runner_ids, settings, default=None, *, classify=True):
     """`summary` for many computers in two scans. Each computer's counts are the ones `summary` would build
-    on its own, including the same claim refusal for each queued bot."""
+    on its own, including the same claim refusal for each queued bot (unless `classify=False`, as `summary`)."""
     from .read_cache import value
     ids = tuple(sorted({rid for rid in runner_ids if rid}))
-    return value(c, ("start_summaries", ids), lambda: _summaries(c, ids, settings, default))
+    return value(c, ("start_summaries", ids, bool(classify)),
+                 lambda: _summaries(c, ids, settings, default, classify))
 
 
 def _summaries(c, runner_ids, settings, default=None, classify=True):
@@ -264,7 +265,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
     from .execution import claim_refusal
     from .store import readiness_document
     runners = {row['id']: row for row in c.execute(f"SELECT * FROM runners WHERE id IN ({marks})", runner_ids)}
-    overloaded = {rid: performance.load_status(c, rid)['overloaded'] for rid in runner_ids}
+    overloaded = {rid: status['overloaded'] for rid, status in performance.load_statuses(c, runner_ids).items()}
     reasons = {'cooling_off': 'quota', 'limit': 'spending limit', 'not_ready': 'computer readiness',
                'readiness_unknown': 'computer readiness', 'sign_in_rejected': 'sign-in',
                'draining': 'bot paused', 'run_hold': 'stopped runs', 'backoff': 'a failed run', 'budget': 'run budget',

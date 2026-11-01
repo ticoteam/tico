@@ -2825,6 +2825,37 @@ export type MeetingSearch = {
   results: Array<unknown>;
 };
 
+export type MemoryTidyCard = {
+  bot: string;
+  cost_usd: number;
+  created: string;
+  diary: string;
+  diff?: string;
+  expires: string;
+  id: string;
+  keep_available: boolean;
+  kind: "memory_tidy";
+  memory_commit: string;
+  model: string;
+  reason: string;
+  requester: string;
+  reviewer: string;
+  status: "open" | "withdrawn" | "discarded" | "kept";
+  title: string;
+};
+
+export type MemoryTidyCardResult = {
+  card: MemoryTidyCard;
+};
+
+export type MemoryTidyCards = {
+  cards: Array<MemoryTidyCard>;
+};
+
+export type MemoryTidyDecision = {
+  decision: "keep" | "discard";
+};
+
 export type MemoryTidyPilot = {
   bot: string;
   effort?: "low";
@@ -5497,6 +5528,14 @@ export type DecideGoalProposalParams = {
 export type DecideGoalProposalBody = GoalProposalDecision;
 export type DecideGoalProposalResponse = GoalProposalResult;
 
+/** POST /api/v2/memory-tidy/cards/{ident}/decide */
+export type DecideMemoryTidyCardParams = {
+  "Idempotency-Key": string;
+  ident: string;
+};
+export type DecideMemoryTidyCardBody = MemoryTidyDecision;
+export type DecideMemoryTidyCardResponse = MemoryTidyCardResult;
+
 /** POST /api/v2/stale-review/{suggestion_id} */
 export type DecideStaleSuggestionParams = {
   "Idempotency-Key": string;
@@ -6215,6 +6254,13 @@ export type GetMeetingTranscriptParams = {
 };
 export type GetMeetingTranscriptBody = never;
 export type GetMeetingTranscriptResponse = unknown;
+
+/** GET /api/v2/memory-tidy/cards/{ident} */
+export type GetMemoryTidyCardParams = {
+  ident: string;
+};
+export type GetMemoryTidyCardBody = never;
+export type GetMemoryTidyCardResponse = MemoryTidyCardResult;
 
 /** GET /api/v2/messages/{mid} */
 export type GetMessageParams = {
@@ -7088,6 +7134,11 @@ export type ListMeetingsParams = {
 };
 export type ListMeetingsBody = never;
 export type ListMeetingsResponse = MeetingReviewList;
+
+/** GET /api/v2/memory-tidy/cards */
+export type ListMemoryTidyCardsParams = Record<string, never>;
+export type ListMemoryTidyCardsBody = never;
+export type ListMemoryTidyCardsResponse = MemoryTidyCards;
 
 /** GET /api/v2/conversations/{cid}/messages */
 export type ListMessagesParams = {

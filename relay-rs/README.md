@@ -14,7 +14,8 @@ Public ingress blocks `/control/*` and `/_tico/*`; policy callbacks and versione
 never leave loopback. `TICO_TRUSTED_PROXIES` selects the ingress IPs/CIDRs whose forwarding headers
 the relay preserves; the binary's default is loopback only, and the standard Compose file adds its two
 front doors' fixed addresses. IPv4-mapped IPv6 peers are compared as IPv4. Other peers get a fresh
-X-Forwarded-For chain.
+X-Forwarded-For chain. `TICO_CLIENT_IP_HEADER` (`x-forwarded-for` or `cf-connecting-ip`) selects the header that
+names the client behind a trusted proxy, read as the server reads it.
 Direct remote clients cannot spoof trusted proxy identity headers. Existing
 TLS termination, cookies, Cloudflare origins and public hostnames remain unchanged. See the
 installation matrix and native job migration in `docs/install.md`.
