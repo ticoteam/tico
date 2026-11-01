@@ -17,7 +17,8 @@ from pydantic import Field
 from . import company_server, files, hook_relay
 from .finance import actions as finance
 from .finance import books_link
-from .finance import equipment as finance_equipment
+from .finance import due_dates as finance_due_dates
+from .finance import equipment as equipment_planner
 from .finance import reads as finance_reads
 from .models import ID, Contract
 from .store import Problem
@@ -88,7 +89,7 @@ def books_problem(e: books_link.BrokerFailed) -> Problem:
 
 def install(app, store, auth, mutate):
     # Equipment photos are Library files: the read check needs this app's Auth (files.readable_by).
-    finance_equipment.set_file_check(lambda c, actor, file_id: files.readable_by(c, auth, actor, file_id))
+    equipment_planner.set_file_check(lambda c, actor, file_id: files.readable_by(c, auth, actor, file_id))
 
     def viewer(request):
         who = request.state.identity
@@ -319,6 +320,27 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.record(c, actor, kind="location", record_id=location_id))
 
+    @app.get("/api/v2/due-dates")
+    def finance_due_date_list(request: Request, q: str = Query("", max_length=100),
+                              archived: Literal["hide", "only", "all"] = "hide",
+                              subject_type: Literal["location", "equipment", "contact"] | None = None,
+                              subject_id: str | None = Query(None, max_length=80),
+                              cursor: str | None = Query(None, max_length=600),
+                              limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+        """Due dates by name: what they fall on (a location, equipment, or a vendor or customer), the repeat, the next
+        day it falls due and the teammate who works it. `q` searches names, and `archived` hides the archived ones (the
+        default), shows only them, or shows both. `subject_type` (with `subject_id`) narrows to one record; a merged
+        location answers under its record. `next_cursor` pages."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_due_dates.listing(c, actor, q=q, archived=archived, cursor=cursor, limit=limit,
+                                                        subject_type=subject_type, subject_id=subject_id))
+
+    @app.get("/api/v2/due-dates/{due_date_id}")
+    def finance_due_date_one(request: Request, due_date_id: ID, view_as: str | None = None):
+        """One due date with its days, newest first: each day's completion and the task that carried it."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_due_dates.due_date(c, actor, due_date_id=due_date_id))
+
     @app.get("/api/v2/items")
     def finance_items(request: Request, q: str = Query("", max_length=100),
                       archived: Literal["hide", "only", "all"] = "hide",
@@ -380,8 +402,8 @@ def install(app, store, auth, mutate):
     def finance_customers(request: Request, q: str = Query("", max_length=100),
                           cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
                           view_as: str | None = None):
-        """Active customers by name then id, for pickers: id and name only, to every teammate. `q` matches a name or an
-        email; `next_cursor` pages."""
+        """Active customers by name then id, for pickers: id and name only, to every teammate. `q` matches a name,
+        and an email too for a viewer of receivables; `next_cursor` pages."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.customers(c, actor, q=q, cursor=cursor, limit=limit))
 
@@ -507,7 +529,7 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/finance/search")
     def finance_search(request: Request,
                        kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location",
-                                     "project", "po", "estimate", "equipment"] | None = None,
+                                     "project", "po", "estimate", "equipment", "due_date"] | None = None,
                        q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
                        vendor: str | None = Query(None, max_length=120),
                        contact_id: str | None = Query(None, max_length=80),

@@ -42,6 +42,25 @@ CREATE TABLE IF NOT EXISTS equipment (
 CREATE TABLE IF NOT EXISTS record_aliases (
   table_name TEXT NOT NULL CHECK (table_name IN ('locations','items','projects')), alias_id TEXT NOT NULL,
   record_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (table_name, alias_id));
+
+CREATE TABLE IF NOT EXISTS due_dates (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL,
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('location','equipment','contact')), subject_id TEXT NOT NULL,
+  repeats TEXT NOT NULL CHECK (repeats IN ('once','weekly','monthly','quarterly','yearly','every_days','every_months')),
+  every_count INTEGER CHECK (every_count IS NULL OR every_count BETWEEN 1 AND 3660),
+  starts_on TEXT NOT NULL, counted_from_on TEXT NOT NULL, next_due_on TEXT,
+  lead_days INTEGER NOT NULL DEFAULT 0 CHECK (lead_days BETWEEN 0 AND 366), assignee_id TEXT NOT NULL,
+  archived_at TEXT, created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT,
+  CHECK ((repeats IN ('every_days','every_months')) = (every_count IS NOT NULL)));
+
+CREATE INDEX IF NOT EXISTS due_dates_subject ON due_dates(subject_type, subject_id);
+
+CREATE TABLE IF NOT EXISTS due_date_occurrences (
+  id TEXT PRIMARY KEY, due_date_id TEXT NOT NULL REFERENCES due_dates(id), due_on TEXT NOT NULL,
+  completed_at TEXT, completed_by_id TEXT, task_id TEXT, created_at TEXT NOT NULL,
+  UNIQUE (due_date_id, due_on), CHECK ((completed_at IS NULL) = (completed_by_id IS NULL)));
+
+CREATE INDEX IF NOT EXISTS due_date_occurrences_task ON due_date_occurrences(task_id) WHERE task_id IS NOT NULL;
 """
 
 

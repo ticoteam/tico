@@ -1546,6 +1546,12 @@ STABLE.extend([
      "cursor", "Equipments"),
     ("/api/v2/equipment/{equipment_id}", "get", "Finance", "getEquipment",
      "One piece of equipment, archived or not", "EquipmentOne"),
+    ("/api/v2/due-dates", "get", "Finance", "listDueDates",
+     "Due dates by name: what each falls on, its repeat, the next day due and its teammate; q searches names, archived "
+     "hides them (default), shows only them or both; subject_type with subject_id narrows to one record; with a cursor",
+     "DueDates"),
+    ("/api/v2/due-dates/{due_date_id}", "get", "Finance", "getDueDate",
+     "One due date, archived or not, with its days newest first and the task that carried each", "DueDateOne"),
     ("/api/v2/items", "get", "Finance", "listItems",
      "Products and services by name or sku; q searches both, archived hides them (default), shows only them or both; "
      "with a cursor. An item's accounts show to viewers who see them; its price shows with its income account",
@@ -1558,8 +1564,8 @@ STABLE.extend([
     ("/api/v2/projects/{project_id}", "get", "Finance", "getProject",
      "One project, archived or not", "ProjectOne"),
     ("/api/v2/customers", "get", "Finance", "listCustomers",
-     "Active customers by name for pickers: id and name only, to every teammate; q matches a name or an email; with a "
-     "cursor", "Customers"),
+     "Active customers by name for pickers: id and name only, to every teammate; q matches a name, and an email for a "
+     "viewer of receivables; with a cursor", "Customers"),
     ("/api/v2/customers/{contact_id}", "get", "Finance", "getCustomer",
      "A customer's panel: the contact, its active locations, and its open estimates and unpaid invoices where the "
      "caller sees receivables (null where not)", "CustomerPanel"),
@@ -1812,6 +1818,16 @@ SCHEMAS.update({
                      required=["id", "name", "kind", "make", "model", "serial"]),
     "Locations": obj({"locations": items(ref("Location")), "next_cursor": "n"}, required=["locations", "next_cursor"]),
     "LocationOne": obj({"location": ref("Location")}, required=["location"]),
+    "DueDates": obj({"due_dates": items(ref("DueDate")), "next_cursor": "n"}, required=["due_dates", "next_cursor"]),
+    "DueDateOne": obj({"due_date": ref("DueDate")}, required=["due_date"]),
+    "DueDate": obj({"id": "s", "name": "s", "subject_type": "s", "subject_id": "s", "subject_name": "n",
+                    "repeats": "s", "every_count": {"type": ["integer", "null"]}, "starts_on": "s",
+                    "next_due_on": "n", "lead_days": "i", "assignee_id": "s", "status": "s", "archived_at": "n"},
+                   required=["id", "name", "subject_type", "subject_id", "repeats", "starts_on", "lead_days",
+                             "assignee_id", "status"],
+                   history=items(ref("DueDay"))),
+    "DueDay": obj({"due_on": "s", "completed_at": "n", "completed_by_id": "n", "task_id": "n"},
+                  required=["due_on"]),
     "Location": obj({"id": "s", "name": "s", "kind": "s", "parent_id": "n", "address": "o", "archived_at": "n",
                      "customer_id": "n", "customer_name": "n"}, required=["id", "name", "kind", "address"]),
     "Items": obj({"items": items(ref("Item")), "next_cursor": "n"}, required=["items", "next_cursor"]),

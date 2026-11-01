@@ -146,20 +146,28 @@ def number_taken(c: sqlite3.Connection, kind: str, contact_id: str, number: str,
                      (contact_id, number, not_id)).fetchone() is not None
 
 
-def invoice_item_revenue(c: sqlite3.Connection, book_id: str, start: str, end: str) -> list[Any]:
+def invoice_item_revenue(c: sqlite3.Connection, book_id: str, start: str, end: str,
+                         cut: Sequence[str] = ()) -> list[Any]:
     """The lines of the posted invoices dated in the window, summed by the item each names (item_id NULL is the lines
-    that name none). Draft and void invoices count for nothing."""
-    return c.execute("SELECT l.item_id, MAX(it.name) AS item_name, SUM(l.amount) AS amount "
-                     "FROM fin_invoice_lines l JOIN fin_invoices v ON v.id=l.invoice_id "
-                     "LEFT JOIN items it ON it.id=l.item_id "
-                     "WHERE v.book_id=? AND v.status IN ('sent','partial','paid') AND v.invoice_date BETWEEN ? AND ? "
-                     "GROUP BY l.item_id", (book_id, start, end)).fetchall()
+    that name none). Draft and void invoices count for nothing. An invoice with a line on a `cut` account is left out
+    whole, as the aging reads leave it (tab_ap.keep_docs)."""
+    sql = ("SELECT l.item_id, MAX(it.name) AS item_name, SUM(l.amount) AS amount "
+           "FROM fin_invoice_lines l JOIN fin_invoices v ON v.id=l.invoice_id "
+           "LEFT JOIN items it ON it.id=l.item_id "
+           "WHERE v.book_id=? AND v.status IN ('sent','partial','paid') AND v.invoice_date BETWEEN ? AND ?")
+    args: list[object] = [book_id, start, end]
+    if cut:
+        sql += (" AND v.id NOT IN (SELECT invoice_id FROM fin_invoice_lines WHERE account_id IN "
+                f"({_marks(cut)}))")
+        args += list(cut)
+    return c.execute(sql + " GROUP BY l.item_id", args).fetchall()
 
 
 # ------------------------------------------------------------------------------------------------ contacts
 def contacts_page(c: sqlite3.Connection, *, book_id: str, kinds: Sequence[str] = (), q: str = "",
-                  active: bool | None = True, after: tuple[str, str] | None = None, most: int = 200) -> list[Any]:
-    """Contacts by name (then id)."""
+                  active: bool | None = True, after: tuple[str, str] | None = None, most: int = 200,
+                  by_email: bool = True) -> list[Any]:
+    """Contacts by name (then id). `q` matches a name, and an email too when `by_email`."""
     sql = "SELECT * FROM fin_contacts WHERE book_id=?"
     args: list[object] = [book_id]
     if kinds:
@@ -168,9 +176,12 @@ def contacts_page(c: sqlite3.Connection, *, book_id: str, kinds: Sequence[str] =
     if active is not None:
         sql += " AND active=?"
         args.append(1 if active else 0)
-    if q:
+    if q and by_email:
         sql += " AND (name LIKE ? ESCAPE '\\' OR emails_json LIKE ? ESCAPE '\\')"
         args += [like(q)] * 2
+    elif q:
+        sql += " AND name LIKE ? ESCAPE '\\'"
+        args.append(like(q))
     if after:
         sql += " AND (name>? OR (name=? AND id>?))"
         args += [after[0], after[0], after[1]]

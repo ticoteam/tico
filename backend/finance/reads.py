@@ -13,6 +13,7 @@ from typing import Any, cast
 from ..records import core as RC
 from ..records import reads as RR
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
+from . import due_dates as DD
 from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
 from . import closing as CL
 from . import context as _context
@@ -661,14 +662,16 @@ def spend_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = No
 def revenue_by_item(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str | None = None, *,
                     top_n: int = 10, at: str | None = None) -> Row:
     """Revenue by item: the posted invoices' lines in the window, summed by the item each names; a line that names none
-    is Unattributed. Receivables only: a viewer without the receivables view is refused, as the aging report is."""
+    is Unattributed. Receivables only: a viewer without the receivables view is refused, as the aging report is. An
+    invoice with a line on a private account this viewer lacks full detail for is left out whole."""
     ctx = load(c, at)
     view = ctx.view(viewer)
     if not tab_ap.sees_side(ctx, view, "invoice"):
         raise denied("receivables are not in your view")
     a, z = _window(start, end, ctx)
+    cut = tab.private_cut(ctx, view)
     rows: list[Row] = []
-    for r in SAP.invoice_item_revenue(c, ctx.book.id, a.isoformat(), z.isoformat()):
+    for r in SAP.invoice_item_revenue(c, ctx.book.id, a.isoformat(), z.isoformat(), cut=cut):
         key, label = (str(r["item_id"]), str(r["item_name"] or r["item_id"])) if r["item_id"] else (NONE, UNATTRIBUTED)
         rows.append({"key": key, "label": label, "amount": int(r["amount"] or 0)})
     return {"by": "item", "start": a.isoformat(), "end": z.isoformat(), "rows": _cap(rows, top_n),
@@ -1413,7 +1416,7 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 
 # ------------------------------------------------------------------------------------------------ search
 SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project", "po",
-              "estimate", "equipment")
+              "estimate", "equipment", "due_date")
 RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects", "equipment": "equipment"}
 SEARCH_EACH = 10            # results per kind when no kind is named
 
@@ -1595,15 +1598,16 @@ def customer_extras(c: sqlite3.Connection, viewer: str, customer_id: str, at: st
 
 def customers(c: sqlite3.Connection, viewer: str, *, q: str = "", cursor: str | None = None, limit: int = 50,
               at: str | None = None) -> Row:
-    """Active customers by name then id, for the picker: id and name only, to every teammate. `q` matches a name or an
-    email; `next_cursor` pages."""
+    """Active customers by name then id, for the picker: id and name only, to every teammate. `q` matches a name,
+    and an email too for a viewer of receivables; `next_cursor` pages."""
     ctx = load(c, at)
     _teammate_or_refuse(ctx, viewer)
     parts = tab.decode_cursor(cursor)
     after = (parts[0], parts[1]) if len(parts) == 2 else None
     most = tab.page_size(limit)
+    by_email = tab_ap.sees_side(ctx, ctx.view(viewer), "invoice")
     rows = SAP.contacts_page(c, book_id=ctx.book.id, kinds=("customer", "both"), q=(q or "").strip()[:100],
-                             active=True, after=after, most=most + 1)
+                             active=True, after=after, most=most + 1, by_email=by_email)
     shown = rows[:most]
     nxt = tab.encode_cursor([str(shown[-1]["name"]), str(shown[-1]["id"])]) if len(rows) > most else None
     return {"customers": [{"id": str(r["id"]), "name": str(r["name"])} for r in shown], "next_cursor": nxt}
@@ -1709,6 +1713,13 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                 results += [{**r, "label": f"{r['nickname'] or r['holder']} ••{r['last4'] or ''}".strip()}
                             for r in cast(list[Row], found["cards"])]
                 nxt = cast(str | None, found["next"])
+            elif k == "due_date":
+                # Due dates page by name; `active=0` names the archived ones, the default is the live ones.
+                listed = DD.listing(c, viewer, q=text, archived="only" if _filter(f, "active") in ("0", "false")
+                                    else "hide", cursor=cursor, limit=most, at=at)
+                results += [cast(Row, {**r, "kind": "due_date", "label": r["name"]})
+                            for r in cast(list[Row], listed["due_dates"])]
+                nxt = cast(str | None, listed["next_cursor"])
             elif k in RECORD_KINDS:
                 _teammate_or_refuse(ctx, viewer)
                 parts = tab.decode_cursor(cursor)

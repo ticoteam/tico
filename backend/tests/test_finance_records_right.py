@@ -268,3 +268,45 @@ def test_revenue_by_item_sums_posted_invoice_lines_by_item_for_the_receivables_v
         with pytest.raises(FinanceError) as hidden:
             FR.report(c, "human:eve", "revenue_by_item", start=WINDOW[0], end=WINDOW[1], at=AT)
         assert hidden.value.code == DENIED
+
+
+def test_revenue_by_item_leaves_out_a_whole_invoice_with_a_line_on_a_private_account(books):
+    """The actions only let a private line sit on an expense or liability account and an invoice line post to income,
+    so one line of invoice B is moved onto a private expense account by hand here. B drops out whole for the viewer."""
+    with books.transaction() as c:
+        payroll = str(_ok(act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                                          "parent_id": account(c, "6000")})).result["account_id"])
+        _ok(act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}))
+        gadget = str(_ok(act(c, OWNER, "item_create", {"name": "Gadget", "kind": "service", "price": 2_500,
+                                                       "income_account_id": account(c, "4000")})).result["item_id"])
+        customer = str(_ok(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}))
+                       .result["contact_id"])
+        invoices = (("2026-10-05", [{"item_id": gadget, "amount": 30_000}]),
+                    ("2026-10-06", [{"item_id": gadget, "amount": 8_000}, {"item_id": gadget, "amount": 1_000}]),
+                    ("2026-10-07", [{"item_id": gadget, "amount": 5_000}]))
+        for day, lines in invoices:
+            made = str(_ok(act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": day,
+                                                            "lines": lines})).result["invoice_id"])
+            _ok(act(c, OWNER, "invoice_send", {"invoice_id": made}))
+            if day == "2026-10-06":
+                c.execute("UPDATE fin_invoice_lines SET account_id=? WHERE invoice_id=? AND amount=1000",
+                          (payroll, made))
+        owner = FR.report(c, OWNER, "revenue_by_item", start=WINDOW[0], end=WINDOW[1], at=AT)
+        assert owner["total"] == 44_000
+        assert {r["label"]: r["amount"] for r in owner["rows"]} == {"Gadget": 44_000}
+        assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "receivables"}).status == "committed"
+        cut = FR.report(c, "human:cara", "revenue_by_item", start=WINDOW[0], end=WINDOW[1], at=AT)
+        assert cut["total"] == 35_000
+        assert {r["label"]: r["amount"] for r in cut["rows"]} == {"Gadget": 35_000}
+
+
+def test_the_picker_matches_an_email_only_for_a_viewer_of_receivables(books):
+    with books.transaction() as c:
+        made = act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer",
+                                                "emails": ["billing@acme-retail.example"]})
+        acme = str(_ok(made).result["contact_id"])
+        assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
+        assert FR.customers(c, "human:eve", q="billing@acme-retail", at=AT)["customers"] == []
+        assert [r["id"] for r in FR.customers(c, "human:eve", q="acme", at=AT)["customers"]] == [acme]
+        assert [r["id"] for r in FR.customers(c, OWNER, q="billing@acme-retail", at=AT)["customers"]] == [acme]
