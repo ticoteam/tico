@@ -12,7 +12,7 @@ teammate who works it, and one occurrence per day it falls due, each completed o
 """
 import sqlite3
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -44,6 +44,46 @@ def step_after(day: date, repeats: str, count: int) -> date:
     return D.occurrence(day, "monthly", count)
 
 
+def chain_next(completed: date, due_on: date, repeats: str, count: int) -> date:
+    """The day a completion-anchored chain falls due next, after its occurrence `due_on` was completed on `completed`: the
+    count of days or months after the completion. An early completion can land that on or before the occurrence itself,
+    so then the count is taken from the occurrence, and the chain always moves on past the day it was made for."""
+    nxt = step_after(completed, repeats, count)
+    return nxt if nxt > due_on else step_after(due_on, repeats, count)
+
+
+def _index_near(first: date, repeats: str, day: date) -> int:
+    """The index (from 0) of the calendar occurrence at or just before `day`, found by arithmetic: a weekly date steps seven
+    days, a monthly, quarterly or yearly one steps months. A month's end clamps, which can move the true index down by one,
+    so the walk in `_from` starts a couple of steps earlier."""
+    if repeats == "once" or day <= first:
+        return 0
+    if repeats == "weekly":
+        return (day - first).days // 7
+    months = (day.year - first.year) * 12 + (day.month - first.month)
+    return months // D.STEP_MONTHS[repeats]
+
+
+def _from(first: date, repeats: str, day: date) -> Iterator[date]:
+    """The calendar occurrences from a couple of steps before `day` on, oldest first, with no end: the caller stops. The walk
+    starts at an index found by arithmetic, so a date from a century ago reaches this year as fast as one from last week."""
+    n = max(0, _index_near(first, repeats, day) - 2)
+    while True:
+        occ: date | None = D.occurrence(first, repeats, n)
+        if occ is None:
+            return
+        yield occ
+        n += 1
+
+
+def _on_grid(first: date, repeats: str, day: date) -> bool:
+    """Whether `day` is one of the calendar occurrences from `first`, the clamped month-end ones included."""
+    if day < first:
+        return False
+    near = _index_near(first, repeats, day)
+    return any(D.occurrence(first, repeats, n) == day for n in range(max(0, near - 2), near + 3))
+
+
 def window(row: Mapping[str, object]) -> date:
     """The first calendar occurrence that counts: the latest one on or before `counted_from_on`. A date that starts after
     that day counts from its start. Only calendar repeats have one."""
@@ -51,11 +91,9 @@ def window(row: Mapping[str, object]) -> date:
     counted = date.fromisoformat(str(row["counted_from_on"]))
     if counted <= first:
         return first
-    repeats = str(row["repeats"])
     latest = first
-    for n in range(D.MAX_OCCURRENCES):
-        day = D.occurrence(first, repeats, n)
-        if day is None or day > counted:
+    for day in _from(first, str(row["repeats"]), counted):
+        if day > counted:
             break
         latest = day
     return latest
@@ -71,8 +109,13 @@ def open_days(row: Mapping[str, object], through: date, completed: set[str]) -> 
         return [due] if due <= through and due.isoformat() not in completed else []
     first = date.fromisoformat(str(row["starts_on"]))
     start = window(row)
-    return [d for d in D.occurrences(first, repeats, through)
-            if start <= d <= through and d.isoformat() not in completed]
+    out: list[date] = []
+    for day in _from(first, repeats, start):
+        if day > through:
+            break
+        if day >= start and day.isoformat() not in completed:
+            out.append(day)
+    return out
 
 
 def next_open(row: Mapping[str, object], completed: set[str]) -> date | None:
@@ -83,10 +126,7 @@ def next_open(row: Mapping[str, object], completed: set[str]) -> date | None:
         return None if due.isoformat() in completed else due
     first = date.fromisoformat(str(row["starts_on"]))
     start = window(row)
-    for n in range(D.MAX_OCCURRENCES):
-        day = D.occurrence(first, repeats, n)
-        if day is None:
-            return None
+    for day in _from(first, repeats, start):
         if start <= day and day.isoformat() not in completed:
             return day
     return None
@@ -98,7 +138,7 @@ def is_occurrence(row: Mapping[str, object], day: date) -> bool:
     if str(row["repeats"]) in COMPLETION:
         return day.isoformat() == str(row["next_due_on"])
     first = date.fromisoformat(str(row["starts_on"]))
-    return window(row) <= day and bool(D.is_occurrence(first, str(row["repeats"]), day))
+    return window(row) <= day and _on_grid(first, str(row["repeats"]), day)
 
 
 def status(row: Mapping[str, object], next_on: date | None, today: date) -> str:

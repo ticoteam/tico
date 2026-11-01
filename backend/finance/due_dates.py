@@ -128,19 +128,23 @@ def due_date_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         RD.update(ctx.c, due_date_id, {**changes, "updated_at": ctx.at, "updated_by_id": who})
+        new_assignee = changes.get("assignee_id")
+        if new_assignee is not None and new_assignee != row["assignee_id"]:
+            FLOW.reassign(ctx.c, due_date_id, str(new_assignee), str(row["name"]))   # its open task goes with it
         return {"due_date_id": due_date_id}
     return Plan(K.default_gate(ctx.org, who, "due_date_update"), f"Change due date {row['name']}"[:200], apply)
 
 
 def _complete(ctx: Ctx, who: str, due_date_id: str, day: date) -> Result:
     """Complete one occurrence. Idempotent: a second completion records nothing. A completion-anchored chain moves to
-    the completion day plus its count, so a late completion shifts it."""
+    the completion day plus its count, so a late completion shifts it; an early one that would land on or before the
+    occurrence counts from the occurrence instead (RD.chain_next), so the chain keeps moving."""
     row = RD.get(ctx.c, due_date_id)
     iso = day.isoformat()
     done = RD.complete_occurrence(ctx.c, due_date_id, iso, who, ctx.at)
     nxt = str(row["next_due_on"]) if row["next_due_on"] else None
     if done and str(row["repeats"]) in RD.COMPLETION:
-        nxt_day = RD.step_after(_moment(ctx), str(row["repeats"]), int(row["every_count"]))
+        nxt_day = RD.chain_next(_moment(ctx), day, str(row["repeats"]), int(row["every_count"]))
         nxt = nxt_day.isoformat()
         RD.update(ctx.c, due_date_id, {"next_due_on": nxt, "updated_at": ctx.at, "updated_by_id": who})
     return {"due_date_id": due_date_id, "due_on": iso, "completed": done, "next_due_on": nxt}
