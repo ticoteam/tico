@@ -2786,5 +2786,39 @@ def audience_class(conv, message=None):
     return "public"
 
 
+# A reader with no standing of its own: what it may read, every reader of the thread may.
+_NO_STANDING = "bot:~audience"
+
+
+def _narrower_than_thread(c, message):
+    if message.get("legacy_audience"):
+        return True
+    if not message.get("restricted"):
+        return False
+    from . import task_privacy
+    refs = H._json(message.get("refs_json"), {}) or {}
+    if isinstance(refs, dict) and refs.get("carries"):
+        source = c.execute("SELECT * FROM messages WHERE id=?", (refs["carries"],)).fetchone()
+        if source and source["legacy_audience"]:
+            return True
+    return not task_privacy.message_readable(c, _NO_STANDING, message, current=True)
+
+
+def mark_narrower(c, history):
+    """Flag the messages of a public turn's page that some reader of the thread may not read (`audience_limited`): history
+    kept for its old readers, or a message tied to a private task or a meeting. A public session is read back into a
+    thread everyone there reads, so the runner never gives it these (contract section 8). The page itself stays whole:
+    the runner's cursor is a message id on it."""
+    if not history:
+        return history
+    marks = ",".join("?" * len(history))
+    rows = {r["id"]: dict(r) for r in c.execute(f"SELECT * FROM messages WHERE id IN ({marks})", [m["id"] for m in history])}
+    for message in history:
+        stored = rows.get(message["id"])
+        if stored and _narrower_than_thread(c, stored):
+            message["audience_limited"] = True
+    return history
+
+
 def private_task_thread(c, conv):
     return bool(conv and conv.get("task_id") and H.task_private(c, H.task(c, conv["task_id"]) or {}))

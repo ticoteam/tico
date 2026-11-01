@@ -475,6 +475,10 @@ audience `members|personal|participants|meeting`, a private task's thread, or a 
 - Existing mappings: a `conversation:<id>` session is adopted as `root:<id>:<class>` on first use (the runner
   copies it); `task:<id>` stays. The old shared `bot` thread mixed private and public context, so it is **not**
   carried into `public` (a deviation recorded in the report).
+- So chat turns start fresh once at rollout: the first turn under `public` or a `root:` key, with nothing to adopt and
+  no Clear, is given its conversation's latest messages (`fallback::first_turn_pack`, the fallback's replay and size
+  limit). On a public turn the server flags what some reader of the thread may not read (`audience_limited`:
+  `threads.mark_narrower`), and the runner never gives a public session those. Task turns on `bot` keep their session.
 - Lanes: `task:` keys run in their own lane; `root:` and `public` share the main lane. A private task on
   `session: bot` keeps the main lane (the bot's one checkout); only its session is its own.
 

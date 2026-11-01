@@ -759,3 +759,22 @@ def test_a_remote_author_writes_only_through_the_keeper_in_its_installs_namespac
                              via="peer", origin=origin)
         assert again["id"] == sent["id"], "a repeat (origin_id, revision) writes nothing"
         assert not c.execute("SELECT 1 FROM thread_followers WHERE actor=?", ("human:ana@peer.acme.example",)).fetchone()
+
+
+def test_a_public_turns_page_flags_only_what_some_reader_of_the_thread_may_not_read(world):
+    store, auth, who = world
+    with store.transaction() as c:
+        owner = threads.viewer(auth, owner_of(c, auth))
+        tid = threads.create(c, owner, title="Launch", audience="company")["id"]
+        plain = threads.post(c, owner, tid, "The launch is Tuesday")
+        reply = threads.post(c, owner, tid, "Agreed", in_reply_to=plain["id"])
+        secret = H.task_create(c, owner.actor, "Acme acquisition", "", owner.actor, private=True, lint=False)
+        open_task = H.task_create(c, owner.actor, "Acme launch", "", owner.actor, private=False, lint=False)
+        tied = threads.post(c, owner, tid, "On it", refs={"task": secret["id"]})
+        tied_open = threads.post(c, owner, tid, "Also on it", refs={"task": open_task["id"]})
+        kept = threads.post(c, owner, tid, "Old readers only")
+        c.execute("UPDATE messages SET legacy_audience='shared:finance' WHERE id=?", (kept["id"],))
+        page = [{"id": m["id"]} for m in (plain, reply, tied, tied_open, kept)]
+        threads.mark_narrower(c, page)
+    assert [bool(m.get("audience_limited")) for m in page] == [False, False, True, False, True]
+

@@ -349,7 +349,7 @@ fn parts(attempt: &Value, names: &Names, after: Option<&str>, resumed: bool, rep
     }
     let own = format!("bot:{bot}");
     for msg in &history {
-        if msg["id"] == message["id"] || (!own_replies && s(&msg["from_actor"]) == own) {
+        if msg["id"] == message["id"] || (!own_replies && s(&msg["from_actor"]) == own) || truthy(&msg["audience_limited"]) {
             continue;
         }
         put(&mut lines, Part::Turn, format!("{} [{}]: {}", speaker(msg), s(&msg["id"]), s(&msg["body"])));
@@ -433,6 +433,18 @@ mod tests {
             "a4" => include_str!("testdata/prompt-a4.txt"),
             other => panic!("no golden prompt for {other}"),
         }
+    }
+
+    #[test]
+    fn a_session_is_not_told_what_some_reader_of_its_thread_may_not_read() {
+        let turn = json!({"id": "a7", "bot": "ops", "conversation": {"id": "c7", "kind": "chat", "scope": "direct"},
+            "message": {"id": "m3", "from_actor": "human:ana", "body": "Now", "refs": {}}, "history": [
+                {"id": "m0", "from_actor": "human:ana", "body": "Told before", "refs": {}},
+                {"id": "m1", "from_actor": "human:ana", "body": "Open words", "refs": {}},
+                {"id": "m2", "from_actor": "human:ben", "body": "Narrow words", "refs": {}, "audience_limited": true},
+                {"id": "m3", "from_actor": "human:ana", "body": "Now", "refs": {}}]});
+        let text = prompt(&turn, &Names::from_config(None), Some("m0"), true);
+        assert!(text.contains("Open words") && !text.contains("Narrow words") && !text.contains("Told before"), "{text}");
     }
 
     #[test]
