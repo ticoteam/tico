@@ -75,6 +75,8 @@ const done = (id, lens, over = {}, result = {}) => ({id, lens, name: LENSES.find
 
 async function open(browser, {role = 'owner', route = '#/strategy/lenses', viewport = DESKTOP, published = true, runs = [], noPublished = false, slow = false} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', locale: 'en-GB'});
+  // The clock is fixed in October: a run the stub starts is stamped with it, and the page shows its date ("27 Oct").
+  await page.clock.install({time: new Date('2026-10-27T12:00:00Z')});
   const errors = [], sent = [];
   page.on('pageerror', e => errors.push(e.message));
   const owner = role === 'owner';
