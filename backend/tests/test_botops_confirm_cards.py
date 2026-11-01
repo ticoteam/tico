@@ -392,3 +392,17 @@ def test_a_client_that_sends_no_header_gets_the_same_card_or_refusal(api, botops
         assert c.execute("SELECT daily_usd FROM usage_limits WHERE bot='ops'").fetchone()[0] == 10
     assert api.app.state.auth.owner_email == "ana@acme.example"
     assert "cara@acme.example" not in api.app.state.auth.bot_admins
+
+
+def test_a_teammate_added_as_a_requester_by_botops_waits_for_the_owners_tap(api, botops):
+    task = post(api, "tasks", {"owner": "ana", "title": "Plan the launch", "body": "Plan it"}, token="ana-test")
+    ana = turn(api, botops, person="ana-test", text="Add Ben to my launch task")
+    answer = act(api, ana, "POST", f"tasks/{task['id']}/requesters", {"actor": "human:ben"})
+    assert answer.status_code == 200 and answer.json()["needs_confirm"], answer.text
+    card_in_chat(api, answer.json(), "ana")
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM task_requesters WHERE task_id=? AND actor=?",
+                         (task["id"], "human:ben")).fetchone()[0] == 0
+    assert confirm(api, answer.json(), "ana-test")["action"]["status"] == "done"
+    rows = get(api, f"tasks/{task['id']}/requesters")["requesters"]
+    assert [r["actor"] for r in rows] == ["human:ben"]

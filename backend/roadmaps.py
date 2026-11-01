@@ -334,6 +334,13 @@ def install_internal(app, store, auth, mutate, mover):
                 actor = H.resolve_actor(c, body.actor)
                 if not actor or not (H.is_human(actor) or H.is_bot(actor)) or not H._actor_exists(c, actor):
                     raise Problem('identity', 'Teammate not found', 422)
+            if actor and actor != who.actor and who.via == 'botops' and not who.confirmed:
+                # BotOps acting for a person adds a teammate to their task only on that person's own tap.
+                made = getattr(request.app.state, 'botops_propose', None)
+                if made:
+                    name = H.human(c, H.actor_id(actor)) or {}
+                    return made(c, who, 'POST', '/api/v2/tasks/' + tid + '/requesters', body.model_dump(),
+                                'Add ' + (name.get('name') or actor) + ' as a requester on “' + row['title'] + '”')
             if actor != who.actor:
                 task(c, who, tid, True)
             return add_requester(c, row['id'], body.model_dump(), actor)
