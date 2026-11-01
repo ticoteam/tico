@@ -185,8 +185,31 @@ def test_the_first_turn_after_an_update_starts_fresh_and_recovers_only_its_roots
     kind, thread = provider_turns(computer)[-1]
     assert kind == "new" and thread != "old-bot-thread-0001", "the old shared thread is never resumed by a root"
     prompt = computer.prompts()[-1]["prompt"]
-    # The fresh thread has none of the room's history inline: it is pointed at this root's conversation, which the
-    # bot reads through `hub conversation show` under the same readability rules (runner-rs/src/prompt.rs, history).
-    assert f"hub conversation show {room['id']}" in prompt, "the fresh thread is pointed at this root's history"
+    # The fresh thread is replayed this root's earlier messages inline, oldest first (runner-rs/src/fallback.rs
+    # first_turn_pack), and nothing from another root.
+    assert "ROOM-B note: launch is Tuesday" in prompt, "the fresh thread is replayed this root's earlier messages"
     assert elsewhere["id"] not in prompt and "OTHER-ROOM" not in prompt, \
         "nothing from another root reaches the fresh thread's prompt"
+
+
+@pytest.mark.parametrize("harness", ["claude"])
+def test_a_public_turn_is_replayed_its_threads_public_history_and_no_direct_message_or_legacy_text(api, computer):
+    require_threads_api(api)
+    computer.start()
+    dm = ok(call(api, "POST", "threads", "ana-test", {"audience": "personal", "members": ["bot:ops"]}))
+    say(api, "ana-test", dm["id"], "@ops DM-SECRET: the board deck is late")
+    until(lambda: finished(computer) == 1, "the reply in the direct message")
+    company = create_thread(api, title="Launch notes", audience="company", members=["bot:ops"])
+    say(api, "ana-test", company["id"], "PUBLIC-ROOM note: launch is Tuesday")
+    legacy = say(api, "ana-test", company["id"], "LEGACY-SECRET: the price is internal")
+    # A message its old readers alone may read: kept in the thread, never replayed to a public session.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET legacy_audience='shared:nobody', restricted=1 WHERE id=?", (legacy["id"],))
+    say(api, "ana-test", company["id"], "@ops summarise the launch notes")
+    until(lambda: finished(computer) == 2, "the reply in the public thread")
+    kind, _thread = provider_turns(computer)[-1]
+    assert kind == "new", "a public thread's first turn starts its own session"
+    prompt = computer.prompts()[-1]["prompt"]
+    assert "PUBLIC-ROOM note: launch is Tuesday" in prompt, "a public turn is replayed its thread's public history"
+    assert "DM-SECRET" not in prompt, "a direct message never reaches a public turn"
+    assert "LEGACY-SECRET" not in prompt, "a legacy-audience message never reaches a public turn"

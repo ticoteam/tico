@@ -2,8 +2,9 @@
 // Dana. Dana, on a desktop, reads the company thread and replies in its composer; a sub-thread under one of its messages
 // shows inline and opens on its own; and her bot page switches between the bot's Home and DM. Omar, a teammate on the
 // desktop, sees the company thread in the sidebar but not the members-only one, and its text is not on his page; opened by
-// direct URL it is "Not found"; and on a bot he may see but not read, the bot has no Home tab. Priya, on a phone, taps the
-// company thread in the sidebar, sees its composer, and the page does not scroll sideways.
+// direct URL it is "Not found"; and on a bot he may see but not read, the bot has no Home tab. Priya's Home is hidden from
+// Omar until Dana makes him Priya's manager (reports_to), and then he reads it. Priya, on a phone, taps the company thread
+// in the sidebar, sees its composer, and the page does not scroll sideways.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
@@ -14,6 +15,7 @@ const PLAN = 'Launch is Tuesday';
 const SECRET = 'Pricing war room only';
 const KICKOFF = 'Kickoff notes';
 const RISKS = 'Sub question about the risks';
+const HOME_NOTE = 'Standup moves to ten';
 const BOT = 'builder-claude';
 
 // One API call as a teammate, by token: the same shape the counsel journey uses (ui/tests/org-rules-counsel.cjs).
@@ -37,6 +39,16 @@ async function restrictBot(hub) {
     {see: everyone, read: dana, write: dana, revision: current.revision});
 }
 
+// Priya's Home: Dana, the owner, reads it; a teammate who only sees Priya reads it only if he manages her (people.manages).
+// Priya's read audience names only herself, so the org chart decides who reads her Home.
+async function restrictPerson(hub) {
+  const current = await api(hub, 'dana', 'GET', '/v2/humans/priya/access');
+  const everyone = {everyone: true, people: [], teams: [], bots: []};
+  const priya = {everyone: false, people: ['priya'], teams: [], bots: []};
+  await api(hub, 'dana', 'PUT', '/v2/humans/priya/access',
+    {see: everyone, read: priya, write: priya, revision: current.revision});
+}
+
 (async () => {
   const hub = await startHub({seeds: ['org']});
   let browser;
@@ -47,6 +59,7 @@ async function restrictBot(hub) {
     const risks = await api(hub, 'dana', 'POST', `/v2/threads/${plan.id}/messages`,
       {text: RISKS, kind: 'say', parent_message_id: kickoff.id});
     await restrictBot(hub);
+    await restrictPerson(hub);
     browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
 
     // Dana, desktop: the company thread shows its message and takes a reply.
@@ -101,6 +114,24 @@ async function restrictBot(hub) {
     assert.equal(await omar.locator('.bot-talk-switch [data-talk="home"]').count(), 0,
       'a peer with See only on the bot gets no Home tab');
     await omar.context().close();
+
+    // Priya's Home. Omar sees Priya but is not her manager (Priya reports to Dana), so her Home is hidden from him. Dana then
+    // makes him her manager by the team chart alone (reports_to), and the same Omar opens her Home.
+    const priyaHome = await api(hub, 'priya', 'GET', '/v2/threads/home/' + encodeURIComponent('human:priya'));
+    await api(hub, 'priya', 'POST', `/v2/threads/${priyaHome.id}/messages`, {text: HOME_NOTE, kind: 'say'});
+    const peer = await pageAs(browser, hub, 'omar');
+    await peer.goto(hub.url + '/#/person/priya');
+    await peer.locator('h1', {hasText: 'Priya'}).waitFor({timeout: t(15000)});
+    await peer.waitForFunction(() => document.getElementById('person-home')?.hidden === true, null, {timeout: t(15000)});
+    assert.equal(await peer.getByText(HOME_NOTE).count(), 0, 'a See-only peer does not read the Home of someone he does not manage');
+    await peer.context().close();
+
+    await api(hub, 'dana', 'POST', '/v2/humans/priya', {reports_to: 'omar'});
+    const manager = await pageAs(browser, hub, 'omar');
+    await manager.goto(hub.url + '/#/person/priya');
+    await manager.locator('#person-home-thread').getByText(HOME_NOTE).waitFor({timeout: t(15000)});
+    assert.equal(await manager.locator('#person-home').isVisible(), true, 'the manager sees the report\'s Home card');
+    await manager.context().close();
 
     // Priya, phone: the company thread is in the sidebar; tapping it opens the thread with its composer, and the page
     // does not scroll sideways.
