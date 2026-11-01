@@ -1,0 +1,42 @@
+/* Links outside this Tico (ui/app/thread-connect.js, ui/app/connections.js): Library › Connections' Slack and Other
+   companies sections, and the Slack and Shared with parts of a thread's Who can read sheet. Rows reuse .cn-row. */
+.cn-sec{padding:8px 0 16px}
+.cn-sec-head{display:flex;align-items:center;gap:8px;padding:12px 28px 4px}
+.cn-sec-head h2{margin:0;font-size:var(--t-md);font-weight:600}
+.cn-sec-head .spacer{flex:1}
+.cn-form{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:4px 28px 8px}
+.cn-form select,.cn-form input:not([type=checkbox]){min-width:0;flex:1 1 180px}
+.cn-key{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0;padding:2px 28px 6px;font-size:var(--t-sm)}
+.cn-key .mono{overflow-wrap:anywhere}
+.cn-err{display:block;padding:0 28px}
+.cn-err:empty{display:none}
+.cn-xmore{padding:0 28px}
+.cn-row.cn-xrow{grid-template-columns:18px minmax(0,1fr) 100px auto}
+.cn-acts{display:flex;justify-content:flex-end;gap:4px;flex-wrap:wrap}
+.tcn-check{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
+
+/* In a thread's sheet. */
+.tcn{display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--line);padding-top:12px}
+.tcn-sec{display:flex;flex-direction:column;gap:6px}
+.tcn-sec[hidden]{display:none}
+.tcn-sec h3{margin:0}
+.tcn .cn-list.tcn-list{padding:0}
+.tcn .cn-row.cn-xrow{padding:4px 0;min-height:34px}
+.tcn-form{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.dash-form .tcn-form :is(input:not([type=checkbox]),select){flex:1 1 160px;width:auto}
+.dash-form label.tcn-check{flex-direction:row}
+.tcn-none{padding:4px 0;font-size:var(--t-sm)}
+
+/* Someone on another company's Tico: their name, the company, and a guest tag. */
+.tcn-who{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tcn-guest{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:8px;font-size:var(--t-2xs);
+  color:var(--muted);line-height:16px;vertical-align:1px;font-weight:400}
+
+@media (max-width:760px){
+  .cn-sec-head,.cn-form,.cn-key,.cn-err,.cn-xmore{padding-left:16px;padding-right:16px}
+  .cn-row.cn-xrow{grid-template-columns:18px minmax(0,1fr) auto;grid-template-areas:"i n s" ". a a";row-gap:4px}
+  .cn-row.cn-xrow .nav-icon{grid-area:i}.cn-row.cn-xrow .cn-name{grid-area:n}.cn-row.cn-xrow .cn-status{grid-area:s}
+  .cn-row.cn-xrow .cn-acts{grid-area:a;justify-content:flex-start}
+  .cn-row.cn-xrow .cn-acts:empty{display:none}
+  .tcn .cn-row.cn-xrow{padding:6px 0}
+}

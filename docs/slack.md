@@ -72,8 +72,10 @@ A channel can be linked to a Tico thread, and the two carry each other's message
 - History is opt-in (`history: true`): the last 30 days, up to 5,000 messages, from members who map to roster people.
   Nothing wakes a bot for it.
 
-The thread settings screen does not link channels yet. Use `hub thread link-slack <thread> [<channel>]` (CLI), the
-`hub_thread_link_slack` tool (MCP), or the API.
+In the app, an owner or an admin links a thread in Library > Connections > Slack (Link a thread), or in the thread's
+Who can read sheet. The same list shows each link's state, with Resume and Unlink. Elsewhere: `hub thread link-slack
+<thread> [<channel>]` (CLI), the `hub_thread_link_slack` tool (MCP), or the API. `GET /api/v2/slack/links` reads a page
+at a time (`limit`, `cursor`; follow `next_cursor`).
 
 ## What humans can do
 

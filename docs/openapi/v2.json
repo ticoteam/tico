@@ -25895,7 +25895,7 @@
     },
     "/api/v2/slack/links": {
       "get": {
-        "summary": "The Slack links of a thread (`thread`), newest first, up to `limit` (at most 100); unlinked ones are left out",
+        "summary": "The Slack links (of one thread with `thread`), newest first, up to `limit` (at most 100) a page; `next_cursor` reads the next page; unlinked ones are left out",
         "operationId": "listSlackLinks",
         "parameters": [
           {
@@ -25916,6 +25916,16 @@
               "type": "integer",
               "default": 50,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Cursor"
             }
           }
         ],
@@ -55455,10 +55465,17 @@
             "items": {
               "$ref": "#/components/schemas/SlackLink"
             }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
-          "links"
+          "links",
+          "next_cursor"
         ],
         "additionalProperties": true
       },

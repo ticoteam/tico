@@ -70,3 +70,23 @@ def test_only_a_suspended_or_refused_link_is_checked_again(api, thread):
 def test_a_thread_that_does_not_exist_is_not_found(api):
     r = api.post("/api/v2/slack/links", json={"thread_id": "no-such-thread", "channel": "#marketing"}, headers=headers())
     assert r.status_code == 404, r.text
+
+
+def test_the_list_pages_newest_first_and_every_link_is_read_once(api):
+    with api.app.state.store.transaction() as c:
+        for n in range(5):
+            c.execute("INSERT INTO conversations (id,kind,subject,created,audience,root_id,path) VALUES (?,?,?,?,?,?,'')",
+                      (f"T-{n}", "thread", f"Thread {n}", H.now(), "company", f"T-{n}"))
+    made = [api.post("/api/v2/slack/links", json={"thread_id": f"T-{n}", "channel": f"#c{n}"}, headers=headers()).json()["id"]
+            for n in range(5)]
+    seen, cursor = [], ""
+    for _ in range(5):
+        r = api.get("/api/v2/slack/links", params={"limit": 2, **({"cursor": cursor} if cursor else {})}, headers=headers())
+        assert r.status_code == 200, r.text
+        page = r.json()
+        assert len(page["links"]) <= 2
+        seen += [row["id"] for row in page["links"]]
+        cursor = page["next_cursor"]
+        if not cursor:
+            break
+    assert sorted(seen) == sorted(made) and len(seen) == len(set(seen))

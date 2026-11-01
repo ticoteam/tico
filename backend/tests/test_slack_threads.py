@@ -839,8 +839,8 @@ def test_a_thread_the_admin_cannot_read_gives_the_same_404_as_a_missing_one(worl
 def test_a_listing_leaves_out_the_links_to_threads_the_admin_cannot_read(world):
     link_id = request(world, "#secret", thread=MEMBERS)      # a members thread: Ana is a member, the outsider is not
     assert gate(world, link_id) == "active"
-    assert [r["id"] for r in ST.list_links(world.hub, WHO, auth=Auth(world.hub))] == [link_id]
-    assert ST.list_links(world.hub, OUTSIDER, auth=Auth(world.hub)) == []
+    assert [r["id"] for r in ST.list_links(world.hub, WHO, auth=Auth(world.hub))["links"]] == [link_id]
+    assert ST.list_links(world.hub, OUTSIDER, auth=Auth(world.hub))["links"] == []
     with pytest.raises(Problem) as exc:
         ST.list_links(world.hub, OUTSIDER, MEMBERS, auth=Auth(world.hub))
     assert exc.value.status == 404

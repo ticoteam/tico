@@ -22,6 +22,10 @@ The request and each approval carry this install's company name (its settings), 
 peering's `company`. The install that approves a peering is its accepting admin: that person reads the threads the
 peering brings in.
 
+In the app, the owner does all of this in Library > Connections > Other companies: this install's id and key, Connect a
+company (by install id), and Approve, Pause, Resume or Revoke on each peering. A thread's Who can read sheet shows
+Shared with, where the owner adds or removes an install.
+
 ## Share a thread
 
 `hub peer share <thread> <install>` gives an active peer a thread this install owns (its audience is `members`).
