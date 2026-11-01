@@ -2207,37 +2207,7 @@ impl Recorder {
     /// A meeting shared live shows the lines Tico holds, one per line, so an edit or removal names
     /// the line Tico changes. Speech not sent yet follows without controls. None if not shared.
     fn shared_transcript(&self, record: &Recording, recording: bool) -> Option<Value> {
-        let context = self.store.context(&record.id).ok()?;
-        if context.live_id.is_empty() || context.live_destination.is_empty() {
-            return None;
-        }
-        let lines = live::shared_lines(&self.store, &record.id, &context.live_destination).ok()?;
-        let open = ["live", "paused"].contains(&context.live_state.as_str());
-        let sent_until = lines.iter().map(|line| line.end_ms).max();
-        let mut blocks: Vec<Value> = lines
-            .iter()
-            .map(|line| {
-                let removed = line.edited && line.text == live::REMOVED;
-                json!({"speaker":line.speaker,"me":line.speaker == "Me","start_ms":line.start_ms,
-                    "paragraphs":[line.text],"partial":false,"streamed":false,"seq":line.seq,
-                    "edited":line.edited,"removed":removed,
-                    "editable":open && line.acknowledged && !live::is_sending(&record.id)})
-            })
-            .collect();
-        if let Ok(turns) = stream::live_turns(&self.store, &record.id) {
-            blocks.extend(
-                turns
-                    .iter()
-                    .filter(|turn| !turn.text.trim().is_empty())
-                    .filter(|turn| sent_until.is_none_or(|end| turn.start_ms >= end))
-                    .map(|turn| {
-                        json!({"speaker":turn.speaker,"me":turn.me,"start_ms":turn.start_ms,
-                            "paragraphs":[turn.text.trim()],"partial":turn.partial,
-                            "streamed":turn.streamed,"seq":null,"editable":false})
-                    }),
-            );
-        }
-        Some(json!({"id": record.id, "live": recording, "shared": true, "blocks": blocks}))
+        live::shared_transcript(&self.store, record, recording)
     }
     fn meeting_view(&mut self) -> Value {
         let Some(record) = self

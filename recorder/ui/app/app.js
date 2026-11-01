@@ -1155,9 +1155,15 @@
     'save-line': async (el) => {
       const edit = S.ui.editLine;
       if (!edit) return;
-      const text = S.ui.editDraft || '';
-      S.ui.editLine = null;
+      const text = (S.ui.editDraft || '').trim();
       await act('edit_shared_line', { id: edit.id, seq: edit.seq, text });
+      // A refused save (being sent, ended in Tico, empty) keeps the draft open with the reason shown.
+      const block = (S.transcript?.blocks || []).find((b) => b.seq === edit.seq);
+      const saved = S.transcript?.id === edit.id && block && block.paragraphs[0] === text;
+      if (saved && S.ui.editLine?.id === edit.id && S.ui.editLine?.seq === edit.seq) {
+        S.ui.editLine = null;
+        render();
+      }
     },
     'ask-remove-line': (el) => { S.ui.removeLine = { id: S.transcript?.id, seq: Number(el.dataset.seq) }; S.ui.editLine = null; render(); },
     'cancel-remove-line': () => { S.ui.removeLine = null; render(); },
@@ -1166,6 +1172,12 @@
       if (!removal) return;
       S.ui.removeLine = null;
       await act('remove_shared_line', { id: removal.id, seq: removal.seq });
+      // A refused removal asks again, with the reason shown, while the same meeting stays open.
+      const block = (S.transcript?.blocks || []).find((b) => b.seq === removal.seq);
+      if (S.transcript?.id === removal.id && !block?.removed && !S.ui.removeLine) {
+        S.ui.removeLine = removal;
+        render();
+      }
     },
     retry: (el) => { S.ui.pop = null; act('retry', { id: el.dataset.id }); },
     'audio-status': () => { S.ui.pop = null; S.ui.panel = 'transcript'; S.ui.showAudio = true; render(); },

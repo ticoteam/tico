@@ -1418,6 +1418,8 @@ fn an_edit_while_send_is_held_at_the_end_is_refused_and_not_saved() {
             word(1_300, 1_550, "there", ""),
         ],
     );
+    let before = crate::live::shared_transcript(&store, &store.get(id).unwrap(), false).unwrap();
+    assert_eq!(before["blocks"][0]["editable"], true);
     let (release, gate) = std::sync::mpsc::channel();
     let (tico, seen, worker) = server_gated(
         vec![
@@ -1446,6 +1448,11 @@ fn an_edit_while_send_is_held_at_the_end_is_refused_and_not_saved() {
         assert_eq!(
             (lines[0].text.as_str(), lines[0].edited),
             ("helo there", false)
+        );
+        let held = crate::live::shared_transcript(&store, &store.get(id).unwrap(), false).unwrap();
+        assert_eq!(
+            held["blocks"][0]["editable"], false,
+            "no controls while Send runs"
         );
         release.send(()).unwrap();
         send.join().unwrap().unwrap();
@@ -1490,4 +1497,74 @@ fn a_failed_send_lifts_the_fence_so_edits_can_be_saved_again() {
     crate::live::edit_shared(&store, id, 1, Some("Hello again")).unwrap();
     let lines = crate::live::shared_lines(&store, id, "synthetic").unwrap();
     assert_eq!(lines[0].text, "Hello again");
+}
+
+/// The guards on an edit and on the view (synthetic, no bots): a line Tico has not acknowledged, a
+/// blank or too long edit, saving the text a line already shows (still an edit), an ended meeting,
+/// and which speech the transcript shows beside the sent lines.
+#[test]
+fn edit_guards_and_the_shared_view_follow_what_tico_has() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Guards");
+    let id = record.id.as_str();
+    streamed(&store, id, "me", 1_000, "helo there", "");
+    streamed(&store, id, "them", 1_200, "hi all", "S1");
+    let (tico, _seen, worker) = server(vec![Some(json!({"accepted":[1,2]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    // Queued but not yet acknowledged by Tico.
+    store
+        .db()
+        .unwrap()
+        .execute(
+            "INSERT INTO live_outbox(recording_id,destination_id,seq,chunk_id,payload_json,acknowledged) VALUES(?,?,?,?,?,0)",
+            rusqlite::params![
+                id,
+                "synthetic",
+                3,
+                "stream:3",
+                json!({"seq":3,"speaker":"S1","start_ms":2000,"end_ms":2500,"text":"pending words"}).to_string()
+            ],
+        )
+        .unwrap();
+    let error = |result: anyhow::Result<()>| result.unwrap_err().to_string();
+    assert!(error(crate::live::edit_shared(&store, id, 3, Some("x"))).contains("still on its way"));
+    assert!(
+        error(crate::live::edit_shared(&store, id, 1, Some("   "))).contains("cannot be empty")
+    );
+    let long = "a".repeat(10_001);
+    assert!(error(crate::live::edit_shared(&store, id, 1, Some(&long))).contains("too long"));
+    // Saving the text a line already shows keeps it: it is marked edited, with no revision.
+    crate::live::edit_shared(&store, id, 1, Some("helo there")).unwrap();
+    let lines = crate::live::shared_lines(&store, id, "synthetic").unwrap();
+    assert_eq!(
+        (lines[0].text.as_str(), lines[0].edited),
+        ("helo there", true)
+    );
+    // Speech starting before the last queued line waits; speech after it is shown.
+    streamed(&store, id, "me", 2_200, "still speaking", "");
+    streamed(&store, id, "me", 9_000, "later words", "");
+    let view = crate::live::shared_transcript(&store, &store.get(id).unwrap(), true).unwrap();
+    let blocks = view["blocks"].as_array().unwrap();
+    let editable: Vec<Value> = blocks
+        .iter()
+        .map(|block| block["editable"].clone())
+        .collect();
+    assert_eq!(editable[..3], [json!(true), json!(true), json!(false)]);
+    let texts: Vec<&str> = blocks
+        .iter()
+        .filter_map(|block| block["paragraphs"][0].as_str())
+        .collect();
+    assert!(
+        texts.contains(&"later words") && !texts.contains(&"still speaking"),
+        "{texts:?}"
+    );
+    // An ended meeting offers no controls.
+    let mut context = store.context(id).unwrap();
+    context.live_state = "ended".into();
+    store.save_context(id, &context).unwrap();
+    let ended = crate::live::shared_transcript(&store, &store.get(id).unwrap(), false).unwrap();
+    assert_eq!(ended["blocks"][0]["editable"], false);
+    assert!(error(crate::live::edit_shared(&store, id, 1, Some("late"))).contains("ended in Tico"));
 }

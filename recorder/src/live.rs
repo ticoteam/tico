@@ -987,8 +987,8 @@ pub struct SharedLine {
     pub edited: bool,
 }
 
-/// Every line shared live for this meeting, in sequence, at its latest revision Tico has been sent.
-/// A refused revision is not shown.
+/// Every line shared live for this meeting, in sequence, at its latest revision queued for Tico (a
+/// queued revision may not have reached Tico yet). A refused revision is not shown.
 pub fn shared_lines(store: &Store, id: &str, destination: &str) -> Result<Vec<SharedLine>> {
     let db = store.db()?;
     let mut query = db.prepare(
@@ -1116,29 +1116,68 @@ pub fn edit_shared(store: &Store, id: &str, seq: i64, text: Option<&str>) -> Res
         Err(error) => return Err(error.into()),
     };
     drop(query);
-    if shown["text"].as_str() == Some(text.as_str()) {
-        return Ok(());
+    // Keeping the text on screen is still a choice: the line is marked edited even when no revision
+    // is needed, so a later automatic correction leaves it alone.
+    if shown["text"].as_str() != Some(text.as_str()) {
+        let revision: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(revision),1)+1 FROM live_corrections WHERE recording_id=? AND destination_id=? AND seq=? AND state<>2",
+            rusqlite::params![id, destination, seq],
+            |row| row.get(0),
+        )?;
+        let payload = json!({
+            "revision": revision,
+            "speaker": shown["speaker"],
+            "start_ms": shown["start_ms"],
+            "end_ms": shown["end_ms"],
+            "text": text,
+        });
+        transaction.execute(
+            "INSERT INTO live_corrections(recording_id,destination_id,seq,revision,payload_json) VALUES(?,?,?,?,?)",
+            rusqlite::params![id, destination, seq, revision, serde_json::to_string(&payload)?],
+        )?;
     }
-    let revision: i64 = transaction.query_row(
-        "SELECT COALESCE(MAX(revision),1)+1 FROM live_corrections WHERE recording_id=? AND destination_id=? AND seq=? AND state<>2",
-        rusqlite::params![id, destination, seq],
-        |row| row.get(0),
-    )?;
-    let payload = json!({
-        "revision": revision,
-        "speaker": shown["speaker"],
-        "start_ms": shown["start_ms"],
-        "end_ms": shown["end_ms"],
-        "text": text,
-    });
-    transaction.execute(
-        "INSERT INTO live_corrections(recording_id,destination_id,seq,revision,payload_json) VALUES(?,?,?,?,?)",
-        rusqlite::params![id, destination, seq, revision, serde_json::to_string(&payload)?],
-    )?;
     transaction.execute(
         "INSERT OR IGNORE INTO live_edits(recording_id,destination_id,seq) VALUES(?,?,?)",
         rusqlite::params![id, destination, seq],
     )?;
     transaction.commit()?;
     Ok(())
+}
+
+/// The transcript of a meeting shared live, as the window shows it: each line as Tico holds it, with
+/// edit controls only where an edit can reach Tico, then the speech not yet sent. Speech that starts
+/// before the last queued line waits until that line is queued, so the list never shows one line
+/// twice; words still being spoken that overlap it wait with it. None when the meeting is not shared.
+pub fn shared_transcript(store: &Store, record: &Recording, recording: bool) -> Option<Value> {
+    let context = store.context(&record.id).ok()?;
+    if context.live_id.is_empty() || context.live_destination.is_empty() {
+        return None;
+    }
+    let lines = shared_lines(store, &record.id, &context.live_destination).ok()?;
+    let open = ["live", "paused"].contains(&context.live_state.as_str()) && !is_sending(&record.id);
+    let queued_until = lines.iter().map(|line| line.end_ms).max();
+    let mut blocks: Vec<Value> = lines
+        .iter()
+        .map(|line| {
+            let removed = line.edited && line.text == REMOVED;
+            json!({"speaker":line.speaker,"me":line.speaker == "Me","start_ms":line.start_ms,
+                "paragraphs":[line.text],"partial":false,"streamed":false,"seq":line.seq,
+                "edited":line.edited,"removed":removed,
+                "editable":open && line.acknowledged && !removed})
+        })
+        .collect();
+    if let Ok(turns) = crate::stream::live_turns(store, &record.id) {
+        blocks.extend(
+            turns
+                .iter()
+                .filter(|turn| !turn.text.trim().is_empty())
+                .filter(|turn| queued_until.is_none_or(|end| turn.start_ms >= end))
+                .map(|turn| {
+                    json!({"speaker":turn.speaker,"me":turn.me,"start_ms":turn.start_ms,
+                        "paragraphs":[turn.text.trim()],"partial":turn.partial,
+                        "streamed":turn.streamed,"seq":null,"editable":false})
+                }),
+        );
+    }
+    Some(json!({"id": record.id, "live": recording, "shared": true, "blocks": blocks}))
 }

@@ -1049,3 +1049,51 @@ fn a_meeting_shared_live_shows_the_lines_tico_holds_with_controls_only_where_an_
         "{blocks}"
     );
 }
+
+#[test]
+fn an_edit_or_removal_names_the_open_meeting_and_leaves_another_alone() {
+    use tico_recorder_native::live;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let mut ids = vec![];
+    for title in ["First call", "Second call"] {
+        let record = store.create(title).unwrap();
+        let mut context = store.context(&record.id).unwrap();
+        context.live_id = format!("live-{}", record.id);
+        context.live_destination = "synthetic".into();
+        context.live_state = "live".into();
+        store.save_context(&record.id, &context).unwrap();
+        store
+            .db()
+            .unwrap()
+            .execute(
+                "INSERT INTO live_outbox(recording_id,destination_id,seq,chunk_id,payload_json,acknowledged) VALUES(?,?,1,'stream:1',?,1)",
+                rusqlite::params![
+                    record.id,
+                    "synthetic",
+                    json!({"seq":1,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"Hello there"}).to_string()
+                ],
+            )
+            .unwrap();
+        ids.push(record.id);
+    }
+    let (first, second) = (ids[0].clone(), ids[1].clone());
+    let mut app = app(store, directory.path());
+    app.open(&first).unwrap();
+    app.edit_shared_line(&second, 1, Some("Changed elsewhere"));
+    assert_eq!(app.error, "That meeting is no longer open");
+    app.dismiss_error();
+    app.edit_shared_line(&second, 1, None);
+    assert_eq!(app.error, "That meeting is no longer open");
+    app.dismiss_error();
+    let other = live::shared_lines(&app.store, &second, "synthetic").unwrap();
+    assert_eq!(
+        (other[0].text.as_str(), other[0].edited),
+        ("Hello there", false)
+    );
+    // The open meeting is the one that changes.
+    app.edit_shared_line(&first, 1, Some("Changed here"));
+    assert!(app.error.is_empty(), "{}", app.error);
+    let open = live::shared_lines(&app.store, &first, "synthetic").unwrap();
+    assert_eq!(open[0].text, "Changed here");
+}
