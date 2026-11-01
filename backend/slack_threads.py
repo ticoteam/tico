@@ -14,12 +14,14 @@ A Slack channel is linked to one Tico thread, and the two talk both ways.
   into its root's Slack thread with a "↳ <title>" line. Every send carries its delivery id in the message metadata, so
   an `uncertain` send is found in the channel's history instead of being sent twice.
 - A linked channel that becomes Slack Connect, gains a member who does not map, or whose thread narrows, is suspended
-  and gets one Needs-you item for the admin who asked. Nothing moves while it is suspended.
+  and gets one Needs-you item for the admin who asked. Nothing moves out while it is suspended; a channel message that
+  arrives meanwhile is queued (`slack_inbound_queue`) and carried in, in order, when the link is active again.
+- Every inbound write goes through the org rule check as the person (`org_rule_check.inbound`, held as that person,
+  with its provenance: the Slack channel and ts). A Block holds it; Send anyway can release it (`replay_held`).
 - History is opt-in: the last 30 days, at most 5,000 messages, written with `refs.import`, so nothing wakes.
 
-Core's entry points are the contract's (`threads.viewer`, `readable`, `post`, `apply_revision`,
-`add_outside_delivery`, `outside_due`, `settle_delivery`, `follow`). They are reached through `Bridge.core()`, so the
-tests put a fake there until core lands.
+Core is `backend/threads.py` (the contract's entry points: `viewer`, `readable`, `post`, `apply_revision`,
+`add_outside_delivery`, `outside_due`, `settle_delivery`, `follow`). Tests use the real core and fake only Slack.
 """
 
 import datetime as dt
@@ -46,6 +48,8 @@ HISTORY_PAGE = 200              # one history or replies call
 HISTORY_PAGES = 50              # the most history pages one import reads
 HISTORY_RETRY = 60              # seconds before a pending import is tried again
 CHECK_SECONDS = 600             # how often linked channels are checked against their thread
+USER_CACHE_SECONDS = 3600       # a Slack user's users.info answer is reused this long (membership checks, every message)
+OUTSIDE_BATCH = 500             # core's outside_due cap: one read covers every Slack channel, so it is the largest
 SEND_BATCH = 50                 # deliveries read per channel per pass
 RECONCILE_AFTER = 60            # an uncertain send waits this long before the history lookup
 RECONCILE_WINDOW = 120          # the lookup starts this long before the uncertain send
@@ -57,6 +61,8 @@ CHANNEL_ID_RE = re.compile(r"^[CG][A-Z0-9]{6,}$")
 CHANNEL_ERRORS = frozenset({"channel_not_found", "not_in_channel", "is_archived", "missing_scope", "restricted_action",
                             "invalid_auth", "account_inactive", "token_revoked", "not_authed", "is_ext_shared"})
 MISSING_CHANNEL = ("channel_not_found", "not_in_channel")
+MAX_DRAIN = 500                 # queued inbound events carried in one pass of one link
+STALLED = frozenset({"denied", "retry"})   # outcomes that keep the queue where it is
 
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS slack_thread_links (
@@ -102,6 +108,7 @@ SCHEMA = [
   revision INTEGER NOT NULL DEFAULT 0,
   attempts INTEGER NOT NULL DEFAULT 0,
   state TEXT NOT NULL CHECK (state IN ('sent','held','deleted','sending','uncertain','ready','failed')),
+  edit_ts TEXT NOT NULL DEFAULT '',
   error TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL)""",
@@ -110,6 +117,13 @@ SCHEMA = [
     "WHERE direction = 'out'",
     "CREATE INDEX IF NOT EXISTS slack_message_links_message ON slack_message_links(message_id)",
     "CREATE INDEX IF NOT EXISTS slack_message_links_state ON slack_message_links(state, updated_at)",
+    """CREATE TABLE IF NOT EXISTS slack_inbound_queue (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  link_id TEXT NOT NULL REFERENCES slack_thread_links(id),
+  event_key TEXT NOT NULL UNIQUE,
+  event_json TEXT NOT NULL,
+  created_at TEXT NOT NULL)""",
+    "CREATE INDEX IF NOT EXISTS slack_inbound_queue_link ON slack_inbound_queue(link_id, seq)",
 ]
 
 
@@ -173,15 +187,27 @@ def _record(c, link, event, direction, state, *, message_id=None, origin_id=None
                message_id, origin_id, actor, state, error and str(error)[:300], now, now))
 
 
-def _sweep(core, c, channel_id, limit=200):
+def _due(core, c, channel_id, limit=OUTSIDE_BATCH):
+    """The pending deliveries to one channel. Core's outside_due reads every Slack destination at once (oldest first),
+    so this filters to the channel."""
+    recipient = outside_recipient(channel_id)
+    return [d for d in core.outside_due(c, "slack", limit) if d["recipient"] == recipient][:limit]
+
+
+def _sweep(core, c, channel_id, limit=OUTSIDE_BATCH):
     """Every pending delivery to the channel is settled `moot`: nothing is sent after an unlink."""
-    prefix = outside_recipient(channel_id)
     for _ in range(50):
-        due = core.outside_due(c, prefix, limit)
+        due = _due(core, c, channel_id, limit)
         if not due:
             return
         for d in due:
             core.settle_delivery(c, d["id"], "moot", error="unlinked")
+
+
+def _audit(c, who, link_id, before, after):
+    """The link's audit row (`audit_log`), beside the event the link writes."""
+    from . import audit_log
+    audit_log.write(c, who.actor, "slack_link:" + str(link_id), before, after)
 
 
 def view(row):
@@ -217,6 +243,7 @@ def request_link(store, who, thread_id, channel_ref, history=False):
                   "created_at,updated_at) VALUES (?,?,?,?, 'requested', ?,?,?,?)",
                   (link_id, thread_id, ref, thread["audience"], "pending" if history else "off", who.actor, now, now))
         H.event(c, who.actor, "slack.link.request", link_id, {"thread": thread_id, "history": bool(history)})
+        _audit(c, who, link_id, None, {"thread": thread_id, "channel": ref, "history": bool(history)})
         return view(_link(c, link_id))
 
 
@@ -228,9 +255,15 @@ def unlink_link(store, who, link_id, core=None):
         if not row or row["state"] == "unlinked":
             raise Problem("not_found", "That Slack link was not found", 404)
         c.execute("UPDATE slack_thread_links SET state='unlinked', updated_at=? WHERE id=?", (H.now(), link_id))
+        c.execute("DELETE FROM slack_inbound_queue WHERE link_id=?", (link_id,))
         if row["channel_id"]:
             _sweep(core, c, row["channel_id"])
+            # Core has no call that takes an outside destination back off a thread, so the member row goes here;
+            # add_outside_delivery puts it back if the channel is linked again.
+            c.execute("DELETE FROM thread_members WHERE thread_id=? AND actor=?",
+                      (row["thread_id"], outside_recipient(row["channel_id"])))
         H.event(c, who.actor, "slack.unlink", link_id, {"channel": row["channel_id"]})
+        _audit(c, who, link_id, {"state": row["state"]}, {"state": "unlinked"})
         return view(_link(c, link_id))
 
 
@@ -242,6 +275,7 @@ def resume_link(store, who, link_id):
             raise Problem("conflict", "Only a suspended or refused link can be checked again", 409)
         c.execute("UPDATE slack_thread_links SET state='requested', reason='', updated_at=? WHERE id=?", (H.now(), link_id))
         H.event(c, who.actor, "slack.link.request", link_id, {"resume": True})
+        _audit(c, who, link_id, {"state": row["state"]}, {"state": "requested"})
         return view(_link(c, link_id))
 
 
@@ -253,6 +287,35 @@ def list_links(store, thread_id="", limit=50):
             args.append(thread_id)
         rows = c.execute(sql + " ORDER BY created_at DESC LIMIT ?", (*args, max(1, min(int(limit or 50), 100)))).fetchall()
         return [view(dict(r)) for r in rows]
+
+
+def _event_key(event):
+    """The queue's key for an event: Slack's event id, or the message's own fields when there is none."""
+    return str(event.get("event_id") or "") or ":".join(
+        str(event.get(k) or "") for k in ("op", "channel", "ts", "edited_ts"))
+
+
+def _place(thread_id):
+    """A write's place as the rule check reads it: the thread it goes to."""
+    return lambda c, author, recipients: OR.place_for(c, author, recipients, thread_id)
+
+
+def _apply_edit(c, core, row, body, *, deleted, edited, team):
+    """One revision of a carried message, or its tombstone, through core. `row` is the message's link row. A repeated
+    text changes nothing; the revision is one past the newest of the link's and the message's."""
+    msg = _one(c, "SELECT revision, body, deleted_at FROM messages WHERE id=?", (row["message_id"],))
+    if not msg or msg["deleted_at"]:
+        return "unknown"
+    if not deleted and body == msg["body"]:
+        c.execute("UPDATE slack_message_links SET edit_ts=? WHERE id=?", (edited, row["id"]))
+        return "unchanged"
+    revision = max(int(row["revision"] or 0), int(msg["revision"] or 0)) + 1
+    origin = {"origin_id": row["origin_id"], "revision": revision, "install": f"slack:{team}", "actor": row["actor"]}
+    if core.apply_revision(c, origin, body=body, deleted=deleted) is None:
+        return "ignored"
+    c.execute("UPDATE slack_message_links SET revision=?, state=?, edit_ts=?, updated_at=? WHERE id=?",
+              (revision, "deleted" if deleted else "sent", edited or row["edit_ts"], H.now(), row["id"]))
+    return "deleted" if deleted else "edited"
 
 
 # ----------------------------------------------------------------------------- the gateway's side
@@ -267,6 +330,7 @@ class Bridge:
         self.next_check = ""            # ISO time; linked channels are checked when it has passed ("" = now)
         self.backoff = {}               # channel id -> ISO time before which it is not sent to (rate limit)
         self._recovered = False
+        self._users = {}                # Slack user id -> (expires, users.info answer)
 
     # --- seams
     def core(self):
@@ -282,13 +346,6 @@ class Bridge:
     def who(self, c, actor):
         return self.auth.identity_for_actor(c, actor)
 
-    def verdict(self, actor, text):
-        """The org-rule check of a write as this person. Outside any transaction: `preflight` reads the store itself."""
-        judge = self.gw.judge
-        with self.store.read() as c:
-            who = self.who(c, actor)
-        return OR.preflight(self.store, judge, who, "message", text)
-
     def viewer(self, c, actor):
         return self.core().viewer(self.auth, self.who(c, actor))
 
@@ -298,10 +355,25 @@ class Bridge:
         return self.core().viewer(self.auth, Identity(f"bot:{slug}", "bot"))
 
     def person_for(self, c, slack_user_id):
-        """(person, reason): the roster person a Slack user is, or None and why. The gateway's `verify_sender` decides,
-        so linking and every message apply the same rules."""
-        person, _user, reason = self.gw.verify_sender(c, {"user_id": slack_user_id})
+        """(person, reason): the roster person a Slack user is, or None and why. The gateway's `check_user` decides, so
+        linking and every message apply the same rules."""
+        try:
+            user = self.slack_user(slack_user_id)
+        except (G.SlackError, G.SlackUnreachable) as exc:
+            return None, f"users.info: {getattr(exc, 'code', type(exc).__name__)}"
+        person, _user, reason = self.gw.check_user(c, user)
         return person, reason
+
+    def slack_user(self, slack_user_id):
+        """A Slack user's users.info answer, reused for USER_CACHE_SECONDS: membership is checked on every link check
+        and on every message, and Slack's rate limit is per workspace."""
+        now = _epoch(self.clock())
+        hit = self._users.get(slack_user_id)
+        if hit and hit[0] > now:
+            return hit[1]
+        user = self.slack.users_info(slack_user_id)
+        self._users[slack_user_id] = (now + USER_CACHE_SECONDS, user)
+        return user
 
     def resolve_members(self, channel_id):
         """(persons, problems): each channel member who maps to a roster person (person id -> Slack user id), and why
@@ -485,19 +557,63 @@ class Bridge:
             return _linked(c, channel_id) is not None
 
     def receive(self, event):
-        """A channel message, edit or delete from a linked channel. Returns the outcome."""
+        """A channel message, edit or delete from a linked channel. It joins the link's queue, so the order holds, and
+        the queue is carried in now when the link is active. A suspended link keeps it until it is checked again.
+        Returns the outcome of the newest event (`queued` while the link is not active)."""
         with self.store.read() as c:
             link = _linked(c, event["channel"])
         if not link:
             return "unlinked"
+        if event["op"] == "store" and event.get("author") != "human":
+            return "bot"                        # Tico's own posts and other bots' are never carried in
+        with self.store.transaction() as c:
+            c.execute("INSERT OR IGNORE INTO slack_inbound_queue (link_id,event_key,event_json,created_at) "
+                      "VALUES (?,?,?,?)", (link["id"], _event_key(event), json.dumps(event, sort_keys=True), H.now()))
+        try:
+            return self.drain(link["id"])
+        except Exception as exc:                # noqa: BLE001 the queue is kept; the next pass carries it in
+            LOG.error("Slack inbound carry failed: %s", type(exc).__name__)
+            return "queued"
+
+    def drain(self, link_id):
+        """Carry in one link's queued events, oldest first, while the link is active. It stops at an event that cannot
+        carry yet (`STALLED`: the sender does not map, which suspends the link, or the write was moved); that event and
+        the ones after it wait for the next pass."""
+        outcome = "queued"
+        for _ in range(MAX_DRAIN):
+            with self.store.read() as c:
+                link = _link(c, link_id)
+                head = _one(c, "SELECT * FROM slack_inbound_queue WHERE link_id=? ORDER BY seq LIMIT 1", (link_id,))
+            if not head:
+                return outcome
+            if not link or link["state"] != "active":
+                return "queued"
+            outcome = self._process(json.loads(head["event_json"]), link)
+            if outcome in STALLED:
+                return outcome
+            with self.store.transaction() as c:
+                c.execute("DELETE FROM slack_inbound_queue WHERE seq=?", (head["seq"],))
+        return outcome
+
+    def drain_all(self):
+        """The pass for the gateway loop: every active link's queue, carried in."""
+        with self.store.read() as c:
+            ids = [r[0] for r in c.execute("SELECT DISTINCT q.link_id FROM slack_inbound_queue q "
+                                           "JOIN slack_thread_links l ON l.id=q.link_id WHERE l.state='active' LIMIT 50")]
+        out = []
+        for link_id in ids:
+            try:
+                out.append(self.drain(link_id))
+            except Exception as exc:            # noqa: BLE001 one link's queue never stops the others
+                LOG.error("Slack queue for a link failed: %s", type(exc).__name__)
+                out.append("error")
+        return out
+
+    def _process(self, event, link):
         if event["op"] == "edit":
             return self._revise(event, link, deleted=False)
         if event["op"] == "delete":
             return self._revise(event, link, deleted=True)
-        if event.get("author") != "human":
-            return "bot"                        # Tico's own posts and other bots' are never carried in
-        if link["state"] != "active":
-            return "suspended"
         return self.post_in(event, link)
 
     def body_for(self, text):
@@ -518,43 +634,70 @@ class Bridge:
         self._note(event, "Tico held this message, so it did not reach the thread.")
         return "held"
 
+    def inbound(self, actor, text, channel, ts, thread_id):
+        """The org-rule verdict for a Slack message, held as its person (`org_rule_check.inbound`): its provenance is the
+        Slack channel and ts, and the bridge is the sender. Checked outside the write; `_write` applies it inside."""
+        return OR.inbound(self.store, self.gw.judge, actor, "slack_message", text, (), source="slack",
+                          authenticated=f"slack:{self.gw.bot_user_id or self.gw.team_id}",
+                          origin=f"{channel}:{ts}", place=_place(thread_id))
+
     def post_in(self, event, link):
+        """One channel message, carried into the thread as its person. A Slack thread reply becomes a sub-thread."""
         channel, ts = event["channel"], event["ts"]
         with self.store.read() as c:
             if _seen(c, channel, ts):
                 return "duplicate"
             person, reason = self.person_for(c, event["user_id"])
+            parent = self.parent_for(c, event) if person else None
         if not person:
             with self.store.transaction() as c:
                 self.suspend(c, link["id"], f"a message came from someone who doesn't map to a roster person ({reason})")
-            return "denied"
+            return "denied"                     # the event stays queued until the link is checked again
         actor = H.human_actor(person["id"])
         text = self.body_for(event["text"])
-        verdict = screening.screen(self.store, "slack", text, actor=actor, role="human", key=ts)
-        if verdict.get("action") == "hold":
+        if screening.screen(self.store, "slack", text, actor=actor, role="human", key=ts).get("action") == "hold":
             return self._held(event, link, actor, "screening hold")
-        gate = self.verdict(actor, text)
+        thread_id = parent["conversation_id"] if parent else link["thread_id"]
+        gate = self.inbound(actor, text, channel, ts, thread_id)
+        return self._write(event, link, actor, thread_id, parent, text, gate)
+
+    def _write(self, event, link, actor, thread_id, parent, text, gate, *, carry_import=False):
+        """The write for one carried message: held by the org rule check (nothing is written, and the author gets a
+        note), or posted as the person with its origin and `refs.slack`. Returns the outcome."""
+        channel, ts = event["channel"], event["ts"]
         origin_id = f"{H.new_id()}@slack:{self.gw.team_id}"
         origin = {"origin_id": origin_id, "revision": 0, "install": f"slack:{self.gw.team_id}", "actor": actor}
-        refs = {"origin": outside_recipient(channel), "slack": {"channel": channel, "ts": ts, "team": self.gw.team_id}}
+        refs = {"slack": {"channel": channel, "ts": ts, "team": self.gw.team_id}}
+        if carry_import:
+            refs["import"] = True
+        held = False
         try:
             with self.store.transaction() as c:
                 if _seen(c, channel, ts):
                     return "duplicate"
-                parent = self.parent_for(c, event)
-                thread_id = parent["conversation_id"] if parent else link["thread_id"]
-                posted = self.core().post(c, self.viewer(c, actor), thread_id, text, kind="say", refs=refs,
-                                          parent_message_id=(parent or {}).get("message_id"), via="slack",
-                                          origin=origin, checked=gate)
-                if posted.get("id"):
-                    _record(c, link, event, "in", "sent", message_id=posted["id"], origin_id=origin_id, actor=actor)
+                verdict = OR.apply(c, gate, text, {"link_id": link["id"], "event": event, "thread_id": thread_id,
+                                                   "text": text, "team": self.gw.team_id,
+                                                   "parent_message_id": (parent or {}).get("message_id"),
+                                                   "import": carry_import})
+                if verdict and "moved" in verdict:
+                    return "retry"
+                if verdict and "held" in verdict:
+                    _record(c, link, event, "in", "held", origin_id=origin_id, actor=actor, error="org rule hold")
+                    held = True
+                else:
+                    posted = self.core().post(c, self.viewer(c, actor), thread_id, OR.warned_text(verdict, text),
+                                              kind="say", refs=refs,
+                                              parent_message_id=(parent or {}).get("message_id"), via="slack",
+                                              origin=origin)
+                    _record(c, link, event, "in", "sent", message_id=posted.get("id"), origin_id=origin_id,
+                            actor=actor)
                     return "posted"
-                _record(c, link, event, "in", "held", origin_id=origin_id, actor=actor, error="org rule hold")
         except Problem as exc:
             with self.store.transaction() as c:
                 _record(c, link, event, "in", "failed", origin_id=origin_id, actor=actor, error=exc.code)
             return "refused"
-        self._note(event, "Tico held this message, so it did not reach the thread.")
+        if held and not carry_import:
+            self._note(event, "Tico held this message, so it did not reach the thread.")
         return "held"
 
     def parent_for(self, c, event):
@@ -567,39 +710,51 @@ class Bridge:
                     (event["channel"], thread_ts))
 
     def _revise(self, event, link, *, deleted):
+        """An edit or a delete in a linked channel: a revision or a tombstone of the message carried in. A repeated edit
+        (the same Slack edit ts, or the same text) changes nothing. A Block holds the edit: the message keeps its text."""
         with self.store.read() as c:
             row = _one(c, "SELECT * FROM slack_message_links WHERE channel_id=? AND ts=? AND direction='in'",
                        (event["channel"], event["ts"]))
+            msg = _one(c, "SELECT conversation_id, body, deleted_at FROM messages WHERE id=?",
+                       (row["message_id"],)) if row and row["message_id"] else None
         if not row:
             return "unknown"
         if row["state"] == "held":
             if not deleted:
                 self._note(event, "Tico held this message, so the edit did not reach the thread.")
             return "held"
-        if row["state"] != "sent" or not row["origin_id"]:
+        if row["state"] != "sent" or not row["origin_id"] or not msg or msg["deleted_at"]:
             return "unknown"
-        if link["state"] != "active":
-            return "suspended"
-        revision = int(row["revision"] or 0) + 1
-        origin = {"origin_id": row["origin_id"], "revision": revision, "install": f"slack:{self.gw.team_id}",
-                  "actor": row["actor"]}
-        body = None
+        edited = str(event.get("edited_ts") or "")
+        if not deleted and edited and edited == row["edit_ts"]:
+            return "duplicate"
+        body = None if deleted else self.body_for(event["text"])
         if not deleted:
-            body = self.body_for(event["text"])
+            if body == msg["body"]:
+                with self.store.transaction() as c:
+                    c.execute("UPDATE slack_message_links SET edit_ts=? WHERE id=?", (edited, row["id"]))
+                return "unchanged"
             verdict = screening.screen(self.store, "slack", body, actor=row["actor"], role="human",
-                                       key=f"{event['ts']}:{revision}")
-            gate = self.verdict(row["actor"], body)
-            if verdict.get("action") == "hold" or OR.holds(gate):
+                                       key=f"{event['ts']}:{edited}")
+            if verdict.get("action") == "hold":
                 self._note(event, "Tico held this edit, so the message in the thread was not changed.")
                 return "held"
+        gate = None if deleted else self.inbound(row["actor"], body, event["channel"], event["ts"],
+                                                 msg["conversation_id"])
         try:
             with self.store.transaction() as c:
-                self.core().apply_revision(c, origin, body=body, deleted=deleted)
-                c.execute("UPDATE slack_message_links SET revision=?, state=?, updated_at=? WHERE id=?",
-                          (revision, "deleted" if deleted else "sent", H.now(), row["id"]))
+                if gate is not None:
+                    verdict = OR.apply(c, gate, body, {"link_id": link["id"], "event": event, "edit": True,
+                                                       "text": body, "team": self.gw.team_id,
+                                                       "thread_id": msg["conversation_id"]})
+                    if verdict and "moved" in verdict:
+                        return "retry"
+                    if verdict and "held" in verdict:
+                        self._note(event, "Tico held this edit, so the message in the thread was not changed.")
+                        return "held"
+                return _apply_edit(c, self.core(), row, body, deleted=deleted, edited=edited, team=self.gw.team_id)
         except Problem as exc:
             return f"refused: {exc.code}"
-        return "deleted" if deleted else "edited"
 
     # --- outbound
     def outbound(self):
@@ -611,7 +766,7 @@ class Bridge:
             if self.backoff.get(link["channel_id"], "") > self.clock():
                 continue
             with self.store.read() as c:
-                due = [dict(d) for d in self.core().outside_due(c, outside_recipient(link["channel_id"]), SEND_BATCH)]
+                due = [dict(d) for d in _due(self.core(), c, link["channel_id"], SEND_BATCH)]
             for d in due:
                 if self.backoff.get(link["channel_id"], "") > self.clock():
                     break
@@ -628,8 +783,7 @@ class Bridge:
         if not msg:
             return {"do": "settle", "state": "moot", "error": "message gone"}
         refs = _refs(msg.get("refs_json"))
-        if refs.get("origin") == outside_recipient(link["channel_id"]) or \
-                (refs.get("slack") or {}).get("channel") == link["channel_id"]:
+        if (refs.get("slack") or {}).get("channel") == link["channel_id"]:
             return {"do": "settle", "state": "delivered"}           # it came from this channel: no echo
         row = _one(c, "SELECT * FROM slack_message_links WHERE link_id=? AND message_id=? AND direction='out'",
                    (link["id"], msg["id"]))
@@ -914,28 +1068,18 @@ class Bridge:
     def _import_one(self, link, m, person_id, text):
         channel, ts = link["channel_id"], str(m.get("ts"))
         actor = H.human_actor(person_id)
-        verdict = screening.screen(self.store, "slack", text, actor=actor, role="human", key=ts)
-        if verdict.get("action") == "hold":
-            return 0
-        gate = self.verdict(actor, text)
-        if OR.holds(gate):
-            return 0
-        event = {"channel": channel, "ts": ts, "thread_ts": str(m.get("thread_ts") or ts)}
-        origin_id = f"{H.new_id()}@slack:{self.gw.team_id}"
-        origin = {"origin_id": origin_id, "revision": 0, "install": f"slack:{self.gw.team_id}", "actor": actor}
-        refs = {"import": True, "origin": outside_recipient(channel),
-                "slack": {"channel": channel, "ts": ts, "team": self.gw.team_id}}
-        with self.store.transaction() as c:
+        with self.store.read() as c:
             if _seen(c, channel, ts):
                 return 0
+        if screening.screen(self.store, "slack", text, actor=actor, role="human", key=ts).get("action") == "hold":
+            return 0
+        event = {"channel": channel, "ts": ts, "thread_ts": str(m.get("thread_ts") or ts), "op": "store",
+                 "user_id": str(m.get("user") or ""), "author": "human", "text": text}
+        with self.store.read() as c:
             parent = self.parent_for(c, event)
-            thread_id = parent["conversation_id"] if parent else link["thread_id"]
-            posted = self.core().post(c, self.viewer(c, actor), thread_id, text, kind="say", refs=refs,
-                                      parent_message_id=(parent or {}).get("message_id"), via="slack", origin=origin)
-            if not posted.get("id"):
-                return 0
-            _record(c, link, event, "in", "sent", message_id=posted["id"], origin_id=origin_id, actor=actor)
-        return 1
+        thread_id = parent["conversation_id"] if parent else link["thread_id"]
+        gate = self.inbound(actor, text, channel, ts, thread_id)
+        return 1 if self._write(event, link, actor, thread_id, parent, text, gate, carry_import=True) == "posted" else 0
 
     # --- the gateway's pass
     def tick(self):
@@ -954,6 +1098,7 @@ class Bridge:
                 LOG.error("Slack link %s check failed: %s", link["id"], type(exc).__name__)
                 out["gated"].append("error")
         self.check_links()
+        out["carried"] = self.drain_all()
         out["sent"] = self.outbound()
         self.reconcile()
         self.sweep_unlinked()
@@ -969,6 +1114,37 @@ class Bridge:
                 LOG.error("Slack history import failed: %s", type(exc).__name__)
                 self._history_state(link["id"], "pending")
         return out
+
+
+@OR.replayer("slack_message")
+def replay_held(c, bot, hold, replay, ingest, gate=None):
+    """Send anyway for a held Slack message or edit: the write the bridge makes, as the person it is held for. The
+    decided check (`gate`) is not asked again. The link must still be active."""
+    link = _link(c, str(replay.get("link_id") or ""))
+    if not link or link["state"] != "active":
+        raise Problem("conflict", "The Slack link is not active, so this stays held", 409)
+    event, team = replay.get("event") or {}, str(replay.get("team") or "")
+    text = OR.warned_text(gate, replay.get("text") or "")
+    row = _one(c, "SELECT * FROM slack_message_links WHERE channel_id=? AND ts=? AND direction='in'",
+               (event.get("channel"), event.get("ts")))
+    core = _core()
+    if replay.get("edit"):
+        if not row:
+            raise Problem("not_found", "That Slack message was not found", 404)
+        return {"outcome": _apply_edit(c, core, row, text, deleted=False, edited=str(event.get("edited_ts") or ""),
+                                       team=team)}
+    if not row or row["state"] != "held":
+        raise Problem("conflict", "That Slack message is not held", 409)
+    refs = {"slack": {"channel": event["channel"], "ts": event["ts"], "team": team}}
+    if replay.get("import"):
+        refs["import"] = True
+    posted = core.post(c, core.viewer(None, bot), replay["thread_id"], text, kind="say", refs=refs,
+                       parent_message_id=replay.get("parent_message_id"), via="slack",
+                       origin={"origin_id": row["origin_id"], "revision": 0, "install": f"slack:{team}",
+                               "actor": row["actor"]})
+    c.execute("UPDATE slack_message_links SET state='sent', message_id=?, updated_at=? WHERE id=?",
+              (posted.get("id"), H.now(), row["id"]))
+    return {"id": posted.get("id"), "state": "sent"}
 
 
 # ----------------------------------------------------------------------------- the REST routes (the API process)

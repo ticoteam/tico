@@ -1,8 +1,7 @@
 """The Slack bridge for native threads (`backend/slack_threads.py`, `_threads-plan.md` §5 and §9).
 
-Slack, the judge and the screening door are fakes. Core is not on any branch yet, so `FakeCore` implements the contract's
-entry points (`docs/dev/threads-contract.md` §3-§4, §11) by writing the rows the contract names (messages,
-conversations, message_deliveries) into the real test database; the bridge's SQL reads them back.
+Only Slack is faked (FakeSlack), and the screening door. Core is the real `backend/threads.py`, and the org rule check
+is the real one with the test judge from test_org_rule_check.
 """
 
 import copy
@@ -16,7 +15,8 @@ from backend import hubdb as H
 from backend import screening
 from backend import slack_gateway as G
 from backend import slack_threads as ST
-from backend.auth import Identity
+from backend import threads as TH
+from backend.auth import Auth, Identity
 from backend.config import Settings
 from backend.store import Problem, Store, encode
 
@@ -24,6 +24,7 @@ TEAM, APP, BOT_USER, BOT_ID = "T02F3S2SD", "A0BU75YSGT1", "U0BUS6WA4SY", "B0BUNG
 MARKETING, PRIVATE, LOUNGE, PARTNERS = "C0000000001", "G0000000001", "C0000000002", "C0000000003"
 COMPANY, MEMBERS = "T-company", "T-members"
 WHO = Identity("human:ana", "human", email="ana@acme.example")
+OWNER = Identity("human:ben", "owner", email="ben@acme.example")   # a rule author other than the sender
 PEOPLE = [
     {"id": "ana", "name": "Ana Rivera", "email": "ana@acme.example", "team": "leadership", "primary_for": ["*"]},
     {"id": "ben", "name": "Ben", "email": "ben@acme.example", "team": "product", "primary_for": ["product"]},
@@ -48,18 +49,6 @@ CHANNELS = {
     PARTNERS: {"id": PARTNERS, "name": "partners", "is_member": True, "is_private": False, "is_ext_shared": True},
 }
 CHANNEL_MEMBERS = {MARKETING: ["U1", "U2", BOT_USER], PRIVATE: ["U1"], LOUNGE: ["U1", "U3"], PARTNERS: ["U1"]}
-CONTRACT = {
-    "conversations": {"audience": "TEXT NOT NULL DEFAULT ''", "parent_id": "TEXT", "parent_message_id": "TEXT",
-                      "root_id": "TEXT", "path": "TEXT NOT NULL DEFAULT ''"},
-    "messages": {"origin_id": "TEXT", "revision": "INTEGER NOT NULL DEFAULT 0", "deleted_at": "TEXT"},
-}
-DELIVERIES = """CREATE TABLE IF NOT EXISTS message_deliveries (
-  id TEXT PRIMARY KEY, message_id TEXT NOT NULL, recipient TEXT NOT NULL, thread_id TEXT,
-  revision INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'pending', mode TEXT NOT NULL DEFAULT 'digest',
-  reason TEXT NOT NULL DEFAULT 'outside', error TEXT, created TEXT NOT NULL,
-  UNIQUE (message_id, recipient, revision))"""
-
-
 class FakeSlack:
     """The Web API as the bridge sees it: canned users, channels and members, and every post, update and note."""
 
@@ -124,85 +113,6 @@ class FakeSlack:
         return {"ok": True}
 
 
-class FakeCore:
-    """`backend/threads.py` stand-in with the contract's entry points, over the contract's rows."""
-
-    def __init__(self):
-        self.outside, self.calls = {}, []           # thread id -> registered outside recipients; every call made
-
-    def viewer(self, auth, who):
-        return who
-
-    def readable(self, c, viewer, thread):
-        return True
-
-    def add_outside_delivery(self, c, thread_id, recipient):
-        self.outside.setdefault(thread_id, set()).add(recipient)
-
-    def follow(self, c, viewer, thread_id, *, notify="live"):
-        self.calls.append(("follow", viewer.actor, thread_id, notify))
-
-    def root(self, c, conv):
-        return c.execute("SELECT root_id FROM conversations WHERE id=?", (conv,)).fetchone()[0] or conv
-
-    def deliver(self, c, message_id, root, revision):
-        for recipient in sorted(self.outside.get(root, ())):
-            c.execute("INSERT INTO message_deliveries (id,message_id,recipient,thread_id,revision,state,created) "
-                      "VALUES (?,?,?,?,?,'pending',?)", (H.new_id(), message_id, recipient, root, revision, H.now()))
-
-    def post(self, c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None,
-             via=None, origin=None, checked=None, attachments=None):
-        self.calls.append(("post", thread_id, body, parent_message_id, (origin or {}).get("origin_id")))
-        if origin:
-            seen = c.execute("SELECT id FROM messages WHERE origin_id=?", (origin["origin_id"],)).fetchone()
-            if seen:
-                return {"id": seen[0]}
-        now, root, conv = H.now(), self.root(c, thread_id), thread_id
-        if parent_message_id:
-            found = c.execute("SELECT id FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()
-            conv = found[0] if found else H.new_id()
-            if not found:
-                audience = c.execute("SELECT audience FROM conversations WHERE id=?", (root,)).fetchone()[0]
-                c.execute("INSERT INTO conversations (id,kind,subject,created,audience,parent_id,parent_message_id,root_id,path) "
-                          "VALUES (?,?,?,?,?,?,?,?,'')", (conv, "thread", body.split(":")[0].strip()[:40], now, audience,
-                                                         thread_id, parent_message_id, root))
-        mid = H.new_id()
-        c.execute("INSERT INTO messages (id,conversation_id,from_actor,kind,body,refs_json,created,origin_id,revision) "
-                  "VALUES (?,?,?,?,?,?,?,?,0)", (mid, conv, principal.actor, kind, body,
-                                                 json.dumps({**(refs or {}), **({"via": via} if via else {})}), now,
-                                                 (origin or {}).get("origin_id")))
-        self.deliver(c, mid, root, 0)
-        return {"id": mid, "body": body}
-
-    def write_revision(self, c, message_id, revision, body, deleted):
-        conv = c.execute("SELECT conversation_id FROM messages WHERE id=?", (message_id,)).fetchone()[0]
-        if deleted:
-            c.execute("UPDATE messages SET deleted_at=?, revision=? WHERE id=?", (H.now(), revision, message_id))
-        else:
-            c.execute("UPDATE messages SET body=?, revision=? WHERE id=?", (body, revision, message_id))
-        self.deliver(c, message_id, self.root(c, conv), revision)
-
-    def apply_revision(self, c, origin, *, body=None, deleted=False):
-        self.calls.append(("revision", origin["origin_id"], origin["revision"], body, deleted))
-        found = c.execute("SELECT id FROM messages WHERE origin_id=?", (origin["origin_id"],)).fetchone()
-        if not found:
-            raise Problem("not_found", "no such message", 404)
-        self.write_revision(c, found[0], origin["revision"], body, deleted)
-        return {"id": found[0]}
-
-    def revise_local(self, c, message_id, body=None, deleted=False):
-        revision = c.execute("SELECT revision FROM messages WHERE id=?", (message_id,)).fetchone()[0] + 1
-        self.write_revision(c, message_id, revision, body, deleted)
-
-    def settle_delivery(self, c, delivery_id, state, error=None):
-        c.execute("UPDATE message_deliveries SET state=?, error=? WHERE id=?", (state, error, delivery_id))
-
-    def outside_due(self, c, prefix, limit):
-        rows = c.execute("SELECT id, message_id, revision, recipient, thread_id FROM message_deliveries "
-                         "WHERE state='pending' AND recipient LIKE ? ORDER BY created, id LIMIT ?", (prefix + "%", limit))
-        return [dict(r) for r in rows.fetchall()]
-
-
 class FakeJudge:
     """The judge is not asked in these tests; the gateway only needs an engine to hold."""
 
@@ -221,17 +131,6 @@ class Clock:
         self.now = H.shift(self.now, seconds=seconds)
 
 
-def contract_tables(store):
-    """The contract's columns and deliveries table, until core creates them (docs/dev/threads-contract.md §1, §4)."""
-    with store.transaction() as c:
-        for table, columns in CONTRACT.items():
-            have = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
-            for name, declaration in columns.items():
-                if name not in have:
-                    c.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
-        c.execute(DELIVERIES)
-
-
 @pytest.fixture
 def hub(tmp_path):
     registry = tmp_path / "hub-registry"
@@ -241,7 +140,6 @@ def hub(tmp_path):
                         assistant_name="Tico")
     store = Store(settings)
     store.initialize()
-    contract_tables(store)
     with store.transaction() as c:
         H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", **entry} for slug, entry in BOTS.items()},
                         {"people": PEOPLE})
@@ -259,7 +157,7 @@ def hub(tmp_path):
 
 @pytest.fixture
 def world(hub, monkeypatch):
-    slack, core, clock = FakeSlack(), FakeCore(), Clock()
+    slack, clock = FakeSlack(), Clock()
     screened = []
 
     def fake_screen(store, source, text, bot=None, **kw):
@@ -270,8 +168,7 @@ def world(hub, monkeypatch):
     monkeypatch.setattr(screening, "screen", fake_screen)
     gw = G.Gateway(hub, slack, judge_engine=FakeJudge(), clock=clock)
     gw.verify_app()
-    gw.bridge = ST.Bridge(gw, core=core)
-    return SimpleNamespace(hub=hub, slack=slack, core=core, clock=clock, gw=gw, bridge=gw.bridge, screened=screened)
+    return SimpleNamespace(hub=hub, slack=slack, clock=clock, gw=gw, bridge=gw.bridge, screened=screened)
 
 
 # ----------------------------------------------------------------------------- helpers
@@ -330,7 +227,12 @@ def chan_delete(stamp, user="U1"):
 
 def send_as_ana(world, text, parent=None, thread=COMPANY):
     with world.hub.transaction() as c:
-        return world.core.post(c, WHO, thread, text, kind="say", refs={}, parent_message_id=parent, via="assistant")["id"]
+        return TH.post(c, WHO, thread, text, kind="say", refs={}, parent_message_id=parent, via="assistant")["id"]
+
+
+def outside_members(world, thread_id=COMPANY):
+    return [r["actor"] for r in all_rows(world, "SELECT actor FROM thread_members WHERE thread_id=? "
+                                               "AND actor LIKE 'slack:%'", thread_id)]
 
 
 def origin_message(world, stamp):
@@ -373,13 +275,13 @@ def test_a_channel_links_only_when_its_audience_and_every_member_allow_it(world,
     if why is None:
         assert state == "active"
         assert link_row(world, link_id)["channel_id"] == MARKETING
-        assert world.core.outside == {COMPANY: {f"slack:{MARKETING}"}}
+        assert outside_members(world) == [f"slack:{MARKETING}"]
         assert [m["person_id"] for m in all_rows(world, "SELECT person_id FROM slack_link_members WHERE link_id=? "
                                                         "ORDER BY person_id", link_id)] == ["ana", "ben"]
     else:
         assert state == "refused"
         assert why in link_row(world, link_id)["reason"]
-        assert world.core.outside == {}
+        assert outside_members(world) == []
 
 
 # ----------------------------------------------------------------------------- suspension
@@ -428,7 +330,7 @@ def test_a_channel_message_goes_through_the_gateway_as_the_mapped_person_and_nev
     msg = one(world, "SELECT from_actor, body, refs_json, origin_id FROM messages")
     assert msg["from_actor"] == "human:ana" and msg["body"] == "Kickoff is at 10"
     refs = json.loads(msg["refs_json"])
-    assert refs["origin"] == f"slack:{MARKETING}" and refs["slack"]["ts"] == ts(1)
+    assert refs["slack"] == {"channel": MARKETING, "ts": ts(1), "team": TEAM}
     assert msg["origin_id"].endswith(f"@slack:{TEAM}")
     assert "slack" in world.screened
 
@@ -438,8 +340,9 @@ def test_a_slack_thread_reply_is_a_sub_thread_of_the_message_it_answers(world):
     world.bridge.receive(chan_event(ts(1), "Kickoff"))
     root = origin_message(world, ts(1))
     assert world.bridge.receive(chan_event(ts(2), "Re: kickoff", user="U2", thread_ts=ts(1))) == "posted"
-    call = world.core.calls[-1]
-    assert call[1] == root["conversation_id"] and call[3] == root["id"]
+    reply = one(world, "SELECT m.conversation_id, c.parent_message_id FROM messages m JOIN conversations c "
+                       "ON c.id = m.conversation_id WHERE m.body = 'Re: kickoff'")
+    assert reply["parent_message_id"] == root["id"]
 
 
 def test_an_edit_and_a_delete_become_a_revision_and_a_tombstone(world):
@@ -460,7 +363,7 @@ def test_a_blocked_message_is_held_and_its_author_is_told_privately(world):
     assert world.slack.ephemeral[-1][1] == "U1"
     # An edit of a held message is held too, and nothing reaches the core.
     assert world.bridge.receive(chan_edit(ts(1), "Fixed text")) == "held"
-    assert not any(call[0] == "revision" for call in world.core.calls)
+    assert all_rows(world, "SELECT id FROM message_revisions") == []
     assert len(world.slack.ephemeral) == 2
 
 
@@ -500,11 +403,11 @@ def test_a_revision_goes_out_as_an_update_and_a_delete_as_a_delete(world):
     world.bridge.outbound()
     sent_ts = world.slack.posts[0]["ts"]
     with world.hub.transaction() as c:
-        world.core.revise_local(c, message_id, body="Ship it today")
+        TH.edit_message(c, WHO, message_id, "Ship it today")
     world.bridge.outbound()
     assert world.slack.updates == [(MARKETING, sent_ts, "*Ana Rivera* · via Tico\nShip it today")]
     with world.hub.transaction() as c:
-        world.core.revise_local(c, message_id, deleted=True)
+        TH.delete_message(c, WHO, message_id)
     world.bridge.outbound()
     assert world.slack.deletes == [(MARKETING, sent_ts)]
 
@@ -515,6 +418,8 @@ def test_sub_threads_are_flattened_with_the_title_two_levels_down(world):
     reply = send_as_ana(world, "Budget: first pass", parent=root)
     reply_thread = one(world, "SELECT conversation_id FROM messages WHERE id=?", reply)["conversation_id"]
     send_as_ana(world, "Budget: final", parent=reply, thread=reply_thread)
+    with world.hub.transaction() as c:                           # the reply's own sub-thread has a title
+        c.execute("UPDATE conversations SET subject=? WHERE parent_message_id=?", ("Budget", reply))
     world.bridge.outbound()
     root_ts = world.slack.posts[0]["ts"]
     assert [(p["thread_ts"], p["text"]) for p in world.slack.posts] == [
@@ -527,7 +432,7 @@ def test_sub_threads_are_flattened_with_the_title_two_levels_down(world):
 def test_unlinking_settles_what_was_not_yet_sent_so_nothing_goes_out(world):
     link_id = activate_marketing(world)
     send_as_ana(world, "Not yet")
-    ST.unlink_link(world.hub, WHO, link_id, core=world.core)
+    ST.unlink_link(world.hub, WHO, link_id)
     assert world.bridge.outbound() == []
     assert world.slack.posts == []
     assert one(world, "SELECT state FROM message_deliveries")["state"] == "moot"
@@ -605,3 +510,93 @@ def test_history_stops_at_the_cap(world, monkeypatch):
     world.bridge.tick()
     assert link_row(world, link_id)["history_count"] == 1
     assert [m["body"] for m in all_rows(world, "SELECT body FROM messages")] == ["first"]
+
+
+# ----------------------------------------------------------------------------- inbound: duplicates, queue, cache, rules
+def test_a_duplicate_edit_event_is_one_revision(world):
+    activate_marketing(world)
+    world.bridge.receive(chan_event(ts(1), "Kickoff"))
+    first = chan_edit(ts(1), "Kickoff at 11")
+    first["edited_ts"] = ts(5)
+    assert world.bridge.receive(first) == "edited"
+    assert world.bridge.receive(dict(first, event_id="Ed-retry")) == "duplicate"
+    assert origin_message(world, ts(1))["revision"] == 1
+    assert len(all_rows(world, "SELECT revision FROM message_revisions WHERE origin_id=?",
+                        origin_message(world, ts(1))["origin_id"])) == 2
+
+
+def test_an_edit_to_the_same_text_is_not_a_revision(world):
+    activate_marketing(world)
+    world.bridge.receive(chan_event(ts(1), "Kickoff"))
+    unfurl = dict(chan_edit(ts(1), "Kickoff"), edited_ts=ts(3))
+    assert world.bridge.receive(unfurl) == "unchanged"
+    assert origin_message(world, ts(1))["revision"] == 0
+
+
+def test_messages_that_arrive_while_suspended_are_posted_on_resume_in_order(world):
+    link_id = activate_marketing(world, members=("U1",))
+    world.slack.members[MARKETING].append("U3")                  # an unmapped member: the link suspends
+    world.clock.advance(ST.CHECK_SECONDS + 1)
+    world.bridge.check_links()
+    assert link_row(world, link_id)["state"] == "suspended"
+    assert world.bridge.receive(chan_event(ts(1), "first while suspended")) == "queued"
+    assert world.bridge.receive(chan_event(ts(2), "second while suspended")) == "queued"
+    assert all_rows(world, "SELECT id FROM messages WHERE body LIKE '%while suspended%'") == []
+    world.slack.members[MARKETING].remove("U3")
+    ST.resume_link(world.hub, WHO, link_id)
+    assert gate(world, link_id) == "active"
+    world.bridge.tick()
+    assert [m["body"] for m in all_rows(world, "SELECT body FROM messages WHERE body LIKE '%while suspended%' "
+                                               "ORDER BY seq")] == [
+        "first while suspended", "second while suspended"]
+    assert all_rows(world, "SELECT seq FROM slack_inbound_queue") == []
+
+
+def test_users_info_is_asked_once_an_hour_per_user(world, monkeypatch):
+    activate_marketing(world)
+    asked = []
+    real = world.slack.users_info
+    monkeypatch.setattr(world.slack, "users_info", lambda uid: asked.append(uid) or real(uid))
+    world.bridge.receive(chan_event(ts(1), "one"))
+    world.bridge.receive(chan_event(ts(2), "two"))
+    assert asked.count("U1") == 0                                 # linking asked already, within the hour
+    world.clock.advance(ST.USER_CACHE_SECONDS + 1)
+    world.bridge.receive(chan_event(ts(3), "three"))
+    assert asked.count("U1") == 1
+
+
+def rule_world(world):
+    """A rule in force that every person's message breaks when it says the favorite color: the test judge answers."""
+    from backend.tests.test_org_rule_check import COLOR, Judge
+    from backend import org_rules as R
+    with world.hub.transaction() as c:
+        R.add_rule(c, Auth(world.hub), OWNER, {"kind": "internal", "text": COLOR, "who": {"everyone": True},
+                                             "if_broken": "block"})
+    world.gw._judge = Judge(world.hub)
+    return COLOR
+
+
+def test_a_rule_break_holds_the_slack_message_as_its_person_with_its_provenance(world):
+    activate_marketing(world)
+    rule_world(world)
+    assert world.bridge.receive(chan_event(ts(1), "The favorite color is teal")) == "held"
+    assert all_rows(world, "SELECT id FROM messages") == []
+    hold = one(world, "SELECT * FROM org_rule_holds")
+    assert hold["author"] == "human:ana"
+    provenance = json.loads(hold["payload_json"])["provenance"]
+    assert provenance["origin"] == {"source": "slack", "origin": f"{MARKETING}:{ts(1)}"}
+    assert provenance["authenticated"].startswith("slack:")
+    assert world.slack.ephemeral[-1][1] == "U1"
+
+
+def test_send_anyway_carries_a_held_slack_message_in_as_its_person(world):
+    from backend import org_rule_check as OR
+    activate_marketing(world)
+    rule_world(world)
+    world.bridge.receive(chan_event(ts(1), "The favorite color is teal"))
+    hold = one(world, "SELECT id, nonce FROM org_rule_holds")
+    with world.hub.transaction() as c:
+        OR.send(c, OWNER, hold["id"], hold["nonce"], auth=Auth(world.hub))
+    carried = one(world, "SELECT m.from_actor, m.body FROM messages m JOIN slack_message_links l ON l.message_id = m.id "
+                         "WHERE l.ts = ?", ts(1))
+    assert carried["from_actor"] == "human:ana" and carried["body"] == "The favorite color is teal"

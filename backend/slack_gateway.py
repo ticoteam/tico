@@ -700,6 +700,11 @@ class Gateway:
             user = self.slack.users_info(event["user_id"])
         except (SlackError, SlackUnreachable) as exc:
             return None, None, f"users.info: {getattr(exc, 'code', type(exc).__name__)}"
+        return self.check_user(c, user)
+
+    def check_user(self, c, user):
+        """(person, user, reason) for a Slack user object: the checks every sender passes, from the roster and the
+        workspace alone (no network), so a caller may reuse a users.info answer."""
         if user.get("is_bot") or user.get("id") == "USLACKBOT":
             return None, user, "sender is a bot"
         if user.get("deleted"):
