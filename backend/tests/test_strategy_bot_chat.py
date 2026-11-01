@@ -117,7 +117,7 @@ def test_the_owners_earlier_strategy_bot_chat_is_read_only_history_under_earlier
     # Nobody else sees it, an admin included.
     for token in ("ben-test", "cara-test"):
         assert get(api, "assistant", token)["earlier"] is None
-        get(api, f"conversations/{old}/messages", token, expected=403)
+        get(api, f"conversations/{old}/messages", token, expected=404)   # unreadable looks missing
     # A turn queued there before is the Strategy Bot's own, never the owner's.
     r = runner(api)
     assign(api, r, "goal-manager")
@@ -330,7 +330,7 @@ def test_the_earlier_strategy_bot_chat_stays_with_the_owner_seat_and_each_keeps_
     # Ana keeps her own Assistant chat and no longer reads the earlier one.
     mine = get(api, "assistant", ana)
     assert (mine["bot"], mine["room_id"], mine["earlier"]) == ("coo", hers, None)
-    get(api, f"conversations/{old}/messages", ana, expected=403)
+    get(api, f"conversations/{old}/messages", ana, expected=404)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT status FROM assistant_actions WHERE id=?", (pending["action"]["id"],)).fetchone()[0] == "cancelled"
         assert c.execute("SELECT count(*) FROM events WHERE action='strategy_bot.chat_moved'").fetchone()[0] == 1
