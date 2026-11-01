@@ -841,7 +841,7 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
 
         def call(self, method, path, body=None, key=None, query=None, delegate=False):
             sent.append((method, path, body))
-            return {"idea": {}, "kpi": {}}
+            return {"idea": {}, "kpi": {}, "segment": {}}
 
         def post(self, path, body=None, key=None):
             return self.call("POST", path, body)
@@ -870,8 +870,34 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
     assert run("growth", "cohort", "set", "--channel", "unknown", "--month", "2026-10", "--new", "18",
                "--source", "new_customers=Stripe") == ("PUT", "growth/cohorts", {
         "channel": "unknown", "month": "2026-10", "new_customers": 18, "sources": {"new_customers": "Stripe"}})
+    assert run("growth", "segment", "create", "--name", "Property managers", "--why", "Big portfolios") == (
+        "POST", "growth/segments", {"name": "Property managers", "why": "Big portfolios", "status": "testing"})
+    assert run("growth", "segment", "update", "segment/property-managers", "--status", "serving", "--motion",
+               "sales_led", "--who-buys", "Ops lead", "--owner", "me")[1:] == (
+        "growth/segments/segment/property-managers", {"status": "serving", "motion": "sales_led", "who_buys": "Ops lead",
+                                                      "owner_ref": "bot:growth"})
+    assert run("growth", "idea", "update", "t1", "--segment", "s1", "--segment", "s2")[2] == {"segments": ["s1", "s2"]}
+    assert run("growth", "channel", "update", "door", "--segment", "")[2] == {"segments": []}       # "" clears
+    assert run("growth", "cohort", "set", "--channel", "door", "--month", "2026-10", "--segment", "s1",
+               "--new", "4")[2] == {"channel": "door", "month": "2026-10", "segment_id": "s1", "new_customers": 4}
     kpi = run("kpi", "update", "k1", "--parent", "k0", "--role", "north_star", "--loop", "referral:2")[2]
     assert (kpi["parent_kpi_id"], kpi["growth_role"], kpi["loop_name"], kpi["loop_step"]) == ("k0", "north_star", "referral", 2)
     assert "stage" not in kpi
     assert run("brand", "draft", "--section", "positioning", "--body", '"Acme cleans homes"')[1:] == (
         "brand/draft", {"sections": {"positioning": "Acme cleans homes"}})
+
+
+def test_a_json_flag_no_command_takes_is_ignored(monkeypatch, capsys):
+    p = hubcli.parser()
+    assert hubcli.parse(p, ["task", "show", "t_1", "--json"]).id == ["t_1"]
+    assert hubcli.parse(p, ["tool", "list", "--json"]).json is True                  # its own flag
+    assert hubcli.parse(p, ["--json", "tool", "list", "--json"]).json is True
+    assert hubcli.parse(p, ["meeting", "search", "--", "--json"]).q == "--json"       # a value stays a value
+    for wrong in (["task", "get", "t_1", "--json"], ["task", "show", "t_1", "--json", "--bogus"]):
+        with pytest.raises(SystemExit) as e:
+            hubcli.parse(p, wrong)
+        assert e.value.code == 2
+    assert "--bogus" in capsys.readouterr().err
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"vendor": "v_1"}'))                # stdin is read once
+    args = hubcli.parse(p, ["finance", "act", "bill_create", "--payload", "-", "--json"])
+    assert args.payload == {"vendor": "v_1"}

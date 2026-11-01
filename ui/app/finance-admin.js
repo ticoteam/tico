@@ -17,7 +17,7 @@ function finSourcesPage() {
   const caps = finCaps(), s = FIN_SRC;
   FIN.src = {groups: [], lines: [], load: 0};
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(s.q)}" placeholder="Search sources, accounts, cards" aria-label="Search sources"></label>
-      <button type="button" class="ghost" data-fin-collapse>Collapse all</button><span class="spacer"></span>
+      <button type="button" class="ghost" data-fin-collapse>Expand all</button><span class="spacer"></span>
       ${finSourceMenuHtml(caps)}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-src">${skelRows(8, {dot: false})}</div>`, '', 'Selected source');
   const body = $('#fin-body');
@@ -27,7 +27,10 @@ function finSourcesPage() {
     if (add) { finPop(add, $('#fin-connect')); return; }
     const pick = ev.target.closest('[data-fin-connect-item]');
     if (pick) { $('#fin-connect').hidden = true; add?.setAttribute('aria-expanded', 'false'); finConnect(pick.dataset.finConnectItem); return; }
-    if (ev.target.closest('[data-fin-collapse]')) { s.open.clear(); finSrcDraw(); return; }
+    if (ev.target.closest('[data-fin-collapse]')) {
+      if (finSrcAllShut()) for (const g of FIN.src.groups) s.open.add(g.group); else s.open.clear();
+      finSrcDraw(); return;
+    }
     const g = ev.target.closest('[data-fin-group]');
     if (g) { const k = g.dataset.finGroup; if (s.open.has(k)) s.open.delete(k); else s.open.add(k); finSrcDraw(); return; }
     const tr = ev.target.closest('tr[data-fin-src]');
@@ -55,11 +58,18 @@ function finSrcCols(r) {
   const sum = o => Object.values(o || {}).reduce((a, b) => a + (Number(b) || 0), 0);
   const sync = r.sync, err = sync?.last_error;
   let has = '', feeds = '', how = '', last = '', status = ['', ''];
-  if (r.kind === 'usage') { has = n(r.entries || 0, 'entry', 'entries'); feeds = 'AI services, by bot'; how = 'Each call'; status = ['ok', 'OK']; }
-  else if (r.kind === 'documents') { has = [r.bills ? n(r.bills, 'bill', 'bills') : '', r.invoices ? n(r.invoices, 'invoice', 'invoices') : ''].filter(Boolean).join(' · '); feeds = 'Payables, Receivables'; how = 'Built in'; status = ['ok', 'OK']; }
+  // backend/finance/tab.py sources: Tico's own rows show whether or not they hold anything yet.
+  if (r.kind === 'usage') { has = n(r.entries || 0, 'entry', 'entries'); feeds = 'AI services, by bot'; how = 'Each call'; status = r.connected === false ? ['idle', '—'] : ['ok', 'OK']; }
+  else if (r.kind === 'inbox') { has = n(r.bills || 0, 'bill', 'bills'); feeds = 'Payables'; how = 'By email'; status = ['ok', 'OK']; }
+  else if (r.kind === 'documents') {
+    const bills = 'bills' in r, inv = 'invoices' in r;
+    has = [bills ? n(r.bills || 0, 'bill', 'bills') : '', inv ? n(r.invoices || 0, 'invoice', 'invoices') : ''].filter(Boolean).join(' · ');
+    feeds = [bills ? 'Payables' : '', inv ? 'Receivables' : ''].filter(Boolean).join(', '); how = 'Built in'; status = ['ok', 'OK'];
+  }
   else if (r.kind === 'entries') { has = n((r.manual || 0) + (r.import || 0), 'entry', 'entries'); how = 'By hand'; status = ['idle', '—']; }
   else {
-    if (r.kind === 'connection') has = r.provider || '';
+    // A connection has the money accounts it feeds (as its rail lists them), else nothing to count.
+    if (r.kind === 'connection') { const k = (FIN.src?.groups || []).flatMap(g => g.rows).filter(x => finSrcMoney(x) && x.sync?.connection_id === r.id).length; has = k ? n(k, 'account', 'accounts') : '—'; }
     else if (r.cards) has = n(sum(r.cards), 'card', 'cards');
     else has = finUsd(r.balance);
     feeds = r.account ? r.account.name : r.kind === 'connection' ? '' : 'Not mapped';
@@ -72,8 +82,12 @@ function finSrcCols(r) {
   }
   return {has, feeds, how, last, status};
 }
+// Every group shut (a search opens them all): the button then expands them, else it collapses them.
+const finSrcAllShut = () => !FIN_SRC.q && !(FIN.src?.groups || []).some(g => FIN_SRC.open.has(g.group));
 function finSrcDraw() {
   const state = FIN.src, s = FIN_SRC, box = $('#fin-src'); if (!box) return;
+  // A search shows every match open, so the toggle hides until the search clears.
+  const btn = $('#fin-body [data-fin-collapse]'); if (btn) { btn.hidden = !!s.q; btn.textContent = finSrcAllShut() ? 'Expand all' : 'Collapse all'; }
   if (!state.groups.length) { box.innerHTML = finNote('No sources yet.'); return; }
   const match = r => !s.q || [r.name, r.provider, r.last4, r.account?.name].some(v => String(v || '').toLowerCase().includes(s.q));
   const out = [];
@@ -86,7 +100,7 @@ function finSrcDraw() {
     for (const r of rows) {
       const c = finSrcCols(r), k = finSrcKey(r);
       out.push(`<tr data-fin-src="${esc(k)}"${s.sel === k ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link fin-src-name">${esc(r.name || r.provider || '')}${r.last4 ? ` <span class="muted">••${esc(r.last4)}</span>` : ''}</button></td>
-        <td>${esc(c.has)}</td><td>${c.feeds === 'Not mapped' ? '<span class="muted">Not mapped</span>' : esc(c.feeds)}</td><td>${esc(c.how)}</td><td class="fin-nowrap">${esc(c.last)}</td>
+        <td>${c.has === '—' || !c.has ? '<span class="muted">—</span>' : esc(c.has)}</td><td>${c.feeds === 'Not mapped' ? '<span class="muted">Not mapped</span>' : esc(c.feeds)}</td><td>${esc(c.how)}</td><td class="fin-nowrap">${esc(c.last)}</td>
         <td>${c.status[1] ? `<span class="pill ${c.status[0]}">${esc(c.status[1])}</span>` : ''}</td></tr>`);
     }
   }
@@ -103,7 +117,7 @@ function finSrcRail() {
   const stripe = r.provider === 'stripe' && (r.kind === 'connection' || r.kind === 'stripe');
   const money = finSrcMoney(r), mine = r.kind === 'connection' ? state.groups.flatMap(g => g.rows).filter(x => finSrcMoney(x) && x.sync?.connection_id === r.id) : [];
   finRail(`<div class="fin-rail-title"><h2>${esc(r.name || r.provider || '')}</h2>${c.status[1] ? `<span class="pill ${c.status[0]}">${esc(c.status[1])}</span>` : ''}</div>
-    ${r.provider ? finKv('Provider', esc(r.provider)) : ''}${r.last4 ? finKv('Account', '••' + esc(r.last4)) : ''}
+    ${r.provider ? finKv('Provider', esc(r.provider)) : ''}${r.address ? finKv('Address', esc(r.address)) : ''}${r.last4 ? finKv('Account', '••' + esc(r.last4)) : ''}
     ${r.kind !== 'connection' && 'balance' in r ? finKv('Balance', finUsd(r.balance) + (r.balance_as_of ? ` <span class="muted">${esc(finDayLabel(r.balance_as_of))}</span>` : '')) : ''}
     ${r.kind !== 'connection' && r.available_balance != null && r.available_balance !== r.balance ? finKv('Available', finUsd(r.available_balance)) : ''}
     ${money ? finKv('Books as', finMapCell(r, admin)) : ''}
@@ -303,16 +317,16 @@ function finShowOnce(title, pairs) {
 const FIN_WHAT = {everything: 'Everything', pnl: 'P&L', expenses: 'Expenses', pnl_lines: 'P&L line', balance_sheet: 'Balance sheet',
   bs_lines: 'Balance sheet line', payables: 'Payables', receivables: 'Receivables', sources: 'Sources'};
 const FIN_ACC = {sel: ''};
-// What a default reads as for this teammate: the teams they manage, their own, or nothing.
-function finDefaultLabel(row, acc) {
-  if (row.default === 'everything') return 'Everything';
-  if (row.default === 'none') return 'Nothing';
-  if (row.default === 'own_expenses') return 'Own expenses';
-  const mine = (acc.teams || []).filter(t => t.lead === row.teammate), ids = new Set(mine.map(t => t.id));
-  const led = mine.filter(t => !ids.has(t.parent)).map(t => t.name);   // a team under one they lead is in it already
-  return (led.length ? led.join(', ') : 'Team') + ' expenses';
+// What a default reads as for this teammate. A manager's covers the teams they lead and everyone who reports to them;
+// the Assistant acts as whoever asks it, so it sees what they see.
+const finAsker = row => row.teammate === 'bot:' + assistantBot();
+function finDefaultLabel(row) {
+  if (finAsker(row)) return 'Same as who asks';
+  // backend/finance/tab.py default_team: the one top team a manager's default covers, else none (several, or reports only).
+  if (row.default === 'team_expenses' && row.default_team) return `${finTeamName(row.default_team)} expenses`;
+  return {everything: 'Everything', none: 'Nothing', own_expenses: 'Own expenses', team_expenses: 'Team expenses'}[row.default] || 'Own expenses';
 }
-const finDefaultCls = d => ({everything: 'all', team_expenses: 'mgr', own_expenses: 'own', none: 'none'}[d] || 'own');
+const finDefaultCls = row => finAsker(row) ? 'own' : {everything: 'all', team_expenses: 'mgr', own_expenses: 'own', none: 'none'}[row.default] || 'own';
 function finLineNames(ids) {
   const rows = [...(FIN_PNL.last?.rows || []), ...(FIN.accLines?.pnl || []), ...(FIN.accLines?.bs || [])];
   return (ids || []).map(id => rows.find(r => r.account_id === id)?.name || 'A line').join(', ');
@@ -324,13 +338,31 @@ function finGrantLabel(g) {
   if (g.what === 'everything' || g.whose === 'company' || g.what.startsWith('bs') || g.what === 'balance_sheet') return FIN_WHAT[g.what] || g.what;
   return `${FIN_WHAT[g.what] || g.what} · ${whose}`;
 }
-const finLeads = (acc, who) => (acc.teams || []).some(t => t.lead === who);
+// The rows of the Access table in order: the owner, then each team (org chart order) with its members and the teams
+// under it, then teammates on no team, then the helpers. {group, d} heads a group; {t, d} is a teammate.
+function finAccRows(acc) {
+  const teams = acc.teams || [], all = acc.teammates || [];
+  const owner = all.filter(t => t.default === 'everything');
+  const helpers = all.filter(t => !owner.includes(t) && finHelper(t.teammate));
+  const mates = all.filter(t => !owner.includes(t) && !helpers.includes(t));
+  const out = owner.map(t => ({t, d: 0}));
+  const walk = (team, d) => {
+    out.push({group: team.name, d});
+    for (const m of mates.filter(m => m.team === team.id).sort((a, b) => (b.teammate === team.lead) - (a.teammate === team.lead))) out.push({t: m, d});
+    for (const k of finTeamKids(teams, team.id)) if (d < 12) walk(k, d + 1);
+  };
+  for (const team of finTeamKids(teams, '')) walk(team, 0);
+  const loose = mates.filter(m => !m.team || !teams.some(x => x.id === m.team));
+  if (loose.length) out.push({group: 'No team', d: 0}, ...loose.map(t => ({t, d: 0})));
+  if (helpers.length) out.push({group: 'Helpers', d: 0}, ...helpers.map(t => ({t, d: 0})));
+  return out;
+}
 function finAccessPage() {
-  const acc = FIN.acc, caps = finCaps();
+  const acc = FIN.acc;
   $('#fin-body').innerHTML = `<div class="fin-bar"><span class="spacer"></span>${acc.can_edit_defaults ? '<button type="button" class="ghost" data-fin-defaults>Edit defaults</button>' : ''}
       ${acc.can_view_as ? '<button type="button" class="ghost" data-fin-viewas>View as…</button>' : ''}</div>`
     + finSplit(`<h2 class="fin-h2">Org chart</h2><div class="fin-scroll" id="fin-acc"></div><div id="fin-private"></div>`, '', 'Selected teammate');
-  if (!acc.teammates.some(t => t.teammate === FIN_ACC.sel)) FIN_ACC.sel = (acc.teammates.find(t => t.teammate !== caps.who) || acc.teammates[0])?.teammate || '';
+  if (!acc.teammates.some(t => t.teammate === FIN_ACC.sel)) FIN_ACC.sel = finAccRows(acc).find(r => r.t)?.t.teammate || '';
   $('#fin-body').onclick = ev => {
     if (ev.target.closest('[data-fin-defaults]')) { finDefaultsEdit(); return; }
     if (ev.target.closest('[data-fin-viewas]')) { finViewAsPick(); return; }
@@ -343,30 +375,20 @@ function finAccessPage() {
 }
 function finAccDraw() {
   const acc = FIN.acc, box = $('#fin-acc'); if (!box) return;
-  const teams = acc.teams || [], mates = acc.teammates || [];
-  const role = t => t.default === 'everything' ? 'Owner' : finLeads(acc, t.teammate) ? 'Manager' : '';
+  const role = t => t.default === 'everything' ? 'Owner' : t.default === 'team_expenses' && !finAsker(t) ? 'Manager' : '';
   const grants = t => (t.grants || []).map(g => `<span class="fin-chip fin-grant${g.status !== 'active' ? ' muted' : ''}">${esc(finGrantLabel(g))}${g.status !== 'active' ? ' · suspended' : ''}</span>${g.granted_by
     ? `<span class="muted fin-small">by ${esc(finWho(g.granted_by))}</span>` : ''}`).join(' ');
   const row = (t, d) => `<tr data-fin-mate="${esc(t.teammate)}"${FIN_ACC.sel === t.teammate ? ' class="fin-on"' : ''} style="--d:${d}"><td><span class="fin-who fin-ind">${finAvatar(t.teammate, 20)}<button type="button" class="fin-link">${esc(finWho(t.teammate))}</button>${role(t) ? `<span class="muted fin-small">${role(t)}</span>` : ''}</span></td>
-    <td><span class="fin-s ${finDefaultCls(t.default)}">${esc(finDefaultLabel(t, acc))}</span></td><td>${grants(t) || '<span class="muted">—</span>'}</td></tr>`;
-  const out = [];
-  // Those on no team shown (the owner, usually) first; then each team, its members and the teams under it.
-  for (const t of mates.filter(m => !m.team || !teams.some(x => x.id === m.team))) out.push(row(t, 0));
-  const kids = id => teams.filter(t => (t.parent || '') === id || (!id && t.parent && !teams.some(x => x.id === t.parent)));
-  const walk = (team, d) => {
-    const members = mates.filter(m => m.team === team.id).sort((a, b) => (b.teammate === team.lead) - (a.teammate === team.lead));
-    out.push(`<tr class="fin-grp" style="--d:${d}"><td colspan="3"><span class="fin-ind">${esc(team.name)}</span></td></tr>`);
-    for (const m of members) out.push(row(m, d));
-    for (const k of kids(team.id)) if (d < 12) walk(k, d + 1);
-  };
-  for (const t of kids('')) walk(t, 0);
+    <td><span class="fin-s ${finDefaultCls(t)}">${esc(finDefaultLabel(t))}</span></td><td>${grants(t) || '<span class="muted">—</span>'}</td></tr>`;
+  const out = finAccRows(acc).map(r => r.t ? row(r.t, r.d) : `<tr class="fin-grp" style="--d:${r.d}"><td colspan="3"><span class="fin-ind">${esc(r.group)}</span></td></tr>`);
   box.innerHTML = `<table class="fin-t fin-acc-t"><thead><tr><th>Teammate</th><th>By default</th><th>Granted</th></tr></thead><tbody>${out.join('')}</tbody></table>`;
-  const priv = acc.private_lines || [];
   // backend/finance/tab.py access: others_see totals|hidden; full_detail the teammates who see it all (owners only).
-  $('#fin-private').innerHTML = priv.length ? `<h2 class="fin-h2">Private lines</h2><div class="fin-private">${priv.map(p => {
-    const full = Array.isArray(p.full_detail) ? p.full_detail : [];
-    return `<span class="fin-chip">${esc(p.name)} <span class="muted">· ${p.others_see === 'hidden' ? 'Hidden' : 'Totals only'}${full.length ? ' · Full detail: ' + esc(full.map(finWho).join(', ')) : ''}</span></span>`;
-  }).join('')}</div>` : '';
+  // Payroll by person is private by default (a payroll line is made private when it comes in), so that default shows
+  // even before there is one: its totals follow the managers' payroll default.
+  const priv = acc.private_lines || [], d = acc.defaults || {};
+  const chip = (name, hidden, full) => `<span class="fin-chip">${esc(name)} <span class="muted">· ${hidden ? 'Hidden' : 'Totals only'}${full.length ? ' · Full detail: ' + esc(full.map(finWho).join(', ')) : ''}</span></span>`;
+  $('#fin-private').innerHTML = finCaps().may('finance.admin') ? `<h2 class="fin-h2">Private lines</h2><div class="fin-private">${chip('Payroll by person', d.manager_payroll === 'hidden', [])}${priv.map(p =>
+    chip(p.name, p.others_see === 'hidden', Array.isArray(p.full_detail) ? p.full_detail : [])).join('')}</div>` : '';
 }
 function finAccRail() {
   const acc = FIN.acc, me = finMe(), t = (acc.teammates || []).find(x => x.teammate === FIN_ACC.sel);
@@ -379,9 +401,10 @@ function finAccRail() {
     return `<div class="fin-kv"><span data-fin-glabel="${i}">${esc(finGrantLabel(g))}</span><span class="muted fin-small">${g.granted_by ? esc(finWho(g.granted_by)) : ''}${g.expires_at ? ' · until ' + esc(finDayLabel(g.expires_at)) : ' · no end'}${mine
       ? ` <button type="button" class="ghost fin-x" data-fin-revoke="${esc(g.id)}" aria-label="Revoke ${esc(finGrantLabel(g))}">✕</button>` : ''}</span></div>`;
   }).join('');
-  // Owners grant anything; a manager grants to their teams' members (the route checks either way). No self-grants.
+  // The server says where a grant would go through (may_grant, from check_grant); the Whose list offers the teams
+  // this viewer leads.
   const leads = new Set(teams.filter(x => x.lead === me).flatMap(x => [...finTeamsBelow(x.id)]));
-  const may = t.teammate !== me && (owner || (t.team && leads.has(t.team)));
+  const may = !!t.may_grant;
   const named = (t.grants || []).some(g => (g.account_ids || []).length);
   const L = may || named ? finAccLines() : null;
   // Line names come with the lines read; relabel the grants then (the form keeps what was typed).
@@ -392,7 +415,7 @@ function finAccRail() {
   const whats = owner ? Object.entries(FIN_WHAT) : [['expenses', FIN_WHAT.expenses], ['pnl_lines', FIN_WHAT.pnl_lines]];
   finRail(`<div class="fin-rail-title">${finAvatar(t.teammate, 28)}<h2>${esc(finWho(t.teammate))}</h2></div>
     ${path.length ? finKv('Team', esc(path.join(' › '))) : ''}${finKv('Kind', t.kind === 'bot' ? 'Bot' : 'Person')}${t.reports_to ? finKv('Reports to', esc(finWho(t.reports_to))) : ''}
-    <h3 class="fin-h">Sees</h3>${finKv(finDefaultLabel(t, acc), '<span class="muted fin-small">Default</span>')}${grants}
+    <h3 class="fin-h">Sees</h3>${finKv(finDefaultLabel(t), '<span class="muted fin-small">Default</span>')}${grants}
     ${may ? `<h3 class="fin-h">Grant more</h3><form class="fin-form fin-rail-form" data-fin-grant>
       <label>What<select name="what">${whats.map(([v, l]) => `<option value="${v}"${v === 'expenses' ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
       <label data-fin-line hidden>Line<select name="line"></select></label>

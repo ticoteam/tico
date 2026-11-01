@@ -37,6 +37,8 @@ Every idea has all of these, or you do not file it:
 - **A source**: where the signal came from. `--source-kind` is `strategy`, `competitor`, `listening`, `peec`, `lost_test`,
   `person` or `other`; `--source-ref` names the item (a bet id, a market page, a match, an action). No source, no idea.
 - **Channels**: one or more `--channel <slug>` from step 1.
+- **Segments**: one or more `--segment <id>` from `hub growth segment list`, the customers it targets. Each testing
+  segment gets at least one idea that measures its activation or retention.
 - **ICE**: `--i` (impact), `--c` (confidence), `--e` (ease), each a whole number from 1 to 10.
 
     hub growth idea create --title "Price calculator on the pricing page" \
