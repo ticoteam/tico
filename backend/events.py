@@ -23,7 +23,7 @@ signed-in person as they commit, filtered to what that person may read:
 
 `after` (or the browser's `Last-Event-ID`) resumes from the last change number seen, so a
 reconnect misses nothing; a client further behind than the log keeps (24 h), or more than BACKLOG_MAX changes behind
-(a slow consumer), is sent `reset` and reads its page in full. So is one that leaves a frame unread for STALL_SECONDS:
+(a slow consumer), is sent `reset` and reads its page in full. So is one that leaves a read's frames unread for STALL_SECONDS:
 what waits for it is the socket's buffer and no more, and it is sent `reset` and the newest change number instead of
 the backlog once it reads again. One read sends at most READ_BYTES of events and leaves
 the rest for the next read, so one poll's work and its payload stay bounded however busy the team is.
@@ -31,8 +31,9 @@ the rest for the next read, so one poll's work and its payload stay bounded howe
 Delivery has no per-client polling. `Store.mutate` and `Store.write` ring an in-process doorbell
 after a write that logged changes commits; one shared reader per event loop also looks for
 changes every couple of seconds, for writes from other processes (the Slack gateway, the
-scheduler) and from code that writes outside those two. On a ring, each open stream reads the
-rows after its own cursor in one query on a worker thread and filters them for its viewer.
+scheduler) and from code that writes outside those two. On a ring, the streams that are due are
+served together (Rounds): one thread, one snapshot and one read of the newest changes, each stream
+then taking the rows after its own cursor and deciding them for its own viewer.
 
 The write's own identity is stamped on its rows in the same transaction (`claim`), so a page
 can say who changed something. Writes outside a request (the scheduler, a migration) stay
@@ -62,9 +63,10 @@ RUNNER_FALLBACK_SECONDS = 5  # the same for computers' streams: work another pro
 BACKLOG_MAX = 5000        # changes a stream may fall behind before it is reset rather than replayed (a slow consumer)
 POLL_THREADS = 4          # threads serving rounds of people's streams: one at a time per store (Rounds)
 ROUND_MAX = 512           # streams one round's snapshot serves; the rest wait for the next round
+ROUND_ROWS = 32           # changes one stream reads in a round, so one catching up holds no one else's next round
                           # and each holds a database connection the store's pool would close and open again
 GONE_SECONDS = 1.0        # a stream asks whether its client hung up at most this often
-STALL_SECONDS = 5.0       # a frame the client took longer than this to take: a slow consumer, reset rather than replayed
+STALL_SECONDS = 5.0       # a read's frames the client took longer than this to take: a slow consumer, reset rather than replayed
 READ_BYTES = 256 * 1024   # event bytes one read sends; the rest of its changes wait for the next read
 LIFETIME_SECONDS = 900    # bounded; each read and keepalive re-checks the sign-in, so this only caps stale state
 RUNNER_LIFETIME_SECONDS = 300
@@ -1549,7 +1551,7 @@ def install(app, store, auth, task_views, task_view):
 
         def poll(c, snapshot, cursor):
             return read_in(c, snapshot, auth, who, cursor, topics=wanted, conversations=conversations, bots=bots,
-                           tasks=tasks, parties=parties,
+                           tasks=tasks, parties=parties, limit=ROUND_ROWS,
                            task_views=task_views, task_view=task_view, needs_held=held,
                            visuals=None if agent else lambda c, who, rows: V.for_reader(app, auth.settings, c, who, rows),
                            threads_scope=threads_scope, shared=shared)
@@ -1594,23 +1596,21 @@ def install(app, store, auth, task_views, task_view):
                             yield _frame(cursor, "reset", {"seq": cursor})
                             quiet_since = time.monotonic()
                         elif next_cursor != cursor:
-                            stalled = False
-                            for seq, topic, data in sent:
-                                began = time.monotonic()
-                                yield _frame(seq, topic, data)
-                                if time.monotonic() - began > STALL_SECONDS:
-                                    stalled = True     # the rest of this read and what came meanwhile are not replayed
-                                    break
-                            if stalled:
+                            # One read is one write to the socket, however many events it holds.
+                            frames = "".join(_frame(seq, topic, data) for seq, topic, data in sent)
+                            # The cursor moves past changes this viewer may not see, so it resumes there.
+                            if not sent or sent[-1][0] != next_cursor:
+                                frames += _frame(next_cursor, "cursor", {"seq": next_cursor})
+                            began = time.monotonic()
+                            yield frames
+                            if time.monotonic() - began > STALL_SECONDS:
+                                # What came meanwhile is not replayed.
                                 cursor = await asyncio.to_thread(newest)
                                 yield _frame(cursor, "reset", {"seq": cursor})
                                 due = False
                                 doorbell.observe(cursor)
                                 quiet_since = time.monotonic()
                                 continue
-                            # The cursor moves past changes this viewer may not see, so it resumes there.
-                            if not sent or sent[-1][0] != next_cursor:
-                                yield _frame(next_cursor, "cursor", {"seq": next_cursor})
                             cursor = next_cursor
                             doorbell.observe(cursor)
                             quiet_since = time.monotonic()

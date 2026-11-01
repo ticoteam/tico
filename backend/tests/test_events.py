@@ -202,7 +202,8 @@ def test_a_consumer_that_leaves_a_frame_unread_is_reset_rather_than_replayed(api
     made = [post(api, "tasks", {"owner": "ben", "title": f"Stall item {n}", "body": "Please."})["id"] for n in range(3)]
     with api.app.state.store.read() as c:
         newest = E.latest(c)
-    monkeypatch.setattr(E, "STALL_SECONDS", -1.0)     # every frame counts as one the client was slow to take
+    monkeypatch.setattr(E, "STALL_SECONDS", -1.0)     # every read's frames count as ones the client was slow to take
+    monkeypatch.setattr(E, "ROUND_ROWS", 1)           # and each read holds one change
     stream = live("ben-test", f"?topics=tasks&after={cursor}")
     reset = stream.until(topic("reset"))
     assert reset["data"]["seq"] >= newest

@@ -242,6 +242,7 @@ def slow_consumer(port, token, query, state, stop):
             line = raw.decode().rstrip("\n")
             if line.startswith("event: "):
                 state["events_after_wait"] += 1
+                state["last_event"] = line[7:]
                 if line == "event: reset":
                     state["reset"] = True
                     break
@@ -380,7 +381,7 @@ def scenario(args, port, db):
                             "p95_met": (percentile(ready, .95) or 1e9) < BURST_P95_S,
                             "failed": sum(1 for b in burst if b.get("error") or b.get("status") != 200),
                             "resets": sum(1 for b in burst if b.get("reset"))},
-        "slow_consumer": {k: slow.get(k) for k in ("status", "events_after_wait", "reset", "closed", "error")},
+        "slow_consumer": {k: slow.get(k) for k in ("status", "events_after_wait", "last_event", "reset", "closed", "error")},
         "resume_cursor": resume,
     }
 
