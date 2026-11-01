@@ -5792,7 +5792,7 @@ def thread_members_add(api, args):
       "owner or an admin only.",
       {"thread": THREAD_ID, "actor": THREAD_ACTOR}, required=("thread", "actor"), writes=True)
 def thread_members_remove(api, args):
-    return api.call("DELETE", _thread_path(args["thread"], "members", quote(args["actor"], safe="")), None,
+    return api.call("DELETE", _thread_path(args["thread"], "members", quote(args["actor"], safe=":")), None,
                     key=_key(args))
 
 

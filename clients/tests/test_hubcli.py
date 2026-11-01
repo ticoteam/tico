@@ -105,7 +105,7 @@ def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
         (["thread", "members", "list", "th1"], ("GET", "threads/th1/members", {})),
         (["thread", "members", "add", "th1", "human:ana", "--owner"],
          ("POST", "threads/th1/members", {"actor": "human:ana", "role": "owner"})),
-        (["thread", "members", "remove", "th1", "human:ana"], ("DELETE", "threads/th1/members/human%3Aana", None)),
+        (["thread", "members", "remove", "th1", "human:ana"], ("DELETE", "threads/th1/members/human:ana", None)),
         (["thread", "update", "th1", "--title", "Refunds", "--archive"],
          ("PATCH", "threads/th1", {"title": "Refunds", "archived": True})),
         (["thread", "update", "th1", "--unarchive"], ("PATCH", "threads/th1", {"archived": False})),

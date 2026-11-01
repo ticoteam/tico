@@ -241,15 +241,16 @@ def view_for(c, actor, type_, subject, data, cache):
 
 def _thread_view(c, actor, type_, subject, data, cache):
     """A thread event is the endpoint owner's when the owner may read the thread (`threads.readable`, the check the
-    timeline makes). A held message is nothing the thread has been given yet, so only owners and admins hear of it."""
+    timeline makes). A held message is not in its thread yet, so it is checked on the thread it was going to: an
+    owner or admin hears of it only where they could read that thread, as for any other event."""
     auth = _state["auth"]
     if not auth:
         return data
-    if type_ == "message.held":
-        return data if _admin(c, actor, cache) else None
     who = _identity(c, actor, cache)
     if not who:
         return None
+    if type_ == "message.held":
+        subject = (data or {}).get("thread_id") or subject
     from . import threads
     return data if threads.readable(c, threads.viewer(auth, who), subject) else None
 

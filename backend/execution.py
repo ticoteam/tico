@@ -252,14 +252,6 @@ def reply_source(c, message):
     return found
 
 
-def claimed_parent(conversation, body):
-    """The sub-thread parent a completion may name: only the one its claim handed out, the run's thread's own
-    `parent_message_id` (the claim's `message`). The runner echoes it back; any other value is ignored, so a runner
-    never chooses where a reply lands and the reply stays in the thread the turn was woken in."""
-    sent = getattr(body, "parent_message_id", None)
-    return sent if sent and sent == (conversation or {}).get("parent_message_id") else None
-
-
 def work_task_id(message, conversation=None):
     """The work attached to a turn; parked urgent notices retain their task refs only as news.
 
@@ -3977,39 +3969,6 @@ class Execution:
         result["prompt_tokens"] = own[-1][0] + own[-1][1] if own else None
         return result
 
-    def post_carried_reply(self, c, row, aid, conv, source, target, text, refs):
-        """A carrier-started turn's reply, through the write door (threads.post) into the carried message's thread
-        (a sub-thread included), as the bot under its turn's grant. Addressed to the sender when that is a person in
-        the thread's audience or a bot that asked; otherwise open in the thread, where the wake rule and the loop
-        guard decide whom it starts. A thread the bot may no longer read or post in (it was removed, the thread was
-        archived) withholds the reply, and the run is still done."""
-        from . import threads
-        actor = "bot:" + row["bot"]
-        thread = threads.thread_row(c, source["conversation_id"]) or conv
-        to = target if ((H.is_human(target) or source["kind"] == "ask")
-                        and threads.audience_has(c, thread, target)) else None
-        # A refusal undoes whatever the post began (a sub-thread, a mention), and leaves the finished run standing.
-        c.execute("SAVEPOINT carried_reply")
-        try:
-            sent = threads.post(c, threads.viewer(self.auth, Identity(actor, "bot", attempt_id=aid)), thread["id"],
-                                text, refs=refs, to_actor=to)
-        except Problem as refusal:
-            c.execute("ROLLBACK TO carried_reply")
-            c.execute("RELEASE carried_reply")
-            if refusal.status not in (403, 404):
-                raise
-            H.event(c, H.KEEPER, "reply.withheld", aid, {"bot": row["bot"], "to": target, "reason": refusal.code})
-            return None
-        except BaseException:
-            c.execute("RELEASE carried_reply")
-            raise
-        c.execute("RELEASE carried_reply")
-        if sent and sent.get("id"):
-            # What it answers, as for any reply Tico posts for a run: a retried completion finds it and posts nothing.
-            c.execute("UPDATE messages SET in_reply_to=? WHERE id=?", (source["id"], sent["id"]))
-            sent = {**sent, "in_reply_to": source["id"]}
-        return sent
-
     def stamp_reply(self, c, reply, row, aid, msg):
         """Mark a reply Tico posts for a run as that run's: counted as its write, with what it answered."""
         # A reply (to a person, or an answer to a bot's ask) is the run acting, though Tico posts it for
@@ -4587,6 +4546,53 @@ class Execution:
         self.forget_held_reply(c, row, row["id"], found[0] if found else None, note)
         return note
 
+    def _say_reply(self, c, actor, target, text, conv, msg, refs, parent_id, aid, carried=False):
+        """The reply to the message a turn answers (`msg`; for a turn a carrier started, the message it carries,
+        reply_source): in that message's thread, or under `parent_id` in its sub-thread when the runner names one. The
+        parent is checked as the attempt, whose grant is its own root (threads._bot_grant): it must be a message there
+        that the bot can read, in a thread the bot can post to, reaching a target who can read it too. Anything else
+        keeps the reply where the message was. threads.post makes or finds the sub-thread.
+
+        A carrier's turn always posts through the write door as the bot under its turn's grant: addressed to the sender
+        when that is a person or a bot that asked, and only when they are in the thread's audience; otherwise open in
+        the thread, where the wake rule and the loop guard decide whom it starts. A thread the bot may no longer read
+        or post in (it was removed, the thread was archived) withholds that reply, and the run is still done."""
+        from . import threads
+        to = target if not carried or H.is_human(target) or msg["kind"] == "ask" else None
+        v = threads.viewer(None, Identity(actor, "bot", attempt_id=aid))
+        thread, under = conv, None
+        if parent_id and text and str(text).strip() and str(target).startswith(("human:", "bot:")):
+            root = threads.root_of(c, conv)
+            parent = H.message(c, parent_id)
+            if (parent and root and parent["conversation_id"] == root["id"] and threads.readable(c, v, parent)
+                    and threads.can_post(c, v, root) and (to is None or threads.audience_has(c, root, to))):
+                if not carried:
+                    return threads.post(c, v, root["id"], text, refs=refs, parent_message_id=parent_id,
+                                        to_actor=to, in_reply_to=msg["id"])
+                thread, under = root, parent_id
+        if not carried:
+            return H.say(c, actor, target, text, conversation_id=conv["id"], in_reply_to=msg["id"], refs=refs)
+        if to and not threads.audience_has(c, thread, to):
+            to = None
+        # A refusal undoes whatever the post began (a sub-thread, a mention), and leaves the finished run standing.
+        c.execute("SAVEPOINT carried_reply")
+        try:
+            sent = threads.post(c, v, thread["id"], text, refs=refs, parent_message_id=under, to_actor=to,
+                                in_reply_to=msg["id"])
+        except Problem as refusal:
+            c.execute("ROLLBACK TO carried_reply")
+            c.execute("RELEASE carried_reply")
+            if refusal.status not in (403, 404):
+                raise
+            H.event(c, H.KEEPER, "reply.withheld", aid, {"bot": actor.split(":", 1)[1], "to": target,
+                                                         "reason": refusal.code})
+            return None
+        except BaseException:
+            c.execute("RELEASE carried_reply")
+            raise
+        c.execute("RELEASE carried_reply")
+        return sent
+
     def complete(self, c, who, aid, body, rule_check=None):
         """`rule_check`: the org rule check of the reply (backend/org_rule_check.py), made before this write."""
         row = self.attempt(c, who, aid, final=True)
@@ -4759,13 +4765,9 @@ class Execution:
                                 from . import org_rule_check
                                 sent = reply_answer(c, self.auth, Identity(actor, "bot", attempt_id=aid), msg,
                                                     asked_text, org_rule_check.warn_line(rule_gate))
-                            elif carried:
-                                sent = self.post_carried_reply(c, row, aid, conv, source, target, text, refs)
                             else:
-                                from . import threads
-                                dest = threads.reply_destination(c, actor, conv, claimed_parent(conv, body))
-                                sent = H.say(c, actor, target, text, conversation_id=dest, in_reply_to=msg["id"],
-                                             refs=refs)
+                                sent = self._say_reply(c, actor, target, text, conv, source, refs,
+                                                       body.parent_message_id, aid, carried)
                             if sent:
                                 self.stamp_reply(c, sent, row, aid, source)
                             return sent

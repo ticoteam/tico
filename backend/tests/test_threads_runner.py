@@ -2,9 +2,11 @@
 
 A mention in a thread starts the bot's run through a carrier, a keeper notice that names the message it carries; the
 turn answers that message, in its thread (a sub-thread included), as the bot under its turn's grant. The claim names
-the thread's root and audience class, which key the runner's session, and a completion can only echo the sub-thread
-parent the claim handed out. A runner claims and completes turns over the attempt endpoints, as runner-rs does.
+the thread's root and audience class, which key the runner's session; the runner sends back the sub-thread's parent
+from the claim, and the reply stays in that sub-thread. A runner claims and completes turns over the attempt endpoints, as runner-rs does.
 """
+
+import pytest
 
 from backend import execution, org_rule_check, threads
 from backend.auth import Identity
@@ -54,7 +56,8 @@ def replies(api, bot="cpo"):
                      "ORDER BY rowid", ("bot:" + bot,))
 
 
-def test_a_mention_in_a_sub_thread_is_answered_in_that_sub_thread_to_the_asker(api):
+@pytest.mark.parametrize("echo", [True, False], ids=["runner-names-parent", "older-runner"])
+def test_a_mention_in_a_sub_thread_is_answered_in_that_sub_thread_to_the_asker(api, echo):
     r = bot_runner(api)
     tid = make_thread(api, title="Launch", members=["bot:cpo"])
     parent = say(api, tid, "Kickoff notes")
@@ -65,7 +68,10 @@ def test_a_mention_in_a_sub_thread_is_answered_in_that_sub_thread_to_the_asker(a
     assert attempt is not None, "a mention in a sub-thread starts the bot's run"
     assert (attempt["message"]["refs"] or {}).get("carries") == asked["id"], "the run starts from the carrier"
     assert attempt["conversation"]["root_id"] == tid and attempt["conversation"]["audience_class"] == "private"
-    finish(api, r, attempt, "Risks: pricing, timing")
+    # The Rust runner sends back the sub-thread's parent from the claim (reply_parent); an older one sends nothing.
+    named = attempt["conversation"].get("parent_message_id")
+    assert named == parent["id"]
+    finish(api, r, attempt, "Risks: pricing, timing", **({"parent_message_id": named} if echo else {}))
     [reply] = replies(api)
     assert reply["conversation_id"] == sub, "the answer lands in the sub-thread that asked, never the root"
     assert reply["to_actor"] == "human:ana" and reply["in_reply_to"] == asked["id"]
@@ -96,23 +102,6 @@ def test_a_carried_message_taken_back_mid_turn_gets_no_reply(api):
         c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), asked["id"]))
     finish(api, r, attempt, "Tiers look fine")
     assert replies(api) == []
-
-
-def test_a_completion_cannot_move_its_reply_under_another_message(api):
-    # The runner echoes the parent its claim handed out; a parent it makes up is ignored, so no sub-thread is started
-    # under a message the turn was never asked about.
-    r = bot_runner(api)
-    tid = make_thread(api, title="Roadmap", members=["bot:cpo"])
-    other = say(api, tid, "Unrelated planning notes")
-    # Addressed to the bot: its own job, not a carrier, so the completion's parent is all that could move the reply.
-    write(api, lambda c, v: threads.post(c, v, tid, "Summarise the roadmap", to_actor="bot:cpo"))
-    attempt = claim(api, r, "cpo")
-    assert not (attempt["message"]["refs"] or {}).get("carries")
-    assert attempt["message"].get("parent_message_id") is None, "a root message hangs off nothing"
-    finish(api, r, attempt, "Summary", parent_message_id=other["id"])
-    [reply] = replies(api)
-    assert reply["conversation_id"] == tid
-    assert rows(api, "SELECT id FROM conversations WHERE parent_message_id=?", (other["id"],)) == []
 
 
 def test_public_and_private_threads_claim_different_audience_classes(api):
