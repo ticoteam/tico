@@ -2408,7 +2408,18 @@ impl Runner {
                             self.publish(&bot, &execution_path, &env).await;
                         }
                         let closed = p.session_path.is_some() && self.task_closed(&attempt).await;
-                        let pushed = self.finish_place(p, &attempt, &env, &skipped, committed_secret).await;
+                        let pushed = if crate::continuity::memory_pass(&attempt["config"]) {
+                            // A nightly memory tidy pass commits and pushes nothing: its checkout is discarded, and the
+                            // run log says what it had changed (criterion 24).
+                            match self.discard_pass_place(p, &env).await {
+                                Ok(changed) if changed.is_empty() => {}
+                                Ok(changed) => self.diagnose(&aid, &format!("Nightly memory tidy: this pass changed {} in its checkout; those changes were discarded and nothing was committed or pushed.", changed.join(", "))),
+                                Err(problem) => self.diagnose(&aid, &format!("Nightly memory tidy: could not discard this pass's checkout ({problem}); nothing was pushed.")),
+                            }
+                            false
+                        } else {
+                            self.finish_place(p, &attempt, &env, &skipped, committed_secret).await
+                        };
                         let relative: Vec<String> = skipped
                             .iter()
                             .map(|f| Path::new(f).strip_prefix(&execution_path).map_or_else(|_| f.clone(), |r| r.display().to_string()))
