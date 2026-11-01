@@ -40,11 +40,13 @@ def test_a_company_from_the_template_has_its_bot_and_a_first_task_queues_a_job(a
 
     post(api, "bots", {"slug": slug, "display_name": card.get("name") or template, "template": template,
                        "status": "active"})
-    assert get(api, f"bots/{slug}")["slug"] == slug
+    made = get(api, f"bots/{slug}")
+    assert made["slug"] == slug
+    bot_id = made["id"]                   # a new bot's id is a UUIDv7 unless it is a product bot; jobs name the id
     # A new bot is still onboarding and takes no task until a person above it on the org chart says it is ready.
     post(api, f"bots/{slug}/onboarded", {})
 
-    before = jobs_for(api, slug)
+    before = jobs_for(api, bot_id)
     post(api, "tasks", {"owner": slug, "title": f"First task for {template}",
                         "body": "Say what you can do for the company this week, in two sentences."})
-    assert jobs_for(api, slug) == before + 1, "the first task did not queue a job for the bot"
+    assert jobs_for(api, bot_id) == before + 1, "the first task did not queue a job for the bot"
