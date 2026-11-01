@@ -785,6 +785,10 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal((await fold.innerText()).trim(), 'Expand all', tag + ': shut again, Expand all');
       await page.locator('[data-fin-group="banks"]').click();
       assert.equal((await fold.innerText()).trim(), 'Collapse all', tag + ': one group open, Collapse all');
+      await page.locator('[data-fin-q]').fill('mercury');
+      assert.equal(await fold.isVisible(), false, tag + ': no toggle while searching');
+      await page.locator('[data-fin-q]').fill('');
+      assert.equal(await fold.isVisible(), true, tag + ': toggle back once the search clears');
       await page.locator('[data-fin-src="bank:m1"]').click();
       await page.locator('#fin-rail select[data-fin-map="m1"]').waitFor();
       const mapTo = await page.locator('#fin-rail select[data-fin-map="m1"] option').evaluateAll(o => o.map(x => x.value));

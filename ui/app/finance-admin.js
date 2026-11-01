@@ -86,7 +86,8 @@ function finSrcCols(r) {
 const finSrcAllShut = () => !FIN_SRC.q && !(FIN.src?.groups || []).some(g => FIN_SRC.open.has(g.group));
 function finSrcDraw() {
   const state = FIN.src, s = FIN_SRC, box = $('#fin-src'); if (!box) return;
-  const btn = $('#fin-body [data-fin-collapse]'); if (btn) btn.textContent = finSrcAllShut() ? 'Expand all' : 'Collapse all';
+  // A search shows every match open, so the toggle hides until the search clears.
+  const btn = $('#fin-body [data-fin-collapse]'); if (btn) { btn.hidden = !!s.q; btn.textContent = finSrcAllShut() ? 'Expand all' : 'Collapse all'; }
   if (!state.groups.length) { box.innerHTML = finNote('No sources yet.'); return; }
   const match = r => !s.q || [r.name, r.provider, r.last4, r.account?.name].some(v => String(v || '').toLowerCase().includes(s.q));
   const out = [];
