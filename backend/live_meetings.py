@@ -653,7 +653,7 @@ def complete_runner_turn(c, rid, turn_id, bot, text, outcome, *, requeued=False,
             if not _retry_empty(c, rid, turn, bot):
                 _finish_pass(c, rid, turn, "empty_bot_reply")
         else:
-            who = Identity("bot:" + bot, "bot")
+            who = Identity("bot:" + bot, "bot", attempt_id=attempt_id or "")
             _reply(c, rid, who, turn_id, text)
     elif failure:
         if _finish_pass(c, rid, turn, "bot_execution_" + failure):
@@ -1493,6 +1493,9 @@ def install_live_meetings(app, store, auth, write):
         who = request.state.identity
         def work(c):
             row = _connector(c, auth, who, rid)
+            if row["thread_id"]:
+                # A call's meeting follows its call: pausing, resuming or ending it here would leave the call behind.
+                raise Problem("call_meeting", "This meeting is a call. Control it through the call.", 409)
             target = {"pause": "paused", "disconnect": "paused", "resume": "live", "end": "ended"}[body.action]
             if row["state"] == target or (body.action == "end" and row["state"] == "ended"):
                 return _view(c, auth, who, rid)

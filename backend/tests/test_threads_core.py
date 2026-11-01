@@ -114,7 +114,6 @@ def test_internal_bots_read_company_and_their_groups_threads_and_external_agents
     An external agent never gets company or team standing read. Python, SQL and SSE agree on every row."""
     from backend.auth import Identity
     store, auth, who = world
-    bots = sorted(a for a in who if a.startswith("bot:"))
     import json
     bot = "bot:content"
     with store.transaction() as c:

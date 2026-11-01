@@ -5,8 +5,11 @@ were attached listen and reply in the thread. When the call ends, the transcript
 are posted to the thread.
 
 Status on this branch: the call API, the CLI, the MCP tools, the OpenAPI operations, the server's recorder and the
-browser signal path are built. Tests run against fakes for LiveKit and the Gateway. No live LiveKit server has been
-run on a real install yet. Text to speech is not built (see Not built).
+browser signal path are built. Most tests run against fakes for LiveKit and the Gateway. One live test
+(`backend/tests/test_call_live.py`) runs against a real `livekit-server` in dev mode, the digest-pinned image: a
+synthetic speaker publishes audio through the LiveKit SDK, the recorder hears it, the Gateway's speech-to-text is the
+only fake, and the transcript posts into the thread and the room is deleted. No install has run calls yet. Text to
+speech is not built (see Not built).
 
 ## How a call works
 
@@ -14,7 +17,8 @@ run on a real install yet. Text to speech is not built (see Not built).
    live meeting, then the server's recorder joins the call's media session as a hidden participant. It hears the call
    and never publishes. If the recorder cannot join, the call ends at once with `meet_unavailable`.
 2. **Join.** People who can read the thread join and get a token good for 5 minutes. It grants microphone and screen
-   share, never a camera and no data messages. A joined client refreshes its token with
+   share, never a camera and no data messages. A join sent again with the same idempotency key gets its token back only
+   while the person can still read the thread. A joined client refreshes its token with
    `POST /api/v2/calls/{call_id}/token` before it expires.
 3. **Transcript.** The recorder subscribes to each microphone and screen-share audio track. Each speaker's audio goes to
    the Gateway's speech-to-text (the Recorder's model, `elevenlabs/scribe-v2`) in clips of up to 8 seconds, or sooner
@@ -23,13 +27,18 @@ run on a real install yet. Text to speech is not built (see Not built).
    stored. If the Gateway does not answer, that clip is lost and the call goes on.
 4. **Bots.** A person who can write to the thread and has joined the call attaches bots (up to 10). A bot must be one
    that person can write to. Attached bots get turns on the call's speech and reply in the thread, as they do in a
-   live meeting. Their replies are messages in the thread.
+   live meeting. A reply is a run of the bot's own runner job, so the bot needs a runner that takes private meeting
+   turns (`private_lanes_v1`), and it is posted in the thread only through that run. A bot stays attached only while the
+   person who attached it can still read the thread and write to the bot. When that ends, the bot stops hearing the call
+   and its replies are refused at once. The sweep then detaches it and cancels its open turns.
 5. **Access.** When someone loses read access to the thread, the server removes them from the media session through
-   LiveKit's server API and refuses their token refresh. Bots that lose write access are detached the same way. A
-   background sweep does this on each pass.
+   LiveKit's server API and refuses their token refresh. Leaving removes a person the same way, at once. A removal that
+   LiveKit does not confirm stays pending, and the background sweep retries it on each pass until it is confirmed.
 6. **End.** The connector ends the call. Speech still waiting is sent, and the end waits up to 150 seconds for clips
-   already being transcribed. Then the recorder leaves and the media session closes. Then two messages are posted to
-   the thread, each once and each marked `restricted`, so only people who can read the thread see them:
+   already being transcribed. Then the recorder leaves and the media session closes. If LiveKit does not confirm the
+   close, the sweep retries it, and the transcript and action items wait until it does. Then two messages are posted to
+   the thread from the connector, each once. Each names the call's meeting, so the meeting's own rules decide who reads
+   it, and each is marked `restricted`:
    - `Call transcript: <title>` with one `speaker: text` line per piece of speech. Long transcripts are cut short, and
      the message says where the full one is.
    - `Action items: <title>` with one `- ` line per item, or `No action items were found.`. The items are drafted
@@ -38,8 +47,9 @@ run on a real install yet. Text to speech is not built (see Not built).
      in `backend/call_items.py`. If the Gateway does not answer, no action items message is posted and the transcript
      stays the call's record.
    Tasks are still made by hand from the action items.
-7. **Restarts.** A Tico restart brings the recorder back for each live call from the database. If the media server
-   stops, the call ends with `end_reason: media_lost`, and the transcript so far is kept.
+7. **Restarts.** A Tico restart brings the recorder back for each live call from the database. A live call whose media
+   session is gone when the sweep looks ends with `end_reason: media_lost`, and the transcript so far is kept. A call
+   whose recorder never started ends the same way two minutes after it began.
 
 ## Spoken replies
 
@@ -53,13 +63,15 @@ is kept for when they do.
 | --- | --- |
 | See a call, list calls, join, refresh a token | People who can read the thread |
 | Start a call, attach or detach bots | People who can write to the thread (attach also needs the person to have joined) |
-| Leave | The person who joined |
+| Leave | The person who joined, even after losing access to the thread |
 | End | The connector |
 | Anything | Bots are refused. BotOps acts as the person it works for |
 
 Errors: `meet_unavailable` (503) when Tico Meet is not set up, the LiveKit package is missing, or the recorder cannot
 join. `call_in_progress` (409) for a second live call in a thread, `call_ended` (409), `not_joined` (409) when a token is
-asked for without joining, and `call_access_removed` (403) after removal. A call the caller cannot read is 404.
+asked for without joining, and `call_access_removed` (403) after removal. A call the caller cannot read is 404, the
+same as a call that does not exist. `call_meeting` (409) when the live meeting's own controls
+(`/api/v2/live-meetings/{id}/control`) are used on a call's meeting: a call is paused, resumed or ended through the call.
 
 ## API
 
@@ -83,6 +95,8 @@ CLI, and `hub_call_list`, `hub_call_show`, `hub_call_start`, `hub_call_join`, `h
 Changes are written to the change log on the `threads` topic: `call.started`, `call.joined`, `call.left`,
 `call.ended`, `call.bot_attached`, `call.bot_detached` and `call.participant_removed`. Each has an audit row. The live
 event stream sends them with `GET /api/v2/events?topics=threads`, and only to people who can read the call's thread.
+A call's view lists only the people and bots the viewer may see (the teammate See level), and a person always sees
+their own place in it.
 
 ## Self-hosting
 
@@ -95,15 +109,23 @@ The `meet` compose profile runs LiveKit (Apache-2.0) on the cell host. It adds n
 - `TICO_MEET_API_KEY` and `TICO_MEET_API_SECRET`: LiveKit's key pair. They go to the LiveKit service and the server only.
 - `TICO_MEET_CERT_DIR`: a folder holding `fullchain.pem` and `privkey.pem` for `TICO_MEET_DOMAIN`. TURN over TLS needs
   them, and the service does not start without them.
-- `TICO_MEET_IMAGE`: optional. The default is `livekit/livekit-server:v1.8.4`, a tag checked on Docker Hub. Pin a digest
-  before you enable the profile.
+- `TICO_MEET_IMAGE`: optional. The default is `livekit/livekit-server:v1.8.4@sha256:621fd87b...c532af`, the tag and
+  its digest, both checked on Docker Hub. A new LiveKit version means a new digest in `compose.yaml`.
 
 `TICO_MEET_INTERNAL_URL` defaults to `http://livekit:7880`, the server's own address for LiveKit's server API and for
 the recorder.
 
 **Signal path.** Caddy (the `caddy` profile) proxies `/rtc` on the app host to LiveKit's port 7880 on the compose network,
-on 443 like the rest of the app (`backend/caddy_assets.py`). Nothing publishes 7880. An install that reaches Tico only
-through the Cloudflare tunnel has no `/rtc` route, so browsers cannot join until the tunnel or a Caddy front routes it.
+on 443 like the rest of the app (`backend/caddy_assets.py`). A tunnel install (the `cloudflared` profile) gets the same
+route in cloudflared's ingress (`tunnel_config` in `docker/entrypoint.sh`), ahead of the app's own rule: `/rtc` goes
+straight to LiveKit, which checks the token itself. The route is written only when `TICO_MEET_URL` is on `TICO_DOMAIN`
+and the key and secret are set. Otherwise the server logs `warning: calls cannot connect over this tunnel: set
+TICO_MEET_URL, key and secret for <domain>`, and browsers cannot join. Nothing publishes 7880. The tunnel carries only
+the signal, so media still needs the ports below open on the host.
+
+**Edge network.** LiveKit joins the `edge` network at `TICO_LIVEKIT_ADDRESS` (172.30.254.4 by default), so Caddy and
+the tunnel reach it by name. The address is outside the dynamic range, and the server does not trust it as a front
+door.
 
 **Ports.**
 
@@ -112,16 +134,20 @@ through the Cloudflare tunnel has no `/rtc` route, so browsers cannot join until
 - No signal port.
 
 **Dependency.** The server installs the `livekit` real-time package (pinned at 1.1.21 in `backend/requirements.txt`, and
-imported only when a call starts). It brings numpy and protobuf into every server image. That is the cost of keeping
-the recorder in-process rather than in a sidecar.
+imported only when a call starts). With numpy and protobuf, its wheels are 28.9 MB compressed; the installed packages
+gzip to about 29 MB, the size of the layer it adds to the server image. The recorder stays in-process, because that is
+under the 40 MB at which a separate recorder image would be worth it. These sizes come from the pinned wheels, not from
+a built image.
 
 ## Not built
 
 - **Text to speech.** `speak_replies` is stored, but no speech is produced. Bots reply in text.
-- **Tunnel-only installs.** There is no `/rtc` route through the Cloudflare tunnel (see Signal path).
-- **Live LiveKit.** The recorder and the media service calls are tested against an in-memory SDK and server. A running
-  LiveKit server has not yet been run with them.
-- **Bot replies after access ends.** A bot whose membership of the thread has ended cannot post its reply, and the
-  reply is not posted at all.
-- **Connector access.** The transcript and action items are posted as the connector. If the connector can no longer
-  post in the thread when the call ends, neither is posted, and the error report says so.
+- **Media through a tunnel.** The tunnel carries only the signal (see Signal path). A tunnel install carries calls only
+  when its TURN and media ports are open to browsers on the host.
+- **Live LiveKit beyond one dev server.** The live test covers one speaker on one `--dev` server. Not run yet: browsers
+  through TURN and TLS, several calls at once, a LiveKit restart in the middle of a call, and the real Gateway.
+- **Bot replies need a runner.** A reply is a run of the bot's runner job. A bot whose runner does not take private
+  meeting turns waits, and the meeting says so, until that runner is updated.
+- **Connector access.** The transcript and action items are posted as the connector. If the thread refuses that post when
+  the call ends (the connector can no longer write there), the post is not made, the error report says so, and nothing
+  retries it. Action items are drafted once, when the call ends. If the Gateway does not answer then, none are posted.

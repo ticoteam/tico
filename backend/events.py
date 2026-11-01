@@ -1001,13 +1001,17 @@ def _messages(view, rows):
 
 def _threads(view, rows):
     """The `threads` topic (contract §9): one event per thread and kind, as it stands now. A `read` row goes only to
-    the reader it names; a thread the viewer cannot read sends nothing. A call's `call.*` rows name the call, not the
-    thread, and go through `_calls`."""
-    from . import threads
-    out = _calls(view, [row for row in rows if str(row["kind"]).startswith("call.")])
-    rows = [row for row in rows if not str(row["kind"]).startswith("call.")]
-    last = {}
+    the reader it names; a thread the viewer cannot read sends nothing. A call's `call.*` rows go to the people who may
+    read the call's thread."""
+    from . import calls, threads
+    out, last = [], {}
     for row in rows:
+        if str(row["kind"]).startswith("call."):
+            # Tico Meet call changes (backend/calls.py): the call's thread decides who hears each one, and each is sent once.
+            if row["conversation_id"] and calls.readable(view.c, view.who.actor, row["conversation_id"]):
+                out.append((row, {"kind": row["kind"], "call_id": row["subject_id"],
+                                  "thread_id": row["conversation_id"]}))
+            continue
         if row["kind"] in ("read", "attention") and row["ref"] != view.who.actor:
             continue
         # Reactions are per message: one event for each message whose reactions moved.
@@ -1128,17 +1132,6 @@ def _bots(view, rows):
             from . import usage_limits
             default = usage_limits.company(view.c)
         out.append((row, {"bot": slug, "status": status_line(view.c, view.who, slug, default, auth=view.auth)}))
-    return out
-
-
-def _calls(view, rows):
-    """Tico Meet call changes (backend/calls.py, `call.*` kinds on the `threads` topic) reach the people who may read
-    the call's thread, and no one else."""
-    from . import calls
-    out = []
-    for row in rows:
-        if row["conversation_id"] and calls.readable(view.c, view.who.actor, row["conversation_id"]):
-            out.append((row, {"kind": row["kind"], "call_id": row["subject_id"], "thread_id": row["conversation_id"]}))
     return out
 
 

@@ -4,9 +4,10 @@ import json
 
 import pytest
 
-from backend import call_media, calls, events, gateway_connection, threads
+from backend import call_media, calls, events, gateway_connection, live_privacy, teammate_access, threads
+from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
+from backend.tests.test_api import api, assign, get, headers, post, runner  # noqa: F401
 from backend.tests.test_call_media import CONFIG, decode, fake_rtc, wait_until  # noqa: F401
 from backend.tests.test_live_meetings import live, settle  # noqa: F401
 from clients import gateway
@@ -22,18 +23,26 @@ class FakeMedia:
 
     def __init__(self):
         self.rooms, self.removed, self.recorders, self.ended = {}, [], {}, []
+        self.down = False            # LiveKit unreachable: every call to it is refused until the test clears this
+
+    def _reachable(self):
+        if self.down:
+            raise call_media.MediaUnavailable("the media server is down")
 
     def person_token(self, room, identity, name):
         return call_media.person_token(CONFIG, room, identity, name)
 
     def room_exists(self, room):
+        self._reachable()
         return room in self.rooms
 
     def remove(self, room, identity):
+        self._reachable()
         self.removed.append((room, identity))
         self.rooms.get(room, set()).discard(identity)
 
     def end_room(self, room):
+        self._reachable()
         self.rooms.pop(room, None)
         self.ended.append(room)
 
@@ -102,6 +111,24 @@ def join(api, call_id, token="ana-test"):
     return post(api, f"calls/{call_id}/join", {}, token=token)
 
 
+def private_lanes_ready(api, machine, bot):
+    """A current runner that takes a private meeting's turns: a call is a private meeting (execution.PRIVATE_LANES)."""
+    return post(api, "runners/heartbeat", {"version": "test", "platform": "test",
+                "capabilities": ["private_lanes_v1"], "readiness": {bot: True}}, token=machine["token"])
+
+
+def bot_reply_by_run(api, bot, text):
+    """The bot answers its meeting turn the way the runner does: the job is claimed, started and completed with its reply."""
+    machine = runner(api)
+    assign(api, machine, bot)
+    private_lanes_ready(api, machine, bot)
+    attempt = post(api, "jobs/claim", {"bot": bot}, token=machine["token"])["attempt"]
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "synthetic-call-turn"}, token=machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": text, "last_seq": 0},
+         token=machine["token"])
+    return attempt
+
+
 def thread_texts(api, cid, token="ana-test"):
     response = api.get(f"/api/v2/conversations/{cid}/messages", headers=headers(token))
     assert response.status_code == 200, response.text
@@ -124,12 +151,7 @@ def test_synthetic_speech_becomes_a_transcript_and_a_bot_reply_in_the_thread(mee
             "SELECT text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq", (meeting_id,))]
     assert transcript == [SYNTHETIC_SPEECH] * 4
 
-    turns = get(meet, f"live-meetings/{meeting_id}/turns", token="ops-live")["turns"]
-    assert turns, "the attached bot was not given a turn on the call's speech"
-    turn = turns[0]
-    post(meet, f"live-meetings/{meeting_id}/turns/{turn['id']}/claim", {}, token="ops-live")
-    post(meet, f"live-meetings/{meeting_id}/chat", {"text": "Ops can take the review.", "turn_id": turn["id"]},
-         token="ops-live")
+    bot_reply_by_run(meet, "ops", "Ops can take the review.")
     assert any("Ops can take the review." in text for text in thread_texts(meet, cid))
 
     post(meet, f"calls/{call_id}/end", {}, token="ana-test")
@@ -154,12 +176,7 @@ def test_the_recorder_hears_the_room_and_the_thread_gets_the_transcript_a_reply_
     settle(meet)
     assert _chunks(meet, meeting_id) == [SYNTHETIC_SPEECH] * 4
 
-    turns = get(meet, f"live-meetings/{meeting_id}/turns", token="ops-live")["turns"]
-    assert turns, "the attached bot was not given a turn on the call's speech"
-    turn = turns[0]
-    post(meet, f"live-meetings/{meeting_id}/turns/{turn['id']}/claim", {}, token="ops-live")
-    post(meet, f"live-meetings/{meeting_id}/chat", {"text": "Ops can take the review.", "turn_id": turn["id"]},
-         token="ops-live")
+    bot_reply_by_run(meet, "ops", "Ops can take the review.")
 
     monkeypatch.setattr(gateway, "relay", lambda method, url, body=None, headers=None, timeout=None: (200, drafted([
         {"title": "Schedule the reliability review with Ops", "quote": SYNTHETIC_SPEECH},
@@ -287,8 +304,8 @@ def test_a_call_change_reaches_the_threads_topic_of_members_only(meet):
     cid = thread(meet)
     call_id = start_call(meet, cid)["id"]
     ben = _threads_events(meet, "human:ben")
-    assert any(event["kind"] == "call.started" and event["call_id"] == call_id and event["thread_id"] == cid
-               for event in ben)
+    started = [event for event in ben if event["kind"] == "call.started" and event["call_id"] == call_id]
+    assert len(started) == 1 and started[0]["thread_id"] == cid       # one event per change, not one per handler
     assert not [event for event in _threads_events(meet, "human:cara") if event.get("call_id") == call_id]
 
 
@@ -405,3 +422,125 @@ def test_the_declared_call_answers_match_the_live_ones(meet):
     send("DELETE", f"/api/v2/calls/{call_id}/bots/ops", "detachCallBot", {})
     send("POST", f"/api/v2/calls/{call_id}/leave", "leaveCall", {})
     send("POST", f"/api/v2/calls/{call_id}/end", "endCall", {})
+
+
+def _remove_from_thread(meet, cid, actor):
+    with meet.app.state.store.transaction() as c:
+        owner = meet.app.state.calls.auth.identity_for_actor(c, "human:ana")
+        threads.remove_member(c, owner, cid, actor)
+
+
+def test_a_cached_join_is_refused_once_the_person_lost_the_thread(meet):
+    cid = thread(meet)
+    call_id = start_call(meet, cid)["id"]
+    assert post(meet, f"calls/{call_id}/join", {}, token="ben-test", key="ben-join-once")["token"]
+    _remove_from_thread(meet, cid, "human:ben")
+    # The same request replayed from the cache must not hand out a token: authorization runs before the replay.
+    post(meet, f"calls/{call_id}/join", {}, token="ben-test", key="ben-join-once", expected=404)
+
+
+def test_leaving_drops_the_person_from_the_room_and_a_refused_drop_is_retried(meet):
+    cid = thread(meet)
+    call_id = start_call(meet, cid)["id"]
+    room = "tico-call-" + call_id
+    media = meet.app.state.call_media
+    join(meet, call_id, "ben-test")
+    media.rooms[room].add("human:ben")
+    media.down = True
+    post(meet, f"calls/{call_id}/leave", {}, token="ben-test")
+    assert media.removed == []                      # the drop was refused, so it stays pending
+    media.down = False
+    meet.app.state.calls.sweep()                    # the sweep keeps the removal until LiveKit confirms it
+    assert media.removed == [(room, "human:ben")] and "human:ben" not in media.rooms[room]
+    assert [p for p in get(meet, f"calls/{call_id}")["participants"] if p["actor"] == "human:ben"][0]["left_at"]
+
+
+def test_leaving_a_call_you_can_no_longer_read_is_a_bare_acknowledgement(meet):
+    cid = thread(meet)
+    call_id = start_call(meet, cid)["id"]
+    join(meet, call_id, "ben-test")
+    _remove_from_thread(meet, cid, "human:ben")
+    assert post(meet, f"calls/{call_id}/leave", {}, token="ben-test") == {"id": call_id, "left": True}
+    post(meet, f"calls/{call_id}/leave", {}, token="cara-test", expected=404)
+
+
+def test_a_media_restart_before_the_first_sweep_ends_the_call(meet):
+    cid = thread(meet)
+    call_id = start_call(meet, cid)["id"]
+    media = meet.app.state.call_media
+    assert media.running(call_id)                   # the recorder started, so the call's media has been seen
+    media.rooms.pop("tico-call-" + call_id)         # LiveKit restarted and lost the room; no sweep has run since
+    meet.app.state.calls.sweep()
+    ended = get(meet, f"calls/{call_id}")
+    assert ended["state"] == "ended" and ended["end_reason"] == "media_lost"
+
+
+def test_a_call_whose_room_will_not_close_is_finished_once_the_sweep_can_reach_the_media_server(meet):
+    cid = thread(meet)
+    call_id = start_call(meet, cid)["id"]
+    media = meet.app.state.call_media
+    media.down = True
+    post(meet, f"calls/{call_id}/end", {}, token="ana-test")
+    assert not [t for t in thread_texts(meet, cid) if t.startswith("Call transcript")]
+    media.down = False
+    meet.app.state.calls.sweep()
+    meet.app.state.calls.sweep()                    # a second pass posts nothing more
+    transcripts = [t for t in thread_texts(meet, cid) if t.startswith("Call transcript")]
+    assert len(transcripts) == 1
+    with meet.app.state.store.read() as c:
+        assert c.execute("SELECT finalized_at FROM calls WHERE id=?", (call_id,)).fetchone()[0]
+
+
+def test_the_legacy_meeting_controls_refuse_a_call_meeting(meet):
+    cid = thread(meet)
+    call = start_call(meet, cid)
+    post(meet, f"live-meetings/{call['meeting_id']}/control", {"action": "end"}, token="ana-test", expected=409)
+    assert get(meet, f"calls/{call['id']}")["state"] == "live"
+
+
+def test_a_bot_attached_by_someone_who_loses_the_thread_leaves_the_call_and_its_open_turns(meet):
+    cid = thread(meet)
+    call = start_call(meet, cid)
+    call_id, meeting_id = call["id"], call["meeting_id"]
+    join(meet, call_id, "ben-test")
+    post(meet, f"calls/{call_id}/bots", {"bots": ["ops"]}, token="ben-test")
+    meet.app.state.calls.ingest(call_id, "human:ben", PCM_EIGHT_SECONDS, 0)
+    meet.app.state.calls.drain(call_id)
+    settle(meet)
+    assert get(meet, f"calls/{call_id}")["bots"] == ["ops"]
+    _remove_from_thread(meet, cid, "human:ben")
+    meet.app.state.calls.sweep()
+    assert get(meet, f"calls/{call_id}")["bots"] == []
+    with meet.app.state.store.read() as c:
+        open_turns = c.execute("SELECT COUNT(*) FROM live_meeting_turns WHERE meeting_id=? AND bot='ops' "
+                               "AND status IN ('pending','claimed')", (meeting_id,)).fetchone()[0]
+    assert open_turns == 0
+
+
+def test_the_transcript_names_its_meeting_so_the_meetings_rules_decide_who_reads_it(meet):
+    cid = thread(meet)
+    call = start_call(meet, cid)
+    join(meet, call["id"], "ben-test")
+    meet.app.state.calls.ingest(call["id"], "human:ben", PCM_EIGHT_SECONDS, 0)
+    post(meet, f"calls/{call['id']}/end", {}, token="ana-test")
+    with meet.app.state.store.read() as c:
+        row = c.execute("SELECT id,refs_json FROM messages WHERE body LIKE 'Call transcript%'").fetchone()
+        refs = json.loads(row["refs_json"])
+        assert live_privacy.sources(c).references(refs) == {call["meeting_id"]}
+        unattached_bot = threads.viewer(meet.app.state.calls.auth, Identity("bot:ops", "bot"))
+        assert not threads.message_readable(c, unattached_bot, H.message(c, row["id"]))
+
+
+def test_a_call_shows_only_the_people_the_viewer_may_see(meet, monkeypatch):
+    cid = thread(meet)
+    call_id = start_call(meet, cid)["id"]
+    join(meet, call_id, "ben-test")
+    real = teammate_access.levels_for
+
+    def hidden(c, viewer, target, auth=None):
+        levels = real(c, viewer, target, auth)
+        return dict(levels, see=False) if target == "human:ben" else levels
+
+    monkeypatch.setattr(teammate_access, "levels_for", hidden)
+    people = [p["actor"] for p in get(meet, f"calls/{call_id}")["participants"]]
+    assert people == ["human:ana"]
