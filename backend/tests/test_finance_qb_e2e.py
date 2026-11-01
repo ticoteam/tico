@@ -1,7 +1,9 @@
 """A local end-to-end run at the QuickBooks boundary: the real QuickBooks client talks HTTP to scripts/fake_quickbooks.py,
 started here on its own port and stopped by its PID. The backfill reads items, locations, classes and jobs with their
-refs, and the P&L reads by location. A purchase order is refused on a mirrored book (its import and write-out are not
-built), which is checked here; the order leg runs on a native book in test_finance_purchasing.py."""
+refs, and the P&L reads by location. Closing a purchase order is refused on a mirrored book (the provider is not sent
+that yet), which is checked here; purchase orders and estimates written to the fake are checked in
+test_an_order_and_an_estimate_are_stored_with_their_location_class_and_item. The native order leg runs in
+test_finance_purchasing.py."""
 import json
 import socket
 import subprocess
@@ -102,6 +104,29 @@ def test_an_invoice_keeps_its_estimate_link_through_quickbooks(fake_quickbooks):
         [(made.external_id, [{"TxnId": "900", "TxnType": "Estimate"}])]
 
 
+def test_an_order_and_an_estimate_are_stored_with_their_location_class_and_item(fake_quickbooks):
+    _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    line = {"account": "Account:12", "amount": 150_000, "description": "work", "item": "Item:40",
+            "place": "Department:20", "class": "30", "project": ""}
+    order = client.send("purchaseorder.create", {"party": "Vendor:60", "number": "PO-1", "day": "2026-10-10", "due": "",
+                                                 "memo": "", "lines": [{**line, "account": "Account:13"}]},
+                        "purchaseorder:one")
+    estimate = client.send("estimate.create",
+                           {"party": "Customer:50", "number": "EST-1", "day": "2026-10-10", "due": "", "memo": "",
+                            "lines": [line]}, "estimate:one")
+    assert order.ok and estimate.ok, (order, estimate)
+    po = _read(fake_quickbooks, "SELECT * FROM PurchaseOrder STARTPOSITION 1 MAXRESULTS 10")
+    po = po["QueryResponse"]["PurchaseOrder"]
+    est = _read(fake_quickbooks, "SELECT * FROM Estimate STARTPOSITION 1 MAXRESULTS 10")["QueryResponse"]["Estimate"]
+    assert po[0]["DepartmentRef"] == {"value": "20"} and po[0]["POStatus"] == "Open"
+    assert po[0]["Line"][0]["ItemBasedExpenseLineDetail"]["ItemRef"] == {"value": "40"}
+    assert po[0]["Line"][0]["ItemBasedExpenseLineDetail"]["ClassRef"] == {"value": "30"}
+    assert est[0]["DepartmentRef"] == {"value": "20"} and est[0]["CustomerRef"] == {"value": "50"}
+    assert est[0]["Line"][0]["SalesItemLineDetail"]["ItemRef"] == {"value": "40"}
+    assert est[0]["Line"][0]["SalesItemLineDetail"]["ClassRef"] == {"value": "30"}
+
+
 def test_a_connected_book_backfills_from_quickbooks_and_its_pnl_reads_by_location(books, fake_quickbooks):  # noqa: F811
     _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
     client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
@@ -119,7 +144,7 @@ def test_a_connected_book_backfills_from_quickbooks_and_its_pnl_reads_by_locatio
         plain = FR.pnl(c, OWNER, *WINDOW, basis="accrual", at=AT)
         assert by_place["expense"] == sum(plain["expense"]) == 100_000       # QuickBooks says 1000.00 dollars
         assert {str(r["label"]): int(r["expense"]) for r in by_place["rows"]}["Denver"] == 100_000
-        refused = act(c, OWNER, "po_create", {"vendor_id": "x", "po_date": "2026-10-10", "lines": []})
+        refused = act(c, OWNER, "po_close", {"po_id": "x"})
         assert refused.status == "denied" and refused.code == NOT_AVAILABLE, refused
     calls = _fake(fake_quickbooks, "GET", "/_fake/calls")["calls"]
     queried = {str(call["query"].get("query", "")).split()[3] for call in calls

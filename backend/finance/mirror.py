@@ -31,6 +31,7 @@ from .store import banking as SK
 from .store import catalog as SC
 from .store import ledger as SL
 from .store import mirror as SX
+from .store import purchasing as SP
 from .store import tico
 
 OUTBOX_MOST = 50                            # writes out claimed in one pass
@@ -46,15 +47,17 @@ XERO_LOCATION_SETTING = "mirror.xero_location"   # the Xero tracking category wh
 REFUSED = ("bill_update", "bill_approve", "bill_schedule", "invoice_send",
            "payment_create", "payment_cancel", "recipient_add", "contact_create", "contact_update",
            "account_create", "account_update", "feed_match",
-           # purchase orders and estimates are local until the mirror writes them (not built)
-           "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
-           "estimate_accept", "estimate_decline", "estimate_convert",
+           # a purchase order's close and void are not written to the provider yet (its create is)
+           "po_close", "po_void",
            # a job's edits are not written to the provider yet (its create is, through RECORD_KINDS)
            "project_update")
 
 Record = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Item | M.Place | M.Dimension | M.Project
           | M.Refused | M.Ext)
 DOC_TABLES = {"Bill": "fin_bills", "Invoice": "fin_invoices"}   # a document kind with a row of its own
+# A purchase order or estimate written to the provider first: its op's table, and the lines table its kind uses.
+ORDER_TABLES = {"purchaseorder.create": "fin_purchase_orders", "estimate.create": "fin_estimates"}
+ORDER_LINES = {"purchaseorder.create": "po", "estimate.create": "estimate"}
 POSTED = ("Purchase", "Deposit", "Transfer", "SalesReceipt", "RefundReceipt", "VendorCredit")   # posted entries
 JOURNAL_KINDS = ("ManualJournal", "BankTransaction", "BankTransfer", "Overpayment", "Prepayment")   # posted as journals
 TABLE_OF = {"Account": "fin_accounts", "JournalEntry": "fin_entries", "CreditMemo": "fin_entries",
@@ -1339,7 +1342,8 @@ def _need(key: str | None, what: str) -> str:
 
 
 def _doc_out(c: sqlite3.Connection, cid: str, local: Mapping[str, Any]) -> dict[str, Any]:
-    """A bill or invoice as the provider takes it: its party and each line's account by their provider keys."""
+    """A bill, invoice, purchase order or estimate as the provider takes it: its party and each line's account by their
+    provider keys. An invoice made from an estimate names that estimate."""
     lines: list[dict[str, Any]] = []
     for x in cast(list[dict[str, Any]], local["lines"]):
         tags = cast(dict[str, str], x.get("tags") or {})
@@ -1350,8 +1354,13 @@ def _doc_out(c: sqlite3.Connection, cid: str, local: Mapping[str, Any]) -> dict[
             "place": _tag_need(c, cid, "rec_places", tags.get("place", "")),
             "class": _bare(_tag_need(c, cid, "fin_dimensions", tags.get("class", ""))),
             "project": _customer_key(_tag_need(c, cid, "rec_projects", tags.get("project", "")))})
-    return {"party": _need(_key(c, cid, "fin_contacts", str(local["party"])), f"contact {local['party']}"),
-            "number": local["number"], "day": local["day"], "due": local["due"], "memo": local["memo"], "lines": lines}
+    party = _need(_key(c, cid, "fin_contacts", str(local["party"])), f"contact {local['party']}")
+    out: dict[str, Any] = {"party": party, "number": local["number"], "day": local["day"], "due": local["due"],
+                           "memo": local["memo"], "lines": lines}
+    if local.get("estimate_id"):
+        estimate = _need(_key(c, cid, "fin_estimates", str(local["estimate_id"])), f"estimate {local['estimate_id']}")
+        out["linked_estimate"] = _bare(estimate)
+    return out
 
 
 def _bare(key: str) -> str:
@@ -1487,7 +1496,7 @@ def _translate(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any
     """What the provider is sent: its keys for accounts and parties, and the tags as its classes when that is on. A
     write waits (_Missing) while an account or party it names is not in the provider yet; an export drops a contact
     the provider does not hold."""
-    if op in ("bill.create", "invoice.create"):
+    if op in ("bill.create", "invoice.create", *ORDER_TABLES):
         return _doc_out(c, cid, local)
     if op in RECORD_OPS:
         return _record_out(c, cid, op, local)
@@ -1727,6 +1736,10 @@ def _confirm(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any],
             _retire(c, load(c, now), cid, entry, str(local["ext"]), now)
     elif op in ("bill.create", "invoice.create"):
         _confirm_document(c, cid, sent, local, now)
+        if local.get("estimate_id"):
+            _claim_estimate(c, cid, sent, local, now)
+    elif op in ORDER_TABLES:
+        _confirm_order(c, cid, op, local, sent, now)
     elif op in ("bill.void", "invoice.void"):
         _confirm_void(c, cid, DOC_TABLES["Bill" if op.startswith("bill") else "Invoice"], local, sent, now)
     elif op in ("payment.bill", "payment.invoice"):
@@ -1766,7 +1779,8 @@ def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], p
 
 # The creates a provider may already hold when a retry comes: a cut-off call can have landed, and a provider's
 # idempotency key is only kept for a while.
-RETRIED_CREATES = ("bill.create", "invoice.create", "journal.create", "party.create", "account.create",
+RETRIED_CREATES = ("bill.create", "invoice.create", "purchaseorder.create", "estimate.create", "journal.create",
+                   "party.create", "account.create",
                    "payment.bill", "payment.invoice", "writeoff.create", "credit.apply",
                    "item.create", "place.create", "project.create")
 # The revision a provider gives a record it has just created (QuickBooks SyncToken). A provider without counters has
@@ -2254,10 +2268,141 @@ def _writeoff_planner(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
                                 "accounts": [account.code]})
 
 
+def _quickbooks_only(ctx: Ctx, what: str) -> None:
+    """Purchase orders and estimates are written to QuickBooks; Xero's are not written yet."""
+    if _provider(ctx) != "quickbooks":
+        raise FinanceError(NOT_AVAILABLE, f"{what} is written to QuickBooks only")
+
+
+def _order_planner(kind: str) -> handlers.Planner:
+    """A purchase order or estimate written to QuickBooks first: its row comes in when the provider confirms the write,
+    under the id it was sent with. Tico numbers it (QuickBooks keeps the number it is given), and its lines share one
+    location, which is the header's department."""
+    po = kind == "po"
+    op = "purchaseorder.create" if po else "estimate.create"
+    table, party_field, day_field = ("fin_purchase_orders", "vendor_id", "po_date") if po else (
+        "fin_estimates", "customer_id", "estimate_date")
+    word, prefix = ("purchase order", "PO") if po else ("estimate", "EST")
+
+    def planner(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
+        V.only(p, (party_field, "number", day_field, "memo", "lines"))
+        _quickbooks_only(ctx, f"a {word}")
+        cid = _cid(ctx)
+        contact = documents.contact_of(ctx, V.text(p, party_field, 80), "bill" if po else "invoice")
+        day = V.day(p, day_field)
+        lines = AP.doc_lines(p.get("lines"), invoice=not po)
+        if any(x.po_line_id for x in lines):
+            raise invalid("a line names a purchase order line only on a bill")
+        lines, asked = documents.resolve_lines(ctx, who, "bill" if po else "invoice", contact, lines)
+        if asked:
+            raise invalid("say which account each line posts to")
+        if len({dict(x.tags).get("place", "") for x in lines} - {""}) > 1:
+            raise invalid(f"a {word} is in one location: its lines name the same one")
+        number = V.opt_text(p, "number", 80) or SP.next_number(ctx.c, table, ctx.book.id, prefix)
+        if SP.number_taken(ctx.c, table, ctx.book.id, number):
+            raise FinanceError(CONFLICT, f"{word} {number} exists")
+        total = sum(x.amount for x in lines)
+        local_id = SL.new_id()
+        body = {"local_id": local_id, "by": who, "party": str(contact["id"]), "number": number, "day": day, "due": "",
+                "memo": V.opt_text(p, "memo", 500) or "",
+                "lines": [{"account_id": x.account_id, "amount": x.amount, "description": x.description,
+                           "item_id": x.item_id, "tags": dict(x.tags), "taxable": x.taxable} for x in lines]}
+
+        def apply(aid: str) -> handlers.Result:
+            outbox = _queue(ctx.c, cid, op, body, by=who, action_id=aid, at=ctx.at)
+            return {("po_id" if po else "estimate_id"): local_id, "number": number, "outbox_id": outbox,
+                    "status": "queued", "total": total}
+        return handlers.Plan(K.default_gate(ctx.org, who, "po_create" if po else "estimate_create"),
+                             f"Send {word} {number} for {documents.money_of(total)} {ctx.book.base_currency} to "
+                             f"{contact['name']}"[:200],
+                             apply, facts=documents.doc_facts("bill" if po else "invoice", contact, lines, ctx))
+    return planner
+
+
+def _estimate_convert(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
+    """An accepted estimate becomes one invoice draft in QuickBooks, linked to the estimate (the link is best effort: a
+    refusal sends the invoice again without it). The estimate is invoiced when the provider confirms that invoice, so a
+    second conversion is refused while the first is on its way or was refused."""
+    V.only(p, ("estimate_id",))
+    _quickbooks_only(ctx, "an estimate's invoice")
+    cid = _cid(ctx)
+    eid = V.text(p, "estimate_id", 80)
+    est = SP.get(ctx.c, "fin_estimates", eid)
+    if est is None or str(est["book_id"]) != ctx.book.id:
+        raise FinanceError(NOT_FOUND, "no such estimate")
+    status = str(est["status"])
+    if status != "accepted":
+        raise FinanceError(CONFLICT, "that estimate is invoiced already" if status == "invoiced"
+                           else "only an accepted estimate can be invoiced")
+    ref = SX.ref_for_local(ctx.c, cid, "fin_estimates", eid)
+    if ref is None or str(ref["status"]) != "active":
+        raise FinanceError(CONFLICT, "that estimate is not in the provider yet")
+    key = f"invoice.create:estimate:{eid}"
+    if SK.outbox_by_key(ctx.c, key) is not None:
+        raise FinanceError(CONFLICT, "that estimate's invoice is already on its way to the provider, or was refused")
+    customer = documents.contact_of(ctx, str(est["customer_id"]), "invoice")
+    lines = [AP.DocLine(str(r["account_id"]), int(r["amount"]), str(r["description"]),
+                        cast(dict[str, str], SK.loads(r["tags_json"])),
+                        None if r["taxable"] is None else bool(r["taxable"]), str(r["item_id"] or ""))
+             for r in SP.lines(ctx.c, "estimate", eid)]
+    for x in lines:
+        if not handlers.may_write(ctx, who, x.account_id, x.tags):
+            raise denied("a line's account or tags are outside your view")
+    body = {"by": who, "party": str(customer["id"]), "number": documents.next_number(ctx, str(customer["id"])),
+            "day": ctx.today, "due": AP.due_date(ctx.today, None, None) or "", "memo": str(est["memo"] or ""),
+            "estimate_id": eid,
+            "lines": [{"account_id": x.account_id, "amount": x.amount, "description": x.description,
+                       "item_id": x.item_id, "tags": dict(x.tags)} for x in lines]}
+
+    def apply(aid: str) -> handlers.Result:
+        outbox = _queue(ctx.c, cid, "invoice.create", body, by=who, action_id=aid, at=ctx.at, key=key)
+        return {"estimate_id": eid, "outbox_id": outbox, "status": "queued"}
+    return handlers.Plan(K.default_gate(ctx.org, who, "invoice_create"),
+                         f"Invoice estimate {est['number']} as one draft", apply,
+                         facts=documents.doc_facts("invoice", customer, lines, ctx))
+
+
+def _confirm_order(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any], sent: Sent, now: str) -> None:
+    """A purchase order or estimate the provider took from Tico: its row and lines come in under the id it was
+    sent with, bound to the provider's id. A read that got there first stands."""
+    ext = M.Ext(kind=sent.kind, external_id=sent.external_id, revision=sent.revision)
+    table = ORDER_TABLES[op]
+    row = SX.ref(c, cid, table, ext.key)
+    if row is not None and str(row["status"]) == "active":
+        return
+    ctx, po, oid = load(c, now), op == "purchaseorder.create", str(local["local_id"])
+    if SP.get(c, table, oid) is None:
+        by = str(local.get("by") or SYSTEM)
+        lines = [{"account_id": str(x["account_id"]), "item_id": str(x.get("item_id") or "") or None,
+                  "amount": int(x["amount"]), "description": str(x["description"]),
+                  "tags_json": SK.dump(dict(x.get("tags") or {})), "created_at": now, "created_by": by,
+                  **({} if po else {"taxable": None if x.get("taxable") is None else int(bool(x["taxable"]))})}
+                 for x in local["lines"]]
+        head = {"book_id": ctx.book.id, "number": str(local["number"]), "status": "draft",
+                "currency": ctx.book.base_currency, "total": sum(int(x["amount"]) for x in local["lines"]),
+                "memo": str(local["memo"]), "created_at": now, "created_by": by, "updated_at": now,
+                ("vendor_id" if po else "customer_id"): str(local["party"]),
+                ("po_date" if po else "estimate_date"): str(local["day"])}
+        SP.insert(c, table, {"id": oid, **head})
+        SP.insert_lines(c, ORDER_LINES[op], oid, lines)
+    _bind(c, cid, table, oid, ext, now)
+
+
+def _claim_estimate(c: sqlite3.Connection, cid: str, sent: Sent, local: Mapping[str, Any], now: str) -> None:
+    """An invoice made from an accepted estimate invoices it once the provider confirms the invoice, whichever read
+    brought the invoice in."""
+    row = SX.ref(c, cid, "fin_invoices", M.Ext(sent.kind, sent.external_id, sent.revision).key)
+    if row is not None:
+        SP.claim_invoice(c, str(local["estimate_id"]), str(row["local_id"]), now)
+
+
 # Mirror-mode planners for the document actions: the provider takes the write first, so these queue it instead of
 # posting here (actions.py uses them in place of the native planners while the books are a provider's).
 DOC_PLANNERS: dict[str, handlers.Planner] = {
     "bill_create": _create_planner("bill"), "invoice_create": _create_planner("invoice"),
+    "po_create": _order_planner("po"), "estimate_create": _order_planner("estimate"),
+    "estimate_convert": _estimate_convert,
+
     "bill_void": _void_planner("bill"), "invoice_void": _void_planner("invoice"),
     "bill_mark_paid": _payment_planner("bill"), "invoice_record_payment": _payment_planner("invoice"),
     "invoice_write_off": _writeoff_planner,

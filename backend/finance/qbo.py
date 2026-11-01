@@ -36,6 +36,7 @@ PAGE = 1000                            # QuickBooks' most rows in one query or o
 MAX_PAGES = 100                        # a list of items larger than this is refused rather than read forever
 # The transactions a retry looks for first, by entity: a cut-off call may already have landed in QuickBooks.
 TRANSACTIONS = {"bill.create": "Bill", "invoice.create": "Invoice", "journal.create": "JournalEntry",
+                "purchaseorder.create": "PurchaseOrder", "estimate.create": "Estimate",
                 "payment.bill": "BillPayment", "payment.invoice": "Payment", "writeoff.create": "CreditMemo",
                 "credit.apply": "Payment"}
 # A shared record found by its name: the entity it is read from, and the field its name is in.
@@ -349,7 +350,7 @@ class QuickBooks:
         """One write, idempotent by its RequestId. Only a refusal from QuickBooks itself is final."""
         request_id = str(uuid.uuid5(NAMESPACE, key))
         items: dict[str, dict[str, str]] = {}
-        if op == "invoice.create":
+        if op in ("invoice.create", "estimate.create"):
             found = self._item_accounts()
             if isinstance(found, str):
                 return Sent(False, error=found)
@@ -398,6 +399,10 @@ def _write_of(op: str, body: Mapping[str, Any],
     if op == "invoice.create":
         income = Q.income_items(items)
         return "Invoice", "invoice", Q.invoice_body(body, income), {}
+    if op == "purchaseorder.create":
+        return "PurchaseOrder", "purchaseorder", Q.purchase_order_body(body), {}
+    if op == "estimate.create":
+        return "Estimate", "estimate", Q.estimate_body(body, Q.income_items(items)), {}
     if op == "bill.void":
         return "Bill", "bill", Q.delete_body(str(body["ext"]), str(body["revision"])), {"operation": "delete"}
     if op == "invoice.void":

@@ -314,3 +314,80 @@ def test_an_item_change_in_a_mirrored_book_leaves_the_row_as_it_was_until_the_pr
     assert _drain(books, fake, cid, now=LATER) == []
     with books.read() as c:
         assert c.execute("SELECT price FROM rec_items WHERE id=?", (item,)).fetchone()[0] == 21_000
+
+
+def test_a_purchase_order_made_here_is_written_to_quickbooks_and_its_row_comes_in_once_the_provider_confirms(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        tags = {"place": _local(c, "Department:3", "rec_places"), "class": _local(c, "Class:7", "fin_dimensions")}
+        made = act(c, OWNER, "po_create", {
+            "vendor_id": _local(c, "Vendor:9", "fin_contacts"), "po_date": "2026-10-05", "number": "PO-78",
+            "lines": [{"item_id": _local(c, "Item:5", "rec_items"), "amount": 1500, "description": "seats",
+                       "tags": tags}]})
+        assert made.status == "committed", made
+        assert c.execute("SELECT COUNT(*) FROM fin_purchase_orders").fetchone()[0] == 0
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert _sent(fake, "purchaseorder.create")["lines"] == [
+        {"account": "Account:2", "amount": 1500, "description": "seats", "item": "Item:5", "place": "Department:3",
+         "class": "7", "project": ""}]
+    with books.read() as c:
+        assert tuple(c.execute("SELECT number, status, total FROM fin_purchase_orders").fetchone()) == \
+            ("PO-78", "draft", 1500)
+        assert c.execute("SELECT COUNT(*) FROM fin_po_lines").fetchone()[0] == 1
+        ext = c.execute(
+            "SELECT external_id FROM fin_external_refs WHERE local_table='fin_purchase_orders'").fetchone()[0]
+        assert str(ext).startswith("PurchaseOrder:")
+
+
+def test_an_estimate_converted_here_links_its_invoice_and_is_invoiced_once_the_provider_confirms(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "estimate_create", {
+            "customer_id": _local(c, "Customer:4", "fin_contacts"), "estimate_date": "2026-10-05", "number": "EST-7",
+            "lines": [{"item_id": _local(c, "Item:5", "rec_items"), "amount": 1500, "description": "seats"}]})
+        assert made.status == "committed", made
+    assert _drain(books, fake, cid, now=LATER) == []
+    estimate = str(made.result["estimate_id"])
+    with books.transaction() as c:
+        assert act(c, OWNER, "estimate_send", {"estimate_id": estimate}).status == "committed"
+        assert act(c, OWNER, "estimate_accept", {"estimate_id": estimate}).status == "committed"
+        converted = act(c, OWNER, "estimate_convert", {"estimate_id": estimate})
+        assert converted.status == "committed", converted
+        again = act(c, OWNER, "estimate_convert", {"estimate_id": estimate})
+        assert again.status != "committed", again
+        assert c.execute("SELECT status FROM fin_estimates WHERE id=?", (estimate,)).fetchone()[0] == "accepted"
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        ext = c.execute("SELECT external_id FROM fin_external_refs WHERE local_table='fin_estimates'").fetchone()[0]
+        assert _sent(fake, "invoice.create")["linked_estimate"] == str(ext).partition(":")[2]
+        status, invoice = c.execute("SELECT status, invoice_id FROM fin_estimates WHERE id=?", (estimate,)).fetchone()
+        assert status == "invoiced" and c.execute("SELECT COUNT(*) FROM fin_invoices WHERE id=?",
+                                                  (invoice,)).fetchone()[0] == 1
+
+
+def test_a_purchase_order_the_provider_refuses_is_not_booked_here_and_the_reason_is_kept(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "po_create", {"vendor_id": _local(c, "Vendor:9", "fin_contacts"),
+                                           "po_date": "2026-10-05", "lines": [{"account_id": _local(
+                                               c, "Account:2", "fin_accounts"), "amount": 900, "description": "pens"}]})
+        assert made.status == "committed", made
+    fake.replies.append(mirror.Sent(False, error="Vendor is inactive", final=True))
+    problems = _drain(books, fake, cid, now=LATER)
+    assert any("Vendor is inactive" in p for p in problems), problems
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_purchase_orders").fetchone()[0] == 0
+        row = c.execute("SELECT status, last_error FROM fin_outbox WHERE op='purchaseorder.create'").fetchone()
+        assert tuple(row) == ("failed", "Vendor is inactive")

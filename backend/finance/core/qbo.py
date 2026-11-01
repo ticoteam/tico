@@ -669,6 +669,16 @@ def invoice_body(body: Mapping[str, Any], income: Mapping[str, str]) -> dict[str
     return out
 
 
+def purchase_order_body(body: Mapping[str, Any]) -> dict[str, Any]:
+    """A purchase order's request body: a bill's lines on its vendor, open until QuickBooks closes it."""
+    return {**bill_body(body), "POStatus": "Open"}
+
+
+def estimate_body(body: Mapping[str, Any], income: Mapping[str, str]) -> dict[str, Any]:
+    """An estimate's request body: an invoice's lines, since QuickBooks prices an estimate by item too."""
+    return invoice_body(body, income)
+
+
 def bill_payment_body(body: Mapping[str, Any]) -> dict[str, Any]:
     """A bill payment: paid from one bank account (or a credit card, a liability) to one vendor, applied to the bill it
     settles."""
