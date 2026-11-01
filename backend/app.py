@@ -6350,12 +6350,14 @@ def create_app(settings=None):
         who = request.state.identity
         def work(c):
             msg = H.message(c, mid)
-            if not msg or msg["to_actor"] != who.actor:
+            # Addressed to the caller, or reaching them another way (a mention, a DM): a delivery row (threads).
+            if not msg or (msg["to_actor"] != who.actor and not c.execute(
+                    "SELECT 1 FROM message_deliveries WHERE message_id=? AND recipient=?", (mid, who.actor)).fetchone()):
                 raise Problem("forbidden", "You may acknowledge only messages addressed to you", 403)
             auth.conversation(c, who, msg["conversation_id"])
             privacy.require_message(c, who, msg)
-            H.mark_read(c, who.actor, mid)
-            H.mark_delivered(c, who.actor, mid)
+            H.mark_read(c, who.actor, mid, recipient=who.actor)
+            H.mark_delivered(c, who.actor, mid, recipient=who.actor)
             # A waiting CLI has already consumed the answer in its current turn.
             if msg["kind"] == "answer":
                 c.execute("UPDATE jobs SET state='completed' WHERE message_id=? AND state='queued'", (mid,))

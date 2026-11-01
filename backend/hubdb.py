@@ -1641,6 +1641,9 @@ def migrate(conn, adopt_legacy=False):
                  "value_json TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(actor, key))")
     # Which messages could be about a task, so a task's page does not read its whole room (backend/message_links.py).
     from . import message_links
+    from . import threads
+    threads.ensure(conn)
+    threads.migrate(conn)
     message_links.ensure(conn)
     clear_finished_close_times(conn)
     return len(MIGRATIONS)
@@ -3099,9 +3102,11 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
                      bool(refs.get("task") or refs.get("approval")))
         if not solicited:
             day = now()[:10]
+            # Counted per delivery (backend/threads.py): what reached this person, addressed or not.
             n = conn.execute(
-                "SELECT COUNT(*) FROM messages WHERE from_actor=? AND to_actor=? "
-                "AND substr(created,1,10)=? AND refs_json LIKE '%\"unsolicited\": true%'",
+                "SELECT COUNT(*) FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
+                "WHERE m.from_actor=? AND d.recipient=? AND d.created_at>=? "
+                "AND m.refs_json LIKE '%\"unsolicited\": true%'",
                 (actor, target, day)).fetchone()[0]
             if n >= UNSOLICITED_PER_DAY:
                 refuse(conn, actor, "unsolicited",
@@ -3405,9 +3410,13 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
            "read_at": read_at, "expires_at": expires_at, "wait_s": wait_s}
     if delivered_at is None:
         _held_queue_admit(conn, actor, target, row["body"], row["refs_json"])
+    # Native threads (backend/threads.py): the origin, revision and restricted flag; the insert trigger adds the seq.
+    from . import threads
+    threads.stamp(conn, row, conv, refs)
     # Capacity waiting is not loop misconduct, even when this conversation also hit its cap.
-    # rule 3: the loop caps
-    if check_cap and is_bot(actor) and is_bot(target):
+    # rule 3: the loop caps. A message written through threads.post is held by the thread loop guard instead, which
+    # makes the run it would start wait (`capped`) rather than refusing the message.
+    if check_cap and is_bot(actor) and is_bot(target) and threads.POSTING.get() is None:
         since = shift(now(), hours=-1)
         # The cap stops two bots talking in circles, so it counts bot-to-bot messages only: the
         # keeper's notices (a routine's "new task", "finished") and a person's messages are not a
@@ -3421,10 +3430,12 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
                    f"{n} messages in this conversation in the last hour; the cap is {CAP_PER_HOUR}")
     conn.execute(
         "INSERT INTO messages (id, conversation_id, from_actor, to_actor, kind, body, refs_json, "
-        "in_reply_to, created, delivered_at, read_at, expires_at, wait_s) VALUES (:id, "
-        ":conversation_id, :from_actor, :to_actor, :kind, :body, :refs_json, :in_reply_to, "
-        ":created, :delivered_at, :read_at, :expires_at, :wait_s)", row)
+        "in_reply_to, created, delivered_at, read_at, expires_at, wait_s, origin_id, revision, restricted, "
+        "legacy_audience) VALUES (:id, :conversation_id, :from_actor, :to_actor, :kind, :body, :refs_json, "
+        ":in_reply_to, :created, :delivered_at, :read_at, :expires_at, :wait_s, :origin_id, :revision, "
+        ":restricted, :legacy_audience)", row)
     conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created"], conv["id"]))
+    threads.record(conn, message(conn, row["id"]), conv)
     # Notes, comments and runner final replies all pass here, including quiet ones
     # and checks requested by a person. Only the check owner may supply its verdict.
     if kind in ("say", "notice") and wake_rules.VERDICT_FIELDS.search(str(body or "")):
@@ -3540,17 +3551,37 @@ def notice(conn, actor, to_actor, body, refs=None, expires_days=NOTICE_DAYS):
     return message(conn, msg["id"])
 
 
-def mark_delivered(conn, actor, message_id):
-    """The keeper sets this only once the runtime accepted the input (at-least-once delivery)."""
-    conn.execute("UPDATE messages SET delivered_at=? WHERE id=? AND delivered_at IS NULL",
-                 (now(), message_id))
+def _secondary_recipient(conn, message_id, recipient):
+    """True when `recipient` is one of the message's further deliveries (a mention, a DM member), not its addressee:
+    their receipt is theirs alone (message_deliveries), the message row's is the addressee's."""
+    if recipient is None:
+        return False
+    row = _one(conn, "SELECT to_actor FROM messages WHERE id=?", (message_id,))
+    return bool(row) and row["to_actor"] != recipient
+
+
+def mark_delivered(conn, actor, message_id, recipient=None):
+    """The keeper sets this only once the runtime accepted the input (at-least-once delivery). The addressee's
+    delivery row follows the message row (a trigger, backend/threads.py); another recipient's is set here."""
+    if _secondary_recipient(conn, message_id, recipient):
+        conn.execute("UPDATE message_deliveries SET delivered_at=COALESCE(delivered_at,?), state=CASE WHEN "
+                     "state='pending' THEN 'delivered' ELSE state END, updated_at=? WHERE message_id=? AND recipient=?",
+                     (now(), now(), message_id, recipient))
+    else:
+        conn.execute("UPDATE messages SET delivered_at=? WHERE id=? AND delivered_at IS NULL",
+                     (now(), message_id))
     event(conn, actor, "message.delivered", message_id)
     return message(conn, message_id)
 
 
-def mark_read(conn, actor, message_id):
-    conn.execute("UPDATE messages SET read_at=? WHERE id=? AND read_at IS NULL",
-                 (now(), message_id))
+def mark_read(conn, actor, message_id, recipient=None):
+    if _secondary_recipient(conn, message_id, recipient):
+        conn.execute("UPDATE message_deliveries SET read_at=COALESCE(read_at,?), state=CASE WHEN state IN "
+                     "('pending','delivered') THEN 'read' ELSE state END, updated_at=? WHERE message_id=? AND recipient=?",
+                     (now(), now(), message_id, recipient))
+    else:
+        conn.execute("UPDATE messages SET read_at=? WHERE id=? AND read_at IS NULL",
+                     (now(), message_id))
     event(conn, actor, "message.read", message_id)
     return message(conn, message_id)
 
@@ -9120,14 +9151,13 @@ def prime_conversations(conn, ids):
 
 def conversations_for(conn, actor, limit=100):
     """Every conversation this actor is a participant in, newest first."""
+    # Filtered in SQL: a window of the newest conversations company-wide lost an older chat behind many newer ones.
     out = []
-    for row in _rows(conn.execute("SELECT * FROM conversations ORDER BY "
-                                  "COALESCE(last_message_at, created) DESC LIMIT ?", (limit * 5,))):
+    for row in _rows(conn.execute("SELECT * FROM conversations c WHERE EXISTS (SELECT 1 FROM "
+                                  "json_each(CASE WHEN json_valid(c.participants_json) THEN c.participants_json END) WHERE value=?) ORDER BY "
+                                  "COALESCE(c.last_message_at, c.created) DESC LIMIT ?", (actor, limit))):
         row["participants"] = _json(row.get("participants_json"), []) or []
-        if actor in row["participants"]:
-            out.append(row)
-        if len(out) >= limit:
-            break
+        out.append(row)
     return out
 
 
@@ -9260,12 +9290,17 @@ def answers_to(conn, message_ids):
 
 
 def undelivered(conn, to_actor=None, limit=200):
-    """What the keeper's mailbox loop reads: messages no runtime has accepted yet."""
+    """What the keeper's mailbox loop reads: messages no runtime has accepted yet. For one recipient, its pending
+    deliveries (message_deliveries: the messages addressed to it and those that reach it otherwise)."""
+    if to_actor:
+        out = _rows(conn.execute(
+            "SELECT m.* FROM message_deliveries d JOIN messages m ON m.id=d.message_id WHERE d.recipient=? "
+            "AND d.state='pending' AND m.deleted_at IS NULL ORDER BY d.created_at LIMIT ?", (to_actor, limit)))
+        for row in out:
+            row["refs"] = _json(row.get("refs_json"), {}) or {}
+        return out
     sql = "SELECT * FROM messages WHERE delivered_at IS NULL AND deleted_at IS NULL"
     args = []
-    if to_actor:
-        sql += " AND to_actor=?"
-        args.append(to_actor)
     out = _rows(conn.execute(sql + " ORDER BY created LIMIT ?", (*args, limit)))
     for row in out:
         row["refs"] = _json(row.get("refs_json"), {}) or {}
@@ -9276,9 +9311,14 @@ def undelivered(conn, to_actor=None, limit=200):
 # word for word, or SQLite does not use it (`inbox_pages`).
 UNREAD_TERMS = "(delivered_at IS NULL OR read_at IS NULL) AND deleted_at IS NULL"
 UNREAD_INDEX = "CREATE INDEX IF NOT EXISTS messages_unread_to ON messages(to_actor, created) WHERE " + UNREAD_TERMS
-UNREAD_PAGE_SQL = ("SELECT rowid AS _seq,* FROM messages WHERE to_actor=? AND " + UNREAD_TERMS +
-                   " AND (expires_at IS NULL OR expires_at > ?) AND created<=? AND (created<? OR rowid<?)"
-                   " ORDER BY created DESC, rowid DESC LIMIT ?")
+# The inbox reads deliveries (backend/threads.py): a message addressed to the reader, or reaching them another way (a
+# mention, a DM), still waiting. The addressee's row follows the message's delivered_at/read_at. The terms repeat the
+# partial index message_deliveries_waiting word for word, or SQLite does not use it.
+WAITING_TERMS = "d.state IN ('pending','delivered','capped','held')"
+UNREAD_PAGE_SQL = ("SELECT m.rowid AS _seq, m.* FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
+                   "WHERE d.recipient=? AND " + WAITING_TERMS + " AND m.deleted_at IS NULL "
+                   "AND (m.expires_at IS NULL OR m.expires_at > ?) AND d.created_at<=? AND (d.created_at<? OR m.rowid<?) "
+                   "ORDER BY d.created_at DESC, m.rowid DESC LIMIT ?")
 
 
 def inbox_pages(conn, actor, at=None, size=100):
