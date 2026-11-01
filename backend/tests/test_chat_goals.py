@@ -90,8 +90,8 @@ def test_read_access_is_not_chat_access_and_other_rooms_stay_private(api):
     assert get(api, f'conversations/{cid}/goal', 'cara-test')['goal'] is None
     action(api, cid, objective='Unauthorized change', token='cara-test', expected=403)
     other = post(api, 'conversations', {'participants': ['bot:ops']})['id']
-    get(api, f'conversations/{other}/goal', 'cara-test', expected=403)
-    action(api, other, objective='Private room', token='cara-test', expected=403)
+    get(api, f'conversations/{other}/goal', 'cara-test', expected=404)
+    action(api, other, objective='Private room', token='cara-test', expected=404)
 
 
 def test_old_runners_and_unsupported_harnesses(api):

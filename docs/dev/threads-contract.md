@@ -229,7 +229,7 @@ threads.AUDIENCES, threads.PRIVATE_AUDIENCES, threads.SAFE_REF_KEYS
 
 ```python
 threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None,
-             via=None, origin=None, checked=None, attachments=None) -> message view
+             via=None, origin=None, checked=None, attachments=None, as_actor=None, start=None) -> message view
 ```
 - `c`: inside the caller's write transaction (`mutate`/`store.transaction`). `principal`: a `threads.viewer(...)`, or
   an actor string for system writes (`keeper`, a migration) which skip C1.
@@ -244,9 +244,16 @@ threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_mes
   transaction, operation `threads`). `post` applies it with `org_rule_check.apply(c, checked, body, replay)` (the
   payload is the body text) and reads **apply's return**: held → returns `org_rule_check.answer(gate)` and writes no
   message and no delivery; warn → the warned text is written; moved → 409 `moved` (retryable). `post` builds
-  `replay = {"thread_id", "body", "kind", "refs", "parent_message_id", "to_actor", "via", "origin", "attachments"}`
-  from its own arguments: what Send anyway runs (the rules-people track's `threads` replayer: `threads.post` again as
-  the person it was held for, the check skipped).
+  `replay = {"thread_id", "body", "kind", "refs", "parent_message_id", "to_actor", "via", "origin", "attachments",
+  "start"}` from its own arguments: what Send anyway runs (the rules-people track's `threads` replayer: `threads.post`
+  again as the person it was held for, the check skipped, passing `start` through too).
+- **A held message makes nothing.** A post that would make its thread is checked before anything is written, and
+  only a message that goes makes the thread: `parent_message_id` naming a message with no sub-thread yet (the
+  sub-thread is made after the verdict), or `start` with `thread_id=None`: either the new thread's `create`
+  arguments (`{"title", "audience", "audience_group_id", "members", "task_id", "kind"}`) or `{"dm": [members],
+  "title"}` (reuses the open DM with exactly those members, else makes one). A thread made with its first message is
+  always `post(..., start=...)`, never `create`/`dm` followed by `post`: a held first message would leave an empty
+  thread behind. In the replay a `start` post has `thread_id: null`.
 
 Step order (§3.1): (1) the caller authenticated `principal` (actor, represented principal, provenance); (2) C1 post
 right (`can_post`); (3) server mention parse (`threads.mentions(c, thread, body)`); (4) screening for outside
@@ -270,6 +277,7 @@ the thread view (§10, with `id`). `home` and `sub_thread` return the stored row
 threads.create(c, principal, *, title="", audience="members", audience_group_id=None, members=(),
                parent_message_id=None, task_id=None, kind="chat") -> thread view
 threads.dm(c, principal, members, *, title="") -> thread view      # audience='personal', reuses an open DM with exactly these members
+# With a first message: threads.post(c, principal, None, body, start={...create args...} or {"dm": [...]}) (§3.1).
 threads.home(c, owner_actor, *, create=True) -> thread row          # lazy Home for bot:/human:/group: (a bot's open shared room is its Home); None when create=False and none
 threads.sub_thread(c, principal, parent_message_id) -> thread row   # get-or-create, race-safe on the unique index
 # A new sub-thread's `subject` is threads.sub_thread_title(parent body): first line, no markdown or @mentions,
@@ -465,6 +473,11 @@ view in `backend/thread_events.py`):
 `changes.kind` values written by core's triggers: `created`, `renamed`, `archived`, `unarchived`, `audience`,
 `members`, `sub_thread`, `counters` (on `conversations`), `read` (on `thread_followers`, `ref` = actor),
 `reactions` (on `message_reactions`, `ref` = message id).
+
+`counters` does **not** fire per message. A new message moves its thread's counters, and the `messages` event already
+carries them (`message_seq`, and the thread's `last_seq` is the highest `message_seq` seen): clients derive unread
+counts and badges from `messages` events plus their own `read` events. `counters` is written only when the counters
+change without a message (the threads migration, a repair), and tells clients to replace their numbers.
 
 ## 10. REST shapes (§3.4; T2 builds the routes on these service functions)
 
