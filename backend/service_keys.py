@@ -34,7 +34,7 @@ ROUTES = {
     "tasks": {("POST", INBOUND_PATH)},
     "update": {("GET", UPDATE_PATH), ("POST", UPDATE_PATH), ("POST", UPDATE_PATH + "/check")},
 }
-FIELDS = ("id", "label", "scope", "created", "created_by", "last_used", "revoked_at", "revoked_by", "made_with_token")
+FIELDS = ("id", "label", "scope", "created_at", "created_by", "last_used_at", "revoked_at", "revoked_by", "made_with_token")
 
 
 def allowed(scope, method, path):
@@ -66,7 +66,7 @@ def listing(c, auth, who):
     _admin(auth, who)
     return [dict(row) for row in c.execute("SELECT " + ",".join("k." + f for f in FIELDS) + ",t.label AS token_label "
                                            "FROM service_keys k LEFT JOIN human_tokens t ON t.id=k.made_with_token "
-                                           "ORDER BY k.created DESC")]
+                                           "ORDER BY k.created_at DESC")]
 
 
 def create(c, auth, who, body):
@@ -76,10 +76,10 @@ def create(c, auth, who, body):
         raise Problem("forbidden", "Only the owner makes an update key: only the owner updates this install", 403)
     key, key_id, now = PREFIX + secrets.token_urlsafe(30), H.new_id(), H.now()
     made_with = who.token_id or None
-    c.execute("INSERT INTO service_keys(id,label,key_hash,created,created_by,scope,made_with_token) VALUES(?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO service_keys(id,label,key_hash,created_at,created_by,scope,made_with_token) VALUES(?,?,?,?,?,?,?)",
               (key_id, body.label, digest(key), now, who.actor, body.scope, made_with))
     H.event(c, who.actor, "service_key.create", key_id, {"label": body.label, "scope": body.scope, "made_with_token": made_with})
-    return {"id": key_id, "key": key, "label": body.label, "scope": body.scope, "created": now, "made_with_token": made_with}
+    return {"id": key_id, "key": key, "label": body.label, "scope": body.scope, "created_at": now, "made_with_token": made_with}
 
 
 def revoke(c, auth, who, key_id):
@@ -146,7 +146,7 @@ def upsert(c, auth, who, body):
                             labels=body.labels or [], type=type_id, step=step)
         # Rule 7 above read the other system's own words; the line naming it is Tico's.
         c.execute("UPDATE tasks SET body=? WHERE id=?", (body.body + footer, row["id"]))
-        c.execute("INSERT INTO service_key_tasks(key_id,external_key,task_id,created) VALUES(?,?,?,?)",
+        c.execute("INSERT INTO service_key_tasks(key_id,external_key,task_id,created_at) VALUES(?,?,?,?)",
                   (key_id, body.key, row["id"], H.now()))
         for url in dict.fromkeys(body.links):
             H.task_link(c, H.KEEPER, row["id"], url)

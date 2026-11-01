@@ -78,49 +78,49 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 
 | Table | Columns worth knowing | Notes |
 |---|---|---|
-| `bots` | `slug, display_name, runtime, model, effort, state, created, last_turn_at` | `state`: active, paused, planned, quarantined |
+| `bots` | `slug, display_name, runtime, model, effort, state, created_at, last_turn_at` | `state`: active, paused, planned, quarantined |
 | `bot_config` | `bot, team, operator, description, reports_to, repo, thread_mode, revision` | the team chart |
 | `bot_status` | `bot, state, focus, task_id, since, last_turn_at, last_result, next_due, open_tasks, needs_human` | live status; history in `bot_status_history(bot, state, focus, since, until, reason, by)` |
-| `humans` | `id, name, email, slack_id, teams_json` | bots do not get `email` |
-| `seats` | `id, title, description, reports_to, team, created, created_by, updated, updated_by, closed_at, closed_by` | Recruiting seats, readable by everyone like the chart; open ones have `closed_at` NULL; `reports_to` is a bot slug, `human:<id>` or `seat:<id>` |
-| `conversations` | `id, kind, scope, subject, task_id, participants_json, owner_actor, room_key, created, last_message_at, closed_at` | `scope`: direct, personal, shared, task |
-| `messages` | `id, conversation_id, from_actor, to_actor, kind, body, refs_json, in_reply_to, created, delivered_at, read_at, wait_s` | `kind`: say, ask, answer, notice, steer |
-| `tasks` | `id, title, body, requester, owner, status, due, goal_id, conversation_id, created, updated, done_at, closed_at, closed_by, note, version, acceptance_json, type_id, step_id, number, step_rank, waiting_on` | `status`: open, doing, waiting, done, closed, declined; `waiting_on` the person a waiting task waits on; `number` is the team-wide ticket number a numbered type gives (NULL until one does), `step_rank` the task's place within its step, lower first ([Tasks](tasks.md)) |
-| `task_relations` | `from_task, to_task, kind, created_by, created` | every task-to-task relationship, read only when both tasks are; `kind`: `parent` (from is a subtask of to), `blocks` (from blocks to), `related` (stored once, lower id first), `duplicate_of`, `follow_up` (from was split off or followed up from to). It replaces the old `tasks.parent_id` and `tasks.blocked_by`: a task's parent is `SELECT to_task FROM task_relations WHERE from_task=:task AND kind='parent'`, its subtasks `SELECT from_task ... WHERE to_task=:task AND kind='parent'`, its blockers `SELECT from_task ... WHERE to_task=:task AND kind='blocks'` |
-| `task_types` | `id, name, numbered, created, updated` | types and, in `task_steps(id, type_id, name, position, status)`, their steps; `numbered` is 1 when the type numbers its tasks |
+| `humans` | `id, name, email, slack_id, teams` | bots do not get `email` |
+| `seats` | `id, title, description, reports_to, team, created_at, created_by, updated_at, updated_by, closed_at, closed_by` | Recruiting seats, readable by everyone like the chart; open ones have `closed_at` NULL; `reports_to` is a bot slug, `human:<id>` or `seat:<id>` |
+| `conversations` | `id, kind, scope, subject, task_id, participants, owner_actor, room_key, created_at, last_message_at, closed_at` | `scope`: direct, personal, shared, task |
+| `messages` | `id, conversation_id, from_actor, to_actor, kind, body, refs, in_reply_to, created_at, delivered_at, read_at, wait_s` | `kind`: say, ask, answer, notice, steer |
+| `tasks` | `id, title, body, requester, owner, status, due, goal_id, conversation_id, created_at, updated_at, done_at, closed_at, closed_by, note, version, acceptance, type_id, step_id, number, step_rank, waiting_on` | `status`: open, doing, waiting, done, closed, declined; `waiting_on` the person a waiting task waits on; `number` is the team-wide ticket number a numbered type gives (NULL until one does), `step_rank` the task's place within its step, lower first ([Tasks](tasks.md)) |
+| `task_relations` | `from_task, to_task, kind, created_by, created_at` | every task-to-task relationship, read only when both tasks are; `kind`: `parent` (from is a subtask of to), `blocks` (from blocks to), `related` (stored once, lower id first), `duplicate_of`, `follow_up` (from was split off or followed up from to). It replaces the old `tasks.parent_id` and `tasks.blocked_by`: a task's parent is `SELECT to_task FROM task_relations WHERE from_task=:task AND kind='parent'`, its subtasks `SELECT from_task ... WHERE to_task=:task AND kind='parent'`, its blockers `SELECT from_task ... WHERE to_task=:task AND kind='blocks'` |
+| `task_types` | `id, name, numbered, created_at, updated_at` | types and, in `task_steps(id, type_id, name, position, status)`, their steps; `numbered` is 1 when the type numbers its tasks |
 | `task_events` | `task_id, ts, actor, field, old, new, note` | every change to a task |
-| `task_roles` | `task_id, role, actor, added_by, created` | who is on a task, by role (a short name the team chooses: `developer`, `reviewer`, `qa` ...); one actor may hold several roles on a task |
-| `goals` | `id, title, owner, parent_id, body, status, status_note, status_by, status_at, status_source, suggest_status, suggest_note, suggest_at, rank, last_read_at, last_read_by, created, created_by, updated` | what every human and bot is for; `status`: red, yellow, green, gray (no data), done, dropped, or NULL while not yet scored; `status_source`: `auto` (the Strategy Bot's arithmetic) or `person` (set by hand, sticks until handed back); `suggest_*` is what the arithmetic says over a human's colour; `parent_id` is the goal it supports (optional); `owner` is `bot:x`, `human:x` or `company`; `tasks.goal_id` names the goal a task serves |
+| `task_roles` | `task_id, role, actor, added_by, created_at` | who is on a task, by role (a short name the team chooses: `developer`, `reviewer`, `qa` ...); one actor may hold several roles on a task |
+| `goals` | `id, title, owner, parent_id, body, status, status_note, status_by, status_at, status_source, suggest_status, suggest_note, suggest_at, rank, last_read_at, last_read_by, created_at, created_by, updated_at` | what every human and bot is for; `status`: red, yellow, green, gray (no data), done, dropped, or NULL while not yet scored; `status_source`: `auto` (the Strategy Bot's arithmetic) or `person` (set by hand, sticks until handed back); `suggest_*` is what the arithmetic says over a human's colour; `parent_id` is the goal it supports (optional); `owner` is `bot:x`, `human:x` or `company`; `tasks.goal_id` names the goal a task serves |
 | `goal_events` | `goal_id, ts, actor, field, old, new, note, status_by, status_source` | every change to a goal; a `status` row says who set it and how |
-| `kpis` | `id, slug, name, definition, unit, direction, cadence, owner, source_note, definition_version, created, created_by, updated` (`goal_id` and `target` are kept for the rows that had them) | a measure that stands on its own; `direction`: up, down, range; `cadence`: daily, weekly, monthly |
-| `goal_kpis` | `goal_id, kpi_id, kind, baseline, baseline_at, target, deadline, min, max, created, created_by, updated, updated_by` | the link between a goal and a KPI, holding the target: `kind` is `improve` (baseline, target, deadline), `maintain` (min, max) or `none`; `kpi_id` may be `auto:<bot>:<metric>` |
-| `kpi_readings` | `kpi_id, ts, value, actor, source, note, created, period_start, period_end, collected_at, evidence, quality, definition_version, supersedes` | appended, never edited; `period_start` and `period_end` are the business time the value describes (`ts` equals `period_end`), `collected_at` when it was collected; `quality`: measured, estimate, partial; a correction is a new row whose `supersedes` names the old one |
+| `kpis` | `id, slug, name, definition, unit, direction, cadence, owner, source_note, definition_version, created_at, created_by, updated_at` (`goal_id` and `target` are kept for the rows that had them) | a measure that stands on its own; `direction`: up, down, range; `cadence`: daily, weekly, monthly |
+| `goal_kpis` | `goal_id, kpi_id, kind, baseline, baseline_at, target, deadline, min, max, created_at, created_by, updated_at, updated_by` | the link between a goal and a KPI, holding the target: `kind` is `improve` (baseline, target, deadline), `maintain` (min, max) or `none`; `kpi_id` may be `auto:<bot>:<metric>` |
+| `kpi_readings` | `kpi_id, ts, value, actor, source, note, created_at, period_start, period_end, collected_at, evidence, quality, definition_version, supersedes` | appended, never edited; `period_start` and `period_end` are the business time the value describes (`ts` equals `period_end`), `collected_at` when it was collected; `quality`: measured, estimate, partial; a correction is a new row whose `supersedes` names the old one |
 | `kpi_definitions` | `kpi_id, version, ts, actor, name, definition, unit, direction, cadence, source_note` | every version of a KPI's definition |
 | `goal_checkins` | `goal_id, kpi_id, ts, author, source_actor, body, signal` | the owner's own words on how a goal is going; `signal`: on_track, at_risk, off_track |
-| `goal_proposals` | `id, kind, goal_id, kpi_id, payload_json, reason, proposed_by, proposed_at, status, decided_by, decided_at` | a change waiting for its owner to confirm |
-| `goal_asks` | `kind, ref, owner, task_id, created` | the Strategy Bot's task asking a person about a KPI or proposal; `kind`: kpi_red, kpi_stale, proposal; `ref`: the KPI or proposal id |
-| `task_delegations` | `task_id, delegate, requested_by, message_id, expires` | |
-| `approvals` | `id, kind, task_id, message_id, payload_json, requested_by, decided_by, decision, decided_at, consumed_at, created` | `kind`: send, spend, publish, merge |
-| `jobs` | `id, message_id, bot, state, created, attempt_id` | one per message a bot has to act on; `state`: queued, leased, running, input, completed, failed, uncertain, cancelled |
-| `attempts` | `id, job_id, bot, runner_id, state, lease_until, created, started, finished, result_json, final_text` | a run (`state`: leased, running, input, completed, failed, interrupted, expired); its streamed output is `attempt_events(attempt_id, seq, kind, payload_json, created)` |
-| `turns` | `id, bot, started, finished, trigger, message_id, task_id, exit, tokens_in, tokens_out, cost, summary, input_tokens, cached_tokens, output_tokens, model, provider, est_cost_usd, usage_reason, billing, trigger_kind, trigger_source, purpose, writes, outcome, did_nothing, rotated, session_kind, session_why, rule_id` | one per run (`id` = the run's attempt id); `exit` is null while running. **Sum `input_tokens`, `cached_tokens`, `output_tokens` and `est_cost_usd`** (input = `input_tokens` + `cached_tokens`); every run finished from this change on, failed, interrupted or usage-limited, has them set (older runs keep what they had, and some have none). A run whose runner counted nothing reads 0 tokens and $0, and `usage_reason` says why (`usage_unreported`, `usage_limited`, `no_result`); `cost_unpriced` means tokens were counted but the model has no list price, so `est_cost_usd` is null. On a run finished from this change on, a null `usage_reason` means usage was measured; an older run has a null reason whether or not it was. **Deprecated: `tokens_in`, `tokens_out` and `cost`.** They are no longer written and the old rows keep their data. `tokens_in` and `tokens_out` were the runner's session counter (a resumed thread's running total, so each turn re-counted the whole session), which is why they run about 35x the real per-run figures; `cost` was never filled. Do not sum them. `trigger_kind`, `writes` and `outcome` are explained under [What woke each run](#what-woke-each-run-and-what-it-did) |
+| `goal_proposals` | `id, kind, goal_id, kpi_id, payload, reason, proposed_by, proposed_at, status, decided_by, decided_at` | a change waiting for its owner to confirm |
+| `goal_asks` | `kind, ref, owner, task_id, created_at` | the Strategy Bot's task asking a person about a KPI or proposal; `kind`: kpi_red, kpi_stale, proposal; `ref`: the KPI or proposal id |
+| `task_delegations` | `task_id, delegate, requested_by, message_id, expires_at` | |
+| `approvals` | `id, kind, task_id, message_id, payload, requested_by, decided_by, decision, decided_at, consumed_at, created_at` | `kind`: send, spend, publish, merge |
+| `jobs` | `id, message_id, bot, state, created_at, attempt_id` | one per message a bot has to act on; `state`: queued, leased, running, input, completed, failed, uncertain, cancelled |
+| `attempts` | `id, job_id, bot, runner_id, state, lease_until, created_at, started_at, finished_at, result, final_text` | a run (`state`: leased, running, input, completed, failed, interrupted, expired); its streamed output is `attempt_events(attempt_id, seq, kind, payload_json, created)` |
+| `turns` | `id, bot, started_at, finished_at, trigger, message_id, task_id, exit, tokens_in, tokens_out, cost, summary, input_tokens, cached_tokens, output_tokens, model, provider, est_cost_usd, usage_reason, billing, trigger_kind, trigger_source, purpose, writes, outcome, did_nothing, rotated, session_kind, session_why, rule_id` | one per run (`id` = the run's attempt id); `exit` is null while running. **Sum `input_tokens`, `cached_tokens`, `output_tokens` and `est_cost_usd`** (input = `input_tokens` + `cached_tokens`); every run finished from this change on, failed, interrupted or usage-limited, has them set (older runs keep what they had, and some have none). A run whose runner counted nothing reads 0 tokens and $0, and `usage_reason` says why (`usage_unreported`, `usage_limited`, `no_result`); `cost_unpriced` means tokens were counted but the model has no list price, so `est_cost_usd` is null. On a run finished from this change on, a null `usage_reason` means usage was measured; an older run has a null reason whether or not it was. **Deprecated: `tokens_in`, `tokens_out` and `cost`.** They are no longer written and the old rows keep their data. `tokens_in` and `tokens_out` were the runner's session counter (a resumed thread's running total, so each turn re-counted the whole session), which is why they run about 35x the real per-run figures; `cost` was never filled. Do not sum them. `trigger_kind`, `writes` and `outcome` are explained under [What woke each run](#what-woke-each-run-and-what-it-did) |
 | `run_weekly` | `week, bot, trigger, purpose, runs, input_tokens, cached_input_tokens, output_tokens, acted, no_change, nothing_to_do, unknown, did_nothing, rotated, acted_pct, no_change_pct, nothing_to_do_pct, unknown_pct` | a read-only view: runs per week, bot, trigger and purpose, every attempt counted ([below](#what-woke-each-run-and-what-it-did)) |
 | `rule_weekly` | `week, bot, rule, runs, input_tokens, cached_input_tokens, output_tokens, acted, did_nothing, did_nothing_pct` | a read-only view: runs per week, bot and [wake rule](how-it-works.md#what-happens-when) (`turns.rule_id`, the rule that woke the run; `unknown` for a run before rules), with tokens and the share that did nothing |
 | `schedules` | `id, bot, routine_key, title, cron, event_name, playbook, timezone and enabled (schedule_config), last_fired, next_due, deleted_at` | routines from before Automations, kept but no longer fired (`docs/routines.md`); `schedule_occurrences(schedule_id, occurrence, task_id, outcome)` says what each firing did |
-| `events` | `ts, actor, action, target, detail_json` | the audit log; `action` such as `task.create`, `sql.query` |
-| `slack_posts` | `message_id, bot, state, attempts, next_attempt, slack_ts, created, updated` | Owner-only outbound queue status for messages the Owner may read; message text, destination and raw errors are hidden. Join `messages` and filter `json_extract(messages.refs_json, '$.task')` for one task. Other callers receive no rows. |
-| `refusals` | `ts, actor, rule, detail_json, severity` | the rule a bot broke |
-| `meetings` | `id, title, owner, recorded_by, transcript_readable, notes, created, updated` | your notes; every team meeting |
-| `meeting_items` | `id, meeting_id, section, text, detail_json, quote, at_ms, status, created_by, updated_by, pushed_at, result_ref, created, updated` | a meeting's action items; `section`: doc, task, feature (older rows may say decision or question); `status`: proposed, pushed, dismissed; `result_ref` is the Tico task a push made. Visible exactly where its meeting is ([Meetings](meetings.md), What a meeting turns into) |
-| `meeting_comments` | `id, meeting_id, author, text, at_ms, created` | the thread beside a meeting: anyone who can open it can add to it ([Meetings](meetings.md)). Visible exactly where its meeting is |
-| `import_refs` | `source, external_id, meeting_id, runner_id, created` | which outside record a meeting was imported from — one row per Close call imported before the transcript-only worker ([Meetings](meetings.md), Close). Visible exactly where its meeting is |
-| `docs` | `id, path, title, body, locked, version, created_by, created, updated_by, updated` | internal Docs, readable by teammates |
-| `doc_versions` | `doc_id, version, title, path, body, actor, created, note` | versions of visible internal Docs |
-| `linked_docs` | `id, title, url, kind, description, added_by, created, updated` | linked Docs |
+| `events` | `ts, actor, action, target, detail` | the audit log; `action` such as `task.create`, `sql.query` |
+| `slack_posts` | `message_id, bot, state, attempts, next_attempt_at, slack_ts, created_at, updated_at` | Owner-only outbound queue status for messages the Owner may read; message text, destination and raw errors are hidden. Join `messages` and filter `json_extract(messages.refs, '$.task')` for one task. Other callers receive no rows. |
+| `refusals` | `ts, actor, rule, detail, severity` | the rule a bot broke |
+| `meetings` | `id, title, owner, recorded_by, transcript_readable, notes, created_at, updated_at` | your notes; every team meeting |
+| `meeting_items` | `id, meeting_id, section, text, detail, quote, at_ms, status, created_by, updated_by, pushed_at, result_ref, created_at, updated_at` | a meeting's action items; `section`: doc, task, feature (older rows may say decision or question); `status`: proposed, pushed, dismissed; `result_ref` is the Tico task a push made. Visible exactly where its meeting is ([Meetings](meetings.md), What a meeting turns into) |
+| `meeting_comments` | `id, meeting_id, author, text, at_ms, created_at` | the thread beside a meeting: anyone who can open it can add to it ([Meetings](meetings.md)). Visible exactly where its meeting is |
+| `import_refs` | `source, external_id, meeting_id, runner_id, created_at` | which outside record a meeting was imported from — one row per Close call imported before the transcript-only worker ([Meetings](meetings.md), Close). Visible exactly where its meeting is |
+| `docs` | `id, path, title, body, locked, version, created_by, created_at, updated_by, updated_at` | internal Docs, readable by teammates |
+| `doc_versions` | `doc_id, version, title, path, body, actor, created_at, note` | versions of visible internal Docs |
+| `linked_docs` | `id, title, url, kind, description, added_by, created_at, updated_at` | linked Docs |
 | `bot_files` | `id, bot, scope, identity, title, kind, locator, current_version, task_id, conversation_id` | Files, with the same task, conversation or bot visibility as their APIs |
-| `bot_file_versions`, `bot_file_activity` | `file_id, version` or `file_id, action, actor, created` | versions and activity of visible Files |
+| `bot_file_versions`, `bot_file_activity` | `file_id, version` or `file_id, action, actor, created_at` | versions and activity of visible Files |
 | `documents`, `document_versions` | legacy mirror fields | compatibility tables for the older docs mirror |
-| `learnings` | `id, integration, actor, text, created, deleted_at` | Tools: what bots and humans learned about a tool (`integration` is the stored column; `integrations/`, `hub tool learn`) |
+| `learnings` | `id, integration, actor, text, created_at, deleted_at` | Tools: what bots and humans learned about a tool (`integration` is the stored column; `integrations/`, `hub tool learn`) |
 | `assistant_action_weekly`, `mcp_call_weekly` | `week, proposer, status, actions, share_pct` and `week, bot, tool, calls, errors, error_pct, avg_ms, max_ms` | read-only totals for the owner and a bot the owner grants them (API only: `PUT /api/v2/outcome-stats/readers/<slug>`; revoke with `read: false`): how Assistant and BotOps proposals settled (`status`: done, failed, cancelled, expired ...) and how bot MCP tool calls went, per week. No row, text, id or person is in them; the underlying `assistant_actions` stays unreadable to a bot. The same bot may call `hub mcp stats` (no `--via`) |
 
 Only the signed-in owner can grant or revoke access; personal API tokens and delegated Assistant or BotOps turns cannot.
@@ -137,31 +137,31 @@ Tool names in the MCP totals and a granted bot's `hub mcp stats` are registered 
 Queued work, oldest first:
 
 ```sql
-SELECT bot, count(*) AS queued, min(created) AS oldest
+SELECT bot, count(*) AS queued, min(created_at) AS oldest
 FROM jobs WHERE state='queued' GROUP BY bot ORDER BY queued DESC
 ```
 
 My open tasks (a bot's own; a human swaps in `human:<id>`):
 
 ```sql
-SELECT id, status, title, requester, due, updated
-FROM tasks WHERE owner=:me AND status IN ('open','doing','waiting') ORDER BY due, updated
+SELECT id, status, title, requester, due, updated_at
+FROM tasks WHERE owner=:me AND status IN ('open','doing','waiting') ORDER BY due, updated_at
 ```
 
 What is waiting on a human, and for how long:
 
 ```sql
-SELECT t.owner, t.title, t.updated, substr(m.body, 1, 100) AS question
+SELECT t.owner, t.title, t.updated_at, substr(m.body, 1, 100) AS question
 FROM tasks t JOIN messages m ON m.conversation_id=t.conversation_id AND m.kind='ask'
-WHERE t.status='waiting' ORDER BY t.updated
+WHERE t.status='waiting' ORDER BY t.updated_at
 ```
 
 The last run of every bot, with the week's count and failures:
 
 ```sql
-SELECT bot, max(started) AS last_turn, count(*) AS turns,
+SELECT bot, max(started_at) AS last_turn, count(*) AS turns,
        sum(exit IN ('failed', 'expired')) AS failed
-FROM turns WHERE started > strftime('%Y-%m-%dT%H:%M:%S', 'now', '-7 days')
+FROM turns WHERE started_at > strftime('%Y-%m-%dT%H:%M:%S', 'now', '-7 days')
 GROUP BY bot ORDER BY last_turn DESC
 ```
 
@@ -194,10 +194,10 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
   as it ends (it looked, and nothing had moved) and `nothing_to_do` when there was no open task to act on (no
   task, or one already done, closed or declined).
 - **What became of it**: when a bot's task sits at `done` or `review` and someone other than the bot or the keeper
-  moves it on, the run that delivered it gets one `turn.outcome` event (`target` the turn id, `detail_json`
+  moves it on, the run that delivered it gets one `turn.outcome` event (`target` the turn id, `detail`
   `{task_id, outcome, from, to}`): `accepted` (closed, or `review` moved to `done`), `edited` (its title or body
   rewritten) or `overridden` (sent back to work, declined or handed to another owner). The first is the run's outcome;
-  later moves add none. `SELECT json_extract(detail_json,'$.outcome') o, count(*) FROM events WHERE
+  later moves add none. `SELECT json_extract(detail,'$.outcome') o, count(*) FROM events WHERE
   action='turn.outcome' GROUP BY o`. A caller's own decision calls get the same from `hub decision outcome`
   (`decision.outcome` events, target the `judge.call` event id).
 - **`did_nothing`**: 1 when `writes` is 0, else 0: the exact flag to measure against. It sees every write that
@@ -214,7 +214,7 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
   (the run failed on a prompt too large to send even after compacting, so Tico cleared the session for the next
   run); `resumed` may carry `compacted`. NULL from an older runner. A new session for any reason but `none_saved` is
   also a line in its task's history (`task_events.field = 'session'`). Unusual: `SELECT bot, count(*) FROM turns
-  WHERE session_kind = 'new' AND session_why <> 'none_saved' AND started > date('now', '-1 day') GROUP BY bot`.
+  WHERE session_kind = 'new' AND session_why <> 'none_saved' AND started_at > date('now', '-1 day') GROUP BY bot`.
 
 `purpose` is a short label for what the run was for (`review PR`, `answer person message`): the place that wakes the bot may name it, otherwise it is the default for that bot and trigger, and runs from before it existed were filled the same way. A wake the map does not know reads `unknown`. Group by it: `SELECT purpose, sum(runs), sum(input_tokens) FROM run_weekly GROUP BY purpose`.
 
@@ -254,8 +254,8 @@ same bot leave no settled comparison state because their writes cannot be attrib
 from last week for the audit:
 
 ```sql
-SELECT ts, json_extract(detail_json, '$.bot') AS bot, json_extract(detail_json, '$.task') AS task,
-       json_extract(detail_json, '$.rule') AS rule, json_extract(detail_json, '$.trigger') AS trigger, target AS message
+SELECT ts, json_extract(detail, '$.bot') AS bot, json_extract(detail, '$.task') AS task,
+       json_extract(detail, '$.rule') AS rule, json_extract(detail, '$.trigger') AS trigger, target AS message
 FROM events WHERE action = 'wake.skipped' AND ts >= date('now', '-13 days', 'weekday 1')
   AND ts < date('now', '-6 days', 'weekday 1') ORDER BY random() LIMIT 50
 ```
@@ -264,16 +264,16 @@ Replies Tico did not post: a turn woken by Tico on a task already finished that 
 `reply.withheld` event (`target` is the run; `bot`, `task`, `to`); its text stays on the run (`attempts.final_text`):
 
 ```sql
-SELECT ts, json_extract(detail_json, '$.bot') AS bot, json_extract(detail_json, '$.task') AS task,
-       json_extract(detail_json, '$.to') AS to_person, target AS run
+SELECT ts, json_extract(detail, '$.bot') AS bot, json_extract(detail, '$.task') AS task,
+       json_extract(detail, '$.to') AS to_person, target AS run
 FROM events WHERE action = 'reply.withheld' ORDER BY ts DESC LIMIT 50
 ```
 
 Who asked what today:
 
 ```sql
-SELECT created, from_actor, to_actor, substr(body, 1, 90) AS ask
-FROM messages WHERE kind='ask' AND created >= strftime('%Y-%m-%d', 'now') ORDER BY created DESC
+SELECT created_at, from_actor, to_actor, substr(body, 1, 90) AS ask
+FROM messages WHERE kind='ask' AND created_at >= strftime('%Y-%m-%d', 'now') ORDER BY created_at DESC
 ```
 
 Routine outcomes from before Automations, most recent first:
@@ -293,7 +293,7 @@ SELECT ts, actor, field, old, new, note FROM task_events WHERE task_id=:task ORD
 What a run said (its streamed output, in order):
 
 ```sql
-SELECT seq, kind, json_extract(payload_json, '$.text') AS text
+SELECT seq, kind, json_extract(payload, '$.text') AS text
 FROM attempt_events WHERE attempt_id=:attempt ORDER BY seq
 ```
 
@@ -316,7 +316,7 @@ WHERE ts > strftime('%Y-%m-%dT%H:%M:%S', 'now', '-7 days') GROUP BY actor, rule 
 Who queried what (the audit of this very feature):
 
 ```sql
-SELECT ts, actor, json_extract(detail_json, '$.rows') AS rows, json_extract(detail_json, '$.sql') AS sql
+SELECT ts, actor, json_extract(detail, '$.rows') AS rows, json_extract(detail, '$.sql') AS sql
 FROM events WHERE action='sql.query' ORDER BY ts DESC LIMIT 20
 ```
 
@@ -325,9 +325,9 @@ From a bot: `hub sql "SELECT ..." --param me=bot:seo`. From Ana's Mac: `scripts/
 For a task's Slack notification status (Owner only):
 
 ```sql
-SELECT p.message_id, p.state, p.created
+SELECT p.message_id, p.state, p.created_at
 FROM slack_posts p JOIN messages m ON m.id = p.message_id
-WHERE json_extract(m.refs_json, '$.task') = :task_id;
+WHERE json_extract(m.refs, '$.task') = :task_id;
 ```
 
 No rows means no visible queued post for that task. `slack_events` and the other gateway
@@ -339,14 +339,14 @@ internals remain unavailable through SQL; use the Slack history tools to read me
 you may read, including when joining the tables:
 
 ```sql
-SELECT tasks.id, tasks.title, tags.key, tags.label, tags.metadata_json
+SELECT tasks.id, tasks.title, tags.key, tags.label, tags.metadata
 FROM tasks
 JOIN task_tags ON task_tags.task_id = tasks.id
 JOIN tags ON tags.id = task_tags.tag_id
 WHERE tags.key = 'release-2026-10-02';
 ```
 
-Use these tables instead of the retained `tasks.labels_json` column.
+Use these tables instead of the retained `tasks.labels` column.
 
 ## Task pipelines
 
@@ -360,5 +360,5 @@ SELECT t.id, t.title, t.status, ty.name AS type, s.name AS step
 FROM tasks t
 JOIN task_types ty ON ty.id = t.type_id
 LEFT JOIN task_steps s ON s.id = t.step_id
-ORDER BY t.updated DESC
+ORDER BY t.updated_at DESC
 ```

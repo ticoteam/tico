@@ -39,7 +39,7 @@ def touch(c, aid, kind=None, payload=None):
 
 def keep_stderr(c, row: AttemptRow, text):
     ensure(c, row['id'])
-    if (row['finished'] and row['finished'] < H.shift(H.now(), days=-7) or
+    if (row['finished_at'] and row['finished_at'] < H.shift(H.now(), days=-7) or
             c.execute('SELECT 1 FROM attempt_capture_drops WHERE attempt_id=?', (row['id'],)).fetchone()):
         return {'kept': False}
     value = tail(text)
@@ -51,26 +51,26 @@ def keep_stderr(c, row: AttemptRow, text):
 
 
 def reason(c, row: AttemptRow, outcome, summary=''):
-    if row['stop_requested'] and outcome != 'completed':
+    if row['stop_requested_at'] and outcome != 'completed':
         from .quarantine_stops import stopped_by
         # A quarantine's Stop reads as the quarantine, never as a lost computer or the keeper (Dev 573).
-        return stopped_by(c, row) or 'Cancelled by ' + row['stop_requested']
+        return stopped_by(c, row) or 'Cancelled by ' + row['stop_requested_at']
     if outcome in ('completed', 'ok'):
         return 'Finished'
     if row['state'] == 'expired':
         return 'Computer lost or heartbeat stopped (attempt lease expired)'
-    result = json.loads(row['result_json'] or '{}')
+    result = json.loads(row['result'] or '{}')
     if result.get('text') == 'Runner restarted during execution':
         return 'Runner restarted during execution'
     # The newest terminal cause wins over a primary model that failed before a fallback succeeded.
-    events = c.execute("SELECT kind,payload_json FROM attempt_events WHERE attempt_id=? "
+    events = c.execute("SELECT kind,payload FROM attempt_events WHERE attempt_id=? "
                         "AND kind IN ('error','diagnostic') ORDER BY seq DESC LIMIT 50", (row['id'],)).fetchall()
     for ev in events:
-        p = json.loads(ev['payload_json'])
+        p = json.loads(ev['payload'])
         if p.get('end_reason'):
             return scrub(p['end_reason'])[:500]
     for ev in events:
-        p = json.loads(ev['payload_json'])
+        p = json.loads(ev['payload'])
         if p.get('runner_error'):
             continue
         if p.get('process_exit') and isinstance(p.get('exit_code'), int):
@@ -85,7 +85,7 @@ def reason(c, row: AttemptRow, outcome, summary=''):
             code = p.get('code') or ''
             return scrub('Model error' + (' (' + str(code) + ')' if code else '') + ': ' + str(err))[:500]
     for ev in events:
-        p = json.loads(ev['payload_json'])
+        p = json.loads(ev['payload'])
         if p.get('runner_error'):
             return scrub(str(p.get('error_type') or 'Runner error') + ': ' + str(p['runner_error']))[:500]
     return scrub(result.get('error') or result.get('reason') or
@@ -99,7 +99,7 @@ def finish(c, aid, outcome, summary=''):
         return
     ensure(c, aid)
     c.execute('UPDATE attempt_diagnostics SET end_reason=?,ended_at=?,stalled_at=NULL WHERE attempt_id=?',
-              (reason(c, row, outcome, summary), row['finished'] or H.now(), aid))
+              (reason(c, row, outcome, summary), row['finished_at'] or H.now(), aid))
 
 
 def restored(c, aid):
@@ -127,8 +127,8 @@ def sweep(c, at=None):
               "WHERE state IN ('leased','running')")
     c.execute("UPDATE attempt_diagnostics SET stalled_at=coalesce(stalled_at,?) WHERE attempt_id IN "
               "(SELECT a.id FROM attempts a JOIN attempt_diagnostics d ON d.attempt_id=a.id "
-              "WHERE a.state IN ('leased','running') AND max(coalesce(d.heartbeat_at,a.created),"
-              "coalesce(d.last_event_at,a.created))<=?)", (at, cutoff))
+              "WHERE a.state IN ('leased','running') AND max(coalesce(d.heartbeat_at,a.created_at),"
+              "coalesce(d.last_event_at,a.created_at))<=?)", (at, cutoff))
     c.execute('UPDATE attempt_diagnostics SET stderr_tail=NULL,stderr_at=NULL WHERE stderr_at<?',
               (H.shift(at, days=-7),))
 

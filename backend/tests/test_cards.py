@@ -25,7 +25,7 @@ def page(api, bot, title="Weekly numbers", task=None):
         c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,mime,locator,task_id,first_activity_at,"
                   "last_activity_at) VALUES(?,?,?,?,?,'file','text/html','tico_blob',?,?,?)",
                   (fid, bot, "task:" + task if task else "bot", fid, title, task, H.now(), H.now()))
-        c.execute("INSERT INTO pages(file_id,created,updated) VALUES(?,?,?)", (fid, H.now(), H.now()))
+        c.execute("INSERT INTO pages(file_id,created_at,updated_at) VALUES(?,?,?)", (fid, H.now(), H.now()))
     return fid
 
 

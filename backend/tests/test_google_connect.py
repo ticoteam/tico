@@ -28,7 +28,7 @@ def app(api):
     settings = api.app.state.store.settings
     settings.google_oauth_client_id, settings.google_oauth_client_secret = CLIENT, "tico-secret"
     with api.app.state.store.transaction() as c:      # a signed-in agent, as a Hermes bot is
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('inbox','hermes','x',?,"
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('inbox','hermes','x',?,"
                   "'human:ana')", (H.now(),))
     settings.test_identities["inbox-test"] = Identity("bot:inbox", "bot", agent="hermes")
     return api
@@ -300,8 +300,8 @@ def test_an_older_google_connects_table_gets_the_fingerprint_columns():
     import sqlite3
     c = sqlite3.connect(":memory:")
     c.execute("CREATE TABLE google_connects(person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, "
-              "state TEXT, verifier TEXT, code TEXT, kind TEXT, message TEXT, hint TEXT, can_json TEXT, runner_id TEXT, "
-              "holder TEXT, started REAL, created TEXT NOT NULL, updated TEXT NOT NULL)")
+              "state TEXT, verifier TEXT, code TEXT, kind TEXT, message TEXT, hint TEXT, can TEXT, runner_id TEXT, "
+              "holder TEXT, started_at REAL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
     google_connect.ensure_schema(c)
     google_connect.ensure_schema(c)
     assert {"pending_hash", "grant_hash"} <= {r[1] for r in c.execute("PRAGMA table_info(google_connects)")}
@@ -416,7 +416,7 @@ def test_a_disconnect_its_offline_computer_never_takes_says_so_and_stays_queued(
     post(app, "mail/google/disconnect", {}, "cara-test")
     assert "stalled" not in get(app, "mail/google", "cara-test")
     with app.app.state.store.transaction() as c:
-        c.execute("UPDATE google_connects SET started=? WHERE person_id='cara'",
+        c.execute("UPDATE google_connects SET started_at=? WHERE person_id='cara'",
                   (time.time() - google_connect.STALLED_SECONDS - 1,))
     seen = get(app, "mail/google", "cara-test")
     assert seen["status"] == "disconnecting" and seen["stalled"] is True
@@ -457,7 +457,7 @@ def test_nobody_acting_for_the_person_connects_or_disconnects(app):
 def test_a_sign_in_nobody_finishes_expires(app):
     _, query = start(app)
     with app.app.state.store.transaction() as c:
-        c.execute("UPDATE google_connects SET started=? WHERE person_id='cara'", (time.time() - 3600,))
+        c.execute("UPDATE google_connects SET started_at=? WHERE person_id='cara'", (time.time() - 3600,))
     assert back(app, state=query["state"], code="c-1") == google_connect.INBOX
     seen = get(app, "mail/google", "cara-test")
     assert seen["kind"] == "expired" and row(app)["verifier"] is None

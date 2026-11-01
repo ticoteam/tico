@@ -107,7 +107,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
         """The copy's record and what it was copied from, for a person who manages the copy and may read the original."""
         settings_admin._manager(c, who, bot)
         config = settings_admin._config(c, bot)
-        source = _json(config["config_json"]).get("copied_from") or {}
+        source = _json(config["config"]).get("copied_from") or {}
         if not source.get("bot"):
             raise Problem("not_a_copy", "That bot was not made by copying another bot", 409)
         if not H.bot(c, source["bot"]):
@@ -135,7 +135,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             if auth.system_bot(bot):
                 raise Problem("system_bot", "Built-in bots cannot be copied; add one from the catalog instead", 409)
             row = settings_admin._config(c, bot)
-            config = _json(row["config_json"])
+            config = _json(row["config"])
             slug = body.slug or free_slug(c, bot)
             display = body.display_name.strip() or ("Copy of " + original["display_name"])[:100]
             choice, effort, harness = model_settings(c, settings_admin, settings, original, config)
@@ -144,9 +144,9 @@ def install(app, store, auth, mutate, settings_admin, place_now):
                 reports_to="human:" + H.actor_id(who.actor), status="planned", repo="", model=choice["id"], effort=effort,
                 harness=harness, owners=[]))
             made = settings_admin._config(c, slug)
-            declared = _json(made["config_json"])
+            declared = _json(made["config"])
             declared["copied_from"] = {"bot": bot, "sha": body.sha}
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(declared), slug))
+            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), slug))
             credentials = credentials_for(c, app.state.vault, who, bot, slug, [t.model_dump() for t in body.tools],
                                           _declared(c, bot))
             # The copy's history is made after this, in BotOps's workspace, so only the computer BotOps's turn runs on (its
@@ -205,9 +205,9 @@ def install(app, store, auth, mutate, settings_admin, place_now):
 
         def work(c):
             config, source = origin(c, who, bot)
-            declared = _json(config["config_json"])
+            declared = _json(config["config"])
             declared["copied_from"] = {"bot": source["bot"], "sha": body.applied_sha}
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(declared), bot))
+            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), bot))
             H.event(c, who.actor, "bot.copy_updated", bot, {"from": source["bot"], "before": source.get("sha") or "",
                                                             "after": body.applied_sha})
             return {"bot": bot, "original": source["bot"], "base_sha": body.applied_sha}

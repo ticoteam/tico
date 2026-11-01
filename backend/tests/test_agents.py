@@ -116,7 +116,7 @@ def test_agent_unread_inbox_is_privacy_checked_in_one_batch(api, monkeypatch):
     token = credential(api)["token"]
     beat(api, token)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE agents SET last_seen=? WHERE bot='scout'", (H.shift(H.now(), seconds=-600),))
+        c.execute("UPDATE agents SET last_seen_at=? WHERE bot='scout'", (H.shift(H.now(), seconds=-600),))
     for i in range(12):
         post(api, "chat/scout", {"text": f"Note {i}"})
     calls = []

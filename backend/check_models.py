@@ -51,8 +51,8 @@ def authors_of(c, settings, task_id):
     turns = [row["id"] for row in c.execute("SELECT id FROM turns WHERE task_id=?", (task_id,))]
     makers = {s["family"] for made in ran_on(c, turns).values() for s in made["segments"] if s["family"]}
     if H.is_bot(task["owner"]):
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (H.actor_id(task["owner"]),)).fetchone()
-        config = follow(c, H.actor_id(task["owner"]), H._json(row["config_json"], {}) or {}) if row else {}
+        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (H.actor_id(task["owner"]),)).fetchone()
+        config = follow(c, H.actor_id(task["owner"]), H._json(row["config"], {}) or {}) if row else {}
         makers.add(providers.author_provider(providers.bot_choice(c, settings, config)[1]))
     return makers - {""}
 
@@ -121,7 +121,7 @@ def choose(c, settings, bot, spec, role, authors=(), memory_pass=False):
 
 
 def record(c, actor, task_id, check):
-    c.execute("INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by,created) "
+    c.execute("INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by,created_at) "
               "VALUES(?,?,?,?,?,?,?,?)", (task_id, check["runtime"], check["model"], check["harness"],
                                           check["effort"], check["role"], actor, H.now()))
     H._task_event(c, task_id, actor, "check_model", None, f"{check['runtime']}:{check['model']}",
@@ -307,8 +307,8 @@ def review_default(c, settings, owner, parent_id):
     parent = H.task(c, parent_id) if parent_id else None
     if not parent or not H.is_bot(owner) or parent["owner"] == owner:
         return None, None
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (H.actor_id(owner),)).fetchone()
-    config = follow(c, H.actor_id(owner), H._json(row["config_json"], {}) or {}) if row else {}
+    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (H.actor_id(owner),)).fetchone()
+    config = follow(c, H.actor_id(owner), H._json(row["config"], {}) or {}) if row else {}
     if config.get("review_model") != "check":
         return None, None
     authors = authors_of(c, settings, parent_id)

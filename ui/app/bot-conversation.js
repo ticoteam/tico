@@ -79,7 +79,7 @@ function convEvent(e) {
 const isRecurring = r => r.recurring === true || /_Created by dispatcher from schedule/.test(String(r.issue_body || ''));
 function convGroup(r, slug) {
   const ev = r.events || [];
-  const live = r.finished == null;
+  const live = r.finished_at == null;
   const agents = ev.filter(x => x.kind === 'agent' && String(x.text || '').trim());
   const hasReply = typeof r.reply === 'string' && r.reply.trim();
   const reply = hasReply ? r.reply : (agents.length ? agents[agents.length - 1].text : '');
@@ -95,10 +95,10 @@ function convGroup(r, slug) {
     ${live ? '<span class="pill in-progress">running</span>' : r.exit !== 0 && r.exit != null ? `<span class="pill fail">failed · exit ${esc(r.exit)}</span>` : ''}
     ${r.needs_human ? `<span class="pill needs">${!personHandle(r.issue_from) || personHandle(r.issue_from) === myHandle() ? 'Needs you' : 'Needs ' + esc(firstName(personDisplay(personHandle(r.issue_from))))}</span>` : ''}
     <span class="spacer" style="flex:1"></span>
-    <span class="tnum" title="${esc(fmt(r.started))}">${r.finished ? ago(r.finished) : ago(r.started)}${r.duration_s != null ? ` · ${Math.round(r.duration_s / 60)}m` : ''}</span>
+    <span class="tnum" title="${esc(fmt(r.started_at))}">${r.finished_at ? ago(r.finished_at) : ago(r.started_at)}${r.duration_s != null ? ` · ${Math.round(r.duration_s / 60)}m` : ''}</span>
     ${r.local ? '' : `<a class="muted" href="${API}/runs/${esc(r.run)}/log" target="_blank" rel="noopener">log</a>`}</div>${
     live || r.local ? '' : `<div class="conv-replay">Replay of run <span class="mono">${esc(r.run)}</span> on ${
-      esc(CONV?.session?.runtime || S.emps.find(e => e.name === slug)?.runtime || 'its runtime')}, ended ${esc(fmt(r.finished) || 'unknown')}</div>`}`;
+      esc(CONV?.session?.runtime || S.emps.find(e => e.name === slug)?.runtime || 'its runtime')}, ended ${esc(fmt(r.finished_at) || 'unknown')}</div>`}`;
   const ask = chat ? convChatAsk(r)
     : !r.issue_body ? ''
     : isRecurring(r) ? `<div class="bubble sched"><span class="who">Routine</span>${esc(r.issue_title || 'Routine')}
@@ -117,7 +117,7 @@ function convGroup(r, slug) {
     c.author === 'human' ? `<div class="bubble you"><span class="who">${esc(personHandle(c.who) || ownerHandle())}</span>${esc(unsigned(c.body))}${chatCopyHTML(unsigned(c.body))}</div>`
     : c.author === 'bot' ? `<div class="bubble bot"><span class="who">${empName(slug)}</span><div class="md">${md(c.body)}</div>${chatCopyHTML(c.body)}</div>`
     : `<div class="conv-note muted">${esc(plainActors(c.body))}</div>`).join('');
-  const brk = r.session_break ? `<div class="conv-break">New session started ${esc(fmt(r.started) || '')}</div>` : '';
+  const brk = r.session_break ? `<div class="conv-break">New session started ${esc(fmt(r.started_at) || '')}</div>` : '';
   return `${brk}<div class="conv-run${chat ? ' chat' : ''}">${head}${ask}${working}${answer}${comments}</div>`;
 }
 function convChatAsk(r) {
@@ -129,7 +129,7 @@ function convChatAsk(r) {
 function convChatStarted(slug, j, text, files) {
   const state = CONV; if (!state || state.slug !== slug) return;
   state.runs.push({run: j.run, issue: null, kind: 'chat', message: {from: myHandle(), text, files},
-    started: j.started || new Date().toISOString(), finished: null, exit: null,
+    started_at: j.started_at || new Date().toISOString(), finished_at: null, exit: null,
     events: [], activity: {}, comments: [], local: true});
   state.active = {run: j.run, issue: null, offset: 0};
   state.sent = true; convRender(state); convSchedule(state);
@@ -139,7 +139,7 @@ function convRender(state) {
   const slug = state.slug;
   state.openWork ||= new Set(); state.wasLive ||= new Set();
   for (const r of state.runs) {                                   // open while live, fold when it lands
-    if (r.finished == null) { state.openWork.add(r.run); state.wasLive.add(r.run); }
+    if (r.finished_at == null) { state.openWork.add(r.run); state.wasLive.add(r.run); }
     else if (state.wasLive.has(r.run)) { state.wasLive.delete(r.run); state.openWork.delete(r.run); }
   }
   // stay pinned to the newest message, unless the reader has scrolled up to read something older (ui/app/stick-scroll.js);
@@ -174,7 +174,7 @@ function convRender(state) {
   const st = $('#conv-state');
   if (st) st.innerHTML = state.active ? `<span class="pill in-progress">Running${state.active.issue ? ` on #${esc(state.active.issue)}` : ''}</span>`
     : stateOf(slug) === 'paused' ? '<span class="pill">Paused</span>'
-    : `Idle${last?.finished ? `, last active ${ago(last.finished)}` : ''}`;
+    : `Idle${last?.finished_at ? `, last active ${ago(last.finished_at)}` : ''}`;
   pillNeeds(BOT_PILL?.slug === slug ? BOT_PILL : null, last?.needs_human && last.issue ? last.issue : null);
 }
 

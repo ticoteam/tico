@@ -26,7 +26,7 @@ def rows_of(c, type_id):
 
 
 def seeded(c, type_id):
-    return [(r["note"], json.loads(r["when_json"]), r["then_outcome"]) for r in rows_of(c, type_id)]
+    return [(r["note"], json.loads(r["condition"]), r["then_outcome"]) for r in rows_of(c, type_id)]
 
 
 def wakes(c, type_id):
@@ -91,11 +91,11 @@ def test_each_step_entry_reaches_only_the_bot_that_must_act(api):
 
         def moved(mover, step):
             c.execute("DELETE FROM jobs")
-            c.execute("DELETE FROM messages WHERE json_extract(refs_json,'$.news')='step_entered'")
+            c.execute("DELETE FROM messages WHERE json_extract(refs,'$.news')='step_entered'")
             H.task_update(c, mover, ticket["id"], step=step)
             return ({r["bot"] for r in c.execute("SELECT bot FROM jobs WHERE state='queued'")},
                     {r["to_actor"] for r in c.execute(
-                        "SELECT to_actor FROM messages WHERE json_extract(refs_json,'$.news')='step_entered'")})
+                        "SELECT to_actor FROM messages WHERE json_extract(refs,'$.news')='step_entered'")})
 
         # QA alone is woken for In QA: neither the Builder who moved it nor the requester hears of it.
         assert moved("bot:cpo", "In QA") == ({"finance"}, {"bot:finance"})
@@ -112,12 +112,12 @@ def test_a_type_without_step_rules_writes_no_message_on_a_step_move(api):
         typ = H.type_create(c, H.KEEPER, "Garden", [{"name": "Todo", "status": "open"}, {"name": "Doing", "status": "doing"}])
         task = H.task_create(c, "bot:coo", "Water", "Water it.", "bot:cpo", type=typ["id"], step="Todo", lint=False)
         H.task_update(c, "bot:cpo", task["id"], step="Doing")
-        assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs_json,'$.news')='step_entered'").fetchone()
+        assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs,'$.news')='step_entered'").fetchone()
 
 
 def step_news(c):
-    return [(r["to_actor"], json.loads(r["refs_json"]).get("rule")) for r in c.execute(
-        "SELECT to_actor,refs_json FROM messages WHERE json_extract(refs_json,'$.news')='step_entered' ORDER BY rowid")]
+    return [(r["to_actor"], json.loads(r["refs"]).get("rule")) for r in c.execute(
+        "SELECT to_actor,refs FROM messages WHERE json_extract(refs,'$.news')='step_entered' ORDER BY rowid")]
 
 
 def leads(c):
@@ -130,11 +130,11 @@ def leads(c):
 
 def lead_moved(c, mover, task, step):
     c.execute("DELETE FROM jobs")
-    c.execute("DELETE FROM messages WHERE json_extract(refs_json,'$.news')='step_entered'")
+    c.execute("DELETE FROM messages WHERE json_extract(refs,'$.news')='step_entered'")
     H.task_update(c, mover, task["id"], step=step)
     return ({r["bot"] for r in c.execute(
         "SELECT j.bot FROM jobs j JOIN messages m ON m.id=j.message_id "
-        "WHERE json_extract(m.refs_json,'$.news')='step_entered'")}, step_news(c))
+        "WHERE json_extract(m.refs,'$.news')='step_entered'")}, step_news(c))
 
 
 def test_a_step_move_reaches_a_lead_only_through_a_row_that_names_it(api):
@@ -149,7 +149,7 @@ def test_a_step_move_reaches_a_lead_only_through_a_row_that_names_it(api):
         assert lead_moved(c, "bot:cpo", idea, "Exploring") == (set(), [])
         assert lead_moved(c, H.KEEPER, idea, "Suggested") == (set(), [])
         # The Release Manager's row: one note, no job.
-        pending = next(r["id"] for r in rows_of(c, typ["id"]) if json.loads(r["when_json"])["step"] == "Pending Release")
+        pending = next(r["id"] for r in rows_of(c, typ["id"]) if json.loads(r["condition"])["step"] == "Pending Release")
         assert lead_moved(c, "bot:cpo", ticket, "Pending Release") == (set(), [("bot:release-manager", pending)])
         aid, flow = wakes(c, typ["id"])
     # A Lead requester a row names hears it as the row says: here a wake.
@@ -184,14 +184,14 @@ def test_the_release_managers_held_step_notices_are_dropped_once_and_nothing_els
             H._wake(c, task, "bot:" + bot, f"{task['title']} entered Exploring.", refs)
         H._wake(c, other, "bot:release-manager", f"{other['title']} entered Exploring.", own_row)
         # As a team's own step_entered row with outcome batch stamps it (rules.stamp).
-        c.execute("UPDATE messages SET refs_json=json_set(refs_json,'$.rule','r-team-step-batch') WHERE body LIKE ?",
+        c.execute("UPDATE messages SET refs=json_set(refs,'$.rule','r-team-step-batch') WHERE body LIKE ?",
                   (other["title"] + "%",))
         held = {r["id"]: (r["bot"], r["state"]) for r in c.execute("SELECT id,bot,state FROM jobs WHERE held=1")}
         assert sorted(b for b, _ in held.values()) == ["boss", "release-manager", "release-manager", "release-manager"]
         c.execute("DELETE FROM events WHERE action=?", (R.STEP_NOISE_DROPPED,))   # this database's startup ran it
         assert R.drop_step_noise(c) == 1
-        after = {r["id"]: (r["bot"], r["state"], json.loads(r["refs_json"])["news"]) for r in c.execute(
-            "SELECT j.id,j.bot,j.state,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id")}
+        after = {r["id"]: (r["bot"], r["state"], json.loads(r["refs"])["news"]) for r in c.execute(
+            "SELECT j.id,j.bot,j.state,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id")}
         assert sorted(after.values()) == [("boss", "queued", "step_entered"),
                                           ("release-manager", "cancelled", "step_entered"),
                                           ("release-manager", "queued", "step_entered"),

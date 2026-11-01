@@ -26,7 +26,7 @@ def computer(api, machine, grok="ready"):
 def earlier_run(api, task_id, model, provider, runtime):
     """A finished run on the task by another model: the parent's work as a fallback wrote it."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES('earlier','ops','2026-01-01T00:00:00Z',"
+        c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES('earlier','ops','2026-01-01T00:00:00Z',"
                   "'2026-01-01T00:05:00Z',?)", (task_id,))
         c.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,output_tokens,model,provider,runtime,"
                   "harness) VALUES('earlier',0,10,10,?,?,?,?)", (model, provider, runtime, runtime))
@@ -37,7 +37,7 @@ def test_a_check_with_no_model_skips_every_maker_of_the_parents_work(api):
     earlier_run(api, parent["id"], "gpt-6-luna", "openai", "codex")
     with api.app.state.store.transaction() as c:
         # The order puts Codex and Claude first: Codex wrote part of the work as a fallback, Claude is the bot's own.
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='providers'",
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='providers'",
                   (encode({"revision": 1, "enabled": ["anthropic", "xai", "openai", "cursor"], "runtime": "claude",
                            "model": "claude-sonnet-5-5", "check_models": ["codex", "claude", "grok", "cursor"]}),))
     computer(api, machine)
@@ -53,7 +53,7 @@ def test_a_check_with_no_model_skips_every_maker_of_the_parents_work(api):
     assert tuple(check_row(api, later["id"]))[:2] == ("cursor", "cursor-auto")
     # With only the author's provider on, it runs there rather than leaving the review unfiled, and says why.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='providers'",
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='providers'",
                   (encode({"revision": 2, "enabled": ["anthropic"], "runtime": "claude", "model": "claude-sonnet-5-5"}),))
     alone = post(api, "tasks", {"owner": "ops", "title": "Check it again", "body": "Read the PR.", "check_model": "auto",
                                 "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
@@ -122,7 +122,7 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
     # Set again, with only the author's provider on: still reviewed on the check model, and the history says why.
     review_model("check")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='providers'",
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='providers'",
                   (encode({"revision": 9, "enabled": ["anthropic"], "runtime": "claude", "model": "claude-sonnet-5-5"}),))
     alone = post(api, "tasks", {"owner": "cpo", "title": "Review PR 703", "body": "https://github.com/ticoteam/tico/pull/703",
                                 "relations": [{"task": parent["id"], "kind": "parent"}]})

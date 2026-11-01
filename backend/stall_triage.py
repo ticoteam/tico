@@ -150,7 +150,7 @@ def _messages(c, row):
     out = []
     for msg in H.task_comments(c, row["id"])[-MESSAGES:]:
         text = " ".join(str(msg.get("body") or "").split())
-        out.append({"from": _who(c, row, msg.get("from_actor")), "at": str(msg.get("created") or "")[:16],
+        out.append({"from": _who(c, row, msg.get("from_actor")), "at": str(msg.get("created_at") or "")[:16],
                     "text": text[:MESSAGE_CHARS]})
     return out
 
@@ -189,7 +189,7 @@ def state_of(c, row, at):
     """(state sent to Decide, the options it may name). Titles, bodies and messages are text; the question says to treat
     them as data."""
     step = c.execute("SELECT name FROM task_steps WHERE id=?", (row["step_id"],)).fetchone() if row.get("step_id") else None
-    quiet = max(0, int((H.parse_ts(at) - H.parse_ts(row["updated"])).total_seconds() // 60))
+    quiet = max(0, int((H.parse_ts(at) - H.parse_ts(row["updated_at"])).total_seconds() // 60))
     options = _options(c, row, at)
     return ({"task": {"title": row["title"] or "", "status": row["status"], "step": step[0] if step else "",
                       "quiet_minutes": quiet, "messages": _messages(c, row)}}, options)

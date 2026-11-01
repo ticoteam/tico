@@ -110,7 +110,7 @@ def request_failure(request, status, exc=None):
 # Every path a bundle may hold. A key that is not here is dropped by `allowed()`, whatever a builder put there; the
 # tests read this table to prove no content field can appear.
 ALLOWED = {
-    "format": None, "created": None,
+    "format": None, "created_at": None,
     "capture": {"server_started": None, "server_events": None, "server_repeats": None,
                 "server_evicted": None, "retention": None, "truncated": None, "edited": None},
     "versions": {"tico": None, "server": None, "runners": None, "updater": None, "app": None},
@@ -118,7 +118,7 @@ ALLOWED = {
     "containers": [{"name": None, "state": None, "health": None, "restarts": None}],
     "update": {"state": None, "from": None, "to": None, "message": None, "restored": None},
     "health": [{"name": None, "status": None}],
-    "runners": [{"label": None, "online": None, "last_seen": None, "platform": None, "kind": None, "release": None, "update": None,
+    "runners": [{"label": None, "online": None, "last_seen_at": None, "platform": None, "kind": None, "release": None, "update": None,
                  "update_error": None, "runtimes": [{"name": None, "installed": None, "version": None, "ready": None,
                                                      "state": None, "detail": None}],
                  "bots": None, "bots_ready": None, "problems": None, "log": None}],
@@ -143,7 +143,7 @@ ALLOWED = {
 # process names, bot labels and models; `points` rows follow performance.COLUMNS.
 ALLOWED["performance"] = {"hours": None, "computers": [{
     "label": None, "scope": None, "mem_total": None, "disk_total": None, "span": None, "points": None, "summary": None,
-    "overloads": [{"started": None, "ended": None, "minutes": None, "reasons": None, "cpu_max": None, "mem_max": None,
+    "overloads": [{"started_at": None, "ended": None, "minutes": None, "reasons": None, "cpu_max": None, "mem_max": None,
                    "runs_max": None, "bots": [{"bot": None, "model": None, "runs": None}],
                    "procs": [{"name": None, "cpu": None, "mem": None}]}],
     "bots": [{"bot": None, "model": None, "runs": None}],
@@ -291,7 +291,7 @@ def bot_label(c, slug):
     return "bot-%d" % (slugs.index(slug) + 1) if slug in slugs else None
 
 
-RUNNERS_SQL = "SELECT id,label,last_seen,version,platform,readiness_json FROM runners WHERE revoked_at IS NULL ORDER BY id"
+RUNNERS_SQL = "SELECT id,label,last_seen_at,version,platform,readiness FROM runners WHERE revoked_at IS NULL ORDER BY id"
 
 
 def runner_label(c, runner_id):
@@ -305,7 +305,7 @@ def _runner_rows(c, fleet, online_ids):
     from . import runner_versions
     rows = []
     for index, row in enumerate(c.execute(RUNNERS_SQL), 1):
-        doc = readiness_document(row["readiness_json"])
+        doc = readiness_document(row["readiness"])
         bots = doc.get("bots") or {}
         problems = []
         for slug, b in bots.items():
@@ -322,7 +322,7 @@ def _runner_rows(c, fleet, online_ids):
             runtimes.append({"name": name, "installed": True, "version": _version(v.get("version")) or str(v.get("version") or "")[:60],
                              "ready": v.get("authenticated") == "ready", "state": str(v.get("authenticated") or ""),
                              "detail": str(v.get("detail") or "")[:200]})
-        rows.append({"label": "runner-%d" % index, "online": row["id"] in online_ids, "last_seen": row["last_seen"], "platform": str(row["platform"] or ""),
+        rows.append({"label": "runner-%d" % index, "online": row["id"] in online_ids, "last_seen_at": row["last_seen_at"], "platform": str(row["platform"] or ""),
                      "kind": update["kind"], "release": update["release"] or _version(row["version"]),
                      "update": update["state"], "update_error": update["error"][:200], "runtimes": runtimes,
                      "bots": len(bots), "bots_ready": sum(1 for b in bots.values() if (b or {}).get("ready")),
@@ -401,7 +401,7 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
     capture["truncated"] = max(0, len(server_lines) - LOG_LINES)
     bundle = {
         "capture": capture,
-        "format": FORMAT, "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "format": FORMAT, "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "versions": {"tico": _version(releases.version()), "server": _version(releases.version()),
                      "runners": sorted({r["release"] for r in runners if r["release"]}),
                      "updater": _version(updater.get("version")),

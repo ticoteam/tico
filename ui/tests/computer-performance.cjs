@@ -14,7 +14,7 @@ const {unrouted} = require('./support/routes.cjs');
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     page.on('dialog', d => d.accept());
-    const machines = [{id: 'c1', label: 'Build server', operator: 'ana', bots: [], platform: 'linux', last_seen: new Date().toISOString(),
+    const machines = [{id: 'c1', label: 'Build server', operator: 'ana', bots: [], platform: 'linux', last_seen_at: new Date().toISOString(),
       readiness: {}, screen: 'off', screen_available: false, performance: 'on'}];
     const now = Math.floor(Date.now() / 1000 / 60) * 60, since = now - 86400;
     const points = [];
@@ -26,9 +26,9 @@ const {unrouted} = require('./support/routes.cjs');
     const view = () => ({computer: {id: 'c1', label: 'Build server'}, performance: machines[0].performance, may_switch: true,
       hours: 24, span: 60, since, until: now, columns: ['ts', 'cpu', 'cpu_max', 'mem', 'mem_max', 'load1', 'swap', 'disk_free', 'active'],
       points: erased ? [] : points, mem_total: 16e9, swap_total: 0, disk_total: 1e11, scope: 'container_cpu',
-      runs: [{attempt: 'a1', bot: 'ops', model: 'claude-opus-5-5', started: iso(now - 7300), finished: iso(now - 6500), state: 'done'}],
+      runs: [{attempt: 'a1', bot: 'ops', model: 'claude-opus-5-5', started_at: iso(now - 7300), finished_at: iso(now - 6500), state: 'done'}],
       busiest: {bots: [{bot: 'ops', model: 'claude-opus-5-5', runs: 1}], processes: [{name: 'cargo', cpu_minutes: 40.5, cpu_max: 400, mem_max: 2e9}]},
-      overloads: [{started: now - 7200, ended: now - 6600, last: now - 6660, minutes: 10, reasons: ['cpu'], cpu_max: 99, mem_max: 60, runs_max: 3,
+      overloads: [{started_at: now - 7200, ended: now - 6600, last: now - 6660, minutes: 10, reasons: ['cpu'], cpu_max: 99, mem_max: 60, runs_max: 3,
         bots: [{bot: 'ops', model: 'claude-opus-5-5', runs: 1}], procs: [{name: 'cargo'}]}],
       summary: 'Overloaded once in the last 1 day (CPU over 90%): CPU over 90% for 10 minutes; running: ops; busiest processes: cargo.'});
     const writes = [];

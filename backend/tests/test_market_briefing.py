@@ -72,11 +72,11 @@ def test_a_week_that_is_not_an_iso_week_is_refused_and_nothing_is_written(seeded
 def test_a_week_has_one_row_a_replacement_keeps_created_and_rewrites_the_page(seeded, events):
     first = brief(seeded, body="First draft.")["briefing"]
     again = brief(seeded, title="Week 44, final", body="Final text.")["briefing"]
-    assert again["id"] == first["id"] and again["created"] == first["created"] and again["title"] == "Week 44, final"
+    assert again["id"] == first["id"] and again["created_at"] == first["created_at"] and again["title"] == "Week 44, final"
     assert len(get(seeded, "market/briefings")["briefings"]) == 1
     with seeded.app.state.store.read() as c:
-        rows = c.execute("SELECT payload_json FROM documents WHERE id=?", ("market/briefings/" + WEEK,)).fetchall()
-    assert len(rows) == 1 and json.loads(rows[0]["payload_json"])["content"] == "Final text."
+        rows = c.execute("SELECT payload FROM documents WHERE id=?", ("market/briefings/" + WEEK,)).fetchall()
+    assert len(rows) == 1 and json.loads(rows[0]["payload"])["content"] == "Final text."
     assert get(seeded, "market/briefings/2026-W01", expected=404)["error"]["code"] == "not_found"
 
 

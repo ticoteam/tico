@@ -122,16 +122,16 @@ def old_rows(org):
                       (routine_id(name), r.get("timezone", "UTC")))
             made[name] = due
         for n, (name, (bot, event, outcome)) in enumerate(WAKE_RULES.items()):
-            c.execute("INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, position, created_by, created, "
-                      "updated) VALUES(?,?,?,?,?,?,?,?,?)", (rule_id(name), "bot", bot, event, outcome, n,
+            c.execute("INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, position, created_by, created_at, "
+                      "updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (rule_id(name), "bot", bot, event, outcome, n,
                                                              "human:" + DANA_ID, H.now(), H.now()))
         for bot, usd in HOURLY.items():
             c.execute("INSERT INTO usage_limits(bot, hourly_usd) VALUES(?,?) ON CONFLICT(bot) DO UPDATE SET "
                       "hourly_usd=excluded.hourly_usd", (bot, usd))
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (TB.TEAM_KEY, json.dumps(TEAM_BUDGET)))
         bot, own = BOT_BUDGET
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0] or "{}")
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps({**config, **own}), bot))
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0] or "{}")
+        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps({**config, **own}), bot))
         c.execute("UPDATE bots SET display_name=? WHERE slug=?", (OLD_NAME, STRATEGY))
         rule_bots = sorted({r[0] for r in c.execute("SELECT scope_id FROM rules WHERE scope_kind='bot'")})
     return {"due": made, "rule_bots": rule_bots}

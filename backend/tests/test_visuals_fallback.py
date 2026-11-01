@@ -59,7 +59,7 @@ def give_preview(api, fid, version, data=PNG, mime="image/png"):
     media_settled(api)
     digest = api.app.state.blobs.put(data, mime)
     with api.app.state.store.transaction() as c:
-        blob = c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) VALUES "
+        blob = c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES "
                          "(lower(hex(randomblob(16))),'human:ben',?,?,?,?,'2026-10-21') RETURNING id",
                          (digest, len(data), "preview", mime)).fetchone()[0]
         c.execute("UPDATE bot_file_versions SET thumb_blob_id=? WHERE file_id=? AND version=?", (blob, fid, version))

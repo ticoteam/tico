@@ -81,8 +81,8 @@ def own_bots(c, auth, who):
         return slugs
     pid = H.actor_id(who.actor)
     mine = set()
-    for row in c.execute("SELECT bot, operator, bot_owners_json FROM bot_config"):
-        if row["operator"] == pid or pid in A.owner_ids(row["bot_owners_json"]):
+    for row in c.execute("SELECT bot, operator, bot_owners FROM bot_config"):
+        if row["operator"] == pid or pid in A.owner_ids(row["bot_owners"]):
             mine.add(row["bot"])
     return mine & slugs
 
@@ -184,9 +184,9 @@ def save_limit(c, auth, who, bot, body, via=None):
     stored = usage_limits.own(c, bot)
     before, saved = _caps_of(stored), {**stored, **wanted}
     marks = ",".join("?" * len(usage_limits.KEYS))
-    c.execute(f"INSERT INTO usage_limits(bot, {', '.join(usage_limits.KEYS)}, updated, updated_by) VALUES(?,{marks},?,?) "
+    c.execute(f"INSERT INTO usage_limits(bot, {', '.join(usage_limits.KEYS)}, updated_at, updated_by) VALUES(?,{marks},?,?) "
               "ON CONFLICT(bot) DO UPDATE SET " + ", ".join(f"{key}=excluded.{key}" for key in usage_limits.KEYS) +
-              ", updated=excluded.updated, updated_by=excluded.updated_by",
+              ", updated_at=excluded.updated_at, updated_by=excluded.updated_by",
               (bot, *(saved[key] for key in usage_limits.KEYS), H.now(), who.actor))
     H.event(c, who.actor, "usage.limit-set", H.bot_actor(bot), wanted)
     _audit(c, who, "spend:" + bot, before, _caps_of(usage_limits.own(c, bot)), via)
@@ -212,8 +212,8 @@ def install(app, store, auth, mutate, settings):
         if not slugs:
             return []
         marks = ",".join("?" * len(slugs))
-        sql = (f"SELECT {key} AS k, {SUMS} FROM {RUNS} t {join} WHERE t.finished IS NOT NULL AND t.started >= ? "
-               f"AND t.started < ? AND t.bot IN ({marks})")
+        sql = (f"SELECT {key} AS k, {SUMS} FROM {RUNS} t {join} WHERE t.finished_at IS NOT NULL AND t.started_at >= ? "
+               f"AND t.started_at < ? AND t.bot IN ({marks})")
         args = [first.isoformat() + "T00:00:00", (last + timedelta(days=1)).isoformat() + "T00:00:00", *sorted(slugs)]
         for dimension, value in (filters or {}).items():
             sql += f" AND {DIMENSIONS[dimension]} = ?"
@@ -298,7 +298,7 @@ def install(app, store, auth, mutate, settings):
             counted = body.count_subscription if "count_subscription" in body.model_fields_set else stored["count_subscription"]
             value = {**{key: stored[key] for key in usage_limits.KEYS}, **amounts(c, body),
                      "count_subscription": bool(counted)}
-            c.execute("INSERT INTO registry_metadata(key, value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+            c.execute("INSERT INTO registry_metadata(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                       (usage_limits.KEY, json.dumps(value)))
             H.event(c, who.actor, "usage.default", "company", value)
             return {"default": usage_limits.company(c)}
@@ -356,7 +356,7 @@ def install(app, store, auth, mutate, settings):
                     raise Problem("not_found", "Bot not found", 404)
                 if bot not in allowed:
                     raise Problem("forbidden", "Usage is for a bot's owners and administrators", 403)
-                daily = {r["k"]: r for r in query(c, "substr(t.started, 1, 10)", "", {bot}, first, last, filters)}
+                daily = {r["k"]: r for r in query(c, "substr(t.started_at, 1, 10)", "", {bot}, first, last, filters)}
                 series = []
                 for offset in range((last - first).days + 1):
                     day = (first + timedelta(days=offset)).isoformat()
@@ -375,7 +375,7 @@ def install(app, store, auth, mutate, settings):
                          **figures(r), "limit": limit_view(c, who, r["k"], default, allowed)}
                         for r in query(c, "t.bot", "", slugs, first, last, filters)]
             elif group == "day":
-                rows = [{"day": r["k"], **figures(r)} for r in query(c, "substr(t.started, 1, 10)", "", slugs, first, last, filters)]
+                rows = [{"day": r["k"], **figures(r)} for r in query(c, "substr(t.started_at, 1, 10)", "", slugs, first, last, filters)]
             elif group in DIMENSIONS:
                 rows = [{"value": r["k"] or None, "name": usage_label(c, r["k"] or "") if group == "subscription" else r["k"] or "Not recorded / not applicable", **figures(r)}
                         for r in query(c, DIMENSIONS[group], "", slugs, first, last, filters)]

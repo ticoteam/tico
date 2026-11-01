@@ -83,7 +83,7 @@
   const lines = t => (t.message || '').split(/\r?\n/).map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
   const title = t => lines(t)[0]?.slice(0, 90) || 'Request';
   const preview = t => lines(t).slice(1).join(' ').slice(0, 140);
-  const last = t => (t.messages || []).at(-1)?.created || t.created;
+  const last = t => (t.messages || []).at(-1)?.created_at || t.created_at;
   const newestFirst = list => [...list].sort((a, b) => (Date.parse(last(b)) || 0) - (Date.parse(last(a)) || 0));
   const ended = t => ['closed', 'gone'].includes(t.status);
   // The request with the most recent message that isn't Closed or Removed.
@@ -226,7 +226,7 @@
     const after = {open: `Delivered to Tico support. ${PROMISE} The reply will appear here.`, gone: 'Tico support removed this request.'};
     // No request in the chat: an empty chat, and a way back to the last request when it is closed.
     const recent = newestFirst(state.tickets)[0], closedLast = !latest() && recent?.status === 'closed' ? recent : null;
-    const html = t ? bubble(t.message, false, t.created, t.sent?.diagnostics) + (t.messages || []).map(m => bubble(m.body, m.from === 'staff', m.created, m.has_diagnostics)).join('')
+    const html = t ? bubble(t.message, false, t.created_at, t.sent?.diagnostics) + (t.messages || []).map(m => bubble(m.body, m.from === 'staff', m.created_at, m.has_diagnostics)).join('')
         + (after[t.status] ? `<p class="support-delivered">${after[t.status]}</p>` : '')
       : `<div class="support-empty"><p>Ask us anything. ${PROMISE}</p><p>${WHO_ANSWERS}</p>${closedLast
         ? `<p>Your last request, ${escape(title(closedLast))}, is closed. <button type="button" class="linkish" data-view-last="${escape(closedLast.id)}">View it</button></p>` : ''}</div>`;

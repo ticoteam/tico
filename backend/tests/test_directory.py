@@ -128,7 +128,7 @@ def test_first_sync_previews_then_needs_the_owner_to_confirm_that_exact_plan(goo
     assert people["dev@acme.example"]["directory"] == "google"
     assert len(events(api, "directory.person_added")) == 2
     synced = events(api, "directory.synced")
-    assert len(synced) == 1 and json.loads(synced[0]["detail_json"])["applied"]["adds"] == 2
+    assert len(synced) == 1 and json.loads(synced[0]["detail"])["applied"]["adds"] == 2
     assert sync(api)["applied"] is True                                       # confirmed once, then routine
     assert api.get("/api/v2/directory", headers=signed_in()).json()["confirmed"] is True
 
@@ -154,7 +154,7 @@ def test_suspended_people_are_marked_left_and_their_tokens_revoked_not_deleted(g
         assert c.execute("SELECT COUNT(*) FROM human_tokens WHERE human=? AND revoked_at IS NULL", (dev["id"],)).fetchone()[0] == 0
     assert api.get("/api/me", headers=headers).status_code in (401, 403)
     left = events(api, "directory.person_left")
-    assert json.loads(left[0]["detail_json"])["reason"] == "disabled in the directory"
+    assert json.loads(left[0]["detail"])["reason"] == "disabled in the directory"
     state["users"]["users"][1]["suspended"] = False
     assert sync(api)["done"]["restores"] == 1
     assert roster_of(api)["dev@acme.example"]["hidden"] is False
@@ -170,7 +170,7 @@ def test_credentials_are_encrypted_and_never_returned(google_api):
     assert "PRIVATE KEY" not in view.text
     assert view.json()["credentials"]["google"] == {"configured": True, "hint": "tico@proj.iam.gserviceaccount.com as admin@acme.example"}
     config = events(api, "directory.configured")
-    assert config and "PRIVATE KEY" not in config[0]["detail_json"]
+    assert config and "PRIVATE KEY" not in config[0]["detail"]
 
 
 def test_only_the_owner_manages_directory_sync_and_stale_revisions_are_refused(google_api):

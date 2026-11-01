@@ -158,7 +158,7 @@ def facts(**kw):
 
 def machine_row(**kw):
     return {"bot": "ops", "mode": "cloud", "size": "default", "always_on": 0, "machine_id": "m1", "runner_id": "r1",
-            "state": "stopped", "machine_size": "default", "active_at": None, "heartbeat_at": None, "next_try": None,
+            "state": "stopped", "machine_size": "default", "active_at": None, "heartbeat_at": None, "next_try_at": None,
             "failures": 0, "problem": "", "problem_at": None, "wake_key": None, "woke_at": None, "enroll_by": 0,
             "enroll_fails": 0, **kw}
 
@@ -370,7 +370,7 @@ def test_work_queued_as_it_goes_quiet_keeps_it_on_for_the_runner_to_take(cloud):
     work(cloud, text="Another thing")                           # queued (real clock) just before the idle stop
     queued = cloud.at[0]
     with cloud.store.transaction() as c:                        # the hub's clock is the fake one's
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'", (stamp(cloud),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops' AND state='queued'", (stamp(cloud),))
     cloud.hq.calls.clear()
     cloud.at[0] = start + 300
     cloud.tick()
@@ -619,8 +619,8 @@ def test_a_frequent_watcher_keeps_it_on_and_a_due_one_wakes_it(cloud):
     def ran(seconds_ago, every):
         when = H.shift(H.now(), seconds=-seconds_ago + (cloud.at[0] - time.time()))
         with cloud.store.transaction() as c:
-            c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started,finished,exit_code,every) "
-                      "VALUES('ops','mail',?,?,?,0,?) ON CONFLICT(bot,name) DO UPDATE SET finished=excluded.finished",
+            c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started_at,finished_at,exit_code,every) "
+                      "VALUES('ops','mail',?,?,?,0,?) ON CONFLICT(bot,name) DO UPDATE SET finished_at=excluded.finished_at",
                       (r["runner_id"], when, when, every))
     for _ in range(4):                                          # every two minutes: never idle for 300 s
         cloud.at[0] += 120
@@ -807,10 +807,10 @@ def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
     execution = cloud.api.app.state.execution
     with cloud.store.transaction() as c:
         # coo is in Engineering on the team chart; finance was made from the video producer's template.
-        c.execute("UPDATE registry_metadata SET value_json=json_set(value_json,'$.org_groups',json(?)) WHERE key='people'",
+        c.execute("UPDATE registry_metadata SET value=json_set(value,'$.org_groups',json(?)) WHERE key='people'",
                   (json.dumps({"engineering": {"name": "Engineering", "parent": ""}}),))
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.team','engineering') WHERE bot='coo'")
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','video-producer') "
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.team','engineering') WHERE bot='coo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','video-producer') "
                   "WHERE bot='finance'")
         for bot in ("ops", "coo", "finance"):
             assert placement.auto_place(c, execution, bot) is None
@@ -867,7 +867,7 @@ def test_the_shared_machine_idles_only_once_every_member_is_idle(cloud):
     start = cloud.row(CM.SHARED)["active_at"]
     cloud.at[0] = start + 200
     with cloud.store.transaction() as c:                        # finance's watcher ran there; ops did nothing
-        c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started,finished,exit_code,every) "
+        c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started_at,finished_at,exit_code,every) "
                   "VALUES('finance','mail',?,?,?,0,3600)", (rid, stamp(cloud), stamp(cloud)))
     cloud.hq.calls.clear()
     cloud.at[0] = start + 300
@@ -979,7 +979,7 @@ def test_a_setup_finished_before_hq_listed_sizes_goes_on_cloud_machines_when_it_
     monkeypatch.setattr(manager, "client", fake)
     with store.transaction() as c:                              # a bootstrap bot setup left planned, with no computer
         c.execute("UPDATE bots SET state='planned' WHERE slug='coo'")
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.materialize',json('true')) "
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.materialize',json('true')) "
                   "WHERE bot='coo'")
         c.execute("UPDATE bots SET state='archived' WHERE slug='doc-updater'")
     manager.tick()
@@ -1138,7 +1138,7 @@ def test_hq_refusing_the_stop_lets_the_claim_go_on_at_once_and_backs_off(cloud):
     cloud.hq.fail["stop"] = CM.Refused("forbidden", 403)       # HQ said it did not stop it
     cloud.tick()
     assert cloud.hq.actions() == ["stop"] and cloud.row()["stop_until"] is None
-    assert cloud.row()["failures"] == 1 and cloud.row()["next_try"] == cloud.at[0] + CM.BACKOFF
+    assert cloud.row()["failures"] == 1 and cloud.row()["next_try_at"] == cloud.at[0] + CM.BACKOFF
     work(cloud)
     assert claim_on(cloud, computer, "ops")["attempt"]["bot"] == "ops"
 

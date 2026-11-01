@@ -268,13 +268,13 @@ class RemoteRegistry:
         sid, rid = report["id"], report["runner_id"]
         # These writes share SQLite's writer lock with open and revocation, including retried reports.
         if c.execute("SELECT 1 FROM events WHERE action='runner.screen_close' AND target=? "
-                     "AND json_extract(detail_json,'$.session_id')=?", (rid, sid)).fetchone():
+                     "AND json_extract(detail,'$.session_id')=?", (rid, sid)).fetchone():
             return
-        opened = c.execute("SELECT actor,detail_json FROM events WHERE action='runner.screen_open' AND target=? "
-                           "AND json_extract(detail_json,'$.session_id')=?", (rid, sid)).fetchone()
+        opened = c.execute("SELECT actor,detail FROM events WHERE action='runner.screen_open' AND target=? "
+                           "AND json_extract(detail,'$.session_id')=?", (rid, sid)).fetchone()
         if not opened:  # A prepared grant whose opening transaction rolled back has nothing to audit.
             return
-        detail = json.loads(opened["detail_json"])
+        detail = json.loads(opened["detail"])
         if (detail.get("relay_lease") != report["lease"] or opened["actor"] != report["actor"]
                 or bool(detail.get("control")) != report["control"]):
             raise RuntimeError("Relay report does not match its committed grant")
@@ -363,14 +363,14 @@ class RemoteRegistry:
 def reconcile_sessions(store, lease=""):
     while True:
         with store.transaction() as c:
-            rows = c.execute("SELECT o.target,o.actor,o.detail_json FROM events o WHERE o.action='runner.screen_open' "
-                             "AND json_extract(o.detail_json,'$.relay_lease') IS NOT NULL "
-                             "AND json_extract(o.detail_json,'$.relay_lease')<>? AND NOT EXISTS "
+            rows = c.execute("SELECT o.target,o.actor,o.detail FROM events o WHERE o.action='runner.screen_open' "
+                             "AND json_extract(o.detail,'$.relay_lease') IS NOT NULL "
+                             "AND json_extract(o.detail,'$.relay_lease')<>? AND NOT EXISTS "
                              "(SELECT 1 FROM events x WHERE x.action='runner.screen_close' AND x.target=o.target "
-                             "AND json_extract(x.detail_json,'$.session_id')=json_extract(o.detail_json,'$.session_id')) "
+                             "AND json_extract(x.detail,'$.session_id')=json_extract(o.detail,'$.session_id')) "
                              "LIMIT 256", (lease,)).fetchall()
             for row in rows:
-                detail = json.loads(row["detail_json"])
+                detail = json.loads(row["detail"])
                 RemoteRegistry._record(c, {"id": detail["session_id"], "runner_id": row["target"], "actor": row["actor"],
                                  "control": bool(detail["control"]), "lease": detail["relay_lease"], "seconds": 0, "code": 1012})
         if len(rows) < 256:

@@ -105,7 +105,7 @@ def changes(c, tid):
         c.execute("UPDATE tasks SET step_id=(SELECT id FROM task_steps LIMIT 1) WHERE id=?", (tid,))
 
     def relation():
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'related',?)",
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'related',?)",
                   (*sorted((other["id"], tid)), H.now()))
 
     def relation_state():
@@ -115,7 +115,7 @@ def changes(c, tid):
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (other["id"],))
 
     def pr_head():
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,pr_sha,checks) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,pr_sha,checks) "
                   "VALUES(?,?,'pr','https://github.com/o/r/pull/9','PR','open','bot:cpo',?,'abc','pending')",
                   ("lk" + tid[:8], tid, H.now()))
 
@@ -213,7 +213,7 @@ def test_synchronizing_an_existing_pr_head_with_unchanged_checks_runs_the_next_c
         G.pull_request(c, {"action": "synchronize", "pull_request": {
             "html_url": url, "head": {"sha": "b" * 40}, "mergeable": None}})
         after = dict(c.execute("SELECT * FROM task_links WHERE task_id=?", (tid,)).fetchone())
-        assert json.loads(after["detail_json"])["head_sha"] == "b" * 40
+        assert json.loads(after["detail"])["head_sha"] == "b" * 40
         assert [after[k] for k in ("pr_sha", "checks", "mergeable")] == [
             before[k] for k in ("pr_sha", "checks", "mergeable")]
         assert jobs(c, "cpo") == 0       # synchronize itself is quiet

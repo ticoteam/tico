@@ -34,27 +34,27 @@ RUN_EVENTS = task_privacy.RUN_TASK_EVENTS_SQL
 READS = [
     # Credentials last used (backend/credentials.py): one target, two actions, newest first.
     ("credential last used",
-     "SELECT ts,actor,detail_json FROM events WHERE target=? AND action IN (?,?) AND actor NOT LIKE 'human:%' "
+     "SELECT ts,actor,detail FROM events WHERE target=? AND action IN (?,?) AND actor NOT LIKE 'human:%' "
      "ORDER BY ts DESC LIMIT 1", ("cred-1", "credential.revealed", "credential.sent_to_computer"),
      "events_action_target"),
     # A judge's decision outcome (backend/judge.py): one action and target.
     ("decision outcome",
-     "SELECT id, detail_json FROM events WHERE target=? AND action='decision.outcome' LIMIT 1", ("call-1",),
+     "SELECT id, detail FROM events WHERE target=? AND action='decision.outcome' LIMIT 1", ("call-1",),
      "events_action_target"),
     # The run events naming a run's tasks (task_privacy, privacy_index, read_deps): the partial index, covering.
     ("run events of a run",
-     f"SELECT detail_json FROM events WHERE action IN ({RUN_EVENTS}) AND target=?", ("att-1",),
+     f"SELECT detail FROM events WHERE action IN ({RUN_EVENTS}) AND target=?", ("att-1",),
      "COVERING INDEX events_run_detail"),
     # The runs that took a task in (message_links.candidates): every run event's detail, read from the index alone.
     ("run events naming a task",
-     f"SELECT target FROM events WHERE action IN ({RUN_EVENTS}) AND instr(detail_json, ?)>0", ("task-1",),
+     f"SELECT target FROM events WHERE action IN ({RUN_EVENTS}) AND instr(detail, ?)>0", ("task-1",),
      "COVERING INDEX events_run_detail"),
     # One action in a time window, no target (health_monitor, judge, app digest): a range, not the action's every row.
     ("limited runs today",
-     "SELECT detail_json FROM events WHERE action='attempt.limited' AND ts>?", ("2026-10-30",),
+     "SELECT detail FROM events WHERE action='attempt.limited' AND ts>?", ("2026-10-30",),
      "events_action_ts (action=? AND ts>?)"),
     ("judge month",
-     "SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0) FROM events WHERE ts>=? AND action='judge.spend'",
+     "SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events WHERE ts>=? AND action='judge.spend'",
      ("2026-10-01",), "events_action_ts (action=? AND ts>?)"),
     # The rows since the month's running total was last counted (judge.spent_this_month): the rowid range, not the month.
     ("judge month since last count", B.NEW_SPEND_SQL, (0, "2026-10-01", "judge.spend"), "INTEGER PRIMARY KEY (rowid>?)"),
@@ -67,14 +67,14 @@ READS = [
     ("anyone's history",
      "SELECT 1 FROM events WHERE actor IN (?,?) LIMIT 1", ("human:ana", "ana"), "events_task_origin (actor=?)"),
     ("ask card",
-     "SELECT detail_json FROM events WHERE actor=? AND action=? AND target=? ORDER BY ts LIMIT 1",
+     "SELECT detail FROM events WHERE actor=? AND action=? AND target=? ORDER BY ts LIMIT 1",
      ("bot:ops", "task.ask_card", "task-1"), "events_task_origin (actor=? AND action=? AND target=?)"),
     ("judge calls today",
      "SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND ts>=?",
      ("bot:ops", "judge.call", "2026-10-30"), "COVERING INDEX events_task_origin (actor=? AND action=?)"),
     # The task-origin reads (hubdb.TASK_ORIGIN_SQL): actor-led, must stay on events_task_origin.
     ("task origin",
-     "SELECT target,detail_json FROM events WHERE actor=? AND action='task.origin' AND target IN (?,?) "
+     "SELECT target,detail FROM events WHERE actor=? AND action='task.origin' AND target IN (?,?) "
      "ORDER BY target,ts DESC", ("bot:ops", "task-1", "task-2"),
      "events_task_origin"),
     # The event sweep walks events_ts forward (store.sweep_events).

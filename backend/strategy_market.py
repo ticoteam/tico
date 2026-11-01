@@ -186,10 +186,10 @@ def follow_merge(c, actor, segment_id, into_id):
             for k in ("revenue_month", "margin_pct"):
                 if same[k] is None and cohort[k] is None:
                     total[k] = None
-            sources = {**MK.loads(cohort["sources_json"], {}), **MK.loads(same["sources_json"], {})}
+            sources = {**MK.loads(cohort["sources"], {}), **MK.loads(same["sources"], {})}
             keys = ("spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "kept_d180", "revenue_month",
                     "margin_pct", "quality")
-            c.execute(f"UPDATE growth_cohorts SET {', '.join(k + '=?' for k in keys)}, sources_json=?, updated_by=?, "
+            c.execute(f"UPDATE growth_cohorts SET {', '.join(k + '=?' for k in keys)}, sources=?, updated_by=?, "
                       "updated_at=? WHERE id=?", (*(total[k] for k in keys), MK.dumps(sources), actor, H.now(), same["id"]))
             c.execute("DELETE FROM growth_cohorts WHERE id=?", (cohort["id"],))
         c.execute("DELETE FROM growth_segments WHERE id=?", (old["id"],))

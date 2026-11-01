@@ -9,14 +9,14 @@ const {open} = require('./tasks-page.cjs');
 const at = mins => new Date(Date.now() - mins * 60000).toISOString();
 const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bot:reviewer', requester: 'bot:lead', status: 'doing',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3,
-  created: at(600), updated: at(30), verdict: null, verdict_head: null, ...over});
+  created_at: at(600), updated_at: at(30), verdict: null, verdict_head: null, ...over});
 const ALREADY = 'Review 1 is already open on this ticket for this head: task t-r1, with reviewer. Wait for its verdict.';
 const REVIEWING = 'You are reviewing this ticket, so you don\'t move it. Finish your review task t-r1 with your verdict.';
 const baseTasks = () => [
   t('t-dev', 'Dev 99: fix the checkout total', {owner: 'bot:builder', children_summary: {total: 3, done: 0, direct_total: 3, direct_done: 0}, parts: {total: 3, done: 0}}),
-  t('t-r1', 'Review 1: PR #12', {_parent: 't-dev', status: 'review', verdict: 'changes', verdict_head: 'a1b2c3d4e5f6a7b8', updated: at(20)}),
-  t('t-qa', 'QA: PR #12', {_parent: 't-dev', status: 'review', verdict: 'pass', verdict_head: '0f9e8d7c6b5a4938', updated: at(22)}),
-  t('t-r2', 'Review 2: PR #12', {_parent: 't-dev', status: 'review', updated: at(24)}),
+  t('t-r1', 'Review 1: PR #12', {_parent: 't-dev', status: 'review', verdict: 'changes', verdict_head: 'a1b2c3d4e5f6a7b8', updated_at: at(20)}),
+  t('t-qa', 'QA: PR #12', {_parent: 't-dev', status: 'review', verdict: 'pass', verdict_head: '0f9e8d7c6b5a4938', updated_at: at(22)}),
+  t('t-r2', 'Review 2: PR #12', {_parent: 't-dev', status: 'review', updated_at: at(24)}),
 ];
 // Grouped by owner, so each row carries its status chip (a status grouping says it in the heading instead).
 const local = {'hub.tasks.layout': JSON.stringify({group: {list: 'owner', foryou: 'requester'}})};

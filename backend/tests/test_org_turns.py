@@ -13,7 +13,7 @@ REASON = "Your company is at its limit; Tico is fixing what's stuck."
 
 def people(api, rows):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps({'people': rows}),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps({'people': rows}),))
 
 
 def one_person(api):
@@ -62,7 +62,7 @@ def test_spec10_stop_is_org_wide_and_only_new_work_waits_until_count_drops(api):
     answer = post(api, 'jobs/claim', {'bot': 'finance', 'start_places': True}, other['token'])
     assert answer['attempt'] is None and answer['waiting'] == REASON
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM attempts WHERE state='running' AND stop_requested IS NULL").fetchone()[0] == 10
+        assert c.execute("SELECT count(*) FROM attempts WHERE state='running' AND stop_requested_at IS NULL").fetchone()[0] == 10
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='completed' WHERE id='attempt-99'")
         c.execute("UPDATE jobs SET state='completed' WHERE attempt_id='attempt-99'")
@@ -107,8 +107,8 @@ def test_recovery_is_fifo_across_computers_and_new_requests_cannot_jump_waiters(
     ready(api, other, ['doc-updater'])
     post(api, 'chat/doc-updater', {'text': 'Younger synthetic request'})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='finance' AND state='queued'", (H.shift(H.now(), minutes=-2),))
-        c.execute("UPDATE jobs SET created=? WHERE bot='doc-updater' AND state='queued'", (H.shift(H.now(), minutes=-1),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='finance' AND state='queued'", (H.shift(H.now(), minutes=-2),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='doc-updater' AND state='queued'", (H.shift(H.now(), minutes=-1),))
     assert claim(api, other, 'doc-updater') is None
     assert claim(api, machine, 'finance') is None
     # Answered "waiting", the runner backs off to its backup poll: longer than CLAIMED_FRESH, still online.
@@ -137,8 +137,8 @@ def test_a_cloud_machine_being_stopped_does_not_hold_other_computers_behind_its_
     ready(api, other, ['doc-updater'])
     post(api, 'chat/doc-updater', {'text': 'Younger synthetic request'})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='finance' AND state='queued'", (H.shift(H.now(), minutes=-2),))
-        c.execute("UPDATE jobs SET created=? WHERE bot='doc-updater' AND state='queued'", (H.shift(H.now(), minutes=-1),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='finance' AND state='queued'", (H.shift(H.now(), minutes=-2),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='doc-updater' AND state='queued'", (H.shift(H.now(), minutes=-1),))
     assert claim(api, other, 'doc-updater') is None
     assert claim(api, machine, 'finance') is None
     age_claim(machine)
@@ -162,8 +162,8 @@ def test_recovery_does_not_hold_other_computers_behind_a_lane_busy_only_on_its_r
     ready(api, other, ['doc-updater'])
     post(api, 'chat/doc-updater', {'text': 'Younger synthetic request'})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='finance' AND state='queued'", (H.shift(H.now(), minutes=-2),))
-        c.execute("UPDATE jobs SET created=? WHERE bot='doc-updater' AND state='queued'", (H.shift(H.now(), minutes=-1),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='finance' AND state='queued'", (H.shift(H.now(), minutes=-2),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='doc-updater' AND state='queued'", (H.shift(H.now(), minutes=-1),))
     busy = {'bot': 'finance', 'start_places': True, 'busy_lanes': ['finance|' + sessions.MAIN_LANE]}
     assert post(api, 'jobs/claim', busy, machine['token'])['waiting'] == REASON
     # The runner backs off past CLAIMED_FRESH without claiming again; its last busy list still holds the lane.
@@ -250,7 +250,7 @@ def test_stop_level_idle_claim_keeps_computer_contact_fresh(api, monkeypatch):
     monkeypatch.setattr(H, 'now', lambda: H.shift(now, seconds=20))
     assert claim(api, machine, 'finance') is None
     with api.app.state.store.read() as c:
-        assert c.execute('SELECT last_seen FROM runners WHERE id=?', (machine['runner_id'],)).fetchone()[0] == H.now()
+        assert c.execute('SELECT last_seen_at FROM runners WHERE id=?', (machine['runner_id'],)).fetchone()[0] == H.now()
 
 
 def test_stop_level_counted_waiter_takes_its_place_while_new_claims_wait(api):
@@ -276,7 +276,7 @@ def test_stop_level_wait_is_a_warning_not_a_stuck_bot_outage(api):
     independent(api, machine)
     assert claim(api, machine, 'finance') is None
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='finance' AND state='queued'", (H.shift(H.now(), minutes=-3),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='finance' AND state='queued'", (H.shift(H.now(), minutes=-3),))
     queue = next(x for x in get(api, 'health')['checks'] if x['id'] == 'queue')
     assert queue['status'] == 'warn' and any(i.get('reason') == 'company_limit' for i in queue['items'])
 
@@ -388,7 +388,7 @@ def test_health_and_queued_labels_do_not_classify_the_fleet_for_at_stop(api, mon
     independent(api, machine)
     assert claim(api, machine, 'finance') is None
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='finance' AND state='queued'",
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='finance' AND state='queued'",
                   (H.shift(H.now(), minutes=-3),))
     monkeypatch.setattr(org_turns, 'snapshot', lambda *a, **k: (_ for _ in ()).throw(
         AssertionError('at_stop and company-turns Health paths must use admission, not snapshot')))

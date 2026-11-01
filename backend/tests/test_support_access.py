@@ -120,9 +120,9 @@ def test_a_session_keeps_hqs_ids_and_each_request_lists_its_own(environment, hq)
     second = start(api, riley).json()
     assert second["id"] == "sa_" + "0" * 23 + "2" and hq.ended == [first["id"]]
     with api.app.state.store.read() as c:
-        events = c.execute("SELECT action, target, detail_json FROM events WHERE action LIKE 'support_access.%' "
+        events = c.execute("SELECT action, target, detail FROM events WHERE action LIKE 'support_access.%' "
                            "ORDER BY rowid").fetchall()
-    assert [(e["action"], e["target"], json.loads(e["detail_json"])["hq_ticket"]) for e in events][:2] == [
+    assert [(e["action"], e["target"], json.loads(e["detail"])["hq_ticket"]) for e in events][:2] == [
         ("support_access.started", first["id"], hq_id), ("support_access.stopped", first["id"], hq_id)]
     mine = api.get("/api/v2/support/access", headers=signed_in()).json()["sessions"]
     assert [(x["id"], x["ticket_id"], x["end_reason"]) for x in mine] == [(first["id"], first["ticket_id"], "stopped")]

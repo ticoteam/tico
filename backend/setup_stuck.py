@@ -27,18 +27,18 @@ def stuck(c, at=None):
     """Active bots parked in setup for more than STUCK_HOURS, as health `stuck` rows (reason `setup`, `since` when
     the bot was added). Few bots are ever parked; each costs one indexed read of its queue."""
     cutoff = H.shift(at or H.now(), hours=-STUCK_HOURS)
-    rows = c.execute("SELECT b.slug,b.display_name,b.created FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
-                     f"WHERE bc.onboarding_state IN {PARKED_SQL} AND b.state='active' AND coalesce(b.created,'')<>'' "
-                     "AND b.created<? ORDER BY b.created", (cutoff,)).fetchall()
+    rows = c.execute("SELECT b.slug,b.display_name,b.created_at FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+                     f"WHERE bc.onboarding_state IN {PARKED_SQL} AND b.state='active' AND coalesce(b.created_at,'')<>'' "
+                     "AND b.created_at<? ORDER BY b.created_at", (cutoff,)).fetchall()
     out = []
     for row in rows:
-        queued = c.execute("SELECT count(*) n, min(created) oldest FROM jobs WHERE bot=? AND state='queued'",
+        queued = c.execute("SELECT count(*) n, min(created_at) oldest FROM jobs WHERE bot=? AND state='queued'",
                            (row["slug"],)).fetchone()
         where = c.execute("SELECT r.label FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?",
                           (row["slug"],)).fetchone()
         out.append({"bot": row["slug"], "name": row["display_name"] or row["slug"], "queued": queued["n"],
                     "oldest": queued["oldest"], "computer": where["label"] if where else "", "reason": "setup",
-                    "since": row["created"], "runner_id": "", "runtime": ""})
+                    "since": row["created_at"], "runner_id": "", "runtime": ""})
     return out
 
 

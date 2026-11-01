@@ -65,7 +65,7 @@ def test_message_pagination_preserves_all_history_with_timestamp_ties(api):
     with api.app.state.store.transaction() as c:
         for n in range(240):
             H.say(c, "human:ana", "bot:ops", f"Message {n}", conversation_id=msg["conversation_id"])
-        c.execute("UPDATE messages SET created='2026-09-10T10:00:00Z'")
+        c.execute("UPDATE messages SET created_at='2026-09-10T10:00:00Z'")
     path = f"/api/v2/conversations/{msg['conversation_id']}/messages"
     newest = api.get(path, headers=headers()).json()
     assert newest["messages"][-1]["body"] == "Message 239"

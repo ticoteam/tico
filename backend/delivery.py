@@ -99,7 +99,7 @@ def defer(conn, bot, kind, item, *, conversation_id="", task_id=None, defer_for=
         raise ValueError(kind)
     created = H.now()
     due = until(defer_for or (TASK_DEFAULT if kind in ("comment", "task") else CHAT_DEFAULT), created)
-    conn.execute("INSERT INTO deferrals(id,bot,kind,item,conversation_id,task_id,due,created) VALUES(?,?,?,?,?,?,?,?)",
+    conn.execute("INSERT INTO deferrals(id,bot,kind,item,conversation_id,task_id,due,created_at) VALUES(?,?,?,?,?,?,?,?)",
                  (H.new_id(), H.actor_id(bot), kind, item, conversation_id or "", task_id, due, created))
     return due
 
@@ -124,9 +124,9 @@ def carried(conn, bot, attempt_id, conversation_ids, tasks=(), notes=(), *, job=
     counts, lines, settle, left, size = {}, [], [], [], 0
     if ids:
         rows = conn.execute(
-            "SELECT d.id,d.kind,d.item,m.from_actor,m.body,m.created,m.deleted_at FROM deferrals d "
+            "SELECT d.id,d.kind,d.item,m.from_actor,m.body,m.created_at,m.deleted_at FROM deferrals d "
             "LEFT JOIN messages m ON m.id=d.item WHERE d.bot=? AND d.settled IS NULL AND d.conversation_id IN "
-            f"({','.join('?' * len(ids))}) ORDER BY d.created,d.id", (bot, *ids)).fetchall()
+            f"({','.join('?' * len(ids))}) ORDER BY d.created_at,d.id", (bot, *ids)).fetchall()
         for row in rows:
             rid, kind, item, sender, body, created, deleted = row
             if body is None or deleted:          # gone: nothing to carry
@@ -225,7 +225,7 @@ def due(conn, at, failures=None):
 
 def _fire(conn, H, bot, conversation_id, at, external):
     rows = H._rows(conn.execute("SELECT * FROM deferrals WHERE bot=? AND conversation_id=? AND settled IS NULL "
-                                "AND fired_job IS NULL ORDER BY created", (bot, conversation_id)))
+                                "AND fired_job IS NULL ORDER BY created_at", (bot, conversation_id)))
     live = [r for r in rows if _alive(conn, r)]
     dead = [r["id"] for r in rows if r not in live]
     for part in H.chunks(dead):
@@ -243,7 +243,7 @@ def _fire(conn, H, bot, conversation_id, at, external):
             conn.execute(f"UPDATE deferrals SET fired_job=? WHERE id IN ({','.join('?' * len(part))})",
                          (pending[0], *part))
         return None
-    config = conn.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = conn.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     harness = (H._json(config[0], {}) or {}).get("harness") if config else None
     if harness in external:
         # Its app delivers what it reads; Tico starts no run for it. The items wait in its rooms.
@@ -262,7 +262,7 @@ def _fire(conn, H, bot, conversation_id, at, external):
         # Quiet, so the wake rules do not turn it into a note for a later run: it is the run.
         message_id = H.say(conn, H.KEEPER, "bot:" + bot, text, kind="notice",
                            refs={"quiet": True, "wake": "deferred", "deferred": [r["id"] for r in live]})["id"]
-    conn.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot,created) VALUES(?,?,?,?)",
+    conn.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot,created_at) VALUES(?,?,?,?)",
                  (message_id, message_id, bot, at))
     job = conn.execute("SELECT id FROM jobs WHERE message_id=?", (message_id,)).fetchone()[0]
     ids = [r["id"] for r in live]

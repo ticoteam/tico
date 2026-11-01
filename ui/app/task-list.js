@@ -482,7 +482,7 @@ function taskListRowHTML(it, ctx, depth = 0) {
   // a subtask shown away from its parent says whose it is
   const pid = taskParentId(t);
   const parent = pid && depth === 0 ? (tasksById(state).get(pid) || t.parent) : null;
-  const when = ctx.done ? (it.closed || it.updated) : it.updated;
+  const when = ctx.done ? (it.closed || it.updated_at) : it.updated_at;
   const ageText = ctx.done ? ageShort(when) : taskAge(t);
   const ageTitle = ctx.done ? `${t.status === 'closed' ? 'Closed' : 'Done'} ${fmt(when)}` : taskAgeTitle(t);
   const need = tasksNeedsQueue(state) ? needsItem(t.id) : null;
@@ -593,7 +593,7 @@ function tasksListHTML(items, state) {
   const select = tasksCanSelect();
   return `<div class="tl${select ? ' can-select' : ''}" data-group-by="${esc(by)}">${asks}${groups.map((g, i) => {
     const {tops: raw, kids} = tasksNest(g.items, nest);
-    const tops = byNeed ? raw : raw.slice().sort(done ? byNewest : g.key === 'scheduled' ? (a, b) => String(a.updated).localeCompare(String(b.updated)) : byRank);
+    const tops = byNeed ? raw : raw.slice().sort(done ? byNewest : g.key === 'scheduled' ? (a, b) => String(a.updated_at).localeCompare(String(b.updated_at)) : byRank);
     const more = extra.get(g.key) || [];
     if (!tops.length && !more.length) return '';
     const ctx = {state, kids, done, by, select};

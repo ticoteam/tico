@@ -51,7 +51,7 @@ def api(tmp_path, api_database):
                 {"id": "cara", "email": "cara@acme.example"}]}),))
             for slug, config in bots.items():
                 product = slug in ("cpo", "product-design")
-                c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
                           (slug, encode(config), "product" if product else None, "ben" if product else "ana"))
             # The company's mail bot is Ana's alone: nobody else sees it, reads it or writes to it.
             restrict(c, "inbox", people=["ana"])
@@ -66,12 +66,12 @@ def api(tmp_path, api_database):
 def unrelated_task_managers(c, *slugs):
     """Keep privacy negatives outside the parties' org chains, without changing bot access grants."""
     import json
-    roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+    roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
     if not any(p['id'] == 'privacy-lead' for p in roster['people']):
         roster['people'].append({'id': 'privacy-lead', 'email': 'privacy-lead@acme.example'})
     c.execute("INSERT OR IGNORE INTO humans(id,name,email) VALUES(?,?,?)",
               ('privacy-lead', 'Privacy Lead', 'privacy-lead@acme.example'))
-    c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(roster),))
+    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
     targets = slugs or tuple(row[0] for row in c.execute('SELECT bot FROM bot_config'))
     for slug in targets:
         c.execute("UPDATE bot_config SET reports_to='human:privacy-lead' WHERE bot=?", (slug,))
@@ -83,7 +83,7 @@ def restrict(c, bot, **audience):
     from backend import bot_access as BA
     levels = {level: audience.pop(level) for level in BA.LEVELS if level in audience}
     every = {level: levels.get(level, audience) for level in BA.LEVELS}
-    c.execute("UPDATE bot_config SET access_json=? WHERE bot=?",
+    c.execute("UPDATE bot_config SET access=? WHERE bot=?",
               (BA.stored(BA.document({level: BA.audience(value) for level, value in every.items()})), bot))
 
 
@@ -314,7 +314,7 @@ def test_turn_output_and_completion_are_durable_and_idempotent(api):
 def slept(api, r, seconds=3600, awake_since=None):
     """Age a machine's last contact the way an hour of sleep does."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=?,awake_since=? WHERE id=?",
+        c.execute("UPDATE runners SET last_seen_at=?,awake_since=? WHERE id=?",
                   (H.shift(H.now(), seconds=-seconds), awake_since, r["runner_id"]))
 
 
@@ -348,7 +348,7 @@ def test_a_files_metadata_follows_the_same_access_as_the_file(api):
     """Name, size and type without the bytes, for the viewer's thumbnails."""
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) VALUES(?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
                   ("blob-meta-0001", "human:ana", "d" * 64, 2048, "storyboard.png", "image/png", H.now()))
     assert get(api, "files/blob-meta-0001/meta") == {"id": "blob-meta-0001", "name": "storyboard.png", "size": 2048,
                                                      "content_type": "image/png"}
@@ -359,7 +359,7 @@ def test_a_files_metadata_follows_the_same_access_as_the_file(api):
 def test_run_windows_include_failed_attempts_without_turns_and_hide_private_rooms(api):
     machine, message, attempt = setup_attempt(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (H.now(), attempt["id"]))
+        c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), attempt["id"]))
         c.execute("DELETE FROM turns WHERE id=?", (attempt["id"],))
         H.status_set(c, "bot:ops", "ops", "running")
         H.status_set(c, "bot:ops", "ops", "idle")

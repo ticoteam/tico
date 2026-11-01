@@ -33,7 +33,7 @@ log = logging.getLogger('tico.worktree_waits')
 
 SCHEMA = ("CREATE TABLE IF NOT EXISTS worktree_waits(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, owner TEXT NOT NULL, "
           "repo TEXT NOT NULL, generation INTEGER NOT NULL, attempt_id TEXT, state TEXT NOT NULL, link_id TEXT, "
-          "reason TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL, finished TEXT)")
+          "reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT)")
 
 
 def ensure(c):
@@ -41,7 +41,7 @@ def ensure(c):
     c.execute(SCHEMA)
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS worktree_waits_open ON worktree_waits(task_id, repo COLLATE NOCASE) "
               "WHERE state IN ('waiting','reserved')")
-    c.execute("CREATE INDEX IF NOT EXISTS worktree_waits_state ON worktree_waits(state, owner, created)")
+    c.execute("CREATE INDEX IF NOT EXISTS worktree_waits_state ON worktree_waits(state, owner, created_at)")
     c.execute("CREATE INDEX IF NOT EXISTS worktree_waits_link ON worktree_waits(link_id) WHERE link_id IS NOT NULL")
 
 
@@ -50,7 +50,7 @@ def _exists(c):
 
 
 def _computer(c, bot):
-    return c.execute("SELECT r.id,r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    return c.execute("SELECT r.id,r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
                      "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
 
 
@@ -58,7 +58,7 @@ def computer_waits(c, bot):
     """The bot's computer prepares a reserved worktree on its own; an older one only makes worktrees inside a turn,
     so for it the refusal stays as it was and nothing waits."""
     row = _computer(c, bot)
-    return bool(row and readiness_document(row['readiness_json']).get('worktree_waits'))
+    return bool(row and readiness_document(row['readiness']).get('worktree_waits'))
 
 
 def _current_task(c, who, task):
@@ -87,10 +87,10 @@ def record(c, who, task, repo, problem):
     now = H.now()
     wait = {'id': uuid.uuid4().hex, 'task_id': task['id'], 'owner': task['owner'], 'repo': repo,
             'generation': generation, 'attempt_id': who.attempt_id, 'state': 'waiting', 'link_id': None,
-            'reason': f'This bot has {problem.extra.get("limit", "its most")} worktrees', 'created': now,
-            'updated': now, 'finished': None}
+            'reason': f'This bot has {problem.extra.get("limit", "its most")} worktrees', 'created_at': now,
+            'updated_at': now, 'finished_at': None}
     c.execute("INSERT INTO worktree_waits VALUES(:id,:task_id,:owner,:repo,:generation,:attempt_id,:state,:link_id,"
-              ":reason,:created,:updated,:finished)", wait)
+              ":reason,:created_at,:updated_at,:finished_at)", wait)
     H.event(c, who.actor, 'worktree.wait', task['id'], {'wait': wait['id'], 'repo': repo, 'generation': generation})
     return wait
 
@@ -102,14 +102,14 @@ def refusal(problem, wait):
               "End your turn now: do not wait, poll, retry or remove worktrees. Your finished worktrees free "
               "themselves once you are idle.")
     return {'detail': detail, 'worktrees': problem.extra.get('worktrees', []),
-            'wait': {'id': wait['id'], 'repo': wait['repo'], 'state': wait['state'], 'since': wait['created'],
+            'wait': {'id': wait['id'], 'repo': wait['repo'], 'state': wait['state'], 'since': wait['created_at'],
                      'generation': wait['generation']}}
 
 
 def _finish(c, wait, state, reason):
     """Close an open wait; False when it was already closed, so nothing is said twice."""
     now = H.now()
-    done = c.execute("UPDATE worktree_waits SET state=?,reason=?,updated=?,finished=? WHERE id=? AND state IN ('waiting','reserved')",
+    done = c.execute("UPDATE worktree_waits SET state=?,reason=?,updated_at=?,finished_at=? WHERE id=? AND state IN ('waiting','reserved')",
               (state, reason[:500], now, now, wait['id'])).rowcount
     if done:
         H.event(c, H.KEEPER, 'worktree.wait.' + state, wait['task_id'], {'wait': wait['id'], 'repo': wait['repo'],
@@ -156,7 +156,7 @@ def serve(c, owners=None, default_org=''):
             return []
         sql += f" AND owner IN ({','.join('?' * len(owners))})"
         args = tuple(owners)
-    rows = [dict(r) for r in c.execute(sql + " ORDER BY owner, created, id", args)]
+    rows = [dict(r) for r in c.execute(sql + " ORDER BY owner, created_at, id", args)]
     full, woken = set(), []
     for wait in rows:
         # One wait that breaks must not fail the heartbeat it runs in: that would also stop the worktree cleanup
@@ -196,9 +196,9 @@ def _serve_one(c, wait, full, default_org):
         _finish(c, wait, 'cancelled', ended)
         link = c.execute("SELECT * FROM task_links WHERE id=? AND kind='worktree' AND state='pending'",
                          (wait['link_id'] or '',)).fetchone()
-        if link and json.loads(link['detail_json'] or '{}').get('checkout_state') == 'queued':
+        if link and json.loads(link['detail'] or '{}').get('checkout_state') == 'queued':
             from .worktrees import cancel_pending
-            cancel_pending(c, dict(link), json.loads(link['detail_json'] or '{}'), ended)
+            cancel_pending(c, dict(link), json.loads(link['detail'] or '{}'), ended)
         return False
     if wait['state'] == 'waiting':
         # The oldest wait that does not fit holds the bot's younger ones back: a freed place goes to it first.
@@ -226,12 +226,12 @@ def _serve_one(c, wait, full, default_org):
                                                 f"worktree: {problem.detail}", refs={'worktree_wait': wait['id'], 'quiet': True},
                         trigger='other', source=wait['id'])
             return False
-        row = c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
-        detail = json.loads(row['detail_json'] or '{}')
+        row = c.execute('SELECT detail FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
+        detail = json.loads(row['detail'] or '{}')
         detail['wait_id'] = wait['id']
         detail.pop('error', None)
-        c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(detail), link['link_id']))
-        c.execute("UPDATE worktree_waits SET state='reserved',link_id=?,updated=? WHERE id=?",
+        c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), link['link_id']))
+        c.execute("UPDATE worktree_waits SET state='reserved',link_id=?,updated_at=? WHERE id=?",
                   (link['link_id'], H.now(), wait['id']))
         H.event(c, H.KEEPER, 'worktree.wait.reserved', wait['task_id'],
                 {'wait': wait['id'], 'link': link['link_id'], 'path': link['path']})
@@ -239,9 +239,9 @@ def _serve_one(c, wait, full, default_org):
     link = c.execute("SELECT * FROM task_links WHERE id=? AND kind='worktree'", (wait['link_id'],)).fetchone()
     if not link or link['state'] == 'removed':
         # The reserved worktree went away before it was ready: wait for a place again.
-        c.execute("UPDATE worktree_waits SET state='waiting',link_id=NULL,updated=? WHERE id=?", (H.now(), wait['id']))
+        c.execute("UPDATE worktree_waits SET state='waiting',link_id=NULL,updated_at=? WHERE id=?", (H.now(), wait['id']))
         return False
-    detail = json.loads(link['detail_json'] or '{}')
+    detail = json.loads(link['detail'] or '{}')
     ready = (link['state'] == 'present' and not detail.get('setup_pending')
              and detail.get('checkout_state') in ('ready', 'legacy_present'))
     if ready:
@@ -275,8 +275,8 @@ def for_task(c, task_id):
     """A task's open waits, for its page: what it waits for, since when and why."""
     if not _exists(c):
         return []
-    return [{'id': r['id'], 'repo': r['repo'], 'state': r['state'], 'since': r['created'], 'reason': r['reason']}
-            for r in c.execute(f"SELECT * FROM worktree_waits WHERE task_id=? AND state IN {OPEN} ORDER BY created",
+    return [{'id': r['id'], 'repo': r['repo'], 'state': r['state'], 'since': r['created_at'], 'reason': r['reason']}
+            for r in c.execute(f"SELECT * FROM worktree_waits WHERE task_id=? AND state IN {OPEN} ORDER BY created_at",
                                (task_id,))]
 
 
@@ -285,7 +285,7 @@ def waiting(c):
     if not _exists(c):
         return []
     return [dict(r) for r in c.execute(f"SELECT w.*,t.title,t.private FROM worktree_waits w JOIN tasks t ON t.id=w.task_id "
-                                       f"WHERE w.state IN {OPEN} ORDER BY w.created")]
+                                       f"WHERE w.state IN {OPEN} ORDER BY w.created_at")]
 
 
 def tick(store, default_org='', force=False):

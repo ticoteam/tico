@@ -110,8 +110,8 @@ def test_a_cancelled_switch_keeps_the_mark_and_the_old_login(api):
 def put_config(api, bot, runtime):
     import json
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot, config_json, operator) VALUES(?, ?, 'ana') ON CONFLICT(bot) DO UPDATE "
-                  "SET config_json=excluded.config_json", (bot, json.dumps({"runtime": runtime})))
+        c.execute("INSERT INTO bot_config(bot, config, operator) VALUES(?, ?, 'ana') ON CONFLICT(bot) DO UPDATE "
+                  "SET config=excluded.config", (bot, json.dumps({"runtime": runtime})))
 
 
 def test_a_signed_out_computer_is_not_given_the_shared_key_until_a_person_says_so(environment):
@@ -362,10 +362,10 @@ def test_a_write_kept_from_the_lock_answers_busy_with_retry_after_and_a_beat_rew
     r = online(api)
     store = api.app.state.store
     with store.read() as c:
-        before = c.execute("SELECT readiness_json,last_seen FROM runners WHERE id=?", (r["runner_id"],)).fetchone()
+        before = c.execute("SELECT readiness,last_seen_at FROM runners WHERE id=?", (r["runner_id"],)).fetchone()
     beat(api, r["token"])
     with store.read() as c:
-        after = c.execute("SELECT readiness_json,last_seen FROM runners WHERE id=?", (r["runner_id"],)).fetchone()
+        after = c.execute("SELECT readiness,last_seen_at FROM runners WHERE id=?", (r["runner_id"],)).fetchone()
     assert after[0] == before[0] and after[1] >= before[1]
     store.writer.acquire()
     timeout, store.writer.timeout = store.writer.timeout, 0.05

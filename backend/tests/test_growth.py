@@ -150,7 +150,7 @@ def test_a_bot_files_and_edits_its_own_idea_but_not_another_bots(api):
 def test_idea_test_and_verdict_close_the_task_and_count_as_bet_evidence(api):
     ops, finance = bot(api, "ops"), bot(api, "finance")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO strategy_bets (id, statement, status, created, updated, updated_by) VALUES "
+        c.execute("INSERT INTO strategy_bets (id, statement, status, created_at, updated_at, updated_by) VALUES "
                   "('bet1','Homeowners book online','active',?,?,'human:ana')", (H.now(), H.now()))
     post(api, "growth/ideas", {"title": "Weekend discount", "bet_id": "nope"}, token="cara-test", expected=404)
     first = post(api, "growth/ideas", {"title": "Weekend discount", "assignee": "ops", "bet_id": "bet1"},
@@ -311,11 +311,11 @@ def test_migration_starts_segments_the_graph_already_marks_us_or_next(tmp_path):
             H._apply(conn, script)
     conn.execute(f"PRAGMA user_version={start}")
     for sid, props in (("segment/homes", "{}"), ("segment/offices", '{"next": true}'), ("segment/hotels", "{}")):
-        conn.execute("INSERT INTO market_entities (id, type, name, properties, status, created, created_by, updated) "
+        conn.execute("INSERT INTO market_entities (id, type, name, properties, status, created_at, created_by, updated_at) "
                      "VALUES (?, 'segment', ?, ?, 'active', 'x', 'x', 'x')", (sid, sid.split("/")[1].title(), props))
-    conn.execute("INSERT INTO market_edges (id, src, rel, dst, created, created_by, updated) VALUES "
+    conn.execute("INSERT INTO market_edges (id, src, rel, dst, created_at, created_by, updated_at) VALUES "
                  "('e1','company/self','operates_in','segment/homes','x','x','x')")
-    conn.execute("INSERT INTO market_edges (id, src, rel, dst, until, created, created_by, updated) VALUES "
+    conn.execute("INSERT INTO market_edges (id, src, rel, dst, until, created_at, created_by, updated_at) VALUES "
                  "('e2','company/self','operates_in','segment/hotels','2020-01-01','x','x','x')")   # ended: not Us
     H.migrate(conn)
     rows = {r["segment_id"]: r["status"] for r in conn.execute("SELECT segment_id, status FROM growth_segments")}

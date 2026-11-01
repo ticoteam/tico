@@ -32,9 +32,9 @@ function reviewItem(id, files, {pick = false, spend = null} = {}) {
     : [{label: 'Approve', then: 'This version is approved'}, {label: 'Request changes', then: 'Your note on what to change goes back'}];
   const question = pick ? 'Which thumbnail goes out?' : 'Is this cut ready?';
   return {id, kind: 'question', title: question, body: '', owner: 'bot:writer', requester: 'bot:writer', status: 'waiting',
-    waiting_on: 'human:ana', version: 1, created: at(3), updated: at(3), open_asks: 1, labels: [], tags: [], links: [],
+    waiting_on: 'human:ana', version: 1, created_at: at(3), updated_at: at(3), open_asks: 1, labels: [], tags: [], links: [],
     lane: 'company', rank: null, parts: {total: 0, done: 0}, tier: 3,
-    ask: {id: 'q-' + id, from_actor: 'bot:writer', to_actor: 'human:ana', body: question, created: at(3),
+    ask: {id: 'q-' + id, from_actor: 'bot:writer', to_actor: 'human:ana', body: question, created_at: at(3),
       refs: {task: id, questions: [{id: 'decision', header: '', question, multi: false, other: true, options}],
         review: {files: files.map(f => ({file: f.file_id, version: f.version, digest: 'd'.repeat(64), ...(pick ? {label: f.title} : {})})),
           ...(pick ? {pick: true} : {})},

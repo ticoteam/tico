@@ -113,7 +113,7 @@ def _item(kind, row, why, fix, owner=None, stamp=None):
     reported again at once and an unchanged one only after REPEAT_HOURS."""
     owner = owner or (row or {}).get("owner") or ""
     return {"kind": kind, "task": row["id"] if row else "", "title": (row or {}).get("title") or "", "owner": owner,
-            "why": why, "fix": fix, "stamp": stamp if stamp is not None else (row or {}).get("updated") or ""}
+            "why": why, "fix": fix, "stamp": stamp if stamp is not None else (row or {}).get("updated_at") or ""}
 
 
 def _readable(c, row):
@@ -188,8 +188,8 @@ def _reviews(c):
         "SELECT t.* FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
         "JOIN tasks p ON p.id=r.to_task "
         "WHERE coalesce(t.private,1)=0 AND t.status IN ('open','doing','waiting','review','ready') "
-        "AND (EXISTS(SELECT 1 FROM task_steps s WHERE s.type_id=p.type_id AND s.flow_json LIKE '%\"check\":%') "
-        "OR t.title LIKE 'Review %' OR t.title LIKE 'QA%') ORDER BY t.created, t.id"))
+        "AND (EXISTS(SELECT 1 FROM task_steps s WHERE s.type_id=p.type_id AND s.flow LIKE '%\"check\":%') "
+        "OR t.title LIKE 'Review %' OR t.title LIKE 'QA%') ORDER BY t.created_at, t.id"))
     out, groups = [], {}
     for row in rows:
         parent_id = TR.parent_of(c, row["id"])
@@ -205,7 +205,7 @@ def _reviews(c):
                              f"hub task get {parent_id}; if its pull request is gone: hub task close {row['id']} "
                              f"--note \"No pull request to review\""))
             continue
-        heads = tuple(sorted(str(H._json(p.get("detail_json"), {}).get("head_sha") or p.get("pr_sha") or "")
+        heads = tuple(sorted(str(H._json(p.get("detail"), {}).get("head_sha") or p.get("pr_sha") or "")
                              for p in links if p.get("state") not in ("merged", "closed", "shipped")))
         groups.setdefault((parent_id, step["id"], heads), []).append((match[0], row))
     for (parent_id, _step, _heads), found in groups.items():
@@ -228,7 +228,7 @@ def _merged(c, at):
     gap = H.shift(at, seconds=-QUIET_MINUTES * 60)
     out = []
     for row in rows:
-        if (row.get("merged_at") or row["updated"]) > gap or not _readable(c, row):
+        if (row.get("merged_at") or row["updated_at"]) > gap or not _readable(c, row):
             continue
         if row["shipped"]:
             out.append(_item("shipped", row, f"its pull request shipped in a release ({row['pr']}) but the ticket is still "
@@ -271,10 +271,10 @@ def _owner_review(c, at):
     gap = H.shift(at, seconds=-OWNER_REVIEW_MINUTES * 60)
     try:
         rows = c.execute(
-            "SELECT j.bot, count(*) AS n, min(coalesce(a.finished, j.created)) AS since FROM jobs j "
+            "SELECT j.bot, count(*) AS n, min(coalesce(a.finished_at, j.created_at)) AS since FROM jobs j "
             "LEFT JOIN attempts a ON a.id=j.attempt_id LEFT JOIN job_recovery r ON r.job_id=j.id AND r.attempt_id=j.attempt_id "
             "WHERE j.state='uncertain' AND j.attempt_id IS NOT NULL AND r.job_id IS NULL "
-            "AND coalesce(a.finished, j.created)<=? GROUP BY j.bot", (gap,)).fetchall()
+            "AND coalesce(a.finished_at, j.created_at)<=? GROUP BY j.bot", (gap,)).fetchall()
     except sqlite3.Error:
         return []
     return [_item("owner_review", None, f"{r['n']} interrupted run{'s' if r['n'] != 1 else ''} of {r['bot']} "
@@ -290,7 +290,7 @@ def _duplicates(c):
         "SELECT * FROM tasks WHERE coalesce(private,1)=0 AND status IN ('open','doing','waiting','review','ready') AND id IN ("
         "SELECT id FROM tasks t WHERE coalesce(t.private,1)=0 AND t.status IN ('open','doing','waiting','review','ready') "
         "AND EXISTS(SELECT 1 FROM tasks o WHERE o.id<>t.id AND o.requester=t.requester AND o.owner=t.owner "
-        "AND coalesce(o.private,1)=0 AND o.status IN ('open','doing','waiting','review','ready'))) ORDER BY created, id"))
+        "AND coalesce(o.private,1)=0 AND o.status IN ('open','doing','waiting','review','ready'))) ORDER BY created_at, id"))
     seen, out = {}, []
     for row in rows:
         key = (row["requester"], row["owner"], H.title_key(row["title"]))
@@ -343,7 +343,7 @@ def render(name, items, more):
 def _open_report(c, name):
     like = "Task check: " + name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + " (%"
     return H._one(c, "SELECT * FROM tasks WHERE owner=? AND requester=? AND title LIKE ? ESCAPE '\\' "
-                     "AND status IN ('open','doing','waiting','review','ready') ORDER BY created DESC LIMIT 1",
+                     "AND status IN ('open','doing','waiting','review','ready') ORDER BY created_at DESC LIMIT 1",
                   (ACTOR, H.KEEPER, like))
 
 

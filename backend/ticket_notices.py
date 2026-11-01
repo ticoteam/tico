@@ -34,7 +34,7 @@ def _step(conn, row):
 
 
 def _pr(conn, row):
-    found = conn.execute("SELECT url FROM task_links WHERE task_id=? AND kind='pr' ORDER BY created DESC,rowid DESC "
+    found = conn.execute("SELECT url FROM task_links WHERE task_id=? AND kind='pr' ORDER BY created_at DESC,rowid DESC "
                          'LIMIT 1', (row['id'],)).fetchone()
     return found[0] if found else 'none'
 
@@ -112,7 +112,7 @@ def moved(conn, actor, task_id, old, new):
         return post(conn, 'done', row, actor)
     if new in STARTED_STATUSES and not conn.execute(
             "SELECT 1 FROM events WHERE actor=? AND action='task.notice' AND target=? "
-            "AND json_extract(detail_json,'$.kind')='started' LIMIT 1", (H.KEEPER, task_id)).fetchone():
+            "AND json_extract(detail,'$.kind')='started' LIMIT 1", (H.KEEPER, task_id)).fetchone():
         return post(conn, 'started', row, actor)
     return []
 

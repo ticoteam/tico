@@ -32,7 +32,7 @@ def goal_controls(api, cid):
     with api.app.state.store.read() as c:
         return [tuple(r) for r in c.execute(
             "SELECT m.id, j.state FROM messages m LEFT JOIN jobs j ON j.message_id=m.id "
-            "WHERE m.conversation_id=? AND json_extract(m.refs_json,'$.goal_action') IS NOT NULL ORDER BY m.created",
+            "WHERE m.conversation_id=? AND json_extract(m.refs,'$.goal_action') IS NOT NULL ORDER BY m.created_at",
             (cid,))]
 
 

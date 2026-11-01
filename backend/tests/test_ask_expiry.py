@@ -40,7 +40,7 @@ def test_a_newer_ask_or_the_tasks_end_supersedes_and_old_asks_fold_out(api):
         H.task_close(c, "human:ana", tid)
         assert H.open_task_asks(c, H.task(c, tid)) == []
         old = bot_ask(c, other, "Indoor or outdoor?")
-        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-4), old["id"]))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-4), old["id"]))
     queue = needs(api)
     assert tid not in [i["id"] for i in queue["items"]] + [i["id"] for i in queue["older"]]
     stale = next(i for i in queue["items"] if i["id"] == other)

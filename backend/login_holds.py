@@ -103,8 +103,8 @@ def canonical(c, runner_id, profile, runtime, subscription=True):
 def _canonical(c, runner_id, profile, runtime):
     from .store import readiness_document
     from .read_cache import one
-    row = one(c, "SELECT readiness_json,capabilities_json FROM runners WHERE id=?", (runner_id,))
-    ready = readiness_document(row["readiness_json"]) if row else {}
+    row = one(c, "SELECT readiness,capabilities FROM runners WHERE id=?", (runner_id,))
+    ready = readiness_document(row["readiness"]) if row else {}
     from .subscriptions import computer_logins
     current = row and computer_logins(row, ready)
     if not profile and current:
@@ -130,7 +130,7 @@ def get(c, runner_id, profile, runtime):
 
 
 def _save(c, hold):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (key(hold["runner_id"], hold["profile"], hold["runtime"]), json.dumps(hold)))
 
 
@@ -307,9 +307,9 @@ def on_runner(c, runner_id):
     from .model_subscriptions import given_to
     out = []
     keys = [key("", subscription_login(sid), runtime) for runtime, sid in given_to(c, runner_id)]
-    rows = c.execute("SELECT value_json FROM registry_metadata WHERE key LIKE ? ORDER BY key",
+    rows = c.execute("SELECT value FROM registry_metadata WHERE key LIKE ? ORDER BY key",
                      (f"{PREFIX}{runner_id}|%",)).fetchall()
-    rows += [r for k in keys for r in c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (k,))]
+    rows += [r for k in keys for r in c.execute("SELECT value FROM registry_metadata WHERE key=?", (k,))]
     for (value,) in rows:
         try:
             hold = json.loads(value)
@@ -326,7 +326,7 @@ def for_attempt(c, attempt_id):
     if not attempt_id:
         return {}
     found = {}
-    for (value,) in c.execute("SELECT value_json FROM registry_metadata WHERE key LIKE ? AND value_json LIKE ?",
+    for (value,) in c.execute("SELECT value FROM registry_metadata WHERE key LIKE ? AND value LIKE ?",
                               (PREFIX + "%", f'%"{attempt_id}"%')):
         try:
             hold = json.loads(value)
@@ -342,10 +342,10 @@ def for_attempt(c, attempt_id):
 def limit_texts(c, attempt_id):
     """The attempt's limit errors and fallback notes in order: (kind, text)."""
     out = []
-    for row in c.execute("SELECT kind,payload_json FROM attempt_events WHERE attempt_id=? AND kind IN "
+    for row in c.execute("SELECT kind,payload FROM attempt_events WHERE attempt_id=? AND kind IN "
                          "('error','diagnostic') ORDER BY seq LIMIT 50", (attempt_id,)):
         try:
-            payload = json.loads(row["payload_json"])
+            payload = json.loads(row["payload"])
         except ValueError:
             continue
         if row["kind"] == "error" and payload.get("limit"):
@@ -412,8 +412,8 @@ _FALLBACK_RESET_RE = re.compile(r"\bresets ([0-9]{1,2}:[0-9]{2}[ap]m) \(UTC\)")
 
 def fallback_reset_notice(c, attempt_id):
     """The fallback's original limit notice and named UTC reset, pinned to when this run ended."""
-    row = c.execute("SELECT result_json,handed_runtime,finished FROM attempts WHERE id=?", (attempt_id,)).fetchone()
-    result = json.loads(row['result_json'] or '{}') if row else {}
+    row = c.execute("SELECT result,handed_runtime,finished_at FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    result = json.loads(row['result'] or '{}') if row else {}
     if not row or not result.get('fallback'):
         return None
     _, notice, limited = turn_steps(c, attempt_id, row['handed_runtime'], result)[-1]
@@ -422,7 +422,7 @@ def fallback_reset_notice(c, attempt_id):
     match = _FALLBACK_RESET_RE.search(notice)
     if not limited or not match:
         return None
-    reset = believable(reset_from_text(match[0], row['finished']), row['finished'])
+    reset = believable(reset_from_text(match[0], row['finished_at']), row['finished_at'])
     return {'notice': notice, 'reset': _iso(reset)} if reset else None
 
 
@@ -495,7 +495,7 @@ def recorded(c, attempt_id, result, runtime):
     if isinstance(result.get("limit_source"), dict):
         return result["limit_source"]
     # Keeper's events by action and target: the events_task_origin index.
-    row = c.execute("SELECT json_extract(detail_json,'$.runtime') FROM events WHERE actor=? AND action='attempt.limited' "
+    row = c.execute("SELECT json_extract(detail,'$.runtime') FROM events WHERE actor=? AND action='attempt.limited' "
                     "AND target=? LIMIT 1", (H.KEEPER, attempt_id)).fetchone()
     return source(c, attempt_id, (row and row[0]) or runtime or "primary", result)
 
@@ -560,7 +560,7 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hoppe
     if body.profile_used is not None:
         profile = body.profile_used
     hop_profile = body.profile_used if body.fallback and body.profile_used is not None else profile
-    claimed = (c.execute("SELECT created FROM attempts WHERE id=?", (attempt_id,)).fetchone() or [""])[0] or ""
+    claimed = (c.execute("SELECT created_at FROM attempts WHERE id=?", (attempt_id,)).fetchone() or [""])[0] or ""
     kept = {}
     from .model_subscriptions import handed
     for n, (rt, notice, limited) in enumerate(steps):

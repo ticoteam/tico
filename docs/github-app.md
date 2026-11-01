@@ -471,7 +471,7 @@ and status, with the checks link and commit; judged when a suite completes, or w
 pending finishes after one has; a run whose own suite is still running holds it), a review is submitted approving or requesting changes (with the reviewer and
 review link), or a release ships the merged PR. A PR merged in a repository other than the one Tico releases
 never ships, so its merge is the wake. The link disarms in the same write, so redelivered events never repeat
-it; the link's `detail_json.wake_once_fired` records what fired. Arming needs the connected App and is refused
+it; the link's `detail.wake_once_fired` records what fired. Arming needs the connected App and is refused
 on a closed or shipped PR, or one already merged outside the release repository; it is off unless armed,
 creates no task and never changes the task's status or step. While armed on an open or merged PR that the App
 has sent an event for, or in a repository it reaches, the task counts as waiting on GitHub, so a waiting task

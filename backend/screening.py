@@ -63,11 +63,11 @@ HOLD_AT, WARN_AT = 0.85, 0.5    # used only when the set cannot be read
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS screening_verdicts(
  source TEXT NOT NULL, key TEXT NOT NULL, score REAL NOT NULL, kind TEXT NOT NULL DEFAULT '', label TEXT NOT NULL,
- created TEXT NOT NULL, PRIMARY KEY(source, key));
+ created_at TEXT NOT NULL, PRIMARY KEY(source, key));
 CREATE TABLE IF NOT EXISTS screening_pending(
  source TEXT NOT NULL, bot TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
  text TEXT NOT NULL, cache_key TEXT NOT NULL DEFAULT '', actor TEXT NOT NULL DEFAULT '', person TEXT NOT NULL DEFAULT '',
- incident INTEGER NOT NULL DEFAULT 0, later_json TEXT NOT NULL DEFAULT '[]', created TEXT NOT NULL,
+ incident INTEGER NOT NULL DEFAULT 0, later TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL,
  PRIMARY KEY(source, bot, key));
 """
 
@@ -97,7 +97,7 @@ _PROSE = re.compile(r"\S+\s+\S+\s+\S+")        # three words: a field a person (
 
 # ----------------------------------------------------------------------------------------------- modes
 def _saved(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
         saved = json.loads(row[0]) if row else {}
     except ValueError:
@@ -128,7 +128,7 @@ def save_modes(c, actor, changes):
              **{layer: changes[layer] for layer in LAYERS if isinstance(changes.get(layer), bool)}}
     if after["mail"] == "hold":
         after["mail"] = "warn"                          # mail is never hidden: reads are shared and never consume it
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(after, sort_keys=True)))
     changed = {k: [before[k], after[k]] for k in (*SOURCES, *LAYERS) if before[k] != after[k]}
     if changed:
@@ -322,7 +322,7 @@ def _screen(store, source, text, bot, key, primary, free, actor, role, mode_, ca
     with store.transaction() as c:
         H.event(c, payer, "judge.call", qset["label"], _audit(qset, result, error, source, out))
         if score is not None and key and cache:
-            c.execute("INSERT INTO screening_verdicts(source,key,score,kind,label,created) VALUES(?,?,?,?,?,?) "
+            c.execute("INSERT INTO screening_verdicts(source,key,score,kind,label,created_at) VALUES(?,?,?,?,?,?) "
                       "ON CONFLICT(source,key) DO NOTHING", (source, key, score, kind or "", qset["label"], H.now()))
     return out
 
@@ -492,9 +492,9 @@ def later(c, source, bot, event):
     text = event.text or event.note or ""
     if not text:
         return
-    row = c.execute("SELECT later_json FROM screening_pending WHERE source=? AND bot=? AND key=?",
+    row = c.execute("SELECT later FROM screening_pending WHERE source=? AND bot=? AND key=?",
                     (source, bot, event.key)).fetchone()
-    c.execute("UPDATE screening_pending SET later_json=? WHERE source=? AND bot=? AND key=?",
+    c.execute("UPDATE screening_pending SET later=? WHERE source=? AND bot=? AND key=?",
               (json.dumps(json.loads(row[0] or "[]") + [text]), source, bot, event.key))
 
 
@@ -502,7 +502,7 @@ def later(c, source, bot, event):
 def defer(c, source, bot, key, title, body, text, *, cache_key="", actor="", person="", incident=False):
     c.execute("SAVEPOINT screening_defer")              # a failure midway leaves no half-written row behind
     try:
-        c.execute("INSERT INTO screening_pending(source,bot,key,title,body,text,cache_key,actor,person,incident,created) "
+        c.execute("INSERT INTO screening_pending(source,bot,key,title,body,text,cache_key,actor,person,incident,created_at) "
                   "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source,bot,key) DO NOTHING",
                   (source, bot, key, title, body, text[:MAX_CHARS], cache_key, actor, person, int(bool(incident)), H.now()))
     except BaseException:
@@ -526,7 +526,7 @@ def deliver(store, auth, row, v, waited=False):
     """File one waiting item: held for a person at `hold` (or after WAIT_HOURS), else the bot's task with the warning
     line at `warn`. One transaction per item: a refusal (its bot paused) leaves it waiting and no other."""
     with store.transaction() as c:
-        now = c.execute("SELECT later_json FROM screening_pending WHERE source=? AND bot=? AND key=?",
+        now = c.execute("SELECT later FROM screening_pending WHERE source=? AND bot=? AND key=?",
                         (row["source"], row["bot"], row["key"])).fetchone()
         if now is None:
             return None                                 # another worker took it
@@ -547,12 +547,12 @@ def deliver(store, auth, row, v, waited=False):
             task = _open_task(c, auth, row, v, None, row["title"], first + row["body"])
         if watcher:
             from .watchers import defang
-            for text in json.loads(now["later_json"] or "[]"):
+            for text in json.loads(now["later"] or "[]"):
                 H.task_comment(c, H.KEEPER, task["id"], defang(text, c), wake=False)
             c.execute("INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
                       (row["bot"], row["key"], task["id"], H.now()))
             # Support triage's record of a held key: a later message on it is a note for the person, not a wake.
-            c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail_json,created) VALUES(?,?,?,?,?,?) "
+            c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail,created_at) VALUES(?,?,?,?,?,?) "
                       "ON CONFLICT(bot,key) DO NOTHING",
                       (row["bot"], row["key"], (v or {}).get("label") or SET, int(bool(person)),
                        json.dumps({k: (v or {}).get(k) for k in ("action", "score", "kinds", "detector")}
@@ -568,7 +568,7 @@ def due(store, skip):
     """The oldest waiting item of an active bot not tried in this pass. A paused bot's items wait for `sweep`."""
     with store.read() as c:
         for row in c.execute("SELECT p.* FROM screening_pending p JOIN bots b ON b.slug=p.bot AND b.state='active' "
-                             "ORDER BY p.created, p.source, p.bot, p.key"):
+                             "ORDER BY p.created_at, p.source, p.bot, p.key"):
             if (row["source"], row["bot"], row["key"]) not in skip:
                 return dict(row)
     return None
@@ -631,14 +631,14 @@ def sweep(store, at=None):
     at = at or H.now()
     cutoff = H.shift(at, hours=-WAIT_HOURS)
     with store.read() as c:
-        rows = [dict(r) for r in c.execute("SELECT * FROM screening_pending WHERE created<? ORDER BY created", (cutoff,))]
+        rows = [dict(r) for r in c.execute("SELECT * FROM screening_pending WHERE created_at<? ORDER BY created_at", (cutoff,))]
     for row in rows:
         try:
             deliver(store, _state["auth"], row, None, waited=True)
         except Exception as exc:                        # noqa: BLE001 the next sweep tries again
             log.error("A waiting %s item for %s could not be handed over: %s", row["source"], row["bot"], type(exc).__name__)
     with store.transaction() as c:
-        c.execute("DELETE FROM screening_verdicts WHERE created<?", (H.shift(at, days=-KEEP_DAYS),))
+        c.execute("DELETE FROM screening_verdicts WHERE created_at<?", (H.shift(at, days=-KEEP_DAYS),))
 
 
 # ----------------------------------------------------------------------------------------------- Settings
@@ -695,13 +695,13 @@ class ScreeningTest(Contract):
 
 
 def recent(c, limit=RECENT):
-    rows = c.execute("SELECT ts,action,target,detail_json FROM events WHERE actor=? "
+    rows = c.execute("SELECT ts,action,target,detail FROM events WHERE actor=? "
                      "AND action IN ('screening.held','screening.warned') ORDER BY ts DESC LIMIT ?",
                      (H.KEEPER, limit)).fetchall()
     out = []
     for r in rows:
         try:
-            d = json.loads(r["detail_json"] or "{}")
+            d = json.loads(r["detail"] or "{}")
         except ValueError:
             d = {}
         task = r["target"] if c.execute("SELECT 1 FROM tasks WHERE id=?", (r["target"],)).fetchone() else None

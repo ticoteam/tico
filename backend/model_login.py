@@ -136,15 +136,15 @@ def sweep(c):
     for row in c.execute(f"SELECT id FROM model_logins WHERE {KEY_JOBS_SQL} AND {ACTIVE_SQL} AND expires_at<?",
                          (now,)).fetchall():
         computer_keys.discard(c, row["id"])
-    c.execute("UPDATE model_logins SET state='expired', url='', user_code='', pending_code=NULL, updated=? "
+    c.execute("UPDATE model_logins SET state='expired', url='', user_code='', pending_code=NULL, updated_at=? "
               f"WHERE {ACTIVE_SQL} AND expires_at<?", (now, now))
-    c.execute("DELETE FROM model_logins WHERE created<?", (H.shift(now, days=-1),))
+    c.execute("DELETE FROM model_logins WHERE created_at<?", (H.shift(now, days=-1),))
 
 
 def sweep_due(c):
     """Whether `sweep` has anything to change: a poll reads without the write lock when it has not."""
     now = H.now()
-    return bool(c.execute(f"SELECT 1 FROM model_logins WHERE ({ACTIVE_SQL} AND expires_at<?) OR created<? LIMIT 1",
+    return bool(c.execute(f"SELECT 1 FROM model_logins WHERE ({ACTIVE_SQL} AND expires_at<?) OR created_at<? LIMIT 1",
                           (now, H.shift(now, days=-1))).fetchone())
 
 
@@ -152,9 +152,9 @@ def view(row):
     state = row["state"]
     return {"id": row["id"], "kind": row["kind"], "runner_id": row["runner_id"], "runtime": row["runtime"],
             "profile": row["profile"], "state": state, "url": row["url"], "code": row["user_code"],
-            "lines": json.loads(row["lines_json"] or "[]"), "message": row["message"],
+            "lines": json.loads(row["lines"] or "[]"), "message": row["message"],
             "accepts_code": row["runtime"] in PASTE_RUNTIMES and state == "waiting",
-            "code_sent": bool(row["code_sent"]), "created": row["created"], "updated": row["updated"],
+            "code_sent": bool(row["code_sent"]), "created_at": row["created_at"], "updated_at": row["updated_at"],
             "expires_at": row["expires_at"]}
 
 
@@ -190,27 +190,27 @@ def _login(c, rid, lid):
 
 
 def _signs_out(runner):
-    return SIGN_OUT_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+    return SIGN_OUT_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
 
 
 def _switches_type(runner):
-    return SWITCH_TYPE_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+    return SWITCH_TYPE_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
 
 
 def _switches_to_key(runner):
-    return SWITCH_TO_KEY_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+    return SWITCH_TO_KEY_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
 
 
 def _handles_keys(runner):
-    return KEYS_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+    return KEYS_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
 
 
 def _online(runner):
-    return bool(runner["last_seen"]) and runner["last_seen"] >= H.shift(H.now(), seconds=-ONLINE_SECONDS)
+    return bool(runner["last_seen_at"]) and runner["last_seen_at"] >= H.shift(H.now(), seconds=-ONLINE_SECONDS)
 
 
 def _removes(runner):
-    return REMOVE_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+    return REMOVE_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
 
 
 def _queue(c, who, runner, runtime, profile, kind, what):
@@ -240,7 +240,7 @@ def _queue(c, who, runner, runtime, profile, kind, what):
         raise Problem("runner_version", f"Update {runner['label']} to {what} from here", 409)
     now = H.now()
     lid = H.new_id()
-    c.execute("INSERT INTO model_logins(id,runner_id,runtime,profile,state,created,updated,expires_at,requested_by,kind) "
+    c.execute("INSERT INTO model_logins(id,runner_id,runtime,profile,state,created_at,updated_at,expires_at,requested_by,kind) "
               "VALUES(?,?,?,?,?,?,?,?,?,?)",
               (lid, runner["id"], runtime, profile, "requested", now, now, H.shift(now, seconds=LIFETIME), who.actor,
                kind))
@@ -282,7 +282,7 @@ def start(c, who, rid, runtime, profile="", auth=None, switch=False, to=""):
     row, new = _queue(c, who, runner, runtime, profile, kind, what)
     if new:
         from .subscription_refresh import invalidate_signin
-        invalidate_signin(c, rid, profile, runtime, row["created"])
+        invalidate_signin(c, rid, profile, runtime, row["created_at"])
         H.event(c, who.actor, {"to_subscription": "runner.login.to_subscription", "switch": "runner.login.switch",
                                "sign_in": "runner.login.start"}[kind], rid, {"runtime": runtime})
     return view(row)
@@ -398,7 +398,7 @@ def _share_with(c, who, runner_ids, credential_id, here, runtime):
             c.execute("UPDATE credential_grants SET revoked=?, revoked_by=? WHERE id=?", (now, who.actor, other["id"]))
         if not c.execute("SELECT 1 FROM credential_grants WHERE credential_id=? AND subject=? AND revoked IS NULL",
                          (credential_id, subject)).fetchone():
-            c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)",
                       (H.new_id(), credential_id, subject, who.actor, now))
     for row in marked:
         _resume(c, who, row, runtime)
@@ -438,7 +438,7 @@ def share_key(c, who, rid, runtime, key, env="", share=(), auth=None, vault=None
     cid, now = H.new_id(), H.now()
     ciphertext, nonce = vault.cipher.encrypt(c, cid, value)
     preview = value[:3] + "…" + value[-3:] if len(value) >= 12 else "••••••"
-    c.execute("INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created,updated,updated_by,"
+    c.execute("INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,updated_by,"
               "created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
               (cid, f"{env} shared from {runner['label']}", "api_key", env, preview, ciphertext, nonce,
                "computers:" + rid, now, now, who.actor, who.actor))
@@ -504,8 +504,8 @@ def _bots_on(c, rid, runtime, profile, settings, every):
     from . import providers
     from .shared_bots import follow
     from .subscriptions import computer_logins
-    runner = c.execute('SELECT readiness_json,capabilities_json FROM runners WHERE id=?', (rid,)).fetchone()
-    ready = H._json(runner['readiness_json'], {}) or {}
+    runner = c.execute('SELECT readiness,capabilities FROM runners WHERE id=?', (rid,)).fetchone()
+    ready = H._json(runner['readiness'], {}) or {}
     current = computer_logins(runner, ready)
     if profile and current:
         # A named default is the same login, so cleanup must still refuse it while bots use it.
@@ -514,11 +514,11 @@ def _bots_on(c, rid, runtime, profile, settings, every):
     record = providers.load(c, settings)
     out = []
     active = "" if every else "AND b.state='active' "
-    for row in c.execute("SELECT a.bot, b.display_name, bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
+    for row in c.execute("SELECT a.bot, b.display_name, bc.config FROM assignments a JOIN bots b ON b.slug=a.bot "
                          f"{active}LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE a.runner_id=? "
                          "ORDER BY a.bot", (rid,)):
         try:
-            config = providers.fill(record, follow(c, row["bot"], json.loads(row["config_json"] or "{}")))
+            config = providers.fill(record, follow(c, row["bot"], json.loads(row["config"] or "{}")))
         except ValueError:
             continue
         reported = ((ready.get('bots') or {}).get(row['bot']) or {}).get('profile') or ''
@@ -567,7 +567,7 @@ def remove(c, who, rid, runtime, profile, settings, auth=None):
     if runtime not in SIGN_OUT_RUNTIMES:
         raise Problem("kind", "Removing a subscription from here isn't available for " + runtime, 422)
     runner = _runner(c, rid)
-    row = c.execute("SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?", (rid, profile)).fetchone()
+    row = c.execute("SELECT runtimes FROM computer_profiles WHERE runner_id=? AND profile=?", (rid, profile)).fetchone()
     if not row or runtime not in json.loads(row[0] or "{}"):
         raise Problem("not_found", "That subscription is not on this computer", 404)
     bots = affected_bots(c, who, rid, runtime, profile, settings, auth=auth, every=True)["bots"]
@@ -599,7 +599,7 @@ def submit_code(c, who, rid, lid, code, auth=None):
         raise Problem("kind", "That does not look like the code the sign-in page showed", 422)
     if row["code_sent"]:
         raise Problem("state", "A code was already sent; start a new sign-in to try again", 409)
-    c.execute("UPDATE model_logins SET pending_code=?, code_sent=1, updated=? WHERE id=?",
+    c.execute("UPDATE model_logins SET pending_code=?, code_sent=1, updated_at=? WHERE id=?",
               (code, H.now(), lid))
     return view(_login(c, rid, lid))
 
@@ -617,7 +617,7 @@ def cancel(c, who, rid, lid, auth=None):
         from .computer_keys import discard
         discard(c, lid)
     if row["state"] in ACTIVE:
-        c.execute("UPDATE model_logins SET state='cancelled', url='', user_code='', pending_code=NULL, updated=? "
+        c.execute("UPDATE model_logins SET state='cancelled', url='', user_code='', pending_code=NULL, updated_at=? "
                   "WHERE id=?", (H.now(), lid))
         H.event(c, who.actor, "runner.login.cancel", rid, {"runtime": row["runtime"]})
     return view(_login(c, rid, lid))
@@ -627,7 +627,7 @@ def pending(c, runner_id, swept=True):
     """What this runner should be running: every live sign-in, and a pasted code not yet taken."""
     if swept:
         sweep(c)
-    rows = c.execute(f"SELECT * FROM model_logins WHERE runner_id=? AND {ACTIVE_SQL} ORDER BY created",
+    rows = c.execute(f"SELECT * FROM model_logins WHERE runner_id=? AND {ACTIVE_SQL} ORDER BY created_at",
                      (runner_id,)).fetchall()
     return [{"id": r["id"], "runtime": r["runtime"], "profile": r["profile"], "expires_at": r["expires_at"],
              **({"kind": r["kind"]} if r["kind"] != "sign_in" else {}),
@@ -651,7 +651,7 @@ def report(c, runner_id, lid, body, settings=None):
     if body.state == "finishing" and row["kind"] == "remove" and row["state"] != "finishing":
         bots = _bots_on(c, runner_id, row["runtime"], row["profile"], settings, True)
         if bots:
-            c.execute("UPDATE model_logins SET state='failed', message=?, updated=? WHERE id=?",
+            c.execute("UPDATE model_logins SET state='failed', message=?, updated_at=? WHERE id=?",
                       (redact(_in_use(bots)), H.now(), lid))
             H.event(c, "runner:" + runner_id, "runner.login.failed", runner_id, {"runtime": row["runtime"]})
             return {"state": "failed"}
@@ -670,10 +670,10 @@ def report(c, runner_id, lid, body, settings=None):
     done_with_page = terminal or state == "finishing"
     url = "" if done_with_page else clean_url(body.url) or row["url"]
     code = "" if done_with_page else clean_user_code(body.code) or row["user_code"]
-    lines = clean_lines(body.lines) or json.loads(row["lines_json"] or "[]")
+    lines = clean_lines(body.lines) or json.loads(row["lines"] or "[]")
     pending_code = None if terminal or body.code_taken else row["pending_code"]
-    c.execute("UPDATE model_logins SET state=?, url=?, user_code=?, lines_json=?, message=?, pending_code=?, "
-              "updated=? WHERE id=?",
+    c.execute("UPDATE model_logins SET state=?, url=?, user_code=?, lines=?, message=?, pending_code=?, "
+              "updated_at=? WHERE id=?",
               (state, url, code, json.dumps(lines), redact(body.message), pending_code, H.now(), lid))
     if terminal:
         H.event(c, "runner:" + runner_id, "runner.login." + state, row["runner_id"], {"runtime": row["runtime"]})
@@ -722,7 +722,7 @@ def _key_runtime(runtime):
 
 def _key_source(runner, runtime):
     """What the computer said signs `runtime` in: {name, source} ("computer", "terminal" or "shared"), or {}."""
-    found = H._json(runner["readiness_json"], {}) or {}
+    found = H._json(runner["readiness"], {}) or {}
     key = ((found.get("runtimes") or {}).get(runtime) or {}).get("key")
     return key if isinstance(key, dict) else {}
 
@@ -888,7 +888,7 @@ def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vaul
             raise Problem("credential", "Paste the key as one line", 422)
         ciphertext, nonce = vault.cipher.encrypt(c, row["id"], value)
         preview = value[:3] + "…" + value[-3:] if len(value) >= 12 else "••••••"
-        c.execute("UPDATE credentials SET ciphertext=?, nonce=?, preview=?, revision=revision+1, updated=?, updated_by=? "
+        c.execute("UPDATE credentials SET ciphertext=?, nonce=?, preview=?, revision=revision+1, updated_at=?, updated_by=? "
                   "WHERE id=?", (ciphertext, nonce, preview, H.now(), who.actor, row["id"]))
         H.event(c, who.actor, "credential.updated", row["id"], {"secret_changed": True, "via": "computers"})
         return {"shared": {"id": row["id"], "env": row["env"], "preview": preview},

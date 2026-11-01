@@ -40,7 +40,7 @@ def seed(store):
         rows.append((str(uuid.uuid4()), f"Task {i}", body, "ana", owner, status, due, None,
                      "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"))
     with store.transaction() as c:
-        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,due,conversation_id,created,updated) "
+        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,due,conversation_id,created_at,updated_at) "
                       "VALUES(?,?,?,?,?,?,?,?,?,?)", rows)
         for i in range(ROUTINES):                      # each moves to its schedule automation
             routine(c, f"r{i}", f"Routine {i}")
@@ -96,7 +96,7 @@ def test_tick_holds_the_write_lock_only_briefly_per_step(api, monkeypatch):
           f"most work {worst['steps'] * STEP} instructions")
     assert worst["steps"] < BOUND, worst
     with store.read() as c:
-        health = json.loads(c.execute("SELECT detail_json FROM service_health WHERE service='scheduler'").fetchone()[0])
+        health = json.loads(c.execute("SELECT detail FROM service_health WHERE service='scheduler'").fetchone()[0])
     assert {"tick_ms", "hold_ms", "hold_step", "wait_ms"} <= set(health)
 
 
@@ -118,7 +118,7 @@ def test_hold_ms_is_the_hold_not_the_wait_behind_another_writer(api):
     Scheduler(store, api.app.state.execution).tick(AT)
     holder.join()
     with store.read() as c:
-        health = json.loads(c.execute("SELECT detail_json FROM service_health WHERE service='scheduler'").fetchone()[0])
+        health = json.loads(c.execute("SELECT detail FROM service_health WHERE service='scheduler'").fetchone()[0])
     assert health["wait_ms"] >= 900 and health["hold_ms"] < 900, health
 
 

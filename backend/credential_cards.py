@@ -40,13 +40,13 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS credential_requests(
  id TEXT PRIMARY KEY, requester TEXT NOT NULL, conversation_id TEXT NOT NULL, bot TEXT NOT NULL, asker TEXT NOT NULL,
  env TEXT NOT NULL, label TEXT NOT NULL DEFAULT '', format TEXT NOT NULL DEFAULT '', help_url TEXT NOT NULL DEFAULT '',
- kind TEXT NOT NULL DEFAULT 'api_key', status TEXT NOT NULL DEFAULT 'pending', created TEXT NOT NULL,
- updated TEXT NOT NULL, credential_id TEXT, message_id TEXT);
+ kind TEXT NOT NULL DEFAULT 'api_key', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL, credential_id TEXT, message_id TEXT);
 CREATE INDEX IF NOT EXISTS credential_requests_pending ON credential_requests(requester, status);
 CREATE TABLE IF NOT EXISTS credential_imports(
  id TEXT PRIMARY KEY, requester TEXT NOT NULL, bot TEXT NOT NULL, env TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
  kind TEXT NOT NULL DEFAULT 'api_key', state TEXT NOT NULL DEFAULT 'requested', message TEXT NOT NULL DEFAULT '',
- credential_id TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);
+ credential_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS credential_imports_state ON credential_imports(state, bot);
 """
 # A variable the run never takes from the vault, or takes from the computer itself (runner-rs/src/env.rs).
@@ -175,7 +175,7 @@ def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", usern
         grants.setdefault(g["credential_id"], set()).add(g["subject"])
     # A member replaces only a credential they stored themselves; anyone else's stays, and theirs is a new one.
     mine = set() if admin else owned(c, who)
-    rows = [r for r in c.execute("SELECT * FROM credentials WHERE env=? ORDER BY created", (env,)) if admin or r["id"] in mine]
+    rows = [r for r in c.execute("SELECT * FROM credentials WHERE env=? ORDER BY created_at", (env,)) if admin or r["id"] in mine]
     own = next((r for r in rows if grants.get(r["id"], set()) <= {subject} and r["id"] in grants), None)
     unused = next((r for r in rows if not grants.get(r["id"])), None)
     existing = own or unused
@@ -217,9 +217,9 @@ def redact_value(c, person, value, env, conversation_id="", attempt_id="", messa
             c.execute("UPDATE messages SET body=? WHERE id=?", ((row["body"] or "").replace(value, label), mid))
             count += 1
     if attempt_id:
-        for row in c.execute("SELECT id,payload_json FROM attempt_events WHERE attempt_id=?", (attempt_id,)).fetchall():
-            if any(f in row["payload_json"] for f in forms):
-                c.execute("UPDATE attempt_events SET payload_json=? WHERE id=?", (scrub(row["payload_json"], [value], label), row["id"]))
+        for row in c.execute("SELECT id,payload FROM attempt_events WHERE attempt_id=?", (attempt_id,)).fetchall():
+            if any(f in row["payload"] for f in forms):
+                c.execute("UPDATE attempt_events SET payload=? WHERE id=?", (scrub(row["payload"], [value], label), row["id"]))
         row = c.execute("SELECT final_text FROM attempts WHERE id=?", (attempt_id,)).fetchone()
         if row and row["final_text"] and value in row["final_text"]:
             c.execute("UPDATE attempts SET final_text=? WHERE id=?", (row["final_text"].replace(value, label), attempt_id))
@@ -228,9 +228,9 @@ def redact_value(c, person, value, env, conversation_id="", attempt_id="", messa
     scrub_value(c, value, label, attempt_id, conversation_id)
     # The answers kept for retries (the chat send that carried it, the claim that delivered it to the run).
     for form in forms:
-        for row in c.execute("SELECT actor,operation,key,response_json FROM idempotency WHERE instr(response_json, ?) > 0", (form,)).fetchall():
-            c.execute("UPDATE idempotency SET response_json=? WHERE actor=? AND operation=? AND key=?",
-                      (row["response_json"].replace(form, label), row["actor"], row["operation"], row["key"]))
+        for row in c.execute("SELECT actor,operation,key,response FROM idempotency WHERE instr(response, ?) > 0", (form,)).fetchall():
+            c.execute("UPDATE idempotency SET response=? WHERE actor=? AND operation=? AND key=?",
+                      (row["response"].replace(form, label), row["actor"], row["operation"], row["key"]))
     if count:
         H.event(c, person.actor, "message.redacted", conversation_id or message_id, {"messages": count, "env": env})
     return count
@@ -340,7 +340,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             again = reconnects.request_of(c, task["id"], key) if task else None
             if again and again["requester"] != person.actor:
                 # Someone else is to save it now: their card replaces the old one (reconnects.open retires it).
-                c.execute("UPDATE credential_requests SET status='cancelled',updated=? WHERE id=?", (H.now(), again["id"]))
+                c.execute("UPDATE credential_requests SET status='cancelled',updated_at=? WHERE id=?", (H.now(), again["id"]))
                 again = None
             if again:
                 # Asked again on the same task: its card is still open, so that card is the answer, not a second one.
@@ -352,13 +352,13 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             for (old,) in c.execute("SELECT id FROM credential_requests WHERE requester=? AND bot=? AND env=? AND status='pending'",
                                     (person.actor, target, body.env)).fetchall():
                 if old not in waited:
-                    c.execute("UPDATE credential_requests SET status='cancelled',updated=? WHERE id=?", (H.now(), old))
+                    c.execute("UPDATE credential_requests SET status='cancelled',updated_at=? WHERE id=?", (H.now(), old))
             rid = H.new_id()
             row = {"id": rid, "requester": person.actor, "conversation_id": msg["conversation_id"], "bot": target, "asker": asker,
                    "env": body.env, "label": body.label.strip(), "format": body.format.strip(), "help_url": url,
-                   "kind": body.kind, "status": "pending", "created": H.now(), "updated": H.now(), "credential_id": None, "message_id": None}
+                   "kind": body.kind, "status": "pending", "created_at": H.now(), "updated_at": H.now(), "credential_id": None, "message_id": None}
             c.execute("INSERT INTO credential_requests VALUES(:id,:requester,:conversation_id,:bot,:asker,:env,:label,:format,:help_url,"
-                      ":kind,:status,:created,:updated,:credential_id,:message_id)", row)
+                      ":kind,:status,:created_at,:updated_at,:credential_id,:message_id)", row)
             shown = view(c, row, person)
             card = H._write_message(c, "bot:" + asker, person.actor, shown["title"], H.conversation(c, msg["conversation_id"]), "say",
                                     {"credential_request": rid, **({"task": task["id"]} if task else {})}, None, None,
@@ -385,7 +385,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         with store.transaction() as c:
             row = load(c, rid, who)
             if row["status"] == "pending":
-                c.execute("UPDATE credential_requests SET status='cancelled',updated=? WHERE id=?", (H.now(), rid))
+                c.execute("UPDATE credential_requests SET status='cancelled',updated_at=? WHERE id=?", (H.now(), rid))
                 row = c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone()
                 reconnects.dropped(c, rid)     # a task waiting on this card goes on without it
             return view(c, row, who)
@@ -401,7 +401,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             value = check_format(row["format"], body.value.get_secret_value())
             manager(c, auth.identity_for_actor(c, row["requester"]), row["bot"])
             stored = store_for_bot(c, vault, who, row["env"], row["bot"], value, kind=row["kind"])
-            c.execute("UPDATE credential_requests SET status='saved',updated=?,credential_id=? WHERE id=?", (H.now(), stored["id"], rid))
+            c.execute("UPDATE credential_requests SET status='saved',updated_at=?,credential_id=? WHERE id=?", (H.now(), stored["id"], rid))
             # The asking bot hears it as the person's own next message: saved, go on. The value is not in it. A card in
             # a task's thread already woke the task once (backend/reconnects.py).
             conversation = H.conversation(c, row["conversation_id"])
@@ -458,18 +458,18 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
     # ------------------------------------------------------------ a secret a bot already keeps in its own file
     def import_view(row):
         return {"id": row["id"], "bot": row["bot"], "env": row["env"], "state": row["state"], "message": row["message"],
-                "credential_id": row["credential_id"], "created": row["created"], "updated": row["updated"]}
+                "credential_id": row["credential_id"], "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
     def imports_due(c):
         now = H.now()
-        return c.execute("SELECT 1 FROM credential_imports WHERE (state='requested' AND created<?) OR created<? LIMIT 1",
+        return c.execute("SELECT 1 FROM credential_imports WHERE (state='requested' AND created_at<?) OR created_at<? LIMIT 1",
                          (H.shift(now, seconds=-IMPORT_EXPIRES_S), H.shift(now, days=-2))).fetchone()
 
     def sweep_imports(c):
         now = H.now()
-        c.execute("UPDATE credential_imports SET state='failed',message='The computer did not answer in time',updated=? "
-                  "WHERE state='requested' AND created<?", (now, H.shift(now, seconds=-IMPORT_EXPIRES_S)))
-        c.execute("DELETE FROM credential_imports WHERE created<?", (H.shift(now, days=-2),))
+        c.execute("UPDATE credential_imports SET state='failed',message='The computer did not answer in time',updated_at=? "
+                  "WHERE state='requested' AND created_at<?", (now, H.shift(now, seconds=-IMPORT_EXPIRES_S)))
+        c.execute("DELETE FROM credential_imports WHERE created_at<?", (H.shift(now, days=-2),))
 
     @app.post("/api/v2/credential-imports")
     def request_import(request: Request, body: CredentialImport):
@@ -484,11 +484,11 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                 raise Problem("env", f"{body.env} is a setting of the computer or of Tico, not a credential a bot can be given", 422)
             if not H.bot(c, body.bot):
                 raise Problem("not_found", "Bot not found", 404)
-            place = c.execute("SELECT r.last_seen,r.label FROM assignments a JOIN runners r ON r.id=a.runner_id "
+            place = c.execute("SELECT r.last_seen_at,r.label FROM assignments a JOIN runners r ON r.id=a.runner_id "
                               "WHERE a.bot=? AND r.revoked_at IS NULL", (body.bot,)).fetchone()
             if not place:
                 raise Problem("no_computer", "That bot is not on a computer, so there is no secrets file to read", 409)
-            if not place["last_seen"] or place["last_seen"] < H.shift(H.now(), seconds=-ONLINE_S):
+            if not place["last_seen_at"] or place["last_seen_at"] < H.shift(H.now(), seconds=-ONLINE_S):
                 raise Problem("offline", f"{place['label']}, where that bot runs, is offline; try again when it is back", 409)
             sweep_imports(c)
             same = c.execute("SELECT * FROM credential_imports WHERE bot=? AND env=? AND state='requested'",
@@ -496,7 +496,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             if same:
                 return import_view(same)
             iid, now = H.new_id(), H.now()
-            c.execute("INSERT INTO credential_imports(id,requester,bot,env,name,kind,state,created,updated) VALUES(?,?,?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO credential_imports(id,requester,bot,env,name,kind,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
                       (iid, person.actor, body.bot, body.env, body.name.strip(), body.kind, "requested", now, now))
             H.event(c, person.actor, "credential.import_requested", iid, {"env": body.env, "bot": body.bot})
             return import_view(c.execute("SELECT * FROM credential_imports WHERE id=?", (iid,)).fetchone())
@@ -525,7 +525,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             if due:
                 sweep_imports(c)
             rows = c.execute("SELECT i.id,i.bot,i.env FROM credential_imports i JOIN assignments a ON a.bot=i.bot "
-                             "WHERE a.runner_id=? AND i.state='requested' ORDER BY i.created", (who.runner_id,)).fetchall()
+                             "WHERE a.runner_id=? AND i.state='requested' ORDER BY i.created_at", (who.runner_id,)).fetchall()
             return {"imports": [dict(r) for r in rows]}
 
     @app.post("/api/v2/runner-credential-imports/{iid}/report")
@@ -544,7 +544,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                 return import_view(row)
 
             def finish(state, message="", credential_id=None):
-                c.execute("UPDATE credential_imports SET state=?,message=?,credential_id=?,updated=? WHERE id=?",
+                c.execute("UPDATE credential_imports SET state=?,message=?,credential_id=?,updated_at=? WHERE id=?",
                           (state, message, credential_id, H.now(), iid))
                 return import_view(c.execute("SELECT * FROM credential_imports WHERE id=?", (iid,)).fetchone())
 

@@ -52,7 +52,7 @@ def test_turning_the_routine_on_makes_one_linked_automation_whose_run_opens_the_
     assert auto["owner"] == "bot:ops" and auto["steps"][0]["args"]["title"] == TEXT
     assert auto["steps"][0]["args"]["owner"] == "bot:ops"
     assert auto["next_due"] == "2030-03-01"
-    assert len(sql(api, "SELECT id FROM automations WHERE flow_json LIKE ?", (f"%{due['id']}%",))) == 1
+    assert len(sql(api, "SELECT id FROM automations WHERE flow LIKE ?", (f"%{due['id']}%",))) == 1
     tick(api, datetime(2030, 2, 14, 23, 59, tzinfo=timezone.utc))
     assert tasks(api, aid) == []
     tick(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
@@ -76,7 +76,7 @@ def test_completing_the_task_marks_the_day_and_reopening_takes_it_back(api):
     assert len(marks(api, due["id"])) == 1
     write(api, H.task_update, "bot:ops", task["id"], status="doing")
     assert marks(api, due["id"]) == []
-    actions = sql(api, "SELECT before_json, after_json FROM audit_log WHERE object=? AND via='routine'",
+    actions = sql(api, "SELECT before, after FROM audit_log WHERE object=? AND via='routine'",
                   ("org_rule:" + due["rule_id"],))
     assert len(actions) == 2      # the mark and its removal are both on record
 
@@ -190,10 +190,10 @@ def test_due_soon_follows_the_routines_lead_time(api):
 def prune_runs(api, days_after):
     """automations.prune as the nightly sweep runs it, `days_after` the latest run finished: run detail is gone."""
     from backend import automations
-    last = sql(api, "SELECT max(finished) AS f FROM automation_runs")[0]["f"]
+    last = sql(api, "SELECT max(finished_at) AS f FROM automation_runs")[0]["f"]
     with api.app.state.store.transaction() as c:
         automations.prune(c, H.shift(last, days=days_after))
-    assert not sql(api, "SELECT id FROM automation_runs WHERE state_json IS NOT NULL")
+    assert not sql(api, "SELECT id FROM automation_runs WHERE state IS NOT NULL")
 
 
 def test_a_late_completion_after_run_detail_is_pruned_still_marks_its_day_and_the_ended_row(api):
@@ -221,20 +221,20 @@ def test_a_due_dates_owner_is_the_caller_a_teammate_in_who_or_someone_they_manag
     # name herself or Ops, never the company's owner or a teammate the rule does not name.
     org(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET bot_owners_json='[\"cara\"]' WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET bot_owners='[\"cara\"]' WHERE bot='ops'")
     r = rule(api, {"kind": "internal", "text": TEXT, "who": {"bots": ["ops"]}})
     body = {"first_due": "2030-03-01", "repeats": "once", "timezone": "UTC", "task_days": 14}
     for owner in ("ana", "ben"):
         post(api, f"rules/{r['id']}/due", {**body, "owner": owner}, token="cara-test", expected=403)
-    assert sql(api, "SELECT id FROM automations WHERE flow_json LIKE '%rule_due_id%'") == []
+    assert sql(api, "SELECT id FROM automations WHERE flow LIKE '%rule_due_id%'") == []
     mine = post(api, f"rules/{r['id']}/due", {**body, "owner": "cara"}, token="cara-test")
     ops = post(api, f"rules/{r['id']}/due", {**body, "owner": "ops"}, token="cara-test")
     assert automation(api, ops["routine_id"])["owner"] == "bot:ops"
     # Someone below her on the chart is hers to name too.
     with api.app.state.store.transaction() as c:
-        raw = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        raw = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         raw["people"].append({"id": "dan", "email": "dan@acme.example", "reports_to": "cara"})
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(raw),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(raw),))
     post(api, f"rules/{r['id']}/due", {**body, "owner": "dan"}, token="cara-test")
     # The owner names anyone.
     assert post(api, f"rules/{r['id']}/due", {**body, "owner": "ben"})["owner"] in ("human:ben", "ben")
@@ -262,7 +262,7 @@ def test_only_the_linked_routine_names_a_due_date_and_a_forged_task_satisfies_no
           expected=403)
     # One saved before that check (written straight to its row) opens its task without the link, whatever its input says.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE automations SET flow_json=json_set(flow_json, '$.trigger.rule_due_id', ?) WHERE id=?",
+        c.execute("UPDATE automations SET flow=json_set(flow, '$.trigger.rule_due_id', ?) WHERE id=?",
                   (due["id"], mine["id"]))
     post(api, f"automations/{mine['id']}/run", {"input": {"due": {"due_on": "2030-03-01", "tz": "UTC",
                                                                   "rule_due_id": due["id"]}}}, token="cara-test")
@@ -277,7 +277,7 @@ def test_only_the_linked_routine_names_a_due_date_and_a_forged_task_satisfies_no
     # The linked routine's own task still does, and its refs name the due date.
     tick(api, datetime(2030, 3, 1, 0, 0, 5, tzinfo=timezone.utc))
     [task] = tasks(api, due["routine_id"])
-    refs = sql(api, "SELECT refs_json FROM messages WHERE json_extract(refs_json,'$.automation')=?", (due["routine_id"],))
-    assert any(json.loads(ref["refs_json"]).get("rule_due_id") == due["id"] for ref in refs)
+    refs = sql(api, "SELECT refs FROM messages WHERE json_extract(refs,'$.automation')=?", (due["routine_id"],))
+    assert any(json.loads(ref["refs"]).get("rule_due_id") == due["id"] for ref in refs)
     write(api, H.task_update, "bot:ops", task["id"], status="done")
     assert [(m["due_on"], m["task_id"]) for m in marks(api, due["id"])] == [("2030-03-01", task["id"])]

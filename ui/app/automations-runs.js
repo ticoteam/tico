@@ -96,7 +96,7 @@ function auRunsDraw(pane) {
     ${r.rows.map(run => {
       const open = r.open.has(run.id), dot = auRunDot(run);
       return `<tr class="au-rr${open ? ' open' : ''}" role="button" tabindex="0" aria-expanded="${open}" data-run="${esc(run.id)}">
-        <td class="au-rt"><span class="nav-icon" aria-hidden="true">${open ? 'expand_more' : 'chevron_right'}</span>${esc(auRunTime(run.started))}</td>
+        <td class="au-rt"><span class="nav-icon" aria-hidden="true">${open ? 'expand_more' : 'chevron_right'}</span>${esc(auRunTime(run.started_at))}</td>
         <td><span class="au-dot ${dot}" role="img" aria-label="${esc(AU_RUN_STATUS[run.status] || run.status)}"></span></td>
         <td class="au-ro">${esc(auRunOutcome(run))}</td><td class="au-n">${esc(auMoney(run.cost))}</td></tr>`
         + (open ? `<tr class="au-rx"><td colspan="4">${(run.steps || []).map(s => `<div class="au-sl">${auTag(s.type)}<span>${esc(auRunStepText(s))}</span>

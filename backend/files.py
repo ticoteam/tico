@@ -60,11 +60,11 @@ CREATE TABLE IF NOT EXISTS bot_file_versions(
  file_id TEXT NOT NULL REFERENCES bot_files(id), version INTEGER NOT NULL,
  blob_id TEXT NOT NULL REFERENCES blobs(id), digest TEXT NOT NULL, source_digest TEXT,
  size INTEGER NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, commit_sha TEXT, repo_path TEXT,
- attempt_id TEXT, actor TEXT NOT NULL, created TEXT NOT NULL, PRIMARY KEY(file_id, version));
+ attempt_id TEXT, actor TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(file_id, version));
 CREATE TABLE IF NOT EXISTS bot_file_activity(
  id INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL REFERENCES bot_files(id),
  actor TEXT NOT NULL, action TEXT NOT NULL, attempt_id TEXT, task_id TEXT, version INTEGER,
- digest TEXT, created TEXT NOT NULL, detail_json TEXT);
+ digest TEXT, created_at TEXT NOT NULL, detail TEXT);
 CREATE INDEX IF NOT EXISTS bot_file_activity_file ON bot_file_activity(file_id, id);
 CREATE TRIGGER IF NOT EXISTS bot_file_activity_append_only BEFORE UPDATE ON bot_file_activity
  BEGIN SELECT RAISE(ABORT, 'bot_file_activity is append-only'); END;
@@ -275,11 +275,11 @@ class Files:
                          (bot, scope, identity)).fetchone()
 
     def activity(self, c, fid, actor, action, *, attempt="", task=None, version=None, digest=None, detail=None, now=None):
-        c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created,detail_json) "
+        c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created_at,detail) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", (fid, actor, action, attempt or None, task, version, digest,
                                                 now or H.now(), encode(detail or {})))
         if task:
-            c.execute("UPDATE tasks SET updated=? WHERE id=?", (now or H.now(), task))
+            c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now or H.now(), task))
 
     def open_row(self, c, *, bot, scope, identity, title, kind, mime, locator, url=None, provider=None,
                  task, conversation, now, fid=None):
@@ -306,7 +306,7 @@ class Files:
         version = row["current_version"]
         if changed:
             version += 1
-            c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,digest,source_digest,size,name,mime,commit_sha,repo_path,attempt_id,actor,created,media_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')",
+            c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,digest,source_digest,size,name,mime,commit_sha,repo_path,attempt_id,actor,created_at,media_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')",
                       (row["id"], version, blob_id, digest, source_digest, size, name, mime, commit or None,
                        repo_path or None, attempt or None, actor, now))
         action = "created" if created else "modified" if changed else "published"
@@ -350,7 +350,7 @@ class Files:
             legacy = c.execute("SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
                                "WHERE a.task_id=? AND b.name=? AND b.id<>? AND NOT EXISTS "
                                "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id) "
-                               "ORDER BY b.created DESC LIMIT 1", (task_id, item["name"], item["id"])).fetchone()
+                               "ORDER BY b.created_at DESC LIMIT 1", (task_id, item["name"], item["id"])).fetchone()
             fid, stamp = (legacy["id"] if legacy else new_id()), H.now()
             c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,mime,locator,task_id,"
                       "first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,'tico_blob',?,?,?)",
@@ -359,7 +359,7 @@ class Files:
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             if legacy:
                 self.insert_task_version(c, fid, 1, legacy["id"], legacy["digest"], legacy["size"],
-                                         legacy["name"], legacy["content_type"], legacy["owner"], legacy["created"], pending=False)
+                                         legacy["name"], legacy["content_type"], legacy["owner"], legacy["created_at"], pending=False)
         number = row["current_version"] + 1 + (1 if legacy else 0)
         self.insert_task_version(c, row["id"], number, item["id"], digest, item["size"], item["name"],
                                  item["content_type"], who.actor, H.now())
@@ -371,7 +371,7 @@ class Files:
 
     @staticmethod
     def insert_task_version(c, fid, number, blob, digest, size, name, mime, actor, created, *, pending=True):
-        c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created,media_state) "
+        c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at,media_state) "
                   "VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (fid, number, blob, digest, size, name, mime, actor, created, "pending" if pending else "none"))
         if not pending:
@@ -393,7 +393,7 @@ class Files:
             for v in c.execute("SELECT * FROM bot_file_versions WHERE file_id=? ORDER BY version DESC", (row["id"],)):
                 fields = dict(v)
                 versions.append({"n": v["version"], "size": v["size"], "mime": v["mime"], "sha256": v["digest"],
-                                 "created": v["created"], "by": v["actor"],
+                                 "created_at": v["created_at"], "by": v["actor"],
                                  **version_review(c, row["id"], v["version"], actor=privacy.actor(who)),
                                  **{k: fields.get(k) for k in ("width", "height", "duration_ms", "media_state")},
                                  "poster_url": f"/api/v2/files/{row['id']}/poster?v={v['version']}" if fields.get("poster_blob_id") else None,
@@ -411,7 +411,7 @@ class Files:
                 continue
             out.append({"id": b["id"], "name": b["name"], "mime": b["content_type"], "current_version": 1,
                         "archived": False, "versions": [{"n": 1, "size": b["size"], "mime": b["content_type"],
-                        "sha256": b["digest"], "created": b["created"], "by": b["owner"],
+                        "sha256": b["digest"], "created_at": b["created_at"], "by": b["owner"],
                         **version_review(c, b["id"], 1, actor=privacy.actor(who)),
                         **{k: b[k] for k in ("width", "height", "duration_ms", "media_state")},
                         "poster_url": f"/api/v2/files/{b['id']}/poster?v=1" if b["poster_blob_id"] else None,
@@ -632,7 +632,7 @@ class Files:
                 c.execute("UPDATE bot_files SET archived=1,last_activity_at=? WHERE id=?", (H.now(), fid))
                 c.execute("DELETE FROM task_assets WHERE task_id=? AND blob_id IN "
                           "(SELECT blob_id FROM bot_file_versions WHERE file_id=?)", (stored["task_id"], fid))
-                c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), stored["task_id"]))
+                c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), stored["task_id"]))
                 self.activity(c, fid, who.actor, "archived", task=stored["task_id"])
                 removed_event(c, stored["task_id"], who.actor, fid, stored["title"])
                 H.event(c, who.actor, "task.file_archived", stored["task_id"], {"file": fid})
@@ -652,7 +652,7 @@ class Files:
                 blob = c.execute("SELECT name FROM blobs WHERE id=?", (fid,)).fetchone()
                 for task in linked:
                     H._task_event(c, task["task_id"], who.actor, "file", blob["name"] if blob else fid, None, "")
-                    c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["task_id"]))
+                    c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["task_id"]))
                     for published in c.execute("SELECT f.id FROM bot_files f JOIN bot_file_versions v "
                                                "ON v.file_id=f.id "
                                                "WHERE v.blob_id=? AND f.scope=? AND f.archived=0",
@@ -739,7 +739,7 @@ class Files:
     def view(self, c, who, row, caches):
         version = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?",
                             (row["id"], row["current_version"])).fetchone()
-        last = c.execute("SELECT actor,action,created FROM bot_file_activity WHERE file_id=? ORDER BY id DESC LIMIT 1",
+        last = c.execute("SELECT actor,action,created_at FROM bot_file_activity WHERE file_id=? ORDER BY id DESC LIMIT 1",
                          (row["id"],)).fetchone()
         link = row["locator"] == "remote_link"
         synced = row["state"] == "ready" and (link or version is not None)
@@ -815,7 +815,7 @@ class Files:
             for v in c.execute("SELECT * FROM bot_file_versions WHERE file_id=? ORDER BY version DESC", (fid,)):
                 out.append({"version": v["version"], "current": v["version"] == row["current_version"], "name": v["name"],
                             "size": v["size"], "mime": v["mime"], "digest": v["source_digest"] or v["digest"],
-                            "actor": v["actor"], "created": v["created"], "url": f"/api/v2/files/{fid}/versions/{v['version']}",
+                            "actor": v["actor"], "created_at": v["created_at"], "url": f"/api/v2/files/{fid}/versions/{v['version']}",
                             "github_url": self.github_url(c, row["bot"], v, caches),
                             **{k: v[k] for k in ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "media_state")}})
             return {"file": fid, "versions": out}
@@ -824,7 +824,7 @@ class Files:
         with self.store.read() as c:
             self.visible_file(c, who, fid)
             rows = [{"id": r["id"], "actor": r["actor"], "action": r["action"], "task_id": r["task_id"],
-                     "version": r["version"], "digest": r["digest"], "created": r["created"]}
+                     "version": r["version"], "digest": r["digest"], "created_at": r["created_at"]}
                     for r in c.execute("SELECT * FROM bot_file_activity WHERE file_id=? ORDER BY id DESC LIMIT 500", (fid,))]
             H.prime_tasks(c, {r["task_id"] for r in rows})
             rows = [r for r in rows if not r["task_id"] or privacy.task_readable(c, who, H.task(c, r["task_id"]))]

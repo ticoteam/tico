@@ -42,45 +42,45 @@ function withRelations(task, tasks) {
 function fixtures() {
   const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bot:engineer', requester: 'human:ana', status: 'doing',
     lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3,
-    created: at(60 * 30), updated: at(30), ...over});
+    created_at: at(60 * 30), updated_at: at(30), ...over});
   const ask = (from, body) => ({ask: {id: 'q-' + from, body, from_actor: from, to_actor: 'human:ana'}});
   const pr = (repo, n, title, state = 'open') => ({id: `pr-${repo}-${n}`, kind: 'pr', repo, number: n, url: `https://github.com/${repo}/pull/${n}`, title, state,
     checks: state === 'merged' ? 'passing' : 'pending'});
   return [
     // Needs you
-    t('t-copy', 'Approve the Q4 pricing page copy', {owner: 'human:ana', requester: 'bot:writer', status: 'open', updated: at(120), labels: ['pricing'],
+    t('t-copy', 'Approve the Q4 pricing page copy', {owner: 'human:ana', requester: 'bot:writer', status: 'open', updated_at: at(120), labels: ['pricing'],
       ...ask('bot:writer', 'Two headline options are in the doc. Pick one so the page can ship Friday.')}),
-    t('t-refund', 'Choose a refund policy for annual plans', {owner: 'human:ana', requester: 'bot:support', status: 'open', updated: at(300), labels: ['billing'],
+    t('t-refund', 'Choose a refund policy for annual plans', {owner: 'human:ana', requester: 'bot:support', status: 'open', updated_at: at(300), labels: ['billing'],
       ...ask('bot:support', 'Three customers asked this week: a full refund within 30 days, or prorated?')}),
-    t('t-access', 'Review Engineer access to the billing repo', {owner: 'human:ana', requester: 'bot:botops', status: 'open', updated: at(60 * 26)}),
-    t('t-terms', 'Approve the new checkout terms', {owner: 'human:ana', requester: 'bot:engineer', status: 'open', _parent: 't-checkout', updated: at(150)}),
-    t('t-onboard', 'Sign off the onboarding email sequence', {owner: 'human:ana', requester: 'bot:writer', status: 'open', updated: at(200), labels: ['email'], due: inDays(1)}),
-    t('t-deck', 'Review the launch deck', {owner: 'human:ana', requester: 'human:sam', status: 'open', updated: at(400), labels: ['launch']}),
+    t('t-access', 'Review Engineer access to the billing repo', {owner: 'human:ana', requester: 'bot:botops', status: 'open', updated_at: at(60 * 26)}),
+    t('t-terms', 'Approve the new checkout terms', {owner: 'human:ana', requester: 'bot:engineer', status: 'open', _parent: 't-checkout', updated_at: at(150)}),
+    t('t-onboard', 'Sign off the onboarding email sequence', {owner: 'human:ana', requester: 'bot:writer', status: 'open', updated_at: at(200), labels: ['email'], due: inDays(1)}),
+    t('t-deck', 'Review the launch deck', {owner: 'human:ana', requester: 'human:sam', status: 'open', updated_at: at(400), labels: ['launch']}),
     // Needs Sam
-    t('t-demo', 'Record the product demo video', {owner: 'human:sam', requester: 'human:ana', status: 'open', updated: at(60 * 50), due: inDays(-1), labels: ['launch']}),
+    t('t-demo', 'Record the product demo video', {owner: 'human:sam', requester: 'human:ana', status: 'open', updated_at: at(60 * 50), due: inDays(-1), labels: ['launch']}),
     // Waits on a person this install does not know: Needs someone
-    t('t-vendor', 'Sign the vendor security questionnaire', {owner: 'human:jo', requester: 'bot:botops', status: 'open', updated: at(60 * 6)}),
+    t('t-vendor', 'Sign the vendor security questionnaire', {owner: 'human:jo', requester: 'bot:botops', status: 'open', updated_at: at(60 * 6)}),
     // Waiting
-    t('t-inbox', 'Migrate the support inbox to the new helpdesk', {owner: 'bot:support', requester: 'bot:botops', status: 'waiting', updated: at(480), labels: ['support'],
+    t('t-inbox', 'Migrate the support inbox to the new helpdesk', {owner: 'bot:support', requester: 'bot:botops', status: 'waiting', updated_at: at(480), labels: ['support'],
       note: 'Waiting on Sam to export the old ticket archive (about 12k tickets) before the import can start.'}),
-    t('t-checkout', 'Ship the checkout redesign', {owner: 'bot:engineer', requester: 'human:ana', status: 'waiting', updated: at(60 * 22), labels: ['checkout'],
+    t('t-checkout', 'Ship the checkout redesign', {owner: 'bot:engineer', requester: 'human:ana', status: 'waiting', updated_at: at(60 * 22), labels: ['checkout'],
       _blocked: ['t-idem'], pr_state: 'changes_requested',
       children_summary: {total: 4, done: 1, direct_total: 4, direct_done: 1}, parts: {total: 4, done: 1}, links: [pr('acme/web', 412, 'Checkout redesign behind a flag')]}),
     // a bot's parked task: its date is when it looks again, not a deadline
-    t('t-changelog', 'Publish the September changelog', {owner: 'bot:writer', requester: 'bot:botops', status: 'waiting', updated: at(900), note: 'Waiting for the 0.3 release tag.', due: inDays(2)}),
+    t('t-changelog', 'Publish the September changelog', {owner: 'bot:writer', requester: 'bot:botops', status: 'waiting', updated_at: at(900), note: 'Waiting for the 0.3 release tag.', due: inDays(2)}),
     // Doing (two are subtasks of the waiting checkout; one is a subtask of the newsletter)
-    t('t-idem', 'Add idempotency keys to the payments API', {_parent: 't-checkout', updated: at(40), labels: ['payments', 'backend', 'api'], pr_state: 'failing', links: [pr('acme/api', 88, 'Idempotency keys for charges')]}),
-    t('t-summary', 'Checkout summary step', {_parent: 't-checkout', status: 'review', updated: at(180), pr_state: 'open', links: [pr('acme/web', 415, 'Summary step')]}),
-    t('t-triage', 'Triage new bug reports from the widget', {owner: 'bot:support', requester: 'bot:botops', updated: at(20), labels: ['bugs']}),
-    t('t-digest', 'Weekly metrics digest', {owner: 'bot:analyst', requester: 'human:sam', status: 'open', updated: at(10)}),
-    t('t-rotate', 'Rotate the staging database credentials', {owner: 'bot:botops', requester: 'bot:botops', updated: at(70), labels: ['security']}),
-    t('t-news', 'Draft the October newsletter', {owner: 'bot:writer', requester: 'human:ana', updated: at(360), labels: ['newsletter'], parts: {total: 1, done: 0}}),
-    t('t-img', 'Pick the newsletter header image', {owner: 'bot:writer', requester: 'human:ana', _parent: 't-news', updated: at(380)}),
-    t('t-flaky', 'Fix the flaky login test on CI', {requester: 'bot:botops', updated: at(60 * 47), pr_state: 'merged', labels: ['ci'], links: [pr('acme/web', 409, 'Stabilise the login test', 'merged')]}),
+    t('t-idem', 'Add idempotency keys to the payments API', {_parent: 't-checkout', updated_at: at(40), labels: ['payments', 'backend', 'api'], pr_state: 'failing', links: [pr('acme/api', 88, 'Idempotency keys for charges')]}),
+    t('t-summary', 'Checkout summary step', {_parent: 't-checkout', status: 'review', updated_at: at(180), pr_state: 'open', links: [pr('acme/web', 415, 'Summary step')]}),
+    t('t-triage', 'Triage new bug reports from the widget', {owner: 'bot:support', requester: 'bot:botops', updated_at: at(20), labels: ['bugs']}),
+    t('t-digest', 'Weekly metrics digest', {owner: 'bot:analyst', requester: 'human:sam', status: 'open', updated_at: at(10)}),
+    t('t-rotate', 'Rotate the staging database credentials', {owner: 'bot:botops', requester: 'bot:botops', updated_at: at(70), labels: ['security']}),
+    t('t-news', 'Draft the October newsletter', {owner: 'bot:writer', requester: 'human:ana', updated_at: at(360), labels: ['newsletter'], parts: {total: 1, done: 0}}),
+    t('t-img', 'Pick the newsletter header image', {owner: 'bot:writer', requester: 'human:ana', _parent: 't-news', updated_at: at(380)}),
+    t('t-flaky', 'Fix the flaky login test on CI', {requester: 'bot:botops', updated_at: at(60 * 47), pr_state: 'merged', labels: ['ci'], links: [pr('acme/web', 409, 'Stabilise the login test', 'merged')]}),
     // Done
-    t('t-receipt', 'Checkout receipt email copy', {_parent: 't-checkout', owner: 'bot:writer', status: 'done', done_at: at(240), updated: at(240)}),
-    t('t-sso', 'Turn on SSO for the admin console', {status: 'done', done_at: at(60 * 30), updated: at(60 * 30), pr_state: 'merged'}),
-    t('t-faq', 'Refresh the billing FAQ', {owner: 'bot:support', status: 'closed', closed_at: at(60 * 70), updated: at(60 * 70)}),
+    t('t-receipt', 'Checkout receipt email copy', {_parent: 't-checkout', owner: 'bot:writer', status: 'done', done_at: at(240), updated_at: at(240)}),
+    t('t-sso', 'Turn on SSO for the admin console', {status: 'done', done_at: at(60 * 30), updated_at: at(60 * 30), pr_state: 'merged'}),
+    t('t-faq', 'Refresh the billing FAQ', {owner: 'bot:support', status: 'closed', closed_at: at(60 * 70), updated_at: at(60 * 70)}),
   ];
 }
 const OPEN_COUNT = 19, NEEDS_YOU = 6;
@@ -135,7 +135,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       const wanted = (url.searchParams.get('status') || '').split(',').filter(Boolean);
       const rows = tasks.filter(x => !wanted.length || wanted.includes(x.status));
       const donePage = url.searchParams.get('sort') === 'finished';
-      if (donePage) rows.sort((a, b) => String(b.closed_at || b.updated).localeCompare(String(a.closed_at || a.updated)));
+      if (donePage) rows.sort((a, b) => String(b.closed_at || b.updated_at).localeCompare(String(a.closed_at || a.updated_at)));
       const offset = Number(url.searchParams.get('offset') || 0), limit = Number(url.searchParams.get('limit') || rows.length);
       if (!donePage && activePage) return activePage(route, rows, offset, limit);
       return json({tasks: (donePage ? rows.slice(offset, offset + limit) : rows).map(x => withRelations(x, tasks)),
@@ -179,7 +179,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
         return json({task: withRelations(task, tasks)});
       }
       return json({task: withRelations(task, tasks), children: tasks.filter(x => x._parent === id).map(x => withRelations(x, tasks)),
-        comments: [{id: 'm1', kind: 'say', from_actor: 'human:ana', body: 'Keep the old flow behind a flag for a week.', created: at(90), refs: {}}],
+        comments: [{id: 'm1', kind: 'say', from_actor: 'human:ana', body: 'Keep the old flow behind a flag for a week.', created_at: at(90), refs: {}}],
         events: [{id: 'e1', ts: at(60), actor: 'bot:engineer', field: 'status', old: 'open', new: 'doing'}], messages: []});
     }
     if (p === '/api/v2/conversations') return json({conversations: []});
@@ -197,7 +197,7 @@ const shot = async (page, name) => {
   fs.mkdirSync(SHOTS, {recursive: true});
   // fonts in, and any finite animation or transition finished
   await page.evaluate(() => document.fonts.ready.then(() => Promise.all(document.getAnimations()
-    .filter(a => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming().endTime)).map(a => a.finished.catch(() => {})))));
+    .filter(a => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming().endTime)).map(a => a.finished_at.catch(() => {})))));
   await page.screenshot({path: path.join(SHOTS, name + '.png')});
 };
 const rowKeys = page => page.locator('#task-body .tl-row').evaluateAll(rows => rows.map(r => r.dataset.taskKey));
@@ -1060,7 +1060,7 @@ async function waitingOnYou(browser) {
   // A bot's task set waiting on you (`--on`) is in Needs you under that bot, whoever filed it, with a short "Waiting" chip
   // and no buttons other rows lack.
   const host = {...fixtures().find(x => x.id === 't-inbox'), id: 't-host', title: 'Restart the build host', owner: 'bot:engineer',
-    requester: 'bot:botops', waiting_on: 'human:ana', note: 'It refuses SSH since the update.', updated: at(5)};
+    requester: 'bot:botops', waiting_on: 'human:ana', note: 'It refuses SSH since the update.', updated_at: at(5)};
   const sams = {...host, id: 't-sams', title: 'Rotate the deploy key', waiting_on: 'human:sam'};
   // A question nobody answered in three days (the server marks it `older`) folds into Older questions, uncounted.
   const stale = {...host, id: 't-stale', title: 'Pick the build host region', waiting_on: null,
@@ -1085,7 +1085,7 @@ async function waitingOnYou(browser) {
 
 async function donePagination(browser) {
   const types = [{id: 'general', name: 'General', steps: []}, {id: 'support', name: 'Support', steps: []}];
-  const task = (id, type, updated) => ({...fixtures()[0], id, title: id, type_id: type, status: 'done', updated, done_at: updated});
+  const task = (id, type, updated) => ({...fixtures()[0], id, title: id, type_id: type, status: 'done', updated_at: updated, done_at: updated});
   const firstPage = Array.from({length: 20}, (_, i) => task(`support-done-${i}`, 'support', at(i + 1)));
   const matchingOlder = task('older-general-done', 'general', at(200));
   const {page, errors} = await open(browser, {hash: '#/tasks?type=general&view=done', types, baseTasks: [],
@@ -1116,9 +1116,9 @@ async function ages(browser) {
   // Every open row reads one short age, since it last moved; the tooltip has when it was opened and updated.
   const base = {...fixtures().find(x => x.id === 't-copy')};
   const extraTasks = [
-    {...base, id: 't-stale', title: 'Stale vendor contract', created: at(60 * 30), updated: at(65)},
-    {...base, id: 't-fresh', title: 'Fresh vendor contract', created: at(60 * 30), updated: new Date().toISOString()},
-    {...base, id: 't-untouched', title: 'Untouched vendor contract', created: at(150), updated: at(150)},
+    {...base, id: 't-stale', title: 'Stale vendor contract', created_at: at(60 * 30), updated_at: at(65)},
+    {...base, id: 't-fresh', title: 'Fresh vendor contract', created_at: at(60 * 30), updated_at: new Date().toISOString()},
+    {...base, id: 't-untouched', title: 'Untouched vendor contract', created_at: at(150), updated_at: at(150)},
   ];
   const {page, errors} = await open(browser, {hash: '#/tasks', extraTasks});
   const age = key => page.locator(`[data-task-key="${key}"] .tl-age`);
@@ -1138,7 +1138,7 @@ async function polling(browser) {
   await peekTitle(page, 'Migrate the support inbox');
   await page.locator('#tasks-pane').evaluate(p => { p.scrollTop = 120; });
   await page.evaluate(() => { window.kept = document.querySelector('[data-task-key="tt-flaky"]'); });
-  Object.assign(tasks.find(x => x.id === 't-inbox'), {title: 'Migrate the support inbox to Helpdesk Pro', version: 9, updated: new Date().toISOString()});
+  Object.assign(tasks.find(x => x.id === 't-inbox'), {title: 'Migrate the support inbox to Helpdesk Pro', version: 9, updated_at: new Date().toISOString()});
   await page.evaluate(() => refresh(false));
   await page.waitForFunction(() => document.querySelector('[data-task-key="tt-inbox"] .tl-title')?.textContent.includes('Helpdesk Pro'));
   await peekTitle(page, 'Helpdesk Pro');

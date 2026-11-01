@@ -61,8 +61,8 @@ Only when they ask. `hub bot update-from-original <copy>`.
 It compares the original's `AGENT.md`, `skills/` and `playbooks/` at the commit the copy was made from and now, with the copy's files, and
 merges file by file with git. The answer's `status`:
 
-- **`updated`**: one commit on the copy's repository took what the original changed and kept what the copy changed. Say in a line
-  what came in (`updated`, and read `original_diff` if they want detail).
+- **`updated_at`**: one commit on the copy's repository took what the original changed and kept what the copy changed. Say in a line
+  what came in (`updated_at`, and read `original_diff` if they want detail).
 - **`current`**: nothing new in the original. Say so.
 - **`conflicts`**: nothing was changed. Each conflict shows what the original changed and what the copy changed in the same file. Tell the
   person in plain words what differs, ask which they want (or both, combined), write that into the copy's file, commit it, then run

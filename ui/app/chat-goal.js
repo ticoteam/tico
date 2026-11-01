@@ -282,7 +282,7 @@ function chatGoalNoticeHTML(m) {
   const [first = '', ...rest] = String(m.body || '').split('\n');
   const objective = m.refs.goal_objective || g?.objective || first.replace(/^Goal (met|stopped):\s*/i, '');
   const note = m.refs.goal_note ?? (g && g.status === status ? g.note || '' : rest.join(' ').trim());
-  return chatGoalLineHTML(status, objective, note, m.created);
+  return chatGoalLineHTML(status, objective, note, m.created_at);
 }
 // A met or stopped goal leaves one line in the thread, where it ended; nothing else announces it. The notice the server
 // wrote for that ending (refs.chat_goal) stands instead; a goal control never does.
@@ -291,6 +291,6 @@ function chatGoalLine(state, messages) {
   if (!goalEnded(g)) return null;
   if (messages.some(m => m.refs?.chat_goal === g.id && (m.refs.goal_status || g.status) === g.status)) return null;
   const end = String(g.ended_at || g.updated_at || '');
-  const at = end ? messages.filter(m => String(m.created || '') <= end).length : messages.length;
+  const at = end ? messages.filter(m => String(m.created_at || '') <= end).length : messages.length;
   return {at, html: chatGoalLineHTML(g.status, g.objective, g.note)};
 }

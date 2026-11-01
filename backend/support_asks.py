@@ -66,7 +66,7 @@ def _asked(who):
 
 
 def _load(c, who):
-    row = c.execute("SELECT value_json FROM preferences WHERE actor=? AND key=?", (who.actor, PREFERENCE)).fetchone()
+    row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?", (who.actor, PREFERENCE)).fetchone()
     try:
         value = json.loads(row[0]) if row else {}
     except ValueError:
@@ -128,8 +128,8 @@ def answer_feedback(store, support, who, body):
     with store.transaction() as c:
         record = _load(c, who)
         record[body.moment] = {"at": H.now(), "answered": ticket is not None}
-        c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,?,?) "
-                  "ON CONFLICT(actor,key) DO UPDATE SET value_json=excluded.value_json, updated=excluded.updated",
+        c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) "
+                  "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
                   (who.actor, PREFERENCE, encode(record), H.now()))
         H.event(c, who.actor, "support.feedback", body.moment, {"answered": ticket is not None})
     return {"moment": body.moment, "answered": ticket is not None, "ticket": ticket}

@@ -16,16 +16,16 @@ def board(c, profile="manager"):
     found = c.execute("SELECT id FROM task_types WHERE name='Dev tickets'").fetchone()
     typ = H.type_get(c, found[0]) if found else dev_type(c)
     c.execute("UPDATE task_types SET manager='coo' WHERE id=?", (typ["id"],))
-    c.execute("UPDATE bot_config SET config_json=? WHERE bot='coo'",
+    c.execute("UPDATE bot_config SET config=? WHERE bot='coo'",
               (encode({"name": "coo", "runtime": "fake", "status": "active", "profile": profile}),))
     if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen) VALUES('r1','box','ana','h',?,?)",
+        c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at,last_seen_at) VALUES('r1','box','ana','h',?,?)",
                   (H.now(), H.now()))
     return H.type_get(c, typ["id"])
 
 
 def profile(c, slug, name):
-    c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.profile',?) WHERE bot=?", (name, slug))
+    c.execute("UPDATE bot_config SET config=json_set(config,'$.profile',?) WHERE bot=?", (name, slug))
 
 
 def settled(c):
@@ -45,7 +45,7 @@ def ticket(c, typ, title="Fix the connection", step="In Progress", minutes=0):
     settled(c)
     if minutes:
         then = H.shift(H.now(), minutes=-minutes)
-        c.execute("UPDATE tasks SET created=?, updated=? WHERE id=?", (then, then, row["id"]))
+        c.execute("UPDATE tasks SET created_at=?, updated_at=? WHERE id=?", (then, then, row["id"]))
         c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (then, row["id"]))
     return H.task(c, row["id"])
 
@@ -58,8 +58,8 @@ def run(c, row, state, minutes_ago, stop=None):
     job = c.execute("SELECT id FROM jobs WHERE message_id=?", (msg["id"],)).fetchone()[0]
     c.execute("UPDATE jobs SET state='done' WHERE id=?", (job,))
     aid = H.new_id()
-    c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,started,"
-              "finished,lane,stop_requested) VALUES(?,?,?,'r1',1,?,?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,started_at,"
+              "finished_at,lane,stop_requested_at) VALUES(?,?,?,'r1',1,?,?,?,?,?,?,?,?)",
               (aid, job, H.actor_id(row["owner"]), aid, state, when, when, when, when, "task:" + row["id"], stop))
     return when
 
@@ -77,8 +77,8 @@ def listed(c, typ, kind=None):
 
 
 def late_notices(c, row):
-    return c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:coo' AND json_extract(refs_json,'$.task')=? "
-                     "AND json_extract(refs_json,'$.step_late')", (row["id"],)).fetchone()[0]
+    return c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:coo' AND json_extract(refs,'$.task')=? "
+                     "AND json_extract(refs,'$.step_late')", (row["id"],)).fetchone()[0]
 
 
 def unheld_jobs(c, slug):
@@ -95,7 +95,7 @@ def test_a_ticket_with_no_run_for_45_minutes_is_listed_once_with_its_owner_and_s
         [entry] = listed(c, typ, "stuck")
         assert entry["ticket"]["id"] == quiet["id"] and entry["ticket"]["owner"] == "cpo"
         assert "owner cpo" in entry["cause"]
-        assert entry["since"] == H.task(c, quiet["id"])["created"], "since it last had a run or entered the step"
+        assert entry["since"] == H.task(c, quiet["id"])["created_at"], "since it last had a run or entered the step"
         assert [e["key"] for e in listed(c, typ, "stuck")] == [entry["key"]], "read again: still one entry"
         # A queued run on it is work: the ticket is not stuck.
         H._write_message(c, "human:ana", "bot:cpo", "carry on", H.conversation(c, quiet["conversation_id"]), "say",
@@ -137,7 +137,7 @@ def test_a_refusal_repeated_twice_on_one_ticket_is_one_entry(api):
         row, other = ticket(c, typ, "Fix Cursor"), ticket(c, typ, "Fix Muse")
 
         def refuse(task_id):
-            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail_json,severity) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail,severity) VALUES(?,?,?,?,?,?)",
                       (H.new_id(), H.now(), "bot:cpo", "review_gate", json.dumps({"task": task_id}), "warn"))
 
         refuse(row["id"])
@@ -183,8 +183,8 @@ def test_the_hourly_list_wakes_a_manager_only_for_a_new_entry(api):
         before = unheld_jobs(c, "coo")
         assert PE.deliver(c) == ["coo"]
         assert unheld_jobs(c, "coo") == before + 1
-        [wake] = c.execute("SELECT body, refs_json FROM messages WHERE to_actor='bot:coo' AND "
-                           "json_extract(refs_json,'$.wake')='exceptions'").fetchall()
+        [wake] = c.execute("SELECT body, refs FROM messages WHERE to_actor='bot:coo' AND "
+                           "json_extract(refs,'$.wake')='exceptions'").fetchall()
         assert "Fix Cursor" in wake[0] and "no run for 45 minutes" in wake[0]
         assert PE.deliver(c) == [], "the same entry an hour later: no second turn"
         ticket(c, typ, "Fix Muse", minutes=50)
@@ -212,7 +212,7 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         # Its own words: the same notice again is dropped as a repeat, which would hide a wake.
         H._wake(c, H.task(c, row["id"]), "bot:coo", f"A setup blocker on {title} needs you.", {"wake": "blocker"})
         c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (H.shift(H.now(), hours=-5), late["id"]))
-        c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), hours=-5), late["id"]))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-5), late["id"]))
         step_age.sweep(c, H.shift(H.now(), minutes=1))
         H.task_update(c, "bot:cpo", row["id"], status="done", note="Shipped")
         return late
@@ -293,7 +293,7 @@ def test_a_verdict_a_handoff_and_a_child_or_blocker_result_are_a_note_for_a_mana
             H.task_update(c, "bot:ops", child["id"], status="done", note="Three bots, one free")
             H.task_update(c, "bot:ops", upstream["id"], status="done", note="Shipped")
             return c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='coo' "
-                             "AND j.state='queued' AND coalesce(j.held,0)=0 AND json_extract(m.refs_json,'$.task') "
+                             "AND j.state='queued' AND coalesce(j.held,0)=0 AND json_extract(m.refs,'$.task') "
                              "IN (?,?)", (mine["id"], waits["id"])).fetchone()[0]
 
         assert results("doer") >= 2, "control: a doer is woken for its child's result and its blocker finishing"
@@ -325,12 +325,12 @@ def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_and_unwoken_unti
 
         def approval():
             aid = H.new_id()
-            c.execute("INSERT INTO approvals(id,kind,task_id,requested_by,created) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO approvals(id,kind,task_id,requested_by,created_at) VALUES(?,?,?,?,?)",
                       (aid, "send", check["id"], "bot:ops", H.now()))
             return lambda: c.execute("DELETE FROM approvals WHERE id=?", (aid,))
 
         def blocker():
-            c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_by,created) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,?,?,?)",
                       (upstream["id"], check["id"], "blocks", "bot:cpo", H.now()))
             return lambda: c.execute("DELETE FROM task_relations WHERE from_task=? AND kind='blocks'", (upstream["id"],))
 
@@ -360,13 +360,13 @@ def test_a_finished_check_is_filed_so_an_idle_ticket_is_listed_as_not_moving_on_
         assert "no check filed at In QA" in missing["cause"], "nothing filed: the missing check is the exception"
         check = check_of(c, row, "QA: PR #41")
         ended = H.shift(H.now(), minutes=-60)
-        c.execute("UPDATE tasks SET status='done', done_at=?, updated=? WHERE id=?", (ended, ended, check["id"]))
+        c.execute("UPDATE tasks SET status='done', done_at=?, updated_at=? WHERE id=?", (ended, ended, check["id"]))
         settled(c)
         [entry] = listed(c, typ, "stuck")
         assert "no check filed" not in entry["cause"]
         assert "QA: PR #41 finished and the ticket has not moved on (owner cpo)" in entry["cause"]
         assert entry["since"] == ended and entry["key"] == missing["key"]
-        c.execute("UPDATE tasks SET done_at=?, updated=? WHERE id=?", (H.now(), H.now(), check["id"]))
+        c.execute("UPDATE tasks SET done_at=?, updated_at=? WHERE id=?", (H.now(), H.now(), check["id"]))
         assert listed(c, typ, "stuck") == [], "a check that just finished: the builder has time to move it on"
 
 
@@ -376,7 +376,7 @@ def test_held_notes_alone_never_wake_a_manager_and_ride_with_its_next_list(api):
     with api.app.state.store.transaction() as c:
         typ = board(c)
         for day in range(7):
-            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
                       (H.new_id(), "keeper", "bot:coo", f"Review 1 approved #{day}.", H.shift(H.now(), days=-day)))
         assert [PE.deliver(c, H.shift(H.now(), hours=h)) for h in range(0, 7 * 24, 6)] == [[]] * 28
         assert unheld_jobs(c, "coo") == 0
@@ -406,7 +406,7 @@ def outside_the_chart(c, typ):
 
 
 def flow(c, typ, step, **value):
-    c.execute("UPDATE task_steps SET flow_json=? WHERE type_id=? AND name=?", (json.dumps(value), typ["id"], step))
+    c.execute("UPDATE task_steps SET flow=? WHERE type_id=? AND name=?", (json.dumps(value), typ["id"], step))
 
 
 def both_reads(api, c, typ, kind):
@@ -416,7 +416,7 @@ def both_reads(api, c, typ, kind):
     before = c.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
     PE.deliver(c)
     body = (c.execute("SELECT body FROM messages WHERE rowid>? AND to_actor='bot:coo' AND "
-                      "json_extract(refs_json,'$.wake')='exceptions'", (before,)).fetchone() or [""])[0]
+                      "json_extract(refs,'$.wake')='exceptions'", (before,)).fetchone() or [""])[0]
     return [e for e in shown if e["kind"] == kind], body
 
 

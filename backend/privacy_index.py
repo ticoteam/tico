@@ -65,8 +65,8 @@ class ReadIndex:
                 # The legacy keeper inputs live_privacy.Sources reads room by room, for every room at once.
                 self.meeting_rooms.update(row[0] for row in c.execute(
                     "SELECT DISTINCT m.conversation_id FROM messages m JOIN live_meeting_turns t "
-                    "ON t.id=json_extract(m.refs_json,'$.live_meeting.turn_id') "
-                    "AND t.meeting_id=json_extract(m.refs_json,'$.live_meeting.meeting_id') "
+                    "ON t.id=json_extract(m.refs,'$.live_meeting.turn_id') "
+                    "AND t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') "
                     "WHERE m.from_actor=? AND m.to_actor='bot:'||t.bot", (H.KEEPER,)))
 
     @cached_property
@@ -131,14 +131,14 @@ class ReadIndex:
     def attempts(self):
         if self._attempts is None:
             rows = {r["id"]: {**dict(r), "messages": [r["message_id"]], "tasks": set()} for r in self.c.execute(
-                "SELECT a.id,a.bot,a.created,a.finished,a.lease_until,j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id")}
+                "SELECT a.id,a.bot,a.created_at,a.finished_at,a.lease_until,j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id")}
             for aid, mid in self.c.execute("SELECT attempt_id,message_id FROM attempt_inputs"):
                 if aid in rows:
                     rows[aid]["messages"].append(mid)
             for tid, aid in self.c.execute("SELECT id,carried_by FROM tasks WHERE carried_by IS NOT NULL"):
                 if aid in rows and tid in self.private:
                     rows[aid]["tasks"].add(tid)
-            for aid, detail in self.c.execute("SELECT target,detail_json FROM events WHERE action IN (" + privacy.RUN_TASK_EVENTS_SQL + ")"):
+            for aid, detail in self.c.execute("SELECT target,detail FROM events WHERE action IN (" + privacy.RUN_TASK_EVENTS_SQL + ")"):
                 if aid in rows:
                     rows[aid]["tasks"].update(self.references(H._json(detail, {}) or {}))
             self._attempts = rows
@@ -152,7 +152,7 @@ class ReadIndex:
         if not row:
             return set()
         ids = {r[0] for r in self.c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)) if r[0] in self.private}
-        for detail, in self.c.execute("SELECT detail_json FROM events WHERE action IN (" +
+        for detail, in self.c.execute("SELECT detail FROM events WHERE action IN (" +
                                      privacy.RUN_TASK_EVENTS_SQL + ") AND target=?", (aid,)):
             ids.update(self.references(H._json(detail, {}) or {}))
         mids = [row["message_id"], *(r[0] for r in self.c.execute(
@@ -173,15 +173,15 @@ class ReadIndex:
                 middle = len(rows) // 2
                 row = rows[middle]
                 left, right = build(rows[:middle]), build(rows[middle + 1:])
-                end = row["finished"] or row["lease_until"]
+                end = row["finished_at"] or row["lease_until"]
                 return row, end, max(end, left[2] if left else "", right[2] if right else ""), left, right
-            self._intervals = {slug: build(sorted(rows, key=lambda r: r["created"])) for slug, rows in groups.items()}
+            self._intervals = {slug: build(sorted(rows, key=lambda r: r["created_at"])) for slug, rows in groups.items()}
         def search(node):
             if not node or node[2] < ts:
                 return
             row, end, _, left, right = node
             yield from search(left)
-            if row["created"] <= ts:
+            if row["created_at"] <= ts:
                 if ts <= end:
                     yield row["id"]
                 yield from search(right)
@@ -201,16 +201,16 @@ class ReadIndex:
         # Task and meeting provenance use the same root/input rows. Authorize
         # simple roots together; inherited roots retain the existing traversals.
         rows = self.c.execute(
-            "SELECT m.conversation_id,m.refs_json,m.in_reply_to FROM attempts a JOIN jobs j ON j.id=a.job_id "
+            "SELECT m.conversation_id,m.refs,m.in_reply_to FROM attempts a JOIN jobs j ON j.id=a.job_id "
             "JOIN messages m ON m.id=j.message_id WHERE a.id=? UNION "
-            "SELECT m.conversation_id,m.refs_json,m.in_reply_to FROM attempt_inputs i "
+            "SELECT m.conversation_id,m.refs,m.in_reply_to FROM attempt_inputs i "
             "JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?", (aid, aid))
         found = False
         for row in rows:
             found = True
             if row["in_reply_to"]:
                 return None
-            direct = self._direct_message(row["conversation_id"], row["refs_json"], include_run=False)
+            direct = self._direct_message(row["conversation_id"], row["refs"], include_run=False)
             if direct is None:
                 return None
             if not direct:
@@ -219,7 +219,7 @@ class ReadIndex:
             return None
         if any(tid in self.denied for tid, in self.c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,))):
             return False
-        for action, detail in self.c.execute("SELECT action,detail_json FROM events WHERE action IN (" +
+        for action, detail in self.c.execute("SELECT action,detail FROM events WHERE action IN (" +
                                             privacy.RUN_TASK_EVENTS_SQL + ") AND target=?", (aid,)):
             data = H._json(detail, {}) or {}
             if not isinstance(data, dict):
@@ -248,7 +248,7 @@ class ReadIndex:
         if len(seen) >= 100:
             raise ValueError("Unsupported provenance depth")
         seen.add(mid)
-        refs = msg.get("refs") or H._json(msg.get("refs_json"), {}) or {}
+        refs = msg.get("refs") or H._json(msg.get("refs"), {}) or {}
         if not isinstance(refs, dict):
             raise ValueError("Unsupported message provenance")
         ids = self.references(refs)
@@ -272,7 +272,7 @@ class ReadIndex:
         return ids
 
     def _message_sources(self, mid, cid, refs, reply):
-        return self.sources({"id": mid, "conversation_id": cid, "refs_json": refs, "in_reply_to": reply})
+        return self.sources({"id": mid, "conversation_id": cid, "refs": refs, "in_reply_to": reply})
 
     def message(self, mid, cid, refs, reply):
         try:
@@ -290,7 +290,7 @@ class ReadIndex:
                 if parent is not None:
                     return parent
             return (self.meetings.message_readable(self.principals,
-                    {"id": mid, "conversation_id": cid, "refs_json": refs, "in_reply_to": reply})
+                    {"id": mid, "conversation_id": cid, "refs": refs, "in_reply_to": reply})
                     and not self.denied.intersection(self.message_sources(mid, cid, refs, reply)))
         except ValueError:
             return False
@@ -335,7 +335,7 @@ class ReadIndex:
             return True
         if msg.get("in_reply_to"):
             return None
-        return self._direct_message(msg.get("conversation_id"), msg.get("refs_json"), include_run=False)
+        return self._direct_message(msg.get("conversation_id"), msg.get("refs"), include_run=False)
 
     def _plain_room(self, cid):
         tid = H._task_ref(self.conversation_tasks.get(cid))
@@ -346,7 +346,7 @@ class ReadIndex:
             rows = defaultdict(set)
             for tag, tid in self.c.execute("SELECT tag_id,task_id FROM task_tags"):
                 rows[tag].add(tid)
-            for target, detail in self.c.execute("SELECT target,detail_json FROM events INDEXED BY events_tag_attach "
+            for target, detail in self.c.execute("SELECT target,detail FROM events INDEXED BY events_tag_attach "
                                                  "WHERE action='tag.attach'"):
                 data = H._json(detail, {}) or {}
                 # Tag history contains explicit task references, not arbitrary prose.

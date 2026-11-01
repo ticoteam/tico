@@ -4808,7 +4808,7 @@ def computer_summary(row):
         update.get("state"), update.get("state") or "unknown")
     level = ("offline" if not row.get("online") else "not_ready" if errors else "warnings" if warnings else "ready")
     return {"id": row.get("id"), "label": row.get("label"), "online": bool(row.get("online")),
-            "last_seen": row.get("last_seen"), "operator": row.get("operator"), "platform": row.get("platform") or "",
+            "last_seen_at": row.get("last_seen_at"), "operator": row.get("operator"), "platform": row.get("platform") or "",
             "accepts_member_bots": bool(row.get("accepts_member_bots")), "release": row.get("release") or "",
             "version": row.get("version") or "", "wanted_release": update.get("wanted_release") or "",
             "update": state, "readiness": level, "bots": len(row.get("bots") or []),
@@ -4886,7 +4886,7 @@ def computer_detail(row, section=None, offset=0):
                     result["truncated"][name] = {"shown": len(page), "total": len(items), "more": more(name, after)}
         if fits(result):
             return result
-    keep = {k: _bounded(row.get(k), 1, 50) for k in ("id", "label", "online", "last_seen", "release", "version")}
+    keep = {k: _bounded(row.get(k), 1, 50) for k in ("id", "label", "online", "last_seen_at", "release", "version")}
     if section:
         items = _computer_section(row, section) or []
         return {**keep, "section": section, "offset": offset, "total": len(items), "items": [],
@@ -4918,7 +4918,7 @@ def computers(api, args):
         if args.get("section"):
             raise ValueError("Name the computer whose section you want: `computer`")
         return {"computers": [computer_summary(r) for r in rows],
-                "services": [{"name": s.get("name"), "ok": not s.get("last_error"), "last_success": s.get("last_success")}
+                "services": [{"name": s.get("name"), "ok": not s.get("last_error"), "last_success": s.get("last_succeeded_at")}
                              for s in listing.get("services") or []],
                 "detail": "One computer in full: hub_computer_list computer=<label or id>"}
     match = [r for r in rows if wanted == r.get("id")] or [

@@ -22,7 +22,7 @@ def label(api, task_id, labels, token, expected=200, **extra):
 
 def refusals(api, slug):
     with api.app.state.store.read() as c:
-        return [(r[0], r[1]) for r in c.execute("SELECT rule, detail_json FROM refusals WHERE actor=?", ("bot:" + slug,))]
+        return [(r[0], r[1]) for r in c.execute("SELECT rule, detail FROM refusals WHERE actor=?", ("bot:" + slug,))]
 
 
 def state(api, slug):
@@ -165,7 +165,7 @@ def test_label_refusals_on_different_tasks_each_count(api):
             label(api, ticket["id"], ["qa"], token, expected=403)
     with api.app.state.store.read() as c:
         about = [json.loads(r[0]).get("task") for r in c.execute(
-            "SELECT detail_json FROM refusals WHERE actor='bot:cpo' AND rule='label' ORDER BY ts")]
+            "SELECT detail FROM refusals WHERE actor='bot:cpo' AND rule='label' ORDER BY ts")]
     assert about == [tickets[0]["id"]] * 2 + [tickets[1]["id"]] * 2, "the replayed refusal keeps its task"
 
 

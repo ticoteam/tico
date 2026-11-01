@@ -7,7 +7,7 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 const evidence = process.env.TICO_REVIEW_EVIDENCE;
 const row = (id, title, owner, review_state, privateMeeting = false) => ({id, title, owner, review_state, private: privateMeeting,
-  kind: 'meeting', status: 'done', client: privateMeeting ? 'tico-recorder' : null, source: privateMeeting ? 'granola' : 'zoom', can_edit: true, started: '2026-10-01T14:00:00Z',
+  kind: 'meeting', status: 'done', client: privateMeeting ? 'tico-recorder' : null, source: privateMeeting ? 'granola' : 'zoom', can_edit: true, started_at: '2026-10-01T14:00:00Z',
   notes: 'Review the plan and next steps.', turns: [{speaker: 'Sam', start_ms: 0, text: 'The plan is ready.'}],
   participants: [{name: 'Sam'}], outbox: {doc: [], task: [], feature: []}});
 async function open(browser, viewport, scheme, role = 'owner') {

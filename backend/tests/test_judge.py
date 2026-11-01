@@ -35,8 +35,8 @@ def fake(api):
 
 def events(api, actor):
     with api.app.state.store.read() as c:
-        return [(r["target"], json.loads(r["detail_json"])) for r in c.execute(
-            "SELECT target, detail_json FROM events WHERE action='judge.call' AND actor=? ORDER BY ts", (actor,))]
+        return [(r["target"], json.loads(r["detail"])) for r in c.execute(
+            "SELECT target, detail FROM events WHERE action='judge.call' AND actor=? ORDER BY ts", (actor,))]
 
 
 def test_a_person_or_a_bot_judges_and_the_audit_keeps_the_answers_not_the_state(api):
@@ -202,6 +202,6 @@ def test_a_caller_records_one_outcome_for_its_own_decision_call(api):
     # Another caller cannot write an outcome onto the bot's call.
     assert api.post("/api/v2/decisions/outcome", json=said, headers=headers()).status_code == 404
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT actor, target, detail_json FROM events WHERE action='decision.outcome'").fetchall()
+        rows = c.execute("SELECT actor, target, detail FROM events WHERE action='decision.outcome'").fetchall()
     assert [(a, t, json.loads(d)) for a, t, d in rows] == [
         ("bot:ops", asked["ref"], {"label": "mail-triage@1", "verdict": "reply 0.8", "action": "replied"})]

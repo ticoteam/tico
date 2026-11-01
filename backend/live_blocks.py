@@ -62,7 +62,7 @@ def _tasks(c, auth, who, attrs, base):
     if attrs.get("parent"):
         clauses.append("parent_id=?")
         args.append(attrs["parent"])
-    rows = c.execute("SELECT id,title FROM tasks WHERE " + " AND ".join(clauses) + " ORDER BY created LIMIT ?",
+    rows = c.execute("SELECT id,title FROM tasks WHERE " + " AND ".join(clauses) + " ORDER BY created_at LIMIT ?",
                      (*args, _limit(attrs.get("limit")))).fetchall()
     if not rows:
         return '<p class="tico-live-empty">Nothing waiting on you</p>'

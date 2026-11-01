@@ -18,8 +18,8 @@ def dev_ticket(api, owner="bot:cpo", requester="bot:coo"):
 def heard(api, bot):
     with api.app.state.store.read() as c:
         jobs = c.execute("SELECT count(*) FROM jobs WHERE bot=?", (bot,)).fetchone()[0]
-        notes = c.execute("SELECT count(*) FROM messages WHERE to_actor=? AND json_extract(refs_json,'$.quiet')=1 "
-                          "AND json_extract(refs_json,'$.rule') IS NOT NULL", ("bot:" + bot,)).fetchone()[0]
+        notes = c.execute("SELECT count(*) FROM messages WHERE to_actor=? AND json_extract(refs,'$.quiet')=1 "
+                          "AND json_extract(refs,'$.rule') IS NOT NULL", ("bot:" + bot,)).fetchone()[0]
     return jobs, notes
 
 

@@ -2,34 +2,34 @@
 MEETING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meetings (
  id TEXT PRIMARY KEY, title TEXT NOT NULL, owner TEXT NOT NULL,
- recorded_by TEXT, uploaded_by TEXT, metadata_json TEXT NOT NULL,
+ recorded_by TEXT, uploaded_by TEXT, metadata TEXT NOT NULL,
  transcript_original TEXT NOT NULL DEFAULT '', transcript_readable TEXT NOT NULL DEFAULT '',
  notes TEXT NOT NULL DEFAULT '', content_hash TEXT NOT NULL DEFAULT '',
- created TEXT NOT NULL, updated TEXT NOT NULL
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meeting_versions (
  id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
- content_hash TEXT NOT NULL, metadata_json TEXT NOT NULL, transcript_original TEXT NOT NULL,
- transcript_readable TEXT NOT NULL, notes TEXT NOT NULL, created TEXT NOT NULL,
+ content_hash TEXT NOT NULL, metadata TEXT NOT NULL, transcript_original TEXT NOT NULL,
+ transcript_readable TEXT NOT NULL, notes TEXT NOT NULL, created_at TEXT NOT NULL,
  UNIQUE(meeting_id, content_hash)
 );
 CREATE TABLE IF NOT EXISTS meeting_deliveries (
  meeting_id TEXT PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
  requested_by TEXT NOT NULL, sender_name TEXT NOT NULL, destination TEXT NOT NULL,
- instructions TEXT NOT NULL, attachments_json TEXT NOT NULL DEFAULT '[]',
+ instructions TEXT NOT NULL, attachments TEXT NOT NULL DEFAULT '[]',
  status TEXT NOT NULL DEFAULT 'pending', task_id TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
  requested_at TEXT NOT NULL, delivered_at TEXT
 );
 CREATE TABLE IF NOT EXISTS task_delegations (
  task_id TEXT NOT NULL REFERENCES tasks(id), delegate TEXT NOT NULL, requested_by TEXT NOT NULL,
- message_id TEXT PRIMARY KEY REFERENCES messages(id), expires TEXT NOT NULL
+ message_id TEXT PRIMARY KEY REFERENCES messages(id), expires_at TEXT NOT NULL
 );
 """
 
 MEETING_REVIEW_SCHEMA = """
 ALTER TABLE meetings ADD COLUMN review_state TEXT NOT NULL DEFAULT 'live'
  CHECK (review_state IN ('pending','live','dismissed'));
-UPDATE meetings SET metadata_json=json_set(metadata_json,'$.review_state','live','$.ready_announced',json('true'))
+UPDATE meetings SET metadata=json_set(metadata,'$.review_state','live','$.ready_announced',json('true'))
  WHERE review_state='live';
 CREATE INDEX IF NOT EXISTS meetings_review_owner ON meetings(review_state,owner COLLATE NOCASE);
 """
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS meeting_items (
  meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
  section TEXT NOT NULL CHECK (section IN ('doc','task','feature','decision','question')),  -- the last two: legacy rows, never listed
  text TEXT NOT NULL,
- detail_json TEXT NOT NULL DEFAULT '{}',
+ detail TEXT NOT NULL DEFAULT '{}',
  quote TEXT NOT NULL DEFAULT '',
  at_ms INTEGER,
  status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','pushed','dismissed')),
@@ -52,10 +52,10 @@ CREATE TABLE IF NOT EXISTS meeting_items (
  updated_by TEXT,
  pushed_at TEXT,
  result_ref TEXT,
- created TEXT NOT NULL,
- updated TEXT NOT NULL
+ created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS meeting_items_meeting ON meeting_items(meeting_id, section, created);
+CREATE INDEX IF NOT EXISTS meeting_items_meeting ON meeting_items(meeting_id, section, created_at);
 """
 
 # What the brain has already thought about one meeting (`backend/meeting_brain.py`). It lives in a
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS meeting_brain (
  last_error TEXT,
  error_at TEXT,
  final_at TEXT,
- updated TEXT NOT NULL
+ updated_at TEXT NOT NULL
 );
 """
 
@@ -85,9 +85,9 @@ CREATE TABLE IF NOT EXISTS meeting_comments (
  author TEXT NOT NULL,
  text TEXT NOT NULL,
  at_ms INTEGER,
- created TEXT NOT NULL
+ created_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS meeting_comments_meeting ON meeting_comments(meeting_id, created);
+CREATE INDEX IF NOT EXISTS meeting_comments_meeting ON meeting_comments(meeting_id, created_at);
 """
 
 # An outside activity may point at a recording already captured in Tico. Keep each transcript
@@ -96,7 +96,7 @@ RECORDING_SOURCES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS recording_source_refs (
  source TEXT NOT NULL, resource_type TEXT NOT NULL, external_id TEXT NOT NULL,
  meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
- created TEXT NOT NULL,
+ created_at TEXT NOT NULL,
  PRIMARY KEY(source,resource_type,external_id)
 );
 CREATE INDEX IF NOT EXISTS recording_source_meeting ON recording_source_refs(meeting_id);
@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS recording_transcripts (
  source TEXT NOT NULL, resource_type TEXT NOT NULL, external_id TEXT NOT NULL,
  transcript_index INTEGER NOT NULL DEFAULT 0,
  content_hash TEXT NOT NULL, source_updated_at TEXT NOT NULL,
- turns_json TEXT NOT NULL, transcript_text TEXT NOT NULL, summary_text TEXT NOT NULL DEFAULT '',
+ turns TEXT NOT NULL, transcript_text TEXT NOT NULL, summary_text TEXT NOT NULL DEFAULT '',
  imported_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS recording_transcripts_meeting ON recording_transcripts(meeting_id,id DESC);
@@ -128,13 +128,13 @@ CREATE TABLE IF NOT EXISTS live_meetings (
  cooldown_ms INTEGER NOT NULL DEFAULT 60000,
  threshold REAL NOT NULL DEFAULT 0.7,
  imported_meeting_id TEXT,
- created TEXT NOT NULL,
- updated TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL,
  started_at TEXT NOT NULL,
  ended_at TEXT,
  UNIQUE(owner_actor,client_id)
 );
-CREATE INDEX IF NOT EXISTS live_meetings_state ON live_meetings(state,updated DESC);
+CREATE INDEX IF NOT EXISTS live_meetings_state ON live_meetings(state,updated_at DESC);
 CREATE TABLE IF NOT EXISTS live_meeting_humans (
  meeting_id TEXT NOT NULL REFERENCES live_meetings(id) ON DELETE CASCADE,
  actor TEXT NOT NULL,
@@ -157,7 +157,7 @@ CREATE TABLE IF NOT EXISTS live_meeting_chunks (
  start_ms INTEGER NOT NULL,
  end_ms INTEGER NOT NULL,
  text TEXT NOT NULL,
- created TEXT NOT NULL,
+ created_at TEXT NOT NULL,
  PRIMARY KEY(meeting_id,seq)
 );
 CREATE INDEX IF NOT EXISTS live_meeting_chunks_time ON live_meeting_chunks(meeting_id,start_ms,seq);
@@ -170,7 +170,7 @@ CREATE TABLE IF NOT EXISTS live_meeting_chunk_versions (
  end_ms INTEGER NOT NULL,
  text TEXT NOT NULL,
  authored_by TEXT NOT NULL,
- created TEXT NOT NULL,
+ created_at TEXT NOT NULL,
  PRIMARY KEY(meeting_id,seq,revision)
 );
 CREATE TABLE IF NOT EXISTS live_meeting_chat (
@@ -182,16 +182,16 @@ CREATE TABLE IF NOT EXISTS live_meeting_chat (
  at_ms INTEGER,
  transcript_seq INTEGER,
  turn_id TEXT,
- created TEXT NOT NULL
+ created_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS live_meeting_chat_order ON live_meeting_chat(meeting_id,created,id);
+CREATE INDEX IF NOT EXISTS live_meeting_chat_order ON live_meeting_chat(meeting_id,created_at,id);
 CREATE UNIQUE INDEX IF NOT EXISTS live_meeting_chat_turn ON live_meeting_chat(turn_id) WHERE turn_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS live_meeting_events (
  meeting_id TEXT NOT NULL REFERENCES live_meetings(id) ON DELETE CASCADE,
  event_id INTEGER NOT NULL,
  type TEXT NOT NULL,
- payload_json TEXT NOT NULL,
- created TEXT NOT NULL,
+ payload TEXT NOT NULL,
+ created_at TEXT NOT NULL,
  PRIMARY KEY(meeting_id,event_id)
 );
 CREATE TABLE IF NOT EXISTS live_meeting_windows (
@@ -201,9 +201,9 @@ CREATE TABLE IF NOT EXISTS live_meeting_windows (
  end_ms INTEGER NOT NULL,
  status TEXT NOT NULL CHECK (status IN ('deciding','complete','interrupted')),
  outcome TEXT NOT NULL DEFAULT '',
- trace_json TEXT NOT NULL DEFAULT '{}',
- started TEXT NOT NULL,
- finished TEXT,
+ trace TEXT NOT NULL DEFAULT '{}',
+ started_at TEXT NOT NULL,
+ finished_at TEXT,
  PRIMARY KEY(meeting_id,window_index)
 );
 CREATE TABLE IF NOT EXISTS live_meeting_turns (
@@ -215,12 +215,12 @@ CREATE TABLE IF NOT EXISTS live_meeting_turns (
  transcript_seq INTEGER,
  status TEXT NOT NULL CHECK (status IN ('pending','claimed','replied','skipped')),
  skip_reason TEXT NOT NULL DEFAULT '',
- created TEXT NOT NULL,
+ created_at TEXT NOT NULL,
  claimed_at TEXT,
  replied_at TEXT,
  UNIQUE(meeting_id,source_key,bot)
 );
-CREATE INDEX IF NOT EXISTS live_meeting_turns_pending ON live_meeting_turns(meeting_id,bot,status,created);
+CREATE INDEX IF NOT EXISTS live_meeting_turns_pending ON live_meeting_turns(meeting_id,bot,status,created_at);
 """
 
 # Per-meeting routing limits are configurable from the connect request. Keep this separate from
@@ -249,12 +249,12 @@ CREATE TABLE IF NOT EXISTS live_meeting_chat_routes (
  chat_id TEXT NOT NULL REFERENCES live_meeting_chat(id) ON DELETE CASCADE,
  status TEXT NOT NULL CHECK (status IN ('deciding','complete')),
  outcome TEXT NOT NULL DEFAULT '',
- trace_json TEXT NOT NULL DEFAULT '{}',
- started TEXT NOT NULL,
- finished TEXT,
+ trace TEXT NOT NULL DEFAULT '{}',
+ started_at TEXT NOT NULL,
+ finished_at TEXT,
  PRIMARY KEY(meeting_id,chat_id)
 );
-CREATE INDEX IF NOT EXISTS live_meeting_chat_routes_status ON live_meeting_chat_routes(meeting_id,status,started);
+CREATE INDEX IF NOT EXISTS live_meeting_chat_routes_status ON live_meeting_chat_routes(meeting_id,status,started_at);
 """
 
 # A live meeting is private to its owner, the people the owner adds and attached bots, or open to the

@@ -62,7 +62,7 @@ def test_a_loose_message_says_what_kind_of_sender_started_its_run(api):
 
 
 def test_a_run_that_failed_before_starting_does_not_claim_later_messages(api):
-    """An attempt that failed on its computer before it started has no `finished`; it must not stay open and fold
+    """An attempt that failed on its computer before it started has no `finished_at`; it must not stay open and fold
     every later message from that bot."""
     r = runner(api)
     assign(api, r, "ops")
@@ -71,7 +71,7 @@ def test_a_run_that_failed_before_starting_does_not_claim_later_messages(api):
         H.say(c, "bot:finance", "bot:ops", "Please tell Ana the census is delivered.", refs={"needs_action": True})
     failed = claim(api, r)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='failed', started=NULL, finished=NULL WHERE id=?", (failed["id"],))
+        c.execute("UPDATE attempts SET state='failed', started_at=NULL, finished_at=NULL WHERE id=?", (failed["id"],))
         loose = H.say(c, "bot:ops", "human:ana", "The census is delivered.")
     asked = post(api, "chat/ops", {"text": "What is next?"})
     attempt = claim(api, r)

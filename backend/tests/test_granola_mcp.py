@@ -125,7 +125,7 @@ def test_registration_device_encryption_status_and_disconnect(api, caplog):
     with api.app.state.store.read() as c:
         row = c.execute("SELECT * FROM granola_connections WHERE actor='human:ana'").fetchone()
         assert b"fake-refresh-sensitive" not in bytes(row["ciphertext"])
-        assert "fake-" not in row["metadata_json"]
+        assert "fake-" not in row["metadata"]
         assert c.execute("SELECT count(*) FROM credentials WHERE id=?", (row["id"],)).fetchone()[0] == 0
     for path in (BASE, BASE + "/connect/status", "/api/v2/credentials"):
         text = api.get(path, headers=headers("ana-test")).text
@@ -147,7 +147,7 @@ def test_free_sync_dedup_private_notes_and_person_isolation(api):
     assert status["last_sync"] and status["plan_hint"] == "free" and not status["last_error"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM meetings").fetchone()[0] == 1
-        row = c.execute("SELECT metadata_json FROM meetings WHERE id=?", (existing["id"],)).fetchone()
+        row = c.execute("SELECT metadata FROM meetings WHERE id=?", (existing["id"],)).fetchone()
         assert json.loads(row[0])["private"]
     record = api.get("/api/meetings/" + existing["id"], headers=headers("ana-test")).json()
     assert record["notes"] == "API notes" and "Never import this" not in json.dumps(record)
@@ -257,7 +257,7 @@ def test_inactive_person_connection_deleted_and_revoked(api):
     provider = Provider(api)
     provider.connect()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('people',?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+        c.execute("INSERT INTO registry_metadata(key,value) VALUES('people',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                   (json.dumps({"people": [{"id": "ana", field: value}]}),))
     provider.sync()
     assert provider.service.load("human:ana") is None

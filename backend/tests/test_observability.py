@@ -201,7 +201,7 @@ def test_operator_test_error_beside_a_docker_server(tmp_path, recording, monkeyp
     """As `docker compose exec server python -m backend.observability test`: no TICO_DB, no TICO_ENVIRONMENT_ID."""
     from backend import observability
     with sqlite3.connect(tmp_path / "hub.sqlite") as c:
-        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT)")
+        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
         c.execute("INSERT INTO registry_metadata VALUES('docker-environment-id', '\"acme-7f3a\"')")
     for name in ("TICO_DB", "TICO_ENVIRONMENT_ID", "TICO_INSTANCE_NAME", "TICO_RELEASE", "TICO_REHEARSAL"):
         monkeypatch.delenv(name, raising=False)

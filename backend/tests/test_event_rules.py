@@ -19,8 +19,8 @@ def rule(api, by="human:ben", scope_kind="team", scope_id="", event="webhook.rec
          params=None):
     """A row in the rules table, as the engine reads it."""
     row = {"id": "rule_" + H.new_id()[:8], "scope_kind": scope_kind, "scope_id": scope_id, "event": event,
-           "when_json": json.dumps(when or {}), "then_outcome": then, "params_json": json.dumps(params or {}),
-           "created_by": by, "created": H.now(), "updated": H.now()}
+           "condition": json.dumps(when or {}), "then_outcome": then, "params": json.dumps(params or {}),
+           "created_by": by, "created_at": H.now(), "updated_at": H.now()}
     with api.app.state.store.transaction() as c:
         c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
     return {"rule": {**row, "params": params or {}}}
@@ -49,7 +49,7 @@ def test_a_team_wake_rule_queues_a_job_with_the_rendered_text_and_the_call_in_it
             (made["id"], "wake_bot", "cpo", True)]
         assert jobs(c, "cpo") == 1
         message = last_message(c, "cpo")
-        refs = json.loads(message["refs_json"])
+        refs = json.loads(message["refs"])
         assert "New order.created: order 42 from Buyer" in message["body"]
         assert {k: refs[k] for k in ("trigger", "delivery", "type", "rule_id", "wake")} == {
             "trigger": "shop", "delivery": "d1", "type": "order.created", "rule_id": made["id"],
@@ -105,7 +105,7 @@ def test_an_error_does_nothing_and_leaves_a_rule_event_error(api, monkeypatch):
     assert judge(api) == []
     with api.app.state.store.transaction() as c:
         assert jobs(c, "cpo") == 0
-        err = c.execute("SELECT detail_json FROM events WHERE action='rule.event_error'").fetchone()
+        err = c.execute("SELECT detail FROM events WHERE action='rule.event_error'").fetchone()
         assert json.loads(err[0])["delivery"] == "d1"
         assert not c.execute("SELECT 1 FROM rule_events_seen").fetchone()          # a retry may try again
     monkeypatch.undo()

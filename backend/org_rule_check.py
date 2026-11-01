@@ -76,15 +76,15 @@ OPERATIONS = {
 DRAFT_AS = {"message": "message", "comment": "comment", "task": "task_create", "assign": "task_owner"}
 
 SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS org_rule_verdicts(digest TEXT PRIMARY KEY, broken_json TEXT NOT NULL, "
-    "call_id TEXT, created TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS org_rule_verdicts_created ON org_rule_verdicts(created)",
+    "CREATE TABLE IF NOT EXISTS org_rule_verdicts(digest TEXT PRIMARY KEY, broken TEXT NOT NULL, "
+    "call_id TEXT, created_at TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS org_rule_verdicts_created ON org_rule_verdicts(created_at)",
     "CREATE INDEX IF NOT EXISTS org_rule_holds_task ON org_rule_holds(task_id) WHERE task_id IS NOT NULL",
     # Mails a bot's connector sent after a check that got no answer from Tico, by the id the connector gave each:
     # one `rules.unchecked` per id, however often it is reported (`record_misses`).
-    "CREATE TABLE IF NOT EXISTS org_rule_misses(author TEXT NOT NULL, id TEXT NOT NULL, created TEXT NOT NULL, "
+    "CREATE TABLE IF NOT EXISTS org_rule_misses(author TEXT NOT NULL, id TEXT NOT NULL, created_at TEXT NOT NULL, "
     "PRIMARY KEY (author, id))",
-    "CREATE INDEX IF NOT EXISTS org_rule_misses_created ON org_rule_misses(created)",
+    "CREATE INDEX IF NOT EXISTS org_rule_misses_created ON org_rule_misses(created_at)",
 )
 MISSES_MAX = 100              # ids one report carries (connectors/mail keeps at most this many per bot)
 MISSES_KEPT_DAYS = 90         # how long a reported id is remembered, so a late repeat still counts once
@@ -182,7 +182,7 @@ def hides_run(c, attempt):
     if not attempt:
         return False
     try:
-        if json.loads(attempt["result_json"] or "{}").get("held_reply"):
+        if json.loads(attempt["result"] or "{}").get("held_reply"):
             return True
     except (TypeError, ValueError):
         pass
@@ -322,7 +322,7 @@ def preflight(store, primary, who, operation, output, recipients=(), context=Non
                        "digest": key, "broken": [], "outcome": "pass", "error": None, "call": None, "cached": False,
                        "draft": draft, "matched": matched, "attempt_id": getattr(who, "attempt_id", "") or "",
                        "context": context or {}, "obj": obj or ""}
-            hit = c.execute("SELECT broken_json, call_id FROM org_rule_verdicts WHERE digest=?", (key,)).fetchone()
+            hit = c.execute("SELECT broken, call_id FROM org_rule_verdicts WHERE digest=?", (key,)).fetchone()
             if hit:
                 broken, unchecked = _cached(hit[0])
                 return {**verdict, "broken": broken, "outcome": "broken" if broken else "pass", "cached": True,
@@ -367,9 +367,9 @@ def preflight(store, primary, who, operation, output, recipients=(), context=Non
                 # cache still records them unchecked.
                 unchecked = [r["id"] for r in rules[J.MAX_QUESTIONS:]]
                 stored = {"broken": broken, "unchecked": unchecked} if unchecked else broken
-                c.execute("INSERT OR REPLACE INTO org_rule_verdicts(digest, broken_json, call_id, created) "
+                c.execute("INSERT OR REPLACE INTO org_rule_verdicts(digest, broken, call_id, created_at) "
                           "VALUES(?,?,?,?)", (key, json.dumps(stored), call["id"], H.now()))
-                c.execute("DELETE FROM org_rule_verdicts WHERE created<?", (H.shift(H.now(), days=-CACHE_DAYS),))
+                c.execute("DELETE FROM org_rule_verdicts WHERE created_at<?", (H.shift(H.now(), days=-CACHE_DAYS),))
         if len(rules) > J.MAX_QUESTIONS and broken is not None:
             verdict["unchecked_rules"] = [r["id"] for r in rules[J.MAX_QUESTIONS:]]
         if broken is None:
@@ -441,8 +441,8 @@ def _tell_bot(c, author, text):
     """A note on the bot's next run, as the keeper (a plain row: a paused bot's note waits, nothing is refused)."""
     if not H.is_bot(author):
         return
-    row = {"id": H.new_id(), "from_actor": H.KEEPER, "to_actor": author, "body": text[:H.NOTE_MAX], "created": H.now()}
-    c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES (:id,:from_actor,:to_actor,:body,:created)",
+    row = {"id": H.new_id(), "from_actor": H.KEEPER, "to_actor": author, "body": text[:H.NOTE_MAX], "created_at": H.now()}
+    c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES (:id,:from_actor,:to_actor,:body,:created_at)",
               row)
     H.event(c, H.KEEPER, "note.create", row["id"], {"to": author, "org_rule": True})
 
@@ -565,9 +565,9 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None):
     task_id = None
     if mode == "escalate":
         if repeat:
-            row = c.execute("SELECT task_id FROM org_rule_holds WHERE author=? AND created>=? AND task_id IS NOT NULL "
-                            "AND json_extract(verdict_json,'$.rule')=? AND json_extract(verdict_json,'$.repeat')=1 "
-                            "ORDER BY created LIMIT 1", (author, _day(), strictest["id"])).fetchone()
+            row = c.execute("SELECT task_id FROM org_rule_holds WHERE author=? AND created_at>=? AND task_id IS NOT NULL "
+                            "AND json_extract(verdict,'$.rule')=? AND json_extract(verdict,'$.repeat')=1 "
+                            "ORDER BY created_at LIMIT 1", (author, _day(), strictest["id"])).fetchone()
             task_id = row[0] if row else None
         if task_id is None and reviewer:
             task_id = _review_task(c, hold_id, author, strictest, reviewer)
@@ -584,8 +584,8 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None):
               "too_large": too_large, "cached": verdict["cached"], "call": verdict.get("call"),
               "digest": verdict["digest"], "versions": {r["id"]: r["version"] for r in verdict["rules"]},
               "matched": [list(x) for x in matched]}
-    c.execute("INSERT INTO org_rule_holds(id, operation, payload_json, author, destinations_json, rule_ids_json, "
-              "verdict_json, nonce, state, reviewer, task_id, created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
+              "verdict, nonce, state, reviewer, task_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
               (hold_id, operation, json.dumps(stored, default=str), author, json.dumps(verdict["recipients"]),
                json.dumps([r["id"] for r in broken]), json.dumps(detail), nonce, "held", reviewer, task_id, H.now()))
     action = "rules.escalated" if mode == "escalate" else "rules.blocked"
@@ -688,10 +688,10 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
     role = role or _reader(who, hold, c, auth)
     if not role:
         raise Problem("not_found", "There is no hold " + hold["id"], 404)
-    stored = {} if summary else json.loads(hold["payload_json"] or "{}")
-    verdict = json.loads(hold["verdict_json"] or "{}")
-    rule_ids = json.loads(hold["rule_ids_json"] or "[]")
-    destinations = json.loads(hold["destinations_json"] or "[]")
+    stored = {} if summary else json.loads(hold["payload"] or "{}")
+    verdict = json.loads(hold["verdict"] or "{}")
+    rule_ids = json.loads(hold["rule_ids"] or "[]")
+    destinations = json.loads(hold["destinations"] or "[]")
     if summary:
         # A list row is bounded whatever the hold names: a few short rule previews and names, and the counts.
         rule_ids, destinations = rule_ids[:SUMMARY_RULES], destinations[:SUMMARY_NAMES]
@@ -707,12 +707,12 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
            "outcome": "escalated" if verdict.get("outcome") == "escalate" else "blocked", "rules": rules,
            "to": [cut(n) for n in _names(c, destinations)],
            "reviewer": hold["reviewer"], "reviewer_name": cut(reviewer_name), "task_id": hold["task_id"],
-           "created": hold["created"], "decided_at": hold["decided_at"], "decided_by": hold["decided_by"],
+           "created_at": hold["created_at"], "decided_at": hold["decided_at"], "decided_by": hold["decided_by"],
            "can_send": role == "reviewer" and hold["state"] == "held" and hold["operation"] in REPLAY}
     if summary:
         out["appealed"] = bool(hold["why"])
-        out["rules_count"] = len(json.loads(hold["rule_ids_json"] or "[]"))
-        out["to_count"] = len(json.loads(hold["destinations_json"] or "[]"))
+        out["rules_count"] = len(json.loads(hold["rule_ids"] or "[]"))
+        out["to_count"] = len(json.loads(hold["destinations"] or "[]"))
         return out
     text = stored.get("text") or ""
     out["text"] = text[:HOLD_TEXT_CHARS]
@@ -751,8 +751,8 @@ def holds_for_task(c, who, task_id, cursor=None, limit=HOLD_LIST_MAX, auth=None)
         if not created or not hid:
             raise Problem("validation", "That cursor is not valid", 422)
         after = (created, hid)
-    query = c.execute(f"SELECT * FROM org_rule_holds WHERE task_id=? AND {where} AND (created>? OR (created=? AND "
-                      "id>?)) ORDER BY created, id", (task_id, *args, after[0], after[0], after[1]))
+    query = c.execute(f"SELECT * FROM org_rule_holds WHERE task_id=? AND {where} AND (created_at>? OR (created_at=? AND "
+                      "id>?)) ORDER BY created_at, id", (task_id, *args, after[0], after[0], after[1]))
     rows = []
     for row in query:                       # one row past the page says there is more
         role = _reader(who, dict(row), c, auth) if fallback else None
@@ -773,7 +773,7 @@ def holds_for_task(c, who, task_id, cursor=None, limit=HOLD_LIST_MAX, auth=None)
         used += size
     more = len(out) < len(rows)
     last = out[-1] if out else None
-    return out, (f"{last['created']}|{last['id']}" if more and last else None)
+    return out, (f"{last['created_at']}|{last['id']}" if more and last else None)
 
 
 def _finish_task(c, hold):
@@ -813,26 +813,26 @@ def keep(c, who, hold_id, auth=None):
 def bot_identity(hold):
     """The bot the held write runs as on Send anyway, with the run it came from (its private tasks and meetings)."""
     from .auth import Identity
-    stored = json.loads(hold["payload_json"] or "{}")
+    stored = json.loads(hold["payload"] or "{}")
     attempt = (stored.get("provenance") or {}).get("attempt_id") or ""
     return Identity(hold["author"], "bot", agent="org-rule-hold", attempt_id=attempt)
 
 
 def hold_matched(hold):
     """The (rule id, version) pairs that matched when the output was held."""
-    verdict = json.loads(hold["verdict_json"] or "{}")
+    verdict = json.loads(hold["verdict"] or "{}")
     if verdict.get("matched") is not None:
         return {tuple(x) for x in verdict["matched"]}
     return {(rid, v) for rid, v in (verdict.get("versions") or {}).items()}
 
 
 def current_matched(c, hold):
-    return {(r["id"], r["version"]) for r in R.matching(c, hold["author"], json.loads(hold["destinations_json"] or "[]"))}
+    return {(r["id"], r["version"]) for r in R.matching(c, hold["author"], json.loads(hold["destinations"] or "[]"))}
 
 
 def hold_input(hold):
     """What a hold's check was shown besides its text and audience: its context and its object."""
-    stored = json.loads(hold["payload_json"] or "{}")
+    stored = json.loads(hold["payload"] or "{}")
     return stored.get("input") or {"context": {}, "obj": ""}
 
 
@@ -851,7 +851,7 @@ def current_audience(c, hold, audience=None):
     fn = (audience if audience is not None else AUDIENCE).get(hold["operation"])
     if fn is None:
         return None
-    stored = json.loads(hold["payload_json"] or "{}")
+    stored = json.loads(hold["payload"] or "{}")
     try:
         found = fn(c, bot_identity(hold), stored.get("replay") or {})
     except Problem:
@@ -863,7 +863,7 @@ def _same_audience(c, hold, audience=None):
     """Refuse Send anyway once the held write would reach someone else than its check was for (a task handed to a
     new owner since): a rule's With is matched on the actual recipients, so that is a new check."""
     now = current_audience(c, hold, audience)
-    if now is not None and now != sorted(json.loads(hold["destinations_json"] or "[]")):
+    if now is not None and now != sorted(json.loads(hold["destinations"] or "[]")):
         raise Problem("changed", "Who this goes to changed since it was held; it stays held. Write it again to "
                       "check it.", 409)
 
@@ -878,10 +878,10 @@ def recheck(store, primary, hold, audience=None):
         now = current_matched(c, hold)
     if now <= hold_matched(hold):
         return sorted(now), None
-    stored = json.loads(hold["payload_json"] or "{}")
+    stored = json.loads(hold["payload"] or "{}")
     shown = hold_input(hold)
     verdict = preflight(store, primary, bot_identity(hold), hold["operation"], stored.get("text") or "",
-                        json.loads(hold["destinations_json"] or "[]"), context=shown.get("context") or None,
+                        json.loads(hold["destinations"] or "[]"), context=shown.get("context") or None,
                         obj=shown.get("obj") or "", skip=hold_matched(hold))
     return sorted(now), verdict
 
@@ -920,7 +920,7 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
     fn = (table or REPLAY).get(hold["operation"])
     if fn is None:
         raise Problem("unsupported", "This hold can't be sent from here", 409)
-    stored = json.loads(hold["payload_json"] or "{}")
+    stored = json.loads(hold["payload"] or "{}")
     if "path" not in (stored.get("provenance") or {}):
         raise Problem("recheck", "This hold is from an older version and can't be sent as it is; it stays held. "
                       "Write it again to check it.", 409)
@@ -949,7 +949,7 @@ def appeal(c, who, hold_id, why):
     if not hold["reviewer"]:
         raise Problem("no_reviewer", "Nobody on the team can review this hold", 409)
     if not task_id:
-        rid = (json.loads(hold["verdict_json"] or "{}")).get("rule")
+        rid = (json.loads(hold["verdict"] or "{}")).get("rule")
         rule = c.execute("SELECT id, text FROM org_rules WHERE id=?", (rid,)).fetchone()
         task_id = _review_task(c, hold_id, hold["author"], dict(rule) if rule else {"text": "a rule"},
                                hold["reviewer"], appeal=True)
@@ -989,16 +989,16 @@ def company(c):
 def mail_approved(c, author, key):
     """A held mail the reviewer chose to send anyway, not yet sent: the next identical check passes it, once."""
     row = c.execute("SELECT * FROM org_rule_holds WHERE author=? AND operation='mail' AND state='sent' "
-                    "AND json_extract(payload_json,'$.replay.mail_digest')=? "
-                    "AND json_extract(verdict_json,'$.used') IS NULL ORDER BY decided_at LIMIT 1",
+                    "AND json_extract(payload,'$.replay.mail_digest')=? "
+                    "AND json_extract(verdict,'$.used') IS NULL ORDER BY decided_at LIMIT 1",
                     (author, key)).fetchone()
     return dict(row) if row else None
 
 
 def claim_mail(c, hold_id):
     """Spend a mail approval inside the write: only one request ever changes the row."""
-    return c.execute("UPDATE org_rule_holds SET verdict_json=json_set(verdict_json,'$.used',1) WHERE id=? "
-                     "AND json_extract(verdict_json,'$.used') IS NULL", (hold_id,)).rowcount == 1
+    return c.execute("UPDATE org_rule_holds SET verdict=json_set(verdict,'$.used',1) WHERE id=? "
+                     "AND json_extract(verdict,'$.used') IS NULL", (hold_id,)).rowcount == 1
 
 
 def mail_warning_line(gate):
@@ -1010,7 +1010,7 @@ def open_mail_hold(c, author, key):
     """The hold already waiting on this exact mail, if any: a draft sent again while it waits is that hold, not a new
     one (one review task per mail)."""
     row = c.execute("SELECT * FROM org_rule_holds WHERE author=? AND operation='mail' AND state='held' "
-                    "AND json_extract(payload_json,'$.replay.mail_digest')=? ORDER BY created DESC LIMIT 1",
+                    "AND json_extract(payload,'$.replay.mail_digest')=? ORDER BY created_at DESC LIMIT 1",
                     (author, key)).fetchone()
     return dict(row) if row else None
 
@@ -1020,9 +1020,9 @@ def held_again(c, hold, verdict=None):
     attempt counts as a block of the hold's rule toward the repeats rule, and the third escalates that same hold."""
     if verdict is not None:
         hold = _blocked_again(c, hold, verdict)
-    verdict = json.loads(hold["verdict_json"] or "{}")
+    verdict = json.loads(hold["verdict"] or "{}")
     rules = []
-    for rid in json.loads(hold["rule_ids_json"] or "[]")[:SUMMARY_RULES]:
+    for rid in json.loads(hold["rule_ids"] or "[]")[:SUMMARY_RULES]:
         row = c.execute("SELECT id, text FROM org_rules WHERE id=?", (rid,)).fetchone()
         if row:
             rules.append(dict(row))
@@ -1034,24 +1034,24 @@ def held_again(c, hold, verdict=None):
 def _blocked_again(c, hold, verdict):
     """One more blocked attempt at a held mail: recorded as a block of its rule; the bot's third block of that rule
     today escalates the hold (a review task, the day's repeat task reused). The hold row comes back as it is now."""
-    detail = json.loads(hold["verdict_json"] or "{}")
+    detail = json.loads(hold["verdict"] or "{}")
     rid, author = detail.get("rule"), hold["author"]
     if detail.get("outcome") != "block" or not rid:
         return hold
-    rules = json.loads(hold["rule_ids_json"] or "[]")
+    rules = json.loads(hold["rule_ids"] or "[]")
     if _repeats(c, author, rid) < REPEAT_BLOCKS - 1:
         H.event(c, author, "rules.blocked", "org_rule:" + rid, {
             "hold": hold["id"], "operation": "mail", "rules": rules, "cached": bool(verdict.get("cached")),
             "reviewer": hold["reviewer"], "again": True})
         return hold
-    row = c.execute("SELECT task_id FROM org_rule_holds WHERE author=? AND created>=? AND task_id IS NOT NULL "
-                    "AND json_extract(verdict_json,'$.rule')=? AND json_extract(verdict_json,'$.repeat')=1 "
-                    "ORDER BY created LIMIT 1", (author, _day(), rid)).fetchone()
+    row = c.execute("SELECT task_id FROM org_rule_holds WHERE author=? AND created_at>=? AND task_id IS NOT NULL "
+                    "AND json_extract(verdict,'$.rule')=? AND json_extract(verdict,'$.repeat')=1 "
+                    "ORDER BY created_at LIMIT 1", (author, _day(), rid)).fetchone()
     task_id = hold["task_id"] or (row[0] if row else None)
     if task_id is None and hold["reviewer"]:
         rule = c.execute("SELECT id, text FROM org_rules WHERE id=?", (rid,)).fetchone()
         task_id = _review_task(c, hold["id"], author, dict(rule) if rule else {"text": "a rule"}, hold["reviewer"])
-    c.execute("UPDATE org_rule_holds SET verdict_json=json_set(verdict_json,'$.outcome','escalate','$.repeat',1), "
+    c.execute("UPDATE org_rule_holds SET verdict=json_set(verdict,'$.outcome','escalate','$.repeat',1), "
               "task_id=? WHERE id=?", (task_id, hold["id"]))
     H.event(c, author, "rules.escalated", "org_rule:" + rid, {
         "hold": hold["id"], "operation": "mail", "rules": rules, "cached": bool(verdict.get("cached")),
@@ -1061,8 +1061,8 @@ def _blocked_again(c, hold, verdict):
 
 def supersede_mail(c, hold_id):
     """An approval a newer rule held again is spent: the new hold's Send anyway is the approval that counts."""
-    c.execute("UPDATE org_rule_holds SET verdict_json=json_set(verdict_json,'$.used','superseded') WHERE id=? "
-              "AND json_extract(verdict_json,'$.used') IS NULL", (hold_id,))
+    c.execute("UPDATE org_rule_holds SET verdict=json_set(verdict,'$.used','superseded') WHERE id=? "
+              "AND json_extract(verdict,'$.used') IS NULL", (hold_id,))
 
 
 @replayer("mail")
@@ -1120,7 +1120,7 @@ def keep_miss(c, author, check_id):
     """The mail check `check_id` (its Idempotency-Key) is counted unchecked for this bot: a later report of the same
     id counts nothing. Inside the write that counted it."""
     if check_id:
-        return c.execute("INSERT OR IGNORE INTO org_rule_misses(author, id, created) VALUES(?,?,?)",
+        return c.execute("INSERT OR IGNORE INTO org_rule_misses(author, id, created_at) VALUES(?,?,?)",
                          (author, check_id, H.now())).rowcount == 1
     return False
 
@@ -1137,11 +1137,11 @@ def record_misses(c, author, ids):
     empty: an id says nothing of whom the mail went to), up to MISSES_DAY_MAX a UTC day. An id not counted is not
     kept. Every id is taken (the connector forgets them on the 2xx). Ids older than MISSES_KEPT_DAYS are forgotten."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=MISSES_KEPT_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
-    c.execute("DELETE FROM org_rule_misses WHERE created<?", (cutoff,))
+    c.execute("DELETE FROM org_rule_misses WHERE created_at<?", (cutoff,))
     counted = on(c) and bool(R.matching(c, author))
     room = MISSES_DAY_MAX - c.execute(
         "SELECT count(*) FROM events WHERE action='rules.unchecked' AND actor=? AND ts>=? "
-        "AND json_extract(detail_json,'$.reason')='connector'", (author, _day())).fetchone()[0] if counted else 0
+        "AND json_extract(detail,'$.reason')='connector'", (author, _day())).fetchone()[0] if counted else 0
     known, recorded, over = [], 0, 0
     for miss in ids:
         if counted and recorded < room:
@@ -1353,7 +1353,7 @@ def install(app, store, auth, mutate):
             # have for the original write (the rules it was held on are not asked again).
             check = recheck(store, app.state.judge, hold, audience)
             if hold["operation"] in prepare:
-                stored = json.loads(hold["payload_json"] or "{}")
+                stored = json.loads(hold["payload"] or "{}")
                 try:
                     ingest = prepare[hold["operation"]](store, bot_identity(hold), stored.get("replay") or {})
                 except Exception as exc:  # noqa: BLE001 - ask ingest's own preflight never stops the send

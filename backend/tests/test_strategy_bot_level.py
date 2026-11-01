@@ -442,7 +442,7 @@ def test_at_upgrade_a_due_monday_note_the_old_level_1_started_never_fires(api):
         routines.update(c, H.KEEPER, REVIEW, {"enabled": True})
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (strategy_bot.KEY, json.dumps(
             {"on": True, "level": 1, "review_armed": H.now(), "review_settled": True})))
-        c.execute("UPDATE schedules SET next_due=NULL, last_fired='2026-09-01T00:00:00.000000Z' WHERE id=?", (REVIEW,))
+        c.execute("UPDATE schedules SET next_due=NULL, last_fired_at='2026-09-01T00:00:00.000000Z' WHERE id=?", (REVIEW,))
         strategy_bot.migrate(c)                                                   # as the server does at startup
     assert not review_enabled(api)
     Scheduler(store, api.app.state.execution).tick(datetime(2026, 9, 14, 17, tzinfo=timezone.utc))

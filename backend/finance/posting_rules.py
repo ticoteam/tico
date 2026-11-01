@@ -19,8 +19,8 @@ CONTROL_SUBTYPES = ("payable", "receivable")
 
 
 def rule_of(row: Any) -> AP.PostingRule:
-    return AP.PostingRule(str(row["id"]), str(row["name"]), SK.loads(row["when_json"]),
-                          AP.parse_posting(SK.loads(row["outcome_json"])), int(row["priority"]))
+    return AP.PostingRule(str(row["id"]), str(row["name"]), SK.loads(row["condition"]),
+                          AP.parse_posting(SK.loads(row["outcome"])), int(row["priority"]))
 
 
 def rules(ctx: Ctx) -> list[AP.PostingRule]:

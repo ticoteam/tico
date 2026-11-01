@@ -58,7 +58,7 @@ def configs(c, slugs=None):
 
 
 def metadata(c, key):
-    found = rows(c, 'SELECT value_json FROM registry_metadata WHERE key=?', (key,))
+    found = rows(c, 'SELECT value FROM registry_metadata WHERE key=?', (key,))
     return found[0] if found else None
 
 

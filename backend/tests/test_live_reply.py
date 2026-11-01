@@ -66,7 +66,7 @@ def test_a_follow_up_says_which_run_took_it_and_the_reply_lists_both(api):
         assert shown[first["id"]]["run"]["state"] == "started_run" and shown[follow["id"]]["run"]["state"] == "added_to_run"
     # What the reply says is stored with it, so it is still there after a restart.
     with api.app.state.store.read() as c:
-        stored = json.loads(c.execute("SELECT refs_json FROM messages WHERE from_actor='bot:ops'").fetchone()[0])
+        stored = json.loads(c.execute("SELECT refs FROM messages WHERE from_actor='bot:ops'").fetchone()[0])
     assert stored["answers"] == [first["id"], follow["id"]] and stored["run"] == {"job_id": starter_job, "attempt_id": aid}
 
 

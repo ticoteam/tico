@@ -486,7 +486,7 @@ def test_backfill_reads_every_page_once_and_a_repeat_changes_nothing(books):
     stripe_pass(books, stripe, AT)
     with books.read() as c:
         assert c.execute("SELECT COUNT(*) FROM fin_feed_txns").fetchone()[0] == 5
-        settings = json.loads(c.execute("SELECT settings_json FROM fin_connections WHERE provider='stripe'"
+        settings = json.loads(c.execute("SELECT settings FROM fin_connections WHERE provider='stripe'"
                                         ).fetchone()[0])
         assert settings["backfilled"] is True
         before = (_sum(c, "4000"), _sum(c, "6200"), _sum(c, "1050"))
@@ -951,7 +951,7 @@ def test_a_summarized_sale_recategorized_after_its_month_closed_still_reconciles
         effects = [(int(r["through_amount"]), int(r["live_amount"]))
                    for r in store_banking.row_effects(c, book, money, gl, "2026-10-31") if str(r["id"]) == row]
         assert effects == [(9_680, 9_680)]
-        assert "summary" not in json.loads(_feed(c, "txn_0001")["raw_json"])
+        assert "summary" not in json.loads(_feed(c, "txn_0001")["raw"])
 
 
 def test_a_refund_of_a_posted_sale_applied_by_hand_reopens_the_receivable_it_gives_back(books):

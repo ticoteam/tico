@@ -43,7 +43,7 @@ PHOTO_BUDGET = 200          # photos fetched per run; the rest arrive on a later
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS directory_credentials(
  source TEXT PRIMARY KEY, ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, hint TEXT NOT NULL DEFAULT '',
- created TEXT NOT NULL, created_by TEXT NOT NULL);
+ created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 """
 
 
@@ -51,11 +51,11 @@ CREATE TABLE IF NOT EXISTS directory_credentials(
 def _blank():
     return {"source": "", "filter": {"groups": [], "org_units": [], "domains": []},
             "interval_minutes": DEFAULT_INTERVAL, "mass_leave_limit": DEFAULT_LIMIT, "confirmed": False,
-            "revision": 0, "updated": "", "updated_by": "", "last": {}, "scim": {}}
+            "revision": 0, "updated_at": "", "updated_by": "", "last": {}, "scim": {}}
 
 
 def load(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
@@ -64,7 +64,7 @@ def load(c):
 
 
 def save(c, cfg):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(cfg, sort_keys=True)))
 
 
@@ -291,7 +291,7 @@ class Directory:
         nonce = os.urandom(12)
         sealed = AESGCM(self.github_app.secret_key(c, replacing="directory:" + source)).encrypt(nonce, json.dumps(blob).encode(), AAD + source.encode())
         c.execute("INSERT INTO directory_credentials VALUES(?,?,?,?,?,?) ON CONFLICT(source) DO UPDATE SET "
-                  "ciphertext=excluded.ciphertext, nonce=excluded.nonce, hint=excluded.hint, created=excluded.created, "
+                  "ciphertext=excluded.ciphertext, nonce=excluded.nonce, hint=excluded.hint, created_at=excluded.created_at, "
                   "created_by=excluded.created_by", (source, sealed, nonce, hint, H.now(), actor))
 
     def credentials(self, c, source):
@@ -321,7 +321,7 @@ class Directory:
                 "mass_leave_limit": cfg["mass_leave_limit"], "confirmed": cfg["confirmed"], "revision": cfg["revision"],
                 "last": cfg["last"],
                 "credentials": {s: {"configured": bool(self.hint(c, s)), "hint": self.hint(c, s)} for s in ("google", "entra")},
-                "scim": {"enabled": bool(scim.get("token_hash")), "created": scim.get("created", ""),
+                "scim": {"enabled": bool(scim.get("token_hash")), "created_at": scim.get("created_at", ""),
                          "url": self.settings.public_url + "/scim/v2"}}
 
     def configure(self, c, actor, body):
@@ -343,7 +343,7 @@ class Directory:
                "domains": [d.lstrip("@") for d in _lines(body.filter.domains, lower=True)]}
         after = {**cfg, "source": body.source, "filter": flt, "interval_minutes": body.interval_minutes,
                  "mass_leave_limit": body.mass_leave_limit, "revision": cfg["revision"] + 1,
-                 "updated": H.now(), "updated_by": actor,
+                 "updated_at": H.now(), "updated_by": actor,
                  # A different source or scope is a different first sync.
                  "confirmed": cfg["confirmed"] and cfg["source"] == body.source and cfg["filter"] == flt}
         save(c, after)
@@ -357,7 +357,7 @@ class Directory:
         from .store import digest
         token = "scim_" + secrets.token_urlsafe(32)
         cfg = load(c)
-        cfg["scim"] = {"token_hash": digest(token), "created": H.now()}
+        cfg["scim"] = {"token_hash": digest(token), "created_at": H.now()}
         save(c, cfg)
         H.event(c, actor, "directory.scim_token_created", "", {})
         return token

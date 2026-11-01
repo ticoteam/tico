@@ -147,20 +147,20 @@ const needsWho = t => {
 // One shape for the list, the sort and the columns.
 const issueItem = i => ({kind: 'issue', key: `i${i.number}`, n: i.number, title: i.title || '',
   slug: i.owner, actor: `bot:${i.owner}`, team: teamOf(i.owner), needs: !!i.needs_human,
-  rank: null, updated: i.updatedAt, closed: i.state === 'CLOSED' ? i.closedAt : '', lane: 'company',
+  rank: null, updated_at: i.updatedAt, closed: i.state === 'CLOSED' ? i.closedAt : '', lane: 'company',
   issue: i});
 const taskItem = t => {
   const slug = actorSlug(t.owner);
   return {kind: 'hub', key: `t${t.id}`, id: t.id, title: t.title || '', slug, actor: t.owner,
           team: slug ? teamOf(slug) : 'people', needs: !!actorPerson(t.owner),
           rank: t.rank == null ? null : Number(t.rank), lane: t.lane || 'company', labels: t.labels || [],
-          updated: t.updated || t.created, closed: t.done_at || t.closed_at || '', task: t, col: hubColumn(t)};
+          updated_at: t.updated_at || t.created_at, closed: t.done_at || t.closed_at || '', task: t, col: hubColumn(t)};
 };
 // Rank is the order (no priority): ranked first, low to high, then the newest unranked.
 const byRank = (a, b) => (a.rank == null ? 1 : 0) - (b.rank == null ? 1 : 0)
   || (a.rank ?? 0) - (b.rank ?? 0)
-  || String(b.updated).localeCompare(String(a.updated));
-const byNewest = (a, b) => String(b.closed || b.updated).localeCompare(String(a.closed || a.updated));
+  || String(b.updated_at).localeCompare(String(a.updated_at));
+const byNewest = (a, b) => String(b.closed || b.updated_at).localeCompare(String(a.closed || a.updated_at));
 const searchWords = value => String(value || '').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
 const searchIncludes = (fields, query) => {
   const haystack = searchWords(fields.filter(Boolean).join(' '));
@@ -215,10 +215,10 @@ function ageShort(iso) {
 }
 // A row reads one short age: how long since the task last moved ("2h"), so a stale one stands out without a second
 // number on every row. The tooltip has when it was opened and last updated.
-const taskAge = t => ageShort(t?.updated || t?.created);
+const taskAge = t => ageShort(t?.updated_at || t?.created_at);
 function taskAgeTitle(t) {
-  return [t?.created ? `Open ${fmt(t.created)}` : '',
-    t?.updated || t?.created ? `Updated ${fmt(t.updated || t.created)}` : ''].filter(Boolean).join(' · ');
+  return [t?.created_at ? `Open ${fmt(t.created_at)}` : '',
+    t?.updated_at || t?.created_at ? `Updated ${fmt(t.updated_at || t.created_at)}` : ''].filter(Boolean).join(' · ');
 }
 // Subtask progress: "1/3" beside a ring that fills as they finish (children_summary from the server, else parts).
 function taskSubProgress(t) {
@@ -405,7 +405,7 @@ function taskCard(it) {
       ${t && taskPropRights(t).edit
         ? `<button type="button" class="tl-face bcard-owner" data-card-owner="${esc(it.key)}" aria-haspopup="true" aria-label="${esc(`Owner: ${actorLabel(it.actor)}. Change`)}" title="${esc(actorLabel(it.actor))}">${actorFace(it.actor, 16)}</button>`
         : `<span class="tl-face" aria-hidden="true">${actorFace(it.actor, 16)}</span>`}
-      <span class="age tnum" title="${esc(fmt(it.updated))}">${esc(ageShort(it.updated))}</span></div>
+      <span class="age tnum" title="${esc(fmt(it.updated_at))}">${esc(ageShort(it.updated_at))}</span></div>
     ${refused ? `<p class="bcard-err" role="alert" data-task-refused>${esc(refused)}</p>` : ''}
   </div>`);
 }
@@ -429,7 +429,7 @@ function taskStatusGroups(items, {always = []} = {}) {
   // Needs you follows the server's queue (what a person asked for first); the rest keep their rank.
   const needOrder = new Map((S.v2?.needs || []).map((item, index) => [String(item.id), index]));
   const byNeed = (a, b) => (needOrder.get(String(a.id)) ?? Infinity) - (needOrder.get(String(b.id)) ?? Infinity) || byRank(a, b);
-  return keys.map(key => ({key, items: (buckets.get(key) || []).sort(key === 'scheduled' ? (a, b) => String(a.updated).localeCompare(String(b.updated))
+  return keys.map(key => ({key, items: (buckets.get(key) || []).sort(key === 'scheduled' ? (a, b) => String(a.updated_at).localeCompare(String(b.updated_at))
     : key === 'needsme' ? byNeed : byRank),
     label: key === 'needsme' ? 'Needs you' : key === 'needs-someone' ? 'Needs someone' : key.startsWith('needs:') ? needsWords(key.slice(6))
       : COMPANY_COLS.find(([k]) => k === key)?.[1] || key,

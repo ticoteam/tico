@@ -53,7 +53,7 @@ async function chatOutlineOpen(state, btn) {
   if (!d.open || V2C !== state) return;
   const box = d.querySelector('.co-list');
   box.innerHTML = list.map(p => `<button type="button" class="co-row" data-id="${esc(p.id)}">
-      <span class="co-text">${esc(p.text || 'Attached files.')}</span><time title="${esc(fmt(p.created))}">${esc(ago(p.created))}</time>
+      <span class="co-text">${esc(p.text || 'Attached files.')}</span><time title="${esc(fmt(p.created_at))}">${esc(ago(p.created_at))}</time>
       ${p.task ? `<span class="co-task">${esc(p.task.title)}</span>` : ''}
     </button>`).join('') || '<div class="co-empty">No prompts yet.</div>';
   box.onclick = ev => {

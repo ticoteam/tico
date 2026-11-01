@@ -364,12 +364,12 @@ class Scheduler:
             try:
                 # One snapshot for the cursor read and the selection, so the runs' provenance primes together.
                 with self.store.read_transaction() as c:
-                    saved = c.execute('SELECT value_json FROM registry_metadata WHERE key=?',
+                    saved = c.execute('SELECT value FROM registry_metadata WHERE key=?',
                                       (assigned_start.CURSOR_KEY,)).fetchone()
                     cursor = [H._json(saved[0], "") if saved else ""]
                     unstarted = assigned_start.due(c, stamp(at), cursor=cursor, failures=failures)
                 with locked("assigned_start_cursor") as c:
-                    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+                    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                               (assigned_start.CURSOR_KEY, H._dump(cursor[0])))
             except Exception as exc:
                 failures.append({'assigned_start': 'selection', 'error': type(exc).__name__})
@@ -434,7 +434,7 @@ class Scheduler:
         longest = max(holds, default=(0, 0, None))
         with self.store.transaction() as c:
             c.execute("INSERT INTO service_health VALUES('scheduler',?,?,?) ON CONFLICT(service) DO UPDATE SET "
-                      "last_success=excluded.last_success,last_error=excluded.last_error,detail_json=excluded.detail_json",
+                      "last_succeeded_at=excluded.last_succeeded_at,last_error=excluded.last_error,detail=excluded.detail",
                       (stamp(at), "schedule errors" if failures else None,
                        # How long the 10-second pass took, the longest any one of its transactions held the write
                        # lock and which step that was, and the longest it waited for the lock behind other writers.
@@ -512,7 +512,7 @@ class Scheduler:
             self.swept = at
             with SR.recording(self.store, "cleanup") as run:
                 with self.store.transaction() as c:
-                    c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND julianday(json_extract(detail_json,'$.failed_at')) < julianday(?) - 30", (stamp(at),))
+                    c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND julianday(json_extract(detail,'$.failed_at')) < julianday(?) - 30", (stamp(at),))
                     # A duplicate is not a failure (batch_work.isolated); rows an older server wrote for one go.
                     c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND last_error LIKE '%: duplicate: %'")
                     SR.prune(c)                                # each system job keeps its last runs

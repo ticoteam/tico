@@ -12,14 +12,14 @@ const SHOTS = process.env.NEEDS_SHOTS || '';
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
 const base = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'human:ana', requester: 'bot:botops', status: 'open',
-  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created: ago(600), updated: ago(60), ...over});
+  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
 const TASKS = [base('t-access', 'Grant ops read access to the billing repo'), base('t-pick', 'Gusto or Rippling for payroll?')];
 const NEEDS = [{...TASKS[1], kind: 'task', need: 'decide'}, {...TASKS[0], kind: 'task', need: 'hands'}];
 const FILTERED = [
   {id: 'f-1', kind: 'task', task: 't-verify', title: 'Verify the cleanup ran', asker: 'bot:ops', asker_name: 'Ops',
-    outcome: 'sent_back', would: 'sent_back', reason: 'own_work', mode: 'on', created: ago(20), let_through_at: null},
+    outcome: 'sent_back', would: 'sent_back', reason: 'own_work', mode: 'on', created_at: ago(20), let_through_at: null},
   {id: 'f-2', kind: 'loose', task: null, title: 'Release at 17:00Z', asker: 'bot:release', asker_name: 'Release Manager',
-    outcome: 'through', would: 'fyi', reason: 'status', mode: 'rehearsal', created: ago(40), let_through_at: null},
+    outcome: 'through', would: 'fyi', reason: 'status', mode: 'rehearsal', created_at: ago(40), let_through_at: null},
 ];
 
 async function shot(target, name) {
@@ -102,8 +102,8 @@ async function shot(target, name) {
       const body = route.request().postDataJSON();
       replays.push(body);
       const pages = [
-        {items: [{kind: 'task', ref: 't-1', title: 'Pick the launch date', asker: 'bot:ops', asker_name: 'Ops', created: ago(300), load: 4, would: 'through', reason: 'under_budget'}], next_offset: 1, total: 2},
-        {items: [{kind: 'loose', ref: 'm-1', title: 'Verify the cleanup ran', asker: 'bot:ops', asker_name: 'Ops', created: ago(200), load: 16, would: 'sent_back', reason: 'own_work'}], next_offset: null, total: 2}];
+        {items: [{kind: 'task', ref: 't-1', title: 'Pick the launch date', asker: 'bot:ops', asker_name: 'Ops', created_at: ago(300), load: 4, would: 'through', reason: 'under_budget'}], next_offset: 1, total: 2},
+        {items: [{kind: 'loose', ref: 'm-1', title: 'Verify the cleanup ran', asker: 'bot:ops', asker_name: 'Ops', created_at: ago(200), load: 16, would: 'sent_back', reason: 'own_work'}], next_offset: null, total: 2}];
       return route.fulfill({contentType: 'application/json', body: JSON.stringify(pages[body.offset ? 1 : 0])});
     });
     await page.waitForFunction(sel => { const day = document.querySelector(sel); return day && !day.dataset.beforeSave; }, DAY);

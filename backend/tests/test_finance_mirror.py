@@ -739,7 +739,7 @@ def test_a_bill_made_here_keeps_its_line_tags_and_a_newer_revision_carries_them(
     with books.read() as c:
         bill = _local(c, "Bill:901", "fin_bills")
         assert c.execute("SELECT revision FROM fin_external_refs WHERE external_id='Bill:901'").fetchone()[0] == "2"
-        tags = [json.loads(row[0]) for row in c.execute("SELECT tags_json FROM fin_bill_lines WHERE bill_id=?", (bill,))]
+        tags = [json.loads(row[0]) for row in c.execute("SELECT tags FROM fin_bill_lines WHERE bill_id=?", (bill,))]
         assert tags == [{"team": "eng"}]
 
 
@@ -809,12 +809,12 @@ def test_a_bank_row_matched_while_its_entry_was_out_withdraws_the_entry_at_the_p
         assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100"), "tags": {}}
                    ).status == "committed"
         c.execute("UPDATE fin_feed_txns SET status='ignored' WHERE id=?", (fid,))
-        local = SK.loads(c.execute("SELECT payload_json FROM fin_outbox WHERE op='journal.create'").fetchone()[0])
+        local = SK.loads(c.execute("SELECT payload FROM fin_outbox WHERE op='journal.create'").fetchone()[0])
         mirror._confirm_entry(c, cid, local, M.Ext("JournalEntry", "77", "1"), AT)
         assert c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0] == 0
         assert c.execute("SELECT status FROM fin_external_refs WHERE external_id='JournalEntry:77'").fetchone()[0] \
             == "deleted"
-        payload = SK.loads(c.execute("SELECT payload_json FROM fin_outbox WHERE op='journal.delete'").fetchone()[0])
+        payload = SK.loads(c.execute("SELECT payload FROM fin_outbox WHERE op='journal.delete'").fetchone()[0])
         assert (payload["ext"], payload["revision"]) == ("JournalEntry:77", "1")
 
 
@@ -1078,7 +1078,7 @@ def test_a_tag_on_a_bill_line_survives_an_amount_edit_to_the_same_provider_line(
                                lines=(M.EntryLine("Account:2", 1600, description="seats", key="7"),))]
     assert _drain(books, fake, cid, now=LATER) == []
     with books.read() as c:
-        tags = [json.loads(row[0]) for row in c.execute("SELECT tags_json FROM fin_bill_lines WHERE bill_id=?", (bill,))]
+        tags = [json.loads(row[0]) for row in c.execute("SELECT tags FROM fin_bill_lines WHERE bill_id=?", (bill,))]
         assert tags == [{"team": "eng"}]
 
 

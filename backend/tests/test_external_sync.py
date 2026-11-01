@@ -22,7 +22,7 @@ def room_messages(api, slug):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute(
             "SELECT m.* FROM messages m JOIN conversations v ON v.id=m.conversation_id "
-            "WHERE v.scope='personal' AND v.owner_actor='human:ana' AND v.room_key=? ORDER BY m.created", (slug,))]
+            "WHERE v.scope='personal' AND v.owner_actor='human:ana' AND v.room_key=? ORDER BY m.created_at", (slug,))]
 
 
 def test_a_new_grok_bot_lands_under_the_person_with_its_history_and_instructions(api):
@@ -34,7 +34,7 @@ def test_a_new_grok_bot_lands_under_the_person_with_its_history_and_instructions
     assert row["reports_to"] == "human:ana" and row["operator"] == "ana"
     assert row["display_name"] == "Grok Designer"          # "Tico Designer" in Grok
     with api.app.state.store.read() as c:
-        config = H._json(c.execute("SELECT config_json FROM bot_config WHERE bot='grok-designer'").fetchone()[0], {})
+        config = H._json(c.execute("SELECT config FROM bot_config WHERE bot='grok-designer'").fetchone()[0], {})
         assert config["harness"] == "grokbot"
         assert config["grok"]["instructions"] == "You design Tico. Keep it plain."
         assert config["grok"]["source"] == "Groky"
@@ -97,7 +97,7 @@ def test_a_bot_may_not_sync_and_nothing_is_fetched_for_it(api, monkeypatch):
     fetched = []
     monkeypatch.setattr(G, "fetch_image", lambda url, transport=None: fetched.append(url))
     with api.app.state.store.transaction() as c:      # a signed-in agent, as a Hermes bot is
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('coo','hermes','x',?,'human:ana')",
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('coo','hermes','x',?,'human:ana')",
                   (H.now(),))
     api.app.state.store.settings.test_identities["coo-test"] = Identity("bot:coo", "bot", agent="hermes")
     image = {"role": "bot", "text": "See", "at": "2026-09-27T10:00:00Z", "images": [{"url": "https://imagine.example/a.png"}]}
@@ -217,7 +217,7 @@ def test_stale_import_warns_without_claiming_a_runtime_failure_or_changing_histo
     [issue] = issues()
     assert issue['severity'] == 'warning' and not issue['needs_person']
     with api.app.state.store.read() as c:
-        config = H._json(c.execute("SELECT config_json FROM bot_config WHERE bot='grok-designer'").fetchone()[0], {})
+        config = H._json(c.execute("SELECT config FROM bot_config WHERE bot='grok-designer'").fetchone()[0], {})
         assert issue['since'] == config['grok']['last_sync'] < later
         assert c.execute("SELECT count(*) FROM jobs WHERE bot='grok-designer'").fetchone()[0] == 0
     assert len(room_messages(api, 'grok-designer')) == 2
@@ -415,7 +415,7 @@ def room_messages_of(api, person, slug):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute(
             "SELECT m.* FROM messages m JOIN conversations v ON v.id=m.conversation_id "
-            "WHERE v.scope='personal' AND v.owner_actor=? AND v.room_key=? ORDER BY m.created,m.rowid",
+            "WHERE v.scope='personal' AND v.owner_actor=? AND v.room_key=? ORDER BY m.created_at,m.rowid",
             ("human:" + person, slug))]
 
 

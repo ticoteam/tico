@@ -130,19 +130,19 @@ def stale_bot_starts(run):
     if not stale or not stale["sent"] or stale["corrected_at"] is None:
         return False, "the runner's claims named no bot busy after the restart, so nothing was tested"
     since = stamp(stale["corrected_at"] - START)
-    first = run.w.sql("SELECT started FROM attempts WHERE bot=? AND started>=? ORDER BY started LIMIT 1",
+    first = run.w.sql("SELECT started_at FROM attempts WHERE bot=? AND started_at>=? ORDER BY started_at LIMIT 1",
                       (stale["bot"], since))
     if not first:
         return False, (f"{stale['bot']} was named busy for {stale['sent']} rounds after the restart and did not start "
                        f"once its list was right, from {since}")
     return True, (f"{stale['bot']} was named busy for {stale['sent']} rounds after the restart; its list was right from "
-                  f"{since}, and it started at {first[0]['started']}")
+                  f"{since}, and it started at {first[0]['started_at']}")
 
 
 def runner_rerun(run):
     """Each turn the runner's restart interrupted ran again to completion: a later attempt on its job completed."""
     rows = run.w.sql("SELECT a.bot, (SELECT count(*) FROM attempts b WHERE b.job_id=a.job_id AND b.state='completed' "
-                     "AND b.started>=a.finished) AS reran FROM attempts a WHERE a.state='interrupted' AND a.finished>=?",
+                     "AND b.started_at>=a.finished_at) AS reran FROM attempts a WHERE a.state='interrupted' AND a.finished_at>=?",
                      (stamp(RESTART_AT),))
     missing = [r["bot"] for r in rows if not r["reran"]]
     if not rows:

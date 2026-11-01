@@ -92,7 +92,7 @@ def _sales_rows(ctx: Ctx, year: int, due: bool) -> list[T.SalesRow]:
     lines = [(str(r["invoice_id"]), str(r["invoice_date"]), str(r["account_id"]), int(r["amount"]), str(r["type"]),
               str(r["subtype"]), bool(r["taxable"]))
              for r in ST.invoice_lines(c, ctx.book.id, f"{year}-01-01", f"{year}-12-31")]
-    remits = [(str(r["account_id"]), str(r["tags_json"]), int(r["amount"]), int(r["bill_total"]), int(r["bill_paid"]))
+    remits = [(str(r["account_id"]), str(r["tags"]), int(r["amount"]), int(r["bill_total"]), int(r["bill_paid"]))
               for r in ST.remittance_lines(c, ctx.book.id, account_ids)]
     due_on: dict[tuple[str, str], str | None] = {}
     for j in jurisdictions:
@@ -213,7 +213,7 @@ def _sales_feeds(ctx: Ctx, year: int, period: str | None = None) -> set[str]:
     c = ctx.c
     account_ids = [str(j["account_id"]) for j in ST.jurisdictions(c, ctx.book.id)]
     bills = sorted({str(r["bill_id"]) for r in ST.remittance_lines(c, ctx.book.id, account_ids)
-                    if _remit_for(str(r["tags_json"]), year, period)})
+                    if _remit_for(str(r["tags"]), year, period)})
     invoices = ST.invoice_lines(c, ctx.book.id, f"{year}-01-01", f"{year}-12-31")
     taxed = {str(r["invoice_id"]) for r in invoices if str(r["subtype"]) == T.SALES_TAX
              and (period is None or T.quarter_key(str(r["invoice_date"])) == period)}

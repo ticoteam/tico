@@ -123,7 +123,7 @@ def test_done_tells_the_private_tasks_owner_and_its_wait_clears(api):
     with api.app.state.store.read() as c:
         assert H.wait_detail(c, H.task(c, row["id"])) is None
         jobs = [json.loads(r[0] or "{}") for r in c.execute(
-            "SELECT m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='ops'")]
+            "SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='ops'")]
     # The company task's result reaches the private task's owner on it, as any awaited subtask's does.
     assert any(r.get("rule") == "awaited_subtask" and r["task"] == row["id"] and r.get("subtask") == made["id"]
                for r in jobs), jobs
@@ -140,7 +140,7 @@ def test_words_copied_from_the_private_work_are_a_correction_naming_the_copy_che
     with api.app.state.store.transaction() as c:
         H.task_comment(c, "bot:cpo", row["id"], "Note for ops: the bucket lifecycle rule deletes refused uploads only "
                                                  "after twenty four hours have passed.", wake=False)
-        c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (json.dumps(
+        c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (json.dumps(
             ["The quarantine report lists every refused upload with its owner and the hour it was deleted"]), row["id"]))
     if words == "Comment":
         words = "The bucket lifecycle rule deletes refused uploads only after twenty four hours have passed, so check first."
@@ -165,7 +165,7 @@ def test_a_file_or_link_from_the_private_task_is_a_correction_naming_that_check(
     url = "https://docs.acme.example/vendor-intake-review"
     with api.app.state.store.transaction() as c:
         blob = H.new_id()
-        c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) "
+        c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) "
                   "VALUES(?,'bot:ops','d',1,'intake.pdf','application/pdf','2026')", (blob,))
         c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (row["id"], blob))
         c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,locator,first_activity_at,last_activity_at,"

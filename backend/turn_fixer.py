@@ -52,8 +52,8 @@ def _gone(c, row):
 # INDEXED BY: the OR defeats the live-run index, and the plain plan scanned every attempt ever made (45-150 ms on
 # 92k attempts, inside the write transaction turn_fixer.free holds). The index holds only live runs, so this reads those.
 DEAD_SQL = ("SELECT * FROM attempts INDEXED BY attempts_live_lease WHERE state IN ('leased','running') AND "
-            "(lease_until<=? OR (state='leased' AND started IS NULL AND stop_requested IS NOT NULL)) "
-            "ORDER BY created,id")
+            "(lease_until<=? OR (state='leased' AND started_at IS NULL AND stop_requested_at IS NOT NULL)) "
+            "ORDER BY created_at,id")
 
 
 def dead(c, now=None):
@@ -61,7 +61,7 @@ def dead(c, now=None):
     now = now or H.now()
     out = []
     for row in c.execute(DEAD_SQL, (now,)).fetchall():
-        if row['state'] == 'leased' and row['started'] is None and row['stop_requested']:
+        if row['state'] == 'leased' and row['started_at'] is None and row['stop_requested_at']:
             out.append((row, 'stopped'))
         elif row['lease_until'] <= now and _gone(c, row):
             out.append((row, 'gone'))
@@ -107,8 +107,8 @@ def free(c, execution):
             _note(c, task, FREED_STOPPED)
         elif after['job_state'] == 'uncertain':
             job = c.execute('SELECT * FROM jobs WHERE id=?', (row['job_id'],)).fetchone()
-            ended = c.execute('SELECT started,finished FROM attempts WHERE id=?', (row['id'],)).fetchone()
-            facts = retry_facts(c, job, ended['started'], ended['finished'])
+            ended = c.execute('SELECT started_at,finished_at FROM attempts WHERE id=?', (row['id'],)).fetchone()
+            facts = retry_facts(c, job, ended['started_at'], ended['finished_at'])
             if facts['safe']:
                 _note(c, task, FREED_READ_ONLY)
                 continue
@@ -145,9 +145,9 @@ def finding(c, settings, value):
                           'running': here['running']})
     now = H.now()
     running = []
-    for row in c.execute("SELECT a.id,a.bot,a.runner_id,a.started,d.heartbeat_at,d.last_event_at FROM attempts a "
+    for row in c.execute("SELECT a.id,a.bot,a.runner_id,a.started_at,d.heartbeat_at,d.last_event_at FROM attempts a "
                          "LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id WHERE a.state='running'"):
-        progress = max(x for x in (row['last_event_at'], row['heartbeat_at'], row['started'], '') if x is not None)
+        progress = max(x for x in (row['last_event_at'], row['heartbeat_at'], row['started_at'], '') if x is not None)
         running.append({'turn': row['id'], 'bot': row['bot'], 'last_progress': progress or None})
     running.sort(key=lambda r: (r['last_progress'] or '', r['turn']))
     stale = [r for r in running if not r['last_progress'] or r['last_progress'] < H.shift(now, seconds=-STALE_PROGRESS_S)]

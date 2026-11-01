@@ -76,7 +76,7 @@ def file(api, token, title="Pick the launch date", body="Two dates: Nov 3 or Nov
 
 def items(api):
     with api.app.state.store.read() as c:
-        return H._rows(c.execute("SELECT * FROM ask_ingest_items ORDER BY created"))
+        return H._rows(c.execute("SELECT * FROM ask_ingest_items ORDER BY created_at"))
 
 
 def calls(api):
@@ -167,7 +167,7 @@ def test_over_budget_with_no_criterion_it_stays_with_the_bot_and_names_its_manag
     listed = get(api, "ask-ingest/filtered", token="ben-test")["items"]
     assert [(i["task"], i["outcome"], i["reason"]) for i in listed] == [(out["task"]["id"], A.SENT_BACK, "criteria")]
     [call] = calls(api)
-    assert "Pick the launch date" not in call["detail_json"], "the call row keeps no text"
+    assert "Pick the launch date" not in call["detail"], "the call row keeps no text"
 
 
 def test_meeting_a_criterion_gets_it_through_at_that_load(gate):
@@ -228,7 +228,7 @@ def test_it_fails_open_and_records_the_failure(gate, monkeypatch, how):
         assert item["reason"] == "busy" and not model.calls and not calls(api)
     else:
         [call] = calls(api)
-        assert ('"error": "%s"' % how) in call["detail_json"]
+        assert ('"error": "%s"' % how) in call["detail"]
 
 
 def test_a_full_pool_refuses_at_once_and_a_freed_slot_runs_again(gate, monkeypatch):
@@ -1022,8 +1022,8 @@ def test_exception_after_judging_keeps_call_link_and_fails_open(gate, monkeypatc
 def reasons(api):
     """{call id: reason} for the unrecorded events the gate named (ask_ingest.unrecorded)."""
     with api.app.state.store.read() as c:
-        return {r["target"]: json.loads(r["detail_json"])["why"]
-                for r in H._rows(c.execute("SELECT target, detail_json FROM events WHERE action=?", (A.UNRECORDED,)))}
+        return {r["target"]: json.loads(r["detail"])["why"]
+                for r in H._rows(c.execute("SELECT target, detail FROM events WHERE action=?", (A.UNRECORDED,)))}
 
 
 def test_a_plain_bot_task_to_a_person_in_rehearsal_writes_one_row_and_one_judge_call(gate):

@@ -19,11 +19,11 @@ def _seed(api, tmp_path):
     with store.transaction() as c:
         M.seed(c, {}, Blobs(store.settings), document=M.load_snapshot(FIXTURE_REGISTRY))
         if not H.bot(c, "listening"):
-            c.execute("INSERT INTO bots (slug, display_name, runtime, model, effort, cwd, host, state, created) "
+            c.execute("INSERT INTO bots (slug, display_name, runtime, model, effort, cwd, host, state, created_at) "
                       "VALUES (?,?,?,?,?,?,?,?,?)",
                       ("listening", "Listening", "grok", "grok-4.6", "high", "", "keeper", "active", H.now()))
         if not c.execute("SELECT 1 FROM bot_config WHERE bot='listening'").fetchone():
-            c.execute("INSERT INTO bot_config (bot, config_json, team, operator, description, reports_to, repo) "
+            c.execute("INSERT INTO bot_config (bot, config, team, operator, description, reports_to, repo) "
                       "VALUES (?,?,?,?,?,?,?)",
                       ("listening", "{}", "marketing", "ana", "Listening", "cmo", "emp-listening"))
 
@@ -31,9 +31,9 @@ def _seed(api, tmp_path):
 def _librarian(api):
     with api.app.state.store.transaction() as c:
         if not H.bot(c, "librarian"):
-            c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
+            c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                       "VALUES('librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-            c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('librarian','{}',NULL,'ana')")
+            c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('librarian','{}',NULL,'ana')")
 
 
 def test_the_librarian_gets_the_market_routines_and_the_old_market_analyst_is_retired(api):
@@ -42,9 +42,9 @@ def test_the_librarian_gets_the_market_routines_and_the_old_market_analyst_is_re
     _librarian(api)
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
+        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('market-analyst','Market Analyst','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('market-analyst','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('market-analyst','{}',NULL,'ana')")
         task = H.task_create(c, "human:ana", "Check Northwind pricing", "", "bot:market-analyst", lint=False)
         M.ensure_curator(c)
         keys = {r["routine_key"]: r for r in c.execute("SELECT * FROM schedules WHERE bot='librarian'")}
@@ -194,8 +194,8 @@ def test_a_market_ask_is_audited_and_capped_per_person_per_day(api, tmp_path, mo
     out = post(api, "market/ask", {"question": "What does Northwind sell?"})
     assert out["answer"] == "Northwind sells pricing software."
     with store.read() as c:
-        rows = [json.loads(r["detail_json"]) for r in c.execute(
-            "SELECT detail_json FROM events WHERE action='market.ask' AND actor='human:ana'")]
+        rows = [json.loads(r["detail"]) for r in c.execute(
+            "SELECT detail FROM events WHERE action='market.ask' AND actor='human:ana'")]
     assert len(rows) == 1 and rows[0]["model"] == M.ASK_MODEL and "Northwind" not in json.dumps(rows[0])
     over = api.post("/api/v2/market/ask", json={"question": "What does Northwind sell?"}, headers=headers())
     assert over.status_code == 429 and over.json()["error"]["code"] == "budget" and len(sent) == 1
@@ -280,7 +280,7 @@ def test_the_daily_curate_pass_is_skipped_when_it_has_nothing_to_read(api):
         assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:librarian'").fetchone()
         assert not c.execute("SELECT 1 FROM automation_runs WHERE automation_id=?", (aid,)).fetchone()
         skipped = [json.loads(r[0]) for r in c.execute(
-            "SELECT detail_json FROM events WHERE action='automation.skipped' AND target=?", (aid,))]
+            "SELECT detail FROM events WHERE action='automation.skipped' AND target=?", (aid,))]
     assert [("Listening" in d["reason"], d["at"]) for d in skipped] == [(True, "2026-10-12T00:00:00.000000Z")]
     with store.transaction() as c:
         c.execute("INSERT INTO market_insights(id,reported_by,reported_at,kind) VALUES('i1','bot:ops',?,'pricing')",

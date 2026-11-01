@@ -103,7 +103,7 @@ def _replayed_reason(c: sqlite3.Connection, p: O.Principal, row: Mapping[str, ob
     """The reason a replay returns: a refusal's names come back only for a caller who may see each budget it named
     (spec §7.5); otherwise the fallback its record kept."""
     fallback = str(row["reason"] or "")
-    result = cast(dict[str, Any], json.loads(str(row["result_json"] or "{}")))
+    result = cast(dict[str, Any], json.loads(str(row["result"] or "{}")))
     if "named" not in result:
         return fallback
     try:
@@ -117,7 +117,7 @@ def _stored(row: Mapping[str, object], full: bool = False) -> ActionResult:
     """An action as recorded. A replay or a status lookup carries the id, status, code and reason only (`full` is for
     the call that just committed it): finance data is read fresh through finance/reads with the caller's current view,
     so a retry after a revoked grant returns nothing they may no longer see (spec §5)."""
-    result = cast(dict[str, object], json.loads(str(row["result_json"] or "{}"))) if full else dict[str, object]()
+    result = cast(dict[str, object], json.loads(str(row["result"] or "{}"))) if full else dict[str, object]()
     return ActionResult(status=str(row["status"]), kind=str(row["kind"]), action_id=str(row["id"]),
                         result={k: v for k, v in result.items() if k != "what"}, code=str(row["code"] or ""),
                         reason=str(row["reason"] or ""), approval_id=str(row["approval_id"] or "") or None,
@@ -241,7 +241,7 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
     if not dry_run:
         prior = SX.by_key(c, key)
         if prior is not None:
-            if prior["kind"] != kind or not _same_request(json.loads(prior["payload_json"]), body) or \
+            if prior["kind"] != kind or not _same_request(json.loads(prior["payload"]), body) or \
                     prior["actor"] != p.actor:
                 return ActionResult(status="failed", kind=kind, code=CONFLICT,
                                     reason="that idempotency key was used for a different request")
@@ -364,9 +364,9 @@ def verify(row: Mapping[str, object], appr: Mapping[str, object]) -> str:
         return "it was decided by someone other than the person it was sent to"
     if appr.get("consumed_at"):
         return "it was already used"
-    result = json.loads(str(row["result_json"] or "{}"))
+    result = json.loads(str(row["result"] or "{}"))
     expected = tico.payload_hash(_approval_payload(str(row["id"]), str(row["kind"]),
-                                                   json.loads(str(row["payload_json"])), str(result.get("what", ""))))
+                                                   json.loads(str(row["payload"])), str(result.get("what", ""))))
     if appr.get("payload_hash") != expected or row["approval_hash"] != expected:
         return "payload"
     return ""
@@ -379,10 +379,10 @@ def _close(ctx: Ctx, row: Mapping[str, object], status: str, code: str, reason: 
     action_id = str(row["id"])
     text = named.fallback if named else reason
     budgeting.release_for(ctx, "action", action_id)
-    payments.drop_details(ctx.c, json.loads(str(row["payload_json"] or "{}")))
+    payments.drop_details(ctx.c, json.loads(str(row["payload"] or "{}")))
     SX.finish(ctx.c, action_id, status=status, result=_recorded(named), code=code, reason=text, at=ctx.at)
     if str(row["kind"]) == "payment_create":     # a scheduled bill that asked for it is open again, and says why
-        documents.payment_ask_ended(ctx, action_id, json.loads(str(row["payload_json"] or "{}")), status, text)
+        documents.payment_ask_ended(ctx, action_id, json.loads(str(row["payload"] or "{}")), status, text)
     p = O.Principal(actor=str(row["actor"]), for_actor=str(row["on_behalf_of"] or ""))
     _audit(ctx.c, p, action_id, str(row["kind"]), status, code, {"approval_id": row["approval_id"]})
     done = _stored(SX.by_id(ctx.c, action_id))
@@ -394,7 +394,7 @@ def withdraw_bill_asks(ctx: Ctx, bill_id: str, keep: str, why: str) -> list[str]
     other than `keep`: its approval is withdrawn and it can never run. The ids ended."""
     out: list[str] = []
     for row in SX.waiting(ctx.c, ("payment_create", "bill_schedule")):
-        body = json.loads(str(row["payload_json"] or "{}"))
+        body = json.loads(str(row["payload"] or "{}"))
         mine = str(body.get("obligation") or "").strip() == f"bill:{bill_id}" if row["kind"] == "payment_create" \
             else str(body.get("bill_id") or "").strip() == bill_id  # trimmed as the planners read them
         if not mine or str(row["id"]) == keep:
@@ -426,14 +426,14 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
     if decision == "declined":
         return _close(ctx, row, "denied", "declined", f"declined by {appr.get('decided_by')}")
     if decision != "approved":
-        stale = appr.get("decided_by") == "keeper" and str(appr.get("created") or "") <= \
+        stale = appr.get("decided_by") == "keeper" and str(appr.get("created_at") or "") <= \
             tico.shift(ctx.at, days=-STALE_DAYS)
         status = "expired" if stale else "withdrawn"
         return _close(ctx, row, status, status, "nobody decided in time; ask again" if stale else
                       "its approval was withdrawn; ask again")
     problem = verify(row, appr)
     p = O.Principal(actor=str(row["actor"]), for_actor=str(row["on_behalf_of"] or ""), rule=str(row["rule_id"] or ""))
-    kind, body = str(row["kind"]), json.loads(str(row["payload_json"]))
+    kind, body = str(row["kind"]), json.loads(str(row["payload"]))
     if problem == "payload":
         return _reask(ctx, row, p, kind, body)
     if problem:

@@ -20,7 +20,7 @@ const AGENTS = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3',
 const bots = [{name: 'rust-engineer', display_name: 'Rust Engineer', org_parent: 'p:ana', reports_to: 'ana', team: 'eng', host: 'keeper',
   status: 'active', can_chat: true, users: [{id: 'ana', name: 'Ana'}], schedules: []}];
 const requested = {id: 's-devin', kind: 'seat', stage: 'recruiting', title: 'Devin', description: '', team: 'eng',
-  reports_to: 'human:ana', created: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: 'devin', agent_name: 'Devin',
+  reports_to: 'human:ana', created_at: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: 'devin', agent_name: 'Devin',
   request_state: 'requested'};
 const detailOf = seat => {
   const known = AGENTS.find(a => a.id === seat.agent) || {id: seat.agent, name: seat.agent_name, maker: '', site: '', line: ''};
@@ -219,7 +219,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
     // A seat's Cloud agents tab: Add hires the agent into that seat, so the seat is filled and leaves the chart.
     {
       const lead = {id: 's-lead', kind: 'seat', stage: 'recruiting', title: 'Support lead', description: '', team: 'eng',
-        reports_to: 'human:ana', created: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: '', agent_name: '', request_state: ''};
+        reports_to: 'human:ana', created_at: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: '', agent_name: '', request_state: ''};
       const {page, errors, calls, state} = await open(browser, {width: 1300, height: 900}, {seats: [lead]});
       await page.goto('https://tico-ui.test/#/tasks');
       await page.waitForSelector('#tree [data-seat="s-lead"]');
@@ -244,7 +244,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
     // A seat's Applicants page offers Cloud agents as a tab, and the grid there attaches its agent to that seat.
     {
       const lead = {id: 's-lead', kind: 'seat', stage: 'recruiting', title: 'Support lead', description: '', team: 'eng',
-        reports_to: 'human:ana', created: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: '', agent_name: '', request_state: ''};
+        reports_to: 'human:ana', created_at: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: '', agent_name: '', request_state: ''};
       const {page, errors, calls, state} = await open(browser, {width: 1300, height: 900}, {seats: [lead]});
       await page.goto('https://tico-ui.test/#/seat/s-lead');
       await page.locator('#main .rc-tabs [data-recruit-tab="cloud"]').click();
@@ -264,7 +264,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
     // adds the agent in the seat, and the Templates tab leaves them out.
     {
       const rust = {id: 's-rust', kind: 'seat', stage: 'recruiting', title: 'Rust engineer', description: '', team: 'eng',
-        reports_to: 'human:ana', created: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: '', agent_name: '', request_state: '', can_edit: true};
+        reports_to: 'human:ana', created_at: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: '', agent_name: '', request_state: '', can_edit: true};
       const template = {template: 'pr-reviewer', name: 'Senior Software Engineer', icon: '', department: 'Engineering',
         department_id: 'engineering', line: 'Reviews every open pull request.', tags: [], owns: [], prerequisites: [], match: 'good',
         source: 'template'};

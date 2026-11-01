@@ -36,7 +36,7 @@ async function open(browser, me, vault) {
     if (p === '/api/v2/credentials' && req.method() === 'POST') {
       const body = JSON.parse(req.postData());
       seen.vault.credentials.push({id: 'c1', name: body.name, username: body.username, kind: body.kind, env: body.env, preview: '••••••', source: '', revision: 1,
-        stored: true, can_reveal: true, last_used: null, last_used_by: '', grants: []});
+        stored: true, can_reveal: true, last_used_at: null, last_used_by: '', grants: []});
       return json({id: 'c1', name: body.name});
     }
     if (p === '/api/v2/credentials/c1/grants') {

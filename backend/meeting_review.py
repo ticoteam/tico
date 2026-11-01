@@ -86,12 +86,12 @@ def install_meeting_review(app, store, auth, mutate):
                 if body.auto_share is None:
                     c.execute("DELETE FROM preferences WHERE actor=? AND key='meetings.auto_share'", (who.actor,))
                 else:
-                    c.execute('INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,?,?) '
-                              'ON CONFLICT(actor,key) DO UPDATE SET value_json=excluded.value_json,updated=excluded.updated',
+                    c.execute('INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) '
+                              'ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at',
                               (who.actor, 'meetings.auto_share', encode(body.auto_share), H.now()))
             if body.review_default is not None:
-                c.execute('INSERT INTO registry_metadata(key,value_json) VALUES(?,?) '
-                          'ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+                c.execute('INSERT INTO registry_metadata(key,value) VALUES(?,?) '
+                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                           ('meetings.review_default', encode(body.review_default)))
             return meetings.review_settings(c, who)
         return mutate(request, body, work)
@@ -103,7 +103,7 @@ def install_meeting_review(app, store, auth, mutate):
         with store.read() as c:
             rows = []
             for row in c.execute('SELECT id FROM meetings WHERE review_state=? '
-                                 'AND (?=\'live\' OR owner=? COLLATE NOCASE) ORDER BY created DESC',
+                                 'AND (?=\'live\' OR owner=? COLLATE NOCASE) ORDER BY created_at DESC',
                                  (review, review, who.email)):
                 try:
                     item = media.view(c, who, row[0])
@@ -122,7 +122,7 @@ def install_meeting_review(app, store, auth, mutate):
         def work(c):
             ids = list(dict.fromkeys(body.ids)) if body.ids is not None else [row[0] for row in c.execute(
                 "SELECT m.id FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
-                "WHERE m.review_state='pending' AND lower(m.owner)=? AND mc.deleted_at IS NULL ORDER BY m.created,m.id",
+                "WHERE m.review_state='pending' AND lower(m.owner)=? AND mc.deleted_at IS NULL ORDER BY m.created_at,m.id",
                 (who.email.lower(),))]
             # Validate the whole selection before publishing any of it.
             action = 'approve' if body.action == 'approve_all' else 'dismiss'

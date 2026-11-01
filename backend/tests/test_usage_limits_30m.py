@@ -26,7 +26,7 @@ def test_a_bot_over_its_30_minute_limit_takes_no_new_turn_until_the_window_ends(
     assert claim(api, r) is None
     assert paused(api)["focus"] == "Paused: over its 30-minute limit"
     with api.app.state.store.read() as c:
-        started = c.execute("SELECT min(started) FROM turns WHERE bot='ops'").fetchone()[0]
+        started = c.execute("SELECT min(started_at) FROM turns WHERE bot='ops'").fetchone()[0]
         at = datetime.fromisoformat(started[:19]).replace(tzinfo=timezone.utc)
         assert usage_limits.blocked(c, "ops", at=at) == "per_30m"
         assert usage_limits.blocked(c, "ops", at=at + timedelta(minutes=30)) is None    # the next window is empty

@@ -21,7 +21,7 @@ sensitive so it can take a while."
 - An owner can ask every bot to redo a past day (`redo`), and a redone request is sent like a new one.
 - People post in the same shape. An update's author (the `bot` column) is a bot slug, or `human:<id>`
   for a person, the key `reports_to` already uses. `drafted_by` is the bot that wrote a draft the
-  author has not replaced, `edited_by` the author once they changed it, and `inputs_json` the
+  author has not replaced, `edited_by` the author once they changed it, and `inputs` the
   reports' updates it was written from.
 - Updates roll up the org chart: the queue asks the deepest bots first, and a manager is asked only
   once each direct report has posted, missed or been skipped, or `MANAGER_WAIT_S` after its first
@@ -88,9 +88,9 @@ TASK_ID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS updates(
  id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL,
- headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL,
+ headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  UNIQUE(bot, kind, day));
-CREATE INDEX IF NOT EXISTS updates_created ON updates(created);
+CREATE INDEX IF NOT EXISTS updates_created ON updates(created_at);
 CREATE TABLE IF NOT EXISTS update_reads(
  update_id TEXT NOT NULL, actor TEXT NOT NULL, read_at TEXT NOT NULL, PRIMARY KEY(update_id, actor));
 CREATE TABLE IF NOT EXISTS update_archive_overrides(
@@ -203,8 +203,8 @@ def visible_authors(c, auth, who, mine=False, scope=None):
 def restricted_bots(c):
     """The bots not every member may read: nothing of theirs goes into a person's company-wide update."""
     from . import bot_access as A
-    return {r["bot"] for r in c.execute("SELECT bot, access_json FROM bot_config WHERE access_json IS NOT NULL")
-            if not A.document(r["access_json"])["read"]["everyone"]}
+    return {r["bot"] for r in c.execute("SELECT bot, access FROM bot_config WHERE access IS NOT NULL")
+            if not A.document(r["access"])["read"]["everyone"]}
 
 
 def team_updates(c, author, kind, day):
@@ -283,7 +283,7 @@ def build_queue(c, day, kind, assistant=None):
     if c.execute("SELECT 1 FROM update_queue WHERE day=? LIMIT 1", (day,)).fetchone():
         return 0
     rows = c.execute(
-        "SELECT b.slug, (SELECT max(u.created) FROM updates u WHERE u.bot=b.slug) last_update, "
+        "SELECT b.slug, (SELECT max(u.created_at) FROM updates u WHERE u.bot=b.slug) last_update, "
         "(SELECT last_turn_at FROM bot_status s WHERE s.bot=b.slug) last_turn "
         "FROM bots b LEFT JOIN update_settings us ON us.bot=b.slug "
         "WHERE b.state='active' AND coalesce(us." + ("daily" if kind == "daily" else "weekly") + ",1)=1").fetchall()
@@ -333,13 +333,13 @@ def ensure_schema(c):
     H.add_column(c, "update_queue", "tries", "INTEGER NOT NULL DEFAULT 0")
     H.add_column(c, "update_queue", "redo", "INTEGER NOT NULL DEFAULT 0")
     H.add_column(c, "update_queue", "held_at", "TEXT")
-    H.add_column(c, "updates", "slides_json", "TEXT")
+    H.add_column(c, "updates", "slides", "TEXT")
     H.add_column(c, "updates", "drafted_by", "TEXT")
     H.add_column(c, "updates", "edited_by", "TEXT")
-    H.add_column(c, "updates", "inputs_json", "TEXT")
-    # `source_json`: the automation run that posted it (`post_update`, backend/automation_actions.py); a post by hand
+    H.add_column(c, "updates", "inputs", "TEXT")
+    # `source`: the automation run that posted it (`post_update`, backend/automation_actions.py); a post by hand
     # clears it. Shown as `source` only when set.
-    H.add_column(c, "updates", "source_json", "TEXT")
+    H.add_column(c, "updates", "source", "TEXT")
     # `meetings`: a person's draft written with meeting summaries in its facts, or from a report's update that was,
     # is read only by a meeting reader (`meeting_reader`). A draft from before the column cannot say what it used,
     # so every one already there counts as having used them.
@@ -400,7 +400,7 @@ def _finish(c, row, state, reason=None):
 def settle_sent(c, row):
     """The request out now: posted, ended without a post, or still going. True while it is going."""
     redo = row["redo"] if "redo" in row.keys() else 0
-    if c.execute("SELECT 1 FROM updates WHERE bot=? AND kind=? AND day=?" + (" AND updated>=?" if redo else ""),
+    if c.execute("SELECT 1 FROM updates WHERE bot=? AND kind=? AND day=?" + (" AND updated_at>=?" if redo else ""),
                  (row["bot"], row["kind"], row["day"], *([row["sent_at"]] if redo else []))).fetchone():
         _finish(c, row, "posted")
         return False
@@ -441,14 +441,14 @@ def request_text(c, bot, kind, day, redo=False):
         utc = lambda at: at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         since, until = utc(start - timedelta(days=6 if week else 0)), utc(start + timedelta(days=1))
     else:
-        last = c.execute("SELECT max(created) FROM updates WHERE bot=?", (bot,)).fetchone()[0]
+        last = c.execute("SELECT max(created_at) FROM updates WHERE bot=?", (bot,)).fetchone()[0]
         since, until = last or H.shift(H.now(), days=-7 if week else -1), "9999"
-    done = c.execute("SELECT title FROM tasks WHERE owner=? AND status IN ('done','closed') AND updated>=? AND updated<? "
-                     "ORDER BY updated DESC LIMIT 12", (actor, since, until)).fetchall()
+    done = c.execute("SELECT title FROM tasks WHERE owner=? AND status IN ('done','closed') AND updated_at>=? AND updated_at<? "
+                     "ORDER BY updated_at DESC LIMIT 12", (actor, since, until)).fetchall()
     open_ = c.execute("SELECT title, status FROM tasks WHERE owner=? AND status IN ('open','doing','waiting','review','ready') "
-                      "ORDER BY updated DESC LIMIT 12", (actor,)).fetchall()
+                      "ORDER BY updated_at DESC LIMIT 12", (actor,)).fetchall()
     asked = c.execute("SELECT title, owner FROM tasks WHERE requester=? AND owner LIKE 'human:%' AND status IN "
-                      "('open','doing','waiting') ORDER BY updated DESC LIMIT 8", (actor,)).fetchall()
+                      "('open','doing','waiting') ORDER BY updated_at DESC LIMIT 8", (actor,)).fetchall()
     goals = c.execute("SELECT title FROM goals WHERE owner=? AND (status IS NULL OR status NOT IN ('done','dropped')) "
                       "ORDER BY rank LIMIT 5", (actor,)).fetchall()
     line = lambda rows, f: "\n".join("- " + f(r) for r in rows) or "- (none)"
@@ -553,7 +553,7 @@ def _shared_message(c, message, shared):
                                                      tuple(ids))}
     if len(rows) != len(ids):
         return None
-    refs = H._json(message["refs_json"], {}) or {}
+    refs = H._json(message["refs"], {}) or {}
     return rows.get(H.message_task_id({"refs": refs})) or next(iter(rows.values()))
 
 
@@ -575,12 +575,12 @@ def draft_facts(c, author, kind, day):
     since = H.shift(H.now(), days=-7 if week else -1)
     hidden = [H.bot_actor(slug) for slug in sorted(restricted_bots(c))]
     shared = shared_tasks_sql(hidden)
-    done = c.execute(f"SELECT title FROM tasks WHERE owner=? AND {shared} AND status IN ('done','closed') AND updated>=? "
-                     "ORDER BY updated DESC LIMIT 12", (author, since)).fetchall()
+    done = c.execute(f"SELECT title FROM tasks WHERE owner=? AND {shared} AND status IN ('done','closed') AND updated_at>=? "
+                     "ORDER BY updated_at DESC LIMIT 12", (author, since)).fetchall()
     open_ = c.execute(f"SELECT title, status FROM tasks WHERE owner=? AND {shared} AND status IN "
-                      "('open','doing','waiting','review','ready') ORDER BY updated DESC LIMIT 12", (author,)).fetchall()
+                      "('open','doing','waiting','review','ready') ORDER BY updated_at DESC LIMIT 12", (author,)).fetchall()
     asked = c.execute(f"SELECT title, owner FROM tasks WHERE requester=? AND {shared} AND owner<>? AND status IN "
-                      "('open','doing','waiting') ORDER BY updated DESC LIMIT 8", (author, author)).fetchall()
+                      "('open','doing','waiting') ORDER BY updated_at DESC LIMIT 8", (author, author)).fetchall()
     goals = c.execute("SELECT title FROM goals WHERE owner=? AND (status IS NULL OR status NOT IN "
                       "('done','dropped')) ORDER BY rank LIMIT 5", (author,)).fetchall()
     # Their decisions in Needs you: what they moved a shared task to (approved, declined, done, closed)...
@@ -589,22 +589,22 @@ def draft_facts(c, author, kind, day):
                         "ORDER BY e.ts DESC LIMIT ?", (author, since, DRAFT_LIST_MAX)).fetchall()
     # ...and their answers to asks, then their comments; a message counts only when every task it names is shared.
     said = lambda where: [(title, m["body"]) for m in c.execute(
-        "SELECT * FROM messages WHERE from_actor=? AND deleted_at IS NULL AND created>=? AND " + where
-        + " ORDER BY created DESC LIMIT ?", (author, since, DRAFT_SCAN_MAX)).fetchall()
+        "SELECT * FROM messages WHERE from_actor=? AND deleted_at IS NULL AND created_at>=? AND " + where
+        + " ORDER BY created_at DESC LIMIT ?", (author, since, DRAFT_SCAN_MAX)).fetchall()
         if (title := _shared_message(c, m, shared))][:DRAFT_LIST_MAX]
     answers = said("kind='answer'")
-    comments = said("kind IN ('say','ask') AND json_extract(refs_json,'$.task') IS NOT NULL "
-                    "AND json_extract(refs_json,'$.comment')")
+    comments = said("kind IN ('say','ask') AND json_extract(refs,'$.task') IS NOT NULL "
+                    "AND json_extract(refs,'$.comment')")
     # The shared meetings they owned or were in (media.shared_meeting; sql.py has the same rule): live,
     # not private, not deleted, with a summary.
     email = ((P.person(author[6:], _chart(c)[0]) or {}).get("email") or "").strip().lower()
     meetings = c.execute(
         "SELECT m.title, m.notes FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
-        "WHERE m.review_state='live' AND mc.deleted_at IS NULL AND json_extract(m.metadata_json,'$.kind')='meeting' "
-        "AND coalesce(json_extract(m.metadata_json,'$.private'),0)=0 AND trim(m.notes)<>'' AND m.created>=? AND ("
-        "lower(m.owner)=? OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata_json,'$.calendar.attendees')) "
-        "WHERE lower(trim(value))=?) OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata_json,'$.participants')) "
-        "WHERE lower(trim(json_extract(value,'$.email')))=?)) ORDER BY m.created DESC LIMIT ?",
+        "WHERE m.review_state='live' AND mc.deleted_at IS NULL AND json_extract(m.metadata,'$.kind')='meeting' "
+        "AND coalesce(json_extract(m.metadata,'$.private'),0)=0 AND trim(m.notes)<>'' AND m.created_at>=? AND ("
+        "lower(m.owner)=? OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata,'$.calendar.attendees')) "
+        "WHERE lower(trim(value))=?) OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata,'$.participants')) "
+        "WHERE lower(trim(json_extract(value,'$.email')))=?)) ORDER BY m.created_at DESC LIMIT ?",
         (since, email, email, email, MEETINGS_MAX)).fetchall() if email else []
     line = lambda rows, f: "\n".join("- " + f(r) for r in rows) or "- (none)"
     facts = [f"{name}'s {'week in review' if week else 'daily update'} for {day}.", "",
@@ -924,13 +924,13 @@ def slides_body(slides):
 
 def _decode(row):
     item = dict(row)
-    raw = item.pop("slides_json", None)
+    raw = item.pop("slides", None)
     item["slides"] = json.loads(raw) if raw else None
     item.pop("meetings", None)            # read rules use it; it is not part of the card
-    if "inputs_json" in item:
-        inputs = item.pop("inputs_json")
+    if "inputs" in item:
+        inputs = item.pop("inputs")
         item["inputs"] = json.loads(inputs) if inputs else []
-    source = item.pop("source_json", None)
+    source = item.pop("source", None)
     if source:
         item["source"] = json.loads(source)
     return item
@@ -1032,7 +1032,7 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
         first = body.splitlines()[0]
         headline = MD_LINK.sub(r"\1", re.sub(r"^\s*[-*•]\s+", "", first))[:200]
     now = H.now()
-    existing = c.execute("SELECT id, drafted_by, edited_by, inputs_json, meetings FROM updates WHERE bot=? AND kind=? AND day=?",
+    existing = c.execute("SELECT id, drafted_by, edited_by, inputs, meetings FROM updates WHERE bot=? AND kind=? AND day=?",
                          (bot, kind, day)).fetchone()
     if drafted_by and own_words(c, bot, day):
         raise Problem("own_update", "They wrote their own update today; a draft does not replace it", 409)
@@ -1047,15 +1047,15 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
     else:
         draft, edited, flagged = None, None, 0
     if existing:
-        c.execute("UPDATE updates SET headline=?, body=?, slides_json=?, updated=?, drafted_by=?, edited_by=?, "
-                  "inputs_json=?, meetings=?, source_json=? WHERE id=?",
+        c.execute("UPDATE updates SET headline=?, body=?, slides=?, updated_at=?, drafted_by=?, edited_by=?, "
+                  "inputs=?, meetings=?, source=? WHERE id=?",
                   (headline, body, stored, now, draft, edited, inputs_json, flagged, source_json, existing["id"]))
         c.execute("DELETE FROM update_reads WHERE update_id=?", (existing["id"],))   # changed: unread again
         uid = existing["id"]
     else:
         uid = H.new_id()
-        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,slides_json,created,updated,drafted_by,edited_by,"
-                  "inputs_json,meetings,source_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,slides,created_at,updated_at,drafted_by,edited_by,"
+                  "inputs,meetings,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (uid, bot, kind, day, headline, body, stored, now, now, draft, edited, inputs_json, flagged,
                    source_json))
         # A new latest logical day supersedes updates this reader previously restored. A backdated
@@ -1090,7 +1090,7 @@ def purge_rejected(c):
     removed = []
     # A week in review with slides was checked as slides; an older bullet one keeps the bullet rules.
     # Only when the shape is refused: a post accepted with a warning stays.
-    for row in c.execute("SELECT * FROM updates WHERE slides_json IS NULL").fetchall() if H.STYLE_LINT == "refuse" else ():
+    for row in c.execute("SELECT * FROM updates WHERE slides IS NULL").fetchall() if H.STYLE_LINT == "refuse" else ():
         if not lint(org_rule_check.unwarned(row["body"]), row["kind"]):
             continue
         c.execute("DELETE FROM update_reads WHERE update_id=?", (row["id"],))
@@ -1145,7 +1145,7 @@ def inbox_ids(c, actor, readable, created_after=None, meetings=False):
     where = [clause, f"NOT {_is_archived_sql()}", _kept(meetings)]
     args = [actor, *values]
     if created_after:
-        where.append("u.created>=?"); args.append(created_after)
+        where.append("u.created_at>=?"); args.append(created_after)
     return [r["id"] for r in c.execute(
         "SELECT u.id FROM updates u LEFT JOIN update_archive_overrides ao ON ao.update_id=u.id AND ao.actor=? "
         "WHERE " + " AND ".join(where), args).fetchall()]
@@ -1154,13 +1154,13 @@ def inbox_ids(c, actor, readable, created_after=None, meetings=False):
 def thread(c, uid):
     """Replies to an update (messages carrying refs.update) and the bot's answers to them."""
     replies = [dict(r) for r in c.execute(
-        "SELECT id, from_actor, to_actor, body, created, conversation_id FROM messages "
-        "WHERE json_extract(refs_json,'$.update')=? ORDER BY created", (uid,))]
+        "SELECT id, from_actor, to_actor, body, created_at, conversation_id FROM messages "
+        "WHERE json_extract(refs,'$.update')=? ORDER BY created_at", (uid,))]
     ids = [r["id"] for r in replies]
     answers = [dict(r) for r in c.execute(
-        "SELECT id, from_actor, to_actor, body, created, conversation_id, in_reply_to FROM messages WHERE in_reply_to IN ("
-        + ",".join("?" * len(ids)) + ") ORDER BY created", ids)] if ids else []
-    return sorted(replies + answers, key=lambda m: m["created"])
+        "SELECT id, from_actor, to_actor, body, created_at, conversation_id, in_reply_to FROM messages WHERE in_reply_to IN ("
+        + ",".join("?" * len(ids)) + ") ORDER BY created_at", ids)] if ids else []
+    return sorted(replies + answers, key=lambda m: m["created_at"])
 
 
 def _only(bots, column="u.bot"):
@@ -1193,19 +1193,19 @@ def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, 
     if not include_archive:
         where.append(is_archived if archive else f"NOT {is_archived}")
     if before:
-        where.append("u.created<?"); args.append(before)
+        where.append("u.created_at<?"); args.append(before)
     rows = c.execute(
         f"SELECT u.*, r.read_at, CASE WHEN {is_archived} THEN 1 ELSE 0 END AS archived "
         "FROM updates u LEFT JOIN update_reads r ON r.update_id=u.id AND r.actor=? "
         "LEFT JOIN update_archive_overrides ao ON ao.update_id=u.id AND ao.actor=? "
-        "WHERE " + " AND ".join(where) + " ORDER BY u.created DESC LIMIT ?",
+        "WHERE " + " AND ".join(where) + " ORDER BY u.created_at DESC LIMIT ?",
         (actor, actor, *args, limit)).fetchall()
     items = []
     for row in rows:
         item = with_inputs(c, _decode(row), readable if may_read is None else may_read, meetings)
         item["read"] = bool(item.pop("read_at"))
         item["archived"] = bool(row["archived"])
-        item["replies"] = c.execute("SELECT count(*) FROM messages WHERE json_extract(refs_json,'$.update')=?",
+        item["replies"] = c.execute("SELECT count(*) FROM messages WHERE json_extract(refs,'$.update')=?",
                                     (row["id"],)).fetchone()[0]
         items.append(item)
     missed = []
@@ -1219,7 +1219,7 @@ def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, 
     unread_count = count_unread(c, actor, readable, kind, meetings)
     queue = c.execute("SELECT state, count(*) n FROM update_queue WHERE day=? GROUP BY state", (today(),)).fetchall()
     return {"updates": items, "missed": missed, "unread": unread_count,
-            "next_before": items[-1]["created"] if len(items) >= limit else None,
+            "next_before": items[-1]["created_at"] if len(items) >= limit else None,
             "today": {r["state"]: r["n"] for r in queue}}
 
 
@@ -1232,7 +1232,7 @@ def count_unread(c, actor, readable, kind=None, meetings=False):
     is_archived = _is_archived_sql()
     return c.execute("SELECT count(*) FROM updates u LEFT JOIN update_reads r ON r.update_id=u.id AND r.actor=? "
                      "LEFT JOIN update_archive_overrides ao ON ao.update_id=u.id AND ao.actor=? "
-                     f"WHERE r.read_at IS NULL AND u.created>=? AND {clause} "
+                     f"WHERE r.read_at IS NULL AND u.created_at>=? AND {clause} "
                      f"AND NOT {is_archived} AND {_kept(meetings)}"
                      + (" AND u.kind=?" if kind else ""),
                      (actor, actor, H.shift(H.now(), days=-14), *values, *([kind] if kind else []))).fetchone()[0]

@@ -129,7 +129,7 @@
         const title = document.createElement('div');
         const strong = Object.assign(document.createElement('strong'), {textContent: `Version ${number}${meta.current ? ' (current)' : ''}`});
         const by = Object.assign(document.createElement('span'), {className: 'muted',
-          textContent: ` · by ${version.actor_name || version.actor} · ${fmt(version.created)}${version.note ? ' · ' + version.note : ''}`});
+          textContent: ` · by ${version.actor_name || version.actor} · ${fmt(version.created_at)}${version.note ? ' · ' + version.note : ''}`});
         title.append(strong, by);
         head.append(title);
         if (!meta.current) {
@@ -159,8 +159,8 @@
         top.append(Object.assign(document.createElement('strong'), {textContent: 'v' + v.version}));
         if (v.current) top.append(Object.assign(document.createElement('span'), {className: 'docs-badge internal', textContent: 'Current'}));
         const who = Object.assign(document.createElement('span'), {className: 'docs-history-who',
-          textContent: `${v.actor_name || v.actor} · ${ago(v.created)}`});
-        who.title = fmt(v.created);
+          textContent: `${v.actor_name || v.actor} · ${ago(v.created_at)}`});
+        who.title = fmt(v.created_at);
         button.append(top, who);
         if (v.note) button.append(Object.assign(document.createElement('span'), {className: 'docs-history-note', textContent: v.note}));
         button.onclick = () => show(v.version);

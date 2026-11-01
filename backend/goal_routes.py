@@ -568,7 +568,7 @@ def install(app, store, auth, mutate, settings):
             unaligned = {owner: n for owner, n in unaligned.items() if owner not in hidden}
             loose = [dict(r) for r in c.execute("SELECT * FROM kpis WHERE archived_at IS NULL "
                                                 "AND id NOT IN (SELECT kpi_id FROM goal_kpis) "
-                                                "ORDER BY created") if r["owner"] not in hidden]
+                                                "ORDER BY created_at") if r["owner"] not in hidden]
             data = K.effective_many(c, [r["id"] for r in loose])
             other = [K.view(r, data.get(r["id"], []), None) for r in loose]
             names.update(owner_names(c, other))
@@ -969,7 +969,7 @@ def install(app, store, auth, mutate, settings):
                                       for i, st in enumerate(ch["steps"])],
                             "saved": saved, "agreed": None if yes is None else ch["n"] in yes, "reason": reason,
                             "link": gid and goal_link(gid)})
-            return {"message_id": mid, "created": back["created"], "changes": out}
+            return {"message_id": mid, "created_at": back["created_at"], "changes": out}
 
     @app.post("/api/v2/goals/refresh")
     def goals_refresh(request: Request, body: M.GoalRefresh):
@@ -1241,7 +1241,7 @@ def install(app, store, auth, mutate, settings):
                 clauses.append("archived_at IS NULL")
             if clauses:
                 sql += " WHERE " + " AND ".join(clauses)
-            records = [dict(r) for r in c.execute(sql + " ORDER BY created", args)
+            records = [dict(r) for r in c.execute(sql + " ORDER BY created_at", args)
                        if r["owner"] not in hidden and (not actor or r["owner"] == actor)]
             data = K.effective_many(c, [r["id"] for r in records])
             out = []

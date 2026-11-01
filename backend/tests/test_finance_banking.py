@@ -363,7 +363,7 @@ def test_a_settled_card_charge_uses_its_allocation_at_its_actual_amount(books):
     fake.txns["txn-c1"] = _txn("txn-c1", "credit-io", -45.0, "creditCardTransaction", cardId="card-eve")
     fake.txns["txn-c2"] = _txn("txn-c2", "credit-io", 5.0, "creditCardTransaction", cardId="card-eve")
     with books.transaction() as c:
-        c.execute("UPDATE fin_connections SET settings_json='{}', cursor=NULL")             # backfill again
+        c.execute("UPDATE fin_connections SET settings='{}', cursor=NULL")             # backfill again
     sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
     with books.read() as c:
         assert _card_use(c, card_id, "2026-10") == 4_000
@@ -386,7 +386,7 @@ def test_the_same_mercury_accounts_through_a_new_token_are_the_same_money_accoun
                                                     "token_creator_email": "ana@acme.example"})
         assert again.status == "committed", again
     with books.transaction() as c:
-        c.execute("UPDATE fin_connections SET settings_json='{}', cursor=NULL")
+        c.execute("UPDATE fin_connections SET settings='{}', cursor=NULL")
     sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
     with books.read() as c:
         assert sorted(str(r[0]) for r in c.execute("SELECT id FROM fin_money_accounts")) == before

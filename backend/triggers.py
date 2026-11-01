@@ -240,7 +240,7 @@ def summary(c, settings, t, since=None):
         "FROM trigger_deliveries WHERE trigger_id=? AND received_at>?", (t["id"], since)).fetchone()
     used = [dict(r) for r in c.execute(
         "SELECT id,name,owner FROM automations WHERE trigger_type='webhook' AND deleted_at IS NULL "
-        "AND json_extract(flow_json,'$.trigger.id')=? ORDER BY name,id LIMIT ?", (t["id"], LISTED_AUTOMATIONS)).fetchall()]
+        "AND json_extract(flow,'$.trigger.id')=? ORDER BY name,id LIMIT ?", (t["id"], LISTED_AUTOMATIONS)).fetchall()]
     return {"id": t["id"], "name": t["name"], "kind": t["kind"], "event": event_of(t["id"]),
             "url": "" if builtin(t["id"]) else address(settings, t["id"]), "builtin": builtin(t["id"]), "created_by": t["created_by"], "created_at": t["created_at"],
             "last_received": last, "received_24h": day, "refused_24h": refused,
@@ -435,10 +435,10 @@ def _refused(c, found, ident, body, headers, at, status, code, reason, via, secr
         type_ = P.type_of(type_spec(found), headers, body)
         _log(c, trigger_id, H.new_id(), ident, body, 0, "refused", reason, type=type_, via=via)
         # Kept under the id the call carries, so the sender's retry or a recovery replaces it; never over an accepted call.
-        c.execute("INSERT INTO trigger_bodies(trigger_id,delivery,received_at,expires_at,type,via,headers_json,body,outcome) "
+        c.execute("INSERT INTO trigger_bodies(trigger_id,delivery,received_at,expires_at,type,via,headers,body,outcome) "
                   "VALUES(?,?,?,?,?,?,?,?,'refused') ON CONFLICT(trigger_id,delivery) DO UPDATE SET "
                   "received_at=excluded.received_at,expires_at=excluded.expires_at,type=excluded.type,via=excluded.via,"
-                  "headers_json=excluded.headers_json,body=excluded.body WHERE trigger_bodies.outcome='refused'",
+                  "headers=excluded.headers,body=excluded.body WHERE trigger_bodies.outcome='refused'",
                   (trigger_id, ident, at, H.shift(at, days=found["keep_days"]), type_, via,
                    json.dumps(P.kept_headers(headers, secret)), body))
         c.execute("DELETE FROM trigger_bodies WHERE trigger_id=? AND outcome='refused' AND delivery NOT IN "
@@ -635,7 +635,7 @@ def receive(c, trigger_id: str, body: bytes, headers: Mapping[str, str], *, secr
                         f"This trigger takes {cap} deliveries an hour; try again later", via, secret, "rate_limited")
     type_ = P.type_of(type_spec(found), headers, body)
     c.execute("INSERT INTO trigger_seen(trigger_id,delivery,seen_at) VALUES(?,?,?)", (trigger_id, delivery, at))
-    c.execute("INSERT OR REPLACE INTO trigger_bodies(trigger_id,delivery,received_at,expires_at,type,via,headers_json,body) "
+    c.execute("INSERT OR REPLACE INTO trigger_bodies(trigger_id,delivery,received_at,expires_at,type,via,headers,body) "
               "VALUES(?,?,?,?,?,?,?,?)",
               (trigger_id, delivery, at, H.shift(at, days=found["keep_days"]), type_, via,
                json.dumps(P.kept_headers(headers, secret)), body))
@@ -675,7 +675,7 @@ def replay(c, who, auth, trigger_id, delivery):
         n += 1                                      # a sender may have used this id for itself
     again = f"{prefix}{n}"
     c.execute("INSERT INTO trigger_seen(trigger_id,delivery,seen_at,replay) VALUES(?,?,?,1)", (trigger_id, again, H.now()))
-    headers = json.loads(stored["headers_json"] or "{}")
+    headers = json.loads(stored["headers"] or "{}")
     fired, results = _route(c, found, again, stored["type"], stored["via"], bytes(stored["body"]), headers, auth)
     _log(c, trigger_id, again, base, stored["body"], len(fired), "replayed", f"replay of {base}",
          type=stored["type"], via=stored["via"], results=results)
@@ -704,7 +704,7 @@ def recover(c, who, auth, vault, trigger_id, since_hours=24):
     for row in rows[:RECOVER_BATCH]:
         c.execute("SAVEPOINT trigger_recover")
         try:
-            got = receive(c, trigger_id, bytes(row["body"]), json.loads(row["headers_json"] or "{}"), secret=None,
+            got = receive(c, trigger_id, bytes(row["body"]), json.loads(row["headers"] or "{}"), secret=None,
                           via=row["via"], received_at=row["received_at"], auth=auth, vault=vault, recovering=True,
                           delivery_id=row["delivery"])    # the id it was refused under, whatever the sender or HQ called it
             c.execute("RELEASE trigger_recover")
@@ -738,12 +738,12 @@ def given_to(c, bot, trigger_id, base):
         return True
     # A turn or wake an automation run on this call sent the bot (Tico's notice names the run).
     on, params = _delivery_match("r.trigger_ref", f"webhook:{trigger_id}:{base}")
-    if c.execute("SELECT 1 FROM messages m JOIN automation_runs r ON r.id=json_extract(m.refs_json,'$.automation_run') "
+    if c.execute("SELECT 1 FROM messages m JOIN automation_runs r ON r.id=json_extract(m.refs,'$.automation_run') "
                  "WHERE m.to_actor=? AND m.from_actor=? AND " + on + " LIMIT 1", (bot, H.KEEPER, *params)).fetchone():
         return True
-    on, params = _delivery_match("json_extract(refs_json,'$.delivery')", base)
+    on, params = _delivery_match("json_extract(refs,'$.delivery')", base)
     # Only Tico's own notices count: a person can put any refs on a message they send.
-    return bool(c.execute("SELECT 1 FROM messages WHERE to_actor=? AND from_actor=? AND json_extract(refs_json,'$.trigger')=? AND "
+    return bool(c.execute("SELECT 1 FROM messages WHERE to_actor=? AND from_actor=? AND json_extract(refs,'$.trigger')=? AND "
                           + on + " LIMIT 1", (bot, H.KEEPER, trigger_id, *params)).fetchone())
 
 
@@ -767,7 +767,7 @@ def read(c, who, trigger_id, delivery, part=1):
         raise Problem("not_found", "Delivery not found", 404)
     row = dict(logged) if logged else {}
     live = bool(stored) and stored["expires_at"] > H.now()
-    headers = json.loads(stored["headers_json"] or "{}") if live else {}
+    headers = json.loads(stored["headers"] or "{}") if live else {}
     out = {"id": delivery, "trigger": trigger_id, "received_at": (stored or logged)["received_at"],
            "type": (stored or logged)["type"], "via": (stored or logged)["via"],
            "outcome": row.get("outcome", "accepted"), "tasks": row.get("tasks", 0), "rules": row.get("rules", 0),

@@ -25,15 +25,15 @@ def seed(c, bots="INSERT"):
     """Bots, a conversation with messages and tasks, written as an older release wrote them: the rows an upgrade
     must keep."""
     for slug in ("coo", "cmo", "seo"):
-        c.execute(f"{bots} INTO bots(slug,display_name,runtime,state,created) VALUES(?,?,?,?,?)",
+        c.execute(f"{bots} INTO bots(slug,display_name,runtime,state,created_at) VALUES(?,?,?,?,?)",
                   (slug, slug.upper(), "codex", "active", TS))
-    c.execute("INSERT INTO conversations(id,kind,subject,participants_json,created,last_message_at) "
+    c.execute("INSERT INTO conversations(id,kind,subject,participants,created_at,last_message_at) "
               "VALUES('c1','direct','Launch plan','[\"bot:coo\",\"human:ana\"]',?,?)", (TS, TS))
     for n in (1, 2):
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created) "
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at) "
                   "VALUES(?,?,?,?,?,?,?)", (f"m{n}", "c1", "human:ana", "bot:coo", "message", f"hello {n}", TS))
     for n in (1, 2, 3):
-        c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,conversation_id,created,updated) "
+        c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,conversation_id,created_at,updated_at) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", (f"t{n}", f"Task {n}", "", "human:ana", "bot:coo", "open", "c1", TS, TS))
 
 

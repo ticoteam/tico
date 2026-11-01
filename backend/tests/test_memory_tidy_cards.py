@@ -50,12 +50,12 @@ def test_one_open_card_retry_and_new_night_replaces_without_applying(db, monkeyp
 def test_two_business_days_excludes_weekend_and_expires_at_boundary(db, monkeypatch):
     monkeypatch.setattr(H, 'now', lambda: '2026-11-06T18:00:00.000000Z')  # Friday 10 Pacific
     card = offer(db)
-    assert card['expires'] == '2026-11-10T18:00:00.000000Z'  # Tuesday 10 Pacific
+    assert card['expires_at'] == '2026-11-10T18:00:00.000000Z'  # Tuesday 10 Pacific
     before = '2026-11-10T17:59:59.999999Z'
     assert len(C.cards_for(db, 'human:ana', before)) == 1
     assert C.sweep(db, before) == 0
-    assert C.cards_for(db, 'human:ana', card['expires']) == []
-    assert C.sweep(db, card['expires']) == 1
+    assert C.cards_for(db, 'human:ana', card['expires_at']) == []
+    assert C.sweep(db, card['expires_at']) == 1
     assert db.execute('SELECT status,reason FROM memory_tidy_cards').fetchone()[:] == ('withdrawn', 'expired')
 
 
@@ -120,7 +120,7 @@ def test_human_needs_you_and_discard_do_not_change_tasks_or_enqueue_work(api):
         assert {t: c.execute('SELECT count(*) FROM ' + t).fetchone()[0] for t in before} == before
         assert c.execute("SELECT count(*) FROM changes WHERE topic='needs' AND kind='memory_tidy' "
                          "AND subject_id='human:ana'").fetchone()[0] == 2
-        stored = c.execute('SELECT edits_json FROM memory_tidy_cards').fetchone()[0]
+        stored = c.execute('SELECT edits FROM memory_tidy_cards').fetchone()[0]
         assert json.loads(stored)['edits'][0]['number'] == 1
 
 
@@ -130,7 +130,7 @@ def test_hourly_scheduler_persists_withdrawal_after_weekend(api, monkeypatch):
     monkeypatch.setattr(H, 'now', lambda: '2026-11-06T18:00:00.000000Z')
     with api.app.state.store.transaction() as c:
         card = offer(c)
-    at = datetime.fromisoformat(card['expires'].replace('Z', '+00:00'))
+    at = datetime.fromisoformat(card['expires_at'].replace('Z', '+00:00'))
     Scheduler(api.app.state.store, api.app.state.execution).tick(at)
     with api.app.state.store.read() as c:
         row = c.execute('SELECT status,reason FROM memory_tidy_cards WHERE id=?', (card['id'],)).fetchone()

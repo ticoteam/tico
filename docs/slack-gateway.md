@@ -85,7 +85,7 @@ there and it goes to the assistant the same way. Each call's cost is written dow
 its retries and the final failure lose none and add none; each `judge.call` the gateway audits repeats the message's
 `cost_usd` for reading.
 
-Every score and answer is stored: on the event (`slack_events.routing_json`) and on the message
+Every score and answer is stored: on the event (`slack_events.routing`) and on the message
 (`refs.routing`), where the conversation view shows it as a chip (`routed by decisions to Legal 92%`).
 A misroute is fixed by a better description in the bot's registry entry, not by a rule.
 
@@ -258,8 +258,8 @@ Read the queue with `hub sql` or SQLite against the live database, read-only:
 SELECT event_id, channel, thread_ts, state, reason, processed
 FROM slack_events WHERE state NOT IN ('routed', 'recorded', 'denied') ORDER BY received;
 
-SELECT message_id, bot, channel, thread_ts, state, attempts, next_attempt, slack_ts, error
-FROM slack_posts WHERE state NOT IN ('sent') ORDER BY created;
+SELECT message_id, bot, channel, thread_ts, state, attempts, next_attempt_at, slack_ts, error
+FROM slack_posts WHERE state NOT IN ('sent') ORDER BY created_at;
 
 -- what each reader has seen of each channel, and the last digest it got
 SELECT r.channel, r.reader, r.last_ts, r.last_run, r.digests,

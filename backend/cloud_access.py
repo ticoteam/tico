@@ -141,7 +141,7 @@ def apply(store, cloud):
             c.execute("DELETE FROM registry_metadata WHERE key=?", (KEY,))
         else:
             c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
-                      "value_json=excluded.value_json", (KEY, json.dumps({**cloud, "checked": H.now()})))
+                      "value=excluded.value", (KEY, json.dumps({**cloud, "checked": H.now()})))
         was, now = (before or {}).get("access"), (cloud or {}).get("access")
         if was != now:
             H.event(c, H.KEEPER, "cloud.access", "company",

@@ -260,7 +260,7 @@ function lcAccessHTML(item) {
 }
 // One stored credential: name and variable, whether a value is stored, when a bot last used it, and what may be done.
 function lcCredHTML(cred) {
-  const used = cred.last_used ? `used ${ago(cred.last_used)}${cred.last_used_by ? ' by ' + lcBotName(cred.last_used_by) : ''}` : 'never used';
+  const used = cred.last_used_at ? `used ${ago(cred.last_used_at)}${cred.last_used_by ? ' by ' + lcBotName(cred.last_used_by) : ''}` : 'never used';
   const acts = [
     VAULT?.can_manage ? `<button class="linkish" type="button" data-vault-edit="${esc(cred.id)}">${cred.stored ? 'Rotate' : 'Set'}</button>` : '',
     `<button class="linkish" type="button" data-vault-share="${esc(cred.id)}">${VAULT?.can_manage ? 'Access' : 'Use with my bots'}</button>`,
@@ -269,7 +269,7 @@ function lcCredHTML(cred) {
   return `<div class="lc-cred" data-cred="${esc(cred.id)}"><span class="nav-icon" aria-hidden="true">key_vertical</span>
     <span class="lc-cn"><b>${esc(cred.name)}</b>${cred.env ? ` <span class="mono muted">${esc(cred.env)}</span>` : ''}</span>
     <span class="pill ${cred.stored ? 'ok' : 'fail'}">${cred.stored ? 'Set' : 'No value'}</span>
-    <span class="muted lc-used" title="${esc(cred.last_used ? fmt(cred.last_used) : '')}">${esc(used)}</span>
+    <span class="muted lc-used" title="${esc(cred.last_used_at ? fmt(cred.last_used_at) : '')}">${esc(used)}</span>
     <span class="lc-acts">${acts}</span></div>`;
 }
 // A variable the tool names that the vault does not hold: what the bots' computers say about it, and Add.
@@ -348,7 +348,7 @@ function lcDrawCredential(id, back) {
   detail.innerHTML = `<div class="meeting-head">${back}<div><h1>${esc(cred.name)}</h1></div></div>
     <div id="tool-facts">${lcIssuesHTML(item)}
     <section class="card lc-creds">${lcCredHTML(cred)}<dl class="int-meta">${row('Type', esc(LC_CRED_KIND[cred.kind] || cred.kind))}${row('Username', esc(cred.username || ''))}${row('Value', cred.preview && `<span class="mono">${esc(cred.preview)}</span>`)}${row('From', esc(cred.source || ''))}
-      ${row('Changed', cred.updated && `<span title="${esc(fmt(cred.updated))}">${esc(ago(cred.updated))}</span>`)}</dl>
+      ${row('Changed', cred.updated_at && `<span title="${esc(fmt(cred.updated_at))}">${esc(ago(cred.updated_at))}</span>`)}</dl>
       ${VAULT?.can_manage ? `<div class="row lc-del"><button class="ghost danger small" type="button" data-vault-delete="${esc(cred.id)}">Delete</button></div>` : ''}</section>
     <section class="card lc-access"><header><h2>Access <span class="muted">${(cred.grants || []).length}</span></h2></header>${grants}</section></div>`;
   lcWireFacts();

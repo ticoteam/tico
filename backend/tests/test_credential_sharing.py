@@ -43,9 +43,9 @@ def test_watchers_receive_only_live_grants_for_active_bots_on_their_computer(api
     assert get(api, path, other["token"], expected=403)["error"]["code"] == "forbidden"
     assert get(api, path, "ana-test", expected=403)["error"]["code"] == "forbidden"
     with api.app.state.store.read() as c:
-        event = c.execute("SELECT actor,detail_json FROM events WHERE action='credential.sent_to_computer'").fetchone()
-        assert event["actor"] == "runner:" + computer["runner_id"] and '"use": "watcher"' in event["detail_json"]
-        assert JIRA not in event["detail_json"]
+        event = c.execute("SELECT actor,detail FROM events WHERE action='credential.sent_to_computer'").fetchone()
+        assert event["actor"] == "runner:" + computer["runner_id"] and '"use": "watcher"' in event["detail"]
+        assert JIRA not in event["detail"]
     post(api, f"credentials/{row['id']}/grants/{grant['id']}/revoke", {})
     assert get(api, path, computer["token"])["credentials"] == []
     post(api, f"credentials/{row['id']}/grants", {"subject": "bot:finance"})
@@ -149,8 +149,8 @@ def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a
     assert done.status_code == 200, done.text
     assert "needs_confirm" not in done.json() and done.json()["credential"] == "Jira" and done.json()["env"] == "JIRA_BASIC_AUTH"
     with api.app.state.store.read() as c:
-        event = c.execute("SELECT actor,detail_json FROM events WHERE action='credential.granted'").fetchone()
-        assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail_json"]       # hers, via BotOps
+        event = c.execute("SELECT actor,detail FROM events WHERE action='credential.granted'").fetchone()
+        assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail"]       # hers, via BotOps
         assert c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0] == 0
     assert act(api, ana, "POST", f"credentials/{row['id']}/grants", {"subject": "bot:ops"}).json()["id"] == done.json()["id"]
     # A grant to a person (or to every computer) is the administrator's own tap: a card, and no grant until it.
@@ -265,8 +265,8 @@ def test_the_import_tool_asks_as_the_requester_and_waits_for_the_computer(api, b
     listing = get(api, "credentials")["credentials"]
     assert [g["subject"] for g in listing[0]["grants"]] == ["bot:finance"]
     with api.app.state.store.read() as c:
-        event = c.execute("SELECT actor,detail_json FROM events WHERE action='credential.import_requested'").fetchone()
-        assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail_json"]
+        event = c.execute("SELECT actor,detail FROM events WHERE action='credential.import_requested'").fetchone()
+        assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail"]
     # A variable that is not in the file is a plain failure the tool reports, not a wait.
     err, still = mcp(api, "hub_credential_import", {"env": "MISSING_KEY", "from_bot": "finance", "wait": 0}, token=ana["token"])
     assert not err and still["state"] == "waiting"

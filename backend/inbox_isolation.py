@@ -32,7 +32,7 @@ def _seed(c, people):
 
 def inbox_only(c, people, save=False):
     """Ids of the computers kept for inbox bots. `save` stores the seed on a write connection."""
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     if row:
         return set(json.loads(row[0]))
     ids = _seed(c, people)
@@ -42,7 +42,7 @@ def inbox_only(c, people, save=False):
 
 
 def _store(c, ids):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(sorted(ids))))
 
 

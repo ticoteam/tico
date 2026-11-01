@@ -117,7 +117,7 @@ def test_do_what_you_recommend_answers_a_question_on_a_file_version(api):
     with api.app.state.store.transaction() as c:
         ask_id = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (made["file_id"],)).fetchone()[0]
         asked = H.message(c, ask_id)
-        c.execute("UPDATE messages SET refs_json=?, to_actor='human:ana' WHERE id=?",
+        c.execute("UPDATE messages SET refs=?, to_actor='human:ana' WHERE id=?",
                   (json.dumps({**asked["refs"], "if_no_answer": {"do": "Approve", "kind": "reversible"}}), ask_id))
     post(api, "needs-you/recommended", {"ask": ask_id})
     assert get(api, f"tasks/{plan['id']}/answers")["answers"][0]["answers"] == {"verdict": ["Approve"]}

@@ -15,21 +15,21 @@ READY = {'schema_version': 1, 'bots': {}, 'worktrees': True, 'worktree_waits': T
 def turn_on(c, task_id):
     """The synthetic turn (attempt a1) is this task's: its message is in the task's room and names it."""
     room = H.task(c, task_id)['conversation_id']
-    c.execute("UPDATE messages SET refs_json=?,conversation_id=? WHERE id='m1'", (json.dumps({'task': task_id}), room))
+    c.execute("UPDATE messages SET refs=?,conversation_id=? WHERE id='m1'", (json.dumps({'task': task_id}), room))
 
 
 def setup_wait(api, tid, readiness=READY):
     """The bot's turn works on `tid`, and the bot already holds LIMIT worktrees on another task."""
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness_json=? WHERE id='r1'", (json.dumps(readiness),))
+        c.execute("UPDATE runners SET readiness=? WHERE id='r1'", (json.dumps(readiness),))
         turn_on(c, tid)
         filler = H.task_create(c, 'human:ana', 'Earlier work', 'Older worktrees', 'bot:cmo')
         c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
         links = []
         for i in range(W.LIMIT):
             link = uuid.uuid4().hex
-            c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,computer_id,"
-                      "path,detail_json,updated) VALUES(?,?,'worktree',?,'w','present','bot:cmo',?,'Acme/product',?,"
+            c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,repo,branch,computer_id,"
+                      "path,detail,updated_at) VALUES(?,?,'worktree',?,'w','present','bot:cmo',?,'Acme/product',?,"
                       "'r1',?,?,?)", (link, filler['id'], 'worktree:' + link, H.now(), f'tico/f{i}',
                                       f'tasks/{filler["id"][:8]}/f{i}',
                                       json.dumps({'owner': 'bot:cmo', 'checkout_state': 'ready'}), H.now()))
@@ -66,7 +66,7 @@ def rows(api, sql, args=()):
 
 def wakes(api, tid):
     return rows(api, "SELECT m.* FROM messages m WHERE m.to_actor='bot:cmo' "
-                     "AND json_extract(m.refs_json,'$.worktree_wait') IS NOT NULL AND json_extract(m.refs_json,'$.task')=?",
+                     "AND json_extract(m.refs,'$.worktree_wait') IS NOT NULL AND json_extract(m.refs,'$.task')=?",
                 (tid,))
 
 
@@ -121,7 +121,7 @@ def test_a_freed_place_is_reserved_prepared_and_wakes_the_task_once_after_setup(
     reserved = rows(api, 'SELECT * FROM worktree_waits')[0]
     assert reserved['state'] == 'reserved' and reserved['link_id']
     link = rows(api, 'SELECT * FROM task_links WHERE id=?', (reserved['link_id'],))[0]
-    assert link['task_id'] == tid and link['state'] == 'pending' and json.loads(link['detail_json'])['wait_id'] == wait['id']
+    assert link['task_id'] == tid and link['state'] == 'pending' and json.loads(link['detail'])['wait_id'] == wait['id']
     # The computer is asked to prepare it; repeated beats and sweeps keep one reservation and wake nobody.
     for _ in range(3):
         actions = beat(api)
@@ -204,7 +204,7 @@ def test_one_broken_wait_ends_alone_and_the_heartbeat_still_frees_places(prepare
     assert state[younger]['state'] == 'reserved'
     assert not rows(api, "SELECT * FROM events WHERE action='half.done'")
     told = wakes(api, tid)
-    assert len(told) == 1 and json.loads(told[0]['refs_json'])['quiet'] and 'worktree add Acme/product' in told[0]['body']
+    assert len(told) == 1 and json.loads(told[0]['refs'])['quiet'] and 'worktree add Acme/product' in told[0]['body']
     for _ in range(3):
         beat(api)
         waits.tick(api.app_state.store, 'Acme', force=True)
@@ -279,7 +279,7 @@ def test_close_reassign_revoke_and_stop_end_the_wait_without_touching_other_task
     free(api, filler, links[0])
     state = {r['task_id']: r['state'] for r in rows(api, 'SELECT * FROM worktree_waits')}
     assert state[tasks[2]] == 'cancelled' and state[tasks[3]] == 'cancelled'
-    assert all(json.loads(m['refs_json']).get('quiet') for m in wakes(api, tasks[2]))
+    assert all(json.loads(m['refs']).get('quiet') for m in wakes(api, tasks[2]))
     assert not wakes(api, tasks[0]) and not wakes(api, tasks[1])
     # A person stopping the turn that asked ends its waits; another turn's wait stands.
     put(api, 'bots/cmo/repositories', {'mode': 'all', 'all_access': 'write'})
@@ -310,7 +310,7 @@ def test_old_computers_keep_the_old_answer_and_health_and_the_task_show_the_wait
     assert 'wait' not in refused and 'Oldest idle: ' in refused['detail'] and 'End your turn' not in refused['detail']
     assert not rows(api, 'SELECT * FROM worktree_waits')
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness_json=? WHERE id='r1'", (json.dumps(READY),))
+        c.execute("UPDATE runners SET readiness=? WHERE id='r1'", (json.dumps(READY),))
     wait = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()['error']['wait']
     shown = api.get(f'/api/v2/tasks/{tid}', headers=auth()).json()['task']['worktree_waits']
     assert shown == [{'id': wait['id'], 'repo': 'Acme/product', 'state': 'waiting', 'since': wait['since'],
@@ -346,7 +346,7 @@ def test_a_wait_whose_task_got_blocked_is_cancelled_not_served(prepared):
     with api.app_state.store.transaction() as c:
         blocker = H.task_create(c, 'human:ana', 'Blocker', 'First this', 'bot:cpo')['id']
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (blocker,))
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'blocks',?)",
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
                   (blocker, tid, H.now()))
     free(api, filler, links[0])
     wait = rows(api, 'SELECT * FROM worktree_waits WHERE task_id=?', (tid,))[0]
@@ -396,12 +396,12 @@ def test_served_wait_reuses_removed_link_without_old_cleanup_intent(prepared):
                  held='held: live turn',
                  cleanup_attempts=W.CLEANUP_TRIES, cleanup_gave_up=True, cleanup_retry_at=H.now())
     with api.app_state.store.transaction() as c:
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,computer_id,"
-                  "path,detail_json,updated) VALUES(?,?,'worktree',?,'w','removed','bot:cmo',?,'Acme/product',"
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,repo,branch,computer_id,"
+                  "path,detail,updated_at) VALUES(?,?,'worktree',?,'w','removed','bot:cmo',?,'Acme/product',"
                   "'tico/retired','r1',?,?,?)",
                   (retired, tid, 'worktree:' + retired, old, f'tasks/{tid[:8]}/Acme__product', json.dumps(stale), old))
         pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/7')
-        c.execute("UPDATE task_links SET state='merged',created=?,branch='tico/retired',detail_json=? WHERE id=?",
+        c.execute("UPDATE task_links SET state='merged',created_at=?,branch='tico/retired',detail=? WHERE id=?",
                   (old, json.dumps({'head_sha': 'a' * 40}), pr['id']))
     assert post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').status_code == 409
     with api.app_state.store.transaction() as c:
@@ -409,15 +409,15 @@ def test_served_wait_reuses_removed_link_without_old_cleanup_intent(prepared):
     free(api, filler, links[0])
     served = rows(api, 'SELECT * FROM worktree_waits')[0]
     assert served['state'] == 'reserved' and served['link_id'] == retired
-    detail = json.loads(rows(api, 'SELECT detail_json FROM task_links WHERE id=?', (retired,))[0]['detail_json'])
+    detail = json.loads(rows(api, 'SELECT detail FROM task_links WHERE id=?', (retired,))[0]['detail'])
     assert not any(key in detail for key in stale if key not in ('owner', 'held'))
     assert detail.get('held') != stale['held']  # a current reservation hold is separate from the retired one
     assert finish_setup(api, tid, retired).status_code == 200
     assert rows(api, 'SELECT state FROM worktree_waits')[0]['state'] == 'woken'
     assert not any(a['link_id'] == retired and a['action'] == 'remove' for a in beat(api))
-    row = rows(api, 'SELECT state,detail_json FROM task_links WHERE id=?', (retired,))[0]
+    row = rows(api, 'SELECT state,detail FROM task_links WHERE id=?', (retired,))[0]
     assert row['state'] == 'present'
-    assert not any(json.loads(row['detail_json']).get(k) for k in W.REMOVAL)
+    assert not any(json.loads(row['detail']).get(k) for k in W.REMOVAL)
     # A PR opened for the new allocation can still release it when that work finishes.
     with api.app_state.store.transaction() as c:
         pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/8')

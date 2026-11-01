@@ -16,7 +16,7 @@ def role_type(c, role):
     """The id of the first type with this role, or None. Only one type is the Product roadmap; Engineering and a
     Dev tickets type made later may both carry the engineering role."""
     from .read_cache import one
-    row = one(c, 'SELECT id FROM task_types WHERE role=? ORDER BY created,id LIMIT 1', (role,))
+    row = one(c, 'SELECT id FROM task_types WHERE role=? ORDER BY created_at,id LIMIT 1', (role,))
     return row[0] if row else None
 
 
@@ -39,7 +39,7 @@ def migrate(c):
             H.add_column(c, 'task_types', 'role', 'TEXT')
 
             def ids(sql, *args):
-                return [r[0] for r in c.execute('SELECT id FROM task_types WHERE ' + sql + ' ORDER BY created,id', args)]
+                return [r[0] for r in c.execute('SELECT id FROM task_types WHERE ' + sql + ' ORDER BY created_at,id', args)]
             managed = (lambda role: ids('manager=?', LEGACY_MANAGERS[role])) if 'manager' in columns else (lambda role: [])
             for role, chosen in ((PRODUCT, (managed(PRODUCT) or ids('id=?', PRODUCT))[:1]),
                                  (ENGINEERING, managed(ENGINEERING) + ids('id=?', ENGINEERING))):
@@ -97,7 +97,7 @@ def ensure(c):
         if existing:
             c.execute('UPDATE task_types SET role=?,manager=coalesce(manager,?) WHERE id=?', (ident, manager, existing))
             continue
-        c.execute('INSERT INTO task_types(id,name,bots,manager,role,steps_only,created,updated) VALUES(?,?,?,?,?,?,?,?)',
+        c.execute('INSERT INTO task_types(id,name,bots,manager,role,steps_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
                   (ident, name, 'work', manager, ident, int(ident == PRODUCT), H.now(), H.now()))
         for position, (step, status) in enumerate(steps):
             c.execute('INSERT INTO task_steps(id,type_id,name,position,status) VALUES(?,?,?,?,?)',
@@ -227,8 +227,8 @@ def ready_step(c):
             public = c.execute('SELECT public_name FROM task_steps WHERE id=?', (building[0],)).fetchone()[0]
             c.execute('INSERT INTO task_steps(id,type_id,name,position,status,public_name) VALUES(?,?,?,?,?,?)',
                       (ident, type_id, READY_STEP, building[2] + 1, 'doing', public or 'In progress'))
-            c.execute('UPDATE task_types SET updated=? WHERE id=?', (H.now(), type_id))
-        c.execute('INSERT INTO registry_metadata(key,value_json) VALUES(?,?)', (READY_MARKER, '{"done": true}'))
+            c.execute('UPDATE task_types SET updated_at=? WHERE id=?', (H.now(), type_id))
+        c.execute('INSERT INTO registry_metadata(key,value) VALUES(?,?)', (READY_MARKER, '{"done": true}'))
     except BaseException:
         c.execute('ROLLBACK TO roadmap_ready_step')
         raise

@@ -29,7 +29,7 @@ def fresh_logs():
 def jobs_of(api, bot):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute("SELECT id,state,held,hold_reason,hold_task_id,attempt_id FROM jobs "
-                                           "WHERE bot=? ORDER BY created,id", (bot,))]
+                                           "WHERE bot=? ORDER BY created_at,id", (bot,))]
 
 
 def task_jobs(api, task_id):
@@ -38,7 +38,7 @@ def task_jobs(api, task_id):
         return [dict(r) for r in c.execute(
             "SELECT j.id,j.state,j.held,j.hold_reason,j.hold_task_id FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE j.bot='ops' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created,j.id", (task_id,))]
+            f"WHERE j.bot='ops' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at,j.id", (task_id,))]
 
 
 def hold_of(api, job_id):
@@ -102,7 +102,7 @@ def two_bots_with_chats(api, machine):
     post(api, "chat/ops", {"text": "Look at the export."})
     post(api, "chat/cpo", {"text": "Look at the pricing."})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops'", (H.shift(H.now(), minutes=-5),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops'", (H.shift(H.now(), minutes=-5),))
 
 
 def test_a_job_whose_checks_raise_is_held_and_the_claim_hands_out_the_next_bots_job(api, monkeypatch, caplog):
@@ -200,7 +200,7 @@ def test_a_moved_input_that_failed_on_the_old_upsert_is_held_and_other_bots_stil
     assert (held["held"], held["hold_reason"], held["state"]) == (1, claim_holds.REASON, "queued")
     assert held["attempt_id"] == attempt["id"]
     with store.read() as c:
-        error = c.execute("SELECT detail_json FROM events WHERE action='job.claim_failed' AND target=?",
+        error = c.execute("SELECT detail FROM events WHERE action='job.claim_failed' AND target=?",
                           (attempt["job_id"],)).fetchone()
         assert error and json.loads(error[0])["error"] == "IntegrityError"
         # The held job's preparation was rolled back: it made no attempt of its own.
@@ -866,7 +866,7 @@ def test_health_lists_waiting_bots_while_a_claim_check_raises(api, monkeypatch, 
         monkeypatch.setattr(execution, "job_refusal", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("unreadable")))
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE state='queued'", (H.shift(H.now(), minutes=-30),))
+        c.execute("UPDATE jobs SET created_at=? WHERE state='queued'", (H.shift(H.now(), minutes=-30),))
         online = {r["id"] for r in health._online_runners(c)}
         waiting, slow, stuck = health._waiting(c, online, store.settings)
     assert "ops" not in {r["bot"] for r in stuck}

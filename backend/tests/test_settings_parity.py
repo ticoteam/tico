@@ -138,10 +138,10 @@ def _objects(api, machine):
         found[key] = (made or {}).get("id") or (made or {}).get("key")
     now = H.now()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?)",
+        c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)",
                   (H.new_id(), "Acme/product", now))
-        c.execute("INSERT INTO bot_transitions(id,bot,kind,target_json,requested_by,expected_revision,state,created,"
-                  "updated) VALUES('tr-parity','finance','model',?,'human:ana',1,'prepared',?,?)",
+        c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created_at,"
+                  "updated_at) VALUES('tr-parity','finance','model',?,'human:ana',1,'prepared',?,?)",
                   ('{"model": "fake-model", "runtime": "fake", "effort": ""}', now, now))
         system = c.execute("SELECT id FROM system_routines LIMIT 1").fetchone() if c.execute(
             "SELECT 1 FROM sqlite_master WHERE name='system_routines'").fetchone() else None

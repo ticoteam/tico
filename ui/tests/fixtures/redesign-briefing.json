@@ -11,6 +11,6 @@
     ],
     "bets": ["bet_1"],
     "touched": [{"id": "bet_1", "n": 1, "statement": "Teams under 50 pick the tool that ships with their CI"}],
-    "created_by": "bot:librarian", "created": "2026-10-26T09:00:00Z", "updated": "2026-10-26T09:00:00Z"
+    "created_by": "bot:librarian", "created_at": "2026-10-26T09:00:00Z", "updated_at": "2026-10-26T09:00:00Z"
   }
 }

@@ -99,7 +99,7 @@ def environment(tmp_path):
             H.sync_registry(c, seed, PEOPLE)
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode(PEOPLE),))
             for slug, config in seed.items():
-                c.execute("INSERT INTO bot_config(bot,config_json,operator,repo) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,operator,repo) VALUES(?,?,?,?)",
                           (slug, encode(config), "morgan", "emp-" + slug))
         return client
 
@@ -197,7 +197,7 @@ def test_the_inbox_manager_turned_on_in_setup_is_a_message_bot_linked_to_the_own
     with api.app.state.store.read() as c:
         assert c.execute("SELECT reports_to FROM bot_config WHERE bot='inbox'").fetchone()[0] == "human:morgan"
         owner = next(p for p in views.roster(c)["people"] if p["id"] == "morgan")
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='inbox'").fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='inbox'").fetchone()[0])
     assert owner["inbox_bot"] == "inbox" and routines.declared_mailbox(config) == OWNER_EMAIL
 
 
@@ -318,7 +318,7 @@ def test_the_team_is_created_with_no_provider_and_no_computer_and_starts_once_th
     done = build_team(api)
     assert {"botops", "support"} <= {row["slug"] for row in done["bots"]}
     with api.app.state.store.read() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='support'").fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='support'").fetchone()[0])
         assert not c.execute("SELECT 1 FROM assignments").fetchone()
     assert not {"model", "runtime"} & set(config)                # it follows the company default, once there is one
     assert _states(api)["botops"] == "planned"                   # nothing is placed or running yet

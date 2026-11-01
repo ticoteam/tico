@@ -41,9 +41,9 @@ def _snoozed(c, actor):
     now = H.now()
     out = set()
     # The person's own rows (events_task_origin), not every person's in ts order (events_action_ts).
-    for row in c.execute("SELECT target, detail_json FROM events INDEXED BY events_task_origin WHERE actor=? "
+    for row in c.execute("SELECT target, detail FROM events INDEXED BY events_task_origin WHERE actor=? "
                          "AND action='batch.later' ORDER BY ts", (actor,)):
-        until = (H._json(row["detail_json"], {}) or {}).get("until") or ""
+        until = (H._json(row["detail"], {}) or {}).get("until") or ""
         if until > now:
             out.add(row["target"])
         else:
@@ -53,7 +53,7 @@ def _snoozed(c, actor):
 
 def _children(c, task_id, owner):
     return H._rows(c.execute("SELECT * FROM tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner=? AND status IN ('open','doing','waiting','review','ready') "
-                             "ORDER BY created", (task_id, owner)))
+                             "ORDER BY created_at", (task_id, owner)))
 
 
 def _row(it, actor):
@@ -84,8 +84,8 @@ def _row(it, actor):
         row["ready_since"] = it["ready_since"]
     if it.get("note"):
         row["note"] = _clip(it["note"], 300)
-    if it.get("created"):
-        row["created"] = it["created"]
+    if it.get("created_at"):
+        row["created_at"] = it["created_at"]
     if it.get("from_person"):
         row["from_person"] = it["from_person"]
     if it.get("pressing"):
@@ -177,7 +177,7 @@ def _name(c, actor):
 
 
 def _rank(row):
-    return needs_order(row["kind"], row.get("created"), row.get("rank") if row["kind"] == "task" else None,
+    return needs_order(row["kind"], row.get("created_at"), row.get("rank") if row["kind"] == "task" else None,
                        row.get("from_person"), row.get("pressing"), bool(row.get("ask_missing")), row.get("due"))
 
 
@@ -205,11 +205,11 @@ def lineup(c, person, rows):
 
 def _sent(c, person, since):
     """The batch messages this person sent since `since`, each with the item keys it carried."""
-    rows = c.execute("SELECT m.id, m.to_actor, m.refs_json, b.id AS batch, b.items_json, b.report_json, "
+    rows = c.execute("SELECT m.id, m.to_actor, m.refs, b.id AS batch, b.items, b.report, "
                      "b.message_id AS first "
-                     "FROM messages m JOIN batches b ON b.id=json_extract(m.refs_json,'$.live.batch') "
-                     "WHERE m.from_actor=? AND json_extract(m.refs_json,'$.live.kind')='batch' "
-                     "AND m.created>=? ORDER BY m.created DESC", (person, since)).fetchall()
+                     "FROM messages m JOIN batches b ON b.id=json_extract(m.refs,'$.live.batch') "
+                     "WHERE m.from_actor=? AND json_extract(m.refs,'$.live.kind')='batch' "
+                     "AND m.created_at>=? ORDER BY m.created_at DESC", (person, since)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -231,18 +231,18 @@ def _pending(c, person):
     for sent in _sent(c, person, since):
         if not privacy.message_readable(c, person, sent):
             continue
-        if _consumed(sent["report_json"], sent["id"], sent["first"]):
+        if _consumed(sent["report"], sent["id"], sent["first"]):
             continue
-        keys = ((H._json(sent["refs_json"], {}) or {}).get("live") or {}).get("items") or []
+        keys = ((H._json(sent["refs"], {}) or {}).get("live") or {}).get("items") or []
         reply = c.execute("SELECT * FROM messages WHERE in_reply_to=? AND from_actor=? "
-                          "ORDER BY created DESC LIMIT 1", (sent["id"], sent["to_actor"])).fetchone()
+                          "ORDER BY created_at DESC LIMIT 1", (sent["id"], sent["to_actor"])).fetchone()
         if not reply:
             for key in keys:
                 awaiting.setdefault(key, sent["to_actor"])
             continue
         if not privacy.message_readable(c, person, reply):
             continue
-        items = json.loads(sent["items_json"] or "[]")
+        items = json.loads(sent["items"] or "[]")
         parts = MARKER.split(reply["body"] or "")
         answers, loose = {}, parts[0].strip()
         for n, body in zip(parts[1::2], parts[2::2]):
@@ -257,10 +257,10 @@ def _pending(c, person):
 
 
 def _consume(c, report):
-    row = c.execute("SELECT report_json FROM batches WHERE id=?", (report["batch"],)).fetchone()
-    data = H._json(row["report_json"] if row else None, {}) or {}
+    row = c.execute("SELECT report FROM batches WHERE id=?", (report["batch"],)).fetchone()
+    data = H._json(row["report"] if row else None, {}) or {}
     data.setdefault("consumed", {})[report["message"]] = report["reply"]
-    c.execute("UPDATE batches SET report_json=? WHERE id=?", (json.dumps(data), report["batch"]))
+    c.execute("UPDATE batches SET report=? WHERE id=?", (json.dumps(data), report["batch"]))
 
 
 def _scope(c, person, line, asked):
@@ -278,7 +278,7 @@ def _scope(c, person, line, asked):
 
 
 def current(c, actor):
-    row = c.execute("SELECT * FROM batches WHERE person=? AND state='open' ORDER BY created DESC LIMIT 1",
+    row = c.execute("SELECT * FROM batches WHERE person=? AND state='open' ORDER BY created_at DESC LIMIT 1",
                     (actor,)).fetchone()
     return dict(row) if row else None
 
@@ -326,32 +326,32 @@ def start(c, actor, items, snapshot, scope=None):
             _consume(c, report)
     for row in rows:
         row.pop("_report", None)
-    batch = {"id": H.new_id(), "person": actor, "state": "open", "created": H.now(), "committed_at": None,
-             "items_json": json.dumps(rows), "cursor": 0, "responses_json": "{}",
-             "alerts_json": json.dumps(alerts(snapshot)), "message_id": None, "report_json": None,
+    batch = {"id": H.new_id(), "person": actor, "state": "open", "created_at": H.now(), "committed_at": None,
+             "items": json.dumps(rows), "cursor": 0, "responses": "{}",
+             "alerts": json.dumps(alerts(snapshot)), "message_id": None, "report": None,
              "scope": group}
-    c.execute("INSERT INTO batches(id,person,state,created,committed_at,items_json,cursor,responses_json,"
-              "alerts_json,message_id,report_json,scope) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-              tuple(batch[k] for k in ("id", "person", "state", "created", "committed_at", "items_json", "cursor",
-                                       "responses_json", "alerts_json", "message_id", "report_json", "scope")))
+    c.execute("INSERT INTO batches(id,person,state,created_at,committed_at,items,cursor,responses,"
+              "alerts,message_id,report,scope) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+              tuple(batch[k] for k in ("id", "person", "state", "created_at", "committed_at", "items", "cursor",
+                                       "responses", "alerts", "message_id", "report", "scope")))
     H.event(c, actor, "batch.started", batch["id"], {"items": len(rows), "alerts": len(alerts(snapshot)),
                                                      "scope": group})
     return {**view(c, batch), "lineup": line}
 
 
 def _items(batch):
-    return json.loads(batch["items_json"] or "[]")
+    return json.loads(batch["items"] or "[]")
 
 
 def _responses(batch):
-    return json.loads(batch["responses_json"] or "{}")
+    return json.loads(batch["responses"] or "{}")
 
 
 def view(c, batch, resumed=False):
     items, responses = _items(batch), _responses(batch)
     cursor = int(batch["cursor"] or 0)
     out = {"id": batch["id"], "state": batch["state"], "total": len(items), "responded": len(responses),
-           "alerts": json.loads(batch["alerts_json"] or "[]"), "resumed": resumed,
+           "alerts": json.loads(batch["alerts"] or "[]"), "resumed": resumed,
            "scope": batch.get("scope")}
     if batch["state"] != "open":
         return out
@@ -435,7 +435,7 @@ def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", 
     kept = [r for r in responses.get(item["key"], [])
             if not (kind in VERDICTS and r["kind"] in VERDICTS)]
     responses[item["key"]] = kept + [response]
-    c.execute("UPDATE batches SET responses_json=? WHERE id=?", (json.dumps(responses), batch["id"]))
+    c.execute("UPDATE batches SET responses=? WHERE id=?", (json.dumps(responses), batch["id"]))
     return {"recorded": True, "n": idx + 1, "key": item["key"], "response": response,
             "responded": len(responses), "total": len(items)}
 

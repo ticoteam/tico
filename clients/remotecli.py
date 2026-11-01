@@ -1156,7 +1156,7 @@ def integration_text(page):
         out += [f"  {q['id']:<44} {q['title']}" for q in page["queries"]]
     notes = page.get("learnings") or []
     out += ["", f"## Learnings ({len(notes)}; add one with `hub tool learn {page['service']} \"...\"`)"]
-    out += [f"  {n['created'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]
+    out += [f"  {n['created_at'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]
     return "\n".join(out)
 
 

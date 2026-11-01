@@ -211,7 +211,7 @@ def latest(readings, usable=False):
     """The newest effective reading by business time, then by when it was collected. `usable` skips a
     partial one: half a period is not a value to judge."""
     pool = [r for r in readings if not (usable and r.get("quality") == "partial")]
-    return max(pool, key=lambda r: (r["period_end"] or "", r["collected_at"] or "", r["created"] or ""), default=None)
+    return max(pool, key=lambda r: (r["period_end"] or "", r["collected_at"] or "", r["created_at"] or ""), default=None)
 
 
 def assess(kpi, link, readings, at=None):
@@ -270,7 +270,7 @@ def assess(kpi, link, readings, at=None):
         first = min((r for r in readings if r.get("quality") != "partial"),
                     key=lambda r: (r["period_end"] or "", r["collected_at"] or ""), default=used)
         start, started = first["value"], _dt(first["period_end"])
-    started = started or _dt(link.get("created")) or at
+    started = started or _dt(link.get("created_at")) or at
     deadline = _dt(utc(link["deadline"], end=True))
     colour, expected = pace(start, started, target, deadline, value, _dt(used["period_end"]) or at, kpi.get("direction") or "up")
     out["expected"] = expected
@@ -339,8 +339,8 @@ def readings(conn, kpi_id, effective=False, limit=500):
         from . import botkpis
         return botkpis.readings(conn, kpi_id)
     rows = H._rows(conn.execute(
-        "SELECT r.*, (SELECT s.id FROM kpi_readings s WHERE s.supersedes=r.id ORDER BY s.created LIMIT 1) AS superseded_by "
-        "FROM kpi_readings r WHERE r.kpi_id=? ORDER BY r.period_end, r.collected_at, r.created", (kpi_id,)))
+        "SELECT r.*, (SELECT s.id FROM kpi_readings s WHERE s.supersedes=r.id ORDER BY s.created_at LIMIT 1) AS superseded_by "
+        "FROM kpi_readings r WHERE r.kpi_id=? ORDER BY r.period_end, r.collected_at, r.created_at", (kpi_id,)))
     if effective:
         rows = [r for r in rows if not r["superseded_by"]]
     return rows[-limit:]
@@ -356,7 +356,7 @@ def effective_many(conn, kpi_ids):
         for row in conn.execute(
                 f"SELECT * FROM kpi_readings r WHERE kpi_id IN ({marks}) AND NOT EXISTS "
                 "(SELECT 1 FROM kpi_readings s WHERE s.supersedes=r.id) "
-                "ORDER BY r.period_end, r.collected_at, r.created", chunk):
+                "ORDER BY r.period_end, r.collected_at, r.created_at", chunk):
             out[row["kpi_id"]].append(dict(row))
     return out
 
@@ -370,7 +370,7 @@ def links_of(conn, goal_id=None, kpi_id=None):
         where.append("kpi_id=?")
         args.append(kpi_id)
     return H._rows(conn.execute("SELECT * FROM goal_kpis" + (" WHERE " + " AND ".join(where) if where else "")
-                                + " ORDER BY created", args))
+                                + " ORDER BY created_at", args))
 
 
 def link(conn, goal_id, kpi_id):
@@ -400,7 +400,7 @@ def view(record, rows, links=None, at=None):
     newest = latest(rows)
     state = assess(record, links, rows, at)
     base = {**{k: record.get(k) for k in ("id", "slug", "name", "definition", "unit", "direction", "cadence", "owner",
-                                          "source_note", "definition_version", "created", "created_by", "updated",
+                                          "source_note", "definition_version", "created_at", "created_by", "updated_at",
                                           "archived_at", "archived_by")},
             "auto": auto(record["id"]), "latest": reading_brief(newest), "readings": len(rows),
             "freshness": state["freshness"], "spark": spark(rows)}
@@ -426,7 +426,7 @@ def goal_views(conn, goal_ids, at=None, include_archived=False):
     for start in range(0, len(goal_ids), 400):
         chunk = goal_ids[start:start + 400]
         rows.extend(H._rows(conn.execute(
-            f"SELECT * FROM goal_kpis WHERE goal_id IN ({','.join('?' * len(chunk))}) ORDER BY created", chunk)))
+            f"SELECT * FROM goal_kpis WHERE goal_id IN ({','.join('?' * len(chunk))}) ORDER BY created_at", chunk)))
     if not rows:
         return out
     ids = list({r["kpi_id"] for r in rows})
@@ -501,14 +501,14 @@ def create(conn, actor, owner, fields, kid=None):
         raise ValueError("name the measure, in words: what is counted, per what")
     ts = H.now()
     row = {"id": kid or H.new_id(), "goal_id": "", "name": values["name"], "unit": values.get("unit", ""), "target": None,
-           "created": ts, "created_by": actor, "slug": _unique_slug(conn, values["name"]),
+           "created_at": ts, "created_by": actor, "slug": _unique_slug(conn, values["name"]),
            "definition": values.get("definition", ""), "direction": values.get("direction", "up"),
            "cadence": values.get("cadence", "weekly"), "owner": owner, "source_note": values.get("source_note", ""),
-           "definition_version": 1, "updated": ts}
-    conn.execute("INSERT INTO kpis (id, goal_id, name, unit, target, created, created_by, slug, definition, direction, "
-                 "cadence, owner, source_note, definition_version, updated) VALUES (:id, :goal_id, :name, :unit, "
-                 ":target, :created, :created_by, :slug, :definition, :direction, :cadence, :owner, :source_note, "
-                 ":definition_version, :updated)", row)
+           "definition_version": 1, "updated_at": ts}
+    conn.execute("INSERT INTO kpis (id, goal_id, name, unit, target, created_at, created_by, slug, definition, direction, "
+                 "cadence, owner, source_note, definition_version, updated_at) VALUES (:id, :goal_id, :name, :unit, "
+                 ":target, :created_at, :created_by, :slug, :definition, :direction, :cadence, :owner, :source_note, "
+                 ":definition_version, :updated_at)", row)
     _version(conn, row, actor, ts)
     return kpi(conn, row["id"])
 
@@ -530,7 +530,7 @@ def update(conn, actor, kpi_id, fields, owner=None):
     sets = {k: new for k, (_, new) in changes.items()}
     if any(k in DEFINING for k in changes):
         sets["definition_version"] = row["definition_version"] + 1
-    sets["updated"] = ts
+    sets["updated_at"] = ts
     conn.execute(f"UPDATE kpis SET {', '.join(k + '=:' + k for k in sets)} WHERE id=:id", {**sets, "id": kpi_id})
     after = kpi(conn, kpi_id)
     if "definition_version" in sets:
@@ -548,11 +548,11 @@ def set_archived(conn, actor, kpi_id, archived):
         return row
     if archived:
         ts = H.now()
-        conn.execute("UPDATE kpis SET archived_at=?, archived_by=?, updated=? WHERE id=?",
+        conn.execute("UPDATE kpis SET archived_at=?, archived_by=?, updated_at=? WHERE id=?",
                      (ts, actor, ts, kpi_id))
         H.event(conn, actor, "kpi.archive", kpi_id)
     else:
-        conn.execute("UPDATE kpis SET archived_at=NULL, archived_by=NULL, updated=? WHERE id=?",
+        conn.execute("UPDATE kpis SET archived_at=NULL, archived_by=NULL, updated_at=? WHERE id=?",
                      (H.now(), kpi_id))
         H.event(conn, actor, "kpi.restore", kpi_id)
     return kpi(conn, kpi_id)
@@ -602,12 +602,12 @@ def add_reading(conn, actor, row, value, period_start=None, period_end=None, col
         if not (note or str(evidence or "").strip()):
             raise ValueError("say what the correction changes, in the note or the evidence")
     reading = {"id": H.new_id(), "kpi_id": row["id"], "ts": end, "value": float(value), "actor": actor,
-               "source": source, "note": note, "created": now, "period_start": start, "period_end": end,
+               "source": source, "note": note, "created_at": now, "period_start": start, "period_end": end,
                "collected_at": collected, "evidence": str(evidence or "").strip()[:2000], "quality": quality,
                "definition_version": version, "supersedes": supersedes or None}
-    conn.execute("INSERT INTO kpi_readings (id, kpi_id, ts, value, actor, source, note, created, period_start, "
+    conn.execute("INSERT INTO kpi_readings (id, kpi_id, ts, value, actor, source, note, created_at, period_start, "
                  "period_end, collected_at, evidence, quality, definition_version, supersedes) VALUES (:id, :kpi_id, "
-                 ":ts, :value, :actor, :source, :note, :created, :period_start, :period_end, :collected_at, "
+                 ":ts, :value, :actor, :source, :note, :created_at, :period_start, :period_end, :collected_at, "
                  ":evidence, :quality, :definition_version, :supersedes)", reading)
     return reading
 
@@ -619,11 +619,11 @@ def set_link(conn, actor, goal_id, kpi_id, values):
     ts = H.now()
     if old:
         conn.execute("UPDATE goal_kpis SET kind=:kind, baseline=:baseline, baseline_at=:baseline_at, target=:target, "
-                     "deadline=:deadline, min=:min, max=:max, updated=:ts, updated_by=:actor WHERE id=:id",
+                     "deadline=:deadline, min=:min, max=:max, updated_at=:ts, updated_by=:actor WHERE id=:id",
                      {**values, "ts": ts, "actor": actor, "id": old["id"]})
     else:
         conn.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, baseline, baseline_at, target, deadline, min, max, "
-                     "created, created_by, updated, updated_by) VALUES (:id, :goal_id, :kpi_id, :kind, :baseline, "
+                     "created_at, created_by, updated_at, updated_by) VALUES (:id, :goal_id, :kpi_id, :kind, :baseline, "
                      ":baseline_at, :target, :deadline, :min, :max, :ts, :actor, :ts, :actor)",
                      {**values, "id": H.new_id(), "goal_id": goal_id, "kpi_id": kpi_id, "ts": ts, "actor": actor})
     return link(conn, goal_id, kpi_id), old
@@ -635,5 +635,5 @@ def unlink(conn, goal_id, kpi_id):
 
 def fill_slugs(conn):
     """Give every KPI a slug (the folder name in the Strategy Bot's repository)."""
-    for row in conn.execute("SELECT id, name FROM kpis WHERE slug IS NULL OR slug='' ORDER BY created").fetchall():
+    for row in conn.execute("SELECT id, name FROM kpis WHERE slug IS NULL OR slug='' ORDER BY created_at").fetchall():
         conn.execute("UPDATE kpis SET slug=? WHERE id=?", (_unique_slug(conn, row["name"]), row["id"]))

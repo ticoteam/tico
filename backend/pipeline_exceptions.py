@@ -66,8 +66,8 @@ def _finished_check(c, ticket, step, since):
     None: the check was filed, and what stands is the ticket not moving on."""
     from . import step_flow
     for row in c.execute(
-            "SELECT t.id, t.title, t.owner, coalesce(t.done_at, t.closed_at, t.updated) AS ended FROM task_relations r "
-            "JOIN tasks t ON t.id=r.from_task WHERE r.kind='parent' AND r.to_task=? AND t.created>=? "
+            "SELECT t.id, t.title, t.owner, coalesce(t.done_at, t.closed_at, t.updated_at) AS ended FROM task_relations r "
+            "JOIN tasks t ON t.id=r.from_task WHERE r.kind='parent' AND r.to_task=? AND t.created_at>=? "
             f"AND t.status NOT IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) ORDER BY ended DESC, t.id",
             (ticket["id"], since, *H.ACTIVE_STATUSES)):
         found = step_flow.child_check(c, dict(row), ticket)
@@ -94,13 +94,13 @@ def _runs(c, row):
         return False, [], []
     lanes, _root = H._session_lanes(c, row)
     attempts = H._rows(c.execute(
-        "SELECT a.id, a.job_id, a.state, a.created, a.finished, a.result_json, a.stop_requested, d.end_reason "
+        "SELECT a.id, a.job_id, a.state, a.created_at, a.finished_at, a.result, a.stop_requested_at, d.end_reason "
         "FROM attempts a LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id WHERE a.bot=? AND a.lane IN (?,?) "
-        "ORDER BY coalesce(a.finished,a.created) DESC, a.id DESC LIMIT 20", (slug, *lanes)))
+        "ORDER BY coalesce(a.finished_at,a.created_at) DESC, a.id DESC LIMIT 20", (slug, *lanes)))
     live = any(a["state"] in ("leased", "running") for a in attempts)
     jobs = [r[0] for r in c.execute(
         "SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
-        "AND j.state IN ('queued','held','uncertain') AND (m.conversation_id=? OR json_extract(m.refs_json,'$.task')=?)",
+        "AND j.state IN ('queued','held','uncertain') AND (m.conversation_id=? OR json_extract(m.refs,'$.task')=?)",
         (slug, row.get("conversation_id") or "", row["id"]))]
     return live, [a for a in attempts if a["state"] not in ("leased", "running")], jobs
 
@@ -158,22 +158,22 @@ def _stuck(c, out, rows, children, at, reader):
                                                          "owner": H.actor_id(item.get("owner") or "") or None}
         subject = "ticket:" + ticket["id"]
         extra = {"ticket": label, **({"check": check} if check else {})}
-        start = entered.get(item["id"]) or item.get("created")
+        start = entered.get(item["id"]) or item.get("created_at")
         newest = finished[0] if finished else None
         if "uncertain" in jobs:
             out.add(subject, "run", "a run is uncertain and waits for its owner's review",
-                    (newest or {}).get("finished") or start, **extra)
-        elif newest and newest["state"] in FAILED and (newest["finished"] or newest["created"]) >= start:
+                    (newest or {}).get("finished_at") or start, **extra)
+        elif newest and newest["state"] in FAILED and (newest["finished_at"] or newest["created_at"]) >= start:
             streak = []
             for a in finished:
                 if a["state"] not in FAILED:
                     break
                 streak.append(a)
             first = streak[-1]
-            word = "was cut" if newest["stop_requested"] or newest["state"] == "interrupted" else "failed"
+            word = "was cut" if newest["stop_requested_at"] or newest["state"] == "interrupted" else "failed"
             out.add(subject, "run", f"the last run {word} ({cause_of(newest)})"
                     + (f", {len(streak)} in a row" if len(streak) > 1 else ""),
-                    first["finished"] or first["created"], **extra)
+                    first["finished_at"] or first["created_at"], **extra)
         if live or jobs or not H.is_bot(item.get("owner") or ""):
             continue
         if item["id"] == ticket["id"] and by_ticket.get(item["id"]):
@@ -190,7 +190,7 @@ def _stuck(c, out, rows, children, at, reader):
                 out.add(subject, "stuck", f"{done['title']} finished and the ticket has not moved on "
                         f"(owner {label['owner']})", done["ended"], **extra)
             continue
-        last = max(x for x in (start, (newest or {}).get("finished") or (newest or {}).get("created")) if x)
+        last = max(x for x in (start, (newest or {}).get("finished_at") or (newest or {}).get("created_at")) if x)
         if last > cutoff or _waits(c, item, at):
             continue
         who = (check or label)["owner"]
@@ -205,18 +205,18 @@ def _pools(c, out, rows, at):
     if not tickets or not H._has_table(c, "check_waits"):
         return
     cutoff = H.shift(at, minutes=-STUCK_MINUTES)
-    for wait in c.execute("SELECT w.ticket_id, w.step_id, w.title, w.reason, w.created FROM check_waits w "
-                          "WHERE w.state='waiting' ORDER BY w.created, w.id"):
+    for wait in c.execute("SELECT w.ticket_id, w.step_id, w.title, w.reason, w.created_at FROM check_waits w "
+                          "WHERE w.state='waiting' ORDER BY w.created_at, w.id"):
         ticket = tickets.get(wait["ticket_id"])
         if not ticket or ticket.get("step_id") != wait["step_id"]:
             continue
         found = check_pools.pool(c, wait["step_id"])
         empty = not found or not found[1]
-        if not empty and wait["created"] > cutoff:
+        if not empty and wait["created_at"] > cutoff:
             continue
         cause = (f"{wait['title']}: the step's pool is empty" if empty else
                  f"{wait['title']}: no reviewer free for {STUCK_MINUTES} minutes ({wait['reason'] or 'all busy'})")
-        out.add("ticket:" + ticket["id"], "pool", cause, wait["created"], ticket=_label(c, ticket))
+        out.add("ticket:" + ticket["id"], "pool", cause, wait["created_at"], ticket=_label(c, ticket))
 
 
 def _slots(c, out, typ, rows):
@@ -236,15 +236,15 @@ def _slots(c, out, typ, rows):
         for slug in assign.get("pool") or []:
             mine = sorted((r for r in rows if r.get("owner") == "bot:" + slug
                            and after < position.get(r.get("step_id"), after) < before),
-                          key=lambda r: r.get("updated") or "")
+                          key=lambda r: r.get("updated_at") or "")
             if len(mine) > slots:
                 out.add("bot:" + slug, "slots", f"{slug} holds {len(mine)} tickets, over its {slots} slots at "
-                        f"{step['name']}", mine[slots].get("updated") or step.get("updated") or H.now(), bot=slug)
+                        f"{step['name']}", mine[slots].get("updated_at") or step.get("updated") or H.now(), bot=slug)
         backlog = flow.get("backlog") or {}
         here = by_step.get(step["id"]) or []
         over = backlog.get("over")
         if isinstance(over, int) and len(here) > over:
-            oldest = min((r.get("updated") or r.get("created") for r in here), default=None)
+            oldest = min((r.get("updated_at") or r.get("created_at") for r in here), default=None)
             out.add("step:" + step["id"], "backlog", f"{len(here)} tickets at {step['name']}, over its backlog of {over}",
                     oldest, step=step["name"])
 
@@ -283,7 +283,7 @@ def _outages(c, out, typ, rows, at):
         if row["status"] in BOT_HELD:
             out.add("bot:" + slug, "outage", f"{slug} is {row['status']}", row["updated_at"] or at, bot=slug)
         elif not check_pools.online(c, slug):
-            seen = c.execute("SELECT max(r.last_seen) FROM assignments a JOIN runners r ON r.id=a.runner_id "
+            seen = c.execute("SELECT max(r.last_seen_at) FROM assignments a JOIN runners r ON r.id=a.runner_id "
                              "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchone()[0]
             out.add("bot:" + slug, "outage", f"{slug}'s computer is offline", seen or at, bot=slug)
 
@@ -310,8 +310,8 @@ def _refusals(c, out, rows, at):
                     ticket=_label(c, row))
     counted = {}
     since = H.shift(at, hours=-REFUSAL_HOURS)
-    for event in c.execute("SELECT ts, rule, detail_json FROM refusals WHERE ts>=? ORDER BY ts, id", (since,)):
-        task_id = (H._json(event["detail_json"], {}) or {}).get("task")
+    for event in c.execute("SELECT ts, rule, detail FROM refusals WHERE ts>=? ORDER BY ts, id", (since,)):
+        task_id = (H._json(event["detail"], {}) or {}).get("task")
         if task_id in tickets and task_id not in retried:
             counted.setdefault((task_id, str(event["rule"] or "a rule")), []).append(event["ts"])
     for (task_id, rule), times in counted.items():
@@ -323,13 +323,13 @@ def _refusals(c, out, rows, at):
 def _merges(c, out, rows):
     """Open pull requests GitHub reports as conflicting."""
     for row in rows:
-        for link in c.execute("SELECT number, pr_sha, detail_json, mergeable, updated, created FROM task_links "
+        for link in c.execute("SELECT number, pr_sha, detail, mergeable, updated_at, created_at FROM task_links "
                               "WHERE task_id=? AND kind='pr' AND state IN ('open','draft') AND mergeable='conflict' "
-                              "ORDER BY created", (row["id"],)):
-            head = (H._json(link["detail_json"], {}) or {}).get("head_sha") or link["pr_sha"] or ""
+                              "ORDER BY created_at", (row["id"],)):
+            head = (H._json(link["detail"], {}) or {}).get("head_sha") or link["pr_sha"] or ""
             if link["number"] and head:
                 out.add("ticket:" + row["id"], "merge", f"PR #{link['number']} cannot merge: it conflicts at {head[:12]}",
-                        link["updated"] or link["created"], ticket=_label(c, row), pr=link["number"], head=head)
+                        link["updated_at"] or link["created_at"], ticket=_label(c, row), pr=link["number"], head=head)
 
 
 def build(c, typ, rows=None, at=None, reader=None):
@@ -346,7 +346,7 @@ def build(c, typ, rows=None, at=None, reader=None):
     if rows is None:
         rows = [r for r in H._rows(c.execute(
             f"SELECT * FROM tasks WHERE type_id=? AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
-            "ORDER BY created", (typ["id"], *H.ACTIVE_STATUSES))) if H.bot_reads_task(c, reader, r)][:5000]
+            "ORDER BY created_at", (typ["id"], *H.ACTIVE_STATUSES))) if H.bot_reads_task(c, reader, r)][:5000]
     rows = [dict(r) for r in rows if r["status"] in H.ACTIVE_STATUSES]
     out = _List()
     children = _check_children(c, {r["id"] for r in rows})
@@ -400,7 +400,7 @@ def deliver(c, at=None):
             continue
         entries = build(c, typ, at=at, reader=H.bot_actor(slug))
         keys = sorted(e["key"] for e in entries)
-        last = c.execute("SELECT detail_json FROM events WHERE action=? AND target=? ORDER BY rowid DESC LIMIT 1",
+        last = c.execute("SELECT detail FROM events WHERE action=? AND target=? ORDER BY rowid DESC LIMIT 1",
                          (EVENT, typ["id"])).fetchone()
         sent = set((H._json(last[0], {}) or {}).get("keys") or []) if last else set()
         new = [k for k in keys if k not in sent]

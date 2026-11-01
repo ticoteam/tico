@@ -25,8 +25,8 @@ TUNNEL_CONFIG = Path("/etc/tico/tunnel.yml")
 def report_health(store, service, *, success=None, error=None, detail=None):
     with store.transaction() as c:
         c.execute("INSERT INTO service_health VALUES(?,?,?,?) ON CONFLICT(service) DO UPDATE SET "
-                  "last_success=coalesce(excluded.last_success,service_health.last_success),"
-                  "last_error=excluded.last_error,detail_json=excluded.detail_json",
+                  "last_succeeded_at=coalesce(excluded.last_succeeded_at,service_health.last_succeeded_at),"
+                  "last_error=excluded.last_error,detail=excluded.detail",
                   (service, success, error, encode(detail or {})))
 
 
@@ -80,8 +80,8 @@ def retention_tier(store, bucket, now):
         rows = {r["service"]: dict(r) for r in c.execute("SELECT * FROM service_health WHERE service IN ('backup-daily','backup-monthly')")}
     for tier, length in (("monthly", 7), ("daily", 10)):
         row = rows.get("backup-" + tier, {})
-        detail = json.loads(row.get("detail_json") or "{}")
-        if detail.get("bucket") != bucket or (row.get("last_success") or "")[:length] != now[:length]:
+        detail = json.loads(row.get("detail") or "{}")
+        if detail.get("bucket") != bucket or (row.get("last_succeeded_at") or "")[:length] != now[:length]:
             return tier
     return "hourly"
 
@@ -130,18 +130,18 @@ def restore_check_due(store, now=None):
     if boundary > now:
         boundary -= timedelta(days=1)
     with store.read() as c:
-        row = c.execute("SELECT last_success FROM service_health WHERE service='restore-check'").fetchone()
-    last = H.parse_ts(row["last_success"]) if row and row["last_success"] else None
+        row = c.execute("SELECT last_succeeded_at FROM service_health WHERE service='restore-check'").fetchone()
+    last = H.parse_ts(row["last_succeeded_at"]) if row and row["last_succeeded_at"] else None
     return last is None or last < boundary
 
 
 def restore_check(store, s3, cloudwatch, bucket):
     with store.read() as c:
-        row = c.execute("SELECT last_success,last_error,detail_json FROM service_health WHERE service='backup'").fetchone()
+        row = c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service='backup'").fetchone()
     try:
-        if not row or not row["last_success"] or row["last_error"]:
+        if not row or not row["last_succeeded_at"] or row["last_error"]:
             raise RuntimeError("No successful current backup is available for an isolated restore check")
-        detail = json.loads(row["detail_json"] or "{}")
+        detail = json.loads(row["detail"] or "{}")
         if detail.get("bucket") != bucket:
             raise RuntimeError("Latest backup belongs to a different storage bucket")
         database_bytes = detail.get("database_bytes", store.settings.db_path.stat().st_size)
@@ -183,7 +183,7 @@ def health(store, cloudwatch):
                    "restore-check": "RestoreCheckAgeSeconds"}
     for service, name in age_metrics.items():
         row = rows.get(service, {})
-        last = H.parse_ts(row.get("last_success"))
+        last = H.parse_ts(row.get("last_succeeded_at"))
         age = max(0, (H.parse_ts(H.now()) - last).total_seconds()) if last else 1_000_000
         metric(cloudwatch, name, age, "Seconds")
     free = shutil.disk_usage(store.settings.db_path.parent).free
@@ -192,7 +192,7 @@ def health(store, cloudwatch):
     metric(cloudwatch, "ApiHealthy", int(api_ok))
     metric(cloudwatch, "ReplicationHealthy", int(replication_ok))
     metric(cloudwatch, "TunnelHealthy", int(tunnel_ok))
-    return {"services": {k: {"last_success": v["last_success"], "last_error": v["last_error"]} for k, v in rows.items()},
+    return {"services": {k: {"last_succeeded_at": v["last_succeeded_at"], "last_error": v["last_error"]} for k, v in rows.items()},
             "disk_free_bytes": free, "api_healthy": api_ok, "replication_healthy": replication_ok,
             "tunnel_healthy": tunnel_ok}
 

@@ -14,7 +14,7 @@ from ..core.org import SYSTEM
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS fin_settings (
-  key TEXT PRIMARY KEY, value_json TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  key TEXT PRIMARY KEY, value TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   updated_at TEXT NOT NULL, updated_by TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS fin_books (
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS fin_rollups (
 
 CREATE TABLE IF NOT EXISTS fin_contacts (
   id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), name TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'vendor' CHECK (kind IN ('vendor','customer','both')), emails_json TEXT NOT NULL DEFAULT '[]',
+  kind TEXT NOT NULL DEFAULT 'vendor' CHECK (kind IN ('vendor','customer','both')), emails TEXT NOT NULL DEFAULT '[]',
   default_account_id TEXT REFERENCES fin_accounts(id), is_1099 INTEGER NOT NULL DEFAULT 0, tax_id_ref TEXT,
   payment_ref TEXT, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   updated_at TEXT);
@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS fin_bills (
 
 CREATE TABLE IF NOT EXISTS fin_bill_lines (
   id TEXT PRIMARY KEY, bill_id TEXT NOT NULL REFERENCES fin_bills(id), account_id TEXT REFERENCES fin_accounts(id),
-  amount BIGINT NOT NULL, description TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '{}',
+  amount BIGINT NOT NULL, description TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS fin_invoices (
@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS fin_invoices (
 
 CREATE TABLE IF NOT EXISTS fin_invoice_lines (
   id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL REFERENCES fin_invoices(id), account_id TEXT REFERENCES fin_accounts(id),
-  amount BIGINT NOT NULL, description TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '{}',
+  amount BIGINT NOT NULL, description TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS fin_attachments (
@@ -139,11 +139,11 @@ CREATE TABLE IF NOT EXISTS fin_feed_txns (
   entry_id TEXT REFERENCES fin_entries(id), commitment_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   updated_at TEXT, pending INTEGER NOT NULL DEFAULT 0, provider_status TEXT NOT NULL DEFAULT '', posted_at TEXT,
   kind TEXT NOT NULL DEFAULT '', card_id TEXT, hold_id TEXT, reconciliation_id TEXT, version INTEGER NOT NULL DEFAULT 0,
-  request_id TEXT, raw_json TEXT NOT NULL DEFAULT '{}', UNIQUE (money_account_id, provider_id));
+  request_id TEXT, raw TEXT NOT NULL DEFAULT '{}', UNIQUE (money_account_id, provider_id));
 
 CREATE TABLE IF NOT EXISTS fin_reconciliations (
   id TEXT PRIMARY KEY, money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id), statement_end TEXT NOT NULL,
-  statement_balance BIGINT NOT NULL, cleared_json TEXT NOT NULL DEFAULT '[]', difference BIGINT NOT NULL DEFAULT 0,
+  statement_balance BIGINT NOT NULL, cleared TEXT NOT NULL DEFAULT '[]', difference BIGINT NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done')), completed_at TEXT,
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, cleared_total BIGINT NOT NULL DEFAULT 0, statement_id TEXT,
   action_id TEXT, undone_at TEXT, undone_by TEXT);
@@ -189,7 +189,7 @@ CREATE TABLE IF NOT EXISTS fin_cards (
   id TEXT PRIMARY KEY, provider TEXT NOT NULL, provider_card_id TEXT, holder TEXT NOT NULL,
   budget_id TEXT REFERENCES fin_budgets(id), money_account_id TEXT REFERENCES fin_money_accounts(id),
   kind TEXT NOT NULL CHECK (kind IN ('standing','single_use','person')), limit_amount BIGINT, limit_interval TEXT,
-  currency TEXT NOT NULL, merchant_locks_json TEXT NOT NULL DEFAULT '[]', category_locks_json TEXT NOT NULL DEFAULT '[]',
+  currency TEXT NOT NULL, merchant_locks TEXT NOT NULL DEFAULT '[]', category_locks TEXT NOT NULL DEFAULT '[]',
   expires_at TEXT, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','frozen','cancelled')), last4 TEXT,
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT, nickname TEXT NOT NULL DEFAULT '',
   provider_limit BIGINT, sync_status TEXT NOT NULL DEFAULT '', sync_error TEXT, synced_at TEXT);
@@ -197,7 +197,7 @@ CREATE TABLE IF NOT EXISTS fin_cards (
 CREATE TABLE IF NOT EXISTS fin_card_auths (
   id TEXT PRIMARY KEY, card_id TEXT NOT NULL REFERENCES fin_cards(id), provider_auth_id TEXT, amount BIGINT NOT NULL,
   currency TEXT NOT NULL, merchant TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL CHECK (mode IN ('live','synced')),
-  decision TEXT NOT NULL, reasons_json TEXT NOT NULL DEFAULT '[]', hold_id TEXT REFERENCES fin_holds(id),
+  decision TEXT NOT NULL, reasons TEXT NOT NULL DEFAULT '[]', hold_id TEXT REFERENCES fin_holds(id),
   commitment_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS fin_card_saves (
@@ -207,22 +207,22 @@ CREATE TABLE IF NOT EXISTS fin_card_saves (
   created_by TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (card_id, vendor_key));
 
 CREATE TABLE IF NOT EXISTS fin_actions (
-  id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, actor TEXT NOT NULL,
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL, actor TEXT NOT NULL,
   on_behalf_of TEXT NOT NULL DEFAULT '', rule_id TEXT NOT NULL DEFAULT '', idempotency_key TEXT NOT NULL UNIQUE,
-  rule_results_json TEXT NOT NULL DEFAULT '[]',
+  rule_results TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL CHECK (status IN ('committed','needs_approval','denied','failed','expired','withdrawn')),
-  approval_id TEXT, approval_hash TEXT, approval_by TEXT, approval_to TEXT, result_json TEXT NOT NULL DEFAULT '{}', code TEXT NOT NULL DEFAULT '',
+  approval_id TEXT, approval_hash TEXT, approval_by TEXT, approval_to TEXT, result TEXT NOT NULL DEFAULT '{}', code TEXT NOT NULL DEFAULT '',
   reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS fin_rules (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('gate','posting')), name TEXT NOT NULL,
-  words TEXT NOT NULL DEFAULT '', when_json TEXT NOT NULL DEFAULT '{}', outcome_json TEXT NOT NULL DEFAULT '{}',
-  examples_json TEXT NOT NULL DEFAULT '[]', external_rule_id TEXT, owner TEXT NOT NULL DEFAULT '',
+  words TEXT NOT NULL DEFAULT '', condition TEXT NOT NULL DEFAULT '{}', outcome TEXT NOT NULL DEFAULT '{}',
+  examples TEXT NOT NULL DEFAULT '[]', external_rule_id TEXT, owner TEXT NOT NULL DEFAULT '',
   active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
 
 CREATE TABLE IF NOT EXISTS fin_rule_runs (
   id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, action_id TEXT, subject TEXT NOT NULL DEFAULT '',
-  inputs_json TEXT NOT NULL DEFAULT '{}', outcome_json TEXT NOT NULL DEFAULT '{}',
+  inputs TEXT NOT NULL DEFAULT '{}', outcome TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS fin_connections (
@@ -230,7 +230,7 @@ CREATE TABLE IF NOT EXISTS fin_connections (
   purpose TEXT NOT NULL CHECK (purpose IN ('bank','cards','books','payments')), credential_ref TEXT,
   status TEXT NOT NULL DEFAULT 'new', cursor TEXT, last_ok_at TEXT, last_error TEXT,
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT, name TEXT NOT NULL DEFAULT '',
-  settings_json TEXT NOT NULL DEFAULT '{}', events_cursor TEXT, last_sync_at TEXT, next_sync_at TEXT);
+  settings TEXT NOT NULL DEFAULT '{}', events_cursor TEXT, last_sync_at TEXT, next_sync_at TEXT);
 
 -- Which provider record each mirrored local row is (spec §4.1). external_id is the provider's kind and id ("Vendor:9"),
 -- revision its version (QuickBooks SyncToken), status active, deleted or unmapped (taken in later, when its references are).
@@ -251,23 +251,23 @@ CREATE TABLE IF NOT EXISTS fin_restatements (
 
 CREATE TABLE IF NOT EXISTS fin_outbox (
   id TEXT PRIMARY KEY, connection_id TEXT REFERENCES fin_connections(id), action_id TEXT, op TEXT NOT NULL,
-  payload_json TEXT NOT NULL DEFAULT '{}', idempotency_key TEXT NOT NULL UNIQUE, attempts INTEGER NOT NULL DEFAULT 0,
+  payload TEXT NOT NULL DEFAULT '{}', idempotency_key TEXT NOT NULL UNIQUE, attempts INTEGER NOT NULL DEFAULT 0,
   next_try_at TEXT, status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','failed','withheld')),
   last_error TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
 
 CREATE TABLE IF NOT EXISTS fin_inbox (
   id TEXT PRIMARY KEY, connection_id TEXT REFERENCES fin_connections(id), provider TEXT NOT NULL,
-  provider_event_id TEXT NOT NULL, payload_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'new',
+  provider_event_id TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'new',
   processed_at TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE (provider, provider_event_id));
 
 CREATE TABLE IF NOT EXISTS fin_events (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, subject TEXT NOT NULL, period_key TEXT NOT NULL DEFAULT '',
-  payload_json TEXT NOT NULL DEFAULT '{}', drained_at TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}', drained_at TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   UNIQUE (name, subject, period_key));
 
 CREATE TABLE IF NOT EXISTS fin_usage_snapshots (
   id TEXT PRIMARY KEY, month TEXT NOT NULL, as_of TEXT NOT NULL, ai_nano BIGINT NOT NULL DEFAULT 0,
-  video_nano BIGINT NOT NULL DEFAULT 0, rows_json TEXT NOT NULL DEFAULT '[]', posted_at TEXT, ignored_at TEXT,
+  video_nano BIGINT NOT NULL DEFAULT 0, rows TEXT NOT NULL DEFAULT '[]', posted_at TEXT, ignored_at TEXT,
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE (month, as_of));
 
 CREATE TABLE IF NOT EXISTS fin_rights (
@@ -301,10 +301,10 @@ CREATE TABLE IF NOT EXISTS fin_credit_refunds (
 
 CREATE TABLE IF NOT EXISTS fin_view_grants (
   id TEXT PRIMARY KEY, subject_kind TEXT NOT NULL CHECK (subject_kind IN ('teammate','team')), subject TEXT NOT NULL,
-  new_members INTEGER NOT NULL DEFAULT 0, members_json TEXT NOT NULL DEFAULT '[]',
+  new_members INTEGER NOT NULL DEFAULT 0, members TEXT NOT NULL DEFAULT '[]',
   what TEXT NOT NULL CHECK (what IN ('everything','pnl','expenses','pnl_lines','balance_sheet','bs_lines','payables',
                                      'receivables','sources')),
-  account_ids_json TEXT NOT NULL DEFAULT '[]', whose TEXT NOT NULL CHECK (whose IN ('own','team','company')),
+  account_ids TEXT NOT NULL DEFAULT '[]', whose TEXT NOT NULL CHECK (whose IN ('own','team','company')),
   whose_team TEXT NOT NULL DEFAULT '', granted_by TEXT NOT NULL, expires_at TEXT,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended','expired','revoked')),
   suspended_reason TEXT, revoked_at TEXT, revoked_by TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
@@ -331,11 +331,11 @@ CREATE TABLE IF NOT EXISTS fin_payments (
   amount BIGINT NOT NULL CHECK (amount > 0), currency TEXT NOT NULL,
   method TEXT NOT NULL CHECK (method IN ('ach','wire','check','rtp')), memo TEXT NOT NULL DEFAULT '',
   obligation TEXT NOT NULL DEFAULT '', account_id TEXT NOT NULL REFERENCES fin_accounts(id),
-  tags_json TEXT NOT NULL DEFAULT '{}',
+  tags TEXT NOT NULL DEFAULT '{}',
   mode TEXT NOT NULL DEFAULT 'approval_queue' CHECK (mode IN ('approval_queue','direct')),
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','sending','awaiting_bank_approval','submitted',
                                                           'settled','returned','failed','cancelled','unknown')),
-  purpose_json TEXT NOT NULL DEFAULT '{}', counted_json TEXT NOT NULL DEFAULT '[]', unknown_since TEXT, flagged_at TEXT,
+  purpose TEXT NOT NULL DEFAULT '{}', counted TEXT NOT NULL DEFAULT '[]', unknown_since TEXT, flagged_at TEXT,
   provider_request_id TEXT, provider_txn_id TEXT, hold_id TEXT REFERENCES fin_holds(id), attempts INTEGER NOT NULL DEFAULT 0,
   next_try_at TEXT, last_error TEXT, settled_at TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   updated_at TEXT);
@@ -353,7 +353,7 @@ CREATE TABLE IF NOT EXISTS fin_statements (
 CREATE TABLE IF NOT EXISTS fin_private_lines (
   account_id TEXT PRIMARY KEY REFERENCES fin_accounts(id),
   others_see TEXT NOT NULL DEFAULT 'totals' CHECK (others_see IN ('totals','hidden')),
-  full_detail_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+  full_detail TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
 
 CREATE TABLE IF NOT EXISTS fin_raw_imports (
   id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), content_hash TEXT NOT NULL,
@@ -364,8 +364,8 @@ CREATE TABLE IF NOT EXISTS fin_raw_imports (
 CREATE TABLE IF NOT EXISTS fin_close_snapshots (
   id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id),
   period_id TEXT NOT NULL UNIQUE REFERENCES fin_periods(id), month TEXT NOT NULL,
-  accounts_json TEXT NOT NULL, pnl_json TEXT NOT NULL, balances_json TEXT NOT NULL,
-  restated_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  accounts TEXT NOT NULL, pnl TEXT NOT NULL, balances TEXT NOT NULL,
+  restated TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   UNIQUE (book_id, month));
 
 CREATE TABLE IF NOT EXISTS fin_transfers (
@@ -377,7 +377,7 @@ CREATE TABLE IF NOT EXISTS fin_transfers (
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','submitted','unknown','failed','posted','cancelled')),
   provider_txn_id TEXT, provider_credit_txn_id TEXT, last_error TEXT, from_feed_id TEXT, to_feed_id TEXT,
   settled_at TEXT, submitted_at TEXT, find_after TEXT,
-  counted_json TEXT NOT NULL DEFAULT '[]',
+  counted TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
   CHECK (from_money_account_id <> to_money_account_id));
 """
@@ -493,7 +493,7 @@ ADDED = (
     ("fin_feed_txns", "kind", "TEXT NOT NULL DEFAULT ''"), ("fin_feed_txns", "card_id", "TEXT"),
     ("fin_feed_txns", "hold_id", "TEXT"), ("fin_feed_txns", "reconciliation_id", "TEXT"),
     ("fin_feed_txns", "version", "INTEGER NOT NULL DEFAULT 0"), ("fin_feed_txns", "request_id", "TEXT"),
-    ("fin_feed_txns", "raw_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("fin_feed_txns", "raw", "TEXT NOT NULL DEFAULT '{}'"),
     ("fin_outbox", "unknown", "INTEGER NOT NULL DEFAULT 0"),
     ("fin_bill_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
     ("fin_invoice_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
@@ -505,17 +505,17 @@ ADDED = (
     ("fin_cards", "synced_at", "TEXT"),
     ("fin_cards", "freeze_by", "TEXT"), ("fin_cards", "freeze_budget_id", "TEXT"),
     ("fin_connections", "name", "TEXT NOT NULL DEFAULT ''"),
-    ("fin_connections", "settings_json", "TEXT NOT NULL DEFAULT '{}'"), ("fin_connections", "events_cursor", "TEXT"),
+    ("fin_connections", "settings", "TEXT NOT NULL DEFAULT '{}'"), ("fin_connections", "events_cursor", "TEXT"),
     ("fin_connections", "last_sync_at", "TEXT"), ("fin_connections", "next_sync_at", "TEXT"),
     ("fin_outbox", "claimed_at", "TEXT"), ("fin_cards", "provider_status", "TEXT"), ("fin_cards", "allocation_due", "INTEGER"),
     ("fin_inbox", "attempts", "INTEGER NOT NULL DEFAULT 0"), ("fin_inbox", "next_try_at", "TEXT"),
-    ("fin_inbox", "tried_json", "TEXT NOT NULL DEFAULT '[]'"),
-    ("fin_payments", "counted_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("fin_inbox", "tried", "TEXT NOT NULL DEFAULT '[]'"),
+    ("fin_payments", "counted", "TEXT NOT NULL DEFAULT '[]'"),
     # phase 2: bills, invoices, contacts, posting rules and the cash view (migration 66)
     ("fin_entries", "basis", "TEXT NOT NULL DEFAULT 'both' CHECK (basis IN ('both','accrual'))"),
     ("fin_bills", "terms_days", "INTEGER"), ("fin_bills", "memo", "TEXT NOT NULL DEFAULT ''"),
     ("fin_bills", "origin", "TEXT NOT NULL DEFAULT 'manual'"), ("fin_bills", "approved_by", "TEXT"),
-    ("fin_bills", "approved_at", "TEXT"), ("fin_bills", "schedule_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("fin_bills", "approved_at", "TEXT"), ("fin_bills", "schedule", "TEXT NOT NULL DEFAULT '{}'"),
     ("fin_bills", "amount_paid", "BIGINT NOT NULL DEFAULT 0"), ("fin_bills", "voided_at", "TEXT"),
     ("fin_bills", "pay_on", "TEXT"), ("fin_bill_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
     ("fin_invoice_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
@@ -534,7 +534,7 @@ ADDED = (
     # the books gaps (migration 73): fin_transfers' columns added since it was first written
     ("fin_transfers", "from_feed_id", "TEXT"), ("fin_transfers", "to_feed_id", "TEXT"),
     ("fin_transfers", "settled_at", "TEXT"), ("fin_transfers", "submitted_at", "TEXT"),
-    ("fin_transfers", "counted_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("fin_transfers", "counted", "TEXT NOT NULL DEFAULT '[]'"),
     ("fin_transfers", "provider_credit_txn_id", "TEXT"), ("fin_transfers", "find_after", "TEXT"),
     # the journal line a bank row matched (migration 75), so a transfer's two legs on one account match one at a time
     ("fin_feed_txns", "entry_line_id", "TEXT"),
@@ -621,7 +621,7 @@ def freeze_provenance(c: sqlite3.Connection) -> None:
         return
     last: dict[str, str] = {}     # card id -> the budget its latest freeze or unfreeze was a cutoff of ("" if none)
     for kind, actor, payload, result in c.execute(
-            "SELECT kind, actor, payload_json, result_json FROM fin_actions WHERE status='committed' AND "
+            "SELECT kind, actor, payload, result FROM fin_actions WHERE status='committed' AND "
             "kind IN ('card_freeze','card_unfreeze') ORDER BY created_at, rowid").fetchall():
         body = cast(dict[str, object], json.loads(str(payload or "{}")))
         cut = str(body.get("budget_id") or "") if kind == "card_freeze" and actor == SYSTEM else ""
@@ -661,8 +661,8 @@ def phase4(c: sqlite3.Connection) -> None:
 
 
 STRIPE_INDEXES = """
-CREATE INDEX IF NOT EXISTS fin_feed_txns_stripe_link ON fin_feed_txns(money_account_id, json_extract(raw_json, '$.link'));
-CREATE INDEX IF NOT EXISTS fin_feed_txns_stripe_source ON fin_feed_txns(money_account_id, json_extract(raw_json, '$.source'));
+CREATE INDEX IF NOT EXISTS fin_feed_txns_stripe_link ON fin_feed_txns(money_account_id, json_extract(raw, '$.link'));
+CREATE INDEX IF NOT EXISTS fin_feed_txns_stripe_source ON fin_feed_txns(money_account_id, json_extract(raw, '$.source'));
 """
 
 

@@ -601,8 +601,8 @@ class Blobs:
                 # Read and update together so a newly returned cleanup ID cannot be overwritten.
                 with self._health_lock:
                     with store.read() as c:
-                        row = c.execute("SELECT detail_json FROM service_health WHERE service='blob-s3'").fetchone()
-                    previous = json.loads(row["detail_json"] or "{}") if row else {}
+                        row = c.execute("SELECT detail FROM service_health WHERE service='blob-s3'").fetchone()
+                    previous = json.loads(row["detail"] or "{}") if row else {}
                     pending = {key: previous[key] for key in ("bucket", "key", "upload_id") if key in previous}
                     self._write_health(store, pending, self._write_error)
                 return False
@@ -621,8 +621,8 @@ class Blobs:
             generation, settings, sources, bucket = self._generation, self.settings, self._sources, self.bucket
             location = self.location
         with store.read() as c:
-            row = c.execute("SELECT detail_json FROM service_health WHERE service='blob-s3'").fetchone()
-        previous = json.loads(row["detail_json"] or "{}") if row else {}
+            row = c.execute("SELECT detail FROM service_health WHERE service='blob-s3'").fetchone()
+        previous = json.loads(row["detail"] or "{}") if row else {}
         # Retain at most one unfinished probe; retry cleanup before creating another. One left in a bucket
         # this server no longer writes to is not this target's to clean up (its keys may not reach it).
         pending = previous if previous.get("upload_id") and previous.get("location", location) == location else {}
@@ -684,8 +684,8 @@ class Blobs:
         detail = {**pending, "location": location or self.location, "error": error, "credentials": (sources or self._sources).kind}
         try:
             with self._health_lock, store.transaction() as c:
-                c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,?,?) "
-                          "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=excluded.last_error,detail_json=excluded.detail_json",
+                c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,?,?) "
+                          "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,last_error=excluded.last_error,detail=excluded.detail",
                           ("blob-s3", H.now() if not error else None, H.now() if error else None, json.dumps(detail)))
         except Exception as exc:
             log.warning("File storage check result not recorded: %s", type(exc).__name__)
@@ -694,8 +694,8 @@ class Blobs:
 
     def _copy_health(self, store):
         with store.transaction() as c:
-            c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,?,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=excluded.last_error,detail_json=excluded.detail_json",
+            c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,?,?) "
+                      "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,last_error=excluded.last_error,detail=excluded.detail",
                       ("blob-copy", H.now() if not self.copy_status["error"] else None, H.now() if self.copy_status["error"] else None, json.dumps(self.copy_status)))
 
     def get(self, digest):
@@ -745,8 +745,8 @@ def register(c, who, digest, size, name, content_type="application/octet-stream"
     name = Path(str(name).replace("\\", "/")).name
     name = re.sub(r"[\x00-\x1f\x7f]", "", name)[:200] or "attachment"
     row = {"id": H.new_id(), "owner": who.actor, "digest": digest, "size": size,
-           "name": name, "content_type": content_type, "created": H.now()}
-    c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) VALUES(:id,:owner,:digest,:size,:name,:content_type,:created)", row)
+           "name": name, "content_type": content_type, "created_at": H.now()}
+    c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(:id,:owner,:digest,:size,:name,:content_type,:created_at)", row)
     return brief(row)
 
 

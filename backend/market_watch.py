@@ -45,7 +45,7 @@ ACTOR = H.KEEPER            # who writes what a check finds
 
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS market_watches (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, url TEXT NOT NULL, "
-    "kind TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_by TEXT, created TEXT, checked TEXT, changed TEXT, "
+    "kind TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_by TEXT, created_at TEXT, checked TEXT, changed TEXT, "
     "last_hash TEXT, last_text TEXT, last_status TEXT, error TEXT)",
     "CREATE INDEX IF NOT EXISTS market_watches_active ON market_watches(active, checked)",
     "CREATE INDEX IF NOT EXISTS market_watches_entity ON market_watches(entity_id)",
@@ -157,7 +157,7 @@ def listing(c, entity_id=None):
     sql, args = "SELECT * FROM market_watches", ()
     if entity_id:
         sql, args = sql + " WHERE entity_id=?", (entity_id,)
-    return [row_of(r) for r in c.execute(sql + " ORDER BY active DESC, created, id", args)]
+    return [row_of(r) for r in c.execute(sql + " ORDER BY active DESC, created_at, id", args)]
 
 
 def host_of(url):
@@ -184,9 +184,9 @@ def add(c, actor, entity_id, url, kind):
         raise Problem("exists", "That page is already watched", 409)
     if c.execute("SELECT count(*) FROM market_watches WHERE active=1").fetchone()[0] >= MAX_ACTIVE:
         raise Problem("limit", f"At most {MAX_ACTIVE} pages are watched at once; stop one first", 409)
-    row = {"id": H.new_id(), "entity_id": entity_id, "url": url, "kind": kind, "created_by": actor, "created": H.now()}
-    c.execute("INSERT INTO market_watches (id, entity_id, url, kind, active, created_by, created) "
-              "VALUES (:id, :entity_id, :url, :kind, 1, :created_by, :created)", row)
+    row = {"id": H.new_id(), "entity_id": entity_id, "url": url, "kind": kind, "created_by": actor, "created_at": H.now()}
+    c.execute("INSERT INTO market_watches (id, entity_id, url, kind, active, created_by, created_at) "
+              "VALUES (:id, :entity_id, :url, :kind, 1, :created_by, :created_at)", row)
     H.event(c, actor, "market.watch.add", row["id"], {"entity": entity_id, "kind": kind})
     return row_of(get(c, row["id"]))
 
@@ -305,10 +305,10 @@ def start(store):
 
 def claim(c, day):
     """Take today's check: True once per UTC day, however many ticks or servers ask."""
-    found = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (DAY_KEY,)).fetchone()
+    found = c.execute("SELECT value FROM registry_metadata WHERE key=?", (DAY_KEY,)).fetchone()
     if found and (json.loads(found[0]) or {}).get("day") == day:
         return False
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (DAY_KEY, json.dumps({"day": day, "at": H.now()})))
     return True
 

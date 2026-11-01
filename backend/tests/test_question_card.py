@@ -113,8 +113,8 @@ def test_the_card_says_what_it_holds_up_and_decide_puts_a_building_item_first(ap
         # The archive question was asked yesterday; the Building one an hour ago.
         for tid, hours in ((old["task"]["id"], 30), (building["task"]["id"], 1)):
             at = H.shift(H.now(), seconds=-hours * 3600)
-            c.execute("UPDATE messages SET created=? WHERE kind='ask' AND json_extract(refs_json,'$.task')=?", (at, tid))
-            c.execute("UPDATE tasks SET created=? WHERE id=?", (at, tid))
+            c.execute("UPDATE messages SET created_at=? WHERE kind='ask' AND json_extract(refs,'$.task')=?", (at, tid))
+            c.execute("UPDATE tasks SET created_at=? WHERE id=?", (at, tid))
     items = {i["id"]: i for i in get(api, "needs-you")["items"]}
     card, other = items[building["task"]["id"]], items[old["task"]["id"]]
     assert card["holds_up"] == {"id": item["id"], "title": "Website sales chat build", "kind": "roadmap", "step": "Building",

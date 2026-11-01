@@ -66,7 +66,7 @@ def record_start(c, now):
     """The releases this server actually ran, oldest first, written at startup when the version changes. An update
     done outside the in-app updater (a manual pull, a rollout script) leaves the updater's `from` stale; this does not."""
     current = version()
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (HISTORY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (HISTORY,)).fetchone()
     seen = json.loads(row[0]) if row else []
     if seen and seen[-1].get("version") == current:
         return seen
@@ -76,7 +76,7 @@ def record_start(c, now):
 
 
 def history(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (HISTORY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (HISTORY,)).fetchone()
     return json.loads(row[0]) if row else []
 
 

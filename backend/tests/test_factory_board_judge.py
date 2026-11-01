@@ -10,9 +10,9 @@ from backend import execution
 
 
 def round_at(hour, free, ready, started, fallback=0, why=None):
-    """One claim round as sim.Run.runner_round marks it: `ready` are the bots the records say can run, `started` the
+    """One claim round as sim.Run.runner_round marks it: `ready` are the bots the records say can run, `started_at` the
     turns the round's claims started."""
-    mark = {"at": START + at(hour), "free": free, "held": 0, "started": started, "fallback": fallback,
+    mark = {"at": START + at(hour), "free": free, "held": 0, "started_at": started, "fallback": fallback,
             "queued": len(ready), "slugs": list(ready), "ready": list(ready), "blocked": {}}
     if why:
         mark["why"] = why
@@ -105,13 +105,13 @@ def test_the_judge_fails_a_server_that_passes_over_every_claim(monkeypatch):
     passed, detail = scenario.checks[0][2](run)
     assert not passed, "a stalled board passed the judge"
     assert "started 0" in detail, detail
-    assert run.claims[200] > 0 and sum(m["started"] for m in run.marks) == 0
+    assert run.claims[200] > 0 and sum(m["started_at"] for m in run.marks) == 0
 
 
 def turn(started, finished, cost, bot="fleet-01"):
     """A turn row as the sim reads it: start and finish clock offsets, and its estimated cost."""
     text = lambda offset: (START + offset).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
-    return {"bot": bot, "started": text(started), "finished": text(finished) if finished is not None else None,
+    return {"bot": bot, "started_at": text(started), "finished_at": text(finished) if finished is not None else None,
             "est_cost_usd": cost}
 
 

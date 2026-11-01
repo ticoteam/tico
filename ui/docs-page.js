@@ -178,7 +178,7 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
     if (source.status === 'access_needed') return 'GitHub access needed';
     if (source.status === 'empty') return `No docs found${source.skipped ? ' · ' + source.skipped + ' skipped' : ''}`;
     if (source.status !== 'ready') return 'Link only';
-    return `${source.doc_count} ${source.doc_count === 1 ? 'doc' : 'docs'}${source.skipped ? ' · ' + source.skipped + ' skipped' : ''}${source.last_checked ? ' · ' + ago(source.last_checked) : ''}`;
+    return `${source.doc_count} ${source.doc_count === 1 ? 'doc' : 'docs'}${source.skipped ? ' · ' + source.skipped + ' skipped' : ''}${source.last_checked_at ? ' · ' + ago(source.last_checked_at) : ''}`;
   };
   const linkRow = link => {
     const kind = DocsSearch.kind(link.provider || link.kind);
@@ -272,11 +272,11 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
   // No doc open: the docs changed most recently, so the page opens on something to read.
   function drawLanding() {
     if (!docs.length && !linked.length) { reader.innerHTML = ''; return; }   // the list says so, and the header has New doc
-    const recent = [...docs].sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || ''))).slice(0, 12);
+    const recent = [...docs].sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || ''))).slice(0, 12);
     reader.innerHTML = `<div class="docs-welcome docs-recent"><h2 class="docs-recent-head">${archived ? 'Archived' : 'Recent'}</h2>${recent.map(d =>
       `<a class="docs-recent-row" href="${docsHref(d.id, archived ? {archived: 1} : {})}"><span class="docs-recent-title">${esc(d.title)}</span>
         <span class="docs-recent-folder">${esc(docsFolderWords(docsDir(d.path)))}</span>
-        <span class="docs-recent-when" title="${esc(fmt(d.updated))}">${esc(ago(d.updated))}${d.updated_by_name ? ' · ' + esc(d.updated_by_name) : ''}</span></a>`).join('')
+        <span class="docs-recent-when" title="${esc(fmt(d.updated_at))}">${esc(ago(d.updated_at))}${d.updated_by_name ? ' · ' + esc(d.updated_by_name) : ''}</span></a>`).join('')
       || '<p class="muted">Nothing here.</p>'}</div>`;
   }
   const pollSources = () => {
@@ -318,7 +318,7 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
       const {doc} = await get('/v2/docs/external/' + encodeURIComponent(selected.slice(9)) + (params.get('revision') ? '?revision=' + encodeURIComponent(params.get('revision')) : ''));
       if (!current()) return;
       const markdown = /\.(md|markdown)$/i.test(doc.path);
-      reader.innerHTML = back + `<header class="docs-reader-head"><div class="docs-reader-title"><p class="docs-crumb muted">${esc(doc.source_title)} · ${esc(doc.path)}</p><h2>${esc(doc.title)}</h2><p class="docs-meta">${esc(doc.commit.slice(0, 7))}${doc.last_checked ? ' · ' + esc(ago(doc.last_checked)) : ''}</p></div><a class="docs-tool" href="${esc(doc.citation_url)}" target="_blank" rel="noopener noreferrer">Open original</a></header><div class="md docs-content">${markdown ? safeMd(doc.content) : '<pre>' + esc(doc.content) + '</pre>'}</div>`;
+      reader.innerHTML = back + `<header class="docs-reader-head"><div class="docs-reader-title"><p class="docs-crumb muted">${esc(doc.source_title)} · ${esc(doc.path)}</p><h2>${esc(doc.title)}</h2><p class="docs-meta">${esc(doc.commit.slice(0, 7))}${doc.last_checked_at ? ' · ' + esc(ago(doc.last_checked_at)) : ''}</p></div><a class="docs-tool" href="${esc(doc.citation_url)}" target="_blank" rel="noopener noreferrer">Open original</a></header><div class="md docs-content">${markdown ? safeMd(doc.content) : '<pre>' + esc(doc.content) + '</pre>'}</div>`;
       reader.querySelectorAll('.docs-content a[href]').forEach(a => {
         const raw = a.getAttribute('href');
         if (raw && !/^[a-z][a-z0-9+.-]*:|^#|^\/\//i.test(raw)) {
@@ -347,7 +347,7 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
   if (!current()) return;
   const canChange = admin || !doc.locked;
   const crumb = `<p class="muted docs-crumb" title="${esc(doc.path)}">${esc(docsFolderWords(docsDir(doc.path)))}</p>`;
-  const meta = `Version ${doc.version} · Updated ${esc(ago(doc.updated))} by ${esc(doc.updated_by_name || doc.updated_by)}`;
+  const meta = `Version ${doc.version} · Updated ${esc(ago(doc.updated_at))} by ${esc(doc.updated_by_name || doc.updated_by)}`;
   if (editing && canChange) {
     reader.innerHTML = back + `<header class="docs-reader-head docs-edit-head"><div class="docs-reader-title">${crumb}<h2>Edit</h2><p class="docs-meta">${meta}</p></div></header>`;
     reader.append(DocsEditor.editor({doc, onSaved: saved => { location.hash = docsHref(saved.id); }, onCancel: () => { location.hash = docsHref(doc.id); },
@@ -357,7 +357,7 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
   }
   reader.innerHTML = `${back}<div class="docs-article"><div class="docs-main"><header class="docs-reader-head"><div class="docs-reader-title">${crumb}
       <h2>${esc(doc.title)}${doc.locked ? ` <span class="docs-lock-badge">${DocsSearch.LOCK}Locked</span>` : ''}</h2>
-      <p class="docs-meta" title="${esc(fmt(doc.updated))}">${meta}</p></div>
+      <p class="docs-meta" title="${esc(fmt(doc.updated_at))}">${meta}</p></div>
       <div class="docs-tools"><a class="docs-tool" id="doc-edit" role="button" href="${docsHref(doc.id, {edit: 1})}"${canChange ? ' title="Edit (e)"' : ' aria-disabled="true" tabindex="-1" title="Locked: only an owner or bot administrator can change this doc"'}>Edit</a>
         <button class="docs-tool docs-tool-icon" id="doc-more" type="button" popovertarget="doc-menu" aria-label="More" aria-expanded="false" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div></header>
     <div id="doc-menu" class="docs-pop" popover aria-label="Doc actions">${canChange ? '<button id="doc-research" type="button">Research…</button>' : ''}<button id="doc-history" type="button">History</button>

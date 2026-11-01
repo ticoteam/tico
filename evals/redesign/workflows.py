@@ -271,7 +271,7 @@ def path_of(run, sid):
 
 
 def started_at(run):
-    return when_of((run or {}).get("started"))
+    return when_of((run or {}).get("started_at"))
 
 
 def one_each(found, names):
@@ -459,10 +459,10 @@ def slack_diag(org, gateway):
     """What the gateway's offer pass saw for each stored channel message, read after the tick (diagnostic only)."""
     with org.store.read() as c:
         rows = [dict(r) for r in c.execute("SELECT * FROM slack_events ORDER BY received, ts")]
-        since = c.execute("SELECT MIN(created) FROM automations WHERE trigger_type='message' AND enabled=1 "
-                          "AND deleted_at IS NULL AND flow_json LIKE '%slack:#%'").fetchone()[0]
-        autos = [dict(r) for r in c.execute("SELECT name,trigger_type,enabled,created,deleted_at,owner FROM automations "
-                                            "WHERE flow_json LIKE '%slack:#%'")]
+        since = c.execute("SELECT MIN(created_at) FROM automations WHERE trigger_type='message' AND enabled=1 "
+                          "AND deleted_at IS NULL AND flow LIKE '%slack:#%'").fetchone()[0]
+        autos = [dict(r) for r in c.execute("SELECT name,trigger_type,enabled,created_at,deleted_at,owner FROM automations "
+                                            "WHERE flow LIKE '%slack:#%'")]
         senders = {}
         for r in rows:
             if r["state"] == "stored" and r["channel_kind"] == "channel":
@@ -540,7 +540,7 @@ def wf1_steps(org, f):
     do(org, f, "runs", W3, runs_of, org, f, "inbox")
     do(org, f, "assistant", W3, assistant_slug, org, DANA_ID)
     do(org, f, "switch", W3, inbox_read, org, DANA_MAIL)
-    f["lead_tasks"] = sql(org, "SELECT id,title,body,created FROM tasks WHERE owner=?", (LEAD_REF,))
+    f["lead_tasks"] = sql(org, "SELECT id,title,body,created_at FROM tasks WHERE owner=?", (LEAD_REF,))
     do(org, f, "slack_runs", W3, wf1_slack_runs, org, f)
 
 
@@ -984,12 +984,12 @@ def wf4_open(org, f):
 
 
 def wf4_tasks(org):
-    return sql(org, "SELECT id,title,body,created FROM tasks WHERE owner=?", (LEAD_REF,))
+    return sql(org, "SELECT id,title,body,created_at FROM tasks WHERE owner=?", (LEAD_REF,))
 
 
 def wf4_steps(org, f):
     do(org, f, "prs", W3, wf4_open, org, f)
-    do(org, f, "links", W3, sql, org, "SELECT number, kind, state, activity_at, created FROM task_links ORDER BY number")
+    do(org, f, "links", W3, sql, org, "SELECT number, kind, state, activity_at, created_at FROM task_links ORDER BY number")
     at(org, utc(DAY4, 9, 30))
     do(org, f, "auto", W3, make_auto, org, "Stale PR nudge", LEAD_REF, {"type": "schedule", "cron": "0 * * * *", "tz": "UTC"},
        [step("stale", "find", source="prs", query="", idle_hours=24, since="last_run", limit=20),
@@ -1309,7 +1309,7 @@ def wf7_notices(f):
     """A run-guard trip sends one held notice to BotOps and one to the Health monitor: hub notices from the keeper, kind
     notice, refs.held naming the bot (CONTRACT section 1)."""
     setup(f, "budget", "seed", "notices")   # "loop" is a list of turns, read by wf9_loop; it is not a reply
-    held = [r for r in body(f, "notices") if OPENAI_ID in str(r["refs_json"])]
+    held = [r for r in body(f, "notices") if OPENAI_ID in str(r["refs"])]
     to_botops = [r for r in held if "botops" in str(r["to_actor"])]
     to_health = [r for r in held if "health-monitor" in str(r["to_actor"])]
     return len(to_botops) == 1 and len(to_health) == 1 and len(held) == 2, \
@@ -1470,7 +1470,7 @@ def wf9_steps(org, f):
     do(org, f, "resumed", W2, turn, org, OPENAI_ID, wave=W2)
     org.scheduler_pass()
     do(org, f, "runs", W3, runs_of, org, f, "auto")
-    # The fake clock stands still through the loop, so the runs share one `started`: the order they were made in
+    # The fake clock stands still through the loop, so the runs share one `started_at`: the order they were made in
     # comes from the table.
     f["made"] = [r["id"] for r in sql(org, "SELECT id FROM automation_runs ORDER BY rowid")]
 
@@ -1479,7 +1479,7 @@ def wf9_spend_cap(f):
     """The first Bot turn step runs; once the $1 per 30 minutes is spent, later ones record spend_cap."""
     setup(f, "auto", "seed", "keep")
     made = f.get("made") or []
-    found = sorted(runs(f, "runs"), key=lambda r: (str(r.get("started")),
+    found = sorted(runs(f, "runs"), key=lambda r: (str(r.get("started_at")),
                                                    made.index(r["id"]) if r.get("id") in made else len(made)))
     statuses = [status_of(r, "work") for r in found]
     return (statuses[:1] == ["ok"] and "spend_cap" in statuses[1:],
@@ -1507,7 +1507,7 @@ def wf9_still(f):
 
 def hub_holds(org):
     """The hub's held notices (kind notice, refs.held), as a reply."""
-    return Reply(200, sql(org, "SELECT to_actor, refs_json FROM messages WHERE kind='notice' AND refs_json LIKE ?",
+    return Reply(200, sql(org, "SELECT to_actor, refs FROM messages WHERE kind='notice' AND refs LIKE ?",
                           ("%held%",)), W2)
 
 
@@ -1515,7 +1515,7 @@ def wf9_notices(f):
     """One held notice each to BotOps and to the Health monitor: hub notices from the keeper, kind notice, refs.held
     naming the bot (CONTRACT section 1). They are hub messages, not Tico Team notices, so they are read from the hub."""
     setup(f, "budget", "auto", "notices")
-    held = [r for r in body(f, "notices") if OPENAI_ID in str(r["refs_json"])]
+    held = [r for r in body(f, "notices") if OPENAI_ID in str(r["refs"])]
     to_botops = [r for r in held if "botops" in str(r["to_actor"])]
     to_health = [r for r in held if "health-monitor" in str(r["to_actor"])]
     return len(to_botops) == 1 and len(to_health) == 1 and len(held) == 2, \
@@ -1651,15 +1651,15 @@ def fake_day(org, f, receiver):
 
 def measure(org, f, start, end, ids, receiver, errors):
     def inside(row, since=start):
-        at_ = when_of(row["created"])
+        at_ = when_of(row["created_at"])
         return at_ is not None and since <= at_ <= end
     tasks = Counter()
-    for row in sql(org, "SELECT owner,title,created FROM tasks"):
+    for row in sql(org, "SELECT owner,title,created_at FROM tasks"):
         who = handler(org, f, row["owner"])
         if who and inside(row):
             tasks[f"{who} | {masked(row['title'])}"] += 1
     woken, after_comment = Counter(), Counter()
-    for row in sql(org, "SELECT bot, created FROM jobs"):
+    for row in sql(org, "SELECT bot, created_at FROM jobs"):
         who = handler(org, f, row["bot"])
         if who and not who.startswith("inbox handler") and inside(row):
             woken[who] += 1

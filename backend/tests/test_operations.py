@@ -16,12 +16,12 @@ def test_operational_health_never_advances_backup_time_after_failed_upload(api):
                                                                 "manifest_sha256": "b" * 64}):
         backup(store, s3, cw, "test-bucket")
     with store.read() as c:
-        before = c.execute("SELECT last_success FROM service_health WHERE service='backup'").fetchone()[0]
+        before = c.execute("SELECT last_succeeded_at FROM service_health WHERE service='backup'").fetchone()[0]
     with patch("backend.operations.upload_bundle", side_effect=RuntimeError("cannot upload")), pytest.raises(RuntimeError):
         backup(store, s3, cw, "test-bucket")
     with store.read() as c:
         row = c.execute("SELECT * FROM service_health WHERE service='backup'").fetchone()
-        assert row["last_success"] == before and row["last_error"] == "RuntimeError"
+        assert row["last_succeeded_at"] == before and row["last_error"] == "RuntimeError"
     with patch("backend.operations.api_healthy", return_value=True), patch("backend.operations.replication_healthy", return_value=True), patch("backend.operations.tunnel_healthy", return_value=True):
         metrics = health(store, cw)
     assert metrics["disk_free_bytes"] > 0
@@ -40,7 +40,7 @@ def test_failed_restore_check_does_not_advance_prior_success(api, tmp_path):
           patch("backend.operations.shutil.disk_usage", return_value=Mock(free=10 * 1024 ** 3)) as capacity):
         restore_check(store, s3, cw, "bucket")
         with store.read() as c:
-            before = c.execute("SELECT last_success FROM service_health WHERE service='restore-check'").fetchone()[0]
+            before = c.execute("SELECT last_succeeded_at FROM service_health WHERE service='restore-check'").fetchone()[0]
         with patch("backend.operations.restore_bundle", side_effect=RuntimeError("corrupt")), pytest.raises(RuntimeError):
             restore_check(store, s3, cw, "bucket")
         capacity.return_value.free = 0
@@ -49,7 +49,7 @@ def test_failed_restore_check_does_not_advance_prior_success(api, tmp_path):
         restore.assert_not_called()
     with store.read() as c:
         row = c.execute("SELECT * FROM service_health WHERE service='restore-check'").fetchone()
-    assert row["last_success"] == before and row["last_error"] == "RuntimeError"
+    assert row["last_succeeded_at"] == before and row["last_error"] == "RuntimeError"
     assert cw.put_metric_data.call_args.kwargs["MetricData"][0]["Value"] == 0
 
 
@@ -61,7 +61,7 @@ def test_backup_notifications_follow_active_implementation_without_rewriting_his
     old = H.shift(H.now(), hours=-50)
     with api.app.state.store.transaction() as c:
         for service in ("backup", "restore-check"):
-            c.execute("INSERT INTO service_health(service,last_success,last_error) VALUES(?,?,?)",
+            c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error) VALUES(?,?,?)",
                       (service, old, "Old timer failed"))
     issues = lambda: [i for i in api.get("/api/status", headers=headers()).json()["health_issues"]
                       if i["kind"] == "service"]
@@ -82,7 +82,7 @@ def test_backup_notifications_follow_active_implementation_without_rewriting_his
                    credential_key={"present": True, "current": False})
     assert "credential key" in issues()[0]["detail"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM service_health WHERE last_success=? AND last_error=?",
+        assert c.execute("SELECT count(*) FROM service_health WHERE last_succeeded_at=? AND last_error=?",
                          (old, "Old timer failed")).fetchone()[0] == 2
 
 
@@ -101,7 +101,7 @@ def test_the_scheduled_backup_carries_the_key_files_and_the_restore_check_reads_
     assert sorted(manifest["key_files"]) == ["credential.key", "github-app.key"]
     assert s3.objects[("bucket", report["key"] + ".keys/github-app.key")] == b"\x02" * 32
     with store.read() as c:
-        detail = json.loads(c.execute("SELECT detail_json FROM service_health WHERE service='backup'").fetchone()[0])
+        detail = json.loads(c.execute("SELECT detail FROM service_health WHERE service='backup'").fetchone()[0])
     assert detail["key_files"] == ["credential.key", "github-app.key"] and "\x02" not in json.dumps(detail)
     with (patch("backend.operations.RESTORE_ROOT", tmp_path / "checks"),
           patch("backend.operations.shutil.disk_usage", return_value=Mock(free=10 * 1024 ** 3))):

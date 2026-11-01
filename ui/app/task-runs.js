@@ -53,7 +53,7 @@ function runAgentsHTML(agents, model) {
 }
 function runShellHTML(s) {
   return `<li><span class="mono">${esc(s.tool)}${s.summary ? ' · ' + esc(s.summary) : ''}</span> <span class="muted">${esc(s.running
-    ? 'running · started ' + ago(s.started) : s.status || 'ended')}</span></li>`;
+    ? 'running · started ' + ago(s.started_at) : s.status || 'ended')}</span></li>`;
 }
 // A failed try offers Report this: Support opens with the run and its reason attached (ui/support.js).
 function runReportHTML(a) {
@@ -63,7 +63,7 @@ function runReportHTML(a) {
 }
 function runAttemptHTML(a, open) {
   const model = ranOn(a.ran_on);
-  const took = a.took_s != null ? durationWords(a.took_s) : a.started ? 'for ' + ago(a.started).replace(/ ago$/, '') : '';
+  const took = a.took_s != null ? durationWords(a.took_s) : a.started_at ? 'for ' + ago(a.started_at).replace(/ ago$/, '') : '';
   const decided = runDecisionWords(a);
   const head = [`Try ${a.try} of ${a.tries}`, runStateWord(a), decided, took, model].filter(Boolean).join(' · ');
   // The decision line says what `next` would for a resume or dismiss, with the note beside it.
@@ -78,7 +78,7 @@ function runAttemptHTML(a, open) {
     ? ` · held until ${esc(fmt(a.wake.held_until))}` : ''}</p>` : '';
   const shells = (a.background || []).length ? `<div class="truns-sub"><div class="lbl">Background</div><ul class="truns-list">${a.background.map(runShellHTML).join('')}</ul></div>` : '';
   return `<details class="truns-try${a.state === 'running' || a.state === 'leased' ? ' live' : ''}"${open ? ' open' : ''} data-run="${esc(a.run)}">
-    <summary><span>${esc(head)}</span><span class="muted tnum" title="${esc(fmt(a.started || a.created))}">${esc(ago(a.started || a.created))}</span></summary>
+    <summary><span>${esc(head)}</span><span class="muted tnum" title="${esc(fmt(a.started_at || a.created_at))}">${esc(ago(a.started_at || a.created_at))}</span></summary>
     ${woke}${a.reason ? `<p class="truns-reason">${esc(a.reason)}</p>` : ''}${[a.waiting, a.paused, a.moved, ranOnNote(a.ran_on)].filter(Boolean).map(t =>
       `<p class="muted truns-moved">${esc(t)}</p>`).join('')}${runReportHTML(a)}${lease ? `<ul class="truns-list truns-lease">${lease}</ul>` : ''}${nxt}
     ${runAgentsHTML(a.subagents || [], ranOn(a.ran_on, false))}${shells}

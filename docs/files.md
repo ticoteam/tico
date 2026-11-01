@@ -136,7 +136,7 @@ activity, with the visible `total`), `POST /api/v2/files/uploads`, `/links`, `/i
 `PATCH /api/v2/files/{id}` (title, task, archive, promote), `GET /api/v2/files/{id}/activity` and
 `/versions`. Display names come as `actor_name` and in `actors`, as everywhere in v2.
 `GET /api/v2/bots/{bot}/instructions` reads the Computer's latest Instructions snapshot with the bot's Read permission.
-It returns `content`, `published`, `updated` and `source`; `published: false` means the Computer has not reported content yet.
+It returns `content`, `published`, `updated_at` and `source`; `published: false` means the Computer has not reported content yet.
 It never substitutes the bot's description for its Instructions.
 `docs/custom-frontend.md` and `examples/custom-frontend` show a bot's Files in a frontend of your own.
 Pages, Library › Files, search and deleting for good are below and in [Pages](pages.md).

@@ -66,7 +66,7 @@ def _asked_again(c, link, row):
     them on it, or the task set waiting on them again."""
     said = c.execute(
         "SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE m.conversation_id=? AND "
-        "m.to_actor=? AND m.from_actor<>? AND m.from_actor LIKE 'bot:%' AND m.created>? "
+        "m.to_actor=? AND m.from_actor<>? AND m.from_actor LIKE 'bot:%' AND m.created_at>? "
         f"AND {H.MESSAGE_TASK_SQL}=? LIMIT 1",
         (row["conversation_id"], link["person"], STRATEGY_BOT, link["settled_at"], row["id"])).fetchone()
     return bool(said) or bool(c.execute(
@@ -159,7 +159,7 @@ def merge(c, actor, person, title, question, task_ids):
     H.task_update(c, STRATEGY_BOT, item["id"], status="waiting", waiting_on=person, note=question[:1000])
     at = H.now()
     for row, how in found:
-        c.execute("INSERT INTO strategy_merges (merged_into, original, person, asker, how, ask_id, created) "
+        c.execute("INSERT INTO strategy_merges (merged_into, original, person, asker, how, ask_id, created_at) "
                   "VALUES (?,?,?,?,?,?,?)", (item["id"], row["id"], person, how[1], how[0], how[2], at))
         H.task_comment(c, STRATEGY_BOT, row["id"],
                        f'Merged with {len(found) - 1} similar ask(s) into one item for {_name(c, person)}: "{title}". '

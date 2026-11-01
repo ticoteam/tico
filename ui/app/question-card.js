@@ -30,7 +30,7 @@ function qcardAge(iso) {
 // The header line after the asker's name: "asked 3 days ago · holds up: Website sales chat build".
 function qcardSub(it) {
   const held = it.holds_up?.title ? `holds up: ${plainActors(it.holds_up.title)}` : '';
-  return [qcardAge(it.ask?.created || it.created), held].filter(Boolean).join(' · ');
+  return [qcardAge(it.ask?.created_at || it.created_at), held].filter(Boolean).join(' · ');
 }
 // The picks ticked when the card opens: the recommended ones.
 const qcardRecommended = q => new Set((q.options || []).map((o, i) => o.recommended ? i : -1).filter(i => i >= 0));

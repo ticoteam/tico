@@ -22,7 +22,7 @@ def wakes(api, task):
     with api.app.state.store.read() as c:
         return [r["body"] for r in c.execute(
             "SELECT m.body FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs_json,'$.milestone') IS NOT NULL", (task["id"],))]
+            f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs,'$.milestone') IS NOT NULL", (task["id"],))]
 
 
 def name(task):
@@ -127,7 +127,7 @@ def test_a_merge_while_the_server_was_down_wakes_once_after_restart(api, tmp_pat
         Scheduler(restarted.state.store, restarted.state.execution).tick()
         with restarted.state.store.read() as c:
             woke = c.execute("SELECT count(*) FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                             f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs_json,'$.milestone') IS NOT NULL",
+                             f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs,'$.milestone') IS NOT NULL",
                              (waiter["id"],)).fetchone()[0]
         assert woke == 1
         assert client  # the restarted app served while the sweep ran
@@ -226,7 +226,7 @@ def recover(app, monkeypatch, github):
     import threading
     service = app.state.github_app
     with service.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO repositories(full_name,reachable,enabled,added_by,updated,default_branch) "
+        c.execute("INSERT OR IGNORE INTO repositories(full_name,reachable,enabled,added_by,updated_at,default_branch) "
                   "VALUES('ticoteam/tico',1,1,'human:ana',?,'main')", (H.now(),))
     monkeypatch.setattr(service, "row", lambda c=None: {"slug": "test-app", "org": "ticoteam"})
     monkeypatch.setattr(service, "mint", lambda *a, **kw: ("test-token", "later"))
@@ -272,7 +272,7 @@ def test_a_release_published_while_the_server_was_down_wakes_once_after_restart(
         recover(restarted, monkeypatch, github)
         with restarted.state.store.read() as c:
             woke = c.execute("SELECT count(*) FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                             f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs_json,'$.milestone') IS NOT NULL",
+                             f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs,'$.milestone') IS NOT NULL",
                              (following["id"],)).fetchone()[0]
         assert woke == 1
 

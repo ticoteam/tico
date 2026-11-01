@@ -59,12 +59,12 @@ def test_refused_for_missing_receipt_moves_itself_when_the_receipt_is_posted(api
 def test_refused_for_failing_checks_moves_when_the_checks_pass(api):
     task = ticket(api, RECEIPT)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.checks',json(?)) WHERE task_id=? AND kind='pr'",
+        c.execute("UPDATE task_links SET detail=json_set(detail,'$.checks',json(?)) WHERE task_id=? AND kind='pr'",
                   (json.dumps({'python': 'failing'}), task['id']))
     refused = move(api, task)
     assert refused.status_code == 422 and 'Tico retries this move itself when the checks' in refused.text
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.checks',json(?)) WHERE task_id=? AND kind='pr'",
+        c.execute("UPDATE task_links SET detail=json_set(detail,'$.checks',json(?)) WHERE task_id=? AND kind='pr'",
                   (json.dumps({'python': 'passing'}), task['id']))
     assert tick(api) == [task['id']] and step(api, task) == 'Review 1'
 
@@ -155,7 +155,7 @@ def owner_woken(api, task):
     with api.app.state.store.read() as c:
         return [bool(r[0]) for r in c.execute(
             "SELECT (SELECT count(*) FROM jobs j WHERE j.message_id=m.id) FROM messages m WHERE m.to_actor=? "
-            "AND json_extract(m.refs_json,'$.task')=? AND json_extract(m.refs_json,'$.review_gate') IS NOT NULL",
+            "AND json_extract(m.refs,'$.task')=? AND json_extract(m.refs,'$.review_gate') IS NOT NULL",
             (task['owner'], task['id']))]
 
 
@@ -246,7 +246,7 @@ def test_a_pr_link_tico_cannot_resolve_is_never_routed_as_a_github_outage(api, m
     else:
         # No GitHub App configured: the gate reads the cached link, which has no head yet.
         monkeypatch.setattr(api.app.state.github_app, 'row', lambda c=None: None)
-        sql = "UPDATE task_links SET detail_json=json_remove(detail_json,'$.head_sha') WHERE task_id=? AND kind='pr'"
+        sql = "UPDATE task_links SET detail=json_remove(detail,'$.head_sha') WHERE task_id=? AND kind='pr'"
     with api.app.state.store.transaction() as c:
         c.execute(sql, (task['id'],))
     refused = move(api, task)
@@ -264,7 +264,7 @@ def test_the_install_owners_receipt_counts_on_ticos_retry(api):
     api.app.state.store.settings.owner_email = 'editor@acme.example'
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM registry_metadata WHERE key='owner'")
-        c.execute("INSERT INTO humans(id,name,email,teams_json) VALUES('editor','Editor','editor@acme.example','[]')")
+        c.execute("INSERT INTO humans(id,name,email,teams) VALUES('editor','Editor','editor@acme.example','[]')")
         H.task_comment(c, 'human:editor', task['id'], RECEIPT, wake=False)
     assert tick(api) == [task['id']] and step(api, task) == 'Review 1'
 
@@ -373,9 +373,9 @@ def test_a_private_tickets_outage_does_not_create_a_task_or_wake_a_manager(api, 
         source_outages.sync(c, api.app.state.store.settings)
         assert not c.execute("SELECT 1 FROM tasks WHERE owner=?", (H.bot_actor('devops-engineer'),)).fetchone()
         assert not c.execute("SELECT 1 FROM events WHERE action='blocker.routed'").fetchone()
-        for row in c.execute("SELECT body,refs_json FROM messages WHERE json_extract(refs_json,'$.source_outage') IS NOT NULL"):
-            assert task['id'] not in row['body'] + row['refs_json']
-            assert task['title'] not in row['body'] + row['refs_json']
+        for row in c.execute("SELECT body,refs FROM messages WHERE json_extract(refs,'$.source_outage') IS NOT NULL"):
+            assert task['id'] not in row['body'] + row['refs']
+            assert task['title'] not in row['body'] + row['refs']
     assert not any(owner_woken(api, task))
 
 
@@ -395,9 +395,9 @@ def test_a_retry_does_not_pass_on_evidence_the_mover_cannot_read(api):
     task = ticket(api)
     with api.app.state.store.transaction() as c:      # a private review child only the owner reads, holding a receipt
         # Ana heads every bot that reports to no one, so cpo reports to another root person she does not manage.
-        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         roster['people'].append({'id': 'zed', 'email': 'zed@acme.example'})
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
         c.execute("UPDATE bot_config SET reports_to='human:zed' WHERE bot='cpo'")
         child = H.task_create(c, H.bot_actor('cpo'), 'Evidence', 'x', H.bot_actor('cpo'), parent_id=task['id'])
         c.execute("UPDATE tasks SET private=1, title='Review 1' WHERE id=?", (child['id'],))

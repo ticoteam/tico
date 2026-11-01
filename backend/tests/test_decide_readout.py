@@ -210,7 +210,7 @@ def test_a_named_sets_label_shows_only_a_version_the_set_defines(api):
     support = sets["support-triage"]
     assert (support["calls"], support["jev"], support["versions"]) == (4, 4, ["1"]), "a number the set never had is text"
     with api.app.state.store.read() as c:
-        spent = c.execute("SELECT COUNT(*), SUM(json_extract(detail_json, '$.cost_usd')) FROM events "
+        spent = c.execute("SELECT COUNT(*), SUM(json_extract(detail, '$.cost_usd')) FROM events "
                           "WHERE action='judge.spend' AND target LIKE 'support-triage@%'").fetchone()
     assert spent[0] == 4 and support["cost_usd"] == round(spent[1], 6) > 0, "every call's spend counts under the set"
     assert sets["learnings-route"]["versions"] == ["run"] and sets["learnings-route"]["calls"] == 2

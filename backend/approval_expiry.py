@@ -25,8 +25,8 @@ def sweep(conn, at=None):
     stale, ended = [], []
     marks = ",".join("?" * len(ENDED))
     for row in H._rows(conn.execute(
-            "SELECT a.id, a.created, t.status FROM approvals a LEFT JOIN tasks t ON t.id=a.task_id "
-            f"WHERE a.decision IS NULL AND (a.created<? OR t.status IN ({marks})) ORDER BY a.created",
+            "SELECT a.id, a.created_at, t.status FROM approvals a LEFT JOIN tasks t ON t.id=a.task_id "
+            f"WHERE a.decision IS NULL AND (a.created_at<? OR t.status IN ({marks})) ORDER BY a.created_at",
             (cutoff, *ENDED))):
         with isolated(conn, "approval_expiry", row["id"]):
             if row["status"] in ENDED:
@@ -39,7 +39,7 @@ def sweep(conn, at=None):
     # walked here rather than in SQL.
     rows = H._rows(conn.execute(
         f"SELECT m.id, t.id AS task_id, t.status, ({H.ACCEPTANCE_ASK_SQL}) AS acceptance, "
-        "json_extract(m.refs_json,'$.stuck') AS stuck, m.from_actor FROM messages m "
+        "json_extract(m.refs,'$.stuck') AS stuck, m.from_actor FROM messages m "
         f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
         f"WHERE m.kind='ask' AND m.to_actor LIKE 'human:%' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL}"))
     gone = [r for r in rows if (r["status"] in ENDED and not r["acceptance"])

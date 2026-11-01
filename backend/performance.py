@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS runner_load_samples(runner_id TEXT NOT NULL, ts INTEG
   sampled_at INTEGER NOT NULL, cpu_pct REAL, mem_used INTEGER, mem_total INTEGER, swap_used INTEGER,
   swap_total INTEGER, running_turns INTEGER NOT NULL, PRIMARY KEY(runner_id,ts)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS attempt_load_snapshots(attempt_id TEXT PRIMARY KEY REFERENCES attempts(id) ON DELETE CASCADE,
-  start_json TEXT, end_json TEXT) WITHOUT ROWID;
+  at_start TEXT, at_end TEXT) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS perf_points(runner_id TEXT NOT NULL, span INTEGER NOT NULL, ts INTEGER NOT NULL,
   n INTEGER NOT NULL, scope TEXT NOT NULL DEFAULT 'host', cpu REAL NOT NULL, cpu_max REAL NOT NULL, load1 REAL,
   mem_used INTEGER, mem_max INTEGER, mem_total INTEGER, swap_used INTEGER, swap_total INTEGER, disk_free INTEGER,
@@ -32,10 +32,10 @@ CREATE TABLE IF NOT EXISTS perf_usage(runner_id TEXT NOT NULL, span INTEGER NOT 
   kind TEXT NOT NULL, key TEXT NOT NULL, bot TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '',
   n INTEGER NOT NULL, cpu REAL NOT NULL, cpu_max REAL NOT NULL, mem INTEGER NOT NULL, mem_max INTEGER NOT NULL,
   PRIMARY KEY(runner_id, span, ts, kind, key)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS perf_overloads(id INTEGER PRIMARY KEY, runner_id TEXT NOT NULL, started INTEGER NOT NULL,
+CREATE TABLE IF NOT EXISTS perf_overloads(id INTEGER PRIMARY KEY, runner_id TEXT NOT NULL, started_at INTEGER NOT NULL,
   last INTEGER NOT NULL, ended INTEGER, reasons TEXT NOT NULL, cpu_max REAL NOT NULL, mem_max REAL NOT NULL,
-  runs_max INTEGER NOT NULL DEFAULT 0, bots_json TEXT NOT NULL DEFAULT '[]', procs_json TEXT NOT NULL DEFAULT '[]');
-CREATE INDEX IF NOT EXISTS perf_overloads_runner ON perf_overloads(runner_id, started);
+  runs_max INTEGER NOT NULL DEFAULT 0, bots TEXT NOT NULL DEFAULT '[]', procs TEXT NOT NULL DEFAULT '[]');
+CREATE INDEX IF NOT EXISTS perf_overloads_runner ON perf_overloads(runner_id, started_at);
 """
 MODES = ("on", "off")
 MINUTE, TEN = 60, 600
@@ -232,7 +232,7 @@ def stamp_attempt(c, attempt_id, runner_id, phase, snapshot=None):
         latest = load_status(c, runner_id)["latest_sample"] if on(c, runner_id) else None
         value = ({k: latest[k] for k in ("at", "cpu_pct", "mem_pct", "running_turns")}
                  if latest and not latest["stale"] else None)
-    column = {"start": "start_json", "end": "end_json"}[phase]
+    column = {"start": "at_start", "end": "at_end"}[phase]
     if value is None:
         c.execute(f"UPDATE attempt_load_snapshots SET {column}=NULL WHERE attempt_id=?", (attempt_id,))
         return
@@ -243,9 +243,9 @@ def stamp_attempt(c, attempt_id, runner_id, phase, snapshot=None):
 
 def attempt_snapshots(c, attempt_id):
     from .read_cache import one
-    row = one(c, "SELECT start_json,end_json FROM attempt_load_snapshots WHERE attempt_id=?", (attempt_id,))
-    return {"load_start": json.loads(row["start_json"]) if row and row["start_json"] else None,
-            "load_end": json.loads(row["end_json"]) if row and row["end_json"] else None}
+    row = one(c, "SELECT at_start,at_end FROM attempt_load_snapshots WHERE attempt_id=?", (attempt_id,))
+    return {"load_start": json.loads(row["at_start"]) if row and row["at_start"] else None,
+            "load_end": json.loads(row["at_end"]) if row and row["at_end"] else None}
 
 
 # ------------------------------------------------------------------------------------------------ overloads
@@ -292,7 +292,7 @@ def detect(c, runner_id, upto):
     if open_:
         if loaded:
             why = sorted(set(json.loads(open_["reasons"])) | set(loaded))
-            _update(c, open_["id"], runner_id, open_["started"], latest["ts"], why)
+            _update(c, open_["id"], runner_id, open_["started_at"], latest["ts"], why)
         elif latest["ts"] > open_["last"]:
             c.execute("UPDATE perf_overloads SET ended=? WHERE id=?", (latest["ts"], open_["id"]))
         return
@@ -301,7 +301,7 @@ def detect(c, runner_id, upto):
     all_reasons = [reasons(p) for p in points]
     if all(all_reasons):
         started = points[-1]["ts"]
-        cur = c.execute("INSERT INTO perf_overloads(runner_id,started,last,reasons,cpu_max,mem_max) VALUES(?,?,?,?,0,0)",
+        cur = c.execute("INSERT INTO perf_overloads(runner_id,started_at,last,reasons,cpu_max,mem_max) VALUES(?,?,?,?,0,0)",
                         (runner_id, started, latest["ts"], "[]"))
         _update(c, cur.lastrowid, runner_id, started, latest["ts"], sorted({r for rs in all_reasons for r in rs}))
         H.event(c, "system", "runner.overloaded", runner_id, {"reasons": sorted({r for rs in all_reasons for r in rs})})
@@ -315,7 +315,7 @@ def _update(c, oid, runner_id, started, last, why):
     procs = c.execute("SELECT key name,sum(cpu*n)/sum(n) cpu,max(mem_max) mem FROM perf_usage WHERE runner_id=? AND "
                       "span=? AND ts>=? AND ts<=? AND kind='proc' GROUP BY key ORDER BY cpu DESC LIMIT 6",
                       (runner_id, MINUTE, started, last)).fetchall()
-    c.execute("UPDATE perf_overloads SET last=?,reasons=?,cpu_max=?,mem_max=?,runs_max=?,bots_json=?,procs_json=? "
+    c.execute("UPDATE perf_overloads SET last=?,reasons=?,cpu_max=?,mem_max=?,runs_max=?,bots=?,procs=? "
               "WHERE id=?",
               (last, json.dumps(why), round(peak[0] or 0, 1), round(peak[1] or 0, 1), peak[2] or 0,
                json.dumps(bots),
@@ -329,14 +329,14 @@ def _iso(ts):
 def _runs(c, runner_id, start, end, limit=500):
     """The turns this computer ran that overlap [start, end), oldest first: this server's own record. A busy window
     keeps its newest `limit`."""
-    # A leased turn counts from its lease: the runner reports `started` once its harness is up. Only the turns still
+    # A leased turn counts from its lease: the runner reports `started_at` once its harness is up. Only the turns still
     # open or finished since `start` are read (attempts_runner_finished, two index ranges): an open overload runs this
     # under the write lock on every post, and visiting each turn the computer ever ran held that lock ~100 s on a slow
     # disk (Dev 249).
-    return c.execute("SELECT a.id,a.bot,coalesce(a.started,a.created) started,a.finished,a.state,t.model FROM attempts a "
+    return c.execute("SELECT a.id,a.bot,coalesce(a.started_at,a.created_at) started_at,a.finished_at,a.state,t.model FROM attempts a "
                      "LEFT JOIN turns t ON t.id=a.id WHERE a.rowid IN (SELECT rowid FROM attempts WHERE runner_id=? "
-                     "AND finished>=? UNION ALL SELECT rowid FROM attempts WHERE runner_id=? AND finished IS NULL) AND "
-                     "coalesce(a.started,a.created)<? ORDER BY coalesce(a.started,a.created) DESC LIMIT ?",
+                     "AND finished_at>=? UNION ALL SELECT rowid FROM attempts WHERE runner_id=? AND finished_at IS NULL) AND "
+                     "coalesce(a.started_at,a.created_at)<? ORDER BY coalesce(a.started_at,a.created_at) DESC LIMIT ?",
                      (runner_id, _iso(start), runner_id, _iso(end), limit)).fetchall()[::-1]
 
 
@@ -350,10 +350,10 @@ def ran(c, runner_id, start, end):
 
 
 def overload_view(row):
-    return {"started": row["started"], "ended": row["ended"], "last": row["last"],
-            "minutes": (( row["ended"] or row["last"] + MINUTE) - row["started"]) // MINUTE,
+    return {"started_at": row["started_at"], "ended": row["ended"], "last": row["last"],
+            "minutes": (( row["ended"] or row["last"] + MINUTE) - row["started_at"]) // MINUTE,
             "reasons": json.loads(row["reasons"]), "cpu_max": row["cpu_max"], "mem_max": row["mem_max"],
-            "runs_max": row["runs_max"], "bots": json.loads(row["bots_json"]), "procs": json.loads(row["procs_json"])}
+            "runs_max": row["runs_max"], "bots": json.loads(row["bots"]), "procs": json.loads(row["procs"])}
 
 
 def recent_overload(c, runner_id, within=RECENT_S, now=None):
@@ -487,7 +487,7 @@ def view(c, runner_id, hours, now=None, label=lambda b: b, access=None):
         slug = r["bot"].removeprefix("bot:")
         shown = seen(slug)
         runs.append({"attempt": r["id"] if seen(slug, "read") else None, "bot": label(slug) if shown else "",
-                     "model": (r["model"] or "") if shown else "", "started": r["started"], "finished": r["finished"],
+                     "model": (r["model"] or "") if shown else "", "started_at": r["started_at"], "finished_at": r["finished_at"],
                      "state": r["state"]})
     name = lambda b: label(b) if b else ""
     bots = [b | {"bot": name(b["bot"])} for b in _shown(ran(c, runner_id, since, now + 1), access, 20)]
@@ -498,7 +498,7 @@ def view(c, runner_id, hours, now=None, label=lambda b: b, access=None):
         procs.append({"name": r["key"], "cpu_minutes": round(r["cpu_n"] * SAMPLE_S / 60 / 100, 1),
                       "cpu_max": round(r["cpu_max"], 1), "mem_max": r["mem_max"]})
     overloads = [overload_view(o) for o in c.execute(
-        "SELECT * FROM perf_overloads WHERE runner_id=? AND coalesce(ended,last)>=? ORDER BY started", (runner_id, since))]
+        "SELECT * FROM perf_overloads WHERE runner_id=? AND coalesce(ended,last)>=? ORDER BY started_at", (runner_id, since))]
     for o in overloads:
         o["bots"] = [b | {"bot": name(b["bot"])} for b in _shown(o["bots"], access)]
     return {"hours": hours, "span": span, "since": since, "until": now, "columns": COLUMNS, "points": points,

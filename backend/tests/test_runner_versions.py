@@ -64,7 +64,7 @@ def test_heartbeat_stores_release_and_commit_and_nudges_the_owner_once_per_serve
     def notices():
         with api.app.state.store.read() as c:
             return [row["body"] for row in c.execute(
-                "SELECT body FROM messages WHERE to_actor='human:ben' AND kind='notice' ORDER BY created")]
+                "SELECT body FROM messages WHERE to_actor='human:ben' AND kind='notice' ORDER BY created_at")]
 
     report(api, r, "0.3.0", commit=commit)
     machine = next(m for m in get(api, "operations", token="ben-test")["computers"] if m["id"] == r["runner_id"])
@@ -90,7 +90,7 @@ def test_heartbeat_stores_release_and_commit_and_nudges_the_owner_once_per_serve
 def ben_notices(api):
     with api.app.state.store.read() as c:
         return [row["body"] for row in c.execute(
-            "SELECT body FROM messages WHERE to_actor='human:ben' AND kind='notice' ORDER BY created")]
+            "SELECT body FROM messages WHERE to_actor='human:ben' AND kind='notice' ORDER BY created_at")]
 
 
 def behind_for_two_hours(api, r):
@@ -160,7 +160,7 @@ def test_queued_work_says_it_waits_for_the_computer_to_update_only_once_the_comp
     assert shown() == held
     # Health names the hold and how long it has run; it is still not a queue_idle Tico bug (PR 623).
     with store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops'", (H.shift(H.now(), minutes=-30),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops'", (H.shift(H.now(), minutes=-30),))
         online = {x["id"] for x in health._online_runners(c)}
         assert {row["reason"] for row in health._waiting(c, online)[2]} == {"updating"}
         found = {f["check_id"]: f for f in health_monitor.findings(c, store.settings)}

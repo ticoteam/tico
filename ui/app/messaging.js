@@ -41,9 +41,9 @@ function messagingEvidence(data) {
         <span class="msg-evidence-meta"><span>Slack · ${esc(data.bot.sources.find(s => s.id === 'slack:' + m.channel)?.name || m.channel)}</span><span>Channel message</span></span>
         <div class="preview">${esc(m.text || '')}</div>
       </button>`})),
-    ...(data.slack_posts || []).map(p => ({kind: 'post', at: +(new Date(p.created)) || 0,
+    ...(data.slack_posts || []).map(p => ({kind: 'post', at: +(new Date(p.created_at)) || 0,
       html: `<button class="msg-evidence" type="button" data-msg-slack="${esc(p.thread_ts)}" data-msg-channel="${esc(p.channel)}">
-        <span class="msg-evidence-top"><strong>Bot reply in ${esc(data.bot.sources.find(s => s.id === 'slack:' + p.channel)?.name || p.channel)}</strong><span class="spacer"></span><span class="muted">${esc(ago(p.created))}</span></span>
+        <span class="msg-evidence-top"><strong>Bot reply in ${esc(data.bot.sources.find(s => s.id === 'slack:' + p.channel)?.name || p.channel)}</strong><span class="spacer"></span><span class="muted">${esc(ago(p.created_at))}</span></span>
         <span class="msg-evidence-meta"><span>Slack action · ${esc(p.state)}</span>${p.error ? `<span>${esc(p.error)}</span>` : ''}</span>
         <div class="preview">${esc(p.text || '')}</div>
       </button>`})),
@@ -54,7 +54,7 @@ function messagingEvidence(data) {
 // The Slack checks this bot ran; its schedules and other triggers are automations (#/automations, searched by its name).
 function messagingRuns(data) {
   return (data.slack_digests || []).map(d => `<div class="msg-run">
-    <div class="msg-run-top"><strong>Slack channel check</strong><span class="spacer"></span><span class="muted">${esc(ago(d.created))}</span></div>
+    <div class="msg-run-top"><strong>Slack channel check</strong><span class="spacer"></span><span class="muted">${esc(ago(d.created_at))}</span></div>
     <div class="msg-run-meta"><span>${esc(d.channels.join(' · '))}</span><span>${d.count} message${d.count === 1 ? '' : 's'}</span>${d.skipped ? `<span>${d.skipped} skipped in high volume</span>` : ''}<span>${esc(d.attempt?.state || 'Queued')}</span></div>
     <button class="ghost" type="button" data-msg-digest="${esc(d.id)}" style="margin-top:8px">View messages reviewed</button>
   </div>`).join('');
@@ -74,7 +74,7 @@ function messagingDetail(data) {
         <div class="msg-actions"><a class="ghost" href="${AUTOMATIONS}?q=${encodeURIComponent(b.name)}" data-msg-automations>Automations</a><a class="ghost" href="#/bot/${encodeURIComponent(b.bot)}">Bot settings</a>${b.can_manage && ['active', 'paused'].includes(b.state) ? `<button class="ghost" type="button" data-msg-pause="${esc(b.bot)}">${b.state === 'active' ? 'Pause bot' : 'Resume bot'}</button>` : ''}</div></div>
       ${sourceControl}
       <section class="msg-panel" aria-labelledby="msg-instructions-title">
-        <div class="msg-panel-title"><h2 id="msg-instructions-title">Instructions</h2><div class="muted">${data.instructions.published ? 'Published by its computer' + (data.instructions.updated ? ' · ' + ago(data.instructions.updated) : '') : 'Published summary; its instructions have not been reported yet'}</div></div>
+        <div class="msg-panel-title"><h2 id="msg-instructions-title">Instructions</h2><div class="muted">${data.instructions.published ? 'Published by its computer' + (data.instructions.updated_at ? ' · ' + ago(data.instructions.updated_at) : '') : 'Published summary; its instructions have not been reported yet'}</div></div>
         <div class="msg-panel-body">
           <div class="msg-facts"><span><strong>${b.sources.length}</strong> source${b.sources.length === 1 ? '' : 's'}</span><span>Last run <strong>${b.last_run ? esc(ago(b.last_run)) : 'not recorded'}</strong></span><span>Next <strong>${b.next_run ? esc(fmt(b.next_run)) : b.slack_interval_minutes ? `Slack every ${b.slack_interval_minutes} minutes when new` : 'not scheduled'}</strong></span></div>
           ${shownSources.length ? `<div class="msg-facts" style="margin-top:10px">${shownSources.map(s => `<span>${esc(s.name)}${s.kind === 'email' ? ` · ${s.error ? 'sync error' : s.synced_at ? 'synced ' + ago(s.synced_at) : 'not synced'}` : ` · ${s.post ? 'can post' : 'reads only'}`}</span>`).join('')}</div>` : ''}
@@ -115,7 +115,7 @@ async function messagingOpenDigest(bot, digest) {
   $('#msg-message-title').textContent = 'Slack check'; body.innerHTML = '<div class="empty">Loading…</div>'; d.showModal();
   try {
     const data = await get(`/v2/messaging/bots/${encodeURIComponent(bot)}/slack-digests/${encodeURIComponent(digest)}`);
-    body.innerHTML = `<p class="muted">${data.count} message${data.count === 1 ? '' : 's'} delivered to the bot${data.skipped ? ` · ${data.skipped} skipped in high volume` : ''} · ${esc(fmt(data.created))}</p>` +
+    body.innerHTML = `<p class="muted">${data.count} message${data.count === 1 ? '' : 's'} delivered to the bot${data.skipped ? ` · ${data.skipped} skipped in high volume` : ''} · ${esc(fmt(data.created_at))}</p>` +
       ((data.messages || []).map(m => `<article class="mail-msg"><div class="meta"><strong>${esc(m.author)}</strong><span class="muted">${esc(mailWhen('', Number(m.ts)))}</span><a href="${esc(m.url)}" target="_blank" rel="noopener">Open in Slack</a></div><pre>${esc(m.deleted ? '(message removed)' : m.text)}</pre></article>`).join('') || '<div class="empty">The delivered message records are unavailable.</div>');
   } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }

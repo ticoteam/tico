@@ -15,7 +15,7 @@ def test_company_waiter_reads_a_computer_with_two_waits_once(api):
     store = api.app.state.store
     with store.transaction() as c:
         jobs = [r[0] for r in c.execute("SELECT id FROM jobs WHERE state='queued' AND bot IN ('finance','doc-updater')")]
-        c.executemany("INSERT INTO org_turn_waits(job_id,created) VALUES(?,?)", [(job, H.now()) for job in jobs])
+        c.executemany("INSERT INTO org_turn_waits(job_id,created_at) VALUES(?,?)", [(job, H.now()) for job in jobs])
     assert len(jobs) >= 2
     statements = []
     with store.read_transaction() as c:

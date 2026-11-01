@@ -46,9 +46,9 @@ CREATE TABLE IF NOT EXISTS stale_judged(
  task_id TEXT PRIMARY KEY, mark TEXT NOT NULL, verdict TEXT NOT NULL, judged_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS stale_suggestions(
  id TEXT PRIMARY KEY, task_id TEXT NOT NULL, owner TEXT NOT NULL, reason TEXT NOT NULL, verdict TEXT NOT NULL,
- action TEXT, suggest TEXT NOT NULL, confidence REAL, mark TEXT NOT NULL, created TEXT NOT NULL,
+ action TEXT, suggest TEXT NOT NULL, confidence REAL, mark TEXT NOT NULL, created_at TEXT NOT NULL,
  outcome TEXT, outcome_at TEXT, outcome_by TEXT);
-CREATE INDEX IF NOT EXISTS stale_suggestions_task ON stale_suggestions(task_id, created);
+CREATE INDEX IF NOT EXISTS stale_suggestions_task ON stale_suggestions(task_id, created_at);
 CREATE INDEX IF NOT EXISTS stale_suggestions_open ON stale_suggestions(owner, outcome);
 """
 
@@ -82,7 +82,7 @@ def enabled(c):
 
 
 def last_pass(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (WATERMARK,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (WATERMARK,)).fetchone()
     try:
         return (json.loads(row[0]) or {}).get("last_pass") if row else None
     except (ValueError, AttributeError):
@@ -90,7 +90,7 @@ def last_pass(c):
 
 
 def _set_watermark(c, at):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (WATERMARK, json.dumps({"last_pass": at})))
 
 
@@ -104,7 +104,7 @@ def due(c, at):
 # ----------------------------------------------------------------------------- candidates (plain code)
 def mark(row):
     """What "unchanged" means for a judged task: its version, its last change and its last checkpoint."""
-    return f"{row.get('version') or 0}|{row.get('updated') or ''}|{row.get('checkpoint_at') or ''}"
+    return f"{row.get('version') or 0}|{row.get('updated_at') or ''}|{row.get('checkpoint_at') or ''}"
 
 
 def _day(ts):
@@ -120,7 +120,7 @@ def _pr_number(link):
 
 
 def _pr_reason(c, row):
-    links = H._rows(c.execute("SELECT * FROM task_links WHERE task_id=? AND kind='pr' ORDER BY created", (row["id"],)))
+    links = H._rows(c.execute("SELECT * FROM task_links WHERE task_id=? AND kind='pr' ORDER BY created_at", (row["id"],)))
     if not links or any(link.get("state") not in FINISHED_PR for link in links):
         return None                                  # no PR, or one still open
     last = links[-1]
@@ -150,8 +150,8 @@ def _snooze_reason(c, row, at):
                       "ORDER BY ts DESC LIMIT 1", (row["id"],)).fetchone()
     if not ended or ended[0] > H.shift(at, hours=-SNOOZE_GRACE_HOURS):
         return None
-    # The wake itself writes `updated`; anything later is activity.
-    if max(row.get("updated") or "", row.get("checkpoint_at") or "") > H.shift(ended[0], minutes=1):
+    # The wake itself writes `updated_at`; anything later is activity.
+    if max(row.get("updated_at") or "", row.get("checkpoint_at") or "") > H.shift(ended[0], minutes=1):
         return None
     return f"Its snooze ended {_day(ended[0])} and nothing happened since"
 
@@ -159,17 +159,17 @@ def _snooze_reason(c, row, at):
 def _twin_reason(c, row):
     marks = ",".join("?" * len(STATUSES))
     key = H.title_key(row["title"])
-    twin = next((r for r in c.execute(f"SELECT id,created,title FROM tasks WHERE owner=? AND id<>? AND status IN ({marks}) "
-                                      "AND (created<? OR (created=? AND id<?)) ORDER BY created",
-                                      (row["owner"], row["id"], *STATUSES, row["created"] or "",
-                                       row["created"] or "", row["id"]))
+    twin = next((r for r in c.execute(f"SELECT id,created_at,title FROM tasks WHERE owner=? AND id<>? AND status IN ({marks}) "
+                                      "AND (created_at<? OR (created_at=? AND id<?)) ORDER BY created_at",
+                                      (row["owner"], row["id"], *STATUSES, row["created_at"] or "",
+                                       row["created_at"] or "", row["id"]))
                  if H.title_key(r[2]) == key), None)
     return f"Same title as an older open task of the same owner (from {_day(twin[1])})" if twin else None
 
 
 def _quiet_reason(row, at):
     days = QUIET_DOING_DAYS if row["status"] == "doing" else QUIET_DAYS
-    last = max(row.get("updated") or "", row.get("checkpoint_at") or "")
+    last = max(row.get("updated_at") or "", row.get("checkpoint_at") or "")
     if last and last < H.shift(at, days=-days):
         then, now = H.parse_ts(last), H.parse_ts(at)
         return f"Nothing happened on it for {(now - then).days} days"
@@ -201,7 +201,7 @@ def candidates(c, at):
     go to Decide."""
     marks = ",".join("?" * len(STATUSES))
     out = []
-    for row in H._rows(c.execute(f"SELECT * FROM tasks WHERE status IN ({marks}) AND private=0 ORDER BY created,id",
+    for row in H._rows(c.execute(f"SELECT * FROM tasks WHERE status IN ({marks}) AND private=0 ORDER BY created_at,id",
                                  STATUSES)):
         if H.TS.snoozed(row, at) or not (H.is_bot(row["owner"]) or H.is_human(row["owner"])):
             continue
@@ -215,7 +215,7 @@ def new_candidates(c, at):
     """The candidates Decide has not judged at their current mark, with no suggestion this week, whose owner can
     hear one."""
     judged = {r[0]: r[1] for r in c.execute("SELECT task_id,mark FROM stale_judged")}
-    recent = {r[0] for r in c.execute("SELECT DISTINCT task_id FROM stale_suggestions WHERE created>?",
+    recent = {r[0] for r in c.execute("SELECT DISTINCT task_id FROM stale_suggestions WHERE created_at>?",
                                       (H.shift(at, days=-SUGGEST_EVERY_DAYS),))}
     return [(row, why) for row, why in candidates(c, at)
             if judged.get(row["id"]) != mark(row) and row["id"] not in recent and _owner_reachable(c, row["owner"])]
@@ -227,7 +227,7 @@ def _comments(c, row):
     for msg in H.task_comments(c, row["id"])[-COMMENTS:]:
         text = str(msg.get("body") or "").strip()
         out.append({"from": "a person" if H.is_human(msg.get("from_actor")) else "a bot",
-                    "at": str(msg.get("created") or "")[:16], "text": text[:COMMENT_CHARS]})
+                    "at": str(msg.get("created_at") or "")[:16], "text": text[:COMMENT_CHARS]})
     return out
 
 
@@ -235,7 +235,7 @@ def state_of(c, row, why):
     step = c.execute("SELECT name FROM task_steps WHERE id=?", (row["step_id"],)).fetchone() \
         if row.get("step_id") else None
     return {"task": {"title": row["title"] or "", "status": row["status"], "step": step[0] if step else "",
-                     "created": row.get("created") or "", "updated": row.get("updated") or "",
+                     "created_at": row.get("created_at") or "", "updated_at": row.get("updated_at") or "",
                      "due": row.get("due") or "", "reason": why, "comments": _comments(c, row)}}
 
 
@@ -280,7 +280,7 @@ def _apply(c, row, why, verdict, confidence, at):
         suggest = bot_words
     else:
         after, suggest = row, person_words
-    c.execute("INSERT INTO stale_suggestions(id,task_id,owner,reason,verdict,action,suggest,confidence,mark,created) "
+    c.execute("INSERT INTO stale_suggestions(id,task_id,owner,reason,verdict,action,suggest,confidence,mark,created_at) "
               "VALUES(?,?,?,?,?,?,?,?,?,?)",
               (sid, row["id"], row["owner"], why, verdict, action, suggest, round(confidence, 3), mark(after), at))
     _judged(c, row["id"], after, verdict, at)
@@ -480,7 +480,7 @@ def pending(c, person):
     since stays on their card until the next pass records the change: Accept is then refused as by hand."""
     out = []
     for row in H._rows(c.execute("SELECT s.* FROM stale_suggestions s LEFT JOIN tasks t ON t.id=s.task_id "
-                                 "WHERE s.owner=? AND s.outcome IS NULL ORDER BY s.created,t.created,t.id", (person,))):
+                                 "WHERE s.owner=? AND s.outcome IS NULL ORDER BY s.created_at,t.created_at,t.id", (person,))):
         task = H.task(c, row["task_id"])
         if task and task["status"] in STATUSES:
             out.append((row, task))
@@ -494,7 +494,7 @@ def card(c, person):
         return None
     n = len(rows)
     return {"kind": "stale", "id": "stale:" + person, "title": TITLE.format(n=n, s="" if n == 1 else "s"),
-            "first_line": "", "created": rows[0][0]["created"], "requester": None, "origin_actor": None,
+            "first_line": "", "created_at": rows[0][0]["created_at"], "requester": None, "origin_actor": None,
             "from_person": None,
             "rows": [{"id": s["id"], "task": t["id"], "title": t["title"], "status": t["status"],
                       "reason": s["reason"], "suggest": s["suggest"], "action": s["action"],

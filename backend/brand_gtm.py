@@ -58,7 +58,7 @@ def published(c, kind, n=None):
                  (n,) if n is not None else ())
     if not row:
         return None
-    return {"n": row["n"], "body": _body(kind, _loads(row["body_json"], {})), "note": row["note"],
+    return {"n": row["n"], "body": _body(kind, _loads(row["body"], {})), "note": row["note"],
             "published_by": row["published_by"], "published_at": row["published_at"]}
 
 
@@ -77,7 +77,7 @@ def _body(kind, value):
 def draft(c, kind, current=None):
     """The draft with the sections that differ from the published body, or None when there is none."""
     row = _draft_row(c, kind)
-    body = _loads(row["body_json"]) if row else None
+    body = _loads(row["body"]) if row else None
     if not isinstance(body, dict):
         return None
     body = _body(kind, body)
@@ -200,7 +200,7 @@ def _north_star_line(c, hidden=None):
     if owner in (hidden or ()) or (hidden is None and owner.startswith("bot:")):
         return []
     newest = K.latest(K.readings(c, row["id"], effective=True))
-    link = H._one(c, "SELECT target FROM goal_kpis WHERE kpi_id=? AND target IS NOT NULL ORDER BY updated DESC LIMIT 1",
+    link = H._one(c, "SELECT target FROM goal_kpis WHERE kpi_id=? AND target IS NOT NULL ORDER BY updated_at DESC LIMIT 1",
                   (row["id"],))
     line = f"North Star: {row['name']}"
     if newest:
@@ -235,7 +235,7 @@ def merge(c, kind, actor, sections, revision=None):
         raise Problem("stale_revision", f"The {TITLES[kind]} draft changed since it was read (revision "
                       f"{current_revision}); read it again and reapply the change", 409,
                       extra={"revision": current_revision})
-    body = _loads(row["body_json"]) if row else None
+    body = _loads(row["body"]) if row else None
     if not isinstance(body, dict):
         body = dict((published(c, kind) or {}).get("body") or {})
     body = _body(kind, body)
@@ -246,8 +246,8 @@ def merge(c, kind, actor, sections, revision=None):
             body[name] = value
     body = validate(kind, body)
     now = H.now()
-    c.execute(f"INSERT INTO {kind}_drafts (id, body_json, revision, updated_by, updated_at) VALUES (1,?,?,?,?) "
-              "ON CONFLICT(id) DO UPDATE SET body_json=excluded.body_json, revision=excluded.revision, "
+    c.execute(f"INSERT INTO {kind}_drafts (id, body, revision, updated_by, updated_at) VALUES (1,?,?,?,?) "
+              "ON CONFLICT(id) DO UPDATE SET body=excluded.body, revision=excluded.revision, "
               "updated_by=excluded.updated_by, updated_at=excluded.updated_at",
               (json.dumps(body, sort_keys=True), current_revision + 1, actor, now))
     H.event(c, actor, f"{kind}.draft", "draft", {"sections": sorted(sections or {})})
@@ -262,9 +262,9 @@ def publish(c, kind, actor, note=""):
         raise Problem("no_draft", f"There is no {TITLES[kind]} draft to publish", 409)
     n = (current or {}).get("n", 0) + 1
     note = " ".join(str(note or "").split())[:500]
-    c.execute(f"INSERT INTO {kind}_versions (id, n, body_json, note, published_by, published_at) VALUES (?,?,?,?,?,?)",
+    c.execute(f"INSERT INTO {kind}_versions (id, n, body, note, published_by, published_at) VALUES (?,?,?,?,?,?)",
               (H.new_id(), n, json.dumps(pending["body"], sort_keys=True), note, actor, H.now()))
-    c.execute(f"UPDATE {kind}_drafts SET body_json='null', revision=revision+1, updated_by=?, updated_at=? WHERE id=1",
+    c.execute(f"UPDATE {kind}_drafts SET body='null', revision=revision+1, updated_by=?, updated_at=? WHERE id=1",
               (actor, H.now()))
     H.event(c, actor, f"{kind}.publish", f"v{n}", {"n": n})
     H.hook(c, f"{kind}.published", f"v{n}", lambda: {"version": n, "note": note, "published_by": actor}, actor,

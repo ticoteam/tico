@@ -34,22 +34,22 @@ def test_qa_pending_marker_is_scoped_to_each_links_task(api):
     task = ticket(api)
     plain = post(api, 'tasks', {'owner': 'cpo', 'title': 'Planning notes', 'body': 'x', 'links': [PR]})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET detail_json=? WHERE task_id=? AND kind='pr'",
+        c.execute("UPDATE task_links SET detail=? WHERE task_id=? AND kind='pr'",
                   (json.dumps({'qa_default_pending': True, 'kept': 'metadata'}), plain['id']))
     hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
     hook(api, 'pull_request', pr_event('synchronize', head={'sha': OLD}))
     with api.app.state.store.read() as c:
         engineering = H.task_links(c, task['id'])[0]
         general = H.task_links(c, plain['id'])[0]
-        assert json.loads(engineering['detail_json'])['qa_default_pending'] is True
-        detail = json.loads(general['detail_json'])
+        assert json.loads(engineering['detail'])['qa_default_pending'] is True
+        detail = json.loads(general['detail'])
         assert not detail.get('qa_default_pending')
         assert detail['kept'] == 'metadata'
 
 
 def notices(api, task):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.review_gate') IS NOT NULL", (task['conversation_id'],))]
+        return [dict(r) for r in c.execute("SELECT * FROM messages WHERE conversation_id=? AND json_extract(refs,'$.review_gate') IS NOT NULL", (task['conversation_id'],))]
 
 
 @pytest.mark.parametrize('step', ['Review 1', 'Review 2'])
@@ -77,7 +77,7 @@ def test_receipt_at_current_head_allows_review_child_and_other_receipts_do_not_w
 def test_ci_is_first_names_failures_and_allows_pending(api, checks, allowed, names):
     task = ticket(api, f'Tests: head {HEAD}: 9 passed, 0 failed' if allowed else None)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.checks',json(?)) WHERE task_id=? AND kind='pr'", (json.dumps(checks), task['id']))
+        c.execute("UPDATE task_links SET detail=json_set(detail,'$.checks',json(?)) WHERE task_id=? AND kind='pr'", (json.dumps(checks), task['id']))
     r = move(api, task)
     assert r.status_code == (200 if allowed else 422), r.text
     if not allowed:
@@ -391,6 +391,6 @@ def test_incomplete_pr_paths_are_retried_without_losing_pending_default(api, mon
     with pytest.raises(ValueError, match='incomplete'):
         G.creation_paths(service, {'html_url': PR, 'changed_files': 2}, {})
     with api.app.state.store.read() as c:
-        detail = json.loads(c.execute("SELECT detail_json FROM task_links WHERE task_id=? AND kind='pr'", (task['id'],)).fetchone()[0])
+        detail = json.loads(c.execute("SELECT detail FROM task_links WHERE task_id=? AND kind='pr'", (task['id'],)).fetchone()[0])
         assert detail['qa_default_pending'] is True
         assert 'qa' not in H.task_labels(H.task(c, task['id']))

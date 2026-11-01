@@ -13,9 +13,9 @@ def _ask(c, title, default=None, days=0):
     said = H.task_comment(c, "bot:ops", task["id"], title, ask=ask)
     H.task_update(c, "bot:ops", task["id"], status="waiting", waiting_on="human:ana", note=title)
     then = H.shift(H.now(), days=-days)
-    c.execute("UPDATE messages SET created=? WHERE id=?", (then, said["id"]))
+    c.execute("UPDATE messages SET created_at=? WHERE id=?", (then, said["id"]))
     c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (then, task["id"]))
-    c.execute("UPDATE tasks SET created=? WHERE id=?", (then, task["id"]))
+    c.execute("UPDATE tasks SET created_at=? WHERE id=?", (then, task["id"]))
     return task, said
 
 
@@ -33,7 +33,7 @@ def test_a_reversible_default_goes_ahead_after_the_teams_days_and_a_send_waits(a
     with api.app.state.store.read() as c:
         answer = _answer(c, safe_ask)
         assert answer["from_actor"] == H.KEEPER and answer["to_actor"] == "bot:ops"
-        assert "goes ahead" in answer["body"] and H._json(answer["refs_json"], {})["answer"]["answers"] == {"decision": ["Yes"]}
+        assert "goes ahead" in answer["body"] and H._json(answer["refs"], {})["answer"]["answers"] == {"decision": ["Yes"]}
         assert H.task(c, safe["id"])["waiting_on"] is None
         assert c.execute("SELECT 1 FROM jobs WHERE message_id=?", (answer["id"],)).fetchone()   # Ops wakes on it
         assert _answer(c, send_ask) is None and _answer(c, fresh_ask) is None
@@ -50,13 +50,13 @@ def test_an_undated_ask_waits_for_the_batch_and_a_task_handed_to_a_person_closes
     with api.app.state.store.transaction() as c:
         _, old = _ask(c, "Which logo do we use?", days=15)
         _, spoken = _ask(c, "Which font do we use?", days=15)
-        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-15), spoken["id"]))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-15), spoken["id"]))
         handed = H.task_create(c, "bot:ops", "Sign the venue form", "x", "human:ana", lint=False)
         touched = H.task_create(c, "bot:ops", "Pick the venue", "x", "human:ana", lint=False)
         later = H.task_create(c, "bot:ops", "Renew the domain before Dec 1", "x", "human:ana",
                               H.shift(H.now(), days=40)[:10], lint=False)
         for row in (handed, touched, later):
-            c.execute("UPDATE tasks SET created=? WHERE id=?", (H.shift(H.now(), days=-15), row["id"]))
+            c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-15), row["id"]))
             c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (H.shift(H.now(), days=-15), row["id"]))
         H.task_comment(c, "human:ana", touched["id"], "Still looking, give me a few days")
         H.task_comment(c, "human:ana", H.message_task_id(spoken), "Thinking about it")
@@ -75,7 +75,7 @@ def test_an_undated_ask_waits_for_the_batch_and_a_task_handed_to_a_person_closes
         task = H.task_create(c, "bot:ops", "Book the venue", "x", "bot:ops", private=False)
         card = H.task_update(c, "bot:ops", task["id"], status="waiting", waiting_on="human:ana",
                              note="Approve the venue for Friday? If yes, I will book it.")["asked_in"]
-        c.execute("UPDATE tasks SET created=? WHERE id=?", (H.shift(H.now(), days=-15), card["id"]))
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-15), card["id"]))
         c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (H.shift(H.now(), days=-15), card["id"]))
         assert ask_deadlines.sweep(c)["closed"] == [card["id"]]
         back = H.task(c, task["id"])
@@ -136,7 +136,7 @@ def test_a_due_routine_occurrence_survives_the_sweep_and_an_ordinary_handed_task
         occurrence = H.task_create(c, "bot:ops", "Payroll", "x", "human:ana", lint=False,
                                    occurrence="auto_1:2026-01-02")
         for task in (plain, occurrence):
-            c.execute("UPDATE tasks SET created=? WHERE id=?", (old, task["id"]))
+            c.execute("UPDATE tasks SET created_at=? WHERE id=?", (old, task["id"]))
         done = ask_deadlines.sweep(c)
     assert done["closed"] == [plain["id"]]
     with api.app.state.store.read() as c:

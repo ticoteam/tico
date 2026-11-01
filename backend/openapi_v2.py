@@ -675,7 +675,7 @@ SCHEMAS = {
     "ChatGoalResult": obj({"goal": {"anyOf": [ref("ChatGoal"), {"type": "null"}]}}, required=["goal"],
                           supported={"type": "boolean"}, commands=items({"type": "object"})),
     "Message": obj({"id": "s", "conversation_id": "s", "from_actor": "s", "to_actor": "s", "kind": "s", "body": "s",
-                    "created": "s", "in_reply_to": "n", "refs": "o"}, required=["id", "conversation_id", "from_actor", "to_actor", "kind", "body", "created", "in_reply_to", "refs"],
+                    "created_at": "s", "in_reply_to": "n", "refs": "o"}, required=["id", "conversation_id", "from_actor", "to_actor", "kind", "body", "created_at", "in_reply_to", "refs"],
                    from_name={"type": "string", "description": "Display name of from_actor, when it is a person or a bot"},
                    to_name={"type": "string", "description": "Display name of to_actor"},
                    body_raw={"type": "string", "description": "A notice Tico wrote, as stored (with actor ids); `body` shows names to people"},
@@ -705,24 +705,24 @@ SCHEMAS = {
                                         "`reply` and `progress` are what the bot wrote (`progress` when a tool call follows it); "
                                         "`tool` is a short label such as \"Ran hub task create\", never its arguments or output"}),
     "Conversation": obj({"id": "s", "kind": "s", "subject": "s", "participants": items({"type": "string"}),
-                         "created": "s", "last_message_at": "s", "closed_at": "n"}),
+                         "created_at": "s", "last_message_at": "s", "closed_at": "n"}),
     "TaskStep": obj({"id": "s", "type_id": "s", "name": "s", "public_name": "s", "position": "i", "status": "s",
                      "check_pool": "a", "check_limit": "i",
                      "flow": {"type": "object", "description": "What the step does with a ticket (docs/tasks.md, Step "
                               "flow). On a check step, other_company is prefer (the default) or require."}},
                     required=["id", "type_id", "name", "position", "status"]),
-    "TaskType": obj({"id": "s", "name": "s", "numbered": "b", "steps_only": "b", "created": "s", "updated": "s", "steps": items(ref("TaskStep"))},
+    "TaskType": obj({"id": "s", "name": "s", "numbered": "b", "steps_only": "b", "created_at": "s", "updated_at": "s", "steps": items(ref("TaskStep"))},
                     bots={"type": ["string", "null"], "enum": ["read", "work", None],
                           "description": "What every bot may do with the type's tasks beyond its own: read "
                                          "(read, comment, file subtasks) or work (also change them); null keeps "
                                          "each task to the bots on it"}),
     "TaskTypeList": obj({"types": items(ref("TaskType"))}),
     "TaskTypeResult": obj({"type": ref("TaskType")}),
-    "Task": obj({"private": "b", "id": "s", "title": "s", "body": "s", "requester": "s", "owner": "s", "status": "s", "created": "s",
-                 "updated": "s", "due": "n", "version": "i", "lane": "s", "labels": items({"type": "string"}),
+    "Task": obj({"private": "b", "id": "s", "title": "s", "body": "s", "requester": "s", "owner": "s", "status": "s", "created_at": "s",
+                 "updated_at": "s", "due": "n", "version": "i", "lane": "s", "labels": items({"type": "string"}),
                  "acceptance_criteria": items({"type": "string"}),
                  "occurrence": {"type": ["string", "null"], "description": "A due-date routine's occurrence, \"<automation_id>:<due_on>\", on the task it opened: the due is its deadline, not a wake date."}},
-                required=["id", "title", "requester", "owner", "status", "created", "updated", "due", "version", "lane", "labels"],
+                required=["id", "title", "requester", "owner", "status", "created_at", "updated_at", "due", "version", "lane", "labels"],
                 owner_name={"type": "string", "description": "Display name of owner (`owner` stays the actor id)"},
                 requester_name={"type": "string", "description": "Display name of requester"},
                 cover={"oneOf": [obj({"url": "s", "width": {"type": ["integer", "null"]},
@@ -767,12 +767,12 @@ SCHEMAS = {
                    "onboarding_state": "s", "stage": {"enum": ["onboarding", "active"], "description": "Onboarding (learns only: no tasks, routines or sends) until a person above it marks onboarding complete, then active"}},
                   required=["id", "display_name", "org_parent", "status", "access"]),
     "Seat": obj({"id": "s", "kind": {"enum": ["seat"]}, "stage": {"enum": ["recruiting"]}, "title": "s",
-                 "description": "s", "reports_to": "s", "team": "s", "created": "s", "org_parent": "s"},
+                 "description": "s", "reports_to": "s", "team": "s", "created_at": "s", "org_parent": "s"},
                 required=["id", "kind", "stage", "title", "description", "reports_to"]),
     "SeatList": obj({"seats": items(ref("Seat"))}, required=["seats"]),
     "SeatClosed": obj({"id": "s", "closed": "b"}, required=["id", "closed"]),
     "SeatDetail": obj({"id": "s", "kind": {"enum": ["seat"]}, "stage": {"enum": ["recruiting"]}, "title": "s",
-                       "description": "s", "reports_to": "s", "team": "s", "created": "s",
+                       "description": "s", "reports_to": "s", "team": "s", "created_at": "s",
                        "description_by": {"enum": ["chart", "person"]},
                        "can_edit": "b"},
                       required=["id", "kind", "stage", "title", "description", "reports_to", "can_edit"]),
@@ -849,7 +849,7 @@ SCHEMAS = {
     "OrgModels": obj({"models": items(ref("OrgModel"))}, required=["models"]),
     "SeatBatch": obj({"seats": items(ref("Seat"))}, required=["seats"]),
     "BotList": items(ref("Bot")),
-    "BotInstructions": obj({"bot": "s", "content": "s", "published": "b", "updated": "n", "source": "s"}),
+    "BotInstructions": obj({"bot": "s", "content": "s", "published": "b", "updated_at": "n", "source": "s"}),
     "BotOnboarded": obj({"bot": "s", "onboarding_state": "s", "stage": "s", "changed": "b", "ready": {
                             "type": ["object", "null"], "description": "The bot's own call: its \"I'm ready\" "
                             "({at, summary})"}, "routine": {
@@ -917,7 +917,7 @@ SCHEMAS = {
                   "family": {"type": ["string", "null"], "description": "The maker of the model that did the work, from "
                              "the model catalog, when every counted segment agrees; null is unknown (mixed, Cursor "
                              "auto, OpenRouter, an unlisted model, nothing counted). Never the bot's configured model."}}),
-    "TaskRun": obj({"run": "s", "bot": "s", "started": "n", "finished": "n", "outcome": "n", "ran_on": ref("RanOn")}),
+    "TaskRun": obj({"run": "s", "bot": "s", "started_at": "n", "finished_at": "n", "outcome": "n", "ran_on": ref("RanOn")}),
     # How a reader's comment reaches the task's bot (backend/delivery.py): the default way and a default defer's
     # deadline, whether they may steer or queue (wake it), whether its harness takes a steer, and whether they may set
     # the goal.
@@ -939,7 +939,7 @@ SCHEMAS = {
         obj({"by": "s", "text": "s", "at": "s"})]},
     "VersionReview": obj({"note": "n", "comment_id": "n", "ask": {"oneOf": [ref("TaskReviewAskView"), {"type": "null"}]},
                           "answers": items(ref("ReviewAnswer"))}),
-    "TaskFileVersion": obj({"n": "i", "size": "i", "mime": "s", "sha256": "s", "created": "s", "by": "s",
+    "TaskFileVersion": obj({"n": "i", "size": "i", "mime": "s", "sha256": "s", "created_at": "s", "by": "s",
                             "comment_id": "n", "note": "n", "ask": {"oneOf": [ref("TaskReviewAskView"), {"type": "null"}]},
                             "answers": items(ref("ReviewAnswer")), "url": "s", "poster_url": "n", "thumb_url": "n",
                             **{k: {"type": ["integer", "null"]} for k in ("width", "height", "duration_ms")},
@@ -960,7 +960,7 @@ SCHEMAS = {
     "InboundTaskResult": obj({"task": {"oneOf": [obj({"id": "s"}), {"type": "null"}]}, "created": "b", "changed": "b"}),
     "UpdateList": obj({"updates": "a", "unread": "i", "next_before": "n"}, required=["updates", "unread"]),
     "UpdateArchiveResult": obj({"updated": "i", "archived": "b", "unread": "i"},
-                                required=["updated", "archived", "unread"]),
+                                required=["updated_at", "archived", "unread"]),
     "ChangelogEntry": obj({"id": "s", "title": "s", "bullets": items({"type": "string"}), "area": "s",
                            "kind": {"type": "string", "enum": ["product", "activity"]}, "shipped_at": "s",
                            "unread": "b", "version": "s", "source": "s", "url": "s", "task_id": "s"},
@@ -1001,36 +1001,36 @@ SCHEMAS = {
     "MeetingReviewList": obj({"meetings": items(ref("ReviewedMeeting")), "count": "i", "pending_count": "i"}),
     "MeetingReviewPreferences": obj({"auto_share": {"type": ["boolean", "null"]},
                                      "review_default": {"type": "string", "enum": ["review", "auto"]}, "effective_auto_share": "b"}),
-    "InternalDocRow": obj({"id": "s", "path": "s", "title": "s", "updated": "s", "updated_by": "s", "locked": "b", "version": "i"},
+    "InternalDocRow": obj({"id": "s", "path": "s", "title": "s", "updated_at": "s", "updated_by": "s", "locked": "b", "version": "i"},
                           updated_by_name={"type": "string", "description": "Display name of updated_by"}),
     "InternalDoc": obj({"id": "s", "path": "s", "title": "s", "body": "s", "locked": "b", "version": "i", "created_by": "s",
-                        "created": "s", "updated_by": "s", "updated": "s", "archived": "b"},
+                        "created_at": "s", "updated_by": "s", "updated_at": "s", "archived": "b"},
                        created_by_name={"type": "string"}, updated_by_name={"type": "string", "description": "Display name of updated_by"}),
     "InternalDocList": obj({"docs": items(ref("InternalDocRow")), "next_cursor": "n"}),
     "InternalDocResult": obj({"doc": ref("InternalDoc")}),
-    "InternalDocVersion": obj({"version": "i", "title": "s", "path": "s", "actor": "s", "created": "s", "note": "s"},
+    "InternalDocVersion": obj({"version": "i", "title": "s", "path": "s", "actor": "s", "created_at": "s", "note": "s"},
                               actor_name={"type": "string"}, size={"type": "integer"}, current={"type": "boolean"}),
     "InternalDocVersions": obj({"doc": "s", "versions": items(ref("InternalDocVersion"))}),
     "InternalDocVersionResult": obj({"version": obj({"version": "i", "title": "s", "path": "s", "body": "s", "actor": "s",
-                                                      "created": "s", "note": "s"}, actor_name={"type": "string"})}),
+                                                      "created_at": "s", "note": "s"}, actor_name={"type": "string"})}),
     "LinkedDoc": obj({"id": "s", "title": "s", "url": "s", "kind": {"enum": ["website", "google_drive", "google_doc", "notion", "github", "other"]},
-                      "host": "s", "description": "s", "added_by": "s", "created": "s", "updated": "s"},
+                      "host": "s", "description": "s", "added_by": "s", "created_at": "s", "updated_at": "s"},
                      added_by_name={"type": "string"}),
     "LinkedDocList": obj({"linked": items(ref("LinkedDoc"))}),
     "LinkedDocResult": obj({"linked": ref("LinkedDoc")}),
     "DocSource": obj({"id": "s", "title": "s", "url": "s", "kind": "s", "provider": "s", "description": "s",
                       "added_by": "s", "repo": "s", "reference": "s", "reference_override": "s", "path": "s",
                       "status": {"enum": ["link_only", "queued", "preparing", "updating", "ready", "empty", "failed", "access_needed"]},
-                      "last_checked": "n", "doc_count": "i", "skipped": "i", "error_code": "s"}),
+                      "last_checked_at": "n", "doc_count": "i", "skipped": "i", "error_code": "s"}),
     "DocSourceList": obj({"sources": items(ref("DocSource")), "next_cursor": "n"}),
     "DocSourceResult": obj({"source": ref("DocSource")}),
     "SourceDocumentList": obj({"source": ref("DocSource"), "documents": items(obj({"id": "s", "title": "s", "path": "s", "commit": "s"})), "next_cursor": "n"}),
     "ExternalHit": obj({"type": {"enum": ["external"]}, "id": "s", "title": "s", "path": "s", "section": "s",
                         "excerpt": "s", "score": "f", "trust": {"enum": ["untrusted_external"]}, "source_id": "s",
-                        "source_title": "s", "source_url": "s", "commit": "s", "last_checked": "n", "citation_url": "s"}, collection={"type": "string"}),
+                        "source_title": "s", "source_url": "s", "commit": "s", "last_checked_at": "n", "citation_url": "s"}, collection={"type": "string"}),
     "ExternalDocResult": obj({"doc": obj({"id": "s", "type": {"enum": ["external"]}, "title": "s", "path": "s",
                         "content": "s", "trust": {"enum": ["untrusted_external"]}, "source_id": "s", "source_title": "s",
-                        "source_url": "s", "commit": "s", "last_checked": "n", "citation_url": "s", "reference_notice": "s"})}),
+                        "source_url": "s", "commit": "s", "last_checked_at": "n", "citation_url": "s", "reference_notice": "s"})}),
     "DocsSearchResults": obj({"results": items({"oneOf": [ref("ExternalHit"),
         obj({"type": {"enum": ["internal"]}, "id": "s", "path": "s", "title": "s", "excerpt": "s", "score": "f"}, required=["type", "id", "path", "title", "excerpt", "score"],
             section={"type": "string"}, anchor={"type": "string"}, collection={"type": "string"}),
@@ -1100,7 +1100,7 @@ SCHEMAS = {
                       "results": {"type": "array", "items": {"type": "object"},
                                   "description": "Matching internal, linked and manual docs, as GET /api/v2/docs/search?collection=all"}},
                      required=["conversation_id", "message_id", "results"]),
-    "DocsConversations": obj({"conversations": items(obj({"id": "s", "title": "s", "created": "s",
+    "DocsConversations": obj({"conversations": items(obj({"id": "s", "title": "s", "created_at": "s",
                                                          "last_message_at": "n", "closed_at": "n"})),
                               "next_offset": {"type": ["integer", "null"]}}),
     "DocsReopened": obj({"conversation_id": "s"}),
@@ -1129,9 +1129,9 @@ SCHEMAS = {
                  "suggest_status": {"type": ["string", "null"], "description": "On a colour set by hand: "
                                                                                "the colour the Strategy "
                                                                                "Bot would choose, when it differs"},
-                 "suggest_note": "n", "suggest_at": "n", "rank": {"type": ["integer", "null"]}, "created": "s", "created_by": "s", "updated": "s"},
+                 "suggest_note": "n", "suggest_at": "n", "rank": {"type": ["integer", "null"]}, "created_at": "s", "created_by": "s", "updated_at": "s"},
                 required=["id", "title", "owner", "parent_id", "body", "status", "status_note", "status_by", "status_at", "status_source",
-                          "rank", "created", "created_by", "updated"],
+                          "rank", "created_at", "created_by", "updated_at"],
                 owner_name={"type": "string"}, status_by_name={"type": "string"},
                 why={"type": "string", "description": "One line tying it to the company's vision; empty: not tied to the vision"},
                 why_by={"type": ["string", "null"]}, why_at={"type": ["string", "null"]}),
@@ -1148,7 +1148,7 @@ SCHEMAS = {
     "Kpi": obj({"id": {"type": "string", "description": "A UUID, or auto:<bot>:<metric> for a bot's automatic KPI"}, "slug": "n",
                 "name": "s", "definition": "s", "unit": "s", "direction": {"enum": ["up", "down", "range"]},
                 "cadence": {"enum": ["daily", "weekly", "monthly"]}, "owner": "s", "source_note": "s", "definition_version": "i",
-                "created": "n", "created_by": "n", "updated": "n",
+                "created_at": "n", "created_by": "n", "updated_at": "n",
                 "archived_at": {"type": ["string", "null"]}, "archived_by": {"type": ["string", "null"]}, "auto": "b",
                 "latest": {"oneOf": [ref("KpiReadingView"), {"type": "null"}]}, "readings": "i",
                 "freshness": {"enum": ["fresh", "stale", "missing", "archived"], "description": "stale: one period missed; missing: never read or two missed. archived: a retained goal link, not counting. Never zero"},
@@ -1181,7 +1181,7 @@ SCHEMAS = {
                     kpis=items(ref("Kpi")), children=items(ref("Goal")), chain=items(ref("Goal")), tasks=items({"type": "object"}),
                     events=items({"type": "object"}), checkins=items(ref("GoalCheckinView")), proposals=items(ref("GoalProposalView"))),
     "GoalResult": obj({"goal": {}}),
-    "CompanyResult": obj({"company": obj({"vision": "s", "description": "s", "updated": "n", "updated_by": "n",
+    "CompanyResult": obj({"company": obj({"vision": "s", "description": "s", "updated_at": "n", "updated_by": "n",
                                           "updated_by_name": "s"}),
                           "may_edit": {"type": "boolean", "description": "The owner on their own click, never an admin or a bot"}}),
     "CompanyHistory": obj({"events": items(obj({"id": "s", "ts": "s", "actor": "s", "actor_name": "s",
@@ -1211,7 +1211,7 @@ SCHEMAS = {
                                                                         "in their Needs you today (UTC)}"},
                        "level3_offer": ref("StrategyBotLevel3Offer")},
                       required=["name", "regular_checks", "level", "levels"]),
-    "StrategyBotLogEntry": obj({"id": "s", "created": "s", "kind": {"type": "string", "enum": [
+    "StrategyBotLogEntry": obj({"id": "s", "created_at": "s", "kind": {"type": "string", "enum": [
                                "decision", "cost", "publish", "send", "bots", "target", "vision", "instructions",
                                "person_task"]},
                            "reason": "s", "goal_id": "s", "state": {"type": "string", "enum": ["done", "proposed", "undone"]},
@@ -1221,7 +1221,7 @@ SCHEMAS = {
                            "undoable": "b", "undone_at": "s", "undone_by": "s",
                            "undo": {"type": "object", "additionalProperties": True,
                                     "description": "What Undo restored and what it kept: {restored, kept, text}"}},
-                          required=["id", "created", "kind", "state", "done", "left", "undoable"]),
+                          required=["id", "created_at", "kind", "state", "done", "left", "undoable"]),
     "StrategyBotLog": obj({"items": items(ref("StrategyBotLogEntry")), "next_before": "s", "can_undo": "b"},
                      required=["items", "can_undo"]),
     "StrategyBotLevel3Offer": obj({"streak": "i", "needed": "i", "due": "b", "last_offered_at": "s"},
@@ -1348,7 +1348,7 @@ STABLE.extend([
 ])
 SCHEMAS.update({
     "Tag": obj({"id": "s", "key": "s", "label": "s", "metadata": "o", "markdown": "s", "is_template": "b",
-                "template_id": "n", "owner": "n", "version": "i", "created": "s", "updated": "s"}),
+                "template_id": "n", "owner": "n", "version": "i", "created_at": "s", "updated_at": "s"}),
     "TagList": obj({"tags": items(ref("Tag"))}),
     "TagResult": obj({"tag": ref("Tag")}),
     "TagDetail": obj({"tag": ref("Tag"), "editable": "b", "tasks": items(ref("Task")),
@@ -1388,8 +1388,8 @@ SCHEMAS.update({
                       "revision": "i", "released": "b"}),
     "BotReleased": obj({"bot": "s", "released": {"type": "object"}}),
     "TeamBudgetState": obj({"turns_per_hour": "i", "turns_per_day": "i", "defaults": {"type": "object"}}),
-    "TaskCapRow": obj({"sender": "s", "receiver": "s", "per_day": "i", "count": "i", "closed": "i", "updated": "s", "updated_by": "s"}),
-    "TaskCapProposal": obj({"id": "s", "sender": "s", "receiver": "s", "per_day": "i", "status": "s", "proposed_by": "s", "created": "s"}),
+    "TaskCapRow": obj({"sender": "s", "receiver": "s", "per_day": "i", "count": "i", "closed": "i", "updated_at": "s", "updated_by": "s"}),
+    "TaskCapProposal": obj({"id": "s", "sender": "s", "receiver": "s", "per_day": "i", "status": "s", "proposed_by": "s", "created_at": "s"}),
     "TaskCaps": obj({"caps": items(ref("TaskCapRow")), "proposals": items(ref("TaskCapProposal"))}),
     "TaskCapWrite": obj({"cap": {"type": "object"}, "approval": "s", "status": "s"}),
 })
@@ -1818,8 +1818,8 @@ STABLE.extend([
     ("/api/v2/people/{person}/assistant", "get", "Automations", "getPersonAssistant",
      "The bot behind a person's Assistant, or null until it is first used", "PersonAssistant"),
 ])
-_RUN = obj({"id": "s", "automation_id": "s", "version": "i", "trigger_ref": "s", "started": "s",
-            "finished": {"type": ["string", "null"]}, "status": {"enum": ["queued", "running", "waiting", "ok", "failed", "empty", "skipped", "held"]},
+_RUN = obj({"id": "s", "automation_id": "s", "version": "i", "trigger_ref": "s", "started_at": "s",
+            "finished_at": {"type": ["string", "null"]}, "status": {"enum": ["queued", "running", "waiting", "ok", "failed", "empty", "skipped", "held"]},
             "cost": "f", "summary": "n", "steps": {"type": ["array", "null"], "items": {"type": "object"},
                                                    "description": "Each step's status, outputs and cost; null after 30 days"}},
            required=["id", "automation_id", "version", "status", "steps"])
@@ -1855,10 +1855,10 @@ SCHEMAS.update({
         "runs": items(obj({"id": "s", "automation_id": "s", "automation_name": "s",
                            "trigger": {"enum": ["message", "task_received", "schedule", "webhook", "listening", "event",
                                                 "due", "system"]},
-                           "owner": "s", "started": "s", "finished": {"type": ["string", "null"]}, "status": "s",
+                           "owner": "s", "started_at": "s", "finished_at": {"type": ["string", "null"]}, "status": "s",
                            "cost": "f", "started_by": "s", "outcome": "s", "step_count": {"type": ["integer", "null"]},
                            "count": {"type": "integer", "description": "Quiet system-job runs folded into this row"}},
-                          required=["id", "automation_id", "automation_name", "trigger", "started", "status"])),
+                          required=["id", "automation_id", "automation_name", "trigger", "started_at", "status"])),
         "next": {"type": ["string", "null"]}, "since": "s"}),
     "AutomationStats": obj({
         "range": "s", "since": "s", "until": "s", "bucket_seconds": "i",
@@ -1899,7 +1899,7 @@ SCHEMAS.update({
 
 SCHEMAS.update({
     "Repository": obj({"full_name": "s", "enabled": "b", "bot_repo": "b", "default_branch": "n",
-                       "setup_command": "n", "setup_source": "n", "reachable": "b", "last_seen": "n"}),
+                       "setup_command": "n", "setup_source": "n", "reachable": "b", "last_seen_at": "n"}),
     "ProductRepositoryPreview": obj({"org": "s", "name": "s", "repository": "s", "visibility": {"enum": ["private"]},
                                       "auto_init": "b", "capability": {"enum": ["available", "missing", "unknown", "not_installed"]},
                                       "capability_detail": "s"}),
@@ -1939,7 +1939,7 @@ STABLE.extend([
 SCHEMAS.update({
     'PublicTask': obj({'id': 's', 'title': 's', 'summary': 's', 'step': 'n', 'requester_count': 'i',
                        'parts': obj({'total': 'i', 'done': 'i'})}),
-    'PublicComment': obj({'id': 's', 'text': 's', 'author': {'enum': ['Team', 'Visitor']}, 'created': 's'}),
+    'PublicComment': obj({'id': 's', 'text': 's', 'author': {'enum': ['Team', 'Visitor']}, 'created_at': 's'}),
     'PublicRoadmap': obj({'tasks': items(ref('PublicTask')), 'next_offset': {'type': ['integer', 'null']}}),
     'PublicRoadmapComments': obj({'comments': items(ref('PublicComment')), 'next_offset': {'type': ['integer', 'null']}}),
     'PublicRoadmapTask': obj({'task': ref('PublicTask'), 'comments': items(ref('PublicComment')),
@@ -2009,7 +2009,7 @@ SCHEMAS.update({
         {**obj({'connected':{'enum':[True]},'scope':{'enum':['inbox']},'company':{'$ref':'#/components/schemas/InboundConnectionCompany'}}),'additionalProperties':False},
     ]},
     'InboundCursor': obj({'cursor':'i'}),
-    'InboundInboxes': obj({'inboxes':items({'type':'object'}),'configured':'b','last_sync':NUM_N,'error':'s','gaps':items({'type':'object'})}),
+    'InboundInboxes': obj({'inboxes':items({'type':'object'}),'configured':'b','last_synced_at':NUM_N,'error':'s','gaps':items({'type':'object'})}),
     'InboundMessages': obj({'messages':items({'type':'object'}),'next':{'type':['integer','null']},'cursor':'i'}),
     'InboundPhoneRequests': obj({'phone_requests':items({'type':'object'}),'next':{'type':['string','null']}}),
 })
@@ -2119,14 +2119,14 @@ STABLE.extend([
 SCHEMAS.update({
     'Webhook': obj({'id': 's', 'name': 's', 'url': 's', 'host': 's', 'events': items({'type': 'string'}), 'enabled': 'b',
                     'paused_reason': 's', 'rate_per_hour': 'i', 'allow_http': 'b', 'created_by': 's',
-                    'requested_by': 'n', 'created': 's', 'updated': 's', 'revision': 'i', 'old_secret_until': 'n',
+                    'requested_by': 'n', 'created_at': 's', 'updated_at': 's', 'revision': 'i', 'old_secret_until': 'n',
                     'can_change': 'b', 'last_7_days': obj({'delivered': 'i', 'failed': 'i', 'pending': 'i'}),
                     'filter': {'type': 'object', 'description': 'departments, bots, task_types; an empty list means all'},
                     'headers': items({'type': 'object', 'description': 'name, secret, and value unless secret (then set: true)'}),
                     'disabled_at': 'n', 'disabled_reason': 'n'}),
     'WebhookSendRow': obj({'id': 's', 'webhook_id': 's', 'event_id': 's', 'type': 's', 'subject': 's', 'state': {
         'enum': ['ready', 'sending', 'delivered', 'failed', 'cancelled', 'withheld']}, 'attempts': 'i',
-        'last_status': {'type': ['integer', 'null']}, 'last_error': 's', 'next_attempt': 'n', 'created': 's',
+        'last_status': {'type': ['integer', 'null']}, 'last_error': 's', 'next_attempt_at': 'n', 'created_at': 's',
         'delivered_at': 'n'}),
 })
 SCHEMAS.update({
@@ -2163,7 +2163,7 @@ STABLE.extend([
      "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when", "FileDeleted"),
 ])
 SCHEMAS.update({
-    "Page": obj({"file_id": "s", "title": "s", "bot": "s", "bot_name": "s", "version": "i", "updated": "s",
+    "Page": obj({"file_id": "s", "title": "s", "bot": "s", "bot_name": "s", "version": "i", "updated_at": "s",
                  "updated_by": "n", "updated_by_name": "s",
                  "cadence": {"type": "string", "enum": ["none", "daily", "weekly", "monthly"]},
                  "as_of": {"type": ["string", "null"], "description": "The date the data is from (YYYY-MM-DD)"},
@@ -2173,7 +2173,7 @@ SCHEMAS.update({
                                  "may see it"}, "replaced_by_title": "n", "archived": "b", "task_id": "n",
                  "src": {"type": ["string", "null"], "description": "Where to frame the page; null means open it "
                          "(GET /api/v2/files/{fid}/versions/{number})"}},
-                required=["file_id", "title", "bot", "bot_name", "version", "updated", "updated_by", "cadence",
+                required=["file_id", "title", "bot", "bot_name", "version", "updated_at", "updated_by", "cadence",
                           "as_of", "stale_days", "replaced_by", "archived", "task_id", "src"]),
     "PageShown": obj({"page": ref("Page"), "can_manage": "b", "can_delete": "b",
                       "pinned": {"type": "array", "description": "The places it is pinned that the caller may open",
@@ -2189,7 +2189,7 @@ SCHEMAS.update({
                        required=["id", "bot", "title", "kind", "library_kind", "version", "last_activity_at"]),
     "FileLibrary": obj({"files": items(ref("LibraryFile")), "has_more": "b", "next_cursor": "n"}),
     "FileSearchHit": obj({"id": "s", "title": "s", "kind": "s", "library_kind": "s", "bot": "s", "bot_name": "s",
-                          "version": "i", "updated": "s", "url": "n", "page": "b", "excerpt": "s", "score": "f"}),
+                          "version": "i", "updated_at": "s", "url": "n", "page": "b", "excerpt": "s", "score": "f"}),
     "FileSearch": obj({"results": items(ref("FileSearchHit"))}),
     "FileDeleted": obj({"deleted": "s", "versions": "i"}),
 })
@@ -2267,7 +2267,7 @@ SCHEMAS['CardList'] = obj({'cards': items(ref('Card')), 'next': 'n'})
 SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'team', 'bot', 'task']}, 'saved': 'b', 'can_edit': 'b',
                         'pins': items(obj({'id': 'n', 'item': 'n', 'position': 'i', 'size': {'enum': ['small', 'medium', 'large']},
                                            'card': ref('Card'),
-                                           'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated': 's', 'archived': 'b'})},
+                                           'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated_at': 's', 'archived': 'b'})},
                                           required=['id', 'item', 'position', 'size'])),
                         'audience': {'type': 'object', 'description': 'A team page: who sees it (docs/permissions.md)'},
                         'name': 's', 'group': 's'}, required=['place', 'kind', 'saved', 'can_edit', 'pins'])
@@ -2291,9 +2291,9 @@ SCHEMAS['ModelSubscription'] = obj({
     'usage': {'anyOf': [obj({'window': {'type': ['string', 'null'], 'enum': ['5h', 'week', None]}, 'used_pct': NUM_N,
                              'cost_usd_month': NUM_N, 'resets_at': 'n'}, required=['window', 'used_pct', 'cost_usd_month']),
                         {'type': 'null'}]},
-    'added_by': 's', 'added_by_name': 's', 'created': 's', 'updated': 's'},
+    'added_by': 's', 'added_by_name': 's', 'created_at': 's', 'updated_at': 's'},
     required=['id', 'name', 'kind', 'runtime', 'label', 'status', 'status_detail', 'status_at', 'preview', 'revision',
-              'computers', 'usage', 'added_by', 'added_by_name', 'created', 'updated'])
+              'computers', 'usage', 'added_by', 'added_by_name', 'created_at', 'updated_at'])
 SCHEMAS['ModelSubscriptionList'] = obj({
     'subscriptions': items(ref('ModelSubscription')),
     'kinds': items(obj({'kind': _SUB_KIND, 'label': 's', 'runtime': {'enum': ['claude', 'codex']}, 'secret_label': 's', 'help': 's'}))})
@@ -2319,9 +2319,9 @@ SCHEMAS['MemoryTidyCard'] = obj({
     'id': 's', 'kind': {'enum': ['memory_tidy']}, 'bot': 's', 'reviewer': 's', 'requester': 's', 'title': 's',
     'memory_commit': 's', 'model': 's', 'cost_usd': {'type': 'number', 'description': 'Filing-ledger list-price estimate, including subscription usage.'},
     'diary': 's', 'diff': {'type': 'string', 'description': 'Checked unified diff; present on detail reads and decisions, omitted from lists.'},
-    'created': 's', 'expires': 's', 'status': {'enum': ['open', 'withdrawn', 'discarded', 'kept']}, 'reason': 's', 'keep_available': 'b',
+    'created_at': 's', 'expires_at': 's', 'status': {'enum': ['open', 'withdrawn', 'discarded', 'kept']}, 'reason': 's', 'keep_available': 'b',
 }, required=['id', 'kind', 'bot', 'reviewer', 'requester', 'title', 'memory_commit', 'model', 'cost_usd', 'diary',
-             'created', 'expires', 'status', 'reason', 'keep_available'])
+             'created_at', 'expires_at', 'status', 'reason', 'keep_available'])
 SCHEMAS['MemoryTidyCards'] = obj({'cards': items(ref('MemoryTidyCard'))})
 SCHEMAS['MemoryTidyCardResult'] = obj({'card': ref('MemoryTidyCard')})
 

@@ -11,7 +11,7 @@ from .store import H, encode
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS audit_log(
  id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, object TEXT NOT NULL,
- before_json TEXT, after_json TEXT, via TEXT);
+ before TEXT, after TEXT, via TEXT);
 CREATE INDEX IF NOT EXISTS audit_log_object ON audit_log(object, at);
 CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log(at);
 """
@@ -30,8 +30,8 @@ def write(c, actor, obj, before, after, via=None):
 
 def _row(r):
     return {"id": r["id"], "at": r["at"], "actor": r["actor"], "object": r["object"], "via": r["via"],
-            "before": None if r["before_json"] is None else json.loads(r["before_json"]),
-            "after": None if r["after_json"] is None else json.loads(r["after_json"])}
+            "before": None if r["before"] is None else json.loads(r["before"]),
+            "after": None if r["after"] is None else json.loads(r["after"])}
 
 
 def rows(c, obj=None, actor=None, limit=LIMIT, before=None):

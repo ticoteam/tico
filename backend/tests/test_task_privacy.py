@@ -17,7 +17,7 @@ def test_private_two_party_matrix(api, requester, owner):
                             [{'name': 'Open', 'status': 'open'}], bots='work')
         task = H.task_create(c, requester, 'Review the sensitive packet', 'Sensitive packet.', owner,
                              private=True, type=typ['id'], lint=False)
-        c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) '
+        c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) '
                   'VALUES(?,?,?,?,?)', (task['id'], 'bot:cmo', requester, None, H.shift(H.now(), hours=24)))
     # Ana is the chart's root above cpo even when she is not a task party.
     readers = {requester, owner, 'human:ana'}
@@ -55,9 +55,9 @@ def test_private_defaults_reassignment_and_human_publication(api):
     cpo = bot_token(api, 'cpo')
     with api.app.state.store.transaction() as c:
         for slug in ('ops', 'cpo'):
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
             config['private_tasks_default'] = True
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps(config), slug))
+            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), slug))
     assigned = post(api, 'tasks', {'owner': 'ops', 'title': 'Review the request', 'body': 'Review it.'})
     created = post(api, 'tasks', {'owner': 'cmo', 'title': 'Draft the response', 'body': 'Draft it.', 'private': False}, token=cpo)
     assert assigned['private'] and created['private']
@@ -112,7 +112,7 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
     with api.app.state.store.transaction() as c:
         counts = {name: c.execute('SELECT count(*) FROM ' + name).fetchone()[0]
                   for name in ('tasks', 'blobs', 'task_assets', 'bot_files')}
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'", (json.dumps({'template': 'general-counsel'}),))
+        c.execute("UPDATE bot_config SET config=? WHERE bot='cpo'", (json.dumps({'template': 'general-counsel'}),))
         c.execute("UPDATE tasks SET requester='human:missing' WHERE id=?", (orphan['id'],))
         c.execute("UPDATE tasks SET requester='keeper' WHERE id=?", (routine['id'],))
         # A database from before task privacy had no change log (backend/events.py) or parties counter (backend/row_clock.py).
@@ -148,13 +148,13 @@ def test_private_dependency_and_refusal_audit_never_copy_sensitive_content(api):
     public = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review release timing', 'body': 'Review it.'})
     post(api, 'tasks/' + public['id'] + '/relations', {'task': private['id'], 'kind': 'blocked_by'}, expected=422)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,?,'now')", (private['id'], public['id'], 'blocks'))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,'now')", (private['id'], public['id'], 'blocks'))
         H._unblock(c, H.task(c, private['id']))
         assert TR.blocker_ids(c, public['id']) == [private['id']]
         with pytest.raises(H.Refused) as exc:
             H.task_update(c, 'bot:cpo', private['id'], body='Read SECRET-PACKET', status='ready')
         assert exc.value.private
-        audit = c.execute("SELECT detail_json FROM events WHERE action='refused'").fetchall()
+        audit = c.execute("SELECT detail FROM events WHERE action='refused'").fetchall()
         assert all('SECRET-PACKET' not in row[0] for row in audit)
 
 
@@ -189,7 +189,7 @@ def test_acted_duplicate_diagnostics_keep_private_ids_out_of_responses_and_audit
             assert ordinary['id'] in str(public_duplicate.value)
         finally:
             H.VIA.reset(token)
-        diagnostics = c.execute("SELECT detail_json FROM events WHERE action='refused'").fetchall()
+        diagnostics = c.execute("SELECT detail FROM events WHERE action='refused'").fetchall()
         assert private['id'] not in str([tuple(row) for row in diagnostics])
 
 

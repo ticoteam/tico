@@ -194,7 +194,7 @@ class Run:
         queued = self.queued_now(w, pool)
         candidates = sorted(set(queued.values()) | set(started_bots))
         ready, blocked = self.readiness(w, candidates, started_bots)
-        mark = {"at": w.now(), "free": free, "held": held, "started": started, "fallback": fallback,
+        mark = {"at": w.now(), "free": free, "held": held, "started_at": started, "fallback": fallback,
                 "queued": len(candidates), "slugs": candidates, "ready": ready, "blocked": blocked}
         if free and ready and started < min(free, len(ready)) and self.short_rounds < SHORT_ROUNDS:
             self.short_rounds += 1
@@ -320,8 +320,8 @@ class Run:
         it, with the reasons its queued work gets on this round."""
         from backend.execution import readiness_document
         with w.store.read() as c:
-            row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (w.runner["runner_id"],)).fetchone()
-        doc = readiness_document(row["readiness_json"]) if row else {}
+            row = c.execute("SELECT readiness FROM runners WHERE id=?", (w.runner["runner_id"],)).fetchone()
+        doc = readiness_document(row["readiness"]) if row else {}
         ready = ((doc.get("bots") or {}).get(slug) or {}).get("ready")
         return {"at": w.now(), "bot": slug, "server_ready": ready, "reasons": self.reasons(w, [slug])}
 
@@ -378,7 +378,7 @@ class Run:
             step = w.board.step(t["step"])
             if not step or not step.assign or str(t["owner"]).startswith("bot:") or t["status"] in B.FINISHED:
                 continue
-            if (w.now() - w.H.parse_ts(t["created"])).total_seconds() < 30 * 60:
+            if (w.now() - w.H.parse_ts(t["created_at"])).total_seconds() < 30 * 60:
                 continue
             pool = [b for b in team.all if b.role == step.assign and w.slots(b.slug) < b.slots]
             if not pool:
@@ -440,8 +440,8 @@ class Run:
             pr = self.w.pr_of(t["id"])
             if pr:
                 out.append(f"  PR #{pr} head={self.w.prs[pr]['head'][:7]} ci={self.w.ci_state(pr)} merged={self.w.prs[pr]['merged']}")
-            for j in self.w.sql("SELECT j.bot, j.state, j.held, j.wake_class, m.refs_json FROM jobs j "
-                                "JOIN messages m ON m.id=j.message_id WHERE json_extract(m.refs_json,'$.task') IN "
+            for j in self.w.sql("SELECT j.bot, j.state, j.held, j.wake_class, m.refs FROM jobs j "
+                                "JOIN messages m ON m.id=j.message_id WHERE json_extract(m.refs,'$.task') IN "
                                 "(SELECT ? UNION SELECT from_task FROM task_relations WHERE to_task=? AND kind='parent') "
                                 "AND j.state NOT IN ('done','cancelled')", (t["id"], t["id"])):
                 out.append(f"  job {j['bot']} {j['state']} held={j['held']} {j['wake_class'] or ''}")
@@ -465,10 +465,10 @@ class Run:
             out.append(f"limit {win['bot']} since {win['since']} until {win['until']} ({win['source']}, "
                        f"streak {win['streak']})")
         for job in sorted(self.probe_seen):
-            for row in w.sql("SELECT id,state,created,started,finished,lease_until FROM attempts "
-                             "WHERE job_id=? ORDER BY created", (job,)):
-                out.append(f"probe {job[:6]} attempt {row['id'][:6]} {row['state']} created {row['created']} "
-                           f"started {row['started']} finished {row['finished']} "
+            for row in w.sql("SELECT id,state,created_at,started_at,finished_at,lease_until FROM attempts "
+                             "WHERE job_id=? ORDER BY created_at", (job,)):
+                out.append(f"probe {job[:6]} attempt {row['id'][:6]} {row['state']} created {row['created_at']} "
+                           f"started {row['started_at']} finished {row['finished_at']} "
                            f"lease {row['lease_until']}")
         return out
 
@@ -493,7 +493,7 @@ class Run:
 
     def lead_time(self):
         """Median hours from a ticket's creation to its merge."""
-        hours = sorted((when - self.w.H.parse_ts(t["created"])).total_seconds() / 3600
+        hours = sorted((when - self.w.H.parse_ts(t["created_at"])).total_seconds() / 3600
                        for t in self.final for tid, when in self.merged_at.items() if tid == t["id"])
         return round(hours[len(hours) // 2], 1) if hours else None
 

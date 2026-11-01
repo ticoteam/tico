@@ -10,7 +10,7 @@ from backend.tests.test_login_holds import at, events, limit, done, signed_in
 
 
 def notices(c):
-    return [dict(r) for r in c.execute("SELECT * FROM messages WHERE json_extract(refs_json,'$.source_outage') IS NOT NULL")]
+    return [dict(r) for r in c.execute("SELECT * FROM messages WHERE json_extract(refs,'$.source_outage') IS NOT NULL")]
 
 
 def managers(c):
@@ -28,7 +28,7 @@ def test_source_start_and_end_are_once_across_repeated_observations_and_restarts
                                    until='2026-10-27T07:00:00.000000Z')
         rows = notices(c)
         assert len(rows) == 2 and {r['to_actor'] for r in rows} == {'bot:coo', 'bot:health-monitor'}
-        assert not any('private-login-name' in r['body'] or 'private-login-name' in r['refs_json'] for r in rows)
+        assert not any('private-login-name' in r['body'] or 'private-login-name' in r['refs'] for r in rows)
         assert not c.execute("SELECT 1 FROM jobs WHERE message_id IN (?,?)", tuple(r['id'] for r in rows)).fetchone()
         assert not c.execute("SELECT 1 FROM tasks").fetchone()
     # No process-local latch: a fresh transaction observes the saved episode.
@@ -52,8 +52,8 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
         assign(api, machine, bot)
     signed_in(api, machine, ['ops', 'finance'], ('codex',))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.fallback.off',json('true'))")
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.runtime','codex') WHERE bot='finance'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback.off',json('true'))")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.runtime','codex') WHERE bot='finance'")
     task = post(api, 'tasks', {'owner': 'ops', 'title': 'Prepare the deployment plan', 'body': 'Review existing code.'})
     first = claim(api, machine)
     limit(api, machine, first, errors=('Usage limit; usage window resets at 2026-10-27T07:00:00Z',))
@@ -99,7 +99,7 @@ def test_mid_turn_fallback_quota_is_saved_and_resumes_at_its_own_reset(api, monk
                   'fallback': 'codex', 'primary_held': True, 'limited': True, 'text': 'Checkpoint: read the files.'}, machine['token'])
     assert result['outcome'] == 'interrupted'
     with api.app.state.store.read() as c:
-        saved = json.loads(c.execute('SELECT result_json FROM attempts WHERE id=?', (first['id'],)).fetchone()[0])
+        saved = json.loads(c.execute('SELECT result FROM attempts WHERE id=?', (first['id'],)).fetchone()[0])
         assert saved['retryable'] and saved['source_pause'] == 'quota'
         assert c.execute('SELECT state FROM jobs WHERE id=?', (first['job_id'],)).fetchone()[0] == 'queued'
         hold = login_holds.get(c, machine['runner_id'], '', 'codex')
@@ -261,7 +261,7 @@ def test_quota_after_a_named_external_action_stays_held(api, monkeypatch):
           'last_seq': 2, 'text': 'Stopped after the merge request.'}, machine['token'])
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
-        result = json.loads(c.execute('SELECT result_json FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0])
+        result = json.loads(c.execute('SELECT result FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0])
         assert not result.get('source_pause') and not result.get('source_continue')
 
 
@@ -287,11 +287,11 @@ def test_strict_lease_recovery_preserves_unknown_effects_and_late_final_answers(
     execution.served_at = None
     with api.app.state.store.transaction() as c:
         execution.expire(c)
-        c.execute('UPDATE attempts SET finished=? WHERE id=?',
+        c.execute('UPDATE attempts SET finished_at=? WHERE id=?',
                   (H.shift(H.now(), minutes=-16), attempt['id']))
         row = c.execute('SELECT * FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()
-        run = c.execute('SELECT started,finished FROM attempts WHERE id=?', (attempt['id'],)).fetchone()
-        facts = retry_facts(c, row, run['started'], run['finished'])
+        run = c.execute('SELECT started_at,finished_at FROM attempts WHERE id=?', (attempt['id'],)).fetchone()
+        facts = retry_facts(c, row, run['started_at'], run['finished_at'])
         assert not facts['lease_lost']
         execution.auto_reconcile(c)
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
@@ -364,7 +364,7 @@ def test_negotiated_fallback_continuation_keeps_its_provider_and_refuses_an_old_
     assert claim(api, machine) is None
     # A later setting stops new fallback turns, not continuation of work already saved there.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.fallback.off',json('true')) WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback.off',json('true')) WHERE bot='ops'")
         login_holds.record(c, machine['runner_id'], '', 'fake', H.now(), reset='2026-10-19T09:00:00.000000Z')
     at(monkeypatch, '2026-10-19T07:01:00.000000Z', api)
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
@@ -467,10 +467,10 @@ def test_an_unconfirmed_fallback_never_resumes_the_old_primary_after_a_lost_leas
     with api.app.state.store.transaction() as c:
         execution.expire(c)
         job = dict(c.execute('SELECT * FROM jobs WHERE id=?', (first['job_id'],)).fetchone())
-        attempt = c.execute('SELECT started,finished FROM attempts WHERE id=?', (first['id'],)).fetchone()
-        facts = retry_facts(c, job, attempt['started'], attempt['finished'])
+        attempt = c.execute('SELECT started_at,finished_at FROM attempts WHERE id=?', (first['id'],)).fetchone()
+        facts = retry_facts(c, job, attempt['started_at'], attempt['finished_at'])
         assert facts['fallback_unknown'] and not facts['safe'] and not facts['lease_lost']
-        assert not c.execute("SELECT 1 FROM attempts WHERE json_extract(result_json,'$.lease_continue')=1").fetchone()
+        assert not c.execute("SELECT 1 FROM attempts WHERE json_extract(result,'$.lease_continue')=1").fetchone()
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
 
@@ -502,6 +502,6 @@ def test_a_pending_completion_batch_counts_past_its_bounded_identity_window(api)
             completion_notes.record(c, 'bot:ops', f'synthetic-{n}')
         rows = c.execute("SELECT body FROM notes WHERE to_actor='bot:ops'").fetchall()
         assert len(rows) == 1 and '1002 tasks' in rows[0][0]
-        saved = json.loads(c.execute('SELECT value_json FROM registry_metadata WHERE key=?',
+        saved = json.loads(c.execute('SELECT value FROM registry_metadata WHERE key=?',
                                     (completion_notes.PREFIX + 'bot:ops',)).fetchone()[0])
         assert len(saved['tasks']) == completion_notes.MAX_BATCH and saved['count'] == 1002

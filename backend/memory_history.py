@@ -28,12 +28,12 @@ from .views import human_only
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_memory_updates(
  bot TEXT NOT NULL, sha TEXT NOT NULL, subject TEXT NOT NULL, author TEXT NOT NULL, committed TEXT NOT NULL,
- files_json TEXT NOT NULL, diff TEXT NOT NULL DEFAULT '', truncated INTEGER NOT NULL DEFAULT 0,
+ files TEXT NOT NULL, diff TEXT NOT NULL DEFAULT '', truncated INTEGER NOT NULL DEFAULT 0,
  attempt_id TEXT NOT NULL DEFAULT '', shared INTEGER NOT NULL DEFAULT 0, runner_id TEXT NOT NULL,
  reported TEXT NOT NULL, PRIMARY KEY(bot, sha));
 CREATE INDEX IF NOT EXISTS bot_memory_updates_by_time ON bot_memory_updates(bot, committed);
 CREATE TABLE IF NOT EXISTS bot_memory_documents(
- bot TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(bot, path));
+ bot TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(bot, path));
 CREATE TABLE IF NOT EXISTS bot_memory_oversized(
  bot TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(bot, path));
 CREATE TABLE IF NOT EXISTS bot_memory_seen(
@@ -112,7 +112,7 @@ def record(c, who, bot, report):
         if before and (before["attempt_id"] or not attempt) and (before["shared"] or not commit.shared):
             continue
         # A commit's content never changes; only what is known about it grows (its run, reaching the repository).
-        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed,files_json,diff,truncated,"
+        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed,files,diff,truncated,"
                   "attempt_id,shared,runner_id,reported) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
                   "ON CONFLICT(bot,sha) DO UPDATE SET "
                   "attempt_id=CASE WHEN bot_memory_updates.attempt_id='' THEN excluded.attempt_id ELSE bot_memory_updates.attempt_id END,"
@@ -130,8 +130,8 @@ def record(c, who, bot, report):
         if len(content.encode("utf-8")) > MAX_DOCUMENT_BYTES:
             oversized.add(path)
         elif path not in oversized:
-            c.execute("INSERT INTO bot_memory_documents(bot,path,content,updated) VALUES(?,?,?,?) "
-                      "ON CONFLICT(bot,path) DO UPDATE SET content=excluded.content,updated=excluded.updated "
+            c.execute("INSERT INTO bot_memory_documents(bot,path,content,updated_at) VALUES(?,?,?,?) "
+                      "ON CONFLICT(bot,path) DO UPDATE SET content=excluded.content,updated_at=excluded.updated_at "
                       "WHERE bot_memory_documents.content<>excluded.content", (bot, path, content, now))
             c.execute("DELETE FROM bot_memory_oversized WHERE bot=? AND path=?", (bot, path))
     for path in oversized:
@@ -154,8 +154,8 @@ def documents(c, bot):
 
 
 def document_status(c, bot):
-    saved = {r["path"]: r["updated"] for r in
-             c.execute("SELECT path,updated FROM bot_memory_documents WHERE bot=?", (bot,))}
+    saved = {r["path"]: r["updated_at"] for r in
+             c.execute("SELECT path,updated_at FROM bot_memory_documents WHERE bot=?", (bot,))}
     oversized = {r["path"] for r in c.execute("SELECT path FROM bot_memory_oversized WHERE bot=?", (bot,))}
     return {path: {"oversized": path in oversized, "updated": saved.get(path, "")}
             for path in DOCUMENTS if path in saved or path in oversized}
@@ -215,7 +215,7 @@ def install_memory_history(app, store, auth, mutate):
             base = commit_base(c, bot, store.settings.github_owner)
             # Only a commit that reached the shared repository has an address to open.
             updates = [{"sha": r["sha"], "subject": r["subject"], "author": r["author"], "when": r["committed"],
-                        "files": json.loads(r["files_json"]), "diff": r["diff"], "truncated": bool(r["truncated"]),
+                        "files": json.loads(r["files"]), "diff": r["diff"], "truncated": bool(r["truncated"]),
                         "shared": bool(r["shared"]), "new": r[column] > seen,
                         "url": f"{base}/commit/{r['sha']}" if base and r["shared"] else None,
                         "source": source(c, auth, who, r["attempt_id"])} for r in rows[:limit]]

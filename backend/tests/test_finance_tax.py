@@ -70,7 +70,7 @@ def _card_charge(c, program, amount, provider_id):
     return SK.insert(c, "fin_feed_txns", {
         "money_account_id": program, "provider_id": provider_id, "txn_date": "2026-06-01", "amount": -amount,
         "counterparty": "Acme Consulting", "currency": "USD", "created_at": AT, "created_by": "system:finance",
-        "status": "posted", "raw_json": "{}"})
+        "status": "posted", "raw": "{}"})
 
 
 def _feed(c, money, amount, day="2026-06-01", kind=""):
@@ -78,7 +78,7 @@ def _feed(c, money, amount, day="2026-06-01", kind=""):
     return SK.insert(c, "fin_feed_txns", {
         "money_account_id": money, "provider_id": "txn", "txn_date": day, "amount": amount, "currency": "USD",
         "counterparty": "Acme Consulting", "kind": kind, "created_at": AT, "created_by": "system:finance",
-        "raw_json": "{}"})
+        "raw": "{}"})
 
 
 def _pay(c, vendor, amount, source, bill_day="2026-05-01", paid_on="2026-06-01", code="6100"):
@@ -400,7 +400,7 @@ def test_a_card_row_on_a_bank_account_is_a_card_payment(keeper, kind):
         card = SK.insert(c, "fin_feed_txns", {
             "money_account_id": bank, "provider_id": "t3", "txn_date": "2026-06-01", "amount": -40_000,
             "counterparty": "Acme Consulting", "currency": "USD", "created_at": AT, "created_by": "system:finance",
-            "status": "posted", "raw_json": "{}", "kind": kind})
+            "status": "posted", "raw": "{}", "kind": kind})
         _pay(c, acme, 40_000, {"feed_id": card})
         _pay(c, acme, 10_000, {"money_account_id": bank})
     with keeper.read() as c:

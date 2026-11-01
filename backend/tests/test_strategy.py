@@ -215,7 +215,7 @@ def test_retiring_a_bet_with_goals_files_one_realign_card_for_the_owner(api):
                          "a.ref=?", (proposal["id"],))
     assert task and task["owner"] == "human:ana" and task["title"] == "Choose what happens to 1 goal after strategy v2"
     assert "Keep as it is, Retire goal, or Move to a bet" in task["body"] and "Confirm" not in task["body"]
-    payload = json.loads(proposal["payload_json"])
+    payload = json.loads(proposal["payload"])
     assert [g["goal_id"] for g in payload["goals"]] == [goal["id"]] and payload["bets"][0]["id"] == two["id"]
     post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm", "moves": {goal["id"]: two["id"]}})
     assert get(api, f"goals/{goal['id']}")["goal"]["bet_id"] == two["id"]
@@ -296,7 +296,7 @@ def test_an_open_bet_task_from_an_earlier_trip_holds_the_trip_until_it_closes(ap
         c.execute("UPDATE tasks SET status='done' WHERE title='Bet 1: may be wrong'")
     log(api, kpi["id"], 15)
     with api.app.state.store.read() as c:
-        tasks = H._rows(c.execute("SELECT status FROM tasks WHERE title='Bet 1: may be wrong' ORDER BY created"))
+        tasks = H._rows(c.execute("SELECT status FROM tasks WHERE title='Bet 1: may be wrong' ORDER BY created_at"))
         assert [t["status"] for t in tasks][-1] != "done" and len(tasks) == 2
         assert c.execute("SELECT count(*) FROM strategy_events WHERE kind=?", (S.TRIPPED,)).fetchone()[0] == 1
 
@@ -343,7 +343,7 @@ def test_the_old_company_vision_moves_into_the_first_draft(api):
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM strategy_versions")
         c.execute("DELETE FROM strategy_events")
-        c.execute("INSERT INTO company_profile (id, vision, description, updated, updated_by) "
+        c.execute("INSERT INTO company_profile (id, vision, description, updated_at, updated_by) "
                   "VALUES ('company','Acme for every landlord.','Bots that run rentals.',?, 'human:ana')", (H.now(),))
         S.ensure(c)
     assert draft(api)["vision"] == "Acme for every landlord."
@@ -418,7 +418,7 @@ def test_hub_sql_shows_strategy_proposals_only_to_the_owner_and_the_bot_that_pro
     publish(api, "Second")                                              # files a strategy_realign card
     post(api, "goal-proposals", {"kind": "strategy_draft", "reason": "r", "payload": {
         "sections": {"not": "Unannounced: no franchise deals."}}}, token=strategy_token)
-    query = {"sql": "SELECT kind, payload_json FROM goal_proposals WHERE kind LIKE 'strategy_%' ORDER BY kind"}
+    query = {"sql": "SELECT kind, payload FROM goal_proposals WHERE kind LIKE 'strategy_%' ORDER BY kind"}
     assert [r[0] for r in post(api, "sql", query)["rows"]] == ["strategy_draft", "strategy_realign"]
     for token in ("ben-test", "cara-test"):
         assert post(api, "sql", query, token=token)["rows"] == []

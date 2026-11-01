@@ -9,7 +9,7 @@ from backend.tests.test_api import api, get, post  # noqa: F401
 
 def roster(api, people):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode({"people": people}),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode({"people": people}),))
 
 
 def revision(api, bot):
@@ -62,7 +62,7 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
                  {"id": "cara", "email": "cara@acme.example", "name": "Cara", "reports_to": "ana"}])
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('botops',?, 'ana')",
+        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('botops',?, 'ana')",
                   (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
     _, _, botops = setup_attempt(api, "botops")
     _, _, ops = setup_attempt(api, "ops")
@@ -76,8 +76,8 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
     _, bots = tree(api)
     assert bots["ops"] == "p:ben"
     with api.app.state.store.read() as c:
-        event = c.execute("SELECT actor,detail_json FROM events WHERE action='bot.definition_delegated'").fetchone()
-        assert event["actor"] == "human:ana" and json.loads(event["detail_json"])["on_behalf_of"] == "human:ana"
+        event = c.execute("SELECT actor,detail FROM events WHERE action='bot.definition_delegated'").fetchone()
+        assert event["actor"] == "human:ana" and json.loads(event["detail"])["on_behalf_of"] == "human:ana"
     # The person's own limits hold: Cara may not move a bot he does not manage.
     theirs = post(api, "chat/botops", {"text": "Move ops under me"})     # rewritten as Cara's below
     theirs = theirs.get("message", theirs)["id"]
@@ -89,5 +89,5 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
     other = post(api, "chat/cpo", {"text": "Move ops under Cara"})
     post(api, "bots/ops/definition", body("ops", on_behalf_of=other.get("message", other)["id"]), token=botops["token"], expected=403)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-8), mid))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-8), mid))
     post(api, "bots/ops/definition", body("ops", reports_to="coo", on_behalf_of=mid), token=botops["token"], expected=403)

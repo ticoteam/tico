@@ -78,7 +78,7 @@ def items(f, key):
 
 
 def started(run):
-    return when(run.get("started"))
+    return when(run.get("started_at"))
 
 
 def fixture_ids(f):
@@ -390,7 +390,7 @@ def old_fired(org, f, at):
     from backend.scheduler import stamp
     installed(f, "routine:pr_sweep")
     with org.store.transaction() as c:
-        c.execute("UPDATE schedules SET last_fired=?, next_due=? WHERE id=?",
+        c.execute("UPDATE schedules SET last_fired_at=?, next_due=? WHERE id=?",
                   (stamp(at), stamp(at + dt.timedelta(hours=1)), fx(f)["routines"]["pr_sweep"]))
     return at
 
@@ -585,7 +585,7 @@ def told_count(org, f):
     mid = setup_cut(f)["migration"]
     with org.store.read() as c:
         tasks = c.execute("SELECT count(*) FROM tasks WHERE title LIKE '%Automations%'").fetchone()[0]
-        notes = c.execute("SELECT count(*) FROM messages WHERE refs_json LIKE ?", (f"%{mid}%",)).fetchone()[0]
+        notes = c.execute("SELECT count(*) FROM messages WHERE refs LIKE ?", (f"%{mid}%",)).fetchone()[0]
     return tasks + notes
 
 

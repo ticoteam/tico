@@ -28,7 +28,7 @@ def enrollment(store, auth, request_id, code_hash, label, owner, status=False):
             if status:
                 return {"online": False}
             c.execute("INSERT INTO hosting_enrollments VALUES(?,?,?)", (request_id, code_hash, label))
-            c.execute("INSERT INTO enrollments(code_hash,operator,expires) VALUES(?,?,?)",
+            c.execute("INSERT INTO enrollments(code_hash,operator,expires_at) VALUES(?,?,?)",
                       (code_hash, person['id'], H.shift(H.now(), minutes=15)))
             H.event(c, who.actor, 'runner.hosting_enrollment', request_id)
         e = c.execute("SELECT * FROM enrollments WHERE code_hash=?", (code_hash,)).fetchone()
@@ -37,7 +37,7 @@ def enrollment(store, auth, request_id, code_hash, label, owner, status=False):
         # A resumed install refreshes only an unused code. A consumed enrollment
         # never becomes a second computer, even after its original expiry.
         if not status and not e['consumed_at']:
-            c.execute("UPDATE enrollments SET expires=? WHERE code_hash=?", (H.shift(H.now(), minutes=15), code_hash))
-        runner = c.execute("SELECT last_seen,revoked_at FROM runners WHERE id=?", (e['runner_id'],)).fetchone()
-        return {"online": bool(runner and not runner['revoked_at'] and runner['last_seen']
-                               and runner['last_seen'] > H.shift(H.now(), minutes=-2))}
+            c.execute("UPDATE enrollments SET expires_at=? WHERE code_hash=?", (H.shift(H.now(), minutes=15), code_hash))
+        runner = c.execute("SELECT last_seen_at,revoked_at FROM runners WHERE id=?", (e['runner_id'],)).fetchone()
+        return {"online": bool(runner and not runner['revoked_at'] and runner['last_seen_at']
+                               and runner['last_seen_at'] > H.shift(H.now(), minutes=-2))}

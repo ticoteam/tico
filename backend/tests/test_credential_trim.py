@@ -33,7 +33,7 @@ def row(name, minutes, actor, action, target, detail):
 
 def add(s, rows):
     with s.transaction() as c:
-        c.executemany("INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(?,?,?,?,?,?)", rows)
+        c.executemany("INSERT INTO events(id,ts,actor,action,target,detail) VALUES(?,?,?,?,?,?)", rows)
 
 
 def remaining(s):
@@ -125,7 +125,7 @@ def test_a_capped_and_resumed_trim_matches_one_full_pass(tmp_path):
     assert total == deleted_full
     assert remaining(capped) == remaining(full)
     with capped.read() as c:
-        assert '"done": true' in c.execute("SELECT value_json FROM registry_metadata WHERE key='credential-use-trim'"
+        assert '"done": true' in c.execute("SELECT value FROM registry_metadata WHERE key='credential-use-trim'"
                                            ).fetchone()[0]
 
 

@@ -14,7 +14,7 @@ const inDays = days => new Date(Date.now() + days * 86400000).toISOString();
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
 const base = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'human:ana', requester: 'bot:writer', status: 'open',
-  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created: ago(600), updated: ago(60), ...over});
+  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
 const TASKS = [
   base('t-keys', 'Add the new OpenAI keys', {requester: 'bot:botops', due: inDays(2)}),
   base('t-pick', 'Gusto or Rippling for payroll?', {requester: 'bot:analyst', due: inDays(9),
@@ -33,10 +33,10 @@ const TASKS = [
   base('t-old', 'Which logo on the invoice?', {owner: 'bot:finance', requester: 'bot:finance',
     ask: {id: 'q-old', body: 'Which logo goes on the invoice?', from_actor: 'bot:finance', to_actor: 'human:ana', older: true}}),
 ];
-const SEND = {id: 'ap-send', kind: 'approval', what: 'send', requester: 'bot:writer', requested_by: 'bot:writer', created: ago(30),
+const SEND = {id: 'ap-send', kind: 'approval', what: 'send', requester: 'bot:writer', requested_by: 'bot:writer', created_at: ago(30),
   title: "Send: '$200 for each rental owner you introduce' to Jennie Ooten", need: 'review',
   payload: {to: ['Jennie Ooten <jennie@acme.example>'], cc: [], subject: '$200 for each rental owner you introduce', body_sha256: 'a'.repeat(64)}};
-const SPEND = {id: 'ap-spend', kind: 'approval', what: 'spend', requester: 'bot:analyst', requested_by: 'bot:analyst', created: ago(90),
+const SPEND = {id: 'ap-spend', kind: 'approval', what: 'spend', requester: 'bot:analyst', requested_by: 'bot:analyst', created_at: ago(90),
   title: 'Pay $1,200: LinkedIn ads for October', need: 'pay', payload: {amount: '$1,200', what: 'LinkedIn ads for October', account: 'Ads'}};
 const REC = {do: 'Gusto', ask: 'q-pick', option: 'Gusto', kind: 'reversible'};
 const card = (id, over) => ({...TASKS.find(x => x.id === id), kind: 'task', ...over});

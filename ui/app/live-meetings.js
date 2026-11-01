@@ -181,7 +181,7 @@ function livePaintDetail(state, detail) {
       ${me && active ? '<form id="live-chat-form" class="live-chat-form"><input name="text" data-live-focus-key="chat-input" maxlength="20000" required aria-label="Meeting chat" placeholder="Write to the meeting"><button class="primary" type="submit">Send</button></form>' : ''}</section>
     <section class="live-section"><h3>Router</h3><p class="muted">${detail.window_ms / 1000}s window · ${detail.cooldown_ms / 1000}s cooldown · up to ${detail.reply_cap ?? 5} turns per window</p>
       <div class="live-router">${router.windows?.length ? router.windows.map(window => `<details><summary>Window ${window.window_index + 1}: ${esc(window.outcome)} <small>${window.start_ms}–${window.end_ms} ms · ${window.trace?.ms ?? '—'} ms</small></summary><pre>${esc(JSON.stringify(window.trace || {}, null, 2))}</pre></details>`).join('') : '<p class="muted">No routing windows yet.</p>'}
-      ${router.chat_routes?.length ? `<div class="live-chat-routes"><b>Chat routing</b>${router.chat_routes.map(route => `<details><summary>${esc(route.outcome || route.status)} · ${esc(route.started || '')} · ${route.trace?.ms ?? '—'} ms</summary><pre>${esc(JSON.stringify(route.trace || {}, null, 2))}</pre></details>`).join('')}</div>` : ''}
+      ${router.chat_routes?.length ? `<div class="live-chat-routes"><b>Chat routing</b>${router.chat_routes.map(route => `<details><summary>${esc(route.outcome || route.status)} · ${esc(route.started_at || '')} · ${route.trace?.ms ?? '—'} ms</summary><pre>${esc(JSON.stringify(route.trace || {}, null, 2))}</pre></details>`).join('')}</div>` : ''}
       ${router.bypasses?.length ? `<div class="live-bypasses"><b>Named mentions</b>${router.bypasses.map(bypass => `<pre>${esc(JSON.stringify(bypass, null, 2))}</pre>`).join('')}</div>` : ''}</div>
       ${router.turns?.length ? `<div class="live-turns"><b>Bot turns</b>${router.turns.map(turn => `<span>${esc(turn.bot)} · ${esc(turn.status)}${turn.skip_reason ? ' · ' + esc(turn.skip_reason) : ''}</span>`).join('')}</div>` : ''}</section>
     ${detail.imported_meeting_id ? `<p class="live-finalized">Saved in Meetings: <a href="#/meetings?meeting=${encodeURIComponent(detail.imported_meeting_id)}">Open transcript</a></p>` : ''}
@@ -217,7 +217,7 @@ function liveChatRows(chat, notices) {
   const rows = [];
   let next = 0;
   for (const message of chat) {
-    while (next < notices.length && message.created && !(notices[next].created > message.created)) rows.push(liveNotice(notices[next++]));
+    while (next < notices.length && message.created_at && !(notices[next].created_at > message.created_at)) rows.push(liveNotice(notices[next++]));
     rows.push(`<p><b>${esc(liveActor(message.actor))}</b><span>${esc(message.text)}</span>${message.transcript_seq ? `<small><button type="button" class="live-transcript-link" data-live-transcript-seq="${message.transcript_seq}">Transcript #${message.transcript_seq}</button></small>` : ''}</p>`);
   }
   while (next < notices.length) rows.push(liveNotice(notices[next++]));

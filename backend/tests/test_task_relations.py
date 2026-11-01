@@ -63,7 +63,7 @@ def test_a_previous_release_database_upgrades_through_the_cloud_store(tmp_path):
     with gzip.open(FIXTURES / "hub-v0.2.1.sqlite.gz") as source, open(path, "wb") as target:
         shutil.copyfileobj(source, target)
     with sqlite3.connect(path) as c:
-        ids = [r[0] for r in c.execute("SELECT id FROM tasks ORDER BY created, id")]
+        ids = [r[0] for r in c.execute("SELECT id FROM tasks ORDER BY created_at, id")]
         c.execute("UPDATE tasks SET parent_id=? WHERE id=?", (ids[0], ids[1]))
     boot(path)
     boot(path)
@@ -76,7 +76,7 @@ def test_a_previous_release_database_upgrades_through_the_cloud_store(tmp_path):
 def test_the_table_keeps_one_parent_and_related_stored_once(tmp_path):
     c = hub(tmp_path / "hub.db")
     a, b, d = (H.task_create(c, "human:ana", f"Write part {n}", "", "bot:cmo", lint=False)["id"] for n in "abc")
-    insert = "INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,?,'now')"
+    insert = "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,'now')"
     c.execute(insert, (a, b, "parent"))
     with pytest.raises(sqlite3.IntegrityError):
         c.execute(insert, (a, d, "parent"))
@@ -128,7 +128,7 @@ def test_sparse_relations_on_a_large_page_do_not_probe_all_task_pairs():
         c.executemany('INSERT INTO tasks VALUES(?,?,?,?,?)',
                       [(tid, tid, 'open', 'bot:cmo', int(i == 999)) for i, tid in enumerate(ids)])
         c.executescript(TR.SCHEMA)
-        c.executemany("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'blocks','now')",
+        c.executemany("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks','now')",
                       [(ids[0], ids[600]), (ids[700], ids[1]), (ids[0], ids[999])])
         operations = [0]
 

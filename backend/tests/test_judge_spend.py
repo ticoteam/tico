@@ -170,7 +170,7 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
         assert B.spent_this_month(c) == pytest.approx(1.1)
 
     # Learnings: a night that reaches the cap sends nothing and keeps its cursors, so nothing read is lost.
-    items = [{"key": f"chat:{n}", "source": "chat", "created": H.now(), "audience": None, "label": "Chat",
+    items = [{"key": f"chat:{n}", "source": "chat", "created_at": H.now(), "audience": None, "label": "Chat",
               "text": f"Invoices go out on Friday {n}.", "author": "human:ana", "ref": {}} for n in range(3)]
     team = {"ops": {"profile": "Ops runs invoicing."}}
     spend(api, -0.6)                                   # back to $0.50, so the night starts
@@ -184,11 +184,11 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
         run_id = L.claim(c, "2026-10-12")
     L.run(store, run_id)
     with store.read() as c:
-        row = c.execute("SELECT status,detail_json FROM learning_runs WHERE id=?", (run_id,)).fetchone()
-        assert row["status"] == "capped" and json.loads(row["detail_json"])["failed"] == {"spend_cap": 2}
+        row = c.execute("SELECT status,detail FROM learning_runs WHERE id=?", (run_id,)).fetchone()
+        assert row["status"] == "capped" and json.loads(row["detail"])["failed"] == {"spend_cap": 2}
         assert c.execute("SELECT count(*) FROM learning_deliveries").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM learning_cursors").fetchone()[0] == 0, "the cursors did not move"
-        audit = json.loads(c.execute("SELECT detail_json FROM events WHERE target=? ORDER BY rowid DESC LIMIT 1",
+        audit = json.loads(c.execute("SELECT detail FROM events WHERE target=? ORDER BY rowid DESC LIMIT 1",
                                      (f"{L.QUESTION_SET}@run",)).fetchone()[0])
         assert audit["calls"] == 1 and audit["cost_usd"] == 0.6, "the call it did make is counted"
         assert audit["answers"] == [{"learnable": {"type": "noul", "value": 0.9, "confidence": 0.8},
@@ -233,7 +233,7 @@ def test_a_call_in_flight_holds_its_most_against_the_cap_for_every_other_request
     second({"team": "Acme"}, QUESTIONS)                # $0.65 written, nothing in flight: it fits
     with store.read() as c:
         assert B.spent_this_month(c) == pytest.approx(0.7)
-        rows = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM events WHERE action='judge.spend' "
+        rows = [json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='judge.spend' "
                                                     "AND target='unpriced'")]
     assert rows == [{"label": "unpriced", "model": "an-unpriced-model", "cost_usd": 0.05}], \
         "the provider's own cost wins; an unpriced model without one is counted at the ceiling"
@@ -384,7 +384,7 @@ def test_a_company_model_call_billed_its_whole_allowance_stays_within_its_reserv
     result = engine({"team": "Acme"}, QUESTIONS, "company")
     assert provider_api.limits == [J.MAX_OUTPUT_TOKENS]
     with store.read() as c:
-        recorded = json.loads(c.execute("SELECT detail_json FROM events WHERE action='judge.spend'").fetchone()[0])
+        recorded = json.loads(c.execute("SELECT detail FROM events WHERE action='judge.spend'").fetchone()[0])
     assert recorded["model"] == model and recorded["cost_usd"] == result["cost_usd"] > 0
     assert recorded["cost_usd"] <= held[0], f"{provider}: billed ${recorded['cost_usd']}, held ${held[0]}"
 
@@ -475,8 +475,8 @@ def test_the_slack_gateway_routes_to_the_assistant_at_the_cap_and_audits_the_cos
     first = S.send(gateway, "please review the vendor terms", judge_answer=S.answers(legal=0.9), channel=S.DM,
                    kind="message", user="U2")
     assert first["state"] == "routed"
-    audit = S.rows(hub, "SELECT detail_json FROM events WHERE action='judge.call'")
-    assert json.loads(audit[-1]["detail_json"])["cost_usd"] == 0.005   # no list price: 500 tokens at the ceiling
+    audit = S.rows(hub, "SELECT detail FROM events WHERE action='judge.call'")
+    assert json.loads(audit[-1]["detail"])["cost_usd"] == 0.005   # no list price: 500 tokens at the ceiling
     hub.settings.decisions_monthly_usd = 1.0
     with hub.transaction() as c:
         H.event(c, "bot:ops", "judge.spend", "mail-triage@1", {"cost_usd": 1.0})
@@ -509,8 +509,8 @@ def test_slack_keeps_the_cost_of_answered_batches_when_a_later_batch_fails(gatew
     gateway.clock.advance(S.G.RETRY_SECONDS)
     assert gateway.tick()["events"][-1]["state"] == "routed"
     with hub.read() as c:
-        rows = [(r["action"], json.loads(r["detail_json"])) for r in
-                c.execute("SELECT action,detail_json FROM events WHERE action IN ('judge.call','judge.spend') ORDER BY rowid")]
+        rows = [(r["action"], json.loads(r["detail"])) for r in
+                c.execute("SELECT action,detail FROM events WHERE action IN ('judge.call','judge.spend') ORDER BY rowid")]
         # Each answered call is written down as it returns: the first try's one, then the retry's two.
         assert [(a, d["cost_usd"]) for a, d in rows] == [("judge.spend", 0.25)] * 3 + [("judge.call", 0.5)]
         assert B.spent_this_month(c) == 0.75
@@ -522,7 +522,7 @@ def test_slack_keeps_the_cost_of_answered_batches_when_a_later_batch_fails(gatew
     gateway.clock.advance(S.G.ROUTE_GIVE_UP_SECONDS + 1)
     assert gateway.tick()["events"][-1]["state"] == "failed"
     with hub.read() as c:
-        last = json.loads(c.execute("SELECT detail_json FROM events WHERE action='judge.call' ORDER BY rowid DESC").fetchone()[0])
+        last = json.loads(c.execute("SELECT detail FROM events WHERE action='judge.call' ORDER BY rowid DESC").fetchone()[0])
         assert last["error"] == "unavailable" and last["cost_usd"] == 0.25
         assert B.spent_this_month(c) == 1.25
 
@@ -543,7 +543,7 @@ def test_slack_stops_a_big_fleet_at_the_cap_partway_and_routes_to_the_assistant(
     assert result["state"] == "routed" and result["decision"]["routed_by"] == "spend_cap"
     assert [r["bot"] for r in result["decision"]["recipients"]] == ["coo"]
     with hub.read() as c:
-        audit = json.loads(c.execute("SELECT detail_json FROM events WHERE action='judge.call'").fetchone()[0])
+        audit = json.loads(c.execute("SELECT detail FROM events WHERE action='judge.call'").fetchone()[0])
         assert audit["error"] == "spend_cap" and audit["cost_usd"] == 0.25
         assert B.spent_this_month(c) == pytest.approx(1.15)
 
@@ -583,7 +583,7 @@ def test_the_month_total_is_a_running_sum_that_stays_exact_per_database_and_mont
 
     def full(s, month):
         with s.read() as c:
-            return round(float(c.execute("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0) FROM events "
+            return round(float(c.execute("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events "
                                          "WHERE ts>=? AND action='judge.spend'", (month + "-01T00:00:00",)).fetchone()[0]), 6)
 
     def running(s, at):

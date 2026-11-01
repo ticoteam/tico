@@ -69,7 +69,7 @@ function tfPicture(v, kind) {
 // An older server has no such route: the task's attachments are its files, each at version 1.
 function tfFromAttachments(list) {
   return (list || []).map(a => ({id: a.id, name: a.name || 'file', mime: a.content_type || a.mime || '', current_version: 1, archived: false,
-    versions: [{n: 1, size: a.size, mime: a.content_type || a.mime || '', created: a.created || null, by: null, comment_id: null, note: null,
+    versions: [{n: 1, size: a.size, mime: a.content_type || a.mime || '', created_at: a.created_at || null, by: null, comment_id: null, note: null,
       ask: null, answers: [], url: a.url || `${API}/v2/files/${encodeURIComponent(a.id)}`, poster_url: null, thumb_url: null}]}));
 }
 function tfNorm(f) {
@@ -87,7 +87,7 @@ function tfTileHTML(f, open) {
   const v = tfVersion(f), kind = tfKind(f.name, v.mime || f.mime), pic = tfPicture(v, kind);
   const ratio = v.width && v.height ? v.width / v.height : kind === 'video' ? 16 / 9 : 4 / 3;
   const w = Math.round(Math.min(168, Math.max(88, 72 * ratio)));
-  const age = ageShort(v.created);
+  const age = ageShort(v.created_at);
   const dot = f.versions.some(tfAskOpen);
   return `<button type="button" class="tf-tile${open ? ' on' : ''}" data-tf-file="${esc(f.id)}" aria-expanded="${open}" style="width:${w}px" title="${esc(f.name)}">
     <span class="tf-thumb${pic ? ' tf-skel' : ''}"><span class="tf-glyph">${esc(tfGlyph(kind, f.name))}</span>${pic ? `<img alt="" data-tf-src="${esc(pic)}">` : ''}${kind === 'video' ? '<span class="tf-play" aria-hidden="true">▶</span>' : ''}</span>
@@ -286,7 +286,7 @@ function tfCompareHTML(f, a, b, kind) {
 }
 function tfVersionMetaHTML(d, f, v) {
   const who = v.by ? actorLabel(v.by) : '';
-  const line = [who, v.created ? ago(v.created) : '', v.size != null ? bytes(Number(v.size)) : ''].filter(Boolean).map(esc).join(' · ');
+  const line = [who, v.created_at ? ago(v.created_at) : '', v.size != null ? bytes(Number(v.size)) : ''].filter(Boolean).map(esc).join(' · ');
   return `<div class="tf-vmeta">${line ? `<div class="tf-vline muted">${v.by ? actorFace(v.by, 14) : ''}<span>${line}</span></div>` : ''}
     ${v.note ? `<div class="tf-note">${esc(v.note)}</div>` : ''}
     ${v.ask ? askHTML(v.ask, v.answers, {file: f.id, version: v.n}, v.ask.by || v.by, d.dataset.task, tfFiles(d), d.canComment !== false) : ''}</div>`;

@@ -60,17 +60,17 @@ SCHEMA = (
     "CREATE UNIQUE INDEX IF NOT EXISTS rule_sources_name ON rule_sources(lower(name))",
     "CREATE TABLE IF NOT EXISTS org_rules(id TEXT PRIMARY KEY, "
     "kind TEXT NOT NULL CHECK (kind IN ('internal','external')), text TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', "
-    "source_id TEXT, cite_json TEXT, who_json TEXT NOT NULL, with_json TEXT NOT NULL DEFAULT '{}', "
+    "source_id TEXT, cite TEXT, who TEXT NOT NULL, with_scope TEXT NOT NULL DEFAULT '{}', "
     "if_broken TEXT NOT NULL DEFAULT 'block' CHECK (if_broken IN ('block','escalate','warn')), reviewer TEXT, "
     "status TEXT NOT NULL CHECK (status IN ('suggested','active','retired')), suggested_by TEXT NOT NULL, "
     "decided_by TEXT, decided_at TEXT, via TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, "
     "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS org_rules_status ON org_rules(status, kind, created_at)",
     "CREATE INDEX IF NOT EXISTS org_rules_source ON org_rules(source_id) WHERE source_id IS NOT NULL",
-    "CREATE TABLE IF NOT EXISTS org_rule_holds(id TEXT PRIMARY KEY, operation TEXT NOT NULL, payload_json TEXT NOT NULL, "
-    "author TEXT NOT NULL, destinations_json TEXT NOT NULL DEFAULT '[]', rule_ids_json TEXT NOT NULL DEFAULT '[]', "
-    "verdict_json TEXT NOT NULL DEFAULT '{}', why TEXT NOT NULL DEFAULT '', nonce TEXT NOT NULL, "
-    "state TEXT NOT NULL CHECK (state IN ('held','sent','kept')), reviewer TEXT, task_id TEXT, created TEXT NOT NULL, "
+    "CREATE TABLE IF NOT EXISTS org_rule_holds(id TEXT PRIMARY KEY, operation TEXT NOT NULL, payload TEXT NOT NULL, "
+    "author TEXT NOT NULL, destinations TEXT NOT NULL DEFAULT '[]', rule_ids TEXT NOT NULL DEFAULT '[]', "
+    "verdict TEXT NOT NULL DEFAULT '{}', why TEXT NOT NULL DEFAULT '', nonce TEXT NOT NULL, "
+    "state TEXT NOT NULL CHECK (state IN ('held','sent','kept')), reviewer TEXT, task_id TEXT, created_at TEXT NOT NULL, "
     "decided_at TEXT, decided_by TEXT)",
     "CREATE INDEX IF NOT EXISTS org_rule_holds_author ON org_rule_holds(author, state)",
 )
@@ -110,9 +110,9 @@ def _has(scope):
 
 def _row(r):
     d = dict(r)
-    d["who"] = json.loads(d.pop("who_json") or "{}")
-    d["with"] = json.loads(d.pop("with_json") or "{}")
-    d["cite"] = json.loads(d.pop("cite_json") or "null")
+    d["who"] = json.loads(d.pop("who") or "{}")
+    d["with"] = json.loads(d.pop("with_scope") or "{}")
+    d["cite"] = json.loads(d.pop("cite") or "null")
     return d
 
 
@@ -505,8 +505,8 @@ def settings_for(c, bot, ctx=None):
     name = ctx["bots"].get(bot, bot)
     out = []
 
-    row = c.execute("SELECT access_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    write = A.document(row["access_json"] if row else None)["write"]
+    row = c.execute("SELECT access FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    write = A.document(row["access"] if row else None)["write"]
     if write["everyone"]:
         text = f"Everyone can message {name}"
     else:
@@ -544,8 +544,8 @@ def settings_for(c, bot, ctx=None):
                 out.append({"text": f"Spends up to ${caps[key]:g} a {PERIOD_WORDS[key[:-4]]} across {label}",
                             "source": "usage_limits", "edit": {"page": "strategy", "anchor": "budget", "path": path}})
 
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    declared = turn_budgets._declared(config["config_json"] if config else None)
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    declared = turn_budgets._declared(config["config"] if config else None)
     own = turn_budgets.own(declared)
     shared = turn_budgets.limits(c, declared)
     for key, word in WINDOW_WORDS:
@@ -648,14 +648,14 @@ def add_rule(c, auth, who, body):
     status = "active" if who.role != "bot" and may_manage(c, auth, who, scope, ctx) else "suggested"
     now = H.now()
     row = {"id": H.new_id(), "kind": kind, "text": text, "description": description, "source_id": source_id,
-           "cite_json": _json(cite) if cite else None, "who_json": _json(scope), "with_json": _json(with_scope),
+           "cite": _json(cite) if cite else None, "who": _json(scope), "with_scope": _json(with_scope),
            "if_broken": _if_broken(body.get("if_broken") or "block"), "reviewer": _reviewer(c, body.get("reviewer")),
            "status": status, "suggested_by": who.actor, "decided_by": who.actor if status == "active" else None,
            "decided_at": now if status == "active" else None, "via": _via(who), "version": 1,
            "created_at": now, "updated_at": now}
-    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite_json, who_json, with_json, if_broken, "
+    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite, who, with_scope, if_broken, "
               "reviewer, status, suggested_by, decided_by, decided_at, via, version, created_at, updated_at) VALUES "
-              "(:id, :kind, :text, :description, :source_id, :cite_json, :who_json, :with_json, :if_broken, :reviewer, "
+              "(:id, :kind, :text, :description, :source_id, :cite, :who, :with_scope, :if_broken, :reviewer, "
               ":status, :suggested_by, :decided_by, :decided_at, :via, :version, :created_at, :updated_at)", row)
     stored = _get(c, row["id"])
     _audit(c, who.actor, row["id"], None, _core(stored), who)
@@ -675,7 +675,7 @@ def edit_rule(c, auth, who, rule_id, body):
     if body.get("who") is not None:
         scope = _scope_checked(c, auth, who, body["who"])
         _check_manage(c, auth, who, scope, ctx)
-        changes["who_json"] = _json(scope)
+        changes["who"] = _json(scope)
     _check_version(row, body.get("version"))
     if body.get("text") is not None:
         changes["text"] = _text(body["text"], TEXT_MAX, "rule")
@@ -684,7 +684,7 @@ def edit_rule(c, auth, who, rule_id, body):
     if body.get("with") is not None:
         if row["kind"] != "internal":
             raise Problem("validation", "With is for internal rules", 422)
-        changes["with_json"] = _json(scope_in(c, body["with"], flags=False))
+        changes["with_scope"] = _json(scope_in(c, body["with"], flags=False))
     if body.get("if_broken") is not None:
         changes["if_broken"] = _if_broken(body["if_broken"])
     if body.get("reviewer") is not None:
@@ -721,7 +721,7 @@ def decide_rule(c, auth, who, rule_id, body, action):
         before = _core(row)
         extra = {"decided_by": who.actor, "decided_at": H.now()}
         if scope != row["who"]:
-            extra["who_json"] = _json(scope)
+            extra["who"] = _json(scope)
         _save(c, rule_id, status="active", extra=extra)
         event = "accepted"
     elif action == "skip":
@@ -909,13 +909,13 @@ def seed_external(c, who, text, source_name, source_kind):
     scope = {"everyone": True, "all_bots": False, "groups": [], "bots": [], "people": []}
     now = H.now()
     row = {"id": H.new_id(), "kind": "external", "text": text, "description": "", "source_id": source["id"],
-           "cite_json": None, "who_json": _json(scope), "with_json": _json({"groups": [], "bots": [], "people": []}),
+           "cite": None, "who": _json(scope), "with_scope": _json({"groups": [], "bots": [], "people": []}),
            "if_broken": "warn", "reviewer": None, "status": "active", "suggested_by": who.actor,
            "decided_by": who.actor, "decided_at": now, "via": _via(who), "version": 1, "created_at": now,
            "updated_at": now}
-    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite_json, who_json, with_json, if_broken, "
+    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite, who, with_scope, if_broken, "
               "reviewer, status, suggested_by, decided_by, decided_at, via, version, created_at, updated_at) VALUES "
-              "(:id, :kind, :text, :description, :source_id, :cite_json, :who_json, :with_json, :if_broken, :reviewer, "
+              "(:id, :kind, :text, :description, :source_id, :cite, :who, :with_scope, :if_broken, :reviewer, "
               ":status, :suggested_by, :decided_by, :decided_at, :via, :version, :created_at, :updated_at)", row)
     _audit(c, who.actor, row["id"], None, _core(_get(c, row["id"])), who)
     _event(c, who.actor, "added", row["id"], {"kind": "external", "status": "active"})

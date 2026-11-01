@@ -20,7 +20,7 @@ const {unrouted} = require('./support/routes.cjs');
     const task = (id, owner, extra = {}) => ({id, title: id, body: 'Build the requested change.', owner,
       requester: 'human:ana', type_id: type.id, step_id: 'building', type: {id: type.id, name: type.name}, step: type.steps[0],
       status: 'doing', version: 1, lane: 'company', labels: [], links: [], parts: {total: 0, done: 0},
-      rank: 1, created: now, updated: now, ...extra});
+      rank: 1, created_at: now, updated_at: now, ...extra});
     const tasks = [task('Automatic cooldown', 'bot:builder-a'), task('Another ticket', 'bot:builder-a'),
       task('Manual quarantine', 'human:ana', {roles: {builder: ['bot:builder-b']}}), task('Healthy builder', 'bot:healthy'),
       task('General work', 'bot:builder-a', {type_id: 'general', type: {id: 'general', name: 'General'}}),

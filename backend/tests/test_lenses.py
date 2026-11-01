@@ -64,9 +64,9 @@ def run_row(api, run_id):
 
 def librarian(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
+        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('librarian','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('librarian','{}',NULL,'ana')")
     return bot(api, "librarian")
 
 
@@ -139,7 +139,7 @@ def test_with_no_model_the_answers_are_saved_and_nothing_runs(api, model):
     two_bets(api)
     model["writer"] = False
     run = start(api)
-    assert run["status"] == "no_model" and run["result"] is None and run["finished"] and run["answers"] == ANSWERS
+    assert run["status"] == "no_model" and run["result"] is None and run["finished_at"] and run["answers"] == ANSWERS
     assert get(api, f"lenses/runs/{run['id']}") == run and not model["sent"]
 
 
@@ -280,7 +280,7 @@ def test_a_run_cut_off_reads_failed_and_start_up_fails_the_running_ones_and_a_la
     run = start(api)
     assert run["status"] == "running" and get(api, f"lenses/runs/{run['id']}")["error"] is None
     with api.app.state.store.transaction() as c:                                # older than the stale limit
-        c.execute("UPDATE lens_runs SET created=? WHERE id=?", (H.shift(H.now(), seconds=-L.STALE_S - 1), run["id"]))
+        c.execute("UPDATE lens_runs SET created_at=? WHERE id=?", (H.shift(H.now(), seconds=-L.STALE_S - 1), run["id"]))
     stale = get(api, f"lenses/runs/{run['id']}")
     assert stale["status"] == "failed" and stale["error"]["code"] == "interrupted"
     with api.app.state.store.transaction() as c:
@@ -291,7 +291,7 @@ def test_a_run_cut_off_reads_failed_and_start_up_fails_the_running_ones_and_a_la
         L.stop_running(c)
     for found in (fresh, other):
         gone = get(api, f"lenses/runs/{found['id']}")
-        assert gone["status"] == "failed" and gone["error"]["code"] == "interrupted" and gone["finished"]
+        assert gone["status"] == "failed" and gone["error"]["code"] == "interrupted" and gone["finished_at"]
 
 
 def test_a_retried_start_runs_the_model_once_and_a_failing_model_leaves_a_failed_run(api, monkeypatch):

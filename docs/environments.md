@@ -49,7 +49,7 @@ repository goes, and how a bot finds a sibling's work.
 | `server` | `local` or `remote`. `local` is what makes `scripts/tico -e <slug> server ...` legal |
 | `port` | Local only. The first free loopback port from 8770 that no other environment has claimed |
 | `workspace` | Absolute path to the bot checkouts and `secrets/` |
-| `created` | UTC timestamp, for the record |
+| `created_at` | UTC timestamp, for the record |
 
 ### `server.env`
 

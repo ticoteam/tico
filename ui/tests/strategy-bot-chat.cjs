@@ -10,7 +10,7 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const now = new Date().toISOString();
-const msg = (id, from, body) => ({id, from_actor: from, body, refs: {}, created: now, kind: 'say'});
+const msg = (id, from, body) => ({id, from_actor: from, body, refs: {}, created_at: now, kind: 'say'});
 const bot = (name, display_name) => ({name, display_name, host: 'keeper', status: 'active', can_chat: false});
 
 async function open(browser, me, view, strategyName) {

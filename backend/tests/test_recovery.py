@@ -20,8 +20,8 @@ def test_store_replaces_legacy_queue_trigger_and_drains_queued_self_messages(tmp
         c.execute("DROP TRIGGER queue_bot_message")
         c.execute("CREATE TRIGGER queue_bot_message AFTER INSERT ON messages "
                   "WHEN NEW.to_actor LIKE 'bot:%' BEGIN "
-                  "INSERT INTO jobs(id,message_id,bot,created) "
-                  "VALUES(NEW.id,NEW.id,substr(NEW.to_actor,5),NEW.created); END")
+                  "INSERT INTO jobs(id,message_id,bot,created_at) "
+                  "VALUES(NEW.id,NEW.id,substr(NEW.to_actor,5),NEW.created_at); END")
         conversation = H.open_conversation(c, "bot:coo", ["bot:coo"], kind="chat")
         self_message = H._write_message(c, "bot:coo", "bot:coo", "legacy loop",
                                         conversation, "say", {}, None, None)
@@ -100,7 +100,7 @@ def test_a_run_the_last_process_held_is_flagged_at_start_and_resumes_if_it_lapse
     with TestClient(create_app(api.app.state.store.settings)) as restarted:
         store = restarted.app.state.store
         with store.read() as c:
-            [flag] = c.execute("SELECT detail_json FROM events WHERE action='attempt.update_cut' AND target=?",
+            [flag] = c.execute("SELECT detail FROM events WHERE action='attempt.update_cut' AND target=?",
                                (a["id"],)).fetchall()
         assert json.loads(flag[0])["cause"] == "restart"
         expire(restarted, a["id"])

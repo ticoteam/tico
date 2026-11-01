@@ -193,7 +193,7 @@ def _adopt(c: sqlite3.Connection, cid: str, records: Sequence[Record], at: str) 
         if r is None or op not in RETRIED_CREATES:
             continue
         ext = _ext_of(r)
-        local = SK.loads(o["payload_json"])
+        local = SK.loads(o["payload"])
         c.execute("SAVEPOINT mirror_adopt")
         try:
             revised = _revised(c, cid, op, local, ext, r)
@@ -803,7 +803,7 @@ def _line_rows(rows: Sequence[tuple[str, int, str]], at: str, tags: Sequence[Map
     """A document's line rows, each with the tags it carries and the provider's id for it (empty for a line Tico wrote)."""
     marks = list(keys) or [""] * len(rows)
     return [{"account_id": account, "amount": amount, "description": description[:200],
-             "tags_json": SK.dump(dict(mark)), "external_line": key, "created_at": at, "created_by": SYSTEM}
+             "tags": SK.dump(dict(mark)), "external_line": key, "created_at": at, "created_by": SYSTEM}
             for (account, amount, description), mark, key in zip(rows, tags, marks, strict=True)]
 
 
@@ -811,7 +811,7 @@ def _carry_lines(c: sqlite3.Connection, kind: str, doc_id: str, old_entry: str, 
                  rows: Sequence[tuple[str, int, str]], sign: int) -> list[dict[str, str]]:
     """Each new line's tags: from the line the document held with the same provider line id (so an amount edit keeps
     its tags), else from the replaced entry's line on the same account and amount."""
-    by_key = {str(x["external_line"]): dict(SK.loads(x["tags_json"])) for x in SAP.lines(c, kind, [doc_id])[doc_id]
+    by_key = {str(x["external_line"]): dict(SK.loads(x["tags"])) for x in SAP.lines(c, kind, [doc_id])[doc_id]
               if x["external_line"]}
     marks = list(keys) or [""] * len(rows)
     fallback = _carried(_entry_tags(c, old_entry),
@@ -1250,7 +1250,7 @@ def _held(c: sqlite3.Connection, cid: str, kind: str, doc_id: str, *, skip: str 
     does not hold against itself."""
     held = 0
     for o in SK.open_writes(c, cid, BALANCE_OPS[kind]):
-        local = SK.loads(o["payload_json"])
+        local = SK.loads(o["payload"])
         if str(o["id"]) != skip and doc_id in (str(local.get("doc_id", "")), str(local.get("invoice_id", ""))):
             held += int(local["amount"])
     return held
@@ -1267,7 +1267,7 @@ def _still_owed(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any
 
 
 def _prepare(c: sqlite3.Connection, cid: str, o: Any, now: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    local = SK.loads(o["payload_json"])
+    local = SK.loads(o["payload"])
     feed = str(local.get("feed_id") or "")
     if feed:
         frow = SK.get(c, "fin_feed_txns", feed)
@@ -1676,7 +1676,7 @@ def mirror_start(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
             if SX.ref_for_local(ctx.c, cid, "fin_contacts", str(row_c["id"])) is not None:
                 continue
             body = {"local_id": str(row_c["id"]), "name": str(row_c["name"]), "kind": str(row_c["kind"]),
-                    "emails": SK.loads_list(row_c["emails_json"]), "active": bool(row_c["active"])}
+                    "emails": SK.loads_list(row_c["emails"]), "active": bool(row_c["active"])}
             _queue(ctx.c, cid, "party.create", body, by=who, at=M.stamp(ctx.at, 1000 + i),
                    key=f"export:{cid}:party:{row_c['id']}")
             queued += 1

@@ -186,7 +186,7 @@ def test_archive_schema_is_created_for_fresh_and_existing_databases():
     # The prior schema has update content/read state but no slides or archive tables.
     c.executescript("""
       CREATE TABLE updates(id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL,
-        headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL,
+        headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
         UNIQUE(bot,kind,day));
       CREATE TABLE update_reads(update_id TEXT NOT NULL, actor TEXT NOT NULL, read_at TEXT NOT NULL,
         PRIMARY KEY(update_id,actor));
@@ -201,7 +201,7 @@ def test_archive_schema_is_created_for_fresh_and_existing_databases():
     c.executescript(updates.SCHEMA)
     updates.ensure_schema(c)
     assert c.execute("SELECT id,body FROM updates").fetchone()[:] == ("existing", "- Old content")
-    assert {r["name"] for r in c.execute("PRAGMA table_info(updates)")} >= {"slides_json"}
+    assert {r["name"] for r in c.execute("PRAGMA table_info(updates)")} >= {"slides"}
     assert {r["name"] for r in c.execute("PRAGMA table_info(update_queue)")} >= {"tries", "redo"}
     assert c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='update_archive_overrides'").fetchone()
     c.close()

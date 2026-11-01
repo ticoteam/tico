@@ -76,12 +76,12 @@ def run(api, net, rehearsal=False):
 
 def due(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE webhook_sends SET next_attempt='1970-01-01T00:00:00.000000Z' WHERE state='ready'")
+        c.execute("UPDATE webhook_sends SET next_attempt_at='1970-01-01T00:00:00.000000Z' WHERE state='ready'")
 
 
 def sends(api, hook_id=None):
     with api.app.state.store.read() as c:
-        sql = "SELECT * FROM webhook_sends" + (" WHERE webhook_id=?" if hook_id else "") + " ORDER BY created, id"
+        sql = "SELECT * FROM webhook_sends" + (" WHERE webhook_id=?" if hook_id else "") + " ORDER BY created_at, id"
         return [dict(r) for r in c.execute(sql, (hook_id,) if hook_id else ())]
 
 
@@ -161,7 +161,7 @@ def test_retries_follow_the_schedule_then_give_up_once_and_say_so_once_a_day(api
     assert all(r["last_status"] == 302 for r in rows)                 # a redirect is a failed try and is never followed
     assert {r.url.host for r in net.seen} == {"93.184.216.34"}
     with api.app.state.store.read() as c:
-        events = c.execute("SELECT detail_json FROM events WHERE action='webhook.exhausted'").fetchall()
+        events = c.execute("SELECT detail FROM events WHERE action='webhook.exhausted'").fetchall()
         notices = c.execute("SELECT id FROM tasks WHERE title LIKE 'Webhook % is not receiving events'").fetchall()
     assert len(events) == 2 and "order" not in events[0][0] and len(notices) == 1
     health = get(api, "health")["checks"]
@@ -321,7 +321,7 @@ def test_the_strategy_bot_and_a_bot_without_the_send_switch_are_refused(api):
             W.publish(c, "custom.x", "s", {}, "bot:ops", only=made["id"])
         with pytest.raises(W.Refused, match="does not exist"):
             W.publish(c, "custom.x", "s", {}, "human:ana", only="ep_missing")
-        c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to_json,updated,updated_by) VALUES('ops',1,'[]',?,?)",
+        c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to,updated_at,updated_by) VALUES('ops',1,'[]',?,?)",
                   (H.now(), "human:ana"))
         assert W.publish(c, "custom.x", "s", {}, "bot:ops", only=made["id"]) == 1
     post(api, f"webhooks/{made['id']}/pause", {})
@@ -381,9 +381,9 @@ def test_the_list_counts_seven_days_and_the_send_log_shows_state_attempts_and_ne
     assert listed["last_7_days"] == {"delivered": 1, "failed": 0, "pending": 2}
     log = get(api, f"webhooks/{made['id']}/sends")
     states = {row["type"]: row for row in log["items"]}
-    assert states["custom.a"]["state"] == "delivered" and states["custom.a"]["next_attempt"] is None
+    assert states["custom.a"]["state"] == "delivered" and states["custom.a"]["next_attempt_at"] is None
     assert states["custom.b"]["state"] == "ready" and states["custom.b"]["attempts"] == 1
-    assert states["custom.b"]["last_status"] == 500 and states["custom.b"]["next_attempt"]
+    assert states["custom.b"]["last_status"] == 500 and states["custom.b"]["next_attempt_at"]
     assert log["more"] is False
     only = get(api, f"webhooks/{made['id']}/sends?state=delivered")["items"]
     assert [row["type"] for row in only] == ["custom.a"]
@@ -416,7 +416,7 @@ def test_an_hourly_rate_makes_sends_wait_and_never_drops_them(api, net):
         post(api, f"webhooks/{made['id']}/send", {"type": f"custom.n{n}"})
     assert run(api, net) == 2
     waiting = [s for s in sends(api) if s["state"] == "ready"]
-    assert len(waiting) == 1 and waiting[0]["next_attempt"] > H.now()
+    assert len(waiting) == 1 and waiting[0]["next_attempt_at"] > H.now()
 
 
 def test_a_copy_for_rehearsal_sends_nothing_and_says_so(api, net):
@@ -443,12 +443,12 @@ def test_the_hourly_cleanup_keeps_a_month_of_sends_and_two_hundred_attempts(api,
     old = H.shift(H.now(), days=-31)
     with api.app.state.store.transaction() as c:
         for n in range(3):
-            c.execute("INSERT INTO webhook_events(id,type,subject,created) VALUES(?,?,?,?)", (f"e{n}", "custom.x", "s", old if n < 2 else H.now()))
-        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt,created) VALUES('old','e0',?,'custom.x','{}','delivered',?,?)",
+            c.execute("INSERT INTO webhook_events(id,type,subject,created_at) VALUES(?,?,?,?)", (f"e{n}", "custom.x", "s", old if n < 2 else H.now()))
+        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at) VALUES('old','e0',?,'custom.x','{}','delivered',?,?)",
                   (made["id"], old, old))
-        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt,created) VALUES('new','e2',?,'custom.x','{}','delivered',?,?)",
+        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at) VALUES('new','e2',?,'custom.x','{}','delivered',?,?)",
                   (made["id"], H.now(), H.now()))
-        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt,created) VALUES('wait','e1',?,'custom.x','{}','ready',?,?)",
+        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at) VALUES('wait','e1',?,'custom.x','{}','ready',?,?)",
                   (made["id"], old, old))
         for n in range(250):
             c.execute("INSERT INTO webhook_attempts(send_id,webhook_id,n,at,timestamp_sent) VALUES('new',?,?,?,0)",
@@ -488,11 +488,11 @@ def test_publish_to_one_endpoint_checks_the_actor_against_that_endpoint(api):
         assert W.publish(c, "custom.x", "s", {}, "human:ben", only=bens["id"]) == 1
         assert W.publish(c, "custom.y", "s", {}, "human:ana", only=bens["id"]) == 1     # an admin may
         assert W.publish(c, "custom.z", "s", {}, H.KEEPER, only=bens["id"]) == 1
-        c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to_json,updated,updated_by) VALUES('ops',1,'[]',?,?)",
+        c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to,updated_at,updated_by) VALUES('ops',1,'[]',?,?)",
                   (H.now(), "human:ana"))
         narrow = W.publish(c, "custom.w", "s", {}, "bot:ops", only=bens["id"])
         assert narrow == 1
-        c.execute("UPDATE webhooks SET events_json='[\"task.*\"]' WHERE id=?", (bens["id"],))
+        c.execute("UPDATE webhooks SET events='[\"task.*\"]' WHERE id=?", (bens["id"],))
         with pytest.raises(W.Refused, match="does not listen"):
             W.publish(c, "custom.v", "s", {}, "bot:ops", only=bens["id"])
 

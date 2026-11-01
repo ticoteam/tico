@@ -27,7 +27,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS company_storage(
  id TEXT PRIMARY KEY, bucket TEXT NOT NULL, prefix TEXT NOT NULL DEFAULT '', region TEXT NOT NULL,
  access_key_id TEXT NOT NULL, secret TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 0,
- created TEXT NOT NULL, created_by TEXT NOT NULL, retired TEXT);
+ created_at TEXT NOT NULL, created_by TEXT NOT NULL, retired TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS company_storage_one_active ON company_storage(active) WHERE active=1;
 """
 BUCKET = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
@@ -58,14 +58,14 @@ def _public(row):
     key = row["access_key_id"]
     return {"bucket": row["bucket"], "prefix": row["prefix"], "region": row["region"],
             "location": _location(row["bucket"], row["prefix"]),
-            "access_key_id": "…" + key[-4:], "created": row["created"], "created_by": row["created_by"],
+            "access_key_id": "…" + key[-4:], "created_at": row["created_at"], "created_by": row["created_by"],
             **({"retired": row["retired"]} if row["retired"] else {})}
 
 
 def places(c, vault):
     """(the active place or None, earlier places newest first), each {bucket, prefix, region, keys} for Blobs.configure."""
     active, earlier = None, []
-    for row in c.execute("SELECT * FROM company_storage ORDER BY active DESC, COALESCE(retired, created) DESC"):
+    for row in c.execute("SELECT * FROM company_storage ORDER BY active DESC, COALESCE(retired, created_at) DESC"):
         place = {"bucket": row["bucket"], "prefix": row["prefix"], "region": row["region"],
                  "keys": (row["access_key_id"], vault.cipher.unseal(c, _context(row["id"]), row["secret"]))}
         if row["active"]:
@@ -176,7 +176,7 @@ def save(store, vault, who, body):
         c.execute("UPDATE company_storage SET active=0, retired=? WHERE active=1", (H.now(),))
         # One row per place: the new keys read what the older ones wrote there.
         c.execute("DELETE FROM company_storage WHERE bucket=? AND prefix=?", (bucket, prefix))
-        c.execute("INSERT INTO company_storage(id,bucket,prefix,region,access_key_id,secret,active,created,created_by) "
+        c.execute("INSERT INTO company_storage(id,bucket,prefix,region,access_key_id,secret,active,created_at,created_by) "
                   "VALUES(?,?,?,?,?,?,1,?,?)",
                   (row_id, bucket, prefix, region, body.access_key_id, vault.cipher.seal(c, _context(row_id), secret),
                    H.now(), who.actor))

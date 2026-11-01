@@ -11,7 +11,7 @@
 function growthIdeaAdopt(d, task) {
   const slot = $('[data-growth-idea]', d);
   if (!slot) return;
-  const id = String(task.id), ver = String(task.version ?? task.updated ?? '');
+  const id = String(task.id), ver = String(task.version ?? task.updated_at ?? '');
   if (pipelineTypeId(task) !== 'idea') { slot.hidden = true; return; }
   if (d.giEl && d.giEl.dataset.task === id) {
     d.giEl.giTask = task; slot.replaceWith(d.giEl);

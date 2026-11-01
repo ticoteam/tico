@@ -107,11 +107,11 @@ CREATE TABLE IF NOT EXISTS cloud_machines(
  always_on INTEGER NOT NULL DEFAULT 0, machine_id TEXT, runner_id TEXT, state TEXT NOT NULL DEFAULT 'none',
  machine_size TEXT, started_at TEXT, stopped_at TEXT, cost_month_usd REAL NOT NULL DEFAULT 0,
  starts_month INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
- active_at REAL, heartbeat_at REAL, ttl_s INTEGER, next_try REAL, failures INTEGER NOT NULL DEFAULT 0,
+ active_at REAL, heartbeat_at REAL, ttl_s INTEGER, next_try_at REAL, failures INTEGER NOT NULL DEFAULT 0,
  problem TEXT NOT NULL DEFAULT '', problem_at TEXT, wake_key TEXT, woke_at REAL,
- enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated TEXT, stop_until REAL);
+ enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated_at TEXT, stop_until REAL);
 CREATE TABLE IF NOT EXISTS cloud_machine_codes(
- code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created TEXT NOT NULL);
+ code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created_at TEXT NOT NULL);
 """
 MODES = ("cloud", "computer")
 PLACEMENTS = ("shared", "own")
@@ -303,7 +303,7 @@ def rows(c):
 
 
 def save(c, key, **fields):
-    fields["updated"] = H.now()
+    fields["updated_at"] = H.now()
     c.execute("UPDATE cloud_machines SET " + ",".join(k + "=?" for k in fields) + " WHERE bot=?",
               (*fields.values(), key))
 
@@ -312,9 +312,9 @@ def default_placement(c, bot):
     """Where a bot's cloud machine is when nobody has chosen: its own for a template in OWN_TEMPLATES or a bot in an
     OWN_DEPARTMENTS department of the team chart (its group, or its manager's up the chain), the shared one for the
     rest. Read once, when its row is made: moving it on the chart later moves no machine."""
-    found = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     try:
-        config = json.loads(found["config_json"] or "{}") if found else {}
+        config = json.loads(found["config"] or "{}") if found else {}
     except ValueError:
         config = {}
     if isinstance(config, dict) and config.get("template") in OWN_TEMPLATES:
@@ -333,7 +333,7 @@ def adopt(c, bot, actor=H.KEEPER):
     current = row(c, bot)
     if current is None:
         placement = default_placement(c, bot)
-        c.execute("INSERT OR IGNORE INTO cloud_machines(bot,placement,changed_by,updated) VALUES(?,?,?,?)",
+        c.execute("INSERT OR IGNORE INTO cloud_machines(bot,placement,changed_by,updated_at) VALUES(?,?,?,?)",
                   (bot, placement, actor, H.now()))
         if placement == "shared":
             ensure_shared(c)
@@ -342,7 +342,7 @@ def adopt(c, bot, actor=H.KEEPER):
 
 
 def ensure_shared(c):
-    c.execute("INSERT OR IGNORE INTO cloud_machines(bot,mode,placement,changed_by,updated) VALUES(?,?,?,?,?)",
+    c.execute("INSERT OR IGNORE INTO cloud_machines(bot,mode,placement,changed_by,updated_at) VALUES(?,?,?,?,?)",
               (SHARED, "cloud", "shared", H.KEEPER, H.now()))
 
 
@@ -417,7 +417,7 @@ def mint(c, key, owner=None):
     if not operator or not H.human(c, operator):
         raise Problem("operator", "Nobody on the roster to own this cloud machine's computer", 409)
     code = secrets.token_urlsafe(32)
-    c.execute("INSERT INTO enrollments(code_hash,operator,expires) VALUES(?,?,?)",
+    c.execute("INSERT INTO enrollments(code_hash,operator,expires_at) VALUES(?,?,?)",
               (digest(code), operator, H.shift(H.now(), minutes=ENROLL_MINUTES)))
     c.execute("INSERT INTO cloud_machine_codes VALUES(?,?,?)", (digest(code), key, H.now()))
     return code
@@ -507,7 +507,7 @@ def placed(c, bot, runner_id, actor):
     if not current:
         shared = row(c, SHARED)
         if shared and shared["runner_id"] and runner_id == shared["runner_id"]:
-            c.execute("INSERT OR IGNORE INTO cloud_machines(bot,mode,placement,changed_by,updated) VALUES(?,?,?,?,?)",
+            c.execute("INSERT OR IGNORE INTO cloud_machines(bot,mode,placement,changed_by,updated_at) VALUES(?,?,?,?,?)",
                       (bot, "cloud", "shared", actor, H.now()))
         return
     shared = row(c, SHARED) if runner_id != current["runner_id"] else None
@@ -545,9 +545,9 @@ def facts(c, settings, current, at):
     for bot in sorted(seen) if runner_id else ():
         turns = turns or bool(c.execute("SELECT 1 FROM attempts WHERE bot=? AND runner_id=? AND state IN "
                                         "('leased','running') LIMIT 1", (bot, runner_id)).fetchone())
-        latest = c.execute("SELECT max(coalesce(finished,started,created)) FROM attempts WHERE bot=? AND runner_id=?",
+        latest = c.execute("SELECT max(coalesce(finished_at,started_at,created_at)) FROM attempts WHERE bot=? AND runner_id=?",
                            (bot, runner_id)).fetchone()[0]
-        ran = c.execute("SELECT max(finished) FROM watcher_runs WHERE bot=? AND runner_id=?",
+        ran = c.execute("SELECT max(finished_at) FROM watcher_runs WHERE bot=? AND runner_id=?",
                         (bot, runner_id)).fetchone()[0]
         activity = max([activity] + [t for t in (epoch(latest), epoch(ran)) if t])
     out = {"active": False, "turns": turns, "activity": activity, "want": None, "want_at": 0,
@@ -647,19 +647,19 @@ def bot_want(c, settings, bot, runner_id, at):
     if placed_on and placed_on["runner_id"] != runner_id:
         return True, "move:" + bot, (1, ""), 0      # chosen while on another computer: its machine is made now
     # Keyed by the newest queued job, so new work wakes a machine the guard holds for older work.
-    newest = c.execute("SELECT id,created FROM jobs WHERE bot=? AND state='queued' AND held=0 "
-                       "ORDER BY created DESC,id DESC LIMIT 1", (bot,)).fetchone()
+    newest = c.execute("SELECT id,created_at FROM jobs WHERE bot=? AND state='queued' AND held=0 "
+                       "ORDER BY created_at DESC,id DESC LIMIT 1", (bot,)).fetchone()
     if newest and runner_id:
         why, _, _, job = bot_claimable(c, settings, runner_id, bot, with_job=True)
         if (why is None and job) or why in STALE:
-            return True, "job:" + newest["id"], (2, newest["created"]), epoch(newest["created"]) or 0
+            return True, "job:" + newest["id"], (2, newest["created_at"]), epoch(newest["created_at"]) or 0
     elif newest:
-        return True, "job:" + newest["id"], (2, newest["created"]), epoch(newest["created"]) or 0
+        return True, "job:" + newest["id"], (2, newest["created_at"]), epoch(newest["created_at"]) or 0
     if runner_id:
-        for watcher in c.execute("SELECT name,finished,every FROM watcher_runs WHERE bot=? ORDER BY finished", (bot,)):
-            done = epoch(watcher["finished"])
+        for watcher in c.execute("SELECT name,finished_at,every FROM watcher_runs WHERE bot=? ORDER BY finished_at", (bot,)):
+            done = epoch(watcher["finished_at"])
             if done is not None and watcher["every"] and done + watcher["every"] <= at:
-                return True, f"watcher:{bot}:{watcher['name']}:{watcher['finished']}", (0, ""), done + watcher["every"]
+                return True, f"watcher:{bot}:{watcher['name']}:{watcher['finished_at']}", (0, ""), done + watcher["every"]
     return True, None, None, 0
 
 
@@ -681,7 +681,7 @@ def decide(current, found, at, idle_s):
         if on and (found["turns"] or found["updating"]):
             return ("heartbeat" if at - (current["heartbeat_at"] or 0) >= HEARTBEAT else None), None
         return ("stop" if on else None), None
-    if current["next_try"] and at < current["next_try"] and not found["retry_now"]:
+    if current["next_try_at"] and at < current["next_try_at"] and not found["retry_now"]:
         return None, None                                   # waiting out a refusal
     if found["frozen"]:
         return ("stop" if on else None), "out_of_credit"
@@ -824,7 +824,7 @@ class Manager:
             learned = bool(listed["sizes"]) and (first or not sizes(c))
             if listed["sizes"]:
                 c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
-                          "value_json=excluded.value_json",
+                          "value=excluded.value",
                           (SIZES_KEY, json.dumps({"sizes": listed["sizes"], "caps": listed["caps"], "at": H.now()})))
             mine = rows(c)
             # Per key, a machine that is not dead wins, then the one this row already has. HQ renames a machine a new
@@ -969,15 +969,15 @@ class Manager:
         key = current["bot"]
         fields = {}
         if refused.status == 402:
-            fields = {"problem": "out_of_credit", "problem_at": H.now(), "next_try": at + FROZEN_RETRY}
+            fields = {"problem": "out_of_credit", "problem_at": H.now(), "next_try_at": at + FROZEN_RETRY}
         elif refused.status == 409 and refused.code == "sandbox_stopping":
-            fields = {"next_try": at + STOPPING_RETRY}
+            fields = {"next_try_at": at + STOPPING_RETRY}
         elif refused.status == 404 and action != "create":
             # HQ has no such machine (its disk was deleted): the next want makes a new one.
-            fields = {"machine_id": None, "state": "deleted", "next_try": None, "enroll_by": None}
+            fields = {"machine_id": None, "state": "deleted", "next_try_at": None, "enroll_by": None}
         else:
             failures = current["failures"] + 1
-            fields = {"failures": failures, "next_try": at + min(BACKOFF_MAX, BACKOFF * 2 ** (failures - 1))}
+            fields = {"failures": failures, "next_try_at": at + min(BACKOFF_MAX, BACKOFF * 2 ** (failures - 1))}
             if action in ("create", "start"):
                 fields.update(problem="hq:" + refused.code, problem_at=H.now())
             if action == "create":
@@ -1106,7 +1106,7 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
         raise Problem("validation", "Choose a computer to move it there; mode only takes cloud", 422)
     if placement is not None and placement not in PLACEMENTS:
         raise Problem("validation", "Choose shared or own", 422)
-    c.execute("INSERT OR IGNORE INTO cloud_machines(bot,mode,placement,changed_by,updated) VALUES(?,?,?,?,?)",
+    c.execute("INSERT OR IGNORE INTO cloud_machines(bot,mode,placement,changed_by,updated_at) VALUES(?,?,?,?,?)",
               (bot, "computer" if c.execute("SELECT 1 FROM assignments WHERE bot=?", (bot,)).fetchone() else "cloud",
                placement or default_placement(c, bot), who.actor, H.now()))
     before = row(c, bot)

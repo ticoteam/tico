@@ -87,13 +87,13 @@ SCHEMA = (
     "status TEXT NOT NULL CHECK (status IN ('draft','published')), guide TEXT NOT NULL DEFAULT 'default', "
     "summary TEXT NOT NULL DEFAULT '', vision TEXT NOT NULL DEFAULT '', sections TEXT NOT NULL DEFAULT '{}', "
     "bets TEXT NOT NULL DEFAULT '[]', note TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 0, "
-    "updated TEXT, updated_by TEXT, published TEXT, published_by TEXT)",
+    "updated_at TEXT, updated_by TEXT, published TEXT, published_by TEXT)",
     # The one-draft rule.
     "CREATE UNIQUE INDEX IF NOT EXISTS strategy_versions_draft ON strategy_versions(status) WHERE status='draft'",
     "CREATE TABLE IF NOT EXISTS strategy_bets (id TEXT PRIMARY KEY, statement TEXT NOT NULL, "
     "why TEXT NOT NULL DEFAULT '', rules_out TEXT NOT NULL DEFAULT '', wrong_if TEXT, cites TEXT NOT NULL DEFAULT '[]', "
     "status TEXT NOT NULL CHECK (status IN ('proposed','active','retired')), since_n INTEGER, until_n INTEGER, "
-    "rank INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL, updated TEXT NOT NULL, updated_by TEXT NOT NULL)",
+    "rank INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS strategy_events (id TEXT PRIMARY KEY, kind TEXT NOT NULL, actor TEXT NOT NULL, "
     "at TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')",
     "CREATE INDEX IF NOT EXISTS strategy_events_at ON strategy_events(at)",
@@ -124,7 +124,7 @@ def ensure(c):
     sections = _sections({"sell": description})
     now = H.now()
     c.execute("INSERT INTO strategy_versions (id, n, status, guide, summary, vision, sections, bets, note, revision, "
-              "updated, updated_by) VALUES (?,NULL,'draft',?,'',?,?,'[]','',0,?,?)",
+              "updated_at, updated_by) VALUES (?,NULL,'draft',?,'',?,?,'[]','',0,?,?)",
               (H.new_id(), DEFAULT_GUIDE, vision, dumps(sections), now, H.KEEPER))
     if vision or description:
         _event(c, H.KEEPER, "migrated", {"new": {"vision": vision, "sell": description}})
@@ -240,9 +240,9 @@ def bet(c, bet_id):
 def bets(c, status=None):
     """Bets in rank order; `status` narrows them to one status."""
     if status:
-        rows = c.execute("SELECT * FROM strategy_bets WHERE status=? ORDER BY rank, created", (status,))
+        rows = c.execute("SELECT * FROM strategy_bets WHERE status=? ORDER BY rank, created_at", (status,))
     else:
-        rows = c.execute("SELECT * FROM strategy_bets ORDER BY rank, created")
+        rows = c.execute("SELECT * FROM strategy_bets ORDER BY rank, created_at")
     return [_bet(r) for r in rows]
 
 
@@ -258,7 +258,7 @@ def vision(c, editor=False):
 
 def website(c):
     """The team's website as setup recorded it (backend/onboarding.py `names.website`), or None."""
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='onboarding'").fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='onboarding'").fetchone()
     names = (loads(row[0], {}) if row else {}).get("names") or {}
     return str(names.get("website") or "").strip() or None
 
@@ -269,7 +269,7 @@ def goals_by_bet(c, auth, who, bet_ids):
     if not bet_ids:
         return {}
     marks = ",".join("?" * len(bet_ids))
-    rows = H._rows(c.execute(f"SELECT * FROM goals WHERE bet_id IN ({marks}) ORDER BY owner, rank, created",
+    rows = H._rows(c.execute(f"SELECT * FROM goals WHERE bet_id IN ({marks}) ORDER BY owner, rank, created_at",
                              tuple(bet_ids)))
     out = {}
     for row in goal_routes.readable_goals(c, auth, who, rows):
@@ -302,7 +302,7 @@ def view(c, auth, who):
     if editor:
         listed = [b for b in bets(c) if b["status"] != "retired"]
         listed += [_bet(r) for r in c.execute("SELECT * FROM strategy_bets WHERE status='retired' "
-                                              "ORDER BY updated DESC LIMIT ?", (RETIRED_SHOWN,))]
+                                              "ORDER BY updated_at DESC LIMIT ?", (RETIRED_SHOWN,))]
     else:
         listed = list((published or {}).get("bets") or [])
     gid = (mine or published or {}).get("guide") or DEFAULT_GUIDE
@@ -394,8 +394,8 @@ def _bump(c, actor, row, changes=None):
     if "sections" in changes:
         changes["sections"] = dumps(changes["sections"])
     sets = "".join(f"{k}=:{k}, " for k in changes)
-    c.execute(f"UPDATE strategy_versions SET {sets}revision=revision+1, updated=:updated, updated_by=:updated_by "
-              "WHERE id=:id", {**changes, "updated": H.now(), "updated_by": actor, "id": row["id"]})
+    c.execute(f"UPDATE strategy_versions SET {sets}revision=revision+1, updated_at=:updated_at, updated_by=:updated_by "
+              "WHERE id=:id", {**changes, "updated_at": H.now(), "updated_by": actor, "id": row["id"]})
     return row["revision"] + 1
 
 
@@ -578,11 +578,11 @@ def add_bet(c, actor, statement, why="", rules_out="", wrong_if=None, cites=None
     row = {"id": H.new_id(), "statement": statement, "why": _clean(c, actor, why, BET_TEXT_MAX, "why"),
            "rules_out": _clean(c, actor, rules_out, BET_TEXT_MAX, "rules_out"),
            "wrong_if": _wrong_if(c, actor, wrong_if), "cites": _cites(c, actor, cites) or [], "status": status,
-           "rank": int(rank), "created": now, "updated": now, "updated_by": actor}
+           "rank": int(rank), "created_at": now, "updated_at": now, "updated_by": actor}
     _may_be(c, actor, row)
     c.execute("INSERT INTO strategy_bets (id, statement, why, rules_out, wrong_if, cites, status, since_n, until_n, "
-              "rank, created, updated, updated_by) VALUES (:id, :statement, :why, :rules_out, :wrong_if, :cites, "
-              ":status, NULL, NULL, :rank, :created, :updated, :updated_by)",
+              "rank, created_at, updated_at, updated_by) VALUES (:id, :statement, :why, :rules_out, :wrong_if, :cites, "
+              ":status, NULL, NULL, :rank, :created_at, :updated_at, :updated_by)",
               {**row, "wrong_if": dumps(row["wrong_if"]) if row["wrong_if"] else None, "cites": dumps(row["cites"])})
     _event(c, actor, "bet.add", {"id": row["id"], "new": {k: row[k] for k in SNAPSHOT if k != "id"}})
     H.event(c, actor, "strategy.bet", row["id"], {"status": status})
@@ -625,8 +625,8 @@ def update_bet(c, actor, bet_id, statement=None, why=None, rules_out=None, wrong
         stored["wrong_if"] = dumps(stored["wrong_if"]) if stored["wrong_if"] else None
     if "cites" in stored:
         stored["cites"] = dumps(stored["cites"])
-    c.execute(f"UPDATE strategy_bets SET {', '.join(f'{k}=:{k}' for k in stored)}, updated=:updated, "
-              "updated_by=:updated_by WHERE id=:id", {**stored, "updated": H.now(), "updated_by": actor, "id": bet_id})
+    c.execute(f"UPDATE strategy_bets SET {', '.join(f'{k}=:{k}' for k in stored)}, updated_at=:updated_at, "
+              "updated_by=:updated_by WHERE id=:id", {**stored, "updated_at": H.now(), "updated_by": actor, "id": bet_id})
     _event(c, actor, "bet.update", {"id": bet_id, "old": {k: row[k] for k in changes}, "new": changes})
     H.event(c, actor, "strategy.bet", bet_id, {"fields": sorted(changes)})
     return bet(c, bet_id), _bet_revision(c, actor, revision)
@@ -742,7 +742,7 @@ def publish(c, actor, note="", revision=None):
               "WHERE id=?", (n, dumps(snapshot), note, now, actor, row["id"]))
     # The fresh draft's revision follows on, so a page still holding the published one gets a 409, not a new draft.
     c.execute("INSERT INTO strategy_versions (id, n, status, guide, summary, vision, sections, bets, note, revision, "
-              "updated, updated_by) VALUES (?,NULL,'draft',?,?,?,?,'[]','',?,?,?)",
+              "updated_at, updated_by) VALUES (?,NULL,'draft',?,?,?,?,'[]','',?,?,?)",
               (H.new_id(), row["guide"], row["summary"], row["vision"], dumps(row["sections"]), row["revision"] + 1,
                now, actor))
     # A bet's span in versions: first published active here, or retired as of here.
@@ -775,7 +775,7 @@ def _realign_goals(c, before, after):
         return []
     marks = ",".join("?" * len(moved))
     rows = c.execute(f"SELECT id, title, owner, bet_id FROM goals WHERE bet_id IN ({marks}) AND "
-                     "coalesce(status,'') NOT IN ('done','dropped') ORDER BY owner, rank, created", tuple(moved))
+                     "coalesce(status,'') NOT IN ('done','dropped') ORDER BY owner, rank, created_at", tuple(moved))
     out = []
     for r in rows:
         change, statement, was = moved[r["bet_id"]]
@@ -812,7 +812,7 @@ def file_card(c, owner, proposal):
     title, body = GA._ask({"kind": "proposal", "proposal": proposal})
     # A realign card is urgent (goal_asks.urgent): past the daily cap, so publishing never rolls back on it.
     made = H.task_create(c, requester, title, body, owner, lint=False, lane="company")
-    c.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created) VALUES ('proposal',?,?,?,?)",
+    c.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created_at) VALUES ('proposal',?,?,?,?)",
               (proposal["id"], owner, made["id"], H.now()))
     return made
 

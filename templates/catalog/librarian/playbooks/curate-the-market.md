@@ -35,7 +35,7 @@ day that is not Monday, stop at once.
 7. File the run with `hub market sweep`. Every `needs-human` insight from this run becomes one task on the team owner, never one task each.
 8. On Mondays the sweep's date is a Monday: refresh the weekly delta page from `market_events`, then write the week's
    briefing (`playbooks/write-the-briefing.md`).
-9. Staleness: an entity past `last_verified` plus 60 days (core tier: 30) that you tried to check and could not verify is named in that same sweep, with what to look for. The server files a task on the Social Media Manager (`listening`) only for those. A date being old is not itself a task.
+9. Staleness: an entity past `last_verified_at` plus 60 days (core tier: 30) that you tried to check and could not verify is named in that same sweep, with what to look for. The server files a task on the Social Media Manager (`listening`) only for those. A date being old is not itself a task.
 
 The sixteen relations, the evidence standard, entity resolution and the page templates are in `knowledge/market/`.
 Reporters do not carry a copy.

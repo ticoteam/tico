@@ -54,19 +54,19 @@ def _catalog(c, who, auth, settings):
         marks = ",".join("?" * len(mailboxes))
         for row in c.execute(
                 "SELECT m.mailbox,count(*) AS n FROM mail_messages m WHERE m.deleted_at IS NULL "
-                f"AND m.mailbox IN ({marks}) AND EXISTS (SELECT 1 FROM json_each(m.labels_json) "
+                f"AND m.mailbox IN ({marks}) AND EXISTS (SELECT 1 FROM json_each(m.labels) "
                 "WHERE value LIKE 'hub/needs-%' OR value='hub/drafted') GROUP BY m.mailbox",
                 tuple(mailboxes)):
             mailboxes[row["mailbox"]]["needs_review"] = row["n"]
     reads = {(row["channel"], row["reader"]): dict(row) for row in c.execute("SELECT * FROM slack_reads")}
     # Each bot's own automations (a mail bot's checks and schedules): when one last ran and when the next is due.
     schedules = {}
-    for row in c.execute("SELECT a.id, a.owner, a.enabled, a.next_due, (SELECT max(started) FROM automation_runs r "
-                         "WHERE r.automation_id=a.id) AS last_fired FROM automations a "
+    for row in c.execute("SELECT a.id, a.owner, a.enabled, a.next_due, (SELECT max(started_at) FROM automation_runs r "
+                         "WHERE r.automation_id=a.id) AS last_fired_at FROM automations a "
                          "WHERE a.deleted_at IS NULL AND a.owner LIKE 'bot:%'"):
         schedules.setdefault(row["owner"][4:], []).append(dict(row))
     latest_digest = {row["reader"]: row["last"] for row in c.execute(
-        "SELECT reader,max(created) AS last FROM slack_digests GROUP BY reader")}
+        "SELECT reader,max(created_at) AS last FROM slack_digests GROUP BY reader")}
     bots = []
     covered_mail, covered_slack = set(), set()
     readable = auth.bot_accesses(c, who)
@@ -74,18 +74,18 @@ def _catalog(c, who, auth, settings):
         bot = row["slug"]
         if row["state"] == "archived" or not readable.get(bot, auth.FULL)["read"]:
             continue
-        config_row = c.execute("SELECT config_json,description,operator,revision FROM bot_config WHERE bot=?",
+        config_row = c.execute("SELECT config,description,operator,revision FROM bot_config WHERE bot=?",
                                (bot,)).fetchone()
-        config = _json(config_row["config_json"], {}) if config_row else {}
+        config = _json(config_row["config"], {}) if config_row else {}
         sources = _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes, reads)
         if not sources:
             continue
         covered_mail.update(s["name"] for s in sources if s["kind"] == "email")
         covered_slack.update(s["id"][6:] for s in sources if s["kind"] == "slack")
         jobs = schedules.get(bot, [])
-        fired = [r["last_fired"] for r in jobs if r["last_fired"]]
+        fired = [r["last_fired_at"] for r in jobs if r["last_fired_at"]]
         due = [r["next_due"] for r in jobs if r["enabled"] and r["next_due"]]
-        turn = c.execute("SELECT max(coalesce(finished,started)) FROM turns WHERE bot=?", (bot,)).fetchone()[0]
+        turn = c.execute("SELECT max(coalesce(finished_at,started_at)) FROM turns WHERE bot=?", (bot,)).fetchone()[0]
         last = max(fired + ([latest_digest[bot]] if bot in latest_digest else []) + ([turn] if turn else []), default=None)
         status = H.status(c, bot) or {}
         bots.append({"bot": bot, "name": row["display_name"] or bot,
@@ -115,8 +115,8 @@ def _catalog(c, who, auth, settings):
 
 
 def _workspace_url(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='slack_workspace_url'").fetchone()
-    return _json(row["value_json"], "") if row else ""
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='slack_workspace_url'").fetchone()
+    return _json(row["value"], "") if row else ""
 
 
 def _slack_link(team_url, channel, ts, thread_ts=None):
@@ -155,14 +155,14 @@ def install_messaging(app, store, auth):
             chosen = [item for item in sources if not source or item["id"] == source]
             mailboxes = [item["name"] for item in chosen if item["kind"] == "email"]
             slack_ids = [item["id"][6:] for item in chosen if item["kind"] == "slack"]
-            instruction = c.execute("SELECT content,updated FROM bot_agent_instructions WHERE bot=?",
+            instruction = c.execute("SELECT content,updated_at FROM bot_agent_instructions WHERE bot=?",
                                     (bot,)).fetchone()
             if not instruction:
-                instruction = c.execute("SELECT content,updated FROM mail_agent_instructions WHERE bot=?",
+                instruction = c.execute("SELECT content,updated_at FROM mail_agent_instructions WHERE bot=?",
                                         (bot,)).fetchone()
-            instructions = {"content": instruction["content"], "updated": instruction["updated"],
+            instructions = {"content": instruction["content"], "updated_at": instruction["updated_at"],
                             "published": True} if instruction and instruction["content"].strip() else {
-                                "content": found["description"], "updated": None, "published": False}
+                                "content": found["description"], "updated_at": None, "published": False}
             jobs = [dict(r) for r in c.execute(
                 "SELECT id, name, enabled, trigger_type, next_due FROM automations WHERE owner=? AND deleted_at IS NULL "
                 "ORDER BY name, id LIMIT 50", ("bot:" + bot,))]
@@ -172,7 +172,7 @@ def install_messaging(app, store, auth):
                 for row in c.execute(f"SELECT * FROM mail_messages WHERE deleted_at IS NULL AND mailbox IN ({marks}) "
                                      "ORDER BY epoch DESC LIMIT 40", tuple(mailboxes)):
                     item = message_public(row)
-                    item["rule_hits"] = _json(row["rule_hits_json"], [])
+                    item["rule_hits"] = _json(row["rule_hits"], [])
                     mail.append(item)
             slack = []
             digests = []
@@ -183,9 +183,9 @@ def install_messaging(app, store, auth):
                 slack = [_slack_message(row, team_url) for row in c.execute(
                     f"SELECT * FROM slack_events WHERE channel IN ({marks}) AND deleted IS NULL "
                     "ORDER BY ts DESC LIMIT 40", tuple(slack_ids))]
-                for row in c.execute("SELECT * FROM slack_digests WHERE reader=? ORDER BY created DESC LIMIT 15",
+                for row in c.execute("SELECT * FROM slack_digests WHERE reader=? ORDER BY created_at DESC LIMIT 15",
                                      (bot,)):
-                    event_ids = _json(row["event_ids_json"], [])
+                    event_ids = _json(row["event_ids"], [])
                     if source and event_ids:
                         marks = ",".join("?" * len(event_ids))
                         matching = c.execute(f"SELECT count(*) FROM slack_events WHERE event_id IN ({marks}) "
@@ -193,17 +193,17 @@ def install_messaging(app, store, auth):
                                              (*event_ids, *slack_ids)).fetchone()[0]
                         if not matching:
                             continue
-                    attempt = c.execute("SELECT a.state,a.started,a.finished,a.final_text FROM jobs j "
+                    attempt = c.execute("SELECT a.state,a.started_at,a.finished_at,a.final_text FROM jobs j "
                                         "LEFT JOIN attempts a ON a.job_id=j.id WHERE j.message_id=? "
-                                        "ORDER BY a.created DESC LIMIT 1", (row["message_id"],)).fetchone()
-                    digests.append({"id": row["id"], "created": row["created"], "count": row["count"],
-                                    "skipped": row["skipped"], "channels": _json(row["channels_json"], []),
+                                        "ORDER BY a.created_at DESC LIMIT 1", (row["message_id"],)).fetchone()
+                    digests.append({"id": row["id"], "created_at": row["created_at"], "count": row["count"],
+                                    "skipped": row["skipped"], "channels": _json(row["channels"], []),
                                     "event_ids": event_ids, "attempt": dict(attempt) if attempt else None})
                 posts = [{"channel": row["channel"], "thread_ts": row["thread_ts"],
-                          "text": row["text"], "state": row["state"], "created": row["created"],
+                          "text": row["text"], "state": row["state"], "created_at": row["created_at"],
                           "error": row["error"], "url": _slack_link(team_url, row["channel"], row["slack_ts"] or row["thread_ts"])}
                          for row in c.execute(f"SELECT * FROM slack_posts WHERE bot=? AND channel IN ({marks}) "
-                                              "ORDER BY created DESC LIMIT 20", (bot, *slack_ids))]
+                                              "ORDER BY created_at DESC LIMIT 20", (bot, *slack_ids))]
             return {"bot": found, "source": source, "instructions": instructions,
                     "automations": jobs, "slack_digests": digests, "slack_posts": posts,
                     "mail": mail, "slack": slack}
@@ -249,7 +249,7 @@ def install_messaging(app, store, auth):
                                (digest_id, bot)).fetchone()
             if not digest:
                 raise Problem("not_found", "Slack pass not found", 404)
-            ids = _json(digest["event_ids_json"], [])[:500]
+            ids = _json(digest["event_ids"], [])[:500]
             messages = []
             if ids:
                 marks = ",".join("?" * len(ids))
@@ -257,5 +257,5 @@ def install_messaging(app, store, auth):
                 messages = [_slack_message(row, team_url) for row in c.execute(
                     f"SELECT * FROM slack_events WHERE event_id IN ({marks}) ORDER BY ts", tuple(ids))
                             if row["channel"] in covered]
-            return {"id": digest_id, "created": digest["created"], "count": digest["count"],
+            return {"id": digest_id, "created_at": digest["created_at"], "count": digest["count"],
                     "skipped": digest["skipped"], "messages": messages}

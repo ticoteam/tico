@@ -22,7 +22,7 @@ TOOL_START = {"started", "start", "running", "pending", "in_progress", "tool_exe
 TOOL_QUIET = {"", "completed", "done", "success", "succeeded", "tool_execution_end"}
 # Text deltas are the reply being typed and tokens/status are bookkeeping: none is a step.
 STEP_EVENTS = ("(kind IN ('tool','message','error') OR "
-               "(kind='delta' AND json_extract(payload_json,'$.delta_kind')='thought'))")
+               "(kind='delta' AND json_extract(payload,'$.delta_kind')='thought'))")
 
 
 # A tool event that reports a call's end (or its failure) is the same call the start already listed.
@@ -218,16 +218,16 @@ def mark_delivery(c, messages):
     for i in range(0, len(ids), 500):
         chunk = ids[i:i + 500]
         for row in c.execute(
-                "SELECT j.message_id,j.bot,j.redirect,json_extract(m.refs_json,'$.delivery') AS way,(SELECT a.id FROM attempts a JOIN jobs aj ON aj.id=a.job_id"
+                "SELECT j.message_id,j.bot,j.redirect,json_extract(m.refs,'$.delivery') AS way,(SELECT a.id FROM attempts a JOIN jobs aj ON aj.id=a.job_id"
                 " JOIN messages am ON am.id=aj.message_id WHERE a.bot=j.bot AND a.state IN ('leased','running')"
                 " AND (am.conversation_id=m.conversation_id OR EXISTS(SELECT 1 FROM attempt_conversations ac"
-                " WHERE ac.attempt_id=a.id AND ac.conversation_id=m.conversation_id)) ORDER BY a.created LIMIT 1) AS live"
+                " WHERE ac.attempt_id=a.id AND ac.conversation_id=m.conversation_id)) ORDER BY a.created_at LIMIT 1) AS live"
                 " FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'"
                 " AND j.message_id IN (%s)" % ",".join("?" * len(chunk)), tuple(chunk)):
             if not row["live"]:
                 continue
             if row["bot"] not in configs:
-                config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
+                config = c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
                 configs[row["bot"]] = json.loads(config[0]) if config else {}
             config = configs[row["bot"]]
             mode = ("redirect" if row["redirect"] else "steer" if row["way"] != "queue"
@@ -251,21 +251,21 @@ def mark_prompts(c, messages):
     if not loose:
         return
     bots = sorted({m["from_actor"][4:] for m in loose})
-    lo, hi = min(m["created"] for m in loose), max(m["created"] for m in loose)
+    lo, hi = min(m["created_at"] for m in loose), max(m["created_at"] for m in loose)
     runs = c.execute(
-        f"SELECT a.bot,a.state,coalesce(a.started,a.created) AS began,a.finished,t.from_actor,"
+        f"SELECT a.bot,a.state,coalesce(a.started_at,a.created_at) AS began,a.finished_at,t.from_actor,"
         " EXISTS(SELECT 1 FROM attempt_inputs i JOIN messages im ON im.id=i.message_id"
         "  WHERE i.attempt_id=a.id AND im.from_actor LIKE 'human:%') AS person"
         " FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages t ON t.id=j.message_id"
-        f" WHERE a.bot IN ({','.join('?' * len(bots))}) AND coalesce(a.started,a.created)<=?"
-        " AND ((a.finished IS NULL AND a.state IN ('leased','running')) OR a.finished>=?)",
+        f" WHERE a.bot IN ({','.join('?' * len(bots))}) AND coalesce(a.started_at,a.created_at)<=?"
+        " AND ((a.finished_at IS NULL AND a.state IN ('leased','running')) OR a.finished_at>=?)",
         (*bots, hi, lo)).fetchall()
-    # A run that failed before it started has no `finished`; only a live one is open-ended.
+    # A run that failed before it started has no `finished_at`; only a live one is open-ended.
     runs = sorted(runs, key=lambda r: r["began"], reverse=True)
     for m in loose:
-        run = next((r for r in runs if "bot:" + r["bot"] == m["from_actor"] and r["began"] <= m["created"]
-                    and (r["finished"] is None and r["state"] in ("leased", "running")
-                         or r["finished"] is not None and m["created"] <= r["finished"])), None)
+        run = next((r for r in runs if "bot:" + r["bot"] == m["from_actor"] and r["began"] <= m["created_at"]
+                    and (r["finished_at"] is None and r["state"] in ("leased", "running")
+                         or r["finished_at"] is not None and m["created_at"] <= r["finished_at"])), None)
         if not run:
             continue
         sender = str(run["from_actor"] or "")
@@ -297,7 +297,7 @@ def annotate(c, auth, who, messages):
         return messages
     marks = ",".join("?" * len(replies))
     turns = {r["id"]: dict(r) for r in c.execute(
-        f"SELECT id,bot,created,started,finished FROM attempts WHERE id IN ({marks})", tuple(replies))}
+        f"SELECT id,bot,created_at,started_at,finished_at FROM attempts WHERE id IN ({marks})", tuple(replies))}
     # What a bot did to answer is its run log: Read. Someone who may only write to it gets the answer.
     access = auth.bot_accesses(c, who, sorted({t["bot"] for t in turns.values()}))
     turns = {aid: t for aid, t in turns.items() if access.get(t["bot"], auth.FULL)["read"]
@@ -306,7 +306,7 @@ def annotate(c, auth, who, messages):
     if not turns:
         return messages
     for t in turns.values():
-        t["from"], t["to"] = t["started"] or t["created"], t["finished"] or H.now()
+        t["from"], t["to"] = t["started_at"] or t["created_at"], t["finished_at"] or H.now()
     actors = sorted({"bot:" + t["bot"] for t in turns.values()})
     lo, hi = min(t["from"] for t in turns.values()), max(t["to"] for t in turns.values())
     who_marks = ",".join("?" * len(actors))
@@ -315,43 +315,43 @@ def annotate(c, auth, who, messages):
         return next((aid for aid, t in turns.items() if "bot:" + t["bot"] == actor and t["from"] <= at <= t["to"]), None)
 
     did = {aid: [] for aid in turns}
-    for row in c.execute(f"SELECT * FROM tasks WHERE requester IN ({who_marks}) AND created BETWEEN ? AND ?",
+    for row in c.execute(f"SELECT * FROM tasks WHERE requester IN ({who_marks}) AND created_at BETWEEN ? AND ?",
                          (*actors, lo, hi)):
-        aid = owner_of(row["requester"], row["created"])
+        aid = owner_of(row["requester"], row["created_at"])
         if aid and readable(lambda: auth.task_row(c, who, dict(row))):
             did[aid].append({"kind": "task", "task_id": row["id"], "title": row["title"], "owner": row["owner"],
-                             "at": row["created"]})
+                             "at": row["created_at"]})
     for row in c.execute(f"SELECT l.*,t.owner,t.requester,t.id AS tid FROM task_links l JOIN tasks t ON t.id=l.task_id "
-                         f"WHERE l.added_by IN ({who_marks}) AND l.created BETWEEN ? AND ?", (*actors, lo, hi)):
-        aid = owner_of(row["added_by"], row["created"])
+                         f"WHERE l.added_by IN ({who_marks}) AND l.created_at BETWEEN ? AND ?", (*actors, lo, hi)):
+        aid = owner_of(row["added_by"], row["created_at"])
         if aid and readable(lambda: auth.task(c, who, row["tid"])):
-            did[aid].append({"kind": "link", "url": row["url"], "title": row["title"] or "", "at": row["created"]})
+            did[aid].append({"kind": "link", "url": row["url"], "title": row["title"] or "", "at": row["created_at"]})
     rooms_of = {aid: replies[aid]["conversation_id"] for aid in turns}
-    for row in c.execute(f"SELECT id,conversation_id,from_actor,to_actor,kind,body,created FROM messages "
-                         f"WHERE from_actor IN ({who_marks}) AND kind IN ('ask','say') AND created BETWEEN ? AND ? "
+    for row in c.execute(f"SELECT id,conversation_id,from_actor,to_actor,kind,body,created_at FROM messages "
+                         f"WHERE from_actor IN ({who_marks}) AND kind IN ('ask','say') AND created_at BETWEEN ? AND ? "
                          "AND deleted_at IS NULL", (*actors, lo, hi)):
-        aid = owner_of(row["from_actor"], row["created"])
+        aid = owner_of(row["from_actor"], row["created_at"])
         if not aid or row["conversation_id"] == rooms_of[aid] or row["to_actor"] == row["from_actor"]:
             continue
         if readable(lambda: auth.conversation(c, who, row["conversation_id"])) and privacy.message_readable(c, privacy.actor(who), row):
-            did[aid].append({"kind": row["kind"], "to": row["to_actor"], "text": clip(row["body"], 160), "at": row["created"]})
-    for row in c.execute(f"SELECT ts,actor,rule,detail_json FROM refusals WHERE actor IN ({who_marks}) AND ts BETWEEN ? AND ?",
+            did[aid].append({"kind": row["kind"], "to": row["to_actor"], "text": clip(row["body"], 160), "at": row["created_at"]})
+    for row in c.execute(f"SELECT ts,actor,rule,detail FROM refusals WHERE actor IN ({who_marks}) AND ts BETWEEN ? AND ?",
                          (*actors, lo, hi)):
         aid = owner_of(row["actor"], row["ts"])
         if aid:
-            detail = (json.loads(row["detail_json"] or "{}") or {}).get("detail") or ""
+            detail = (json.loads(row["detail"] or "{}") or {}).get("detail") or ""
             did[aid].append({"kind": "refused", "rule": row["rule"], "text": clip(detail, 200), "at": row["ts"]})
     events = {aid: [] for aid in turns}
-    for row in c.execute(f"SELECT attempt_id,kind,payload_json,created FROM attempt_events WHERE attempt_id IN "
+    for row in c.execute(f"SELECT attempt_id,kind,payload,created_at FROM attempt_events WHERE attempt_id IN "
                          f"({','.join('?' * len(turns))}) AND {STEP_EVENTS} ORDER BY attempt_id,seq", tuple(turns)):
         if not privacy.content_readable(c, privacy.actor(who), dict(row)):
             continue
-        events[row["attempt_id"]].append((row["kind"], json.loads(row["payload_json"]), row["created"]))
+        events[row["attempt_id"]].append((row["kind"], json.loads(row["payload"]), row["created_at"]))
     for aid, t in turns.items():
         steps = build_steps(events[aid])
         replies[aid].setdefault("run", {}).update(
             did=sorted(did[aid], key=lambda d: d["at"]), steps=len(steps),
-            tool_calls=sum(s["kind"] == "tool" for s in steps), took_s=seconds(t["started"], t["finished"]))
+            tool_calls=sum(s["kind"] == "tool" for s in steps), took_s=seconds(t["started_at"], t["finished_at"]))
     return messages
 
 
@@ -370,8 +370,8 @@ def install(app, store, auth):
             auth.run_conversation(c, who, row["bot"], message)
             privacy.require_attempt(c, who, aid)
             auth.require_read(c, who, row["bot"])
-            events = [(r["kind"], json.loads(r["payload_json"]), r["created"]) for r in c.execute(
-                f"SELECT kind,payload_json,created FROM attempt_events WHERE attempt_id=? AND {STEP_EVENTS} ORDER BY seq",
+            events = [(r["kind"], json.loads(r["payload"]), r["created_at"]) for r in c.execute(
+                f"SELECT kind,payload,created_at FROM attempt_events WHERE attempt_id=? AND {STEP_EVENTS} ORDER BY seq",
                 (aid,)) if privacy.content_readable(c, privacy.actor(who), dict(r))]
             # A live run of a bot org rules apply to keeps what it says out until its reply is checked and delivered
             # (backend/org_rule_check.py): its tool steps only, as the room's live view shows it.
@@ -379,6 +379,6 @@ def install(app, store, auth):
             if hides_run(c, row):
                 events = [e for e in events if e[0] == "tool"]
             steps = build_steps(events)
-            return {"turn_id": aid, "started": row["started"], "finished": row["finished"],
-                    "took_s": seconds(row["started"], row["finished"]),
+            return {"turn_id": aid, "started_at": row["started_at"], "finished_at": row["finished_at"],
+                    "took_s": seconds(row["started_at"], row["finished_at"]),
                     "tool_calls": sum(s["kind"] == "tool" for s in steps), "steps": steps}

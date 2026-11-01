@@ -1798,11 +1798,11 @@ def action_for(c: sqlite3.Connection, viewer: str, action_id: str, at: str | Non
         return None
     ctx = load(c, at)
     try:
-        payload = cast(Mapping[str, object], json.loads(str(row["payload_json"] or "{}")))
+        payload = cast(Mapping[str, object], json.loads(str(row["payload"] or "{}")))
     except ValueError:
         payload = dict[str, object]()
     try:
-        result = cast(Mapping[str, Any], json.loads(str(row["result_json"] or "{}")))
+        result = cast(Mapping[str, Any], json.loads(str(row["result"] or "{}")))
     except ValueError:
         result = dict[str, Any]()
     covers = True if ctx.view(viewer).everything else _covers(ctx, viewer, payload)

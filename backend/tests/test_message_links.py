@@ -21,7 +21,7 @@ def store(tmp_path):
     with s.transaction() as c:
         c.execute("INSERT OR IGNORE INTO humans(id,name) VALUES('ana','Ana'),('ben','Ben')")
         c.execute("INSERT OR IGNORE INTO bots(slug,state) VALUES('ops','active')")
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES('r1','r','ana','h','t')")
+        c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at) VALUES('r1','r','ana','h','t')")
     return s
 
 
@@ -36,7 +36,7 @@ class World:
             for i in range(5):
                 tid = f"task-{seed}-{i}"
                 requester, owner = self.rng.choice(READERS), self.rng.choice(READERS + ("bot:ops",))
-                c.execute("INSERT INTO tasks(id,title,requester,owner,status,private,created,updated) "
+                c.execute("INSERT INTO tasks(id,title,requester,owner,status,private,created_at,updated_at) "
                           "VALUES(?,?,?,?,'doing',?,'t','t')", (tid, tid, requester, owner, self.rng.random() < 0.5))
                 self.tasks.append(tid)
             self.rooms = [self.room(c) for _ in range(3)]
@@ -52,13 +52,13 @@ class World:
 
     def room(self, c, task_id=None):
         cid = self.id("conv")
-        c.execute("INSERT INTO conversations(id,kind,task_id,participants_json,created,scope) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO conversations(id,kind,task_id,participants,created_at,scope) VALUES(?,?,?,?,?,?)",
                   (cid, "chat", task_id, json.dumps(["human:ana", "human:ben", "bot:ops"]), "t", "shared"))
         return cid
 
     def say(self, c, refs=None, reply=None, cid=None):
         mid = self.id("msg")
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,in_reply_to,created) "
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,in_reply_to,created_at) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", (mid, cid or self.rng.choice(self.rooms), "human:ana", "human:ben",
                                                 self.rng.choice(("chat", "say", "ask", "answer")),
                                                 "body " + mid, json.dumps(refs or {}), reply, f"2026-01-01T{self.n:08d}"))
@@ -67,8 +67,8 @@ class World:
 
     def run(self, c, message):
         jid, aid = self.id("job"), self.id("attempt")
-        c.execute("INSERT INTO jobs(id,message_id,bot,state,created) VALUES(?,?,'ops','done','t')", (jid, message))
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+        c.execute("INSERT INTO jobs(id,message_id,bot,state,created_at) VALUES(?,?,'ops','done','t')", (jid, message))
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES(?,?,'ops','r1',1,?,'done','t','t')", (aid, jid, aid))
         self.attempts.append(aid)
         return aid
@@ -114,14 +114,14 @@ class World:
         what = self.rng.choice(("edit", "unlink", "delete", "comment-delete", "reparent", "move", "relink-room",
                                 "late-carry", "late-move", "purge"))
         if what == "edit":
-            c.execute("UPDATE messages SET refs_json=?, edited_at='t' WHERE id=?",
+            c.execute("UPDATE messages SET refs=?, edited_at='t' WHERE id=?",
                       (json.dumps(self.reference(self.rng.choice(self.tasks))), mid))
         elif what == "unlink":
-            c.execute("UPDATE messages SET refs_json='{}' WHERE id=?", (mid,))
+            c.execute("UPDATE messages SET refs='{}' WHERE id=?", (mid,))
         elif what == "delete":
             c.execute("UPDATE messages SET deleted_at='t' WHERE id=?", (mid,))
         elif what == "comment-delete":
-            c.execute("UPDATE messages SET body='',refs_json=?,deleted_at='t' WHERE id=?",
+            c.execute("UPDATE messages SET body='',refs=?,deleted_at='t' WHERE id=?",
                       (json.dumps({"task": self.rng.choice(self.tasks), "comment": True}), mid))
         elif what == "reparent":
             c.execute("UPDATE messages SET in_reply_to=? WHERE id=?", (self.rng.choice(self.messages), mid))
@@ -149,7 +149,7 @@ def pages(s, cid, tid, reader, limit):
     with s.read_transaction() as c:
         while True:
             page = task_privacy.page(c, who, cid, task_id=tid, before=before, limit=limit)
-            out.append([(m["id"], m["refs_json"]) for m in page["messages"]] + [page["has_more"]])
+            out.append([(m["id"], m["refs"]) for m in page["messages"]] + [page["has_more"]])
             if not page["has_more"]:
                 return out
             before = page["next_before"]
@@ -252,7 +252,7 @@ def test_an_edit_and_a_delete_move_a_message_on_and_off_a_task_page(tmp_path, mo
     ids = lambda tid: [m for m, _ in pages(s, cid, tid, "human:ana", 200)[0][:-1]]
     assert ids(first) == [mid, reply] and ids(second) == []
     with s.transaction() as c:
-        c.execute("UPDATE messages SET refs_json=? WHERE id=?", (json.dumps({"task": second}), mid))
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps({"task": second}), mid))
     assert ids(first) == [] and ids(second) == [mid, reply]
     with s.transaction() as c:
         c.execute("UPDATE messages SET body='',deleted_at='t' WHERE id=?", (mid,))
@@ -267,7 +267,7 @@ def test_an_edit_and_a_delete_move_a_message_on_and_off_a_task_page(tmp_path, mo
         # search reads no event rows.
         plan = " ".join(r[3] for r in c.execute(
             "EXPLAIN QUERY PLAN SELECT target FROM events WHERE action IN (" + task_privacy.RUN_TASK_EVENTS_SQL
-            + ") AND instr(detail_json, ?)>0", (first,)))
+            + ") AND instr(detail, ?)>0", (first,)))
         assert "COVERING INDEX events_run_detail" in plan, plan
         # The task's own room, and an id the links never keep, are read whole.
         assert message_links.candidates(c, world.tasks[0], world.task_room) is None
@@ -286,7 +286,7 @@ def test_a_write_outside_store_transaction_is_read_from_its_row_until_the_next_t
         reply = world.say(c, reply=mid, cid=cid)
     ids = lambda tid: [m for m, _ in pages(s, cid, tid, "human:ana", 200)[0][:-1]]
     with s.read_transaction() as c:
-        c.execute("UPDATE messages SET refs_json=? WHERE id=?", (json.dumps({"task": second}), mid))
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps({"task": second}), mid))
         orphan = world.say(c, reply=mid, cid=cid)
     with s.read() as c:
         assert {r[0] for r in c.execute("SELECT message_id FROM message_links_dirty")} == {mid, orphan}
@@ -324,7 +324,7 @@ def test_backfill_is_batched_idempotent_and_catches_rows_an_older_server_wrote(t
     raw.execute("DELETE FROM messages WHERE id IN (%s)" % ",".join("?" * len(tail)), tail)
     tid, old = world.tasks[1], "msg-older"
     raw.execute("UPDATE tasks SET private=0 WHERE id=?", (tid,))
-    raw.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+    raw.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at) "
                 "VALUES(?,?,'human:ana','human:ben','chat','b',?,'z')", (old, world.rooms[0], json.dumps({"task": tid})))
     assert raw.execute("SELECT rowid FROM messages WHERE id=?", (old,)).fetchone()[0] < top
     raw.close()

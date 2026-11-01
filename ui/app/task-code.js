@@ -35,7 +35,7 @@ function taskQaWaiverHTML(w) {
 
 // ---- Code: one line per worktree and per pull request
 const taskLinkDetail = l => {
-  let d = l.detail || l.detail_json || {};
+  let d = l.detail || l.detail || {};
   if (typeof d === 'string') { try { d = JSON.parse(d); } catch { d = {}; } }
   return d && typeof d === 'object' ? d : {};
 };

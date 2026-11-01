@@ -195,12 +195,12 @@ def _loads(value, default):
 
 
 def definition(conn):
-    row = conn.execute("SELECT value_json FROM registry_metadata WHERE key=?", (DEFINITION_KEY,)).fetchone()
+    row = conn.execute("SELECT value FROM registry_metadata WHERE key=?", (DEFINITION_KEY,)).fetchone()
     return (_loads(row[0], {}) or None) if row else None
 
 
 def _save_definition(conn, value):
-    conn.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    conn.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                  (DEFINITION_KEY, MK.dumps(value)))
 
 
@@ -453,12 +453,12 @@ def create_size(conn, actor, f):
            "growth_pct": growth, "method": method, "arithmetic": str(f.get("arithmetic") or ""), "formula": formula,
            "params": MK.dumps(params), "evidence_ids": json.dumps(ids), "confidence": f.get("confidence") or "medium",
            "overlaps": str(f.get("overlaps") or ""), "spread": str(f.get("spread") or ""), "status": "proposed",
-           "created_by": actor, "created": now, "updated": now}
+           "created_by": actor, "created_at": now, "updated_at": now}
     conn.execute("INSERT INTO market_sizes (id, segment_id, dimension, basis, year, spend_usd, low_usd, high_usd, "
                  "growth_pct, method, arithmetic, formula, params, evidence_ids, confidence, overlaps, spread, status, "
-                 "created_by, created, updated) VALUES (:id,:segment_id,:dimension,:basis,:year,:spend_usd,:low_usd,"
+                 "created_by, created_at, updated_at) VALUES (:id,:segment_id,:dimension,:basis,:year,:spend_usd,:low_usd,"
                  ":high_usd,:growth_pct,:method,:arithmetic,:formula,:params,:evidence_ids,:confidence,:overlaps,"
-                 ":spread,:status,:created_by,:created,:updated)", row)
+                 ":spread,:status,:created_by,:created_at,:updated_at)", row)
     _log(conn, actor, seg["id"], "size.proposed", None, f"{_usd(spend)} ({method}, {row['dimension']}/{row['basis']} {row['year']})",
          trip=False)
     if f.get("accept"):
@@ -484,8 +484,8 @@ def accept_size(conn, actor, size_id):
     before = None
     for other in _same_key(conn, row):
         before = effective(_size_row(other), shared)["spend_usd"]
-        conn.execute("UPDATE market_sizes SET status='proposed', updated=? WHERE id=?", (H.now(), other["id"]))
-    conn.execute("UPDATE market_sizes SET status='accepted', updated=? WHERE id=?", (H.now(), size_id))
+        conn.execute("UPDATE market_sizes SET status='proposed', updated_at=? WHERE id=?", (H.now(), other["id"]))
+    conn.execute("UPDATE market_sizes SET status='accepted', updated_at=? WHERE id=?", (H.now(), size_id))
     now_row = effective(size(conn, size_id), shared)
     _log(conn, actor, row["segment_id"], "size", None if before is None else _usd(before), _usd(now_row["spend_usd"]),
          f"{row['method']} accepted ({row['dimension']}/{row['basis']} {row['year']})")
@@ -500,7 +500,7 @@ def reject_size(conn, actor, size_id):
     if row["status"] == "rejected":
         return effective(row, shared)
     was = row["status"] == "accepted"
-    conn.execute("UPDATE market_sizes SET status='rejected', updated=? WHERE id=?", (H.now(), size_id))
+    conn.execute("UPDATE market_sizes SET status='rejected', updated_at=? WHERE id=?", (H.now(), size_id))
     shown = effective(size(conn, size_id), shared)
     _log(conn, actor, row["segment_id"], "size" if was else "size.rejected", _usd(shown["spend_usd"]) if was else None,
          None if was else _usd(shown["spend_usd"]), f"{row['method']} rejected ({row['dimension']}/{row['basis']} {row['year']})",
@@ -632,7 +632,7 @@ def _tree(conn, root):
 def _best(rows):
     rank = {"high": 0, "medium": 1, "low": 2}
     return sorted(rows, key=lambda r: (r["spend_usd"] is None, rank.get(r["confidence"], 3), r["method"] == "owner",
-                                       r["updated"]), reverse=False)[0]
+                                       r["updated_at"]), reverse=False)[0]
 
 
 def _disagree(rows):
@@ -675,12 +675,12 @@ def spend(conn, dimension="offering", basis="product", year=None):
     marks = json.dumps(ids)
     sizes = {}
     for row in conn.execute("SELECT * FROM market_sizes WHERE dimension=? AND year=? AND status<>'rejected' "
-                            "AND segment_id IN (SELECT value FROM json_each(?)) ORDER BY created, id", (dimension, year, marks)):
+                            "AND segment_id IN (SELECT value FROM json_each(?)) ORDER BY created_at, id", (dimension, year, marks)):
         sizes.setdefault(row["segment_id"], []).append(effective(_size_row(row), shared))
     _attach_evidence(conn, [r for rows in sizes.values() for r in rows])
     figures = {}
     for row in conn.execute("SELECT f.*, e.source_url FROM market_figures f LEFT JOIN market_evidence e ON e.id=f.evidence_id "
-                            "WHERE f.segment_id IN (SELECT value FROM json_each(?)) ORDER BY f.as_of DESC, f.created DESC, f.id", (marks,)):
+                            "WHERE f.segment_id IN (SELECT value FROM json_each(?)) ORDER BY f.as_of DESC, f.created_at DESC, f.id", (marks,)):
         figures.setdefault((row["segment_id"], row["entity_id"]), []).append(
             {"metric": row["metric"], "value": row["value"], "text": row["text"], "kind": row["kind"],
              "as_of": row["as_of"], "source_url": row["source_url"] or ""})
@@ -772,10 +772,10 @@ def create_figure(conn, actor, f):
         raise Problem("range", "A figure is not negative", 422)
     ids = _evidence(conn, actor, [f["evidence_id"]] if f.get("evidence_id") else [], f.get("evidence"), need=True)
     row = {"id": H.new_id(), "entity_id": ent["id"], "segment_id": seg["id"], "metric": f["metric"], "value": value,
-           "text": text, "kind": f["kind"], "as_of": as_of, "evidence_id": ids[0], "created_by": actor, "created": H.now()}
+           "text": text, "kind": f["kind"], "as_of": as_of, "evidence_id": ids[0], "created_by": actor, "created_at": H.now()}
     conn.execute("INSERT INTO market_figures (id, entity_id, segment_id, metric, value, text, kind, as_of, evidence_id, "
-                 "created_by, created) VALUES (:id,:entity_id,:segment_id,:metric,:value,:text,:kind,:as_of,:evidence_id,"
-                 ":created_by,:created)", row)
+                 "created_by, created_at) VALUES (:id,:entity_id,:segment_id,:metric,:value,:text,:kind,:as_of,:evidence_id,"
+                 ":created_by,:created_at)", row)
     shown = f"{f['metric']} {value:g}" if value is not None else f"{f['metric']}: {text}"
     MK._event(conn, "entity", ent["id"], actor, "figure", None, f"{shown} ({f['kind']}, {as_of}) in {seg['id']}")
     return row
@@ -812,13 +812,13 @@ def _source(item, origin, by=None, created=None):
         raise Problem("validation", "A source url starts with https://", 422)
     return {"id": ident, "name": name[:200], "kind": kind[:80], "covers": list(dict.fromkeys(covers)), "access": item["access"],
             "reliability": item["reliability"], "how": str(item.get("how") or "")[:1000], "url": url or None,
-            "origin": origin, **({"created_by": by, "created": created} if origin == "team" else {})}
+            "origin": origin, **({"created_by": by, "created_at": created} if origin == "team" else {})}
 
 
 def sources(conn):
     """The shipped catalog with the team's additions; a team row with a shipped id replaces it."""
     merged = {s["id"]: s for s in shipped_sources()}
-    for row in H._rows(conn.execute("SELECT * FROM market_sources ORDER BY created, id")):
+    for row in H._rows(conn.execute("SELECT * FROM market_sources ORDER BY created_at, id")):
         row["covers"] = _loads(row["covers"], [])
         merged[row["id"]] = {**row, "origin": "team"}
     return list(merged.values())
@@ -826,11 +826,11 @@ def sources(conn):
 
 def add_source(conn, actor, item):
     row = _source(item, "team", actor, H.now())
-    conn.execute("INSERT INTO market_sources (id, name, kind, covers, access, reliability, how, url, created_by, created) "
+    conn.execute("INSERT INTO market_sources (id, name, kind, covers, access, reliability, how, url, created_by, created_at) "
                  "VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, kind=excluded.kind, "
                  "covers=excluded.covers, access=excluded.access, reliability=excluded.reliability, how=excluded.how, "
                  "url=excluded.url", (row["id"], row["name"], row["kind"], json.dumps(row["covers"]), row["access"],
-                                      row["reliability"], row["how"], row["url"], actor, row["created"]))
+                                      row["reliability"], row["how"], row["url"], actor, row["created_at"]))
     H.event(conn, actor, "market.source", row["id"], {"name": row["name"]})
     return row
 
@@ -898,7 +898,7 @@ def value_chain(conn):
 def _open_task(conn):
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     row = conn.execute(f"SELECT id FROM tasks WHERE owner=? AND (title=? OR title LIKE ?) AND status IN ({marks}) "
-                       "ORDER BY created DESC LIMIT 1", ("bot:librarian", SIZE_TASK, SIZE_TASK + " (%)", *H.ACTIVE_STATUSES)).fetchone()
+                       "ORDER BY created_at DESC LIMIT 1", ("bot:librarian", SIZE_TASK, SIZE_TASK + " (%)", *H.ACTIVE_STATUSES)).fetchone()
     return row["id"] if row else None
 
 

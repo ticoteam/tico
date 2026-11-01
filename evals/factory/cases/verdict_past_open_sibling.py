@@ -64,13 +64,13 @@ def _watch_results(run, w):
     from backend import execution as E
     with w.store.read() as c:
         runner = c.execute("SELECT * FROM runners WHERE id=?", (w.runner["runner_id"],)).fetchone()
-        ready = E.readiness_document(runner["readiness_json"])
-        rows = c.execute("SELECT j.*, m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "WHERE j.state='queued' AND json_extract(m.refs_json,'$.subtask') IS NOT NULL "
-                         "AND json_extract(m.refs_json,'$.verdict') IS NOT NULL").fetchall()
+        ready = E.readiness_document(runner["readiness"])
+        rows = c.execute("SELECT j.*, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
+                         "WHERE j.state='queued' AND json_extract(m.refs,'$.subtask') IS NOT NULL "
+                         "AND json_extract(m.refs,'$.verdict') IS NOT NULL").fetchall()
         for job in map(dict, rows):
-            ticket = w.parent_of(json.loads(job.pop("refs_json"))["subtask"])
-            if ticket not in run.asked or w.H.parse_ts(job["created"]) >= w.now() - w.tick:
+            ticket = w.parent_of(json.loads(job.pop("refs"))["subtask"])
+            if ticket not in run.asked or w.H.parse_ts(job["created_at"]) >= w.now() - w.tick:
                 continue
             why = E.job_refusal(c, job, {}, ready, set(), E.lanes_on(runner), E.roots_on(runner))
             if why:
@@ -150,7 +150,7 @@ def verdicts_reach_builder(run):
                 continue
             notices = run.w.sql("SELECT j.state, j.attempt_id, EXISTS (SELECT 1 FROM attempt_inputs a WHERE "
                                 "a.message_id=m.id) folded FROM messages m LEFT JOIN jobs j ON j.message_id=m.id "
-                                "WHERE m.to_actor=? AND json_extract(m.refs_json,'$.subtask')=?", (owner, c["id"]))
+                                "WHERE m.to_actor=? AND json_extract(m.refs,'$.subtask')=?", (owner, c["id"]))
             if not notices or any(n["state"] and not n["attempt_id"] and not n["folded"] for n in notices):
                 missing.append(f"{run.w.title(ticket)}: {c['title']} "
                                f"({', '.join(str(n['state'] or 'quiet') for n in notices) or 'no notice'})")

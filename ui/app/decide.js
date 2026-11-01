@@ -40,16 +40,16 @@ const decideItemKey = it => ({approval: 'approval:', ask: 'ask:', stale: 'stale:
 function decideCards(items) {
   const me = myActor(), asks = [], approvals = [], waiting = [], mine = [], unexplained = [];
   for (const it of items || []) {
-    if (it.kind === 'approval') { approvals.push({key: 'approval:' + it.id, type: 'approve', it, at: it.created}); continue; }
-    if (it.kind === 'ask') { asks.push({key: 'ask:' + it.id, type: 'ask', it, at: it.created}); continue; }
-    if (it.kind === 'memory_tidy') { approvals.push({key: 'memory_tidy:' + it.id, type: 'memory_tidy', it, at: it.created}); continue; }
-    if (it.kind === 'stale') { approvals.push({key: 'stale:' + it.id, type: 'stale', it, at: it.created}); continue; }
+    if (it.kind === 'approval') { approvals.push({key: 'approval:' + it.id, type: 'approve', it, at: it.created_at}); continue; }
+    if (it.kind === 'ask') { asks.push({key: 'ask:' + it.id, type: 'ask', it, at: it.created_at}); continue; }
+    if (it.kind === 'memory_tidy') { approvals.push({key: 'memory_tidy:' + it.id, type: 'memory_tidy', it, at: it.created_at}); continue; }
+    if (it.kind === 'stale') { approvals.push({key: 'stale:' + it.id, type: 'stale', it, at: it.created_at}); continue; }
     if (!['task', 'question', 'waiting'].includes(it.kind)) continue;
     const q = it.kind === 'question' ? decideQuestion(it) : null;
-    if (q) asks.push({key: 'task:' + it.id, type: 'pick', it, q, at: it.ask.created || it.created});
+    if (q) asks.push({key: 'task:' + it.id, type: 'pick', it, q, at: it.ask.created_at || it.created_at});
     // A card still waiting for its bot to say what it needs goes last, as the server orders it.
     else (it.ask_missing ? unexplained : it.owner === me && it.kind === 'task' && it.waiting_on !== me ? mine : waiting)
-      .push({key: 'task:' + it.id, type: 'task', it, at: (it.ask?.to_actor === me && it.ask.created) || it.created, yn: !it.ask_missing && decideYesNoAsk(decideAskText(it))});
+      .push({key: 'task:' + it.id, type: 'task', it, at: (it.ask?.to_actor === me && it.ask.created_at) || it.created_at, yn: !it.ask_missing && decideYesNoAsk(decideAskText(it))});
   }
   const old = (a, b) => String(a.at || '').localeCompare(String(b.at || ''));
   // The server's tier (backend/views.py decide_tier): what holds up something due, or going ahead on its own, within
@@ -311,7 +311,7 @@ function decideRender(st, enter = false) {
   const face = chat ? `<a class="dc-who-face" href="${esc(chat)}" tabindex="-1" aria-hidden="true">${actorFace(from, 32)}</a>`
     : from === 'keeper' ? personCircle('Tico', 32) : actorFace(from, 32);
   const sub = c.type === 'pick' ? qcardSub(c.it) : c.type === 'approve' ? plainActors(approvalTitle(c.it) || c.it.title || '')
-    : c.type === 'memory_tidy' ? `Expires ${fmt(c.it.expires)}` : c.type === 'ask' || c.type === 'stale' ? ageShort(c.it.created) : decideMeta(c.it);
+    : c.type === 'memory_tidy' ? `Expires ${fmt(c.it.expires_at)}` : c.type === 'ask' || c.type === 'stale' ? ageShort(c.it.created_at) : decideMeta(c.it);
   // The chip names what the card is; a task card outside the questions names what it needs (Pay, Review and send).
   const chip = c.type === 'approve' ? 'Approval' : c.type === 'stale' ? 'Stale check' : c.type === 'memory_tidy' ? 'Nightly memory tidy'
     : c.type === 'task' && c.it.need && c.it.need !== 'decide' ? needLabel(c.it.need) : 'Question';
@@ -441,10 +441,10 @@ function decideStaleHTML(c) {
 }
 function decideMeta(it) {
   const me = myActor();
-  if (it.ask_missing) return `Waiting for ${actorLabel(it.owner) || 'its bot'} to explain · ${ageShort(it.updated || it.created)}`;
-  if (it.waiting_on === me || it.kind === 'waiting') return `Waiting on you · ${ageShort(it.updated || it.created)}`;
-  if (it.kind === 'question') return `Question for you · ${ageShort(it.ask?.created || it.created)}`;
-  return `Assigned to you · ${ageShort(it.created)}`;
+  if (it.ask_missing) return `Waiting for ${actorLabel(it.owner) || 'its bot'} to explain · ${ageShort(it.updated_at || it.created_at)}`;
+  if (it.waiting_on === me || it.kind === 'waiting') return `Waiting on you · ${ageShort(it.updated_at || it.created_at)}`;
+  if (it.kind === 'question') return `Question for you · ${ageShort(it.ask?.created_at || it.created_at)}`;
+  return `Assigned to you · ${ageShort(it.created_at)}`;
 }
 // What a task card leads with: the plain ask, in the words written to the person. In order, an open question to them;
 // the ask the bot wrote in its waiting note or its task's first paragraph (`person_ask`, checked by the server); on a

@@ -74,7 +74,7 @@ def remittance_lines(c: sqlite3.Connection, book_id: str, account_ids: Sequence[
     if not account_ids:
         return []
     return c.execute(
-        "SELECT b.id AS bill_id, bl.account_id, bl.tags_json, bl.amount, "
+        "SELECT b.id AS bill_id, bl.account_id, bl.tags, bl.amount, "
         "(SELECT COALESCE(SUM(x.amount), 0) FROM fin_bill_lines x WHERE x.bill_id=b.id) AS bill_total, "
         "(SELECT COALESCE(SUM(s.amount), 0) FROM fin_settlements s WHERE s.to_kind='bill' AND s.to_id=b.id "
         "AND s.voided_at IS NULL) AS bill_paid "

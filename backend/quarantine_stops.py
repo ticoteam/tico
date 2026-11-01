@@ -33,10 +33,10 @@ def line(c, bot, at=None):
 def stop(c, row):
     """Record the quarantine's Stop on `row`, a leased or running attempt of a quarantined bot whose runner still holds
     it, and return the attempt read again. A Stop already recorded (a person's, or this one) stands."""
-    if row["stop_requested"]:
+    if row["stop_requested_at"]:
         return row
     said = line(c, row["bot"])
-    c.execute("UPDATE attempts SET stop_requested=? WHERE id=? AND stop_requested IS NULL", (H.KEEPER, row["id"]))
+    c.execute("UPDATE attempts SET stop_requested_at=? WHERE id=? AND stop_requested_at IS NULL", (H.KEEPER, row["id"]))
     H.event(c, H.KEEPER, "attempt.stop", row["id"], {"bot": row["bot"], "quarantine": said})
     return c.execute("SELECT a.*,x.runner_id AS assigned_runner,x.generation AS assigned_generation "
                      "FROM attempts a JOIN assignments x ON x.bot=a.bot WHERE a.id=?", (row["id"],)).fetchone()
@@ -45,17 +45,17 @@ def stop(c, row):
 def restart(c, row, line):
     """Record a keeper Stop on a live attempt whose computer's sign-in for its runtime changed: the run ends, its work
     goes back in the queue (`requeues`) and starts fresh. A Stop already recorded stands. Returns whether it was new."""
-    if row["stop_requested"]:
+    if row["stop_requested_at"]:
         return False
-    c.execute("UPDATE attempts SET stop_requested=? WHERE id=? AND stop_requested IS NULL", (H.KEEPER, row["id"]))
+    c.execute("UPDATE attempts SET stop_requested_at=? WHERE id=? AND stop_requested_at IS NULL", (H.KEEPER, row["id"]))
     H.event(c, H.KEEPER, "attempt.stop", row["id"], {"bot": row["bot"], "restart": line})
     return True
 
 
 def _stop_detail(c, row):
-    if not row["stop_requested"] or row["stop_requested"] != H.KEEPER:
+    if not row["stop_requested_at"] or row["stop_requested_at"] != H.KEEPER:
         return {}
-    found = c.execute("SELECT detail_json FROM events WHERE action='attempt.stop' AND target=? "
+    found = c.execute("SELECT detail FROM events WHERE action='attempt.stop' AND target=? "
                       "ORDER BY ts DESC LIMIT 1", (row["id"],)).fetchone()
     return (json.loads(found[0] or "{}") or {}) if found else {}
 
@@ -81,15 +81,15 @@ def requeues(c, row):
     job = c.execute("SELECT * FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
     if not job:
         return False
-    facts = retry_facts(c, {**dict(job), "attempt_id": row["id"]}, row["started"], H.now())
+    facts = retry_facts(c, {**dict(job), "attempt_id": row["id"]}, row["started_at"], H.now())
     if restarted(c, row):
         # Judged as a computer restart: only a named outside action, a used approval or a fallback's unknown work
         # holds it for review.
         if facts["consumed"] or facts["fallback_unknown"]:
             return False
-        return not row["started"] or not outside_actions(c, {**dict(job), "attempt_id": row["id"]},
-                                                         row["started"], H.now())
-    return facts["safe"] or not row["started"] and not facts["calls"] and not facts["consumed"]
+        return not row["started_at"] or not outside_actions(c, {**dict(job), "attempt_id": row["id"]},
+                                                         row["started_at"], H.now())
+    return facts["safe"] or not row["started_at"] and not facts["calls"] and not facts["consumed"]
 
 
 def then(c, row, held):

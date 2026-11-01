@@ -104,7 +104,7 @@ def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=Fals
         manifest = {"format": "tico-legacy-import-v1", "source": str(source),
                     "source_sha256": source_report["sha256"], "history": counts,
                     "archives": archives, "execution": state}
-        c.execute("INSERT INTO registry_metadata VALUES('legacy-import',?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+        c.execute("INSERT INTO registry_metadata VALUES('legacy-import',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                   (encode(manifest),))
     # Produce one portable file for transfer. The cloud server will return it to WAL mode on
     # first startup, but no accepted migration write may remain only in a local sidecar.
@@ -242,17 +242,17 @@ def main(argv=None):
             fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as stream:
                 json.dump(code, stream)
-        report = {"written": str(args.out), "expires": code["expires"]}
+        report = {"written": str(args.out), "expires": code["expires_at"]}
     elif args.command == "set-repo":
         from .models import repo_reference
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
         repo = repo_reference(args.repo)
         with store.transaction() as c:
-            row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (args.bot,)).fetchone()
+            row = c.execute("SELECT config FROM bot_config WHERE bot=?", (args.bot,)).fetchone()
             if not row:
                 raise SystemExit("Unknown bot: " + args.bot)
-            config = {**json.loads(row["config_json"] or "{}"), "repo": repo}
-            c.execute("UPDATE bot_config SET repo=?,config_json=?,revision=revision+1 WHERE bot=?",
+            config = {**json.loads(row["config"] or "{}"), "repo": repo}
+            c.execute("UPDATE bot_config SET repo=?,config=?,revision=revision+1 WHERE bot=?",
                       (repo, encode(config), args.bot))
             H.event(c, H.KEEPER, "bot.repo_set", args.bot, {"repo": repo})
         report = {"bot": args.bot, "repo": repo,

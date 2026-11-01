@@ -29,7 +29,7 @@ def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):
     assert first and queued == active, "every active bot is queued, and the first one asked"
     with store.transaction() as c:
         assert updates.dispatch(c, MORNING) is None, "one at a time: nothing more while it is out"
-        request = c.execute("SELECT m.body, m.refs_json FROM update_queue q JOIN messages m ON m.id=q.message_id "
+        request = c.execute("SELECT m.body, m.refs FROM update_queue q JOIN messages m ON m.id=q.message_id "
                             "WHERE q.state='sent'").fetchone()
         assert "hub_update_create" in request["body"] and "Finished since your last update" in request["body"]
         assert c.execute("SELECT 1 FROM jobs WHERE bot=?", (first,)).fetchone(), "the request wakes the bot"
@@ -142,7 +142,7 @@ def test_people_post_their_own_update_and_alerts_come_only_from_direct_reports(a
     get(api, "updates?scope=everyone", expected=422)
     # An external agent is outside the company: it sees its own bot's update, no person's.
     with store.transaction() as c:
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by,last_seen) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by,last_seen_at) VALUES(?,?,?,?,?,?)",
                   ("analyst", "hermes", digest("agent-test"), H.now(), "human:ana", H.now()))
     outside = {u["bot"] for u in get(api, "updates", token="agent-test")["updates"]}
     assert "analyst" in outside and not any(updates.is_person(a) for a in outside)
@@ -275,10 +275,10 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         post(api, f"tasks/{task['id']}/comments", {"text": "Comment on " + task["title"]})
         post(api, f"tasks/{task['id']}", {"version": get(api, f"tasks/{task['id']}")["task"]["version"], "status": "done"})
     meeting = lambda mid, notes, review="live", **meta: c.execute(
-        "INSERT INTO meetings(id,title,owner,metadata_json,notes,created,updated,review_state) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO meetings(id,title,owner,metadata,notes,created_at,updated_at,review_state) VALUES(?,?,?,?,?,?,?,?)",
         (mid, mid, "ben@acme.example", json.dumps({"kind": "meeting", **meta}), notes, H.now(), H.now(), review))
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done', updated=? WHERE id=?", (H.now(), done["id"]))
+        c.execute("UPDATE tasks SET status='done', updated_at=? WHERE id=?", (H.now(), done["id"]))
         restrict(c, "finance", people=["ana"])
         H.task_create(c, "bot:finance", "Restricted request", "x", "human:ana")
         attended = {"calendar": {"attendees": ["ANA@acme.example"]}}
@@ -288,7 +288,7 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         meeting("Old sync", "Deleted meeting notes", **attended)
         c.execute("INSERT INTO media_control(meeting_id,deleted_at) VALUES('Old sync',?)", (H.now(),))
         meeting("Ben's one-to-one", "Not her meeting notes", participants=[{"email": "cara@acme.example"}])
-        c.execute("INSERT INTO approvals(id,kind,task_id,payload_json,requested_by,decided_by,decision,decided_at,created) "
+        c.execute("INSERT INTO approvals(id,kind,task_id,payload,requested_by,decided_by,decision,decided_at,created_at) "
                   "VALUES('ap1','send',?,?,'bot:ops','human:ana','approved',?,?)",
                   (budget["id"], json.dumps({"text": "Approval payload to the vendor"}), H.now(), H.now()))
         c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot IN ('finance','ops')")

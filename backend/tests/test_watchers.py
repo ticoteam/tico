@@ -18,7 +18,7 @@ def hosted(api, bot="ops"):
 
 def tasks(api, bot="ops"):
     with api.app.state.store.read() as c:
-        return [dict(t) for t in c.execute("SELECT id,title,body,status,conversation_id FROM tasks WHERE owner=? ORDER BY created",
+        return [dict(t) for t in c.execute("SELECT id,title,body,status,conversation_id FROM tasks WHERE owner=? ORDER BY created_at",
                                            ("bot:" + bot,))]
 
 

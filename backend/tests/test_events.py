@@ -269,17 +269,17 @@ def test_every_source_writes_its_topic(api):
     task = post(api, "tasks", {"owner": "ben", "title": "Coverage", "body": "Please."})
     assert logged(lambda c: c.execute("UPDATE tasks SET title='Covered' WHERE id=?", (task["id"],))) == {
         ("tasks", "update"), ("needs", "task")}
-    assert logged(lambda c: c.execute("INSERT INTO task_links(id,task_id,kind,url,created) VALUES('l1',?,'pr','u',?)",
+    assert logged(lambda c: c.execute("INSERT INTO task_links(id,task_id,kind,url,created_at) VALUES('l1',?,'pr','u',?)",
                                       (task["id"], H.now()))) == {("tasks", "link")}
     # What a task's row shows besides its own columns: its tags, and a tag's own name.
     with store.transaction() as c:
-        c.execute("INSERT INTO tags(id,key,label,created,updated) VALUES('tg1','coverage','Coverage',?,?)", (H.now(), H.now()))
+        c.execute("INSERT INTO tags(id,key,label,created_at,updated_at) VALUES('tg1','coverage','Coverage',?,?)", (H.now(), H.now()))
     assert logged(lambda c: c.execute("INSERT INTO task_tags(task_id,tag_id) VALUES(?,'tg1')",
                                       (task["id"],))) == {("tasks", "tags")}
     assert logged(lambda c: c.execute("UPDATE tags SET label='Covered' WHERE id='tg1'")) == {("tasks", "tags")}
     assert ("messages", "update") in logged(lambda c: c.execute("UPDATE messages SET body='edited' WHERE id=?", (msg["id"],)))
     assert logged(lambda c: c.execute("UPDATE messages SET read_at=? WHERE id=?", (H.now(), msg["id"]))) == set()
-    assert logged(lambda c: c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) "
+    assert logged(lambda c: c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) "
                                       "VALUES(?,99,'delta','{}',?)", (aid, H.now()))) == {("runs", "output")}
     assert logged(lambda c: c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (H.now(), aid))) == set()
     assert logged(lambda c: c.execute("UPDATE attempts SET state='running' WHERE id=?", (aid,))) == {("runs", "attempt")}
@@ -332,7 +332,7 @@ def test_a_task_link_rewritten_with_the_same_values_logs_nothing_and_a_change_to
     setup_attempt(api)
     task = post(api, "tasks", {"owner": "ben", "title": "Review the links", "body": "Please."})
     with store.transaction() as c:
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,computer_id,created) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,computer_id,created_at) "
                   "VALUES('wt1',?,'worktree','u','present','rc1',?)", (task["id"], H.now()))
 
     def logged(sql):
@@ -342,7 +342,7 @@ def test_a_task_link_rewritten_with_the_same_values_logs_nothing_and_a_change_to
             return {(row["topic"], row["kind"]) for row in c.execute("SELECT * FROM changes WHERE seq>?", (before,))}
     with store.read() as c:
         columns = [row[1] for row in c.execute("PRAGMA table_info(task_links)")]
-    assert {"repo", "detail_json", "computer_id", "pr_merged_at"} <= set(columns)
+    assert {"repo", "detail", "computer_id", "pr_merged_at"} <= set(columns)
     for column in columns:
         assert logged(f"UPDATE task_links SET {column}={column} WHERE id='wt1'") == set(), column
     assert logged("UPDATE task_links SET state='unknown' WHERE id='wt1'") == {("tasks", "link"), ("runner", "worktrees")}
@@ -352,7 +352,7 @@ def test_a_task_link_rewritten_with_the_same_values_logs_nothing_and_a_change_to
         assert ("tasks", "link") in logged(f"UPDATE task_links SET {column}='x{column}' WHERE id='wt1'"), column
     # A pull request link is no worktree: the task still hears of it, the computers do not.
     with store.transaction() as c:
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,created) VALUES('pr1',?,'pr','https://github.com/acme/app/pull/9',?)",
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,created_at) VALUES('pr1',?,'pr','https://github.com/acme/app/pull/9',?)",
                   (task["id"], H.now()))
     assert logged("UPDATE task_links SET title='Renamed' WHERE id='pr1'") == {("tasks", "link")}
 

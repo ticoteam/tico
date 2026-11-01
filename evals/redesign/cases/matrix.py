@@ -241,7 +241,7 @@ def queue_of(org, slug, task):
         bot = c.execute("SELECT state FROM bots WHERE slug=?", (slug,)).fetchone()
         states = c.execute("SELECT state, count(*) FROM jobs WHERE bot=? GROUP BY state", (slug,)).fetchall()
         own = c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
-                        "AND json_extract(m.refs_json,'$.task')=?", (slug, task)).fetchall()
+                        "AND json_extract(m.refs,'$.task')=?", (slug, task)).fetchall()
     return (f"bot {bot[0] if bot else None}, its jobs {dict((k, v) for k, v in states)}, "
             f"the turn's job {[row[0] for row in own]}")
 

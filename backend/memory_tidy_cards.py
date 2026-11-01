@@ -23,13 +23,13 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_tidy_cards (
  id TEXT PRIMARY KEY, bot TEXT NOT NULL, reviewer TEXT NOT NULL, pass_id TEXT NOT NULL UNIQUE,
  memory_commit TEXT NOT NULL, model TEXT NOT NULL, cost_usd REAL NOT NULL,
- diff TEXT NOT NULL, diary TEXT NOT NULL, edits_json TEXT NOT NULL,
- parent_task_id TEXT, check_task_id TEXT, started TEXT NOT NULL, created TEXT NOT NULL,
- expires TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', reason TEXT NOT NULL DEFAULT '',
+ diff TEXT NOT NULL, diary TEXT NOT NULL, edits TEXT NOT NULL,
+ parent_task_id TEXT, check_task_id TEXT, started_at TEXT NOT NULL, created_at TEXT NOT NULL,
+ expires_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', reason TEXT NOT NULL DEFAULT '',
  decided TEXT, decided_by TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS memory_tidy_cards_one_open ON memory_tidy_cards(bot) WHERE status='open';
-CREATE INDEX IF NOT EXISTS memory_tidy_cards_reviewer ON memory_tidy_cards(reviewer,status,expires);
-CREATE INDEX IF NOT EXISTS memory_tidy_cards_started ON memory_tidy_cards(bot,started);
+CREATE INDEX IF NOT EXISTS memory_tidy_cards_reviewer ON memory_tidy_cards(reviewer,status,expires_at);
+CREATE INDEX IF NOT EXISTS memory_tidy_cards_started ON memory_tidy_cards(bot,started_at);
 """
 
 
@@ -41,11 +41,11 @@ def sweep(c, at=None):
     """Hourly cleanup and filing cleanup; withdrawal never applies an edit."""
     at = at or H.now()
     return c.execute("UPDATE memory_tidy_cards SET status='withdrawn',reason='expired',decided=? "
-                     "WHERE status='open' AND expires<=?", (at, at)).rowcount
+                     "WHERE status='open' AND expires_at<=?", (at, at)).rowcount
 
 
 SUMMARY_FIELDS = ('id', 'bot', 'reviewer', 'memory_commit', 'model', 'cost_usd', 'diary',
-                  'created', 'expires', 'status', 'reason')
+                  'created_at', 'expires_at', 'status', 'reason')
 
 
 def view(row, *, detail=True):
@@ -86,7 +86,7 @@ def file_card(c, *, bot, reviewer, pass_id, memory_commit, model, cost_usd,
     if started is None:
         raise Problem('validation', 'Invalid pass start', 422)
     started = stamp(started.replace(tzinfo=started.tzinfo or timezone.utc))
-    newer = c.execute('SELECT 1 FROM memory_tidy_cards WHERE bot=? AND started>=? LIMIT 1', (bot, started)).fetchone()
+    newer = c.execute('SELECT 1 FROM memory_tidy_cards WHERE bot=? AND started_at>=? LIMIT 1', (bot, started)).fetchone()
     if newer:
         raise Problem('conflict', 'A newer Nightly memory tidy pass already has a card', 409)
     sweep(c, created)
@@ -95,8 +95,8 @@ def file_card(c, *, bot, reviewer, pass_id, memory_commit, model, cost_usd,
     ident = H.new_id()
     expires = stamp(crossed_at(created))
     c.execute('INSERT INTO memory_tidy_cards '
-              '(id,bot,reviewer,pass_id,memory_commit,model,cost_usd,diff,diary,edits_json,'
-              'parent_task_id,check_task_id,started,created,expires) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+              '(id,bot,reviewer,pass_id,memory_commit,model,cost_usd,diff,diary,edits,'
+              'parent_task_id,check_task_id,started_at,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
               (ident, bot, reviewer, pass_id, memory_commit, model, cost_usd, result.diff, result.diary,
                result.edits_json, parent_task_id, check_task_id, started, created, expires))
     return view(c.execute('SELECT * FROM memory_tidy_cards WHERE id=?', (ident,)).fetchone())
@@ -104,7 +104,7 @@ def file_card(c, *, bot, reviewer, pass_id, memory_commit, model, cost_usd,
 
 def cards_for(c, actor, at=None):
     return [view(r, detail=False) for r in c.execute("SELECT " + ",".join(SUMMARY_FIELDS) + " FROM memory_tidy_cards WHERE reviewer=? "
-                                     "AND status='open' AND expires>? ORDER BY created,id", (actor, at or H.now()))]
+                                     "AND status='open' AND expires_at>? ORDER BY created_at,id", (actor, at or H.now()))]
 
 
 def require_card(c, actor, ident):
@@ -134,7 +134,7 @@ def install(app, store, auth, mutate):
         with store.read_transaction() as c:
             row = require_card(c, who.actor, ident)
             card = view(row)
-            if row['status'] == 'open' and row['expires'] <= H.now():
+            if row['status'] == 'open' and row['expires_at'] <= H.now():
                 card.update(status='withdrawn', reason='expired')
             return {'card': card}
 
@@ -145,7 +145,7 @@ def install(app, store, auth, mutate):
 
         def write(c):
             row = require_card(c, who.actor, ident)
-            if row['status'] != 'open' or row['expires'] <= H.now():
+            if row['status'] != 'open' or row['expires_at'] <= H.now():
                 raise Problem('conflict', 'This Nightly memory tidy card is no longer open', 409)
             if body.decision == 'keep':
                 raise Problem('unavailable', 'Keep is not available yet; the proposal remains open', 409)

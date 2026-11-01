@@ -166,7 +166,7 @@ def main():
         H.sync_registry(c, bots, {"people": people})
         c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": people}),))
         for slug, config in bots.items():
-            c.execute("INSERT INTO bot_config(bot,config_json,operator,reports_to,description) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,operator,reports_to,description) VALUES(?,?,?,?,?)",
                       (slug, encode(config), "ana", "ana" if slug == "coo" else "coo", config.get("description", "")))
         c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
     call = lambda path, body: httpx.post(url + "/api/v2/" + path, json=body, timeout=20, headers={  # noqa: E731

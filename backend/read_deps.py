@@ -54,7 +54,7 @@ TURN = ("id", "meeting_id", "bot")
 
 def _turn_rooms(side):
     """The rooms of the keeper inputs naming this turn, as nodes; the partial index holds only such inputs."""
-    turn = "json_extract(m.refs_json,'$.live_meeting.turn_id')"
+    turn = "json_extract(m.refs,'$.live_meeting.turn_id')"
     return f"SELECT 'c:'||m.conversation_id FROM messages m WHERE {turn} IS NOT NULL AND {turn}={side}.id"
 
 
@@ -62,7 +62,7 @@ def _changed(columns):
     return " OR ".join(f"OLD.{c} IS NOT NEW.{c}" for c in columns)
 
 
-MESSAGE = ("id", "conversation_id", "refs_json", "in_reply_to", "from_actor", "to_actor")
+MESSAGE = ("id", "conversation_id", "refs", "in_reply_to", "from_actor", "to_actor")
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS read_index(key TEXT PRIMARY KEY) WITHOUT ROWID",
     "CREATE TABLE IF NOT EXISTS read_deps(dep TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY(dep, key)) WITHOUT ROWID",
@@ -72,8 +72,8 @@ SCHEMA = (
     "CREATE TRIGGER IF NOT EXISTS read_deps_message_insert AFTER INSERT ON messages BEGIN "
     "INSERT OR IGNORE INTO read_dirty VALUES('m:'||NEW.id); " + _touch("'m:'||NEW.id") + _touch("'t:'||NEW.id") +
     "INSERT OR IGNORE INTO read_dirty SELECT key FROM read_deps WHERE dep='c:'||NEW.conversation_id "
-    "AND instr(coalesce(NEW.refs_json,''),'live_meeting')>0; "
-    "DELETE FROM read_index WHERE instr(coalesce(NEW.refs_json,''),'live_meeting')>0 AND key IN "
+    "AND instr(coalesce(NEW.refs,''),'live_meeting')>0; "
+    "DELETE FROM read_index WHERE instr(coalesce(NEW.refs,''),'live_meeting')>0 AND key IN "
     "(SELECT key FROM read_deps WHERE dep='c:'||NEW.conversation_id); END",
     f"CREATE TRIGGER IF NOT EXISTS read_deps_message_update AFTER UPDATE OF {','.join(MESSAGE)} ON messages "
     f"WHEN {_changed(MESSAGE)} BEGIN INSERT OR IGNORE INTO read_dirty VALUES('m:'||NEW.id); "
@@ -191,7 +191,7 @@ class Walk:
                 # The meeting check also walks each input moved off this run (live_privacy `_attempt_from`), its room
                 # and its ancestors, where the task walk only reads the moved event: walk them here so a change there
                 # unsettles the run.
-                for detail, in self.c.execute("SELECT detail_json FROM events WHERE action='attempt.input.moved' "
+                for detail, in self.c.execute("SELECT detail FROM events WHERE action='attempt.input.moved' "
                                               "AND target=?", (aid,)):
                     detail = H._json(detail, {}) or {}
                     if isinstance(detail, dict) and isinstance(detail.get("message_id"), str):
@@ -207,7 +207,7 @@ class Walk:
         self.nodes.clear()
         self.nodes.add("m:" + row["id"])
         self.nodes.add("c:" + str(row["conversation_id"]))
-        msg = {"id": row["id"], "conversation_id": row["conversation_id"], "refs_json": row["refs_json"],
+        msg = {"id": row["id"], "conversation_id": row["conversation_id"], "refs": row["refs"],
                "in_reply_to": row["in_reply_to"]}
         try:
             self.index.sources(msg)
@@ -243,7 +243,7 @@ def settle(conn, keys, walk=None):
     messages = [k[2:] for k in keys if k.startswith("m:")]
     for start in range(0, len(messages), 500):
         chunk = messages[start:start + 500]
-        for row in conn.execute("SELECT id,conversation_id,refs_json,in_reply_to FROM messages WHERE id IN (%s)"
+        for row in conn.execute("SELECT id,conversation_id,refs,in_reply_to FROM messages WHERE id IN (%s)"
                                 % ",".join("?" * len(chunk)), chunk):
             ok, nodes = walk.message(row)
             deps.extend((node, "m:" + row["id"]) for node in nodes)

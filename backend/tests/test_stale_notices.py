@@ -35,7 +35,7 @@ def test_a_status_check_the_owner_has_acted_on_since_is_dropped(api):
         c.execute("UPDATE task_events SET ts=? WHERE task_id IN (?,?)", (H.shift(H.now(), minutes=-10), row["id"], other["id"]))
         quiet, kept = (H._wake(c, t, "bot:ops", "Status check: no activity for 2 h.", {"wake": "step_status"},
                                trigger="stall_check") for t in (row, other))
-        c.execute("UPDATE messages SET created=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-5), quiet["id"], kept["id"]))
+        c.execute("UPDATE messages SET created_at=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-5), quiet["id"], kept["id"]))
         H.task_update(c, "bot:ops", row["id"], note="Pushed the fix.")
     handed = [claim(api, r), claim(api, r)]
     with api.app.state.store.read() as c:
@@ -48,7 +48,7 @@ def test_checks_news_for_a_head_the_pull_request_moved_past_is_dropped(api):
     with api.app.state.store.transaction() as c:
         row = task(c)
         c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops'")
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,detail_json) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,detail) "
                   "VALUES('l1',?,'pr','https://github.example/acme/app/pull/7','open','bot:ops',?,?)",
                   (row["id"], H.now(), json.dumps({"head_sha": "b" * 40})))
         old = H._wake(c, row, "bot:ops", "Checks failed on aaaaaaa.",
@@ -69,7 +69,7 @@ def test_a_late_warning_for_a_ticket_that_has_left_its_step_is_dropped(api):
         c.execute("UPDATE task_events SET ts=? WHERE task_id IN (?,?)", (H.shift(H.now(), minutes=-10), moved["id"], still["id"]))
         late, kept = (H._wake(c, t, "bot:ops", "Late: it has been at In Progress for 4 h.",
                               {"wake": "blocker", "step_late": True}, trigger="stall_check") for t in (moved, still))
-        c.execute("UPDATE messages SET created=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-5), late["id"], kept["id"]))
+        c.execute("UPDATE messages SET created_at=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-5), late["id"], kept["id"]))
         # Tico moved it on by itself (a verdict, green checks): no person or bot acted, but it is no longer late there.
         H._task_event(c, moved["id"], H.KEEPER, "step", "in-progress", "review-1")
     claim(api, r)
@@ -113,12 +113,12 @@ def test_a_review_gate_refusal_is_dropped_once_the_ticket_has_moved(api):
             review_gate.notify(c, "human:ana", {"task": t["id"], "kind": "receipt", "head": "a" * 40,
                                                 "pr": "https://github.example/acme/app/pull/7",
                                                 "text": "Review refused: missing test receipt."})
-        old, kept = (c.execute("SELECT * FROM messages WHERE json_extract(refs_json,'$.task')=? "
-                               "AND json_extract(refs_json,'$.review_gate') IS NOT NULL", (t["id"],)).fetchone()
+        old, kept = (c.execute("SELECT * FROM messages WHERE json_extract(refs,'$.task')=? "
+                               "AND json_extract(refs,'$.review_gate') IS NOT NULL", (t["id"],)).fetchone()
                      for t in (moved, still))
         # The refusal held both (the ticket keeps its step) before it told the Builder.
         c.execute("UPDATE task_events SET ts=? WHERE task_id IN (?,?)", (H.shift(H.now(), minutes=-10), moved["id"], still["id"]))
-        c.execute("UPDATE messages SET created=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-5), old["id"], kept["id"]))
+        c.execute("UPDATE messages SET created_at=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-5), old["id"], kept["id"]))
         H._task_event(c, moved["id"], H.KEEPER, "step", step["In Progress"], step["Pending Release"])
     claim(api, r)
     with api.app.state.store.read() as c:

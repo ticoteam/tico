@@ -557,7 +557,7 @@ def test_a_card_limit_approval_that_no_longer_fits_stores_no_figure(books):
         H.approval_decide(c, OWNER, held.approval_id, "approved")
         done = FA.approval_decided(c, held.approval_id, OCT_END)
         assert done.status in ("failed", "denied") and done.code == "invalid", done
-        reason, result = c.execute("SELECT reason, result_json FROM fin_actions WHERE id=?",
+        reason, result = c.execute("SELECT reason, result FROM fin_actions WHERE id=?",
                                    (str(held.action_id),)).fetchone()
         assert not any(ch.isdigit() for ch in str(reason)) and asked["card_id"] in str(result), (reason, result)
         for reader in (OWNER, "human:cara"):

@@ -8,7 +8,7 @@ from backend.tests.test_tasks_board import bot_token
 
 def age(api, tid, hours=30):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), seconds=-hours * 3600), tid))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), seconds=-hours * 3600), tid))
 
 
 def stuck(api, token="ana-test"):

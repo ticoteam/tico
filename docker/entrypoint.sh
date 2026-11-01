@@ -370,11 +370,11 @@ environment_identity() {
 import json, os, re, secrets, sqlite3
 from backend.hubdb import leave_wal_for_litestream
 db = leave_wal_for_litestream(sqlite3.connect(os.environ["TICO_DB"]))
-row = db.execute("SELECT value_json FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
+row = db.execute("SELECT value FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
 value = os.environ.get("TICO_ENVIRONMENT_ID") or (json.loads(row[0]) if row else secrets.token_hex(8))
 if not re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", value):
     raise SystemExit("TICO_ENVIRONMENT_ID is lowercase letters, digits and hyphens")
-db.execute("INSERT INTO registry_metadata VALUES('docker-environment-id', ?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+db.execute("INSERT INTO registry_metadata VALUES('docker-environment-id', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
            (json.dumps(value),))
 db.commit()
 print(value)
@@ -541,7 +541,7 @@ import json, os, sqlite3, sys, time
 for _ in range(60):
     try:
         row = sqlite3.connect("file:%s?mode=ro" % os.environ["TICO_DB"], uri=True).execute(
-            "SELECT value_json FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
+            "SELECT value FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
     except sqlite3.Error:
         row = None
     if row:

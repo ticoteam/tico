@@ -14,7 +14,7 @@ PREFIX = 'source-outage:'
 def observe(c, source, kind, *, waiting=0, until=None, active=True, since=None):
     """Record an observation in the caller's transaction; a rollback also rolls back the notice."""
     key = PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32]
-    saved = c.execute('SELECT value_json FROM registry_metadata WHERE key=?', (key,)).fetchone()
+    saved = c.execute('SELECT value FROM registry_metadata WHERE key=?', (key,)).fetchone()
     old = H._json(saved[0], {}) if saved else {}
     if not active and not old.get('active'):
         return
@@ -22,8 +22,8 @@ def observe(c, source, kind, *, waiting=0, until=None, active=True, since=None):
         return
     now = H.now()
     record = {'source': source, 'kind': kind, 'active': bool(active), 'since': old.get('since') if old.get('active') else since or now,
-              'waiting': int(waiting), 'until': until, 'updated': now}
-    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+              'waiting': int(waiting), 'until': until, 'updated_at': now}
+    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
               (key, json.dumps(record)))
     if bool(old.get('active')) == bool(active):
         return
@@ -56,11 +56,11 @@ def sync(c, settings):
     from . import execution, login_holds, move_retry, performance
     seen = set()
     queued = [dict(r) for r in c.execute(
-        "SELECT j.bot,count(*) n,a.runner_id,b.config_json FROM jobs j JOIN assignments a ON a.bot=j.bot "
-        "JOIN bot_config b ON b.bot=j.bot WHERE j.state='queued' GROUP BY j.bot,a.runner_id,b.config_json")]
+        "SELECT j.bot,count(*) n,a.runner_id,b.config FROM jobs j JOIN assignments a ON a.bot=j.bot "
+        "JOIN bot_config b ON b.bot=j.bot WHERE j.state='queued' GROUP BY j.bot,a.runner_id,b.config")]
     counts = {}
     for row in queued:
-        config = H._json(row['config_json'], {}) or {}
+        config = H._json(row['config'], {}) or {}
         primary = execution.login_key(c, settings, row['runner_id'], row['bot'], config)
         last = execution.last_limit(c, row['bot'])
         ended = login_holds.for_attempt(c, last['id']) if last else {}
@@ -75,7 +75,7 @@ def sync(c, settings):
         # Reuse wake batching's history/digest carrier; retries retain their own jobs and checkpoints.
         if execution.cooling_off(c, row['bot']):
             batch_waiters(c, row['bot'])
-    for (raw,) in c.execute('SELECT value_json FROM registry_metadata WHERE key LIKE ?', (login_holds.PREFIX + '%',)).fetchall():
+    for (raw,) in c.execute('SELECT value FROM registry_metadata WHERE key LIKE ?', (login_holds.PREFIX + '%',)).fetchall():
         hold = H._json(raw, {}) or {}
         if not isinstance(hold, dict) or not hold.get('runner_id') or not hold.get('runtime'):
             continue
@@ -98,10 +98,10 @@ def sync(c, settings):
         for link in links(c, dict(row)):
             # All checks for the same repository share access; PR numbers never split an incident.
             source = 'github:' + (link.get('repo') or (link.get('url') or '').split('/pull/')[0]).lower()
-            saved = c.execute('SELECT value_json FROM registry_metadata WHERE key=?',
+            saved = c.execute('SELECT value FROM registry_metadata WHERE key=?',
                               (PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32],)).fetchone()
             proof = H._json(saved[0], {}) if saved else {}
-            if proof and not proof.get('active') and (detail.get('at') or '') <= proof.get('updated', ''):
+            if proof and not proof.get('active') and (detail.get('at') or '') <= proof.get('updated_at', ''):
                 continue  # A successful read supersedes this old refusal, even if the ticket has not moved.
             entry = github.setdefault(source, {'tasks': set(), 'since': detail.get('since')})
             entry['tasks'].add(row['id'])
@@ -109,7 +109,7 @@ def sync(c, settings):
         observe(c, source, 'GitHub checks access', waiting=len(entry['tasks']), since=entry['since'])
         seen.add(PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32])
     # A move's expiry, close or cancellation is not evidence that GitHub's access recovered.
-    for key, raw in c.execute('SELECT key,value_json FROM registry_metadata WHERE key LIKE ?', (PREFIX + '%',)).fetchall():
+    for key, raw in c.execute('SELECT key,value FROM registry_metadata WHERE key LIKE ?', (PREFIX + '%',)).fetchall():
         value = H._json(raw, {}) or {}
         if value.get('active') and value.get('source', '').startswith('github:') and key not in seen:
             observe(c, value['source'], value['kind'], waiting=0)
@@ -119,7 +119,7 @@ def sync(c, settings):
             source = 'computer:' + runner_id
             observe(c, source, 'Computer capacity', waiting=sum(x['n'] for x in queued if x['runner_id'] == runner_id))
             seen.add(PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32])
-    for key, raw in c.execute('SELECT key,value_json FROM registry_metadata WHERE key LIKE ?', (PREFIX + '%',)).fetchall():
+    for key, raw in c.execute('SELECT key,value FROM registry_metadata WHERE key LIKE ?', (PREFIX + '%',)).fetchall():
         value = H._json(raw, {}) or {}
         if value.get('active') and key not in seen and not value.get('source', '').startswith('github:'):
             # The digest is already the durable identity; finish through the same transition writer without hashing twice.
@@ -136,13 +136,13 @@ def _finish(c, key, value):
 def batch_waiters(c, bot):
     from . import wake_presets
     groups = {}
-    for row in c.execute("SELECT j.*,m.conversation_id,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id "
+    for row in c.execute("SELECT j.*,m.conversation_id,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE j.bot=? AND j.state='queued' AND j.attempt_id IS NULL AND j.redirect=0 "
                          "AND m.from_actor=? AND m.kind='notice' AND m.deleted_at IS NULL "
-                         "AND coalesce(json_extract(m.refs_json,'$.quiet'),0)=0 "
-                         "AND coalesce(json_extract(m.refs_json,'$.command'),0)=0 "
-                         "ORDER BY j.created,j.rowid", (bot, H.KEEPER)).fetchall():
-        refs = H._json(row['refs_json'], {}) or {}
+                         "AND coalesce(json_extract(m.refs,'$.quiet'),0)=0 "
+                         "AND coalesce(json_extract(m.refs,'$.command'),0)=0 "
+                         "ORDER BY j.created_at,j.rowid", (bot, H.KEEPER)).fetchall():
+        refs = H._json(row['refs'], {}) or {}
         if refs.get('caused_by', '').startswith('human:') or refs.get('wake_digest'):
             continue
         groups.setdefault((row['conversation_id'], refs.get('task')), []).append(dict(row))

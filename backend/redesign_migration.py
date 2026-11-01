@@ -39,8 +39,8 @@ MESSAGE_PART = ("\n\nThe message to handle: id {{message.id}} in thread {{messag
                 "({{message.from_name}}), subject {{message.subject}}. Its body:\n{{message.body}}")
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS redesign_migrations(id TEXT PRIMARY KEY, state TEXT NOT NULL, actor TEXT NOT NULL, "
-    "created TEXT NOT NULL, expires TEXT NOT NULL, finished TEXT, restored_at TEXT, snapshot_json TEXT, "
-    "result_json TEXT)",
+    "created_at TEXT NOT NULL, expires_at TEXT NOT NULL, finished_at TEXT, restored_at TEXT, snapshot_json TEXT, "
+    "result TEXT)",
     "CREATE TABLE IF NOT EXISTS redesign_migration_accepts(flag TEXT PRIMARY KEY, accepted_by TEXT NOT NULL, "
     "at TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS redesign_migrated(kind TEXT NOT NULL, id TEXT NOT NULL, migration TEXT NOT NULL, "
@@ -76,7 +76,7 @@ def _json(raw, default):
 
 
 def _meta(c, key):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (key,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
     return row[0] if row else None
 
 
@@ -84,7 +84,7 @@ def _set_meta(c, key, raw):
     if raw is None:
         c.execute("DELETE FROM registry_metadata WHERE key=?", (key,))
     else:
-        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                   (key, raw))
 
 
@@ -223,14 +223,14 @@ def _routines(c, done, fresh=False):
 def _rule_step(n, row):
     """One wake rule as its own Filter step: the event (and the rule's simple conditions) as `when`, its outcome as the
     action, and the whole row in the action's args, which is what rules.py reads back."""
-    when = _json(row["when_json"], {})
-    params = _json(row["params_json"], {})
+    when = _json(row["condition"], {})
+    params = _json(row["params"], {})
     conds = [] if row["event"] == "*" else [{"field": "event", "op": "is", "value": row["event"]}]
     for key, value in sorted(when.items()):
         if isinstance(value, (str, int, float, bool)) and F.FIELD.fullmatch(str(key)) and len(conds) < F.MAX_CONDS:
             conds.append({"field": "task." + str(key), "op": "is", "value": value})
-    rule = {k: row[k] for k in ("id", "scope_kind", "scope_id", "event", "position", "note", "created_by", "created",
-                                 "updated", "revision") if k in row.keys()}
+    rule = {k: row[k] for k in ("id", "scope_kind", "scope_id", "event", "position", "note", "created_by", "created_at",
+                                 "updated_at", "revision") if k in row.keys()}
     rule["action_by"] = dict(row).get("action_by")
     rule["when"] = when
     do = OUTCOME_DO.get(row["then_outcome"], "wake_bot")
@@ -254,7 +254,7 @@ def _wake_rules(c, done, me):
     """The table's wake rules, one "What wakes" automation per scope (a flow holds at most F.MAX_STEPS steps, so a
     longer list becomes more than one)."""
     from . import tico_notices
-    rows = [r for r in c.execute("SELECT * FROM rules ORDER BY scope_kind, scope_id, position, created, id").fetchall()
+    rows = [r for r in c.execute("SELECT * FROM rules ORDER BY scope_kind, scope_id, position, created_at, id").fetchall()
             if not tico_notices.is_builtin_rule(r["id"]) and ("wake_rule", r["id"]) not in done]
     groups = {}
     for row in rows:
@@ -312,12 +312,12 @@ def _builtins(c, done, me):
         out.append({"kind": "builtin", "id": "wake-builtins", "title": "Built-in wake rules", "becomes": wakes_builtin(me),
                     "flags": [], "_do": ("adopt", {})})
     if _table(c, "task_rules"):
-        for row in c.execute("SELECT * FROM task_rules ORDER BY created, id").fetchall():
+        for row in c.execute("SELECT * FROM task_rules ORDER BY created_at, id").fetchall():
             if ("task_rule", row["id"]) in done or not me:
                 continue
             controls = {"on": bool(row["enabled"]), "preset": row["preset"], "at": row["at"],
-                        "department": row["department"], "triggers": _json(row["triggers_json"], []),
-                        "actions": _json(row["actions_json"], [])}
+                        "department": row["department"], "triggers": _json(row["triggers"], []),
+                        "actions": _json(row["actions"], [])}
             flow = _mirror(row["name"], me, "task_rule", controls, {"kind": "task_rule", "id": row["id"]})
             out.append({"kind": "task_rule", "id": row["id"], "title": row["name"], "becomes": flow, "flags": [],
                         "_do": ("mirror", {})})
@@ -409,7 +409,7 @@ def _unchanged(c):
             out.append({"kind": "destination", "id": "destination:" + row["key"], "title": row["key"],
                         "becomes": "unchanged", "flags": [], "_do": None})
     if _table(c, "goals"):
-        for row in c.execute("SELECT id, title FROM goals ORDER BY created, id").fetchall():
+        for row in c.execute("SELECT id, title FROM goals ORDER BY created_at, id").fetchall():
             out.append({"kind": "goal", "id": "goal:" + row["id"], "title": row["title"], "becomes": "unchanged",
                         "flags": [], "_do": None})
     return out
@@ -460,8 +460,8 @@ def _budgets(c, done):
     if ("turn_budget", "budget:team") not in done:
         out.append({"kind": "turn_budget", "id": "budget:team", "title": "Team turn budgets", "becomes": after,
                     "flags": [], "_do": ("budget_team", {"raise": after != team and bool(stored)})})
-    for row in c.execute("SELECT bot, config_json FROM bot_config ORDER BY bot").fetchall():
-        mine = {k: v for k, v in TB.own(_json(row["config_json"], {})).items() if v is not None}
+    for row in c.execute("SELECT bot, config FROM bot_config ORDER BY bot").fetchall():
+        mine = {k: v for k, v in TB.own(_json(row["config"], {})).items() if v is not None}
         if not mine or ("turn_budget", "budget:" + row["bot"]) in done:
             continue
         raised = _raised(mine)
@@ -574,10 +574,10 @@ def _convert_one(c, who, mid, obj, group_done):
         _mark(c, "turn_budget", obj["id"], mid, None)
         return None
     if kind == "budget_bot":
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (args["bot"],)).fetchone()
-        declared = _json(row["config_json"] if row else None, {})
+        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (args["bot"],)).fetchone()
+        declared = _json(row["config"] if row else None, {})
         declared.update(args["values"])
-        c.execute("UPDATE bot_config SET config_json=?, revision=revision+1 WHERE bot=?",
+        c.execute("UPDATE bot_config SET config=?, revision=revision+1 WHERE bot=?",
                   (json.dumps(declared, sort_keys=True), args["bot"]))
         _mark(c, "turn_budget", obj["id"], mid, None)
         return None
@@ -733,7 +733,7 @@ def _finish(c, who, mid, waiting):
     untold = c.execute("SELECT 1 FROM redesign_migrated WHERE migration=? AND told IS NULL LIMIT 1", (mid,)).fetchone()
     record = {"state": "done", "migration": mid, "at": _now(), **total, "told": told or previous.get("told"),
               "owner_wait": who.role != "owner" or bool(waiting) or bool(untold)}
-    c.execute("UPDATE redesign_migrations SET state='converted', finished=?, result_json=? WHERE id=?",
+    c.execute("UPDATE redesign_migrations SET state='converted', finished_at=?, result=? WHERE id=?",
               (_now(), json.dumps({**total, "waiting": waiting}, sort_keys=True), mid))
     _set_meta(c, CUTOVER, json.dumps(record, sort_keys=True))
     line = (f"redesign cutover {mid}: {total['converted']} moved to automations, {total['kept']} kept as they were, "
@@ -765,7 +765,7 @@ def cutover(store):
         mid = record.get("migration") or "mig_" + H.new_id()
         if not record:
             now = _now()
-            c.execute("INSERT OR IGNORE INTO redesign_migrations(id, state, actor, created, expires) "
+            c.execute("INSERT OR IGNORE INTO redesign_migrations(id, state, actor, created_at, expires_at) "
                       "VALUES(?,?,?,?,?)", (mid, "converting", who.actor, now, now))
             _set_meta(c, CUTOVER, json.dumps({"state": "running", "migration": mid, "at": now}, sort_keys=True))
         else:
@@ -810,7 +810,7 @@ def _wakes_of(c, scope_kind, scope_id):
     """The "What wakes" automations of one scope, oldest first."""
     from . import automations
     out = []
-    for row in c.execute("SELECT * FROM automations WHERE id>=? AND id<? AND deleted_at IS NULL ORDER BY created, id",
+    for row in c.execute("SELECT * FROM automations WHERE id>=? AND id<? AND deleted_at IS NULL ORDER BY created_at, id",
                          (WAKES_PREFIX, WAKES_PREFIX[:-1] + "`")).fetchall():
         flow = automations.flow_of(row)
         if (flow.get("wakes") or {}) == {"scope_kind": scope_kind, "scope_id": scope_id}:
@@ -1007,12 +1007,12 @@ def wake_rules_of(aid, flow):
             out.append({"id": source.get("id") or f"{aid}.{step.get('id')}.{i + 1}",
                         "scope_kind": scope.get("scope_kind") or source.get("scope_kind") or "bot",
                         "scope_id": scope.get("scope_id") or source.get("scope_id") or "", "event": event or "*",
-                        "when_json": json.dumps(when, sort_keys=True), "then_outcome": outcome,
-                        "params_json": json.dumps(params, sort_keys=True),
+                        "condition": json.dumps(when, sort_keys=True), "then_outcome": outcome,
+                        "params": json.dumps(params, sort_keys=True),
                         "enabled": 0 if step.get("enabled") is False else 1,
                         "position": source.get("position") if source.get("position") is not None else n + 1,
                         "note": source.get("note") or "", "created_by": source.get("created_by") or "",
-                        "created": source.get("created") or "", "updated": source.get("updated") or "",
+                        "created_at": source.get("created_at") or "", "updated_at": source.get("updated_at") or "",
                         "revision": source.get("revision") or 1, "action_by": source.get("action_by")})
     return out
 
@@ -1056,7 +1056,7 @@ def wake_problems(c, aid, flow):
     except ValueError:
         return []
     return [{"rule": row["id"], "step": value, "why": _missing_why(value, names)}
-            for row in rows for value, names in _missing_steps(c, flow.get("wakes") or {}, _json(row["when_json"], {}))]
+            for row in rows for value, names in _missing_steps(c, flow.get("wakes") or {}, _json(row["condition"], {}))]
 
 
 def check_wakes(flow, c=None, saved=None, aid=None):
@@ -1076,11 +1076,11 @@ def check_wakes(flow, c=None, saved=None, aid=None):
     if saved and aid and saved.get("wakes"):
         try:
             kept = {(row["id"], value.lower()) for row in wake_rules_of(aid, saved)
-                    for value, _ in _missing_steps(c, saved["wakes"], _json(row["when_json"], {}))}
+                    for value, _ in _missing_steps(c, saved["wakes"], _json(row["condition"], {}))}
         except ValueError:
             kept = set()
     for row in rows:
-        for value, names in _missing_steps(c, flow["wakes"], _json(row["when_json"], {})):
+        for value, names in _missing_steps(c, flow["wakes"], _json(row["condition"], {})):
             if (row["id"], value.lower()) not in kept:
                 raise Problem("invalid", _missing_why(value, names), 422)
 
@@ -1100,7 +1100,7 @@ def wakes_naming(c, type_id, steps):
         except ValueError:      # not readable as wake rules: nothing it shows can run
             continue
         for rule in rules:
-            for value in _named(_json(rule["when_json"], {})) or []:
+            for value in _named(_json(rule["condition"], {})) or []:
                 if value.lower() in named:
                     out.append(f"{row['name']}: {value}")
     return out
@@ -1110,14 +1110,14 @@ def wake_rows(c, event=None):
     """The converted wake rules, read back from the enabled "What wakes" automations as rules-table rows (rules.py adds
     them to its own). `event` keeps rows on that event or `*`; None keeps every row."""
     try:
-        found = c.execute("SELECT id, flow_json FROM automations WHERE id>=? AND id<? AND deleted_at IS NULL "
+        found = c.execute("SELECT id, flow FROM automations WHERE id>=? AND id<? AND deleted_at IS NULL "
                           "AND enabled=1", (WAKES_PREFIX, WAKES_PREFIX[:-1] + "`")).fetchall()
     except Exception:   # sqlite3.OperationalError: no automations table yet
         return []
     out = []
     for row in found:
         try:
-            rows = wake_rules_of(row["id"], _json(row["flow_json"], {}))
+            rows = wake_rules_of(row["id"], _json(row["flow"], {}))
         except ValueError:   # saved before the check (or by hand): nothing it shows can run
             log.warning("redesign migration: %s cannot be read as wake rules", row["id"])
             continue
@@ -1342,7 +1342,7 @@ def pending(c):
 
     add("turn_budget", int(low(_json(_meta(c, TB.TEAM_KEY), {}))))
     if _table(c, "bot_config"):
-        add("turn_budget", sum(low(_json(r[0], {})) for r in c.execute("SELECT config_json FROM bot_config")))
+        add("turn_budget", sum(low(_json(r[0], {})) for r in c.execute("SELECT config FROM bot_config")))
     if team_rules.load(c).get("stale_review") and ("system_job", "job:stale_review") not in done:
         add("system_job", 1)
     row = bots.get(strategy_bot.SLUG)

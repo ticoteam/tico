@@ -91,14 +91,14 @@ def test_a_board_flowed_before_check_kinds_gets_them_once_even_when_renamed(api)
         for s in step_flow.steps(c, task["type_id"]):
             flow = {k: v for k, v in step_flow.of(s).items() if k != "check"}
             name = "Second look" if s["name"] == "Review 2" else s["name"]
-            c.execute("UPDATE task_steps SET flow_json=?, name=? WHERE id=?",
+            c.execute("UPDATE task_steps SET flow=?, name=? WHERE id=?",
                       (json.dumps(flow) if flow else None, name, s["id"]))
         c.execute("DELETE FROM events WHERE action=? AND target=?", (step_flow.CHECKS_SEEDED, task["type_id"]))
         step_flow.seed_checks(c)
         kinds = {s["name"]: step_flow.check_kind(s) for s in step_flow.steps(c, task["type_id"]) if step_flow.check_kind(s)}
         assert kinds == {"Review 1": "review", "Second look": "review"}
         first = next(s for s in step_flow.steps(c, task["type_id"]) if s["name"] == "Review 1")
-        c.execute("UPDATE task_steps SET flow_json=? WHERE id=?", (json.dumps({"gate": True, "check": "qa"}), first["id"]))
+        c.execute("UPDATE task_steps SET flow=? WHERE id=?", (json.dumps({"gate": True, "check": "qa"}), first["id"]))
         step_flow.seed_checks(c)
         assert step_flow.check_kind(step_flow.step(c, first["id"])) == "qa", "a step's kind, once set, is a person's"
 
@@ -138,7 +138,7 @@ def test_a_receipt_in_a_keeper_notice_naming_a_renamed_review_step_counts(api):
     receipt as one about Review 1 was."""
     from backend import test_receipts
     sha = "d" * 40
-    notice = {"id": "m1", "from_actor": "keeper", "created": "2026-01-01", "body": f"First look asked.\nTests: head {sha}: 3 passed, 0 failed"}
+    notice = {"id": "m1", "from_actor": "keeper", "created_at": "2026-01-01", "body": f"First look asked.\nTests: head {sha}: 3 passed, 0 failed"}
     task = {"id": "t", "owner": "bot:cpo", "note": "", "messages": [notice], "children": []}
     assert test_receipts.at_head({**task, "review_steps": ["First look"]}, sha)[0] == "passed"
     assert test_receipts.at_head(task, sha)[0] != "passed", "a keeper line that names no review step is not evidence"
@@ -161,13 +161,13 @@ def test_renaming_a_step_keeps_the_boards_rules_on_it(api):
     """The Dev board's "wake QA on In QA" row follows In QA to its new name."""
     task = pools.ticket(api, None)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,when_json,then_outcome,params_json,enabled,position,"
-                  "note,created_by,created,updated,revision) VALUES('r-qa','type',?,'step_entered',?,'wake','{}',1,1,"
+        c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,position,"
+                  "note,created_by,created_at,updated_at,revision) VALUES('r-qa','type',?,'step_entered',?,'wake','{}',1,1,"
                   "'QA',?,?,?,1)", (task["type_id"], json.dumps({"step": ["Review 2", "Done"], "role": "qa"}),
                                      H.KEEPER, H.now(), H.now()))
     _renamed(api, task, {"Review 2": "Second look"})
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT when_json, revision FROM rules WHERE id='r-qa'").fetchone()
+        row = c.execute("SELECT condition, revision FROM rules WHERE id='r-qa'").fetchone()
     assert json.loads(row[0]) == {"step": ["Second look", "Done"], "role": "qa"} and row[1] == 2
 
 
@@ -177,7 +177,7 @@ def test_the_upgrade_finds_a_renamed_release_check_by_its_pool_after_the_merge_s
         for ident, name, position, flow, pool in (("pr", "Shipped", 10, {"on_merge": True}, None),
                                                   ("after", "Live check", 11, {"can_hold": False}, '["qa"]'),
                                                   ("before", "Pairing", 3, {"can_hold": False}, '["qa"]')):
-            c.execute("INSERT INTO task_steps(id,type_id,name,position,status,flow_json,check_pool) VALUES(?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO task_steps(id,type_id,name,position,status,flow,check_pool) VALUES(?,?,?,?,?,?,?)",
                       (ident, task["type_id"], name, position, "review", json.dumps(flow), pool))
         c.execute("DELETE FROM events WHERE action=? AND target=?", (step_flow.CHECKS_SEEDED, task["type_id"]))
         step_flow.seed_checks(c)

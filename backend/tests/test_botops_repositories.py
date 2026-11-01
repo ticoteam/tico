@@ -17,10 +17,10 @@ def repos(api):
     api.app.state.store.settings.github_owner = "Acme"
     with api.app.state.store.transaction() as c:
         for name in ("Acme/product", "Acme/docs"):
-            c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?)", (H.new_id(), name, H.now()))
+            c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)", (H.new_id(), name, H.now()))
         for bot, name, level in (("ops", "Acme/product", "write"), ("botops", "Acme/docs", "read")):
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0] or "{}")
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?",
+            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0] or "{}")
+            c.execute("UPDATE bot_config SET config=? WHERE bot=?",
                       (json.dumps({**config, "repo_access_mode": "chosen"}), bot))
             c.execute("INSERT INTO bot_repo_access VALUES(?,?,?)", (bot, name, level))
 
@@ -48,12 +48,12 @@ def test_botops_acting_for_a_person_cannot_take_another_bots_access_away(api, bo
     assert cards[2].json()["repeated"] is True
     assert effective(api) == before
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT owner,method,path,summary,description,body_json FROM assistant_actions WHERE id=?",
+        row = c.execute("SELECT owner,method,path,summary,description,body FROM assistant_actions WHERE id=?",
                         (card["action"]["id"],)).fetchone()
         assert (row["owner"], row["method"], row["path"]) == ("human:ana", "PUT", "/api/v2/bots/ops/repositories")
         # Plain words on the card: who, and what it loses; no method, path or mode word ("own", "chosen").
         assert row["description"] == row["summary"] == "ops: loses access to product."
-        assert json.loads(row["body_json"]) == {"mode": "own"}
+        assert json.loads(row["body"]) == {"mode": "own"}
         assert not c.execute("SELECT 1 FROM events WHERE action='bot.repos_changed' AND target='ops'").fetchone()
     # Write turned to read is taken away too.
     lowered = act(api, ana, "PUT", "bots/ops/repositories",
@@ -76,7 +76,7 @@ def test_a_person_in_settings_still_narrows_and_is_told_what_stops(api, botops, 
     assert changed["stopped"] == [{"full_name": "Acme/product", "access": "write"}]
     assert changed["effective"] == [] and changed["chosen"] == [{"full_name": "Acme/product", "access": "write"}]
     with api.app.state.store.read() as c:
-        detail = json.loads(c.execute("SELECT detail_json FROM events WHERE action='bot.repos_changed' AND target='ops'"
+        detail = json.loads(c.execute("SELECT detail FROM events WHERE action='bot.repos_changed' AND target='ops'"
                                       ).fetchone()[0])
     assert detail["stopped"] == [{"full_name": "Acme/product", "access": "write"}]
     back = put(api, "bots/ops/repositories", {"mode": "chosen"}, token="ana-test")
@@ -120,7 +120,7 @@ OPTIONS = [("run_workflows", "may run workflows in product"), ("edit_workflows",
 
 def _stored_card(api, card):
     with api.app.state.store.read() as c:
-        return dict(c.execute("SELECT owner,method,path,description,body_json,status FROM assistant_actions WHERE id=?",
+        return dict(c.execute("SELECT owner,method,path,description,body,status FROM assistant_actions WHERE id=?",
                               (card["action"]["id"],)).fetchone())
 
 

@@ -41,11 +41,11 @@ log = logging.getLogger("tico.support")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS support_tickets(
- id TEXT PRIMARY KEY, actor TEXT NOT NULL, created TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
- message TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', sent_json TEXT NOT NULL DEFAULT '{}',
- hq_id TEXT NOT NULL, hq_secret TEXT NOT NULL, messages_json TEXT NOT NULL DEFAULT '[]',
+ id TEXT PRIMARY KEY, actor TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+ message TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', sent TEXT NOT NULL DEFAULT '{}',
+ hq_id TEXT NOT NULL, hq_secret TEXT NOT NULL, messages TEXT NOT NULL DEFAULT '[]',
  seen_id INTEGER NOT NULL DEFAULT 0, checked TEXT, request_key TEXT);
-CREATE INDEX IF NOT EXISTS support_tickets_actor ON support_tickets(actor, created);
+CREATE INDEX IF NOT EXISTS support_tickets_actor ON support_tickets(actor, created_at);
 """
 MAX_MESSAGE = 4000
 PER_DAY = 10                 # new tickets one person may file in a day; HQ limits the address as well
@@ -248,15 +248,15 @@ def _messages(value):
 
 def _last_activity(row):
     """When the ticket was last written on, by either side, or filed: an aware datetime (the epoch when none reads)."""
-    times = [H.parse_ts(m.get("created")) for m in json.loads(row["messages_json"] or "[]")] + [H.parse_ts(row["created"])]
+    times = [H.parse_ts(m.get("created_at")) for m in json.loads(row["messages"] or "[]")] + [H.parse_ts(row["created_at"])]
     return max((t for t in times if t and t.tzinfo), default=EPOCH)
 
 
 def view(row):
     """A ticket as the page sees it. The HQ secret and id are not in it."""
-    messages = json.loads(row["messages_json"] or "[]")
-    return {"id": row["id"], "created": row["created"], "status": row["status"], "message": row["message"],
-            "email": row["email"], "sent": json.loads(row["sent_json"] or "{}"), "messages": messages,
+    messages = json.loads(row["messages"] or "[]")
+    return {"id": row["id"], "created_at": row["created_at"], "status": row["status"], "message": row["message"],
+            "email": row["email"], "sent": json.loads(row["sent"] or "{}"), "messages": messages,
             "unread": sum(1 for m in messages if m["from"] == "staff" and m["id"] > row["seen_id"])}
 
 
@@ -366,7 +366,7 @@ class Support:
                 if again:
                     return view(again)
             since = H.shift(H.now(), hours=-24)
-            recent = c.execute("SELECT count(*) FROM support_tickets WHERE actor=? AND created>?",
+            recent = c.execute("SELECT count(*) FROM support_tickets WHERE actor=? AND created_at>?",
                                (who.actor, since)).fetchone()[0]
         if recent >= PER_DAY:
             raise Problem("support_busy", "That is enough requests for today. Try again tomorrow.", 429)
@@ -418,7 +418,7 @@ class Support:
             raise Problem("support_unreachable", "Could not reach Tico support. Try again in a moment.", 502, retryable=True)
         ticket_id = "sup_" + secrets.token_hex(6)
         with self.store.transaction() as c:
-            c.execute("INSERT INTO support_tickets(id,actor,created,status,message,email,sent_json,hq_id,hq_secret,"
+            c.execute("INSERT INTO support_tickets(id,actor,created_at,status,message,email,sent,hq_id,hq_secret,"
                       "request_key) VALUES(?,?,?,?,?,?,?,?,?,?)",
                       (ticket_id, who.actor, H.now(), "open", message, email, encode(sent), hq_id,
                        self.vault.cipher.seal(c, _context(ticket_id), hq_secret), key or None))
@@ -524,7 +524,7 @@ class Support:
 
     def listing(self, who):
         with self.store.read() as c:
-            rows = c.execute("SELECT * FROM support_tickets WHERE actor=? ORDER BY created DESC, id DESC LIMIT ?",
+            rows = c.execute("SELECT * FROM support_tickets WHERE actor=? ORDER BY created_at DESC, id DESC LIMIT ?",
                              (who.actor, LISTED)).fetchall()
         tickets = [view(r) for r in rows]
         return {"enabled": True, "tickets": tickets, "unread": sum(t["unread"] for t in tickets)}
@@ -547,7 +547,7 @@ class Support:
         else:
             return False
         with self.store.transaction() as c:
-            c.execute("UPDATE support_tickets SET status=?, messages_json=COALESCE(?,messages_json), checked=? WHERE id=?",
+            c.execute("UPDATE support_tickets SET status=?, messages=COALESCE(?,messages), checked=? WHERE id=?",
                       (status, encode(messages) if messages is not None else None, H.now(), row["id"]))
         return True
 
@@ -558,7 +558,7 @@ class Support:
         now = H.now()
         with self.store.read() as c:
             rows = c.execute("SELECT * FROM support_tickets WHERE actor=? AND status!='gone' "
-                             "ORDER BY created DESC LIMIT ?", (who.actor, LISTED)).fetchall()
+                             "ORDER BY created_at DESC LIMIT ?", (who.actor, LISTED)).fetchall()
         active_since = H.parse_ts(now) - timedelta(seconds=ACTIVE_S)
         rows = sorted(rows, key=lambda r: (r["id"] == ticket, _last_activity(r)), reverse=True)
         failed, asked = False, 0
@@ -581,7 +581,7 @@ class Support:
 
     def read(self, who, ticket_id):
         row = self._own(who, ticket_id)
-        newest = max([m["id"] for m in json.loads(row["messages_json"] or "[]")] or [0])
+        newest = max([m["id"] for m in json.loads(row["messages"] or "[]")] or [0])
         with self.store.transaction() as c:
             c.execute("UPDATE support_tickets SET seen_id=MAX(seen_id,?) WHERE id=?", (newest, ticket_id))
         return self.one(who, ticket_id)

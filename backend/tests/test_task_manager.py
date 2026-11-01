@@ -33,7 +33,7 @@ def built(environment):
 
 def as_manager(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   (TM.SLUG, "hermes", "hash-tm", "2026-01-01T00:00:00Z", "human:test"))
     api.app.state.store.settings.test_identities["tm"] = Identity(TM.ACTOR, "bot", agent="hermes")
     return signed_in("tm")
@@ -46,7 +46,7 @@ def quiet_task(api, title="Reconcile the Acme invoices", private=False, owner="b
     made = made.json()["task"]
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM jobs")
-        c.execute("UPDATE tasks SET updated=?, private=? WHERE id=?", (H.shift(H.now(), hours=-3), int(private), made["id"]))
+        c.execute("UPDATE tasks SET updated_at=?, private=? WHERE id=?", (H.shift(H.now(), hours=-3), int(private), made["id"]))
     return made["id"]
 
 
@@ -58,7 +58,7 @@ def report(api):
 
 def checks(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT id,title,body,status FROM tasks WHERE owner=? ORDER BY created", (TM.ACTOR,))]
+        return [dict(r) for r in c.execute("SELECT id,title,body,status FROM tasks WHERE owner=? ORDER BY created_at", (TM.ACTOR,))]
 
 
 def test_it_is_built_in_active_and_outside_the_org_chart(environment):
@@ -128,7 +128,7 @@ def test_it_reassigns_only_within_the_owners_department(environment):
     api = built(environment)
     task = quiet_task(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.team','sales') WHERE bot='botops'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.team','sales') WHERE bot='botops'")
         groups = {"sales": {"name": "Sales", "parent": ""}, "support": {"name": "Support", "parent": ""}}
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('people', ?)",
                   (json.dumps({"people": [], "org_groups": groups}),))

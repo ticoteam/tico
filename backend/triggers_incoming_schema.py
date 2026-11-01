@@ -19,7 +19,7 @@ ALTER TABLE trigger_deliveries ADD COLUMN rules INTEGER NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS trigger_bodies (
   trigger_id TEXT NOT NULL, delivery TEXT NOT NULL, received_at TEXT NOT NULL, expires_at TEXT NOT NULL,
   type TEXT NOT NULL DEFAULT '', via TEXT NOT NULL DEFAULT 'direct',
-  headers_json TEXT NOT NULL DEFAULT '{}', body BLOB NOT NULL,
+  headers TEXT NOT NULL DEFAULT '{}', body BLOB NOT NULL,
   PRIMARY KEY(trigger_id, delivery));
 CREATE INDEX IF NOT EXISTS trigger_bodies_expires ON trigger_bodies(expires_at);
 CREATE TABLE IF NOT EXISTS trigger_seen (

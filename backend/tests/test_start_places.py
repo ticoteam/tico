@@ -129,7 +129,7 @@ def test_start_reservation_expires_despite_renewals_and_leaves_task_untouched(ap
     aid = attempt['id']
     now = H.now()
     with store.read() as c:
-        before = [tuple(r) for r in c.execute('SELECT id,status,version,note,updated FROM tasks ORDER BY id')]
+        before = [tuple(r) for r in c.execute('SELECT id,status,version,note,updated_at FROM tasks ORDER BY id')]
     for elapsed in (60, 120):
         monkeypatch.setattr(H, 'now', lambda elapsed=elapsed: H.shift(now, seconds=elapsed))
         post(api, f'attempts/{aid}/renew', {}, computer['token'])
@@ -144,7 +144,7 @@ def test_start_reservation_expires_despite_renewals_and_leaves_task_untouched(ap
     with store.read() as c:
         assert c.execute('SELECT state FROM attempts WHERE id=?', (aid,)).fetchone()[0] == 'expired'
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
-        assert [tuple(r) for r in c.execute('SELECT id,status,version,note,updated FROM tasks ORDER BY id')] == before
+        assert [tuple(r) for r in c.execute('SELECT id,status,version,note,updated_at FROM tasks ORDER BY id')] == before
     denied = api.post(f'/api/v2/attempts/{aid}/started', json={'thread_id': 'too-late'}, headers=headers(computer['token']))
     assert denied.status_code == 409
 
@@ -162,7 +162,7 @@ def test_overload_holds_only_new_starts_and_calm_load_resumes_them(api, cpu, mem
     machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == computer['runner_id'])
     assert any(w['reason'] == 'computer busy' for w in machine['turn_counts']['waits'])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state,stop_requested FROM attempts WHERE id='attempt-0'").fetchone()[:] == ('running', None)
+        assert c.execute("SELECT state,stop_requested_at FROM attempts WHERE id='attempt-0'").fetchone()[:] == ('running', None)
     post(api, 'runners/performance', {'samples': [point(int(time.time()) // 60 * 60 + 1, cpu=20)]}, computer['token'])
     assert claim(api, computer, 'finance') is not None
 
@@ -188,9 +188,9 @@ def test_upgrade_preserves_legacy_waits_and_only_unstarted_places_expire(api, mo
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM start_places")
         old = H.shift(H.now(), seconds=-7200)
-        c.execute("UPDATE attempts SET created=?", (old,))
+        c.execute("UPDATE attempts SET created_at=?", (old,))
         # One legacy worker cleared its wait and really is preparing; the other still waits.
-        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) "
+        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) "
                   "VALUES('attempt-1',2,'status',?,?)", ('{"waiting":""}', H.now()))
         start_places.restore_waits(c)
         assert start_places.overdue(c) == []  # An older worker never agreed to a hard preparation deadline.
@@ -306,7 +306,7 @@ def test_finished_task_stops_a_new_pre_start_wait_before_capacity_returns(api):
     post(api, f'attempts/{aid}/started', {'thread_id': 'must-not-start'}, computer['token'], expected=409)
     post(api, f'attempts/{aid}/complete', {'outcome': 'interrupted', 'text': '', 'last_seq': 0}, computer['token'])
     with api.app.state.store.read() as c:
-        assert c.execute('SELECT state,started FROM attempts WHERE id=?', (aid,)).fetchone()[:] == ('interrupted', None)
+        assert c.execute('SELECT state,started_at FROM attempts WHERE id=?', (aid,)).fetchone()[:] == ('interrupted', None)
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'cancelled'
         assert c.execute('SELECT status FROM tasks WHERE id=?', (task['id'],)).fetchone()[0] == 'done'
 

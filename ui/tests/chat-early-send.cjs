@@ -34,7 +34,7 @@ async function whileLoading(browser) {
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/chat/sales') {
         sends.push(route.request().postDataJSON().text);
-        return json({conversation: {id: 'c1'}, message: {id: 'm1', from_actor: 'human:ana', body: sends[0], created: new Date().toISOString()}});
+        return json({conversation: {id: 'c1'}, message: {id: 'm1', from_actor: 'human:ana', body: sends[0], created_at: new Date().toISOString()}});
       }
       return json(unrouted(p));
     });
@@ -65,7 +65,7 @@ async function afterHashNav(browser) {
   const errors = [], sends = [], served = [], streams = [];
   page.on('pageerror', e => errors.push(e.message));
   const now = () => new Date().toISOString();
-  let server = [{id: 'old', from_actor: 'bot:sales', body: 'Welcome back', created: '2026-01-01T00:00:00Z'}], sentAt = 0;
+  let server = [{id: 'old', from_actor: 'bot:sales', body: 'Welcome back', created_at: '2026-01-01T00:00:00Z'}], sentAt = 0;
   let releaseCurrent;
   const currentHeld = new Promise(done => releaseCurrent = done);
   await page.route('**/*', async route => {
@@ -91,7 +91,7 @@ async function afterHashNav(browser) {
     }
     if (p === '/api/v2/chat/sales') {
       sends.push(route.request().postDataJSON().text);
-      const message = {id: 'm1', from_actor: 'human:ana', body: sends[0], created: now()};
+      const message = {id: 'm1', from_actor: 'human:ana', body: sends[0], created_at: now()};
       server = [...server, message]; sentAt = Date.now();
       return json({conversation: {id: 'c1'}, message});
     }

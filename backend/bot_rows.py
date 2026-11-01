@@ -26,10 +26,10 @@ class BotRows:
         read = [slug for slug in slugs if slug in readable]
         self.configs = {r["bot"]: r for r in read_cache.configs(c, slugs)}
         # The originals of shared bots, which a branch follows.
-        sources = {source_of(_json(row["config_json"])) for row in self.configs.values()} - {""} - set(self.configs)
+        sources = {source_of(_json(row["config"])) for row in self.configs.values()} - {""} - set(self.configs)
         self.configs.update({r["bot"]: r for r in read_cache.configs(c, sources)})
         self.humans = {row["id"]: row for row in H.humans(c)}
-        self.assignments = _by(c, "SELECT a.bot,a.runner_id,a.generation,r.label,r.operator,r.last_seen,"
+        self.assignments = _by(c, "SELECT a.bot,a.runner_id,a.generation,r.label,r.operator,r.last_seen_at,"
                                   "r.revoked_at FROM assignments a JOIN runners r ON r.id=a.runner_id "
                                   "WHERE a.bot IN ({})", read)
         self.draining = set(_by(c, "SELECT bot FROM bot_control WHERE draining=1 AND bot IN ({})", read))
@@ -63,7 +63,7 @@ class BotRows:
     def declared(self, slug):
         """shared_bots.declared, from the rows read."""
         row = self.configs.get(slug)
-        return _json(row["config_json"]) if row else {}
+        return _json(row["config"]) if row else {}
 
     def human(self, pid):
         """H.human, from the rows read."""
@@ -74,5 +74,5 @@ class BotRows:
         row = self.configs.get(slug)
         if not row:
             return None
-        config = H._json(row["config_json"], {}) or {}
+        config = H._json(row["config"], {}) or {}
         return resolve_harness(config) if is_external(config) else None

@@ -61,7 +61,7 @@ def test_purpose_migration_backfills_unlabelled_turns_and_keeps_caller_labels(tm
     try:
         # A file may have the column before recording the version bump.
         conn.execute(f"PRAGMA user_version={version}")
-        conn.executemany("INSERT INTO turns(id,bot,started,trigger_kind,purpose) VALUES(?,?,'2026-01-01',?,?)",
+        conn.executemany("INSERT INTO turns(id,bot,started_at,trigger_kind,purpose) VALUES(?,?,'2026-01-01',?,?)",
                          [("builder", "pr-reviewer", "pr_checks", None),
                           ("reviewer", "pr-reviewer-sol", "status_or_relation", None),
                           ("unknown", "ops", None, None),

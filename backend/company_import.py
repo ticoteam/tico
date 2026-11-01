@@ -479,7 +479,7 @@ def apply(onboarding, c, who, text, fingerprint):
                                 "deferred": summary["deferred"], "seats": len(made), "people": people,
                                 **({"strategy": strategy} if strategy else {})}
     onboarding._store(c, record, who.actor)
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (PLAN_KEY, encode(saved)))
     clear_failure(c)
     H.event(c, who.actor, "onboarding.company_imported", "", {"fingerprint": fingerprint,
@@ -513,7 +513,7 @@ def add_invitee(onboarding, c, who, key, email):
     for seat_id in entry.get("seats") or []:          # a seat someone has moved since stays where they put it
         seat = c.execute("SELECT reports_to FROM seats WHERE id=? AND closed_at IS NULL", (seat_id,)).fetchone()
         if seat and seat["reports_to"] == home:
-            c.execute("UPDATE seats SET reports_to=?,updated=?,updated_by=? WHERE id=?",
+            c.execute("UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE id=?",
                       ("human:" + row["id"], H.now(), who.actor, seat_id))
             H.event(c, who.actor, "seat.updated", seat_id, {"fields": ["reports_to"]})
     people[at] = {**entry, "person": row["id"]}
@@ -559,7 +559,7 @@ def start(onboarding, store, telemetry=None):
                 telemetry.capture("company_import", exc)
         failure = {"at": H.now(), "reason": reason[:500]}
         with store.transaction() as c:
-            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                       (FAILED_KEY, encode(failure)))
             H.event(c, "system", "onboarding.company_import_failed", "", {"reason": failure["reason"]})
         return failure
@@ -590,7 +590,7 @@ def dismiss(onboarding, c, who):
 
 def failure(c):
     """Why the setup's company file wasn't imported on server start, or None (`start`)."""
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (FAILED_KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (FAILED_KEY,)).fetchone()
     try:
         value = json.loads(row[0]) if row else None
     except ValueError:

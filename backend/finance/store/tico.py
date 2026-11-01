@@ -28,7 +28,7 @@ def shift(at: str, days: int) -> str:
 
 
 def _metadata(c: sqlite3.Connection, key: str) -> Any:
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (key,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
     try:
         return json.loads(row[0]) if row else None
     except (TypeError, ValueError):
@@ -71,7 +71,7 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
     roster = cast(dict[str, Any], P.load(doc if isinstance(doc, dict) else {"people": []}))
     configs: dict[str, dict[str, Any]] = {}
     archived = {str(r[0]) for r in c.execute("SELECT slug FROM bots WHERE state='archived'")}
-    for row in c.execute("SELECT bot, config_json, reports_to FROM bot_config"):
+    for row in c.execute("SELECT bot, config, reports_to FROM bot_config"):
         if str(row[0]) in archived:
             continue
         try:
@@ -182,7 +182,7 @@ def gateway_run_costs(c: sqlite3.Connection, after: str, through: str,
     video, params = _video(video_models)
     rows = c.execute(f"SELECT bot, CASE WHEN {video} THEN 'video' ELSE 'ai' END, "
                      f"printf('%.9f', sum(coalesce(est_cost_usd, 0))) FROM {_runs()} WHERE {_GATEWAY} "
-                     "AND finished > ? AND finished <= ? GROUP BY 1, 2", (*params, after, through)).fetchall()
+                     "AND finished_at > ? AND finished_at <= ? GROUP BY 1, 2", (*params, after, through)).fetchall()
     return {(str(r[0] or ""), str(r[1])): str(r[2]) for r in rows}
 
 
@@ -202,15 +202,15 @@ def video_jobs(c: sqlite3.Connection, job_ids: Sequence[str], video_models: Sequ
 def run_holds_settled(c: sqlite3.Connection, month: str, through: str, page: int = 1000) -> list[tuple[str, str]]:
     """(hold id, source id) of every settled run hold no entry has taken in yet whose run finished in `month`
     (YYYY-MM, the month the Gateway bills it in) at or before `through`, read a page at a time. A run's finish is its
-    job's last turn's `finished`; a hold with no turn on record goes by when it settled."""
+    job's last turn's `finished_at`; a hold with no turn on record goes by when it settled."""
     out: list[tuple[str, str]] = []
     last = ""
     while True:
         rows = c.execute(
-            "SELECT id, source_id FROM (SELECT h.id, h.source_id, coalesce((SELECT max(t.finished) FROM attempts a "
-            "JOIN turns t ON t.id = a.id WHERE a.job_id = substr(h.source_id, 5)), h.settled_at) AS finished "
+            "SELECT id, source_id FROM (SELECT h.id, h.source_id, coalesce((SELECT max(t.finished_at) FROM attempts a "
+            "JOIN turns t ON t.id = a.id WHERE a.job_id = substr(h.source_id, 5)), h.settled_at) AS finished_at "
             "FROM fin_holds h WHERE h.source='run' AND h.status='settled' AND h.entry_id IS NULL AND h.id>?) "
-            "WHERE substr(finished, 1, 7)=? AND finished<=? ORDER BY id LIMIT ?", (last, month, through, page)).fetchall()
+            "WHERE substr(finished_at, 1, 7)=? AND finished_at<=? ORDER BY id LIMIT ?", (last, month, through, page)).fetchall()
         out += [(str(r[0]), str(r[1])) for r in rows]
         if len(rows) < page:
             return out
@@ -229,9 +229,9 @@ def live_expired_run_holds(c: sqlite3.Connection, at: str) -> list[str]:
 def gateway_decision_costs(c: sqlite3.Connection, after: str, through: str) -> dict[str, str]:
     """{caller actor: USD as decimal text} for decision calls on the Gateway's model in (after, through], from the
     judge audit (`judge.call` rows name who asked)."""
-    rows = c.execute("SELECT actor, printf('%.9f', sum(coalesce(json_extract(detail_json, '$.cost_usd'), 0))) "
+    rows = c.execute("SELECT actor, printf('%.9f', sum(coalesce(json_extract(detail, '$.cost_usd'), 0))) "
                      "FROM events WHERE action='judge.call' AND ts > ? AND ts <= ? "
-                     "AND json_extract(detail_json, '$.model') LIKE 'tico-%' GROUP BY actor", (after, through)).fetchall()
+                     "AND json_extract(detail, '$.model') LIKE 'tico-%' GROUP BY actor", (after, through)).fetchall()
     return {str(r[0] or ""): str(r[1]) for r in rows}
 
 
@@ -245,8 +245,8 @@ def run_gateway_cost(c: sqlite3.Connection, turn_id: str) -> str | None:
 def bot_average_run(c: sqlite3.Connection, bot: str, since: str, most: int) -> str | None:
     """A bot's average Gateway-billed cost per run over its last `most` such runs started since `since`, or None."""
     row = c.execute(f"SELECT count(*), printf('%.9f', avg(cost)) FROM (SELECT id, sum(coalesce(est_cost_usd, 0)) AS cost "
-                    f"FROM {_runs()} WHERE bot=? AND started >= ? AND finished IS NOT NULL AND {_GATEWAY} GROUP BY id "
-                    "ORDER BY max(started) DESC LIMIT ?)", (bot, since, most)).fetchone()
+                    f"FROM {_runs()} WHERE bot=? AND started_at >= ? AND finished_at IS NOT NULL AND {_GATEWAY} GROUP BY id "
+                    "ORDER BY max(started_at) DESC LIMIT ?)", (bot, since, most)).fetchone()
     return str(row[1]) if row and int(row[0]) else None
 
 
@@ -340,7 +340,7 @@ def seal_credential(c: sqlite3.Connection, name: str, value: str, preview: str, 
     cipher = _cipher()
     cid = new_id()
     ciphertext, nonce = cipher.encrypt(c, cid, value)
-    c.execute("INSERT INTO credentials(id,name,kind,preview,ciphertext,nonce,source,created,updated,updated_by,"
+    c.execute("INSERT INTO credentials(id,name,kind,preview,ciphertext,nonce,source,created_at,updated_at,updated_by,"
               "created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
               (cid, name[:150], SEALED_KIND, preview, ciphertext, nonce, SEALED_SOURCE, at, at, by, by))
     return cid
@@ -390,17 +390,17 @@ def finance_hook_calls(c: sqlite3.Connection, at: str, most: int) -> list[Row]:
 # joining, leaving or being archived. A roster edit that changes none of these moves it too; that only costs a cache.
 _BUMP = ("UPDATE fin_view_versions SET version=version+1, reason='{why}', "
          "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=1")
-_TEAM = ("CASE WHEN json_valid(OLD.config_json) AND json_valid(NEW.config_json) "
-         "THEN json_extract(OLD.config_json, '$.team') IS NOT json_extract(NEW.config_json, '$.team') "
-         "OR json_extract(OLD.config_json, '$.reports_to') IS NOT json_extract(NEW.config_json, '$.reports_to') "
-         "ELSE OLD.config_json IS NOT NEW.config_json END")
+_TEAM = ("CASE WHEN json_valid(OLD.config) AND json_valid(NEW.config) "
+         "THEN json_extract(OLD.config, '$.team') IS NOT json_extract(NEW.config, '$.team') "
+         "OR json_extract(OLD.config, '$.reports_to') IS NOT json_extract(NEW.config, '$.reports_to') "
+         "ELSE OLD.config IS NOT NEW.config END")
 ORG_TRIGGERS = (
     ("fin_view_roster_insert", "AFTER INSERT ON registry_metadata WHEN NEW.key = 'people'", "roster"),
-    ("fin_view_roster_update", "AFTER UPDATE OF value_json ON registry_metadata WHEN NEW.key = 'people' "
-     "AND OLD.value_json IS NOT NEW.value_json", "roster"),
+    ("fin_view_roster_update", "AFTER UPDATE OF value ON registry_metadata WHEN NEW.key = 'people' "
+     "AND OLD.value IS NOT NEW.value", "roster"),
     ("fin_view_bot_insert", "AFTER INSERT ON bot_config", "bot added"),
     ("fin_view_bot_delete", "AFTER DELETE ON bot_config", "bot removed"),
-    ("fin_view_bot_update", f"AFTER UPDATE OF reports_to, config_json ON bot_config WHEN "
+    ("fin_view_bot_update", f"AFTER UPDATE OF reports_to, config ON bot_config WHEN "
      f"OLD.reports_to IS NOT NEW.reports_to OR {_TEAM}", "reports to"),
     ("fin_view_bot_archive", "AFTER UPDATE OF state ON bots WHEN (OLD.state = 'archived') IS NOT "
      "(NEW.state = 'archived')", "bot archived"),

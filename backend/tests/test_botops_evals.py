@@ -87,7 +87,7 @@ def replay(api, botops_machine, scenario):
     for step in scenario["script"]:
         if step.get("person") == "fill_card":
             with api.app.state.store.read() as c:
-                card = c.execute("SELECT id FROM credential_requests WHERE status='pending' ORDER BY created DESC").fetchone()
+                card = c.execute("SELECT id FROM credential_requests WHERE status='pending' ORDER BY created_at DESC").fetchone()
             post(api, f"credential-requests/{card['id']}/save", {"value": rules["credential_card"]["value"]}, owner)
             steps += 1
         elif step.get("next_turn"):

@@ -279,8 +279,8 @@ def test_a_temporary_assignment_retired_with_its_task_takes_the_model_off_it(api
     ops_on_sonnet(api)
     mine = filed(api, "Tidy the changelog")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,state,created) VALUES('ops-a1','Ops A1','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('ops-a1',?,'ana')",
+        c.execute("INSERT INTO bots(slug,display_name,state,created_at) VALUES('ops-a1','Ops A1','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('ops-a1',?,'ana')",
                   (json.dumps({"assignment_branch": True, "shared_from": "ops"}),))
         c.execute("UPDATE tasks SET owner='bot:ops-a1',status='doing' WHERE id=?", (mine["id"],))
         haiku = task_run_models.stamped("claude-haiku-5-5", "low", "claude")
@@ -409,7 +409,7 @@ def test_a_task_says_whether_its_reader_may_set_its_model_as_the_post_decides(ap
     own_model(api, theirs["id"], HAIKU, token="ben-test", expected=403)
     # Named an owner of ops, he may set the model of its branch's tasks, though he does not manage the branch itself.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET bot_owners_json=? WHERE bot='ops'", (json.dumps(["ana", "ben"]),))
+        c.execute("UPDATE bot_config SET bot_owners=? WHERE bot='ops'", (json.dumps(["ana", "ben"]),))
     assert get(api, "tasks/" + theirs["id"], "ben-test")["can_set_run_model"] is True
     own_model(api, theirs["id"], HAIKU, token="ben-test")
     assert get(api, "tasks/" + theirs["id"], "ben-test")["run_model"]["model"] == "claude-haiku-5-5"

@@ -104,7 +104,7 @@ def message_tasks(c, message, seen=None, include_run=True, current=False):
     row = dict(message)
     if row.get("id") and not current:
         row = H.message(c, row["id"], include_deleted=True) or row
-    refs = row.get("refs") or H._json(row.get("refs_json"), {}) or {}
+    refs = row.get("refs") or H._json(row.get("refs"), {}) or {}
     run = refs.get("run") if isinstance(refs, dict) else None
     has_run = isinstance(refs, dict) and (refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None))
     key = ("message_tasks", row.get("id"), bool(include_run and has_run), row.get("conversation_id"),
@@ -131,7 +131,7 @@ def _message_tasks(c, message, seen=None, include_run=True, current=False):
     # Only complete root traversals are reusable. A nested traversal can skip ancestors
     # already visited by its caller, so caching that partial result would lose provenance.
     values = read_cache.cache(c)
-    refs = message.get("refs") or H._json(message.get("refs_json"), {}) or {}
+    refs = message.get("refs") or H._json(message.get("refs"), {}) or {}
     run = refs.get("run") if isinstance(refs, dict) else None
     has_run = isinstance(refs, dict) and (refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None))
     cache_key = ("message_tasks", mid, bool(include_run and has_run), message.get("conversation_id"),
@@ -145,7 +145,7 @@ def _message_tasks(c, message, seen=None, include_run=True, current=False):
         return set(cached[0])
     seen.add(mid)
     conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
-    refs = message.get("refs") or H._json(message.get("refs_json"), {}) or {}
+    refs = message.get("refs") or H._json(message.get("refs"), {}) or {}
     if not isinstance(refs, dict):
         raise Problem("privacy", "Message provenance cannot be authorized", 403)
     ids = references(c, refs)
@@ -153,7 +153,7 @@ def _message_tasks(c, message, seen=None, include_run=True, current=False):
         for mid in refs.get(key, []) if isinstance(refs.get(key), list) else []:
             if isinstance(mid, str):
                 ids.update(message_tasks(c, H.message(c, mid, include_deleted=True), seen, include_run=False))
-    # `refs` as parsed here: a row as stored has only `refs_json`, and its `refs.task` still decides.
+    # `refs` as parsed here: a row as stored has only `refs`, and its `refs.task` still decides.
     tid = H.message_task_id({**message, "refs": refs}, conv)
     if tid:
         ids.add(tid)
@@ -192,7 +192,7 @@ def _attempt_tasks(c, aid):
     for row in rows:
         ids.update(message_tasks(c, row, include_run=False, current=True))
     ids.update(r[0] for r in c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)))
-    for row in c.execute("SELECT detail_json FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND target=?",
+    for row in c.execute("SELECT detail FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND target=?",
                          (aid,)):
         ids.update(references(c, H._json(row[0], {}) or {}))
     return ids
@@ -209,13 +209,13 @@ def carried_tasks(c, aid):
                      "WHERE i.attempt_id=?", (aid, aid)).fetchall()
     for row in rows:
         row = dict(row)
-        refs = H._json(row.get("refs_json"), {}) or {}
+        refs = H._json(row.get("refs"), {}) or {}
         if isinstance(refs, dict) and "reconcile" in refs:
             refs = {key: value for key, value in refs.items() if key != "reconcile"}
-            row = {**row, "refs": refs, "refs_json": json.dumps(refs)}
+            row = {**row, "refs": refs, "refs": json.dumps(refs)}
         ids.update(_message_tasks(c, row, include_run=False, current=True))
     ids.update(r[0] for r in c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)))
-    for row in c.execute("SELECT detail_json FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND target=?",
+    for row in c.execute("SELECT detail FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND target=?",
                          (aid,)):
         ids.update(references(c, H._json(row[0], {}) or {}))
     return ids
@@ -249,7 +249,7 @@ def prime_attempts(c, aids):
             carried[row[0]].append(row[1])
         events = {aid: [] for aid in chunk}
         moved = {aid: [] for aid in chunk}
-        for row in c.execute("SELECT target,action,detail_json FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL +
+        for row in c.execute("SELECT target,action,detail FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL +
                              f") AND target IN ({marks})", chunk):
             events[row[0]].append(row[2])
             if row[1] == INPUT_MOVED:
@@ -290,7 +290,7 @@ def _prime_inputs(c, rows):
     tasks their refs name and their rooms, read together. Every call that checks a run (each event batch, each input
     poll) rebuilds its provenance once other writes move the clock, and a long goal run has taken in many inputs."""
     rows = H.prime_message_rows(c, rows)
-    prime_references(c, [H._json(row["refs_json"], {}) or {} for row in rows])
+    prime_references(c, [H._json(row["refs"], {}) or {} for row in rows])
     H.prime_conversations(c, {row["conversation_id"] for row in rows})
     meeting_sources(c).prime_conversations({row["conversation_id"] for row in rows})
 
@@ -306,7 +306,7 @@ def prime_queued(c, messages):
     prime_messages(c, messages)
     about = set()
     for m in messages:
-        refs = H._json(m.get("refs_json"), {}) or {}
+        refs = H._json(m.get("refs"), {}) or {}
         about.add(H.message_task_id({"refs": refs if isinstance(refs, dict) else {}},
                                     H.conversation(c, m["conversation_id"]) if m.get("conversation_id") else None))
     H.prime_tasks(c, about)
@@ -317,14 +317,14 @@ def prime_messages(c, messages):
     and answer, their rooms and meeting provenance, and the runs behind them together, so a long task's comments are
     not a few queries per comment."""
     messages = [dict(m) for m in messages]
-    refs = [m.get("refs") or H._json(m.get("refs_json"), {}) or {} for m in messages]
+    refs = [m.get("refs") or H._json(m.get("refs"), {}) or {} for m in messages]
     # The walks read each message's parents by id, and on a long task those are mostly the page's own messages,
     # given here as views: they are read as stored with the rest of their ancestry.
     parents = set().union(*(_parent_ids(m, r) for m, r in zip(messages, refs))) if messages else set()
     # Views and joins may carry extra columns. Only rows fetched from messages seed its stored-row cache.
     stored = H.prime_messages(c, parents | {m.get("id") for m in messages})
     ancestry_rows = [dict(row) for row in H.prime_message_rows(c, stored.values())]
-    ancestry = [H._json(row["refs_json"], {}) or {} for row in ancestry_rows]
+    ancestry = [H._json(row["refs"], {}) or {} for row in ancestry_rows]
     prime_references(c, refs + ancestry)
     rooms = {m.get("conversation_id") for m in messages + ancestry_rows}
     H.prime_conversations(c, rooms)
@@ -418,7 +418,7 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
         clauses.append("rowid<?")
         args.append(anchor["rowid"])
     if since:
-        clauses.append("created>?")
+        clauses.append("created_at>?")
         args.append(since)
     if task_id:
         # Only the messages that could be about the task are read (backend/message_links.py); each is still
@@ -445,7 +445,7 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
                 return False
         except Problem:
             return False
-        message = {**stored, "refs": H._json(stored["refs_json"], {}) or {}}
+        message = {**stored, "refs": H._json(stored["refs"], {}) or {}}
         if max_bytes and len(visible) < limit:
             size += len(json.dumps(message, default=str).encode())
             if visible and size > max_bytes:
@@ -568,7 +568,7 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
             approval = H.approval(c, key[9:])
             if not approval or not message_readable(c, principal, H.message(c, approval["message_id"])):
                 raise Problem("privacy", "This approval is no longer available", 403)
-        for key in ("items_json", "responses_json", "refs_json"):
+        for key in ("items", "responses", "refs"):
             if isinstance(payload.get(key), str):
                 require_payload(c, who, H._json(payload[key], {}) or {}, principal)
         if payload.get("attempt_id") and not attempt_readable(c, principal, payload["attempt_id"]):
@@ -626,7 +626,7 @@ def worktree_link_readable(c, who, link):
     ids = references(c, link)
     if readable(c, who.actor, ids):
         return True
-    detail = H._json(link.get("detail_json"), {}) or {}
+    detail = H._json(link.get("detail"), {}) or {}
     owner = detail.get("owner")
     if not owner and link.get("task_id"):
         task = c.execute("SELECT owner FROM tasks WHERE id=?", (link["task_id"],)).fetchone()
@@ -862,7 +862,7 @@ def from_private(c, who, owner, parent):
 
 
 def _private_words(c, row):
-    criteria = H._json(row.get("acceptance_json"), []) or []
+    criteria = H._json(row.get("acceptance"), []) or []
     return "\n".join([row.get("title") or "", row.get("body") or "", row.get("note") or "",
                        *(str(item or "") for item in (criteria if isinstance(criteria, list) else [])),
                        *(m.get("body") or "" for m in H.task_comments(c, row["id"]))])
@@ -985,7 +985,7 @@ def public_message(c, message):
 def require_batch(c, who, row):
     if row:
         row = dict(row)
-        require_payload(c, who, H._json(row["items_json"], []) or [])
+        require_payload(c, who, H._json(row["items"], []) or [])
         if row.get("message_id"):
             require_message(c, who, H.message(c, row["message_id"]))
 
@@ -1071,7 +1071,7 @@ def tag_readable(c, who, row):
 # Attach events of a batch of tags. The index is named because the general target/action index fetches every event
 # row from a table of millions; this one holds the attach events alone, covering their detail. Read as one row of
 # JSON, as status_tasks is: a busy tag list is thousands of attach rows, each step a GIL hand-off (41 ms on TIDY).
-TAG_ATTACHES_SQL = ("SELECT json_group_array(json_array(target,detail_json)) FROM events INDEXED BY events_tag_attach "
+TAG_ATTACHES_SQL = ("SELECT json_group_array(json_array(target,detail)) FROM events INDEXED BY events_tag_attach "
                     "WHERE target IN ({marks}) AND action='tag.attach'")
 
 
@@ -1392,9 +1392,9 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
 def event_readable(c, actor, event):
     event = dict(event)
     meetings = meeting_sources(c)
-    if not meetings.readable(actor, meetings.references(H._json(event.get("detail_json"), {}) or {})):
+    if not meetings.readable(actor, meetings.references(H._json(event.get("detail"), {}) or {})):
         return False
-    ids = references(c, H._json(event.get("detail_json"), {}) or {}) | references(c, event.get("target"))
+    ids = references(c, H._json(event.get("detail"), {}) or {}) | references(c, event.get("target"))
     target = event.get("target")
     if _task(c, target):
         ids.add(target)
@@ -1413,8 +1413,8 @@ def event_readable(c, actor, event):
             return False
     # Tool/audit events from a private execution often have no explicit task ref.
     if H.is_bot(event.get("actor")):
-        for row in c.execute("SELECT id FROM attempts WHERE bot=? AND created<=? "
-                             "AND coalesce(finished,?)>=?", (H.actor_id(event["actor"]),
+        for row in c.execute("SELECT id FROM attempts WHERE bot=? AND created_at<=? "
+                             "AND coalesce(finished_at,?)>=?", (H.actor_id(event["actor"]),
                                                             event["ts"], H.now(), event["ts"])):
             if not meetings.attempt_readable(actor, row[0]):
                 return False

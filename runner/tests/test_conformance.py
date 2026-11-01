@@ -84,7 +84,7 @@ class Computer:
         assign(api, self.registration, "ops")
         self.runtime = RUNTIMES.get(harness, harness)
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
                       (encode({"name": "ops", "runtime": self.runtime, "harness": harness, "model": MODELS[harness],
                                "status": "active", **(bot or {})}),))
         if harness in GRANTED_KEYS:
@@ -169,14 +169,14 @@ class Computer:
 
     def readiness(self):
         with self.api.app.state.store.read() as c:
-            row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (self.registration["runner_id"],)).fetchone()
+            row = c.execute("SELECT readiness FROM runners WHERE id=?", (self.registration["runner_id"],)).fetchone()
         return (json.loads(row[0] or "{}") if row else {}).get("bots", {})
 
     def profiles(self):
         """The subscription profiles this computer's last heartbeat listed: {name: {runtime: state}}."""
         with self.api.app.state.store.read() as c:
             return {r[0]: json.loads(r[1] or "{}") for r in c.execute(
-                "SELECT profile, runtimes_json FROM computer_profiles WHERE runner_id=?", (self.registration["runner_id"],))}
+                "SELECT profile, runtimes FROM computer_profiles WHERE runner_id=?", (self.registration["runner_id"],))}
 
     def calls(self):
         if not self.log_path.exists():
@@ -188,14 +188,14 @@ class Computer:
 
     def attempts(self):
         with self.api.app.state.store.read() as c:
-            rows = c.execute("SELECT id, state, result_json, final_text FROM attempts WHERE runner_id=? ORDER BY created",
+            rows = c.execute("SELECT id, state, result, final_text FROM attempts WHERE runner_id=? ORDER BY created_at",
                              (self.registration["runner_id"],)).fetchall()
         return [{"id": r[0], "state": r[1], "result": terminal_result(r[2]), "text": r[3]} for r in rows]
 
     def events(self, aid):
         with self.api.app.state.store.read() as c:
             return [{"seq": r[0], "kind": r[1], "payload": json.loads(r[2])}
-                    for r in c.execute("SELECT seq, kind, payload_json FROM attempt_events WHERE attempt_id=? ORDER BY seq", (aid,))]
+                    for r in c.execute("SELECT seq, kind, payload FROM attempt_events WHERE attempt_id=? ORDER BY seq", (aid,))]
 
     def keys(self):
         with self.api.app.state.store.read() as c:
@@ -231,7 +231,7 @@ def add_bot(api, computer, tmp_path, slug, bot=None):
     config = {"name": slug, "runtime": computer.runtime, "harness": computer.harness, "model": MODELS[computer.harness],
               "status": "active", **(bot or {})}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(config), slug))
+        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(config), slug))
     repo = tmp_path / "projects" / f"bot-{slug}"
     repo.mkdir(parents=True)
     (repo / "AGENT.md").write_text(f"# {slug.title()}\n\nAnswer the Acme team.\n")
@@ -253,7 +253,7 @@ def terminal_result(raw):
 
 def bot_attempts(api, computer, bot):
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT id, result_json FROM attempts WHERE runner_id=? AND bot=? ORDER BY created",
+        rows = c.execute("SELECT id, result FROM attempts WHERE runner_id=? AND bot=? ORDER BY created_at",
                          (computer.registration["runner_id"], bot)).fetchall()
     return [{"id": r[0], "result": terminal_result(r[1])} for r in rows]
 
@@ -421,7 +421,7 @@ def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer)
 def started_threads(api, computer):
     """The provider thread each of this computer's turns reported when it started, oldest first."""
     with api.app.state.store.read() as c:
-        return [r[0] for r in c.execute("SELECT thread_id FROM attempts WHERE runner_id=? ORDER BY created",
+        return [r[0] for r in c.execute("SELECT thread_id FROM attempts WHERE runner_id=? ORDER BY created_at",
                                         (computer.registration["runner_id"],))]
 
 
@@ -841,7 +841,7 @@ def test_the_signed_in_account_reaches_readiness_without_anything_token_like(api
 
     def account():
         with api.app.state.store.read() as c:
-            row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (computer.registration["runner_id"],)).fetchone()
+            row = c.execute("SELECT readiness FROM runners WHERE id=?", (computer.registration["runner_id"],)).fetchone()
         return json.loads(row[0] or "{}").get("runtimes", {}).get(computer.runtime, {}).get("account")
 
     got = until(account, "the account in readiness", timeout=40)
@@ -852,13 +852,13 @@ def test_the_signed_in_account_reaches_readiness_without_anything_token_like(api
     else:
         assert got == {"email": "ops@acme.example", "plan": "max", "org": "Acme Ltd"}
     with api.app.state.store.read() as c:
-        stored = json.dumps([list(r) for r in c.execute("SELECT readiness_json FROM runners")])
+        stored = json.dumps([list(r) for r in c.execute("SELECT readiness FROM runners")])
     assert "sk-ant-oat01" not in stored and "acme-org-0001" not in stored
 
 
 def runtime_row(api, computer):
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (computer.registration["runner_id"],)).fetchone()
+        row = c.execute("SELECT readiness FROM runners WHERE id=?", (computer.registration["runner_id"],)).fetchone()
     return json.loads(row[0] or "{}").get("runtimes", {}).get(computer.runtime, {})
 
 
@@ -1087,7 +1087,7 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
     git(base, "remote", "set-url", "origin", "https://github.com/org/product.git")
     git(base, "worktree", "add", "-q", "-b", "tico/feature", str(projects / "work" / "product"))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
                   (encode({"name": "ops", "runtime": computer.harness, "model": MODELS[computer.harness],
                            "status": "active", "session": "task"}),))
     computer.start()
@@ -1102,11 +1102,11 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
     def certified():
         # Each config change is a full readiness pass, which inspects the computer's worktrees.
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.touched',?) WHERE bot='ops'",
+            c.execute("UPDATE bot_config SET config=json_set(config,'$.touched',?) WHERE bot='ops'",
                       (time.monotonic(),))
-            row = c.execute("SELECT state, detail_json FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
+            row = c.execute("SELECT state, detail FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
         time.sleep(0.5)
-        return row["state"] == "present" and json.loads(row["detail_json"])["checkout_state"] == "ready"
+        return row["state"] == "present" and json.loads(row["detail"])["checkout_state"] == "ready"
     until(certified, "the attached worktree reported ready", timeout=60)
 
     post(api, f"tasks/{task['id']}/chat", {"text": "REMEMBER what the build taught you"})
@@ -1176,7 +1176,7 @@ def test_python_m_runner_run_is_the_rust_runner_and_says_so_in_readiness(api, li
     try:
         machine.start()
         with api.app.state.store.read() as c:
-            row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (machine.registration["runner_id"],)).fetchone()
+            row = c.execute("SELECT readiness FROM runners WHERE id=?", (machine.registration["runner_id"],)).fetchone()
         from runner.engine import source_id
         reported = json.loads(row[0])["engine"]
         assert (reported["name"], reported["build"]) == ("rust", source_id(ROOT))

@@ -15,25 +15,25 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 const bots = ['lead', 'qa', 'senior'].map(name => ({name, display_name: {lead: 'Head of Engineering', qa: 'QA Engineer',
   senior: 'Senior Engineer'}[name], org_parent: '', host: 'keeper', status: 'active', can_chat: true, users: [{id: 'ana', name: 'Ana'}], schedules: []}));
 const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bot:lead', requester: 'human:ana', status: 'doing',
-  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created: ago(600), updated: ago(60), ...over});
+  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
 const T = {
   own: task('t-own', 'Ship the release notes'),
   forAna: task('t-ana', 'Pick the release day', {owner: 'human:ana', requester: 'bot:lead', status: 'open'}),
-  waits: task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', note: 'Waiting on Ana for the bucket keys.', created: ago(480)}),
-  onQa: task('t-on-qa', 'Merge the export fix', {status: 'waiting', waiting_on: 'bot:qa', created: ago(300)}),
-  vendor: task('t-vendor', 'Renew the domain', {status: 'waiting', note: "Waiting for the vendor's invoice.\nThen pay it.", created: ago(200)}),
-  roadmap: task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created: ago(30)}),
-  doneNow: task('t-done-now', 'Send the weekly summary', {status: 'done', done_at: ago(2 * 1440), created: ago(3 * 1440)}),
-  doneOld: task('t-done-old', 'Close the old mailbox', {status: 'done', done_at: ago(20 * 1440), created: ago(21 * 1440)}),
+  waits: task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', note: 'Waiting on Ana for the bucket keys.', created_at: ago(480)}),
+  onQa: task('t-on-qa', 'Merge the export fix', {status: 'waiting', waiting_on: 'bot:qa', created_at: ago(300)}),
+  vendor: task('t-vendor', 'Renew the domain', {status: 'waiting', note: "Waiting for the vendor's invoice.\nThen pay it.", created_at: ago(200)}),
+  roadmap: task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created_at: ago(30)}),
+  doneNow: task('t-done-now', 'Send the weekly summary', {status: 'done', done_at: ago(2 * 1440), created_at: ago(3 * 1440)}),
+  doneOld: task('t-done-old', 'Close the old mailbox', {status: 'done', done_at: ago(20 * 1440), created_at: ago(21 * 1440)}),
   asked: task('t-asked', 'Support access fixes', {owner: 'bot:senior', requester: 'bot:lead', status: 'done',
-    ask: {id: 'q-1', body: 'Should full access refuse credential changes?', from_actor: 'bot:lead', to_actor: 'human:ana', created: ago(30)}}),
+    ask: {id: 'q-1', body: 'Should full access refuse credential changes?', from_actor: 'bot:lead', to_actor: 'human:ana', created_at: ago(30)}}),
   qa: task('t-qa', 'Run the release check', {owner: 'bot:qa', requester: 'bot:lead', status: 'doing'}),
 };
 const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Friday fine for the summary?', first_line: 'Is Friday fine for the summary?',
-  body: 'Is Friday fine for the summary?', requester: 'bot:lead', origin_actor: 'bot:lead', created: ago(20),
-  ask: {id: 'm-loose', from_actor: 'bot:lead', to_actor: 'human:ana', body: 'Is Friday fine for the summary?', created: ago(20)}};
+  body: 'Is Friday fine for the summary?', requester: 'bot:lead', origin_actor: 'bot:lead', created_at: ago(20),
+  ask: {id: 'm-loose', from_actor: 'bot:lead', to_actor: 'human:ana', body: 'Is Friday fine for the summary?', created_at: ago(20)}};
 const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...T.waits, kind: 'waiting'}, LOOSE,
-  {kind: 'approval', id: 'approval-1', what: 'send', requested_by: 'bot:lead', requester: 'bot:lead', title: 'Approve the announcement', created: ago(10)},
+  {kind: 'approval', id: 'approval-1', what: 'send', requested_by: 'bot:lead', requester: 'bot:lead', title: 'Approve the announcement', created_at: ago(10)},
   {...task('t-qa-ana', 'Approve the test plan', {owner: 'human:ana', requester: 'bot:qa', status: 'open'}), kind: 'task'}];
 
 // Head of Engineering keeps Done Recently beside the new defaults (a layout saved before them).
@@ -72,7 +72,7 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
         const all = Object.values(T);
         // The rail reads open and finished tasks apart, finished ones since a day; the server filters both.
         const st = q.get('status'), since = q.get('updated_since');
-        const fits = t => (!st || st === 'all' || st.split(',').includes(t.status)) && (!since || t.updated >= since);
+        const fits = t => (!st || st === 'all' || st.split(',').includes(t.status)) && (!since || t.updated_at >= since);
         if (q.get('owner') === 'lead') return json({tasks: all.filter(t => t.owner === 'bot:lead' && fits(t))});
         if (q.get('requester') === 'lead') return json({tasks: all.filter(t => t.requester === 'bot:lead' && t.status !== 'done')});
         return json({tasks: []});
@@ -100,8 +100,8 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
             ? Object.values(T).filter(t => (t.owner === 'bot:lead' || t.requester === 'bot:lead') && LAYOUT[0].conditions[0].value.includes(t.status))
             : Object.values(T).filter(t => (t.owner === 'bot:lead' || t.requester === 'bot:lead')
               && ((t.owner === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana'))))},
-          {key: 'active', name: 'Doing', rows: owned.filter(t => ['open', 'doing'].includes(t.status)).sort((a,b) => b.created.localeCompare(a.created))},
-          {key: 'blocked', name: 'Blocked', rows: owned.filter(t => t.status === 'waiting' && t.waiting_on !== 'human:ana').sort((a,b) => b.created.localeCompare(a.created))},
+          {key: 'active', name: 'Doing', rows: owned.filter(t => ['open', 'doing'].includes(t.status)).sort((a,b) => b.created_at.localeCompare(a.created_at))},
+          {key: 'blocked', name: 'Blocked', rows: owned.filter(t => t.status === 'waiting' && t.waiting_on !== 'human:ana').sort((a,b) => b.created_at.localeCompare(a.created_at))},
           {key: 'c4', name: 'Assigned to Others', rows: others},
         ];
         return json({bot: 'lead', tabs: groups.map(({key, name, rows}) => ({key, name, count: rows.length, ids: rows.map(t => t.id), next: null})), tasks: Object.values(T)});

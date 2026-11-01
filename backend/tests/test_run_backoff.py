@@ -14,7 +14,7 @@ def at(monkeypatch, api, when):
     """The clock reads `when`, and the test computer has been reporting in all along."""
     monkeypatch.setattr(H, "now", lambda: when)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (when,))
+        c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (when,))
 
 
 def fail(api, machine, attempt, error, summary="", **extra):

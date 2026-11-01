@@ -26,22 +26,22 @@ def group(api, gid, token="ana-test"):
 
 def roster_of(api):
     with api.app.state.store.read() as c:
-        return json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        return json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
 
 
 def set_roster(api, doc):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(doc),))
 
 
 def add_bots(c, **bots):
     """{slug: (config, reports_to)}: bots straight into the database."""
     for slug, (config, reports_to) in bots.items():
         if not H.bot(c, slug):
-            c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
+            c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                       "VALUES(?,?,?,?,?,'','keeper','active',?)", (slug, slug, "fake", "m", "", H.now()))
         c.execute("DELETE FROM bot_config WHERE bot=?", (slug,))
-        c.execute("INSERT INTO bot_config(bot,config_json,operator,reports_to) VALUES(?,?,?,?)",
+        c.execute("INSERT INTO bot_config(bot,config,operator,reports_to) VALUES(?,?,?,?)",
                   (slug, encode({"name": slug, **config}), "ana", reports_to))
 
 
@@ -117,7 +117,7 @@ def test_teams_org_groups_and_person_teams_become_groups_and_no_bot_changes_grou
             "coach": ({}, None), "planner": ({"team": ""}, "cmo")}
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM bot_config")
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(doc),))
         add_bots(c, **bots)
         roster, configs = Groups._roster(c), Groups._configs(c)
         before = {slug: P.team_of(slug, configs, roster) for slug in configs}
@@ -133,10 +133,10 @@ def test_teams_org_groups_and_person_teams_become_groups_and_no_bot_changes_grou
     assert stored["org_groups"]["success-team"] == {"name": "Success Team"}
     assert {p["id"]: p["team"] for p in stored["people"]} == {"ana": "marketing", "ben": "success-team", "cara": "product"}
     with api.app.state.store.read() as c:
-        assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='coach'").fetchone()[0])["team"] == ""
+        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='coach'").fetchone()[0])["team"] == ""
         assert c.execute("SELECT team FROM bot_config WHERE bot='design'").fetchone()[0] == "product"
         assert P.by_team(Groups._roster(c))["success-team"] == ["ben"]
-        assert json.loads(H.human(c, "ben")["teams_json"]) == ["success-team"]
+        assert json.loads(H.human(c, "ben")["teams"]) == ["success-team"]
     # Idempotent: again changes nothing, even when the flag is cleared.
     with api.app.state.store.transaction() as c:
         assert Groups.migrate(c, api.app.state.store.settings) is False

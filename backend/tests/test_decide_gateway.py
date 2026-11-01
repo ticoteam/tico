@@ -139,13 +139,13 @@ def wire(api, monkeypatch, gateway_key="gw-synthetic", own_key="", team_llm=True
 def audits(api):
     with api.app.state.store.read() as c:
         return [json.loads(r[0]) for r in c.execute(
-            "SELECT detail_json FROM events WHERE action='judge.call' ORDER BY rowid")]
+            "SELECT detail FROM events WHERE action='judge.call' ORDER BY rowid")]
 
 
 def spends(api):
     with api.app.state.store.read() as c:
         return [json.loads(r[0]) for r in c.execute(
-            "SELECT detail_json FROM events WHERE action='judge.spend' ORDER BY rowid")]
+            "SELECT detail FROM events WHERE action='judge.spend' ORDER BY rowid")]
 
 
 def ask(api):
@@ -299,7 +299,7 @@ def test_slack_routing_with_a_capped_gateway_and_no_own_key_never_reaches_typesa
     gw.tick()
     assert len(net.calls(GATEWAY_URL)) == 1 and net.calls(J.URL) == [], "a capped Gateway never falls through to TypeSafe"
     if team_llm:
-        detail = json.loads(rows(hub, "SELECT detail_json FROM events WHERE action='judge.call'")[-1]["detail_json"])
+        detail = json.loads(rows(hub, "SELECT detail FROM events WHERE action='judge.call'")[-1]["detail"])
         assert detail["provider"] == "Anthropic" and len(net.calls(ANTHROPIC)) == 1
 
 
@@ -399,9 +399,9 @@ def test_the_slack_gateway_counts_an_unusable_answer_with_the_one_after_it(hub, 
     gw.verify_app()
     assert gw.receive(envelope("hello there", channel=DM, kind="message")) == "queued"
     gw.tick()
-    spent = [json.loads(r["detail_json"]) for r in rows(hub, "SELECT detail_json FROM events WHERE action='judge.spend'")]
+    spent = [json.loads(r["detail"]) for r in rows(hub, "SELECT detail FROM events WHERE action='judge.spend'")]
     assert [(row["model"], row.get("unusable")) for row in spent] == [("tico-decide-1.0", True), ("claude-sonnet-5-5", None)]
-    detail = json.loads(rows(hub, "SELECT detail_json FROM events WHERE action='judge.call'")[-1]["detail_json"])
+    detail = json.loads(rows(hub, "SELECT detail FROM events WHERE action='judge.call'")[-1]["detail"])
     assert detail["provider"] == "Anthropic" and detail["cost_usd"] == round(sum(row["cost_usd"] for row in spent), 6)
 
 
@@ -665,13 +665,13 @@ def test_slack_routing_asks_the_gateway_first_and_audits_it(hub, monkeypatch, ne
     assert gw.receive(envelope("hello there", channel=DM, kind="message")) == "queued"
     gw.tick()
     assert net.requests and {r[0] for r in net.requests} == {GATEWAY_URL}
-    detail = json.loads(rows(hub, "SELECT detail_json FROM events WHERE action='judge.call'")[-1]["detail_json"])
+    detail = json.loads(rows(hub, "SELECT detail FROM events WHERE action='judge.call'")[-1]["detail"])
     assert detail["provider"] == "Tico AI Gateway" and detail["model"] == "tico-decide-1.0"
 
     net.fail[GATEWAY_URL] = 503
     assert gw.receive(envelope("and again", channel=DM, kind="message")) == "queued"
     gw.tick()
-    detail = json.loads(rows(hub, "SELECT detail_json FROM events WHERE action='judge.call'")[-1]["detail_json"])
+    detail = json.loads(rows(hub, "SELECT detail FROM events WHERE action='judge.call'")[-1]["detail"])
     assert detail["provider"] == "TypeSafe" and len(net.calls(J.URL)) >= 1
 
 

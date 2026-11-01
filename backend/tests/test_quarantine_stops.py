@@ -32,7 +32,7 @@ def review(api):
         task = c.execute("SELECT id,body FROM tasks WHERE title=? AND status='open'", (REVIEW,)).fetchone()
         if not task:
             return None
-        said = [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs_json,'$.task')=?",
+        said = [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs,'$.task')=?",
                                         (task['id'],))]
         return "\n".join([task['body'] or '', *said])
 
@@ -130,7 +130,7 @@ def test_a_read_only_turn_on_a_host_that_does_not_report_its_calls_is_held(api):
 def test_a_quarantine_stopped_turn_that_used_up_an_approval_is_held(api):
     machine, message, attempt = working(api, safe=True)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
                   ('quarantine-send', 'send', message['id'], 'bot:ops', H.now(), H.now()))
     quarantine(api)
     post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
@@ -248,7 +248,7 @@ def test_a_quarantine_after_the_lease_already_lapsed_is_still_a_lost_computer(ap
     refused = post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'], expected=409)
     assert refused['error']['code'] == 'stale_lease'
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT stop_requested FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0] is None
+        assert c.execute("SELECT stop_requested_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0] is None
 
 
 def test_a_person_stop_is_unchanged(api):

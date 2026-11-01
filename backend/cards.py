@@ -35,14 +35,14 @@ from .store import H, Problem, encode
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cards (
-  id TEXT PRIMARY KEY, template TEXT NOT NULL, settings_json TEXT NOT NULL DEFAULT '{}', title TEXT NOT NULL DEFAULT '',
-  made_by TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, updated_by TEXT NOT NULL);
+  id TEXT PRIMARY KEY, template TEXT NOT NULL, settings TEXT NOT NULL DEFAULT '{}', title TEXT NOT NULL DEFAULT '',
+  made_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pins (
   id TEXT PRIMARY KEY, place TEXT NOT NULL, item TEXT NOT NULL, position INTEGER NOT NULL,
-  size TEXT NOT NULL DEFAULT 'medium', made_by TEXT NOT NULL, created TEXT NOT NULL, UNIQUE(place, item));
+  size TEXT NOT NULL DEFAULT 'medium', made_by TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(place, item));
 CREATE INDEX IF NOT EXISTS pins_item ON pins(item);
 CREATE TABLE IF NOT EXISTS pin_places (
-  place TEXT PRIMARY KEY, audience_json TEXT, saved TEXT NOT NULL, saved_by TEXT NOT NULL);
+  place TEXT PRIMARY KEY, audience TEXT, saved TEXT NOT NULL, saved_by TEXT NOT NULL);
 """
 
 SIZES = ("small", "medium", "large")
@@ -311,7 +311,7 @@ def automation_runs(ctx, s):
     groups = {"group:" + g for g in P.group_and_below(s["team"], ctx.roster)} if s["team"] else None
     keys = {AU._key(a) for a in actors or ()}
     names = {}
-    for row in ctx.c.execute("SELECT id, name, owner, grp, flow_json FROM automations WHERE deleted_at IS NULL"):
+    for row in ctx.c.execute("SELECT id, name, owner, grp, flow FROM automations WHERE deleted_at IS NULL"):
         if groups is not None and row["grp"] not in groups and AU._key(row["owner"]) not in keys:
             continue
         if AU.may_change(ctx.c, ctx.who, {**AU.flow_of(row), "readonly": False}, chart):
@@ -319,8 +319,8 @@ def automation_runs(ctx, s):
     if not names:
         return {"total": 0, "failed": 0, "running": 0, "runs": []}
     runs = [dict(r) for r in ctx.c.execute(
-        "SELECT id, automation_id, status, started, finished FROM automation_runs WHERE started>=? "
-        "AND automation_id IN (SELECT value FROM json_each(?)) ORDER BY started DESC LIMIT 500",
+        "SELECT id, automation_id, status, started_at, finished_at FROM automation_runs WHERE started_at>=? "
+        "AND automation_id IN (SELECT value FROM json_each(?)) ORDER BY started_at DESC LIMIT 500",
         (ago(hours=24), json.dumps(sorted(names))))]
     failed = [r for r in runs if r["status"] == "failed"]
     shown = (failed + [r for r in runs if r["status"] != "failed"])[:5]
@@ -350,7 +350,7 @@ def pages_for(ctx, team="", limit=5):
 
 
 def page_brief(row):
-    return {"file_id": row["id"], "title": row["title"], "bot": row["bot"], "updated": row["last_activity_at"],
+    return {"file_id": row["id"], "title": row["title"], "bot": row["bot"], "updated_at": row["last_activity_at"],
             "archived": bool(row["archived"])}
 
 
@@ -405,7 +405,7 @@ DATA = {"tasks_by_status": tasks_by_status, "done_per_week": done_per_week, "nee
 
 def card_view(ctx, row):
     """A card for its reader: its settings and what it shows them, or `hidden` when that is nothing."""
-    settings = json.loads(row["settings_json"]) if isinstance(row.get("settings_json"), str) else row["settings"]
+    settings = json.loads(row["settings"]) if isinstance(row.get("settings"), str) else row["settings"]
     template = row["template"]
     team = settings.get("team") or ""
     data = None
@@ -445,7 +445,7 @@ def place_row(c, place):
 
 def audience_of(c, place):
     row = place_row(c, place)
-    return A.audience(json.loads(row["audience_json"]) if row and row["audience_json"] else {"everyone": True})
+    return A.audience(json.loads(row["audience"]) if row and row["audience"] else {"everyone": True})
 
 
 def may_view(ctx, kind, ident):
@@ -515,7 +515,7 @@ def canonical(kind, ident):
 
 
 def pins_at(c, place):
-    return [dict(r) for r in c.execute("SELECT * FROM pins WHERE place=? ORDER BY position, created, id", (place,))]
+    return [dict(r) for r in c.execute("SELECT * FROM pins WHERE place=? ORDER BY position, created_at, id", (place,))]
 
 
 def card_row(c, cid):
@@ -525,7 +525,7 @@ def card_row(c, cid):
 
 def default_pins(kind, ident):
     return [{"id": None, "place": canonical(kind, ident), "item": None, "position": i, "size": size, "made_by": None,
-             "card": {"id": None, "template": t, "settings_json": json.dumps({"team": ident}), "title": "",
+             "card": {"id": None, "template": t, "settings": json.dumps({"team": ident}), "title": "",
                       "made_by": None}}
             for i, (t, size) in enumerate(DEFAULTS.get(kind, []))]
 
@@ -568,7 +568,7 @@ def ensure(ctx, kind, ident):
     if kind not in DEFAULTS or place_row(ctx.c, place):
         return
     now = H.now()
-    ctx.c.execute("INSERT INTO pin_places(place, audience_json, saved, saved_by) VALUES(?,?,?,?)",
+    ctx.c.execute("INSERT INTO pin_places(place, audience, saved, saved_by) VALUES(?,?,?,?)",
                   (place, None, now, ctx.who.actor))
     for pin in default_pins(kind, ident):
         cid = make_card(ctx, pin["card"]["template"], "", {"team": ident} if ident else {})
@@ -580,7 +580,7 @@ def make_card(ctx, template, title, settings):
         raise Problem("too_many", f"This team keeps {CARDS_MAX} cards: remove some first", 409)
     settings = clean_settings(ctx, template, settings)
     cid, now = H.new_id(), H.now()
-    ctx.c.execute("INSERT INTO cards(id,template,settings_json,title,made_by,created,updated,updated_by) "
+    ctx.c.execute("INSERT INTO cards(id,template,settings,title,made_by,created_at,updated_at,updated_by) "
                   "VALUES(?,?,?,?,?,?,?,?)", (cid, template, json.dumps(settings), (title or "").strip(), ctx.who.actor,
                                               now, now, ctx.who.actor))
     H.event(ctx.c, ctx.who.actor, "card.added", cid, {"template": template})
@@ -594,7 +594,7 @@ def size_of(value):
 
 
 def file_activity(c, fid, actor, action, place):
-    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,created,detail_json) VALUES(?,?,?,?,?)",
+    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,created_at,detail) VALUES(?,?,?,?,?)",
               (fid, actor, action, H.now(), encode({"place": place})))
 
 
@@ -630,7 +630,7 @@ def insert_pin(ctx, place, item, size, position=None):
     position = count if position is None else min(position, count)
     ctx.c.execute("UPDATE pins SET position=position+1 WHERE place=? AND position>=?", (place, position))
     pid = H.new_id()
-    ctx.c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created) VALUES(?,?,?,?,?,?,?)",
+    ctx.c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
                   (pid, place, item, position, size_of(size), ctx.who.actor, H.now()))
     if item.startswith("page:"):
         file_activity(ctx.c, item[5:], ctx.who.actor, "pinned", place)
@@ -731,7 +731,7 @@ def sync_bot(ctx, slug, widgets):
             ctx.c.execute("UPDATE pins SET position=? WHERE id=?", (at, have[item]["id"]))
         else:
             check_item(ctx, "bot", item)
-            ctx.c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created) VALUES(?,?,?,?,?,?,?)",
+            ctx.c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
                           (H.new_id(), place, item, at, "medium", ctx.who.actor, H.now()))
             if item.startswith("page:"):
                 file_activity(ctx.c, item[5:], ctx.who.actor, "pinned", place)
@@ -791,10 +791,10 @@ def edit_card(ctx, cid, title=None, settings=None):
     if title is not None:
         fields["title"] = title.strip()
     if settings is not None:
-        merged = {**json.loads(row["settings_json"]), **settings}
-        fields["settings_json"] = json.dumps(clean_settings(ctx, row["template"], merged))
+        merged = {**json.loads(row["settings"]), **settings}
+        fields["settings"] = json.dumps(clean_settings(ctx, row["template"], merged))
     if fields:
-        fields.update(updated=H.now(), updated_by=ctx.who.actor)
+        fields.update(updated_at=H.now(), updated_by=ctx.who.actor)
         ctx.c.execute("UPDATE cards SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), cid))
         H.event(ctx.c, ctx.who.actor, "card.changed", cid, {"fields": sorted(k for k in fields if k != "updated")})
     return card_view(ctx, card_row(ctx.c, cid))
@@ -826,7 +826,7 @@ def save_place(ctx, place, audience=None):
         if kind != "team":
             raise bad("Everyone sees the Dashboard")
         level = A.audience(audience.model_dump())
-        ctx.c.execute("UPDATE pin_places SET audience_json=?, saved=?, saved_by=? WHERE place=?",
+        ctx.c.execute("UPDATE pin_places SET audience=?, saved=?, saved_by=? WHERE place=?",
                       (None if level["everyone"] else json.dumps(level), H.now(), ctx.who.actor, place))
         H.event(ctx.c, ctx.who.actor, "place.audience", place, {"everyone": level["everyone"]})
     return place
@@ -933,14 +933,14 @@ def install(app, store, auth, mutate, settings, task_view):
             out, last = [], None
             sql, args = "SELECT * FROM cards", []
             if cursor:
-                sql += " WHERE (created<? OR created=? AND id<?)"
+                sql += " WHERE (created_at<? OR created_at=? AND id<?)"
                 at, _, cid = cursor.partition("|")
                 args += [at, at, cid]
-            for row in c.execute(sql + " ORDER BY created DESC, id DESC", args):
+            for row in c.execute(sql + " ORDER BY created_at DESC, id DESC", args):
                 row = dict(row)
                 if card_readable(ctx, row):
                     if len(out) == limit:
-                        return {"cards": out, "next": f"{last['created']}|{last['id']}"}
+                        return {"cards": out, "next": f"{last['created_at']}|{last['id']}"}
                     out.append(card_view(ctx, row))
                     last = row
             return {"cards": out, "next": None}

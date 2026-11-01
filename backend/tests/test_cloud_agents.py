@@ -306,7 +306,7 @@ def test_adding_a_supported_agent_hires_a_bot_on_its_harness_and_fills_the_seat(
     assert added["harness"] == "claude" and added["seat"] == seat["id"] and added["bot"]
     with api.app.state.store.read() as c:
         bot = H.bot(c, added["bot"])
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0])
         closed = c.execute("SELECT closed_at, filled_by FROM seats WHERE id=?", (seat["id"],)).fetchone()
     assert bot["display_name"] == "Support lead" and config["harness"] == "claude" and config["runtime"] == "claude"
     assert config["model"] == added["model"] and config["reports_to"] == seat["reports_to"]
@@ -318,7 +318,7 @@ def onboarding_artifacts(api, bot):
     """What Onboarding leaves on a bot a seat is filled with: its state, its template, whether its computer builds its
     repository, and the BotOps setup task that builds it when the template is not a starter."""
     with api.app.state.store.read() as c:
-        state, config_json = c.execute("SELECT onboarding_state, config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        state, config_json = c.execute("SELECT onboarding_state, config FROM bot_config WHERE bot=?", (bot,)).fetchone()
         config = json.loads(config_json)
         task = H.task(c, config["setup_task_id"]) if config.get("setup_task_id") else None
     return {"state": state, "template": config.get("template"), "materialize": bool(config.get("materialize")),
@@ -346,7 +346,7 @@ def test_adding_without_a_seat_opens_a_seat_in_the_team_and_fills_it(environment
     with api.app.state.store.read() as c:
         assert H.bot(c, added["bot"])["display_name"] == "Codex"
         assert c.execute("SELECT team FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0] == team
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0])
         assert config["team"] == team                # group membership reads the bot's own config
         assert c.execute("SELECT filled_by FROM seats WHERE id=?", (added["seat"],)).fetchone()[0] == added["bot"]
     assert onboarding_artifacts(api, added["bot"])["state"] == lifecycle.statuses.NEEDS_SETUP
@@ -406,7 +406,7 @@ def test_a_request_left_by_a_dead_process_is_recovered_by_the_next_guarded_actio
         for seat_id, created in ((filing["id"], stale), (fresh["id"], H.now())):
             c.execute("UPDATE seats SET request_state=?,agent='devin',agent_name='Devin' WHERE id=?",
                       (lifecycle.FILING, seat_id))
-            c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created,made) "
+            c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created_at,made) "
                       "VALUES(?,?,?,?,?,?,?,?)", (uuid.uuid4().hex, "dead-process", "key-" + seat_id, "x", seat_id,
                                                  "filing", created, 0))
     assert ask(api, f"seats/{fresh['id']}/request-agent", {"agent": "copilot"}, expected=409)["error"]["code"] == "filing"
@@ -415,13 +415,13 @@ def test_a_request_left_by_a_dead_process_is_recovered_by_the_next_guarded_actio
     cancelling = ask(api, "seats", {"title": "Analyst"})
     ask(api, f"seats/{cancelling['id']}/request-agent", {"agent": "copilot"})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE seats SET request_state=?,updated=? WHERE id=?", (lifecycle.CANCELLING, stale, cancelling["id"]))
+        c.execute("UPDATE seats SET request_state=?,updated_at=? WHERE id=?", (lifecycle.CANCELLING, stale, cancelling["id"]))
     assert ask(api, f"seats/{cancelling['id']}/cancel-request", {})["request_state"] == "cancelled"
     # A cancel that recovers a stale filing is then refused (there is no request left to cancel), and the recovery holds.
     orphan = ask(api, "seats", {"title": "Writer"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE seats SET request_state=?,agent='devin',agent_name='Devin' WHERE id=?", (lifecycle.FILING, orphan["id"]))
-        c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created,made) "
+        c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created_at,made) "
                   "VALUES(?,?,?,?,?,?,?,?)", (uuid.uuid4().hex, "dead-process", "key-o", "x", orphan["id"], "filing", stale, 0))
     ask(api, f"seats/{orphan['id']}/cancel-request", {}, expected=404)
     with api.app.state.store.read() as c:
@@ -587,7 +587,7 @@ def test_a_request_a_stopped_process_left_filing_is_released_when_the_store_star
     task = api.get(f"/api/v2/seats/{seat['id']}/request", headers=signed_in()).json()["tasks"][0]
     with api.app.state.store.transaction() as c:           # the process stopped before Tico answered
         c.execute("UPDATE seats SET request_state=?,request_ticket='' WHERE id=?", (lifecycle.FILING, seat["id"]))
-        c.execute("UPDATE seat_requests SET state='filing',ticket_id='',created=? WHERE seat_id=?",
+        c.execute("UPDATE seat_requests SET state='filing',ticket_id='',created_at=? WHERE seat_id=?",
                   ("2000-01-01T00:00:00+00:00", seat["id"]))
     cloud_agents.release_abandoned(api.app.state.store)
     assert seats(api) == []
@@ -612,7 +612,7 @@ def test_a_seat_with_no_team_under_a_bot_in_a_team_asks_that_teams_rule(environm
     assert bot_count(api) == before
     added = ask(api, "cloud-agents/codex/add", {"seat_id": seat["id"]})
     with api.app.state.store.read() as c:
-        assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?",
+        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?",
                                     (added["bot"],)).fetchone()[0])["team"] == team
 
 
@@ -652,7 +652,7 @@ def plant_stale_filing(api, seat_id, actor="dead-process", key=None, request_has
     stale = H.shift(H.now(), seconds=-(lifecycle.FILING_STALE_SECONDS + 1))
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE seats SET request_state=?,agent='devin',agent_name='Devin' WHERE id=?", (lifecycle.FILING, seat_id))
-        c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created,made) "
+        c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created_at,made) "
                   "VALUES(?,?,?,?,?,?,?,?)", (uuid.uuid4().hex, actor, key or "key-" + seat_id, request_hash, seat_id,
                                              "filing", stale, made))
 

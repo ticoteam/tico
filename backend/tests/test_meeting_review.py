@@ -103,7 +103,7 @@ def test_legacy_hub_migration_backfills_live_and_cloud_restart_keeps_queue(api, 
     for version, script in enumerate(H.MIGRATIONS[:19], 1):
         H._apply(db, script)
         db.execute(f'PRAGMA user_version={version}')
-    db.execute("INSERT INTO meetings(id,title,owner,metadata_json,created,updated) VALUES(?,?,?,?,?,?)",
+    db.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
                ('legacy', 'Meeting', 'ben@acme.example', json.dumps({'id': 'legacy', 'kind': 'meeting'}), H.now(), H.now()))
     H.migrate(db)
     assert db.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
@@ -138,7 +138,7 @@ def test_released_migrations_remain_in_place(tmp_path, version):
         H._apply(db, script)
         db.execute(f'PRAGMA user_version={i}')
     db.execute("INSERT INTO blob_locations VALUES('digest','example-bucket','2026-10-01')")
-    db.execute("INSERT INTO meetings(id,title,owner,metadata_json,created,updated) VALUES(?,?,?,?,?,?)",
+    db.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
                ('released', 'Existing notes', 'ben@acme.example', '{}', H.now(), H.now()))
     H.migrate(db)
     assert db.execute('SELECT bucket FROM blob_locations').fetchone()[0] == 'example-bucket'

@@ -25,7 +25,7 @@ const {chromium} = require('playwright');
         const tab = `[data-learn-view="${file}"]`;
         await page.evaluate(file => learnOpen('ops', {
           documents: {[file]: 'The saved copy'},
-          document_status: {[file]: {oversized: true, updated: '2026-10-26T10:00:00Z'}},
+          document_status: {[file]: {oversized: true, updated_at: '2026-10-26T10:00:00Z'}},
         }), file);
         await page.locator(tab).click();
         assert.equal(await page.locator('.learn-warning').count(), 1);
@@ -34,7 +34,7 @@ const {chromium} = require('playwright');
         assert.ok(await page.locator('.learn-warning').evaluate(el => Boolean(el.compareDocumentPosition(el.nextElementSibling) & Node.DOCUMENT_POSITION_FOLLOWING)));
         await page.locator('[data-learn-close]').click();
         await page.evaluate(file => learnOpen('ops', {
-          documents: {[file]: 'The current copy'}, document_status: {[file]: {oversized: false, updated: '2026-10-27T10:00:00Z'}},
+          documents: {[file]: 'The current copy'}, document_status: {[file]: {oversized: false, updated_at: '2026-10-27T10:00:00Z'}},
         }), file);
         await page.locator(tab).click();
         assert.equal(await page.locator('.learn-warning').count(), 0);
@@ -45,7 +45,7 @@ const {chromium} = require('playwright');
     // The button loads only status. Opening refreshes the actual file; More fetches only history.
     await page.evaluate(async () => {
       window.reads = [];
-      const status = {'memory/learnings.md': {oversized: false, updated: '2026-10-27T10:00:00Z'}};
+      const status = {'memory/learnings.md': {oversized: false, updated_at: '2026-10-27T10:00:00Z'}};
       const row = subject => ({subject, author: 'ops', when: '2026-10-27T10:00:00Z', files: ['memory/learnings.md']});
       window.ago = () => 'today';
       window.get = async url => {
@@ -72,7 +72,7 @@ const {chromium} = require('playwright');
     await page.locator('[data-learn-close]').click();
     // No updates and no saved text: the warning alone still exposes the button and tab.
     await page.evaluate(async () => {
-      window.get = async () => ({documents: {}, document_status: {'memory/learnings.md': {oversized: true, updated: ''}}});
+      window.get = async () => ({documents: {}, document_status: {'memory/learnings.md': {oversized: true, updated_at: ''}}});
       await botLearningsLoad('ops');
     });
     assert.equal(await page.locator('#bot-learn').isVisible(), true);

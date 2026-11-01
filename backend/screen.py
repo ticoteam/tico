@@ -16,11 +16,11 @@ UNAVAILABLE = "This computer has no screen. Turn it on on the computer first."
 
 def available(row):
     """Whether the computer's last heartbeat offered a screen."""
-    return CAPABILITY in set(H._json(row["capabilities_json"], []) or []) if row else False
+    return CAPABILITY in set(H._json(row["capabilities"], []) or []) if row else False
 
 
 def size(row):
-    screen = (H._json(row["readiness_json"], {}) or {}).get("screen") or {}
+    screen = (H._json(row["readiness"], {}) or {}).get("screen") or {}
     return int(screen.get("width") or WIDTH), int(screen.get("height") or HEIGHT)
 
 

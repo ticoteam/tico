@@ -72,7 +72,7 @@ server is upgraded; the runner retains those reports for retry.
 
 - `GET /api/v2/bots/{bot}/memory?before=&limit=`: `updates`, `unseen`, `documents`,
   `document_status`, `next_before`. Each path in `document_status` has `oversized` and
-  `updated` (the saved copy's date, empty if none). Add `include_documents=false` to omit file contents
+  `updated_at` (the saved copy's date, empty if none). Add `include_documents=false` to omit file contents
   while keeping their status. The button and history pagination use this; opening the panel fetches current files.
 - `POST /api/v2/bots/{bot}/memory/seen`: you opened the history.
 
@@ -282,7 +282,7 @@ the existing hourly sweep persists withdrawal. No new routine is enabled.
 
 Keep is visible but disabled until the separate Keep slice installs application.
 The server refuses `keep` without changing the open proposal. That slice can read
-stored `edits_json` and provenance under the same reviewer authorization, apply
+stored `edits` and provenance under the same reviewer authorization, apply
 under the push lock, and mark `kept` only after a successful push. A failed Keep
 must leave the card open. Keep execution, pass scheduling and pilot activation
 are separate from this card change.

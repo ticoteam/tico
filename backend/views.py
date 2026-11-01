@@ -59,7 +59,7 @@ def since_time(value):
     return (at if at.tzinfo else at.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
-ATTEMPT_DETAIL_SQL = "SELECT state,result_json,finished FROM attempts WHERE id=?"
+ATTEMPT_DETAIL_SQL = "SELECT state,result,finished_at FROM attempts WHERE id=?"
 
 
 def prime_attempt_details(c, ids):
@@ -71,7 +71,7 @@ def prime_attempt_details(c, ids):
         chunk = wanted[start:start + 250]
         marks = ",".join("?" * len(chunk))
         attempts = {row["id"]: row for row in c.execute(
-            f"SELECT id,state,result_json,finished FROM attempts WHERE id IN ({marks})", chunk)}
+            f"SELECT id,state,result,finished_at FROM attempts WHERE id IN ({marks})", chunk)}
         read_cache.prime(c, ATTEMPT_DETAIL_SQL, {(aid,): attempts.get(aid) for aid in chunk})
         diags = {row["attempt_id"]: row for row in c.execute(
             "SELECT attempt_id,end_reason,ended_at,last_event,last_event_at,heartbeat_at,stalled_at "
@@ -80,9 +80,9 @@ def prime_attempt_details(c, ids):
                          "FROM attempt_diagnostics WHERE attempt_id=?",
                          {(aid,): diags.get(aid) for aid in chunk})
         snaps = {row["attempt_id"]: row for row in c.execute(
-            f"SELECT attempt_id,start_json,end_json FROM attempt_load_snapshots WHERE attempt_id IN ({marks})",
+            f"SELECT attempt_id,at_start,at_end FROM attempt_load_snapshots WHERE attempt_id IN ({marks})",
             chunk)}
-        read_cache.prime(c, "SELECT start_json,end_json FROM attempt_load_snapshots WHERE attempt_id=?",
+        read_cache.prime(c, "SELECT at_start,at_end FROM attempt_load_snapshots WHERE attempt_id=?",
                          {(aid,): snaps.get(aid) for aid in chunk})
 
 
@@ -94,12 +94,12 @@ def attempt_details(c, turn):
     details = {"record_kind": "attempt" if failed else "run", "attempt_id": turn["id"], **metadata(c, turn["id"]), **attempt_snapshots(c, turn["id"])}
     if failed:
         try:
-            result = json.loads(attempt["result_json"] or "{}")
+            result = json.loads(attempt["result"] or "{}")
         except (ValueError, TypeError):
             result = {}
         reason = login_holds.failure_line(result) or result.get("error") or result.get("reason") or result.get("message") or (
             "Lease expired before completion" if attempt["state"] == "expired" else "Attempt failed before completion")
-        details.update(exit=attempt["state"], finished=attempt["finished"] or turn.get("finished"),
+        details.update(exit=attempt["state"], finished_at=attempt["finished_at"] or turn.get("finished_at"),
                        failure_reason=login_holds.failure_line(result) or details["end_reason"] or str(reason))
     return details
 
@@ -109,10 +109,10 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
     rows = []
     # One bot's runs as their own query text: `? IS NULL OR a.bot=?` would hide attempts_bot_state.
     found = list(c.execute(
-            "SELECT a.id,a.bot,a.started,a.created,a.finished,a.state,a.result_json,j.message_id FROM attempts a "
+            "SELECT a.id,a.bot,a.started_at,a.created_at,a.finished_at,a.state,a.result,j.message_id FROM attempts a "
             "JOIN jobs j ON j.id=a.job_id WHERE a.state IN ('failed','expired') " + ("AND a.bot=? " if bot is not None else "") +
-            "AND (? IS NULL OR coalesce(a.finished,a.created)>=?) AND NOT EXISTS "
-            "(SELECT 1 FROM turns t WHERE t.id=a.id) ORDER BY coalesce(a.finished,a.created) DESC LIMIT ?",
+            "AND (? IS NULL OR coalesce(a.finished_at,a.created_at)>=?) AND NOT EXISTS "
+            "(SELECT 1 FROM turns t WHERE t.id=a.id) ORDER BY coalesce(a.finished_at,a.created_at) DESC LIMIT ?",
             ((bot,) if bot is not None else ()) + (since, since, limit)))
     stored = H.prime_messages(c, [row["message_id"] for row in found])
     privacy.prime_messages(c, list(stored.values()))
@@ -131,22 +131,22 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
         except Problem:
             continue
         try:
-            result = json.loads(row["result_json"] or "{}")
+            result = json.loads(row["result"] or "{}")
         except (ValueError, TypeError):
             result = {}
         reason = (login_holds.failure_line(result) or result.get("error") or result.get("reason") or result.get("message")
                   or ("Lease expired before completion" if row["state"] == "expired" else "Attempt failed before completion"))
         rows.append({"id": row["id"], "attempt_id": row["id"], "bot": row["bot"],
-                     "started": row["started"] or row["created"], "finished": row["finished"],
+                     "started_at": row["started_at"] or row["created_at"], "finished_at": row["finished_at"],
                      "exit": row["state"], "message_id": row["message_id"],
                      "record_kind": "attempt", "failure_reason": str(reason),
-                     **attempt_details(c, {"id": row["id"], "finished": row["finished"]})})
+                     **attempt_details(c, {"id": row["id"], "finished_at": row["finished_at"]})})
     return rows
 
 
 def computer_details(c, row, who, auth):
     value = dict(row)
-    readiness = readiness_document(value.get("readiness_json"))
+    readiness = readiness_document(value.get("readiness"))
     access = auth.bot_accesses(c, who)
     assigned = assignments_by_runner(c)[1].get(row["id"]) or set()
     shared = shared_logins(c, row["id"], readiness, assigned, access)
@@ -160,7 +160,7 @@ def computer_details(c, row, who, auth):
     update["wanted_release"] = runner_versions.desired()["version"]
     from .repositories import computer_repositories
     return {"repositories": computer_repositories(c).get(row["id"], "unknown"),
-            "version": value.get("version") or "", "release": update.get("release") or "", "last_seen": value.get("last_seen"),
+            "version": value.get("version") or "", "release": update.get("release") or "", "last_seen_at": value.get("last_seen_at"),
             "readiness": readiness, "update": update, "fix": "Open Settings > Computers to retry the update" if update.get("error") else "Open Settings > Computers",
             "services": [], "services_scope": "team", "shared_logins": shared}
 
@@ -245,7 +245,7 @@ def team_services(c, who, auth):
     return [{**dict(r), "scope": "team", "name": SERVICE_NAMES.get(r["service"], r["service"]),
              "text": f"{SERVICE_NAMES.get(r['service'], r['service'])}: {r['last_error'] or 'No reported error'}",
              "fix": "Open Health for " + SERVICE_NAMES.get(r["service"], r["service"])} for r in c.execute(
-                 "SELECT service,last_success,last_error FROM service_health ORDER BY service")]
+                 "SELECT service,last_succeeded_at,last_error FROM service_health ORDER BY service")]
 
 
 def roster(c, shared=False):
@@ -285,7 +285,7 @@ def _entries(c, github_owner=""):
     result = {}
     for row in read_cache.configs(c):
         from .shared_bots import follow
-        config = follow(c, row["bot"], json.loads(row["config_json"]))
+        config = follow(c, row["bot"], json.loads(row["config"]))
         if row["onboarding_state"]:
             config["onboarding_state"] = row["onboarding_state"]
         repo = config.get("repo") or row["repo"] or ("emp-" + row["bot"])
@@ -293,8 +293,8 @@ def _entries(c, github_owner=""):
                        "repo": repo, "repo_url": repo_url(repo, github_owner)})
         if row["thread_mode"]:
             config["thread_mode"] = row["thread_mode"]
-        if row["owner_ids_json"] is not None:
-            config["owner_ids"] = json.loads(row["owner_ids_json"])
+        if row["owner_ids"] is not None:
+            config["owner_ids"] = json.loads(row["owner_ids"])
         result[row["bot"]] = config
     return result
 
@@ -351,10 +351,10 @@ def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
     (backend/topic_change.py) alike. The conversation's epoch moves, so its history starts after the clear; the next
     turn starts a fresh provider thread and loads the recovery pack. The caller checks no turn is running."""
     c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
-              "epoch=epoch+1,updated=excluded.updated", (conversation_id, H.now()))
+              "epoch=epoch+1,updated_at=excluded.updated_at", (conversation_id, H.now()))
     # Drop the provider pointer so the next turn tries a fresh thread and loads the
     # recovery pack from Hub history instead of resuming the cleared session.
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     cfg = json.loads(config[0] or "{}") if config else {}
     if config:
         c.execute("DELETE FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
@@ -396,14 +396,14 @@ def docs_room(conv, who):
 def bot_owner_rows(c, registry, slug, people, configs, archived):
     """The people listed as a bot's owners: the creator and co-owners, and its operator. Whoever it reports
     up to and the Admins own it too, without being listed."""
-    ids = list(dict.fromkeys([*A.owner_ids(registry["bot_owners_json"] if registry else None),
+    ids = list(dict.fromkeys([*A.owner_ids(registry["bot_owners"] if registry else None),
                               *([registry["operator"]] if registry and registry["operator"] else [])]))
     return [{"id": i, "name": (P.person(i, people) or {}).get("name") or i} for i in ids]
 
 
 # A bot's computer, as machine() reads it; prime_machines reads it for many bots at once.
-ASSIGNED_COLUMNS = ("SELECT a.runner_id,a.generation,r.label,r.operator,r.last_seen,r.revoked_at,r.readiness_json,"
-                    "r.platform,r.version,r.awake_since,r.screen,r.capabilities_json")
+ASSIGNED_COLUMNS = ("SELECT a.runner_id,a.generation,r.label,r.operator,r.last_seen_at,r.revoked_at,r.readiness,"
+                    "r.platform,r.version,r.awake_since,r.screen,r.capabilities")
 ASSIGNED_SQL = ASSIGNED_COLUMNS + " FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?"
 
 
@@ -415,7 +415,7 @@ def prime_machines(c, slugs):
         return
     for part in H.chunks(sorted(set(slugs))):
         marks = ",".join("?" * len(part))
-        for statement, query in ((CONFIG_SQL, f"SELECT config_json,bot FROM bot_config WHERE bot IN ({marks})"),
+        for statement, query in ((CONFIG_SQL, f"SELECT config,bot FROM bot_config WHERE bot IN ({marks})"),
                                  (ROW_SQL, f"SELECT * FROM agents WHERE bot IN ({marks})"),
                                  (ASSIGNED_SQL, ASSIGNED_COLUMNS + ",a.bot FROM assignments a "
                                                 f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({marks})"),
@@ -434,7 +434,7 @@ def machine(c, bot):
     if not row:
         return {"online": False, "awake": False, "ready": False, "machine": None}
     now = H.now()
-    online = bool(not row["revoked_at"] and row["last_seen"] and row["last_seen"] > H.shift(now, seconds=-AWAKE_GAP))
+    online = bool(not row["revoked_at"] and row["last_seen_at"] and row["last_seen_at"] > H.shift(now, seconds=-AWAKE_GAP))
     # Online is contact; awake is contact that has lasted. A machine waking for a few seconds
     # is online and takes no work, so say which of the two a queued request is waiting for.
     awake = online and Execution.awake(row["awake_since"], now)
@@ -442,12 +442,12 @@ def machine(c, bot):
     # subscription sign-in the Gateway covers meanwhile is no problem (backend/models_preset.py as_served).
     from .models_preset import as_served
     # One parse of the computer's report: /api/employees and Health call this once per bot.
-    document = readiness_document(row["readiness_json"])
+    document = readiness_document(row["readiness"])
     detail = {k: v for k, v in bot_readiness(document, bot).items() if k != "tools"}
     detail = as_served(c, bot, document, detail)
     return {"online": online, "awake": awake, "ready": online and detail.get("ready") is True,
             "readiness": detail,
-            "machine": {**{k: row[k] for k in ("runner_id", "generation", "label", "operator", "last_seen",
+            "machine": {**{k: row[k] for k in ("runner_id", "generation", "label", "operator", "last_seen_at",
                                                          "platform", "version")}, **screen_listing(row)}}
 
 
@@ -536,7 +536,7 @@ def operation_issues(c, who, auth):
                 from .agents import CONFIG_SQL
                 config = read_cache.one(c, CONFIG_SQL, (slug,))        # prime_machines read it with every bot's
                 runtime = providers.bot_choice(c, auth.settings,
-                                               H._json(config["config_json"], {}) or {} if config else {})[0] or "your"
+                                               H._json(config["config"], {}) or {} if config else {})[0] or "your"
                 # The login the limit held (backend/login_holds.py) says whose limit it was: a fallback's quota text
                 # is not the bot's own provider's billing.
                 from . import login_holds
@@ -550,12 +550,12 @@ def operation_issues(c, who, auth):
                 if last:
                     # Named from what the turn kept when it finished, not the bot's runtime or the login's hold now:
                     # a fallback's quota must not read as the primary's, nor a past limit as a newly chosen provider's.
-                    result = json.loads((c.execute("SELECT result_json FROM attempts WHERE id=?", (last["id"],))
+                    result = json.loads((c.execute("SELECT result FROM attempts WHERE id=?", (last["id"],))
                                          .fetchone() or ["{}"])[0] or "{}")
                     src = login_holds.recorded(c, last["id"], result, own)
                     runtime, billing = login_holds.label(src), src["billing"]
                 streak = hold.get("streak", 0) if hold else limit_streak(c, slug)
-                reset = hold.get("reset") if hold else bool(last and provider_reset(last, H.parse_ts(last["finished"])))
+                reset = hold.get("reset") if hold else bool(last and provider_reset(last, H.parse_ts(last["finished_at"])))
                 resume = login_holds.fallback_resume_reason(c, last['id']) if last else None
                 if resume:
                     add("bot", bot["display_name"] + " needs attention", f"{runtime}; {resume}",
@@ -682,20 +682,20 @@ def operation_issues(c, who, auth):
                 "Create one in Settings → Bots and install it in the " + agent["harness"] + " profile.",
                 bot=slug, needs_person=False)
         elif agent and bot["state"] == "active" and not location["online"] and agent.get("synced"):
-            detail = ("Last sync " + agent["last_seen"] + "." if agent["last_seen"] else "No history has synced yet.")
+            detail = ("Last sync " + agent["last_seen_at"] + "." if agent["last_seen_at"] else "No history has synced yet.")
             if queued:
                 detail += (f" {queued} message{'s' if queued != 1 else ''} wait{'s' if queued == 1 else ''} "
                            "for the next sync.")
             add("agent", bot["display_name"] + "'s history has not synced lately", detail,
-                bot=slug, since=agent["last_seen"], severity="warning", needs_person=False,
+                bot=slug, since=agent["last_seen_at"], severity="warning", needs_person=False,
                 action="Run the Tico sync in " + (agent.get("label") or "the agent") + " to refresh this copy.")
         elif agent and bot["state"] == "active" and not location["online"]:
-            detail = ("Last heartbeat " + agent["last_seen"] + "." if agent["last_seen"]
+            detail = ("Last heartbeat " + agent["last_seen_at"] + "." if agent["last_seen_at"]
                       else "No heartbeat yet: install the credential and the heartbeat timer on its box.")
             if queued:
                 detail += f" {queued} unread message{'s' if queued != 1 else ''} waiting in its inbox."
             add("agent", bot["display_name"] + "'s " + agent["harness"] + " agent has not reported in",
-                detail, bot=slug, since=agent["last_seen"], needs_person=False)
+                detail, bot=slug, since=agent["last_seen_at"], needs_person=False)
         elif agent:
             pass    # an external agent that reported in lately: no computer to check
         elif bot["state"] == "active" and not location["machine"]:
@@ -707,7 +707,7 @@ def operation_issues(c, who, auth):
         elif bot["state"] == "active" and location["machine"] and not location["online"]:
             # One issue per machine, not one per bot: the person can only do one thing about it.
             entry = offline.setdefault(location["machine"]["runner_id"], {
-                "label": location["machine"]["label"], "since": location["machine"]["last_seen"],
+                "label": location["machine"]["label"], "since": location["machine"]["last_seen_at"],
                 "operator": location["machine"]["operator"], "bots": [], "slugs": [], "queued": 0})
             entry["bots"].append(bot["display_name"])
             entry["slugs"].append(slug)
@@ -745,19 +745,19 @@ def operation_issues(c, who, auth):
     if who.role == "owner":
         # Container backups report through replication; imported VM timer history stays historical.
         managed_backups = bool(os.environ.get("TICO_BACKUP_MODE"))
-        for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,version,checkout_json,restart_requested "
+        for row in c.execute("SELECT id,label,operator,last_seen_at,revoked_at,version,checkout,restart_requested_at "
                              "FROM runners WHERE revoked_at IS NULL"):
-            online = row["last_seen"] and row["last_seen"] > H.shift(H.now(), seconds=-60)
+            online = row["last_seen_at"] and row["last_seen_at"] > H.shift(H.now(), seconds=-60)
             if online and not runner_version_supported(row["version"]):
                 add("runner_version", row["label"] + " needs a runner update",
                     "Install the current " + auth.settings.app_name + " runner before assigning new work.",
                     machine=row["id"], action="Update this runner in Settings → Computers.")
             if online:
                 checkout_issue(add, row, runner_busy(c, row["id"]))
-        for row in c.execute("SELECT service,last_error,detail_json FROM service_health WHERE last_error IS NOT NULL"):
+        for row in c.execute("SELECT service,last_error,detail FROM service_health WHERE last_error IS NOT NULL"):
             if managed_backups and row["service"] in SNAPSHOT_BACKUP_ROWS:
                 continue
-            detail = json.loads(row["detail_json"] or "{}")
+            detail = json.loads(row["detail"] or "{}")
             if row["service"] == "github:token":
                 # Only the App itself failing is a system problem, and only while it is recent and unrecovered.
                 from . import health
@@ -771,11 +771,11 @@ def operation_issues(c, who, auth):
         # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
         # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
         # reports every 10 minutes.
-        if c.execute("SELECT 1 FROM runners WHERE revoked_at IS NULL AND last_seen>?",
+        if c.execute("SELECT 1 FROM runners WHERE revoked_at IS NULL AND last_seen_at>?",
                      (H.shift(H.now(), seconds=-60),)).fetchone():
             for service, label, limit in (("connector:calendar", "Calendar", 15), ("connector:mail", "Mail", 90)):
-                row = c.execute("SELECT last_success,last_error FROM service_health WHERE service=?", (service,)).fetchone()
-                last = H.parse_ts(row["last_success"]) if row and row["last_success"] else None
+                row = c.execute("SELECT last_succeeded_at,last_error FROM service_health WHERE service=?", (service,)).fetchone()
+                last = H.parse_ts(row["last_succeeded_at"]) if row and row["last_succeeded_at"] else None
                 if last and not row["last_error"] and last < H.parse_ts(H.shift(H.now(), minutes=-limit)):
                     minutes = int((H.parse_ts(H.now()) - last).total_seconds() // 60)
                     add("service", SERVICE_NAMES[service] + " needs attention",
@@ -794,8 +794,8 @@ def operation_issues(c, who, auth):
                     action="Review Backups in Settings → Health.")
         for service, label, limit in (() if managed_backups else
                 (("backup", "verified backup", 36), ("restore-check", "isolated restore check", 36))):
-            row = c.execute("SELECT last_success FROM service_health WHERE service=?", (service,)).fetchone()
-            last = H.parse_ts(row["last_success"]) if row and row["last_success"] else None
+            row = c.execute("SELECT last_succeeded_at FROM service_health WHERE service=?", (service,)).fetchone()
+            last = H.parse_ts(row["last_succeeded_at"]) if row and row["last_succeeded_at"] else None
             if last and last < H.parse_ts(H.shift(H.now(), hours=-limit)):
                 hours = int((H.parse_ts(H.now()) - last).total_seconds() // 3600)
                 add("service", service + " needs attention",
@@ -814,7 +814,7 @@ def own_sign_in(c, bot, settings=None):
     """Why this bot's model is not signed in on its own computer (backend/readiness.py, the rule Health's stuck
     check and the model picker use), or '' when its computer is signed in or it waits on something else."""
     from .readiness import can_run, own_harness
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     runtime = providers.bot_choice(c, settings, json.loads(config[0] or "{}") if config else {})[0]
     verdict = can_run(c, bot, runtime, harness=own_harness(c, bot, runtime)) if runtime else {}
     return (verdict.get("problem") or "its model is not signed in") if verdict.get("sign_in") else ""
@@ -885,7 +885,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif behind:
         # Whether the running turn takes it (`steer`) or it waits for the next one; chat offers Stop and redirect.
         from .harnesses import steers
-        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
         config = json.loads(config[0]) if config else {}
         label = ("Saved — steering this turn" if not queued and steers(config, config.get("runtime"))
                  else "Saved — queued for the next turn")
@@ -904,7 +904,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
 # stale sqlite_stat1 row for messages the planner scanned all of them (40-44 ms a call on TIDY v0.5.1, 545 an hour).
 TASK_WAIT_SQL = ("SELECT j.bot FROM jobs j INDEXED BY jobs_queued JOIN messages m ON m.id=j.message_id "
                  "JOIN conversations cv ON cv.id=m.conversation_id "
-                 f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created LIMIT 1")
+                 f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at LIMIT 1")
 
 
 def task_wait(c, task_id, settings=None):
@@ -955,10 +955,10 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     person = "m.from_actor LIKE 'human:%'"
     which = (f"AND (j.bot=? OR {person}) " if bot and people else "AND j.bot=? " if bot
              else f"AND {person} " if people else "")
-    job = c.execute("SELECT j.*,m.from_actor AS sender,a.state AS attempt_state,a.lease_until,a.stop_requested "
+    job = c.execute("SELECT j.*,m.from_actor AS sender,a.state AS attempt_state,a.lease_until,a.stop_requested_at "
                     "FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
-                    "AND coalesce(json_extract(m.refs_json,'$.maintenance'),'')!='checkpoint' "
+                    "AND coalesce(json_extract(m.refs,'$.maintenance'),'')!='checkpoint' "
                     + which + "ORDER BY m.rowid DESC LIMIT 1", (cid, bot) if bot else (cid,)).fetchone()
     execution = None
     if job and who and (not privacy.message_readable(c, privacy.actor(who), H.message(c, job["message_id"]))
@@ -974,7 +974,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
         location = machine(c, job["bot"])
         label = {"queued": "Saved — queued", "leased": "Starting", "running": "Working",
                  "completed": "Complete", "cancelled": "Delivery dismissed", "uncertain": "Stopped — saved for later"}.get(state, state)
-        if state == "cancelled" and job["stop_requested"]:
+        if state == "cancelled" and job["stop_requested_at"]:
             label = "Stopped"
         if input_added and state == "running":
             label = "Working — follow-up added"
@@ -1000,8 +1000,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
                 label = 'Saved — ' + reason
         parts = []
         if state in ("leased", "running"):
-            parts = turns.reply_parts([(e["kind"], json.loads(e["payload_json"]), e["created"]) for e in c.execute(
-                "SELECT kind,payload_json,created FROM attempt_events WHERE attempt_id=? ORDER BY seq", (job["attempt_id"],))])
+            parts = turns.reply_parts([(e["kind"], json.loads(e["payload"]), e["created_at"]) for e in c.execute(
+                "SELECT kind,payload,created_at FROM attempt_events WHERE attempt_id=? ORDER BY seq", (job["attempt_id"],))])
         if parts:
             # A bot that org rules apply to shows that it works and its tool steps, never its reply before the reply
             # is checked and delivered (backend/org_rule_check.py).
@@ -1103,7 +1103,7 @@ def pressing(it, now=None):
     if due and str(due) <= H.shift(now, days=1):
         return True
     days = DECISIVE_DAYS if KIND_RANK.get(it.get("kind"), 9) <= 1 else PRESSING_DAYS
-    return bool(it.get("created")) and str(it["created"]) <= H.shift(now, days=-days)
+    return bool(it.get("created_at")) and str(it["created_at"]) <= H.shift(now, days=-days)
 
 
 CHECKOUT_BEHIND_HOURS = 1
@@ -1117,7 +1117,7 @@ def runner_busy(c, runner_id):
 
 def restart_issue(add, row, busy, since=None):
     """Behind main, or pulled but not restarted: one plain line and a Restart button The runner also does this by itself; the button is for now."""
-    if row["restart_requested"]:
+    if row["restart_requested_at"]:
         detail = "Restarting" + (f" after {busy} running turn{'s' if busy != 1 else ''} finish{'es' if busy == 1 else ''}."
                                  if busy else " now. Nothing is running, so nothing will be interrupted.")
     elif busy:
@@ -1125,7 +1125,7 @@ def restart_issue(add, row, busy, since=None):
     else:
         detail = "Nothing is running, so nothing will be interrupted."
     add("runner_checkout", row["label"] + " has a Tico update", detail, machine=row["id"], since=since,
-        severity="warning", restart=not row["restart_requested"])
+        severity="warning", restart=not row["restart_requested_at"])
     return True
 
 
@@ -1133,7 +1133,7 @@ def checkout_issue(add, row, busy=0):
     """A runner whose checkout is not what main says (#492): the production runner ran 28 commits
     behind for a day because a bot committed in it. Local commits never fast-forward, so they are
     said at once; being behind is said once it has lasted an hour (a pull is on its way before)."""
-    checkout = H._json(row["checkout_json"], {}) or {}
+    checkout = H._json(row["checkout"], {}) or {}
     if not checkout:
         return
     ahead, behind = int(checkout.get("ahead") or 0), int(checkout.get("behind") or 0)
@@ -1312,7 +1312,7 @@ def take_recommendation(c, auth, who, asked, version=None):
                  if t and t["status"] == "waiting" and t.get("waiting_on") == who.actor
                  and (t is task or t["owner"] == asked["from_actor"] and not _another_card_under(c, t, task_id, who.actor))]
         for t in waits:
-            c.execute("UPDATE tasks SET waiting_on=NULL, updated=? WHERE id=?", (H.now(), t["id"]))
+            c.execute("UPDATE tasks SET waiting_on=NULL, updated_at=? WHERE id=?", (H.now(), t["id"]))
             H._task_event(c, t["id"], who.actor, "waiting_on", who.actor, None, text)
         if waits:
             H._recount(c, who.actor)
@@ -1414,7 +1414,7 @@ def went_away(c, me, days=7):
     answered for them."""
     since = H.shift(H.now(), days=-days)
     expired = c.execute("SELECT count(*) FROM events WHERE ts>=? AND action IN ('ask.expired','ask.went_ahead') "
-                        "AND json_extract(detail_json,'$.to')=?", (since, me)).fetchone()[0]
+                        "AND json_extract(detail,'$.to')=?", (since, me)).fetchone()[0]
     # A question a newer one from the same bot replaced, still open in the same thread, did not go away: it is asked
     # again, so only one with no open successor counts.
     withdrawn = (c.execute(WITHDRAWN_ASKS_SQL, (me, since)).fetchone()[0]
@@ -1422,8 +1422,8 @@ def went_away(c, me, days=7):
                              "AND a.decision='withdrawn' AND a.decided_at>=?", (me, since)).fetchone()[0])
     assistant = (c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.to_actor=? "
                            "AND a.decided_via='assistant' AND a.decided_at>=?", (me, since)).fetchone()[0]
-                 + c.execute("SELECT count(*) FROM messages WHERE from_actor=? AND kind='answer' AND created>=? "
-                             "AND json_extract(refs_json,'$.via')='assistant'", (me, since)).fetchone()[0])
+                 + c.execute("SELECT count(*) FROM messages WHERE from_actor=? AND kind='answer' AND created_at>=? "
+                             "AND json_extract(refs,'$.via')='assistant'", (me, since)).fetchone()[0])
     return {"expired": expired, "withdrawn": withdrawn, "assistant": assistant,
             "total": expired + withdrawn + assistant, "days": days}
 
@@ -1459,17 +1459,17 @@ def recent_bots(c, auth, who, since, limit, needs):
             seen[slug] = ts
     # Discovery window: one readable_messages prime (not message_readable per row), then task_sql for tasks.
     recent_msgs = [dict(r) for r in c.execute(
-        "SELECT id, from_actor, to_actor, created FROM messages WHERE created>=? AND "
+        "SELECT id, from_actor, to_actor, created_at FROM messages WHERE created_at>=? AND "
         "((from_actor=? AND to_actor LIKE 'bot:%') OR (to_actor=? AND from_actor LIKE 'bot:%'))",
         (since, me, me))]
     for row in privacy.readable_messages(c, privacy.actor(who), recent_msgs):
-        touch(H.actor_id(row["to_actor"] if row["from_actor"] == me else row["from_actor"]), row["created"])
+        touch(H.actor_id(row["to_actor"] if row["from_actor"] == me else row["from_actor"]), row["created_at"])
     visible = auth.task_sql(c, who)
     for row in c.execute(
-            "SELECT id, owner, requester, updated FROM tasks WHERE updated>=? AND "
+            "SELECT id, owner, requester, updated_at FROM tasks WHERE updated_at>=? AND "
             f"((requester=? AND owner LIKE 'bot:%') OR (owner=? AND requester LIKE 'bot:%')) AND ({visible})",
             (since, me, me)):
-        touch(H.actor_id(row["owner"] if row["requester"] == me else row["requester"]), row["updated"])
+        touch(H.actor_id(row["owner"] if row["requester"] == me else row["requester"]), row["updated_at"])
     waiting = {}
     for item in needs:
         # A task waiting on the person waits with the bot that owns it, whoever asked for it.
@@ -1491,15 +1491,15 @@ def recent_bots(c, auth, who, since, limit, needs):
         # Newest readable line each way. Lazy, not a fixed window: deleted or unreadable newest rows must not
         # hide an older readable one, and the first row is readable almost always.
         mine = next((m for m in c.execute("SELECT * FROM messages WHERE from_actor=? AND to_actor=? "
-                    "ORDER BY created DESC", (me, actor)) if privacy.message_readable(c, privacy.actor(who), m)), None)
+                    "ORDER BY created_at DESC", (me, actor)) if privacy.message_readable(c, privacy.actor(who), m)), None)
         theirs = next((m for m in c.execute("SELECT * FROM messages WHERE from_actor=? AND to_actor=? AND deleted_at IS NULL "
-                      "ORDER BY created DESC", (actor, me)) if privacy.message_readable(c, privacy.actor(who), m)), None)
+                      "ORDER BY created_at DESC", (actor, me)) if privacy.message_readable(c, privacy.actor(who), m)), None)
 
         conversation = next((m["conversation_id"] for m in sorted(filter(None, (mine, theirs)),
-                             key=lambda m: m["created"], reverse=True) if m["conversation_id"]), None)
-        tasks = c.execute("SELECT id, title, status, owner, updated FROM tasks WHERE status IN "
+                             key=lambda m: m["created_at"], reverse=True) if m["conversation_id"]), None)
+        tasks = c.execute("SELECT id, title, status, owner, updated_at FROM tasks WHERE status IN "
                           "('open','doing','waiting','review','ready') AND ((owner=? AND requester=?) OR (owner=? AND requester=?)) "
-                          "ORDER BY updated DESC LIMIT 5", (actor, me, me, actor)).fetchall()
+                          "ORDER BY updated_at DESC LIMIT 5", (actor, me, me, actor)).fetchall()
         current = H.task(c, status["task_id"]) if status.get("task_id") else None
         out.append({
             "bot": slug, "name": bot.get("display_name") or slug, "last_interaction": last,
@@ -1507,10 +1507,10 @@ def recent_bots(c, auth, who, since, limit, needs):
                        "since": status.get("since"), "working_on": (current or {}).get("title"),
                        "last_turn_at": status.get("last_turn_at")},
             "conversation_id": conversation,
-            "you_said": {"text": _clip(mine["body"]), "at": mine["created"]} if mine else None,
-            "it_said": {"text": _clip(theirs["body"]), "at": theirs["created"]} if theirs else None,
+            "you_said": {"text": _clip(mine["body"]), "at": mine["created_at"]} if mine else None,
+            "it_said": {"text": _clip(theirs["body"]), "at": theirs["created_at"]} if theirs else None,
             "open_tasks": [{"id": t["id"], "title": t["title"], "status": t["status"],
-                            "owner": t["owner"], "updated": t["updated"]} for t in tasks],
+                            "owner": t["owner"], "updated_at": t["updated_at"]} for t in tasks],
             "needs_you": waiting.get(slug, []),
         })
     return out
@@ -1728,12 +1728,12 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 ask["stale"] = True      # its one-click Clarify (backend/clarify_asks.py) shows on the card
             items.append(item)
     for msg in privacy.readable_messages(c, privacy.actor(who), H.loose_asks_to(c, who.actor)):
-        msg["refs"] = H._json(msg.get("refs_json"), {}) or {}
-        ask = {k: msg[k] for k in ("id", "from_actor", "to_actor", "body", "created", "conversation_id", "refs")}
+        msg["refs"] = H._json(msg.get("refs"), {}) or {}
+        ask = {k: msg[k] for k in ("id", "from_actor", "to_actor", "body", "created_at", "conversation_id", "refs")}
         item = {"kind": "ask", "id": msg["id"], "message_id": msg["id"], "title": _clip(msg["body"], 160),
                 "first_line": (msg["body"] or "").split("\n")[0], "body": msg["body"], "requester": msg["from_actor"],
                 "origin_actor": msg["from_actor"], "conversation_id": msg["conversation_id"],
-                "created": msg["created"], "ask": ask,
+                "created_at": msg["created_at"], "ask": ask,
                 "from_person": msg["from_actor"] if H.is_human(msg["from_actor"]) else None,
                 "recommend": recommendation(ask, who.actor)}
         if H.ask_older(msg):
@@ -1812,7 +1812,7 @@ def _readable(auth, c, who, task_id):
 
 def needs_key(x):
     """An item's place in the queue (needs_order), from the item as needs_items builds it."""
-    return needs_order(x["kind"], x["created"], x.get("rank") if x["kind"] == "task" else None,
+    return needs_order(x["kind"], x["created_at"], x.get("rank") if x["kind"] == "task" else None,
                        x.get("from_person"), x["pressing"], bool(x.get("ask_missing")), deadline(x))
 
 
@@ -1918,15 +1918,15 @@ def fleet_snapshot(c, auth, identity, task_view):
     index = ReadIndex(c, principal)
     for m in c.execute("SELECT m.*,j.bot,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'"):
         if (not dict(m).get("deleted_at") and not dict(m).get("deleted") and
-                index.message(m["id"], m["conversation_id"], m["refs_json"], m["in_reply_to"]) and
+                index.message(m["id"], m["conversation_id"], m["refs"], m["in_reply_to"]) and
                 (not m["attempt_id"] or index.attempt(m["attempt_id"]))):
             queued[m["bot"]] = queued.get(m["bot"], 0) + 1
     # One pass for every live attempt: the per-bot SELECT below used to pay once per writable bot.
     now = H.now()
     live_by_bot = {}
     for row in c.execute(
-            "SELECT id,bot,state,started,lease_until,created FROM attempts "
-            "WHERE state IN ('leased','running') AND lease_until>? ORDER BY created DESC", (now,)):
+            "SELECT id,bot,state,started_at,lease_until,created_at FROM attempts "
+            "WHERE state IN ('leased','running') AND lease_until>? ORDER BY created_at DESC", (now,)):
         live_by_bot.setdefault(row["bot"], []).append(row)
     # machine() / presence used to re-SELECT assignment+agent rows once per readable bot; Health already primes.
     shown = [row["slug"] for row in bot_rows
@@ -1955,7 +1955,7 @@ def fleet_snapshot(c, auth, identity, task_view):
                      "focus": status.get("focus") or "", "task_id": status.get("task_id"),
                      "online": location["online"], "ready": location["ready"],
                      "queued": queued.get(slug, 0),
-                     "active_attempt": {k: attempt[k] for k in ("id", "state", "started", "lease_until")} if attempt else None,
+                     "active_attempt": {k: attempt[k] for k in ("id", "state", "started_at", "lease_until")} if attempt else None,
                      "active_attempts": len(active)})
     tasks = []
     for row in H.tasks(c, status=H.ACTIVE_STATUSES + ("declined",), visible=auth.task_sql(c, principal)):
@@ -1965,7 +1965,7 @@ def fleet_snapshot(c, auth, identity, task_view):
         if not relevant:
             continue
         tasks.append({k: row.get(k) for k in
-                      ("id", "title", "owner", "requester", "status", "due", "note", "updated")})
+                      ("id", "title", "owner", "requester", "status", "due", "note", "updated_at")})
     items = needs_items(c, auth, principal, task_view)
     return {"actor": principal.actor, "as_of": H.now(), "bots": bots, "tasks": tasks,
             "needs_you": items,
@@ -1998,12 +1998,12 @@ def install_views(app, store, auth, mutate, task_view):
             rows.append((turn, message))
         for attempt in failed_attempts(c, who, auth, bot, limit=limit):
             rows.append((attempt, H.message(c, attempt["message_id"])))
-        rows.sort(key=lambda item: item[0].get("started") or "", reverse=True)
+        rows.sort(key=lambda item: item[0].get("started_at") or "", reverse=True)
         return rows[:limit]
 
     def run_view(turn, c=None, made=None):
         turn = {**turn, **attempt_details(c, turn)} if c else turn
-        started, finished = H.parse_ts(turn.get("started")), H.parse_ts(turn.get("finished"))
+        started, finished = H.parse_ts(turn.get("started_at")), H.parse_ts(turn.get("finished_at"))
         duration = max(0, round((finished - started).total_seconds())) if started and finished else None
         success = turn.get("exit") == "completed"
         if made is None and c is not None:
@@ -2012,7 +2012,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "record_kind": turn.get("record_kind", "run"), "attempt_id": turn["id"],
                 "outcome": turn.get("exit"), "failure_reason": turn.get("failure_reason") or "",
                 **{k: turn.get(k) for k in ("end_reason", "ended_at", "last_event", "last_event_at", "stalled", "stalled_at")},
-                "finished": turn.get("finished") or turn.get("started"),
+                "finished_at": turn.get("finished_at") or turn.get("started_at"),
                 "exit": 0 if success else 1, "duration_s": duration,
                 "output_tokens": turn.get("output_tokens") if turn.get("output_tokens") is not None else turn.get("tokens_out"),
                 "cost_usd": turn.get("est_cost_usd") if turn.get("est_cost_usd") is not None else turn.get("cost"),
@@ -2035,8 +2035,8 @@ def install_views(app, store, auth, mutate, task_view):
         cloud_rows = cloud_machines.rows(c) if cloud_machines.offered(c, store.settings) else None
         # Each bot's last finished run, one turns_bot_finished seek per bot rather than a sort of every run there is.
         latest_run = {slug: tid for slug, tid in c.execute(
-            "SELECT b.slug,(SELECT t.id FROM turns t WHERE t.bot=b.slug AND t.finished IS NOT NULL "
-            "ORDER BY t.finished DESC,t.id DESC LIMIT 1) FROM bots b") if tid}
+            "SELECT b.slug,(SELECT t.id FROM turns t WHERE t.bot=b.slug AND t.finished_at IS NOT NULL "
+            "ORDER BY t.finished_at DESC,t.id DESC LIMIT 1) FROM bots b") if tid}
         from .usage_records import ran_on
         run_views = ran_on(c, list(latest_run.values()))
         latest_models = {}
@@ -2065,7 +2065,7 @@ def install_views(app, store, auth, mutate, task_view):
 
         def declared(slug):
             row = registries.get(slug)
-            return config_of(row["config_json"]) if row else {}
+            return config_of(row["config"]) if row else {}
         from .report_order import positions
         places = positions(c)              # its place among its manager's reports on the chart, when someone set one
         # The Material Symbol a bot's avatar wears: its own, else its template's. A bot made from a `kind: helper` card
@@ -2099,11 +2099,11 @@ def install_views(app, store, auth, mutate, task_view):
             pid = H.actor_id(who.actor)
             manager = (who.role == "owner" or (who.role == "human" and (
                 auth.bot_admin(who) or (registry and (registry["operator"] == pid
-                                                      or pid in A.owner_ids(registry["bot_owners_json"])))
+                                                      or pid in A.owner_ids(registry["bot_owners"])))
                 or P.manages(pid, "bot", slug, people, configs, archived, bare))))
             policy = {"can_manage": manager, "bot_owners": bot_owner_rows(c, registry, slug, people, configs, archived)}
             if manager:
-                policy["access_policy"] = A.document(registry["access_json"] if registry else None)
+                policy["access_policy"] = A.document(registry["access"] if registry else None)
             if not level["read"]:
                 # Seen, not read: the name, role, who runs it, who it reports to. Its
                 # configuration, routines, machine and goals are its activity.
@@ -2349,10 +2349,10 @@ def install_views(app, store, auth, mutate, task_view):
             from . import browser_exit
             # One pass each for every computer's internet sharing and today's bytes through it.
             exit_policies, exit_used = browser_exit.policies(c), browser_exit.used_today_all(c)
-            runners = list(c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
-                                      "accepts_member_bots,turns_at_once,screen,performance,capabilities_json,"
+            runners = list(c.execute("SELECT id,label,operator,last_seen_at,revoked_at,platform,version,capacity,readiness,"
+                                      "accepts_member_bots,turns_at_once,screen,performance,capabilities,"
                                       "restart_since,"
-                                      "readiness_at FROM runners ORDER BY created"))
+                                      "readiness_at FROM runners ORDER BY created_at"))
             from . import usage_limits
             from .start_places import describe, summaries, turn_limit
             # One company Default for every computer's queue classify: without it each summary rebuilds
@@ -2382,8 +2382,8 @@ def install_views(app, store, auth, mutate, task_view):
                 from .performance import listing as performance_listing
                 value.update(screen_listing(value))
                 value.update(performance_listing(value))
-                value.pop("capabilities_json")
-                value["readiness"] = readiness_document(value.pop("readiness_json"))
+                value.pop("capabilities")
+                value["readiness"] = readiness_document(value.pop("readiness"))
                 value["repositories"] = repo_status.get(row["id"], "unknown")
                 assigned_here = active_placed.get(row["id"]) or set()
                 value["readiness"]["bots"] = {bot: report for bot, report in value["readiness"].get("bots", {}).items()
@@ -2450,7 +2450,7 @@ def install_views(app, store, auth, mutate, task_view):
                                  "harness_choices": harness_choice.get(row["id"]) or {},
                                  "cloud_machine": cloud_of.get(row["id"])})
             health = [{**dict(r), "name": SERVICE_NAMES.get(r["service"], r["service"])}
-                      for r in c.execute("SELECT service,last_success,last_error FROM service_health")]
+                      for r in c.execute("SELECT service,last_succeeded_at,last_error FROM service_health")]
             from .agents import listing as agent_listing
             # `machines` is the older name of `computers`, kept for older clients.
             return {"cloud": True, "computers": machines, "machines": machines,
@@ -2466,17 +2466,17 @@ def install_views(app, store, auth, mutate, task_view):
         # after the first privacy check opens a transaction.
         with store.read_transaction() as c:
             health = c.execute("SELECT * FROM service_health WHERE service='scheduler'").fetchone()
-            tick = health["last_success"] if health else None
+            tick = health["last_succeeded_at"] if health else None
             age = max(0, (H.parse_ts(H.now()) - H.parse_ts(tick)).total_seconds()) if tick else None
             active, queued = [], []
             # Cancelled and uncertain jobs are not "up next": uncertain work already
             # surfaces as a health issue, cancelled work is history.
             readable = auth.bot_accesses(c, who)
             jobs = [row for row in c.execute(
-                "SELECT j.*,a.started,t.title AS task_title,m.from_actor FROM jobs j "
+                "SELECT j.*,a.started_at,t.title AS task_title,m.from_actor FROM jobs j "
                 "LEFT JOIN attempts a ON a.id=j.attempt_id JOIN messages m ON m.id=j.message_id "
                 f"JOIN conversations cv ON cv.id=m.conversation_id LEFT JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
-                "WHERE j.state IN ('queued','leased','running','input') ORDER BY j.created")
+                "WHERE j.state IN ('queued','leased','running','input') ORDER BY j.created_at")
                 if readable.get(row["bot"], auth.FULL)["read"]]
             # Every job's message and run are read and checked together, not a few queries per job. A deleted
             # message is not readable, as H.message (which leaves it out) made it.
@@ -2490,8 +2490,8 @@ def install_views(app, store, auth, mutate, task_view):
                     continue
                 # Never the message text: a shared bot's private chats belong to their people.
                 title = row["task_title"] or "Message from " + H.actor_id(row["from_actor"])
-                item = {"employee": row["bot"], "bot": row["bot"], "id": row["id"], "started": row["started"],
-                        "state": row["state"], "created": row["created"],
+                item = {"employee": row["bot"], "bot": row["bot"], "id": row["id"], "started_at": row["started_at"],
+                        "state": row["state"], "created_at": row["created_at"],
                         "title": title if len(title) <= 80 else title[:79].rstrip() + "\u2026"}
                 (queued if row["state"] == "queued" else active).append(item)
             return {"cloud": True, "last_tick": tick, "active": active, "queued": queued,
@@ -2524,16 +2524,16 @@ def install_views(app, store, auth, mutate, task_view):
             if not message:
                 raise Problem("not_found", "Run not found or unavailable to this account", 404)
             attempt = c.execute("SELECT * FROM attempts WHERE id=?", (run_id,)).fetchone()
-            events = c.execute("SELECT seq,kind,payload_json,created FROM attempt_events "
+            events = c.execute("SELECT seq,kind,payload,created_at FROM attempt_events "
                                "WHERE attempt_id=? ORDER BY seq", (run_id,)).fetchall()
             # A live run of a bot org rules apply to keeps its reply out until it is checked and delivered.
             from .org_rule_check import hides_run
             if hides_run(c, attempt):
                 events = [e for e in events if e["kind"] not in ("delta", "message")]
             lines = [store.settings.app_name + " cloud run " + run_id, "Bot: " + turn["bot"],
-                     "Started: " + str(turn["started"]), "Finished: " + str(turn["finished"]),
+                     "Started: " + str(turn["started_at"]), "Finished: " + str(turn["finished_at"]),
                      "Outcome: " + str(turn["exit"])]
-            result = json.loads(attempt["result_json"]) if attempt and attempt["result_json"] else {}
+            result = json.loads(attempt["result"]) if attempt and attempt["result"] else {}
             if result.get("fallback"):
                 lines.append("Fallback: " + str(result["fallback"]) + " (primary harness unavailable; the turn ran on the fallback)")
             if result.get("limited"):
@@ -2563,9 +2563,9 @@ def install_views(app, store, auth, mutate, task_view):
             # Newest readable bot-owned done tasks with a long enough note. Filter with task_sql in one pass
             # (not auth.task per candidate); 120 is the activity cap beside product releases.
             activity = [dict(r) for r in c.execute(
-                "SELECT id,title,owner,note,done_at,updated FROM tasks WHERE status='done' AND substr(owner,1,4)='bot:' "
+                "SELECT id,title,owner,note,done_at,updated_at FROM tasks WHERE status='done' AND substr(owner,1,4)='bot:' "
                 f"AND length(note)>=20 AND ({auth.task_sql(c, who)}) "
-                "ORDER BY COALESCE(NULLIF(done_at,''),updated) DESC LIMIT 120")] \
+                "ORDER BY COALESCE(NULLIF(done_at,''),updated_at) DESC LIMIT 120")] \
                 if kind != "product" and not unread and since_version is None else []
             for task in activity:
                 if len((task.get("note") or "").strip()) < 20:
@@ -2573,7 +2573,7 @@ def install_views(app, store, auth, mutate, task_view):
                 note = re.sub(r"\s+", " ", task["note"]).strip()
                 entries.append({"id": "activity-" + task["id"], "title": task["title"],
                                 "bullets": [note[:280]], "area": "Agent activity", "kind": "activity",
-                                "shipped_at": task.get("done_at") or task["updated"], "task_id": task["id"]})
+                                "shipped_at": task.get("done_at") or task["updated_at"], "task_id": task["id"]})
             entries.sort(key=lambda row: row["shipped_at"] or "", reverse=True)
             # Busy bot activity cannot push shipped releases out of the product view.
             entries = products + entries
@@ -2626,11 +2626,11 @@ def install_views(app, store, auth, mutate, task_view):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
-            row = c.execute("SELECT content,updated FROM bot_agent_instructions WHERE bot=?", (bot,)).fetchone()
+            row = c.execute("SELECT content,updated_at FROM bot_agent_instructions WHERE bot=?", (bot,)).fetchone()
             if not row:
-                row = c.execute("SELECT content,updated FROM mail_agent_instructions WHERE bot=?", (bot,)).fetchone()
+                row = c.execute("SELECT content,updated_at FROM mail_agent_instructions WHERE bot=?", (bot,)).fetchone()
             return {"bot": bot, "content": row["content"] if row else "",
-                    "published": bool(row and row["content"].strip()), "updated": row["updated"] if row else None,
+                    "published": bool(row and row["content"].strip()), "updated_at": row["updated_at"] if row else None,
                     "source": "Computer snapshot" if row else "Not published yet"}
 
     @app.get("/api/employees/{bot}/files")
@@ -2641,7 +2641,7 @@ def install_views(app, store, auth, mutate, task_view):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
-            row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
             config = json.loads(row[0]) if row else {}
             safe = {k: v for k, v in config.items() if k not in ("cwd", "env", "token", "secrets", "secrets_file")}
             status = H.status(c, bot) or {}
@@ -2671,12 +2671,12 @@ def install_views(app, store, auth, mutate, task_view):
             rows = list(reversed(visible_turns(c, who, bot, limit=100)))
             turns = []
             for turn, message in rows:
-                turns.append({"role": "user", "text": message["body"], "ts": turn["started"]})
+                turns.append({"role": "user", "text": message["body"], "ts": turn["started_at"]})
                 attempt = c.execute("SELECT final_text FROM attempts WHERE id=?", (turn["id"],)).fetchone()
                 if attempt and attempt[0]:
                     turns.append({"role": "assistant", "text": attempt[0],
-                                  "ts": turn["finished"] or turn["started"]})
-            config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+                                  "ts": turn["finished_at"] or turn["started_at"]})
+            config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
             cfg = json.loads(config[0]) if config else {}
             runtime, model = providers.bot_choice(c, auth.settings, cfg)
             runtime = runtime or "local"
@@ -2792,7 +2792,7 @@ def install_views(app, store, auth, mutate, task_view):
                 raise Problem("forbidden", "This bot takes requests in its own Assistant room, not here", 403)
             privacy.require_destination(c, who, "bot:" + slug, conv["id"], {"task": tid})
             message = H.say(c, who.actor, "bot:" + slug, text, conversation_id=conv["id"], refs={"task": tid})
-            c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
                       (tid, "bot:" + slug, who.actor, message["id"], H.shift(H.now(), hours=24)))
         tagged = [m for m in (privacy.page(c, who, conv["id"])["messages"] if conv else [])
                   if H.message_task_id(m) == tid]
@@ -2866,7 +2866,7 @@ def runnable_choices(c, who, auth, settings):
     # computer, shared by its bots) and each bot's config are read once here, not once per check.
     for row in c.execute("SELECT bot,runner_id FROM assignments").fetchall():
         read_cache.prime(c, PLACED_SQL, {(row["bot"],): read_cache.one(c, RUNNER_SQL, (row["runner_id"],))})
-    rows = c.execute("SELECT a.bot,b.runtime,bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
+    rows = c.execute("SELECT a.bot,b.runtime,bc.config FROM assignments a JOIN bots b ON b.slug=a.bot "
                      "LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE b.state<>'archived' ORDER BY a.bot").fetchall()
     read_cache.prime(c, CONFIG_SQL, {(row["bot"],): row for row in rows})
     for row in rows:
@@ -2874,7 +2874,7 @@ def runnable_choices(c, who, auth, settings):
         if not auth.bot_manager(c, who, bot):
             continue
         # The bot's own harness too: the picker keeps it shown when its provider is no longer offered.
-        own = resolve_harness(H._json(row["config_json"], {}) or {}, row["runtime"])
+        own = resolve_harness(H._json(row["config"], {}) or {}, row["runtime"])
         for harness in sorted(set(harnesses) | ({own} if own in HARNESS_BY_ID and not HARNESS_BY_ID[own].get("external") else set())):
             runtime = HARNESS_BY_ID[harness]["runtime"]
             answer = runtime_choice(c, bot, runtime, who, computers, harness=harness)

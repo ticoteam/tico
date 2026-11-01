@@ -571,7 +571,7 @@ def test_a_rule_test_never_reads_the_fingerprint_of_a_hidden_raise(books):
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:ben"}).status == "committed"
         asked = act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert asked.status == "needs_approval"
-        stored = c.execute("SELECT payload_json FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0]
+        stored = c.execute("SELECT payload FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0]
         assert "raise_check" in stored
         probe = act(c, OWNER, "rule_test", {"when": {"raise_check": {"matches": "^"}}, "outcome": {"outcome": "deny"}},
                     dry_run=True)

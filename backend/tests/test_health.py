@@ -59,7 +59,7 @@ def test_an_escalated_task_waiting_on_its_own_quiet_hold_is_not_progressing(envi
         H.TR.relate(c, 'bot:helper', window['id'], hold['id'], 'blocked_by')
         H.task_update(c, 'bot:helper', window['id'], status='waiting', note="Waiting on the hold's ack.")
         c.execute("UPDATE jobs SET state='completed'")
-        c.execute("UPDATE tasks SET private=0, updated=? WHERE id IN (?,?)",
+        c.execute("UPDATE tasks SET private=0, updated_at=? WHERE id IN (?,?)",
                   (H.shift(H.now(), seconds=-3600), window['id'], hold['id']))
         H.event(c, H.KEEPER, 'task.stall_escalated', window['id'], {'wakes': 3})
         if hidden == 'private':
@@ -67,8 +67,8 @@ def test_an_escalated_task_waiting_on_its_own_quiet_hold_is_not_progressing(envi
         elif hidden == 'activity':
             from backend import bot_access as A
             only_ana = A.audience({'people': ['ana']})
-            c.execute("INSERT INTO bot_config(bot,config_json,operator,access_json) VALUES('holder','{}','ana',?) "
-                      "ON CONFLICT(bot) DO UPDATE SET access_json=excluded.access_json",
+            c.execute("INSERT INTO bot_config(bot,config,operator,access) VALUES('holder','{}','ana',?) "
+                      "ON CONFLICT(bot) DO UPDATE SET access=excluded.access",
                       (A.stored({'see': A.OPEN_LEVEL, 'read': only_ana, 'write': only_ana}),))
     for status in ('open', 'review'):
         with api.app.state.store.transaction() as c:
@@ -86,17 +86,17 @@ def test_an_offline_computer_holds_its_bots(environment):
     add_bot(api, "helper")
     heartbeat(api, runner, seconds_ago=600, runtimes=SIGNED_IN)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('helper',?,1,?,'t')",
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
                   (runner, H.now()))
     body, checks = health_of(api)
     assert checks["computers"]["status"] == "bad" and checks["waiting"]["status"] == "bad"
     assert body["waiting"][0]["bot"] == "helper" and body["waiting"][0]["reason"] == "computer_offline"
-    assert body["computers"][0]["last_seen"]
+    assert body["computers"][0]["last_seen_at"]
     # A second computer that is up makes it a warning, not an outage.
     heartbeat(api, runner, seconds_ago=5, runtimes=SIGNED_IN)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen) "
-                  "SELECT 'r2','Old laptop',operator,'h2',created,? FROM runners WHERE id=?",
+        c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at,last_seen_at) "
+                  "SELECT 'r2','Old laptop',operator,'h2',created_at,? FROM runners WHERE id=?",
                   (H.shift(H.now(), hours=-2), runner))
     body, checks = health_of(api)
     assert checks["computers"]["status"] == "warn" and "Old laptop" in checks["computers"]["summary"]
@@ -108,11 +108,11 @@ def silent_computer(api, seconds_ago):
     add_bot(api, "helper")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET operator='riley' WHERE id=?", (runner,))
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('helper',?,1,?,'t')",
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
                   (runner, H.now()))
         # A chat message in a conversation, as the product writes them: the trigger queues its job, and Pipeline counts it.
-        c.execute("INSERT INTO conversations(id,kind,participants_json,created) VALUES('cv1','chat','[]',?)", (H.now(),))
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created) "
+        c.execute("INSERT INTO conversations(id,kind,participants,created_at) VALUES('cv1','chat','[]',?)", (H.now(),))
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at) "
                   "VALUES('m1','cv1','human:ana','bot:helper','chat','hi',?)", (H.now(),))       # queues its job
     heartbeat(api, runner, seconds_ago=seconds_ago, runtimes=SIGNED_IN)
     return runner
@@ -225,7 +225,7 @@ def test_a_bot_reads_computers_and_failed_runs_without_admin_detail(environment)
     heartbeat(api, runner, seconds_ago=5, runtimes=SIGNED_IN)
     add_bot(api, "qa")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('qa','hermes','x',?,'human:ana')",
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('qa','hermes','x',?,'human:ana')",
                   (H.now(),))
     api.app.state.store.settings.test_identities["qa-bot"] = Identity("bot:qa", "bot", agent="hermes")
     body, checks = health_of(api, signed_in("qa-bot"))
@@ -329,11 +329,11 @@ def test_a_bot_its_computer_cannot_start_is_stuck_with_the_reason_and_one_fix(en
     runner = enrolled(api)
     add_bot(api, "release")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET label='Team box', last_seen=?, readiness_json=? WHERE id=?",
+        c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?",
                   (H.now(), json.dumps({"schema_version": 1, "runtimes": {
                       "claude": {"installed": True, "authenticated": "missing", "detail": "Claude login required"}},
                       "bots": {"release": {"ready": False, "runtime": "claude", "problems": ["Claude login required"]}}}), runner))
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('release',?,1,?,'t')",
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('release',?,1,?,'t')",
                   (runner, H.now()))
         c.execute("UPDATE bots SET runtime='claude' WHERE slug='release'")
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
@@ -355,7 +355,7 @@ def test_a_bot_its_computer_cannot_start_is_stuck_with_the_reason_and_one_fix(en
     from backend import bot_access as A
     only_ana = A.audience({"people": ["ana"]})
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config_json,operator,access_json) VALUES('release','{}','ana',?)",
+        c.execute("INSERT INTO bot_config(bot,config,operator,access) VALUES('release','{}','ana',?)",
                   (A.stored({"see": only_ana, "read": only_ana, "write": only_ana}),))
     body, checks = health_of(api, as_person(api, "quinn"))
     assert body["stuck"] == [] and "release" not in json.dumps(body)
@@ -376,7 +376,7 @@ def test_a_chat_waiting_on_its_own_model_sign_in_says_so_and_other_waits_keep_th
 
     def report(claude):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE runners SET last_seen=?, readiness_json=? WHERE id=?", (H.now(), json.dumps({
+            c.execute("UPDATE runners SET last_seen_at=?, readiness=? WHERE id=?", (H.now(), json.dumps({
                 "schema_version": 1, "runtimes": {
                     "claude": {"installed": True, "authenticated": claude, "detail": "" if claude == "ready" else "Claude login required"},
                     "codex": {"installed": True, "authenticated": "ready"}},
@@ -388,10 +388,10 @@ def test_a_chat_waiting_on_its_own_model_sign_in_says_so_and_other_waits_keep_th
     report("missing")
     chats = {}
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('coder',?,'ana')", (json.dumps({"runtime": "codex"}),))
+        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('coder',?,'ana')", (json.dumps({"runtime": "codex"}),))
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         for bot in ("writer", "coder"):
-            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')",
+            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
                       (bot, runner, H.now()))
             chats[bot] = H.open_conversation(c, owner, [owner, "bot:" + bot], kind="chat")
             H._write_message(c, owner, "bot:" + bot, "start setup", chats[bot], "say", {}, None, None)
@@ -416,15 +416,15 @@ def test_an_antigravity_bot_is_not_told_to_sign_in_to_gemini_cli(environment):
     runner = enrolled(api)
     add_bot(api, "scout")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET label='Team box', last_seen=?, readiness_json=? WHERE id=?", (H.now(), json.dumps({
+        c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?", (H.now(), json.dumps({
             "schema_version": 1, "runtimes": {
                 "gemini": {"installed": True, "authenticated": "missing", "detail": "Gemini login required"}},
             "bots": {"scout": {"ready": False, "runtime": "gemini", "problems": ["Missing bot repository or AGENT.md"]}}}),
             runner))
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('scout',?,'ana')",
+        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('scout',?,'ana')",
                   (json.dumps({"runtime": "gemini", "harness": "antigravity"}),))
         c.execute("UPDATE bots SET runtime='gemini' WHERE slug='scout'")
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('scout',?,1,?,'t')",
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('scout',?,1,?,'t')",
                   (runner, H.now()))
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         chat = H.open_conversation(c, owner, [owner, "bot:scout"], kind="chat")
@@ -451,8 +451,8 @@ def test_computer_sign_in_names_only_a_model_its_bots_run_on(environment):
     runner = enrolled(api)
     add_bot(api, "writer")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('writer',?,'ana')", (json.dumps({"runtime": "claude"}),))
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('writer',?,1,?,'t')",
+        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('writer',?,'ana')", (json.dumps({"runtime": "claude"}),))
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('writer',?,1,?,'t')",
                   (runner, H.now()))
     heartbeat(api, runner, runtimes={"codex": {"installed": True, "authenticated": "missing"},
                                      "claude": {"installed": True, "authenticated": "ready"}})
@@ -461,8 +461,8 @@ def test_computer_sign_in_names_only_a_model_its_bots_run_on(environment):
     assert next(r for r in body["computers"][0]["runtimes"] if r["name"] == "codex")["signable"]
     add_bot(api, "coder")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('coder',?,'ana')", (json.dumps({"runtime": "codex"}),))
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('coder',?,1,?,'t')",
+        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('coder',?,'ana')", (json.dumps({"runtime": "codex"}),))
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('coder',?,1,?,'t')",
                   (runner, H.now()))
     assert "sign in to Codex" in health_of(api)[1]["computer_signin"]["summary"]
 
@@ -493,8 +493,8 @@ def test_a_bot_over_the_daily_token_threshold_is_flagged(environment):
     add_bot(api, "loop")
     api.app.state.store.settings.token_alert_input = 1000
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,input_tokens,cached_tokens) VALUES('t1','loop',?,1100,90000)", (H.now(),))
-        c.execute("INSERT INTO turns(id,bot,started,input_tokens,cached_tokens) VALUES('t0','loop',?,9000,0)",
+        c.execute("INSERT INTO turns(id,bot,started_at,input_tokens,cached_tokens) VALUES('t1','loop',?,1100,90000)", (H.now(),))
+        c.execute("INSERT INTO turns(id,bot,started_at,input_tokens,cached_tokens) VALUES('t0','loop',?,9000,0)",
                   (H.shift(H.now(), hours=-30),))
     checks = health_of(api)[1]
     assert checks["tokens"]["status"] == "warn" and "1,100 uncached input tokens in 24 h" in checks["tokens"]["summary"]
@@ -506,11 +506,11 @@ def test_a_bot_that_has_not_finished_setup_warns_once_its_held_work_is_old(envir
     add_bot(api, "support")
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, H.KEEPER, "Ticket 42", "", "bot:support")    # from before an upgrade
-        c.execute("INSERT INTO bot_config(bot,config_json,operator,onboarding_state) VALUES('support','{}','ana','needs_setup') "
+        c.execute("INSERT INTO bot_config(bot,config,operator,onboarding_state) VALUES('support','{}','ana','needs_setup') "
                   "ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup'")
     assert "setup:support" not in health_of(api)[1]                 # just filed: setup may be under way
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET created='2026-01-02T03:04:05Z' WHERE id=?", (task["id"],))
+        c.execute("UPDATE tasks SET created_at='2026-01-02T03:04:05Z' WHERE id=?", (task["id"],))
     check = health_of(api)[1]["setup:support"]
     assert check["status"] == "warn" and check["summary"] == "support is still onboarding; 1 task waiting since 2026-01-02."
     assert check["label"] == "Onboarding not finished"
@@ -521,10 +521,10 @@ def test_a_bot_that_has_not_finished_setup_warns_once_its_held_work_is_old(envir
 def _parked(api, slug, days_ago, created_by="", operator="morgan"):
     add_bot(api, slug)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config_json,operator,onboarding_state,created_by) VALUES(?,'{}',?,'needs_setup',?) "
+        c.execute("INSERT INTO bot_config(bot,config,operator,onboarding_state,created_by) VALUES(?,'{}',?,'needs_setup',?) "
                   "ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup',operator=excluded.operator,"
                   "created_by=excluded.created_by", (slug, operator, created_by))
-        c.execute("UPDATE bots SET created=? WHERE slug=?", (H.shift(H.now(), days=-days_ago), slug))
+        c.execute("UPDATE bots SET created_at=? WHERE slug=?", (H.shift(H.now(), days=-days_ago), slug))
 
 
 def test_a_bot_left_in_setup_for_a_day_is_stuck_and_its_manager_may_finish_it(environment):
@@ -582,9 +582,9 @@ def test_a_repository_a_computer_could_not_copy_is_named_with_gits_reason(reques
 def _hosted(api, runner, bot, report):
     import json
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET label='Team box', last_seen=?, readiness_json=? WHERE id=?",
+        c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?",
                   (H.now(), json.dumps({"schema_version": 1, "runtimes": SIGNED_IN, "bots": {bot: report}}), runner))
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t') "
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t') "
                   "ON CONFLICT(bot) DO NOTHING", (bot, runner, H.now()))
 
 
@@ -627,8 +627,8 @@ def test_a_read_only_reviewer_given_every_repository_keeps_its_denies(environmen
     add_bot(api, "reviewer")
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO repositories(full_name,enabled,bot_repo) VALUES('acme/product',1,0)")
-        c.execute("INSERT INTO bot_config(bot,config_json,repo,operator) VALUES('reviewer',?,'bot-reviewer','ana') ON CONFLICT(bot) DO "
-                  "UPDATE SET config_json=excluded.config_json,repo=excluded.repo", ('{"repo_access_mode": "all"}',))
+        c.execute("INSERT INTO bot_config(bot,config,repo,operator) VALUES('reviewer',?,'bot-reviewer','ana') ON CONFLICT(bot) DO "
+                  "UPDATE SET config=excluded.config,repo=excluded.repo", ('{"repo_access_mode": "all"}',))
     read = {"service": "github", "identity": "acme/docs", "can": ["read"], "scope": {"repo": "acme/docs"}}
     deny = "Claude Code settings deny: gh pr comment, gh pr create, gh pr review"
     _hosted(api, runner, "reviewer", {"ready": True, "runtime": "claude", "warnings": [deny], "tools": [read]})
@@ -637,7 +637,7 @@ def test_a_read_only_reviewer_given_every_repository_keeps_its_denies(environmen
         assert any(t["identity"] == "acme/product" and "write" in t["can"] for t in listing(c, settings, "reviewer")["tools"])
     assert "harness_denies" not in health_of(api)[1]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='reviewer'", ('{"repo_access_mode": "chosen"}',))
+        c.execute("UPDATE bot_config SET config=? WHERE bot='reviewer'", ('{"repo_access_mode": "chosen"}',))
         c.execute("INSERT INTO bot_repo_access VALUES('reviewer','acme/product','write')")
     summary = health_of(api)[1]["harness_denies"]["summary"]
     assert "reviewer may write to acme/product" in summary and "gh pr create, gh pr comment" in summary
@@ -668,12 +668,12 @@ def test_harness_denies_answers_each_bot_as_a_bot_by_bot_pass_does(environment, 
         readiness[slug] = {"ready": True, "runtime": "claude", "warnings": [deny], "tools": tools}
         with api.app.state.store.transaction() as c:
             if config:
-                c.execute("INSERT INTO bot_config(bot,config_json,repo,operator) VALUES(?,?,?,'ana')", (slug, config, "bot-" + slug))
-            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')", (slug, runner, H.now()))
+                c.execute("INSERT INTO bot_config(bot,config,repo,operator) VALUES(?,?,?,'ana')", (slug, config, "bot-" + slug))
+            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')", (slug, runner, H.now()))
             if slug == "chosen":
                 c.execute("INSERT INTO bot_repo_access VALUES('chosen','acme/app','write')")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET label='Team box', last_seen=?, readiness_json=? WHERE id=?",
+        c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?",
                   (H.now(), json.dumps({"schema_version": 1, "runtimes": SIGNED_IN, "bots": readiness}), runner))
     with api.app.state.store.read_transaction() as c:
         batched = harness_denies(c, settings)
@@ -703,7 +703,7 @@ def _listened(api, *, routed_days_ago, saved_days_ago, judged=None):
                   "VALUES('i2','reddit','2','https://example.com/2','a later post','h2',?)",
                   (H.shift(H.now(), days=-saved_days_ago),))
         if judged:
-            c.execute("INSERT INTO listen_judgments(id,item_id,question_set,scores_json,judged_at) VALUES('j1','i1',?,'{}',?)",
+            c.execute("INSERT INTO listen_judgments(id,item_id,question_set,scores,judged_at) VALUES('j1','i1',?,'{}',?)",
                       (judged, H.shift(H.now(), days=-routed_days_ago)))
 
 
@@ -759,7 +759,7 @@ def test_a_computer_on_the_python_runner_is_told_to_update_and_the_heartbeat_tak
     for engine, warned in (({"name": "rust", "build": "0123456789abcdef"}, False),
                            ({"name": "python", "note": "TICO_RUNNER_ENGINE=python"}, True)):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE runners SET label='Team box', last_seen=?, readiness_json=? WHERE id=?",
+            c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?",
                       (H.now(), json.dumps({"schema_version": 1, "runtimes": {}, "bots": {}, "engine": engine}), runner))
         check = health_of(api)[1].get("engine:" + runner)
         assert bool(check) == warned
@@ -772,10 +772,10 @@ def claimable(c, runner, *bots):
     claim holds the work (execution.claim_refusal), which Health names instead of "slow"."""
     import json
     for bot in bots:
-        c.execute("INSERT OR IGNORE INTO bot_config(bot,config_json,operator) VALUES(?,'{}','ana')", (bot,))
-    document = json.loads(c.execute("SELECT readiness_json FROM runners WHERE id=?", (runner,)).fetchone()[0] or "{}")
+        c.execute("INSERT OR IGNORE INTO bot_config(bot,config,operator) VALUES(?,'{}','ana')", (bot,))
+    document = json.loads(c.execute("SELECT readiness FROM runners WHERE id=?", (runner,)).fetchone()[0] or "{}")
     document.setdefault("bots", {}).update({bot: {"ready": True} for bot in bots})
-    c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (json.dumps(document), runner))
+    c.execute("UPDATE runners SET readiness=? WHERE id=?", (json.dumps(document), runner))
 
 
 def test_refusal_quarantine_explains_the_claim_hold_and_matches_bot_status(environment):
@@ -853,22 +853,22 @@ def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeyp
     add_bot(api, "helper")
     old = H.shift(H.now(), minutes=-30)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('helper',?,1,?,'t')",
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
                   (runner, H.now()))
         claimable(c, runner, "helper")
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         task = H.task_create(c, owner, "Interrupted task", "", "bot:helper", private=False)
         interrupted = H.task_comment(c, owner, task["id"], "interrupted work")
         interrupted_job = c.execute("SELECT id FROM jobs WHERE message_id=?", (interrupted["id"],)).fetchone()["id"]
-        c.execute("UPDATE jobs SET state='uncertain',created=? WHERE id=?", (old, interrupted_job))
+        c.execute("UPDATE jobs SET state='uncertain',created_at=? WHERE id=?", (old, interrupted_job))
         H.task_comment(c, owner, task["id"], "queued behind interrupted work")
-        c.execute("UPDATE jobs SET created=? WHERE bot='helper' AND state='queued'", (old,))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='helper' AND state='queued'", (old,))
 
         running_chat = H.open_conversation(c, owner, [owner, "bot:helper"], kind="chat")
         H._write_message(c, owner, "bot:helper", "running turn", running_chat, "say", {}, None, None)
-        running_job = c.execute("SELECT id FROM jobs WHERE bot='helper' AND state='queued' ORDER BY created DESC LIMIT 1").fetchone()["id"]
+        running_job = c.execute("SELECT id FROM jobs WHERE bot='helper' AND state='queued' ORDER BY created_at DESC LIMIT 1").fetchone()["id"]
         c.execute("UPDATE jobs SET state='running' WHERE id=?", (running_job,))
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,started) "
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,started_at) "
                   "VALUES('helper-running',?,'helper',?,1,'x','running',?,?,?)",
                   (running_job, runner, H.shift(H.now(), hours=1), H.now(), H.now()))
         online = {r["id"] for r in health._online_runners(c)}
@@ -896,10 +896,10 @@ def fenced_task_jobs(c, bot, created):
     owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
     task = H.task_create(c, owner, "Interrupted task", "", "bot:" + bot, private=False)
     interrupted = H.task_comment(c, owner, task["id"], "interrupted work")
-    c.execute("UPDATE jobs SET state='uncertain',created=? WHERE message_id=?", (created, interrupted["id"]))
+    c.execute("UPDATE jobs SET state='uncertain',created_at=? WHERE message_id=?", (created, interrupted["id"]))
     H.task_comment(c, owner, task["id"], "queued behind interrupted work")
     jobs = [r["id"] for r in c.execute("SELECT id FROM jobs WHERE bot=? AND state='queued'", (bot,)) if r["id"] not in before]
-    c.executemany("UPDATE jobs SET created=? WHERE id=?", [(created, job) for job in jobs])
+    c.executemany("UPDATE jobs SET created_at=? WHERE id=?", [(created, job) for job in jobs])
     return jobs
 
 
@@ -913,7 +913,7 @@ def test_work_held_on_purpose_behind_an_interrupted_run_is_not_stuck(environment
     heartbeat(api, runner)
     add_bot(api, "helper")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('helper',?,1,?,'t')",
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
                   (runner, H.now()))
         claimable(c, runner, "helper")
         jobs = fenced_task_jobs(c, "helper", H.shift(H.now(), minutes=-30))
@@ -945,7 +945,7 @@ def test_a_persons_message_waiting_two_minutes_on_a_computer_with_room_is_stuck(
     heartbeat(api, runner)
     add_bot(api, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('ops',?,1,?,'t')",
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('ops',?,1,?,'t')",
                   (runner, H.now()))
         claimable(c, runner, "ops")
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
@@ -953,7 +953,7 @@ def test_a_persons_message_waiting_two_minutes_on_a_computer_with_room_is_stuck(
         H._write_message(c, owner, "bot:ops", "hello?", chat, "say", {}, None, None)
         online = {r["id"] for r in health._online_runners(c)}
         assert health._waiting(c, online)[1] == []                    # just sent
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops'", (H.shift(H.now(), minutes=-3),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops'", (H.shift(H.now(), minutes=-3),))
         [row] = health._waiting(c, online)[1]
         assert row["bot"] == "ops" and row["reason"] == "slow"
         c.execute("UPDATE messages SET from_actor='bot:helper' WHERE conversation_id=?", (chat["id"],))
@@ -971,7 +971,7 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET label='Team box' WHERE id=?", (runner,))
         for bot in ("ops", "dev"):
-            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')",
+            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
                       (bot, runner, H.now()))
         claimable(c, runner, "ops", "dev")
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
@@ -980,9 +980,9 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
             H._write_message(c, owner, "bot:" + bot, "hello?", chat, "say", {}, None, None)
         job = c.execute("SELECT id FROM jobs WHERE bot='dev'").fetchone()["id"]
         c.execute("UPDATE jobs SET state='leased' WHERE id=?", (job,))
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a-dev',?,'dev',?,1,'x','running',?,?)", (job, runner, H.shift(H.now(), hours=1), H.now()))
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops'", (H.shift(H.now(), minutes=-30),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops'", (H.shift(H.now(), minutes=-30),))
         online = {r["id"] for r in health._online_runners(c)}
         [row] = health._waiting(c, online)[2]
         assert row["bot"] == "ops" and row["reason"] == "slow"         # nothing says it is updating: a bug
@@ -1039,7 +1039,7 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
         c.execute("UPDATE runners SET label='Mac' WHERE id=?", (runner,))
         c.execute("UPDATE bots SET display_name='BotOps' WHERE slug='botops'")
         for bot in ("ops", "botops", "audit"):
-            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')",
+            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
                       (bot, runner, H.now()))
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         for bot in ("ops", "botops", "audit"):
@@ -1050,14 +1050,14 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
         for bot, since in started.items():
             job = c.execute("SELECT id FROM jobs WHERE bot=?", (bot,)).fetchone()["id"]
             c.execute("UPDATE jobs SET state='leased' WHERE id=?", (job,))
-            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,"
-                      "started) VALUES(?,?,?,?,1,?,'running',?,?,?)",
+            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,"
+                      "started_at) VALUES(?,?,?,?,1,?,'running',?,?,?)",
                       (run[bot], job, bot, runner, "x" + bot, H.shift(H.now(), hours=1), since, since))
         watch = H.task_create(c, "bot:botops", "Watch HotMic's update to 0.3.48", "x", "bot:botops", lint=False)
         secret = H.task_create(c, "bot:audit", "Private release gate", "x", "bot:audit", lint=False, private=True)
         c.execute("UPDATE tasks SET carried_by='b-botops' WHERE id=?", (watch["id"],))
         c.execute("UPDATE tasks SET carried_by='a-audit' WHERE id=?", (secret["id"],))
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops'", (H.shift(H.now(), minutes=-30),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops'", (H.shift(H.now(), minutes=-30),))
         c.execute("INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,reported) "
                   "VALUES(?,'0.3.46','mac','waiting','0.3.48',?)", (runner, H.now()))
         online = {r["id"] for r in health._online_runners(c)}
@@ -1105,13 +1105,13 @@ def test_roadmap_suggestions_warn_from_the_routing_rule_and_only_to_administrato
 
     def health(chosen=None, labels=("roadmap",), headers=None, **states):
         with api.app.state.store.transaction() as c:
-            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('pm',?,'morgan') ON CONFLICT(bot) "
-                      "DO UPDATE SET config_json=excluded.config_json", ('{"template": "product-manager"}',))
+            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('pm',?,'morgan') ON CONFLICT(bot) "
+                      "DO UPDATE SET config=excluded.config", ('{"template": "product-manager"}',))
             c.execute("UPDATE bots SET state='active', display_name=upper(slug) WHERE slug IN ('pm','ops')")
             for bot, state in states.items():
                 c.execute("UPDATE bots SET state=? WHERE slug=?", (state, bot))
-            c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('roadmaps',?) ON CONFLICT(key) "
-                      "DO UPDATE SET value_json=excluded.value_json",
+            c.execute("INSERT INTO registry_metadata(key,value) VALUES('roadmaps',?) ON CONFLICT(key) "
+                      "DO UPDATE SET value=excluded.value",
                       (json.dumps({"labels": list(labels), "suggestions_bot": chosen}),))
         return health_of(api, headers)[1].get("roadmap_suggestions")
 
@@ -1143,16 +1143,16 @@ def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment):
     api.app.state.store.settings.test_identities["observer-bot"] = Identity("bot:observer", "bot", agent="hermes")
     old = H.shift(H.now(), hours=-3)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('observer','hermes','x',?,'human:ana')", (H.now(),))
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('helper',?,1,?,'t')", (runner, H.now()))
-        c.execute("UPDATE runners SET last_seen=? WHERE id=?", (H.now(), runner))
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('observer','hermes','x',?,'human:ana')", (H.now(),))
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')", (runner, H.now()))
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.now(), runner))
         cv = H.open_conversation(c, 'human:morgan', ['human:morgan', 'bot:helper'], kind='chat')
         H._write_message(c, 'human:morgan', 'bot:helper', 'check the queue', cv, 'say', {}, None, None)
-        c.execute("UPDATE jobs SET created=? WHERE bot='helper'", (old,))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='helper'", (old,))
         tasks = [H.task_create(c, 'human:morgan', title, '', 'bot:helper', private=False)
                  for title in ('Repair the queue', 'Check the diagnosis')]
         for task in tasks:
-            c.execute("UPDATE tasks SET updated=? WHERE id=?", (old, task['id']))
+            c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (old, task['id']))
             H.event(c, H.KEEPER, 'task.stall_escalated', task['id'], {'wakes': 3})
         c.execute("UPDATE bots SET state='paused' WHERE slug='helper'")
     headers = signed_in('observer-bot')
@@ -1171,9 +1171,9 @@ def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment):
         claimable(c, runner, 'helper')
         c.execute("UPDATE runners SET capacity=1 WHERE id=?", (runner,))
         H._write_message(c, 'human:morgan', 'bot:helper', 'one more request', cv, 'say', {}, None, None)
-        job = c.execute("SELECT id FROM jobs WHERE bot='helper' ORDER BY created DESC LIMIT 1").fetchone()[0]
+        job = c.execute("SELECT id FROM jobs WHERE bot='helper' ORDER BY created_at DESC LIMIT 1").fetchone()[0]
         c.execute("UPDATE jobs SET state='running' WHERE id=?", (job,))
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('helper-running',?,'helper',?,1,'x','running',?,?)",
                   (job, runner, H.shift(H.now(), hours=1), H.now()))
     queue = health_of(api, headers)[1]['queue']
@@ -1272,8 +1272,8 @@ def test_batched_computer_load_and_overload_reads_answer_what_each_computer_read
     busy, off, calm, revoked = enrolled(api), "r-off", "r-calm", "r-gone"
     with api.app.state.store.transaction() as c:
         for rid in (off, calm, revoked):
-            c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen) "
-                      "SELECT ?,?,operator,?,created,last_seen FROM runners WHERE id=?", (rid, rid, "h" + rid, busy))
+            c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at,last_seen_at) "
+                      "SELECT ?,?,operator,?,created_at,last_seen_at FROM runners WHERE id=?", (rid, rid, "h" + rid, busy))
         c.execute("UPDATE runners SET performance='off' WHERE id=?", (off,))
         c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), revoked))
         for rid, cpu in ((busy, 95), (off, 95), (calm, 10), (revoked, 95)):
@@ -1281,11 +1281,11 @@ def test_batched_computer_load_and_overload_reads_answer_what_each_computer_read
                 ts = now - 60 * k
                 c.execute("INSERT INTO runner_load_samples VALUES(?,?,?,?,?,?,?,?,?)",
                           (rid, ts, ts, cpu, 90, 100, 0, 0, 1))
-        c.execute("INSERT INTO perf_overloads(runner_id,started,last,ended,reasons,cpu_max,mem_max,runs_max) "
+        c.execute("INSERT INTO perf_overloads(runner_id,started_at,last,ended,reasons,cpu_max,mem_max,runs_max) "
                   "VALUES(?,?,?,?,'[]',99,99,1)", (busy, now - 7200, now - 3600, now - 3500))      # ended long ago
-        c.execute("INSERT INTO perf_overloads(runner_id,started,last,ended,reasons,cpu_max,mem_max,runs_max) "
+        c.execute("INSERT INTO perf_overloads(runner_id,started_at,last,ended,reasons,cpu_max,mem_max,runs_max) "
                   "VALUES(?,?,?,?,'[]',99,99,1)", (busy, now - 900, now - 100, now - 50))         # ended just now
-        c.execute("INSERT INTO perf_overloads(runner_id,started,last,ended,reasons,cpu_max,mem_max,runs_max) "
+        c.execute("INSERT INTO perf_overloads(runner_id,started_at,last,ended,reasons,cpu_max,mem_max,runs_max) "
                   "VALUES(?,?,?,NULL,'[]',99,99,1)", (calm, now - 900, now - 100))                # still open
     ids = [busy, off, calm, revoked]
     with api.app.state.store.read() as c:

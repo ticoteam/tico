@@ -158,7 +158,7 @@ def recheck(ctx: Ctx, o: Any, fresh: list[G.Hit] | None = None) -> bool:
     is released (a hold) or the transfer is cancelled. On a send, the limits it fits that it has not counted yet go into
     `fresh`, for `reserve` once the send is claimed."""
     from . import gating
-    body = SK.loads(o["payload_json"])
+    body = SK.loads(o["payload"])
     t = SK.get(ctx.c, "fin_transfers", str(body["transfer_id"]))
     if t is None or str(t["status"]) != "queued":
         SK.update(ctx.c, "fin_outbox", str(o["id"]), {"status": "failed", "claimed_at": None, "next_try_at": None,
@@ -180,7 +180,7 @@ def recheck(ctx: Ctx, o: Any, fresh: list[G.Hit] | None = None) -> bool:
         _stop(ctx, o, t, "payments were turned off for this bank connection", hold=False)
         return True
     found = gating.send_facts(ctx, who, "payment_create", _facts(ctx, src, dst, amount))
-    mine = payments.own_counts(ctx, t["counted_json"], t["action_id"])
+    mine = payments.own_counts(ctx, t["counted"], t["action_id"])
 
     def used(rule: G.Rule, key: str, subject: str) -> int:
         have = SK.counter(ctx.c, rule.id, key, subject)[0]
@@ -204,15 +204,15 @@ def reserve(ctx: Ctx, o: Any, hits: Sequence[G.Hit]) -> None:
     does the same): the transfer owns them, so they move once, and come back if Mercury refuses it."""
     if not hits:
         return
-    tid = str(SK.loads(o["payload_json"])["transfer_id"])
+    tid = str(SK.loads(o["payload"])["transfer_id"])
     t = SK.get(ctx.c, "fin_transfers", tid)
     if t is None:
         return
-    owned = [list(x) for x in SK.loads_list(t["counted_json"])]
+    owned = [list(x) for x in SK.loads_list(t["counted"])]
     for h in hits:
         SK.count(ctx.c, h.rule, h.period_key, h.subject, int(t["amount"]), ctx.at)
         owned.append([h.rule, h.period_key, h.subject])
-    SK.update(ctx.c, "fin_transfers", tid, {"counted_json": SK.dump(owned)})
+    SK.update(ctx.c, "fin_transfers", tid, {"counted": SK.dump(owned)})
 
 
 def _give_back(ctx: Ctx, tid: str) -> None:
@@ -221,11 +221,11 @@ def _give_back(ctx: Ctx, tid: str) -> None:
     t = SK.get(ctx.c, "fin_transfers", tid)
     if t is None:
         return
-    for raw in SK.loads_list(t["counted_json"]):
+    for raw in SK.loads_list(t["counted"]):
         if isinstance(raw, list) and len(cast(list[Any], raw)) == 3:
             rule, key, subject = cast(list[Any], raw)
             SK.uncount(ctx.c, str(rule), str(key), str(subject), int(t["amount"]), ctx.at)
-    SK.update(ctx.c, "fin_transfers", tid, {"counted_json": "[]"})
+    SK.update(ctx.c, "fin_transfers", tid, {"counted": "[]"})
 
 
 def plan_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -335,7 +335,7 @@ def _stamp(value: object) -> str:
 
 def not_sent(ctx: Ctx, payload: Mapping[str, Any], why: str, unknown: bool, *, started: object = None) -> None:
     """A send that did not clearly land: `unknown` when it may have (no answer, a 5xx, a call cut off), else refused.
-    Either way a finance admin is asked to check Mercury, and nothing sends the transfer again on its own. `started` is
+    Either way a finance admin is asked to check Mercury, and nothing sends the transfer again on its own. `started_at` is
     when the call was claimed: it may have landed from then, so its legs are looked for from that day, not from the day
     the failure is recorded (a recovery can run days later)."""
     tid = str(payload["transfer_id"])

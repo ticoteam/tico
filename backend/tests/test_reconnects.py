@@ -40,14 +40,14 @@ def wakes(api, t):
         return [r["body"] for r in c.execute(
             "SELECT m.body FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
             f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.to_actor='bot:ops' "
-            "AND json_extract(m.refs_json,'$.reconnected') IS NOT NULL", (t["id"],))]
+            "AND json_extract(m.refs,'$.reconnected') IS NOT NULL", (t["id"],))]
 
 
 def cards(api, t):
     with api.app.state.store.read() as c:
         return [json.loads(r[0])["reconnect"] for r in c.execute(
-            "SELECT m.refs_json FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs_json,'$.reconnect') IS NOT NULL", (t["id"],))]
+            "SELECT m.refs FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs,'$.reconnect') IS NOT NULL", (t["id"],))]
 
 
 def needs(api, token="ana-test"):
@@ -257,7 +257,7 @@ def test_a_bot_on_a_task_opens_a_credential_card_in_its_thread_and_saving_it_wak
     assert wakes(api, t) == [f"Reconnected: {t['title']}\nthe Acme CRM token is saved. Continue."]
     with api.app.state.store.read() as c:
         # The wake is the bot's one notice: no second "Saved ..." message from the person.
-        assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs_json,'$.credential_saved') IS NOT NULL").fetchone()
+        assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs,'$.credential_saved') IS NOT NULL").fetchone()
 
 
 def ask_secret(api, attempt, env="ACME_CRM_TOKEN", label="the Acme CRM token", **extra):
@@ -283,7 +283,7 @@ def botops_turn(api, title="Connect the Acme CRM for ops"):
     from backend.tests.test_api import ready
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('botops',?, 'ana')",
+        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('botops',?, 'ana')",
                   (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
     machine = runner(api)
     assign(api, machine, "botops")
@@ -304,7 +304,7 @@ def botops_wakes(api, t):
     with api.app.state.store.read() as c:
         return [r["body"] for r in c.execute(
             "SELECT m.body FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.to_actor='bot:botops' AND json_extract(m.refs_json,'$.reconnected') IS NOT NULL",
+            f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.to_actor='bot:botops' AND json_extract(m.refs,'$.reconnected') IS NOT NULL",
             (t["id"],))]
 
 
@@ -554,7 +554,7 @@ def hold_item(api, bot="ops"):
 
 def login_card(api, t, runner_id="r1"):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO runners(id,label,token_hash,operator,created) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING",
+        c.execute("INSERT INTO runners(id,label,token_hash,operator,created_at) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING",
                   (runner_id, "Acme Mac", "x-" + runner_id, "ana", H.now()))
         return R.login_refused(c, api.app.state.store.settings, "ops", runner_id, "codex", t["id"])
 

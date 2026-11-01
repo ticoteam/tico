@@ -2,7 +2,7 @@
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS trigger_relays (
   relay_id TEXT PRIMARY KEY, trigger_id TEXT NOT NULL, address_prefix TEXT NOT NULL,
-  created_by TEXT NOT NULL, created TEXT NOT NULL, deleted_at TEXT, hq_gone INTEGER NOT NULL DEFAULT 0);
+  created_by TEXT NOT NULL, created_at TEXT NOT NULL, deleted_at TEXT, hq_gone INTEGER NOT NULL DEFAULT 0);
 CREATE UNIQUE INDEX IF NOT EXISTS trigger_relays_live ON trigger_relays(trigger_id) WHERE deleted_at IS NULL;
 CREATE TABLE IF NOT EXISTS hook_relay_state (
   singleton INTEGER PRIMARY KEY CHECK(singleton=1), cursor INTEGER NOT NULL DEFAULT 0,

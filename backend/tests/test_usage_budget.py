@@ -51,21 +51,21 @@ def big_org(api, first, last, groups_=8):
         org[f"g{g}-n"] = {"name": f"Group {g} nested", "parent": f"g{g}"}
     teams = sorted(org)
     with store.transaction() as c:
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         people["org_groups"] = org
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(people),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(people),))
         for n in range(first, last):
             slug = f"acme-bot-{n:03d}"
-            c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
+            c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                       "VALUES(?,?,?,?,?,'','keeper','active',?)", (slug, slug, "fake", "m", "", H.now()))
-            c.execute("INSERT INTO bot_config(bot,config_json,operator,team) VALUES(?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,operator,team) VALUES(?,?,?,?)",
                       (slug, encode({"name": slug}), "ana", teams[n % len(teams)]))
-            c.execute("INSERT INTO turns(id,bot,started,finished,est_cost_usd,billing) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO turns(id,bot,started_at,finished_at,est_cost_usd,billing) VALUES(?,?,?,?,?,?)",
                       (H.new_id(), slug, H.now(), H.now(), 0.25, "api"))
-            c.execute("INSERT INTO usage_limits(bot,daily_usd,updated,updated_by) VALUES(?,?,?,?)",
+            c.execute("INSERT INTO usage_limits(bot,daily_usd,updated_at,updated_by) VALUES(?,?,?,?)",
                       (slug, 10, H.now(), "human:ana"))
         for gid in org:
-            c.execute("INSERT OR IGNORE INTO usage_pools(scope,daily_usd,updated,updated_by) VALUES(?,?,?,?)",
+            c.execute("INSERT OR IGNORE INTO usage_pools(scope,daily_usd,updated_at,updated_by) VALUES(?,?,?,?)",
                       ("group:" + gid, 100, H.now(), "human:ana"))
 
 

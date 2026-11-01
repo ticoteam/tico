@@ -33,14 +33,14 @@ def reply(api, r, attempt, words):
 def room_messages(api):
     room = get(api, "assistant")["room_id"]
     with api.app.state.store.read() as c:
-        return [dict(m) for m in c.execute("SELECT id, from_actor, body, created FROM messages WHERE conversation_id=? "
-                                           "ORDER BY created, rowid", (room,))]
+        return [dict(m) for m in c.execute("SELECT id, from_actor, body, created_at FROM messages WHERE conversation_id=? "
+                                           "ORDER BY created_at, rowid", (room,))]
 
 
 def backdate(api, minutes, *ids):
     with api.app.state.store.transaction() as c:
         for i, mid in enumerate(ids):
-            c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), seconds=-minutes * 60 - len(ids) + i),
+            c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), seconds=-minutes * 60 - len(ids) + i),
                                                                     mid))
 
 
@@ -49,7 +49,7 @@ def read_back(api, attempt, *changes, expected=200):
 
 
 def save(api, attempt, step, expected=200, ref="turn"):
-    return asked(api, step["path"].removeprefix("/api/v2/"), json.loads(step["body_json"]), attempt["token"], ref,
+    return asked(api, step["path"].removeprefix("/api/v2/"), json.loads(step["body"]), attempt["token"], ref,
                  expected=expected)
 
 
@@ -76,7 +76,7 @@ def test_a_new_goal_is_read_back_by_tico_and_a_plain_yes_saves_exactly_it_as_the
     # Before the yes, nothing saves, cited or not.
     first, measure = back["changes"][0]["steps"]
     assert save(api, attempt, first, expected=403)["error"]["code"] == "not_agreed"
-    assert post(api, "goals", json.loads(first["body_json"]), token=attempt["token"], expected=403)["error"]["code"] == "not_agreed"
+    assert post(api, "goals", json.loads(first["body"]), token=attempt["token"], expected=403)["error"]["code"] == "not_agreed"
     attempt = reply(api, r, attempt, "yes")
     assert room_messages(api)[-2]["id"] == back["message_id"]
     made = save(api, attempt, first)
@@ -95,8 +95,8 @@ def test_a_new_goal_is_read_back_by_tico_and_a_plain_yes_saves_exactly_it_as_the
     assert save(api, attempt, first, expected=409)["error"]["code"] == "conflict"
     # Recorded as the owner, via their Assistant, citing their yes and the read-back.
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor, detail_json FROM events WHERE action='goal.create' AND target=?", (gid,)).fetchone()
-    detail = H._json(row["detail_json"], {})
+        row = c.execute("SELECT actor, detail FROM events WHERE action='goal.create' AND target=?", (gid,)).fetchone()
+    detail = H._json(row["detail"], {})
     assert row["actor"] == "human:ana" and detail["via"] == "assistant"
     assert {k: detail["delegation"][k] for k in ("for", "cited", "assistant", "goal_read_back", "change", "words")} == \
         {"for": "human:ana", "cited": turn_message(api, attempt), "assistant": "bot:coo",
@@ -200,10 +200,10 @@ def test_a_save_that_differs_from_the_read_back_is_refused_and_saves_nothing(api
     back = read_back(api, attempt, {"kind": "goal_update", "goal_id": target["id"], "title": "Ship the docs"})
     step = back["changes"][0]["steps"][0]
     attempt = reply(api, r, attempt, "yes")
-    for changed in ({**step, "body_json": '{"title": "Ship the docs v2"}'},                       # another value
-                    {**step, "body_json": '{"title": "Ship the docs", "owner": "coo"}'},          # another field
+    for changed in ({**step, "body": '{"title": "Ship the docs v2"}'},                       # another value
+                    {**step, "body": '{"title": "Ship the docs", "owner": "coo"}'},          # another field
                     {**step, "path": f"/api/v2/goals/{other['id']}"},                             # another goal
-                    {**step, "path": f"/api/v2/goals/{target['id']}/why", "body_json": '{"why": "Ship the docs"}'}):
+                    {**step, "path": f"/api/v2/goals/{target['id']}/why", "body": '{"why": "Ship the docs"}'}):
         assert save(api, attempt, changed, expected=403)["error"]["code"] == "not_agreed"
     assert [get(api, "goals/" + g["id"])["goal"]["title"] for g in (target, other)] == ["Launch the docs",
                                                                                           "Keep the bots running"]
@@ -424,7 +424,7 @@ def test_cli_read_back_and_cited_save_use_the_server_agreement(api, monkeypatch,
     assert hubcli.main(['goal', 'create', '--owner', 'company', '--title', 'First', '--on-behalf-of', 'turn']) == 0
     gid = json.loads(capsys.readouterr().out)['id']
     step = back['changes'][0]['steps'][1]
-    assert hubcli.main(['goal', 'save', step['method'], step['path'], step['body_json'],
+    assert hubcli.main(['goal', 'save', step['method'], step['path'], step['body'],
                        '--created-goal', gid, '--on-behalf-of', 'turn']) == 0
     capsys.readouterr()
     with api.app.state.store.read() as c:
@@ -542,7 +542,7 @@ def test_unmeasured_flags_are_refused_without_saving_a_proposal(api):
     allowed = post(api, "goal-proposals", {"kind": "flag", "goal_id": row["id"],
                    "payload": {"issue": "vague"}}, token="strategy-test")["proposal"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE goal_proposals SET payload_json=? WHERE id=?",
+        c.execute("UPDATE goal_proposals SET payload=? WHERE id=?",
                   (json.dumps({"issue": "unmeasured"}), allowed["id"]))
     assert get(api, "goal-proposals")["proposals"][0]["payload"]["issue"] == "unmeasured"
 
@@ -556,12 +556,12 @@ def test_legacy_read_backs_require_a_fresh_draft_before_read_or_save(api):
     back = read_back(api, attempt, {"kind": "goal_update", "goal_id": child["id"], "parent_id": ""})
     attempt = reply(api, r, attempt, "yes")
     with api.app.state.store.transaction() as c:
-        stored = c.execute("SELECT detail_json FROM events WHERE action=? AND target=?",
+        stored = c.execute("SELECT detail FROM events WHERE action=? AND target=?",
                            (GR.EVENT, back["message_id"])).fetchone()
-        old = json.loads(stored["detail_json"])
+        old = json.loads(stored["detail"])
         for change in old["changes"]:
             change.pop("read_owners")
-        c.execute("UPDATE events SET detail_json=? WHERE action=? AND target=?",
+        c.execute("UPDATE events SET detail=? WHERE action=? AND target=?",
                   (json.dumps(old), GR.EVENT, back["message_id"]))
         G.update(c, "human:ana", child["id"], parent_id="")
         restrict(c, "finance", people=["ana"])

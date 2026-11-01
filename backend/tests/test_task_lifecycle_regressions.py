@@ -29,9 +29,9 @@ def eligible(c, task_id):
 
 
 def age(c, task_id):
-    c.execute("UPDATE tasks SET created=?,updated=?,done_at=? WHERE id=?", (OLD, OLD, OLD, task_id))
+    c.execute("UPDATE tasks SET created_at=?,updated_at=?,done_at=? WHERE id=?", (OLD, OLD, OLD, task_id))
     c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (OLD, task_id))
-    c.execute("UPDATE messages SET created=? WHERE conversation_id=(SELECT conversation_id FROM tasks WHERE id=?)",
+    c.execute("UPDATE messages SET created_at=? WHERE conversation_id=(SELECT conversation_id FROM tasks WHERE id=?)",
               (OLD, task_id))
 
 
@@ -42,7 +42,7 @@ def test_keeper_notices_do_not_restart_auto_close_but_team_messages_do(c):
     H._wake(c, task, task["owner"], "Release validation finished", quiet=True)
     H.task_comment(c, H.KEEPER, task["id"], "Seen again by the watcher", wake=False)
     row = H.task(c, task["id"])
-    assert row["updated"] == OLD
+    assert row["updated_at"] == OLD
     assert R.untouched(c, row, 24, H.parse_ts(AT))
     assert eligible(c, task["id"])
     for actor in ("human:ana", "bot:cpo"):
@@ -50,7 +50,7 @@ def test_keeper_notices_do_not_restart_auto_close_but_team_messages_do(c):
                     refs={"task": task["id"], "quiet": True})
         assert not R.untouched(c, row, 24, H.parse_ts(AT))
         assert not eligible(c, task["id"])
-        c.execute("UPDATE messages SET created=? WHERE id=?", (OLD, msg["id"]))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (OLD, msg["id"]))
     R.close(c, H.task(c, task["id"]), {"id": "synthetic-rule", "name": "Close 24h after done"})
     assert H.task(c, task["id"])["status"] == "closed"
 
@@ -62,17 +62,17 @@ def test_declined_blocker_releases_waiter_with_one_wake_after_last_blocker(c):
         TR.add_blocker(c, "human:ana", waiter["id"], blocker["id"], mover=True)
     H.task_update(c, "bot:cmo", waiter["id"], status="waiting")
     def wakes():
-        return c.execute("SELECT count(*) FROM messages WHERE json_extract(refs_json,'$.blocker_done') IS NOT NULL "
-                         "AND json_extract(refs_json,'$.task')=?", (waiter["id"],)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM messages WHERE json_extract(refs,'$.blocker_done') IS NOT NULL "
+                         "AND json_extract(refs,'$.task')=?", (waiter["id"],)).fetchone()[0]
     H.task_update(c, "bot:cpo", blockers[0]["id"], status="declined")
     assert TR.blocker_ids(c, waiter["id"]) == [blockers[1]["id"]]
     assert wakes() == 0
     H.task_update(c, "bot:cpo", blockers[1]["id"], status="declined")
     assert not TR.blocker_ids(c, waiter["id"])
     assert wakes() == 1
-    notice = H._one(c, "SELECT refs_json FROM messages WHERE json_extract(refs_json,'$.blocker_done')=?",
+    notice = H._one(c, "SELECT refs FROM messages WHERE json_extract(refs,'$.blocker_done')=?",
                     (blockers[1]["id"],))
-    assert H._json(notice["refs_json"], {})["blocker_status"] == "declined"
+    assert H._json(notice["refs"], {})["blocker_status"] == "declined"
     H.task_update(c, "bot:cpo", blockers[1]["id"], status="declined")
     assert wakes() == 1
 
@@ -106,9 +106,9 @@ def test_worktree_wait_is_visible_and_survives_stranded_sweep(c, state):
     task = create(c, "Build task fix")
     H.task_update(c, "bot:cmo", task["id"], status="waiting")
     WW.ensure(c)
-    c.execute("INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,reason,created,updated) "
+    c.execute("INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,reason,created_at,updated_at) "
               "VALUES('wait',?,'bot:cmo','acme/product',1,?,'No free worktree',?,?)", (task["id"], state, OLD, OLD))
-    c.execute("UPDATE tasks SET updated=? WHERE id=?", (OLD, task["id"]))
+    c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (OLD, task["id"]))
     row = H.task(c, task["id"])
     detail = H.wait_detail(c, row)
     assert detail and "worktree" in detail["why"] and "acme/product" in detail["why"]
@@ -170,7 +170,7 @@ def test_milestone_resume_with_obsolete_step_notifies_owner_once(c, retained):
     task = create(c, "Resume after merge", type=typ["id"], step="Ready")
     step = typ["steps"][1]["id"] if retained == "closed" else None
     c.execute("UPDATE tasks SET status='waiting',step_id=?,requester='bot:cpo' WHERE id=?", (step, task["id"]))
-    c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,then_outcome,created_by,created,updated) "
+    c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,then_outcome,created_by,created_at,updated_at) "
               "VALUES('resume-rule','team','','step_entered','wake','human:ana',?,?)", (AT, AT))
     MW.add(c, "human:ana", H.task(c, task["id"]), "pr:https://github.com/acme/product/pull/2")
     before = c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cmo'").fetchone()[0]
@@ -215,7 +215,7 @@ def test_opening_task_refreshes_links_without_touching_tasks_or_close_timer(api,
              for title in ("Ship export", "Review export")]
     service = api.app.state.github_app
     with service.store.transaction() as c:
-        c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated) VALUES(?,1,1,?,?)",
+        c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated_at) VALUES(?,1,1,?,?)",
                   ("ticoteam/tico", "human:ana", H.now()))
         G.pull_request(c, pr_event("synchronize", head={"sha": "head", "ref": "export"}, state="open"))
         for task in tasks:
@@ -240,7 +240,7 @@ def test_opening_task_refreshes_links_without_touching_tasks_or_close_timer(api,
             link = H.task_links(c, task["id"])[0]
             assert link["state"] == ("merged" if merged else "open")
             assert link["mergeable"] == "clean"
-            assert row["updated"] == OLD
+            assert row["updated_at"] == OLD
             assert R.untouched(c, row, 24, H.parse_ts(AT))
             assert eligible(c, task["id"])
             history = c.execute("SELECT * FROM task_events WHERE task_id=? AND field='github' AND ts>?", (task["id"], OLD)).fetchall()
@@ -254,10 +254,10 @@ def test_computed_mergeability_webhook_never_counts_as_task_activity(c, mergeabl
     task = create(c, "Build export")
     H.task_link(c, "human:ana", task["id"], PR, kind="pr", mover=True)
     G.pull_request(c, pr_event("synchronize", head={"sha": "head", "ref": "export"}))
-    c.execute("UPDATE tasks SET updated=? WHERE id=?", (OLD, task["id"]))
+    c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (OLD, task["id"]))
     G.pull_request(c, pr_event("opened", head={"sha": "head", "ref": "export"}, mergeable=mergeable))
     assert H.task_links(c, task["id"])[0]["mergeable"] == ("clean" if mergeable else "conflict")
-    assert H.task(c, task["id"])["updated"] == OLD
+    assert H.task(c, task["id"])["updated_at"] == OLD
     G.pull_request(c, pr_event("closed", merged=True))
-    assert H.task(c, task["id"])["updated"] == AT
+    assert H.task(c, task["id"])["updated_at"] == AT
     assert c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='github'", (task["id"],)).fetchone()

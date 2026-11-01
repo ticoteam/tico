@@ -25,10 +25,10 @@ log = logging.getLogger(__name__)
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS invariant_state(
  check_id TEXT PRIMARY KEY, firing INTEGER NOT NULL DEFAULT 0, count INTEGER NOT NULL DEFAULT 0,
- examples_json TEXT NOT NULL DEFAULT '[]', checked_at TEXT, since TEXT, task_id TEXT);
+ examples TEXT NOT NULL DEFAULT '[]', checked_at TEXT, since TEXT, task_id TEXT);
 CREATE INDEX IF NOT EXISTS invariants_lease ON attempts(lease_until) WHERE state IN ('leased','running');
-CREATE INDEX IF NOT EXISTS invariants_doing ON tasks(updated) WHERE status='doing';
-CREATE INDEX IF NOT EXISTS invariants_open_approvals ON approvals(created) WHERE decision IS NULL;
+CREATE INDEX IF NOT EXISTS invariants_doing ON tasks(updated_at) WHERE status='doing';
+CREATE INDEX IF NOT EXISTS invariants_open_approvals ON approvals(created_at) WHERE decision IS NULL;
 """
 
 LIMIT = 500                  # rows read per check; a count at this many is "500 or more"
@@ -81,11 +81,11 @@ def lease_overdue(c, ctx):
 def task_stuck(c, ctx):
     """A bot's task in progress (`doing`) with no job for it still owed work, and nothing changed on it for the hour.
     The live-job test is in the query, ahead of LIMIT, so busy old tasks cannot hide a stuck newer one."""
-    rows = c.execute(f"SELECT t.id FROM tasks t WHERE t.status='doing' AND t.owner LIKE 'bot:%' AND t.updated<? "
+    rows = c.execute(f"SELECT t.id FROM tasks t WHERE t.status='doing' AND t.owner LIKE 'bot:%' AND t.updated_at<? "
                      f"AND NOT EXISTS (SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
                      f"JOIN conversations cv ON cv.id=m.conversation_id "
                      f"WHERE j.bot=substr(t.owner, 5) AND j.state IN ({','.join('?' * len(LIVE_JOBS))}) "
-                     f"AND {H.MESSAGE_TASK_SQL}=t.id) ORDER BY t.updated LIMIT ?",
+                     f"AND {H.MESSAGE_TASK_SQL}=t.id) ORDER BY t.updated_at LIMIT ?",
                      (_ago(ctx, minutes=TASK_QUIET_MINUTES), *LIVE_JOBS, LIMIT)).fetchall()
     return [row["id"] for row in rows]
 
@@ -115,10 +115,10 @@ def owner_unreachable(c, ctx):
     for actor in targets:
         if _unreachable(actor, people, bots):
             found += [row["id"] for row in c.execute(
-                f"SELECT m.id FROM messages m WHERE {open_ask} AND m.to_actor=? ORDER BY m.created LIMIT ?",
+                f"SELECT m.id FROM messages m WHERE {open_ask} AND m.to_actor=? ORDER BY m.created_at LIMIT ?",
                 (actor, LIMIT))]
     for row in c.execute("SELECT a.id, COALESCE(a.decision_owner, m.to_actor) AS owner FROM approvals a "
-                         "LEFT JOIN messages m ON m.id=a.message_id WHERE a.decision IS NULL ORDER BY a.created").fetchall():
+                         "LEFT JOIN messages m ON m.id=a.message_id WHERE a.decision IS NULL ORDER BY a.created_at").fetchall():
         if row["owner"] and _unreachable(row["owner"], people, bots):
             found.append(row["id"])
     return found[:LIMIT]
@@ -162,7 +162,7 @@ def relay_silent(c, ctx):
     if not relays:
         return []
     created = [t.replace(tzinfo=t.tzinfo or timezone.utc).timestamp()
-               for t in (H.parse_ts(row["created"]) for row in relays) if t]
+               for t in (H.parse_ts(row["created_at"]) for row in relays) if t]
     since = max(hook_relay.state(c)["last_pull_at"] or 0, min(created, default=0))
     if ctx.at.timestamp() - since < RELAY_SILENT_MINUTES * 60:
         return []
@@ -180,8 +180,8 @@ def long_holds(c, ctx):
     total = c.execute("SELECT count(*) FROM flight_events WHERE kind='long_hold' AND ts>=?", (since,)).fetchone()[0]
     if total <= LONG_HOLDS_PER_HOUR:
         return []
-    rows = c.execute("SELECT json_extract(detail_json,'$.route') AS route, json_extract(detail_json,'$.site') AS site, "
-                     "count(*) AS n, max(json_extract(detail_json,'$.hold_s')) AS worst FROM flight_events "
+    rows = c.execute("SELECT json_extract(detail,'$.route') AS route, json_extract(detail,'$.site') AS site, "
+                     "count(*) AS n, max(json_extract(detail,'$.hold_s')) AS worst FROM flight_events "
                      "WHERE kind='long_hold' AND ts>=? GROUP BY route, site ORDER BY n DESC LIMIT ?",
                      (since, LIMIT)).fetchall()
     return [f"{row['route'] or 'a background job'} at {row['site'] or 'an unknown site'}: {row['n']} holds, "
@@ -331,9 +331,9 @@ def _apply(c, auth, check, hits, now):
         if was:
             _close(c, task_id)
         firing, task_id, since = 0, None, None
-    c.execute("INSERT INTO invariant_state(check_id,firing,count,examples_json,checked_at,since,task_id) "
+    c.execute("INSERT INTO invariant_state(check_id,firing,count,examples,checked_at,since,task_id) "
               "VALUES(?,?,?,?,?,?,?) ON CONFLICT(check_id) DO UPDATE SET firing=excluded.firing, count=excluded.count, "
-              "examples_json=excluded.examples_json, checked_at=excluded.checked_at, since=excluded.since, "
+              "examples=excluded.examples, checked_at=excluded.checked_at, since=excluded.since, "
               "task_id=excluded.task_id",
               (check.id, firing, len(hits), json.dumps(hits[:EXAMPLES]), now, since, task_id))
 
@@ -347,7 +347,7 @@ def _changed(row, hits):
         return was
     if not was or not row["task_id"]:
         return True
-    return row["count"] != len(hits) or row["examples_json"] != json.dumps(hits[:EXAMPLES])
+    return row["count"] != len(hits) or row["examples"] != json.dumps(hits[:EXAMPLES])
 
 
 def sweep(store, auth, settings, at, record=None):
@@ -379,7 +379,7 @@ def health_checks(c):
         check = BY_ID.get(row["check_id"])
         if not check:
             continue
-        examples = json.loads(row["examples_json"] or "[]")
+        examples = json.loads(row["examples"] or "[]")
         count = row["count"]
         shown = f"{count}{'+' if count >= LIMIT else ''}"
         more = f" and {count - len(examples)} more" if count > len(examples) else ""

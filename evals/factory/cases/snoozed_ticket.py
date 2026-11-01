@@ -61,10 +61,10 @@ def owner_turns(run, tid, since, until=None):
 
 def notices(run, tid, prefix):
     """Tico's notices to the ticket's owner starting `prefix`, with whether each queued a job (woke it)."""
-    return run.w.sql("SELECT m.created, m.to_actor, EXISTS(SELECT 1 FROM jobs j WHERE j.message_id=m.id) woke "
-                     "FROM messages m JOIN tasks t ON t.id=json_extract(m.refs_json,'$.task') "
+    return run.w.sql("SELECT m.created_at, m.to_actor, EXISTS(SELECT 1 FROM jobs j WHERE j.message_id=m.id) woke "
+                     "FROM messages m JOIN tasks t ON t.id=json_extract(m.refs,'$.task') "
                      "WHERE t.id=? AND m.to_actor=t.owner AND m.from_actor='keeper' AND m.body LIKE ? "
-                     "ORDER BY m.created", (tid, prefix + "%"))
+                     "ORDER BY m.created_at", (tid, prefix + "%"))
 
 
 def both_snoozed(run):
@@ -101,10 +101,10 @@ def snooze_over_once(run):
     _, until, _ = run.snoozed[tid]
     over = notices(run, tid, "Snooze over:")
     slack = at(0, 2 * run.scenario.tick_minutes)
-    ok = len(over) == 1 and over[0]["woke"] and until <= run.w.H.parse_ts(over[0]["created"]) <= until + slack
+    ok = len(over) == 1 and over[0]["woke"] and until <= run.w.H.parse_ts(over[0]["created_at"]) <= until + slack
     ran = owner_turns(run, tid, until, until + at(2))
     early = notices(run, run.parked, "Snooze over:")
-    return ok and bool(ran) and not early, (f"{len(over)} at the date ({', '.join(o['created'][11:16] for o in over)}), "
+    return ok and bool(ran) and not early, (f"{len(over)} at the date ({', '.join(o['created_at'][11:16] for o in over)}), "
                                             f"{len(ran)} owner runs after it, {len(early)} on the unsnoozed ticket")
 
 

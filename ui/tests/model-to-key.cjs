@@ -18,7 +18,7 @@ const {unrouted} = require('./support/routes.cjs');
     const chip = (name, runtime) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
       pinned: false, update_available: false, detail: ''});
     const subscription = () => ({installed: true, authenticated: 'ready', account: {email: 'dev@acme.example', plan: 'pro', checked_at: at(-60000)}});
-    const fixture = () => ({id: 'box', label: 'Team box', operator: 'sam', bots: ['writer'], platform: 'linux', last_seen: at(-3000),
+    const fixture = () => ({id: 'box', label: 'Team box', operator: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000),
       readiness_at: at(-3000), needed_runtimes: ['codex', 'claude'], bot_runtimes: ['codex', 'claude'], signed_out: {}, keys: {}, shared_keys: {},
       bot_connections: [{bot: 'writer', runtime: 'codex', profile: ''}],
       readiness: {runtimes: {codex: subscription(), claude: subscription()},
@@ -65,18 +65,18 @@ const {unrouted} = require('./support/routes.cjs');
           const body = req.postDataJSON(); writes.push({p, body});
           if (held) await held.promise;
           const id = 'key' + Object.keys(rows).length;
-          rows[id] = {id, kind: body.switch ? 'to_key' : 'use_key', runtime: body.runtime, state: 'requested', polls: 0, created: new Date().toISOString(), lines: []};
+          rows[id] = {id, kind: body.switch ? 'to_key' : 'use_key', runtime: body.runtime, state: 'requested', polls: 0, created_at: new Date().toISOString(), lines: []};
           return json({...rows[id], key: {id: 'cred9', env: 'OPENAI_API_KEY', preview: 'sk-…456'}});
         }
         const cancel = p.match(/^\/api\/v2\/computers\/box\/logins\/(\w+)\/cancel$/);
         if (cancel) {
           writes.push({p, body: req.postDataJSON()});
-          return json(Object.assign(rows[cancel[1]], {state: 'cancelled', updated: new Date().toISOString()}));
+          return json(Object.assign(rows[cancel[1]], {state: 'cancelled', updated_at: new Date().toISOString()}));
         }
         const one = p.match(/^\/api\/v2\/computers\/box\/logins\/(\w+)$/);
         if (one) {
           const row = rows[one[1]], end = ending[row.runtime];
-          if (++row.polls === 2 && end !== 'hold') Object.assign(row, end, {updated: new Date().toISOString()});
+          if (++row.polls === 2 && end !== 'hold') Object.assign(row, end, {updated_at: new Date().toISOString()});
           return json(row);
         }
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -183,7 +183,7 @@ const {unrouted} = require('./support/routes.cjs');
 
     // Offline: Switch to API key stays, disabled, saying why.
     const offered = await detail.locator('[data-model-to-key]').count();
-    box.last_seen = at(-3 * 3600000);
+    box.last_seen_at = at(-3 * 3600000);
     await page.evaluate(() => loadSettings());
     await own('claude').locator('.computer-conn-signin', {hasText: 'last checked'}).waitFor();
     assert.ok(offered > 0);

@@ -93,13 +93,13 @@ const DELIVERED = `Delivered to Tico support. ${PROMISE} The reply will appear h
           if (rest === 'tickets/refresh') {
             if (hq.pollFail) return json({error: {detail: 'Could not reach Tico support. Try again in a moment.'}}, 502);
             if (hq.reply && hq.tickets[0] && !hq.tickets[0].messages.some(m => m.from === 'staff'))
-              Object.assign(hq.tickets[0], {status: 'answered', messages: [...hq.tickets[0].messages, {id: 1, created: new Date().toISOString(), from: 'staff', body: 'Try the latest release. ' + HOSTILE}]});
+              Object.assign(hq.tickets[0], {status: 'answered', messages: [...hq.tickets[0].messages, {id: 1, created_at: new Date().toISOString(), from: 'staff', body: 'Try the latest release. ' + HOSTILE}]});
             const snapshot = view();
             if (hq.refreshGate) { hq.refreshStarted?.(); await hq.refreshGate; return json(snapshot); }
             return json(view());
           }
           if (rest === 'tickets' && req.method() === 'POST') {
-            const ticket = {id: 'sup_' + (hq.tickets.length + 1), created: new Date().toISOString(), status: 'open', message: body.message, email: body.email,
+            const ticket = {id: 'sup_' + (hq.tickets.length + 1), created_at: new Date().toISOString(), status: 'open', message: body.message, email: body.email,
                             sent: body.include_ids ? {version: '0.2.17', install_id: INSTALL} : {}, messages: []};
             hq.tickets.unshift(ticket);
             return json(out(ticket));
@@ -109,7 +109,7 @@ const DELIVERED = `Delivered to Tico support. ${PROMISE} The reply will appear h
           if (rest.endsWith('/messages') && hq.gate) await hq.gate;
           if (rest.endsWith('/messages') && hq.abort) return route.abort('connectionrefused');
           if (rest.endsWith('/messages') && hq.fail) return json({error: {detail: 'Could not reach Tico support. Try again in a moment.'}}, 502);
-          if (rest.endsWith('/messages')) { ticket.messages.push({id: ticket.messages.length + 1, created: new Date().toISOString(), from: 'person', body: body.message}); return json(out(ticket)); }
+          if (rest.endsWith('/messages')) { ticket.messages.push({id: ticket.messages.length + 1, created_at: new Date().toISOString(), from: 'person', body: body.message}); return json(out(ticket)); }
           if (req.method() === 'DELETE') { hq.tickets = hq.tickets.filter(x => x.id !== id); return json({deleted: true}); }
         }
         if (p === '/api/employees' || p === '/api/issues') return json([]);
@@ -326,12 +326,12 @@ const DELIVERED = `Delivered to Tico support. ${PROMISE} The reply will appear h
     // Existing requests: it opens on the one with the most recent message that isn't Closed or Removed, at its newest
     // message; Your requests lists them newest first with their badges and dots, and the ? counts every unread reply.
     const at = m => new Date(Date.now() - m * 60000).toISOString();
-    const reply = (id, m) => ({id, created: at(m), from: 'staff', body: 'Reply ' + id});
+    const reply = (id, m) => ({id, created_at: at(m), from: 'staff', body: 'Reply ' + id});
     v = await visit({seed: [
-      {id: 'sup_a', created: at(300), status: 'closed', message: 'Old question', messages: [reply(1, 1)], sent: {}},
-      {id: 'sup_b', created: at(100), status: 'open', message: 'Waiting question\nIt still fails after a restart.', messages: [], sent: {}},
-      {id: 'sup_c', created: at(400), status: 'answered', message: 'Answered question', messages: [reply(1, 50), reply(2, 5)], sent: {}},
-      {id: 'sup_d', created: at(2), status: 'gone', message: 'Removed question', messages: [], sent: {}},
+      {id: 'sup_a', created_at: at(300), status: 'closed', message: 'Old question', messages: [reply(1, 1)], sent: {}},
+      {id: 'sup_b', created_at: at(100), status: 'open', message: 'Waiting question\nIt still fails after a restart.', messages: [], sent: {}},
+      {id: 'sup_c', created_at: at(400), status: 'answered', message: 'Answered question', messages: [reply(1, 50), reply(2, 5)], sent: {}},
+      {id: 'sup_d', created_at: at(2), status: 'gone', message: 'Removed question', messages: [], sent: {}},
     ]});
     await v.page.waitForFunction(() => window.supportState().unread === 3);
     assert.ok(!v.calls.some(c => c.endsWith('/read')), 'nothing is read until a conversation is shown');
@@ -404,7 +404,7 @@ const DELIVERED = `Delivered to Tico support. ${PROMISE} The reply will appear h
 
     // A send still on its way when the pop-up is closed and reopened: nothing can send it twice or change it, and the
     // outcome shows in the composer on screen, whether it lands while open or while closed.
-    v = await visit({seed: [{id: 'sup_s', created: at(30), status: 'open', message: 'Slow line', messages: [], sent: {}}]});
+    v = await visit({seed: [{id: 'sup_s', created_at: at(30), status: 'open', message: 'Slow line', messages: [], sent: {}}]});
     const slow = v.page.locator('#support-pop');
     const hold = () => { let go; v.hq.gate = new Promise(r => { go = r; }); return () => { v.hq.gate = null; go(); }; };
     const posted = () => v.calls.filter(c => c.startsWith('POST tickets/sup_s/messages')).length;
@@ -508,8 +508,8 @@ const DELIVERED = `Delivered to Tico support. ${PROMISE} The reply will appear h
     // Opening on Your requests or on another request's reply reads only what it shows: the chat left open last time is
     // not read on the way.
     v = await visit({seed: [
-      {id: 'sup_a', created: at(60), status: 'answered', message: 'Question A', messages: [reply(1, 30)], sent: {}},
-      {id: 'sup_b', created: at(90), status: 'open', message: 'Question B', messages: [], sent: {}}]});
+      {id: 'sup_a', created_at: at(60), status: 'answered', message: 'Question A', messages: [reply(1, 30)], sent: {}},
+      {id: 'sup_b', created_at: at(90), status: 'open', message: 'Question B', messages: [], sent: {}}]});
     await openSupport(v.page);
     assert.equal(await v.page.locator('#support-pop [data-title]').innerText(), 'Question A');
     await v.page.waitForFunction(() => window.supportState().unread === 0);
@@ -553,8 +553,8 @@ const DELIVERED = `Delivered to Tico support. ${PROMISE} The reply will appear h
     await v.ctx.close();
 
     // Only old requests still open (Oct 29: it opened on a week-old alert): Tico support shows Your requests, reading nothing.
-    v = await visit({seed: [{id: 'sup_7', created: at(3 * 24 * 60), status: 'open', message: 'Health Monitor alert', messages: [], sent: {}},
-                            {id: 'sup_6', created: at(5), status: 'closed', message: 'Just closed', messages: [], sent: {}}]});
+    v = await visit({seed: [{id: 'sup_7', created_at: at(3 * 24 * 60), status: 'open', message: 'Health Monitor alert', messages: [], sent: {}},
+                            {id: 'sup_6', created_at: at(5), status: 'closed', message: 'Just closed', messages: [], sent: {}}]});
     await supportLink(v.page);
     await v.page.locator('#t-support').click();
     await v.page.locator('#support-pop[open] [data-requests] .support-item').first().waitFor();
@@ -569,8 +569,8 @@ const DELIVERED = `Delivered to Tico support. ${PROMISE} The reply will appear h
     // and the request show the tier and the time left in the same words, the banner opens the request it started from,
     // the log under that request lists what support did (as text, its time as the app's event times read), another
     // request shows none of it, and Stop ends it.
-    v = await visit({seed: [{id: 'sup_9', created: new Date().toISOString(), status: 'open', message: 'Bots stopped', messages: [], sent: {}},
-                            {id: 'sup_8', created: at(600), status: 'closed', message: 'Old question', messages: [], sent: {}}],
+    v = await visit({seed: [{id: 'sup_9', created_at: new Date().toISOString(), status: 'open', message: 'Bots stopped', messages: [], sent: {}},
+                            {id: 'sup_8', created_at: at(600), status: 'closed', message: 'Old question', messages: [], sent: {}}],
                      access: {available: true, off_reason: '', active: null, last: null, sessions: [], can_start: true, can_full: false}});
     await openSupport(v.page);
     const strip = v.page.locator('#support-pop [data-view] [data-access]');
@@ -662,9 +662,9 @@ const DELIVERED = `Delivered to Tico support. ${PROMISE} The reply will appear h
     // An iPhone (390x844) with the keyboard up: the box is 16 px so Safari doesn't zoom in on it, and the sheet fills
     // exactly what is visible above the keyboard: the box, Send and the newest reply on screen, nothing of the page
     // behind it showing and the page not scrolling under it. With the keyboard down it is the usual bottom sheet again.
-    v = await visit({viewport: {width: 390, height: 844}, keyboard: true, seed: [{id: 'sup_9', created: at(30), status: 'answered', message: 'Roadmap suggestions go to an archived bot.', sent: {},
-      messages: [reply(1, 25), {id: 2, created: at(20), from: 'person', body: 'Still there on 0.3.54.'},
-        {id: 3, created: at(10), from: 'staff', body: 'The setting now decides who gets suggestions.\n\nAfter that, it is safe to turn public roadmap suggestions back on. Reply here if anything still goes to the archived bot.'}]}]});
+    v = await visit({viewport: {width: 390, height: 844}, keyboard: true, seed: [{id: 'sup_9', created_at: at(30), status: 'answered', message: 'Roadmap suggestions go to an archived bot.', sent: {},
+      messages: [reply(1, 25), {id: 2, created_at: at(20), from: 'person', body: 'Still there on 0.3.54.'},
+        {id: 3, created_at: at(10), from: 'staff', body: 'The setting now decides who gets suggestions.\n\nAfter that, it is safe to turn public roadmap suggestions back on. Reply here if anything still goes to the archived bot.'}]}]});
     await openSupport(v.page);
     const kpop = v.page.locator('#support-pop'), kbox = kpop.locator('[data-compose] [name=message]');
     await kbox.focus();
@@ -753,8 +753,8 @@ const DELIVERED = `Delivered to Tico support. ${PROMISE} The reply will appear h
     await v.ctx.close();
 
     // A computer in the dark theme, and keyboard only: focus on a #/support link, Enter, focus in the box.
-    v = await visit({theme: 'dark', seed: [{id: 'sup_5', created: at(30), status: 'answered', message: 'Can bots share a computer?', sent: {},
-      messages: [reply(1, 20), {id: 2, created: at(10), from: 'person', body: 'Thanks, and two?'}]}]});
+    v = await visit({theme: 'dark', seed: [{id: 'sup_5', created_at: at(30), status: 'answered', message: 'Can bots share a computer?', sent: {},
+      messages: [reply(1, 20), {id: 2, created_at: at(10), from: 'person', body: 'Thanks, and two?'}]}]});
     assert.equal(await v.page.getByText('Talk to us').count(), 0, 'no Talk to us in the sidebar');
     await supportLink(v.page);
     await v.page.locator('#t-support').focus();
@@ -885,7 +885,7 @@ const DELIVERED = `Delivered to Tico support. ${PROMISE} The reply will appear h
     await v.ctx.close();
 
     // "Want help setting up?" opens a new request that starts from the snapshot, which the person reads and sends as setup.
-    v = await visit({seed: [{id: 'sup_0', created: new Date().toISOString(), status: 'open', message: 'Earlier', sent: {}, messages: []}]});
+    v = await visit({seed: [{id: 'sup_0', created_at: new Date().toISOString(), status: 'open', message: 'Earlier', sent: {}, messages: []}]});
     await v.page.evaluate(() => document.querySelector('#main').insertAdjacentHTML('beforeend', '<button type="button" data-setup-help="health">Want help setting up?</button>'));
     await v.page.locator('#main [data-setup-help]').click();
     await v.page.waitForFunction(() => document.querySelector('#support-pop[open] #support-message')?.value.startsWith("I'd like help setting up Tico."));

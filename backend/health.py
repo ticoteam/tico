@@ -113,9 +113,9 @@ def _login_dependencies(c, settings):
     from .harnesses import harness_caps, normalize_fallback, resolve_harness
     from .shared_bots import follow
     record, found = providers.load(c, settings), {}
-    for row in c.execute("SELECT a.runner_id,a.bot,bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
+    for row in c.execute("SELECT a.runner_id,a.bot,bc.config FROM assignments a JOIN bots b ON b.slug=a.bot "
                          "AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot"):
-        config = providers.fill(record, follow(c, row['bot'], H._json(row['config_json'], {}) or {}))
+        config = providers.fill(record, follow(c, row['bot'], H._json(row['config'], {}) or {}))
         fallback = normalize_fallback(config.get('fallback')) or {}
         for choice in (config, fallback):
             runtime = choice.get('runtime')
@@ -161,12 +161,12 @@ def _computers(c, runners_online, settings, limits=None):
     # runtime while the company has no default model: the runner installs only that one.
     default = providers.default_runtime(providers.load(c, settings))
     wanted = {default} - {""}
-    for r in c.execute("SELECT r.id,r.label,r.last_seen,r.platform,r.readiness_json,coalesce(nullif(h.name,''),r.operator) "
+    for r in c.execute("SELECT r.id,r.label,r.last_seen_at,r.platform,r.readiness,coalesce(nullif(h.name,''),r.operator) "
                        "AS operator FROM runners r LEFT JOIN humans h ON h.id=r.operator WHERE r.revoked_at IS NULL "
                        "ORDER BY r.label"):
-        document = readiness_document(r["readiness_json"])
+        document = readiness_document(r["readiness"])
         runtimes = document.get("runtimes") or {}
-        rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in since, "last_seen": r["last_seen"],
+        rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in since, "last_seen_at": r["last_seen_at"],
                      "platform": r["platform"] or "", "update": runner_versions.view(fleet.get(r["id"])),
                      "disk": document.get("disk"),
                      "operator": r["operator"], "container_exec": document.get("container_exec"),
@@ -210,8 +210,8 @@ def _computers(c, runners_online, settings, limits=None):
 
 def _mail_key_exposed(c):
     """Labels of the computers that report holding the mail key where their bots can read it."""
-    return [r["label"] for r in c.execute("SELECT label,readiness_json FROM runners WHERE revoked_at IS NULL ORDER BY label")
-            if readiness_document(r["readiness_json"]).get("mail_key") == "exposed"]
+    return [r["label"] for r in c.execute("SELECT label,readiness FROM runners WHERE revoked_at IS NULL ORDER BY label")
+            if readiness_document(r["readiness"]).get("mail_key") == "exposed"]
 
 
 PUBLISH_WARNING = "GitHub history not published: "                     # runner-rs/src/readiness_extra.rs
@@ -236,8 +236,8 @@ def _reported(c, prefix, limit=200):
     out = []
     hosting = {(a["bot"], a["runner_id"]) for a in c.execute(
         "SELECT a.bot,a.runner_id FROM assignments a JOIN bots b ON b.slug=a.bot WHERE b.state<>'archived'")}
-    for r in c.execute("SELECT id,readiness_json FROM runners WHERE revoked_at IS NULL"):
-        for bot, row in ((readiness_document(r["readiness_json"]).get("bots")) or {}).items():
+    for r in c.execute("SELECT id,readiness FROM runners WHERE revoked_at IS NULL"):
+        for bot, row in ((readiness_document(r["readiness"]).get("bots")) or {}).items():
             if (bot, r["id"]) not in hosting:
                 continue                  # a computer that no longer hosts the bot has nothing to publish for it
             for warning in (row or {}).get("warnings") or []:
@@ -264,7 +264,7 @@ def harness_denies(c, settings):
     configs = {}
     for part in H.chunks(bots):
         configs.update((r["bot"], r) for r in c.execute(
-            f"SELECT bot,repo,config_json FROM bot_config WHERE bot IN ({','.join('?' * len(part))})", part))
+            f"SELECT bot,repo,config FROM bot_config WHERE bot IN ({','.join('?' * len(part))})", part))
     out = []
     for bot, rest in reported:
         prefixes = [p.strip() for p in rest.split(",") if p.strip()]
@@ -274,7 +274,7 @@ def harness_denies(c, settings):
             continue
         row = configs.get(bot)
         own = str(repo_of((row["repo"] if row else "") or "bot-" + bot, "owner") or "").split("/")[-1].lower()
-        mode = H._json(row["config_json"] if row else None, {}).get("repo_access_mode", "own")
+        mode = H._json(row["config"] if row else None, {}).get("repo_access_mode", "own")
         github = [t for t in tools if str(t.get("service") or "").lower() in ("github", "github-app")
                   and t.get("id") != "repo" and "own repository" not in str(t.get("detail") or "")
                   and str((t.get("scope") or {}).get("repo") or t.get("identity") or "").split("/")[-1].lower() != own]
@@ -313,11 +313,11 @@ def _missing_tool_credentials(c, online_ids):
     """Tool and Computer names only, for online assignments with effective credentials missing."""
     from .bot_tools import granted, service_name
     out = set()
-    for row in c.execute("SELECT a.bot,r.id,r.label,r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    for row in c.execute("SELECT a.bot,r.id,r.label,r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
                          "JOIN bots b ON b.slug=a.bot WHERE b.state<>'archived' AND r.revoked_at IS NULL"):
         if row["id"] not in online_ids:
             continue
-        report = (readiness_document(row["readiness_json"]).get("bots") or {}).get(row["bot"]) or {}
+        report = (readiness_document(row["readiness"]).get("bots") or {}).get(row["bot"]) or {}
         for tool in granted(c, row["bot"], report.get("tools") or []):
             if tool.get("credential") == "missing":
                 out.add((service_name(tool.get("service")), row["label"]))
@@ -343,9 +343,9 @@ def missing_repositories(c, online_ids):
     """(bot, computer, why) for the active bots whose online computer says it has no repository for them.
     `why` is the runner's own sentence naming the cause (not on GitHub, GitHub refused, a clone failed)."""
     out = []
-    for r in c.execute("SELECT a.bot,r.id,r.label,r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    for r in c.execute("SELECT a.bot,r.id,r.label,r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
                        "JOIN bots b ON b.slug=a.bot WHERE b.state='active' AND r.revoked_at IS NULL ORDER BY a.bot"):
-        report = (readiness_document(r["readiness_json"]).get("bots") or {}).get(r["bot"])
+        report = (readiness_document(r["readiness"]).get("bots") or {}).get(r["bot"])
         if r["id"] in online_ids and isinstance(report, dict) and report.get("repository_present") is False:
             why = next((p for p in report.get("problems") or [] if "repositor" in p.lower()), "Missing bot repository")
             out.append((r["bot"], r["label"], why))
@@ -442,7 +442,7 @@ def repository_fix(c, bot, label, github_owner=""):
     app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
     address = repo_url(repo, (app["org"] if app else "") or github_owner) or config.get("repo_url") or repo
     repository = str(address).rstrip("/").removesuffix(".git").removeprefix("https://github.com/")
-    row = c.execute("SELECT r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?",
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?",
                     (bot,)).fetchone()
     report = ((readiness_document(row[0]).get("bots") or {}).get(bot) or {}) if row else {}
     path = report.get("repository") or "<projects>/" + repo.rstrip("/").split("/")[-1].removesuffix(".git")
@@ -453,8 +453,8 @@ def repository_fix(c, bot, label, github_owner=""):
 def _member_bots_beside_shared_keys(c):
     """Computers whose `_shared.env` holds keys every bot there receives, and that also host bots members
     created: a member's bot instructions could ask a run for them."""
-    runners = [r for r in c.execute("SELECT id,label,readiness_json FROM runners WHERE revoked_at IS NULL ORDER BY label")
-               if readiness_document(r["readiness_json"]).get("shared_env")]
+    runners = [r for r in c.execute("SELECT id,label,readiness FROM runners WHERE revoked_at IS NULL ORDER BY label")
+               if readiness_document(r["readiness"]).get("shared_env")]
     out, members = [], {}
     if runners:
         marks = ",".join("?" * len(runners))
@@ -506,20 +506,20 @@ def silent_computers(c, minutes=SILENT_MINUTES):
     interrupted run nobody reviewed, as Pipeline splits them. A computer that never checked in is setup, not this."""
     from .execution import unfenced_sql
     rows = c.execute(
-        f"SELECT r.id, r.label, r.operator, r.last_seen, sum(CASE WHEN NOT ({unfenced_sql()}) THEN 1 ELSE 0 END) dead, "
+        f"SELECT r.id, r.label, r.operator, r.last_seen_at, sum(CASE WHEN NOT ({unfenced_sql()}) THEN 1 ELSE 0 END) dead, "
         "count(j.id) n, group_concat(DISTINCT a.bot) bots "
         "FROM runners r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.slug=a.bot AND b.state='active' "
         "JOIN jobs j ON j.bot=a.bot AND j.state='queued' AND j.held=0 "
         "LEFT JOIN messages m ON m.id=j.message_id LEFT JOIN conversations cv ON cv.id=m.conversation_id "
-        "WHERE r.revoked_at IS NULL AND r.last_seen < ? GROUP BY r.id ORDER BY r.last_seen",
+        "WHERE r.revoked_at IS NULL AND r.last_seen_at < ? GROUP BY r.id ORDER BY r.last_seen_at",
         (H.shift(H.now(), minutes=-minutes),)).fetchall()
-    return [{"id": r["id"], "label": r["label"], "operator": r["operator"], "last_seen": r["last_seen"],
-             "minutes": quiet_minutes(r["last_seen"]), "queued": r["n"] - r["dead"], "dead": r["dead"],
+    return [{"id": r["id"], "label": r["label"], "operator": r["operator"], "last_seen_at": r["last_seen_at"],
+             "minutes": quiet_minutes(r["last_seen_at"]), "queued": r["n"] - r["dead"], "dead": r["dead"],
              "bots": sorted(r["bots"].split(","))} for r in rows]
 
 
 def quiet_minutes(last_seen):
-    """Whole minutes since `last_seen`; 0 when it cannot be read."""
+    """Whole minutes since `last_seen_at`; 0 when it cannot be read."""
     seen = H.parse_ts(last_seen)
     return int((datetime.now(timezone.utc) - seen).total_seconds() // 60) if seen else 0
 
@@ -561,12 +561,12 @@ def _waiting(c, online_ids, settings=None, limits=None):
     # held job behind an interrupted run as dead, and work held on purpose is not stuck.
     split = pipeline_stats.queue_counts(c, [r["slug"] for r in c.execute("SELECT slug FROM bots")])
     queued = {r["bot"]: (r["n"], r["oldest"]) for r in c.execute(
-        "SELECT bot, count(*) n, min(created) oldest FROM jobs WHERE state='queued' AND held=0 GROUP BY bot")}
+        "SELECT bot, count(*) n, min(created_at) oldest FROM jobs WHERE state='queued' AND held=0 GROUP BY bot")}
     asked = {r["bot"]: r["oldest"] for r in c.execute(
-        "SELECT j.bot, min(j.created) oldest FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "SELECT j.bot, min(j.created_at) oldest FROM jobs j JOIN messages m ON m.id=j.message_id "
         "WHERE j.state='queued' AND m.from_actor LIKE 'human:%' GROUP BY j.bot")}
-    assigned = {r["bot"]: (r["runner_id"], r["label"], r["readiness_json"]) for r in c.execute(
-        "SELECT a.bot, a.runner_id, r.label, r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    assigned = {r["bot"]: (r["runner_id"], r["label"], r["readiness"]) for r in c.execute(
+        "SELECT a.bot, a.runner_id, r.label, r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
         "WHERE r.revoked_at IS NULL")}
     # A starter bot still waiting for its first setup holds its work on purpose: not slow (`unfinished_setup` warns
     # once the hold is old).
@@ -577,7 +577,7 @@ def _waiting(c, online_ids, settings=None, limits=None):
     # writer for seconds on a live install. Detailed wait counts stay on the company-turns check below.
     company_stopped = settings and org_turns.admission(c)['at_stop']
     busy, running, turns = set(), {}, {}
-    for r in c.execute("SELECT id,bot,runner_id,coalesce(started,created) since FROM attempts "
+    for r in c.execute("SELECT id,bot,runner_id,coalesce(started_at,created_at) since FROM attempts "
                        "WHERE state IN ('leased','running') ORDER BY since"):
         busy.add(r["bot"])
         running[r["runner_id"]] = running.get(r["runner_id"], 0) + 1
@@ -690,9 +690,9 @@ def _waiting(c, online_ids, settings=None, limits=None):
             groups = {}
             for job, why in queued_reasons(c, settings, where[0], slug, limits, suspect=suspect):
                 key = why or "slow"
-                group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created"]})
+                group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created_at"]})
                 group["queued"] += 1
-                group["oldest"] = min(group["oldest"], job["created"])
+                group["oldest"] = min(group["oldest"], job["created_at"])
             row["queue_reasons"] = list(groups.values())
             reason = ("limit" if refused == "limit" else "updating" if where[0] in updating
                       else "restarting" if where[0] in restarting else refused or "slow")
@@ -741,9 +741,9 @@ def unfinished_setup(c):
                        f"WHERE bc.onboarding_state IN {PARKED_SQL} AND b.state='active' ORDER BY b.slug").fetchall()
     cutoff, out = H.shift(H.now(), minutes=-SETUP_HOLD_MINUTES), []
     for row in parked:      # few bots are ever parked; each is two indexed reads
-        tasks = c.execute("SELECT count(*) n, min(created) oldest FROM tasks WHERE owner=? AND status IN ('open','doing','ready')",
+        tasks = c.execute("SELECT count(*) n, min(created_at) oldest FROM tasks WHERE owner=? AND status IN ('open','doing','ready')",
                           ("bot:" + row["slug"],)).fetchone()
-        notices = c.execute("SELECT count(*) n, min(created) oldest FROM jobs WHERE bot=? AND state='queued'",
+        notices = c.execute("SELECT count(*) n, min(created_at) oldest FROM jobs WHERE bot=? AND state='queued'",
                             (row["slug"],)).fetchone()
         count, what, oldest = (tasks["n"], "task", tasks["oldest"]) if tasks["n"] else (notices["n"], "notice", notices["oldest"])
         if count and oldest < cutoff:
@@ -852,8 +852,8 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
     configured = {r["slug"]: r["runtime"] or "" for r in c.execute("SELECT slug,runtime FROM bots")}
     # Each offline computer's last check-in, read once for every bot waiting on one (not one read per bot).
     offline = sorted({row["runner_id"] for row in rows if row["reason"] == "computer_offline"})
-    seen_at = {r["id"]: r["last_seen"] for r in c.execute(
-        f"SELECT id,last_seen FROM runners WHERE id IN ({','.join('?' * len(offline))})", offline)} if offline else {}
+    seen_at = {r["id"]: r["last_seen_at"] for r in c.execute(
+        f"SELECT id,last_seen_at FROM runners WHERE id IN ({','.join('?' * len(offline))})", offline)} if offline else {}
     # Every quarantined bot's quarantine record, read together for its explanation (quarantine_display.explanation).
     H.prime_quarantines(c, [row["bot"] for row in rows if row["reason"] == "quarantined"])
     # Every stuck bot's configuration and operator, read together for its harness check and quarantine
@@ -863,7 +863,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
     for part in H.chunks(sorted({row["bot"] for row in rows})):
         marks = ",".join("?" * len(part))
         found = {r["bot"]: r for r in c.execute(
-            f"SELECT bot,config_json,operator FROM bot_config WHERE bot IN ({marks})", part)}
+            f"SELECT bot,config,operator FROM bot_config WHERE bot IN ({marks})", part)}
         prime(c, readiness.CONFIG_SQL, {(s,): found.get(s) for s in part})
         prime(c, OPERATOR_SQL, {(s,): found.get(s) for s in part})
     out = []
@@ -952,7 +952,7 @@ def holding_turns(c, attempts):
     for a in attempts:
         ids = sorted(attempt_tasks(c, a["id"]))
         task = c.execute(f"SELECT id,title FROM tasks WHERE id IN ({','.join('?' * len(ids))}) AND NOT private "
-                         "ORDER BY updated DESC LIMIT 1", ids).fetchone() if ids else None
+                         "ORDER BY updated_at DESC LIMIT 1", ids).fetchone() if ids else None
         out.append({"run": a["id"], "bot": a["bot"], "name": names.get(a["bot"], a["bot"]), "since": a["since"],
                     "task": task["id"] if task else "", "task_title": task["title"] if task else ""})
     return out
@@ -1017,7 +1017,7 @@ _TOKEN_CACHE = {}   # (database, threshold) -> (monotonic time, answer)
 def _token_heavy(c, threshold):
     """(bot, tokens) for bots whose uncached input tokens passed `threshold` in the last day. A run records
     `input_tokens` without its cache reads (runner-rs/src/execute.rs), so cache reads, which are cheap, do not count.
-    Both halves filter on `turns.started` (indexed) before summing; the sum still visits every turn of the day
+    Both halves filter on `turns.started_at` (indexed) before summing; the sum still visits every turn of the day
     (about 90 ms at 30,000 turns), so one answer serves every tab's Health poll for five minutes."""
     if not threshold or threshold <= 0:
         return []
@@ -1030,9 +1030,9 @@ def _token_heavy(c, threshold):
     answer = [(r["bot"], r["n"]) for r in c.execute(
         "SELECT bot, sum(n) AS n FROM ("
         "SELECT t.bot, coalesce(s.input_tokens,0) AS n FROM turns t "
-        "JOIN turn_usage_segments s ON s.turn_id=t.id WHERE t.started>=? "
+        "JOIN turn_usage_segments s ON s.turn_id=t.id WHERE t.started_at>=? "
         "UNION ALL SELECT t.bot, coalesce(t.input_tokens,0) FROM turns t "
-        "WHERE t.started>=? AND NOT EXISTS (SELECT 1 FROM turn_usage_segments s WHERE s.turn_id=t.id)) "
+        "WHERE t.started_at>=? AND NOT EXISTS (SELECT 1 FROM turn_usage_segments s WHERE s.turn_id=t.id)) "
         "GROUP BY bot HAVING sum(n)>? ORDER BY sum(n) DESC", (since, since, threshold))]
     _TOKEN_CACHE.clear()
     _TOKEN_CACHE[key] = (time.monotonic(), answer)
@@ -1052,14 +1052,14 @@ def token_failure(c):
     """{"message", "action"} when the GitHub App itself failed to issue a token in the last day and has not
     succeeded since, else None. A row without an action predates App-only recording (0.2.21 also wrote a bot's
     own missing repository here), so it is not this."""
-    health = c.execute("SELECT last_success,last_error,detail_json FROM service_health WHERE service=?",
+    health = c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?",
                        (GITHUB_HEALTH,)).fetchone()
     recent = H.shift(H.now(), hours=-RECENT_HOURS)
     if not (health and health["last_error"] and health["last_error"] > recent
-            and health["last_error"] > (health["last_success"] or "")):
+            and health["last_error"] > (health["last_succeeded_at"] or "")):
         return None
     try:
-        detail = json.loads(health["detail_json"] or "{}")
+        detail = json.loads(health["detail"] or "{}")
     except ValueError:
         return None
     return {"message": str(detail.get("message") or ""), "action": str(detail["action"])} if detail.get("action") else None
@@ -1425,10 +1425,10 @@ def silent_waits(c, at=None):
     return [dict(r) for r in c.execute(
         "SELECT * FROM (SELECT t.id, t.title, t.owner, t.waiting_on, t.conversation_id, t.private, "
         "coalesce((SELECT max(e.ts) FROM task_events e WHERE e.task_id=t.id AND e.field='waiting_on' "
-        "AND e.new=t.waiting_on), t.updated) AS since FROM tasks t "
+        "AND e.new=t.waiting_on), t.updated_at) AS since FROM tasks t "
         "WHERE t.waiting_on IS NOT NULL AND t.status='waiting') w WHERE w.since<? "
         "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.to_actor=w.waiting_on AND m.from_actor=w.owner "
-        "AND m.created>=w.since AND m.deleted_at IS NULL) "
+        "AND m.created_at>=w.since AND m.deleted_at IS NULL) "
         "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=w.conversation_id AND m.kind='ask' "
         f"AND m.to_actor=w.waiting_on AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL}) "
         "ORDER BY w.since LIMIT 20", (cutoff,))]
@@ -1436,11 +1436,11 @@ def silent_waits(c, at=None):
 
 def _failed(c):
     since = H.shift(H.now(), hours=-RECENT_HOURS)
-    rows = c.execute("SELECT bot,state,finished FROM attempts WHERE state IN ('failed','expired') AND finished>? "
-                     "ORDER BY finished DESC LIMIT 5", (since,)).fetchall()
-    total = c.execute("SELECT count(*) FROM attempts WHERE state IN ('failed','expired') AND finished>?",
+    rows = c.execute("SELECT bot,state,finished_at FROM attempts WHERE state IN ('failed','expired') AND finished_at>? "
+                     "ORDER BY finished_at DESC LIMIT 5", (since,)).fetchall()
+    total = c.execute("SELECT count(*) FROM attempts WHERE state IN ('failed','expired') AND finished_at>?",
                       (since,)).fetchone()[0]
-    return total, [{"bot": r["bot"], "state": r["state"], "at": r["finished"]} for r in rows]
+    return total, [{"bot": r["bot"], "state": r["state"], "at": r["finished_at"]} for r in rows]
 
 
 def _fallbacks(c):
@@ -1448,9 +1448,9 @@ def _fallbacks(c):
     harness and when the unbroken run of fallback turns began; and bots a usage limit still holds."""
     from .execution import cooling_off
     since, latest = H.shift(H.now(), hours=-RECENT_HOURS), {}
-    for r in c.execute("SELECT bot,coalesce(started,created) AS began,json_extract(result_json,'$.fallback') AS harness "
-                       "FROM attempts WHERE state IN ('completed','failed','interrupted') AND finished>? "
-                       "ORDER BY bot,finished DESC", (since,)):
+    for r in c.execute("SELECT bot,coalesce(started_at,created_at) AS began,json_extract(result,'$.fallback') AS harness "
+                       "FROM attempts WHERE state IN ('completed','failed','interrupted') AND finished_at>? "
+                       "ORDER BY bot,finished_at DESC", (since,)):
         row = latest.setdefault(r["bot"], {"bot": r["bot"], "harness": r["harness"], "since": r["began"], "open": bool(r["harness"])})
         if row["open"] and r["harness"]:
             row["since"] = r["began"]
@@ -1491,10 +1491,10 @@ def storage_view(c, settings):
     settings = storage_settings(c, settings)
     usage = c.execute("SELECT COUNT(*) AS files,COALESCE(SUM(size),0) AS bytes FROM "
                       "(SELECT digest,MAX(size) AS size FROM blobs GROUP BY digest)").fetchone()
-    row = c.execute("SELECT detail_json FROM service_health WHERE service='blob-copy'").fetchone()
-    detail = json.loads(row["detail_json"] or "{}") if row else {}
-    row = c.execute("SELECT detail_json FROM service_health WHERE service='blob-s3'").fetchone()
-    write_detail = json.loads(row["detail_json"] or "{}") if row else {}
+    row = c.execute("SELECT detail FROM service_health WHERE service='blob-copy'").fetchone()
+    detail = json.loads(row["detail"] or "{}") if row else {}
+    row = c.execute("SELECT detail FROM service_health WHERE service='blob-s3'").fetchone()
+    write_detail = json.loads(row["detail"] or "{}") if row else {}
     location = settings.blob_bucket + ("/" + settings.blob_prefix if settings.blob_prefix else "")
     credentials = write_detail.get("credentials") if write_detail.get("location") == location else None
     return {"mode": "s3" if settings.blob_bucket else "local", "bucket": settings.blob_bucket,
@@ -1510,7 +1510,7 @@ def review_children_sql(visible):
     return ("SELECT tasks.owner FROM task_relations r JOIN tasks ON tasks.id=r.from_task "
             "WHERE r.kind='parent' AND r.to_task=? AND tasks.status IN ('open','doing','waiting','review','ready') "
             "AND tasks.title LIKE 'Review %' "
-            f"AND coalesce(tasks.private,1)=0 AND ({visible}) ORDER BY tasks.created LIMIT 3")
+            f"AND coalesce(tasks.private,1)=0 AND ({visible}) ORDER BY tasks.created_at LIMIT 3")
 
 
 def _aged_pr_checks(c, who, auth, full, kind):
@@ -1523,11 +1523,11 @@ def _aged_pr_checks(c, who, auth, full, kind):
         "SELECT l.*,tasks.title task_title,tasks.owner, tasks.number ticket FROM task_links l "
         "JOIN tasks ON tasks.id=l.task_id WHERE l.kind='pr' AND l.state IN ('open','draft') "
         "AND tasks.owner LIKE 'bot:%' AND coalesce(tasks.private,1)=0 "
-        f"AND ({auth.task_sql(c, who)}) ORDER BY l.created,l.id")
+        f"AND ({auth.task_sql(c, who)}) ORDER BY l.created_at,l.id")
     items, seen = [], set()
     for row in rows:
         link = dict(row)
-        detail = H._json(link["detail_json"], {}) or {}
+        detail = H._json(link["detail"], {}) or {}
         wait = detail.get("health_wait") or {}
         reason = health_wait_reason(link, detail)
         if not reason or wait.get("reason") != reason or not H.parse_ts(wait.get("since")):
@@ -1569,7 +1569,7 @@ def _unreviewed_runs(c, who, auth):
     from .execution import HELD_UNREVIEWED
     slugs = [row[0] for row in c.execute(
         "SELECT DISTINCT j.bot FROM jobs j LEFT JOIN attempts a ON a.id=j.attempt_id WHERE j.state='uncertain' "
-        "AND coalesce(a.finished,j.created)<=? ORDER BY j.bot", (H.shift(H.now(), seconds=-HELD_UNREVIEWED),))]
+        "AND coalesce(a.finished_at,j.created_at)<=? ORDER BY j.bot", (H.shift(H.now(), seconds=-HELD_UNREVIEWED),))]
     readable = auth.bot_accesses(c, who, slugs) if slugs else {}
     items = []
     # One read of every held run, then the same per-run visibility check unreviewed does for one bot.
@@ -1577,9 +1577,9 @@ def _unreviewed_runs(c, who, auth):
     if slugs:
         cutoff = H.shift(H.now(), seconds=-HELD_UNREVIEWED)
         marks = ",".join("?" * len(slugs))
-        for row in c.execute("SELECT m.*,j.bot,j.attempt_id,coalesce(a.finished,j.created) AS since FROM jobs j "
+        for row in c.execute("SELECT m.*,j.bot,j.attempt_id,coalesce(a.finished_at,j.created_at) AS since FROM jobs j "
                              "JOIN messages m ON m.id=j.message_id LEFT JOIN attempts a ON a.id=j.attempt_id "
-                             f"WHERE j.bot IN ({marks}) AND j.state='uncertain' AND coalesce(a.finished,j.created)<=? "
+                             f"WHERE j.bot IN ({marks}) AND j.state='uncertain' AND coalesce(a.finished_at,j.created_at)<=? "
                              "AND NOT EXISTS(SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id) "
                              "ORDER BY since", (*slugs, cutoff)):
             held.setdefault(row["bot"], []).append(row)
@@ -1624,8 +1624,8 @@ def _prime_claims(c):
     found = {}
     for part in H.chunks(keys):
         found.update((row["key"], row) for row in c.execute(
-            f"SELECT value_json,key FROM registry_metadata WHERE key IN ({','.join('?' * len(part))})", part))
-    prime_rows(c, "SELECT value_json FROM registry_metadata WHERE key=?",
+            f"SELECT value,key FROM registry_metadata WHERE key IN ({','.join('?' * len(part))})", part))
+    prime_rows(c, "SELECT value FROM registry_metadata WHERE key=?",
                {(key,): [found[key]] if key in found else [] for key in keys})
 
 
@@ -1716,9 +1716,9 @@ def view(c, who, settings, auth, github, config):
     storage = storage_settings(c, settings)
     if full and storage.blob_bucket:
         health = c.execute("SELECT * FROM service_health WHERE service='blob-copy'").fetchone()
-        detail = json.loads(health["detail_json"] or "{}") if health else {}
-        write_health = c.execute("SELECT detail_json FROM service_health WHERE service='blob-s3'").fetchone()
-        write_detail = json.loads(write_health["detail_json"] or "{}") if write_health else {}
+        detail = json.loads(health["detail"] or "{}") if health else {}
+        write_health = c.execute("SELECT detail FROM service_health WHERE service='blob-s3'").fetchone()
+        write_detail = json.loads(write_health["detail"] or "{}") if write_health else {}
         location = storage.blob_bucket + ("/" + storage.blob_prefix if storage.blob_prefix else "")
         if write_detail.get("error") and write_detail.get("location") == location:
             checks.append(_check("blob_storage", "File storage", "warn", write_detail["error"],
@@ -1733,8 +1733,8 @@ def view(c, who, settings, auth, github, config):
                              "Files are on this computer's disk. A file store (S3) is recommended.",
                              [_fix("Storage", "https://github.com/ticoteam/tico/blob/main/docs/files.md#storage")]))
     # Connection health belongs to the person; only the Team owner may see another person's.
-    for row in c.execute("SELECT actor,metadata_json FROM granola_connections"):
-        meta = json.loads(row["metadata_json"])
+    for row in c.execute("SELECT actor,metadata FROM granola_connections"):
+        meta = json.loads(row["metadata"])
         if meta.get("needs_signin") and (row["actor"] == who.actor or who.role == "owner"):
             checks.append(_check("granola:" + row["actor"], "Granola", "warn",
                                  "Granola needs sign-in again", [_fix("Open Meetings", "#/meetings")]))
@@ -1831,8 +1831,8 @@ def view(c, who, settings, auth, github, config):
         from .worktrees import current_error, supported
         if supported(c):
             usage, errors = {}, []
-            for row in c.execute("SELECT t.owner,l.state,l.detail_json FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND l.state<>'removed'"):
-                detail = json.loads(row['detail_json'] or '{}')
+            for row in c.execute("SELECT t.owner,l.state,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND l.state<>'removed'"):
+                detail = json.loads(row['detail'] or '{}')
                 bot = H.actor_id(row['owner'])
                 usage[bot] = usage.get(bot, 0) + detail.get('size_mb', 0)
                 if error := current_error(row['state'], detail):
@@ -1850,13 +1850,13 @@ def view(c, who, settings, auth, github, config):
                     return f'{minutes} min' if minutes < 120 else f'{minutes // 60} h'
                 checks.append(_check('worktree_waits', 'Waiting for a worktree', 'info', '; '.join(
                     f"{H.actor_id(w['owner'])}: {w['repo']}, {'setting up' if w['state'] == 'reserved' else 'no room'} "
-                    f"for {age(w['created'])} ({w['reason']})" for w in waits[:3])
+                    f"for {age(w['created_at'])} ({w['reason']})" for w in waits[:3])
                     + ('.' if len(waits) <= 3 else f'; and {len(waits) - 3} more.'), [_fix('Open tasks', '#/tasks')]))
             # What freed a place lately, and why (backend/worktrees.py released_event): finished work releasing its
             # tree is the normal way room comes back, so it is said, not warned about.
             since = H.shift(H.now(), hours=-24)
             reasons = {}
-            for (reason,) in c.execute("SELECT json_extract(detail_json,'$.reason') FROM events "
+            for (reason,) in c.execute("SELECT json_extract(detail,'$.reason') FROM events "
                                        "WHERE action='worktree.released' AND ts>=?", (since,)):
                 reasons[reason or 'cleanup'] = reasons.get(reason or 'cleanup', 0) + 1
             if reasons:
@@ -2094,7 +2094,7 @@ def view(c, who, settings, auth, github, config):
     # checks alone miss that loop. Use the same task visibility as the rest of Tico.
     # Waiting tasks can also escalate when held only by their own quiet subtasks.
     stalled = [row for row in c.execute(
-        "SELECT id,title,number,owner,updated,status,waiting_on FROM tasks "
+        "SELECT id,title,number,owner,updated_at,status,waiting_on FROM tasks "
         "WHERE owner LIKE 'bot:%' AND status IN ('open','doing','waiting') "
         f"AND coalesce(private,1)=0 AND ({auth.task_sql(c, who)}) "
         # A waiting parent's diagnosis must not reveal the activity of an unreadable blocker.
@@ -2105,13 +2105,13 @@ def view(c, who, settings, auth, github, config):
         # Redundant with the EXISTS; lets SQLite start from the few escalated tasks, not every task.
         "AND tasks.id IN (SELECT target FROM events WHERE action='task.stall_escalated') "
         "AND EXISTS (SELECT 1 FROM events e WHERE e.action='task.stall_escalated' "
-        "AND e.target=tasks.id AND e.ts>=tasks.updated) ORDER BY updated", H.ACTIVE_STATUSES)
+        "AND e.target=tasks.id AND e.ts>=tasks.updated_at) ORDER BY updated_at", H.ACTIVE_STATUSES)
         if row["status"] != "waiting" or H.own_stuck_blockers(c, dict(row))]
     if stalled:
         items = [{"bot": H.actor_id(row["owner"]), "name": row["title"][:200], "task": row["id"],
-                  "quiet_minutes": quiet_minutes(row["updated"]),
+                  "quiet_minutes": quiet_minutes(row["updated_at"]),
                   "text": f"#{row['number'] or row['id']} {row['title'][:200]} (owner {row['owner']}): "
-                          f"no progress for {quiet_minutes(row['updated'])} min; check the recovery diagnosis or record the missing dependency",
+                          f"no progress for {quiet_minutes(row['updated_at'])} min; check the recovery diagnosis or record the missing dependency",
                   "fix": "hub task show " + row["id"],
                   "fixes": [_fix("Open task", "#/tasks/" + row["id"])]}
                  for row in stalled[:DIAGNOSTIC_LIMIT]] if full or kind == "bot" else []
@@ -2200,21 +2200,21 @@ def note_github_token(store, error=None, action=""):
     now = H.now()
     detail = json.dumps({"message": error, "action": action}) if error else None
     with store.read() as c:
-        current = c.execute("SELECT last_error,detail_json FROM service_health WHERE service=?", (GITHUB_HEALTH,)).fetchone()
+        current = c.execute("SELECT last_error,detail FROM service_health WHERE service=?", (GITHUB_HEALTH,)).fetchone()
         if error:
-            if current and current["last_error"] == error and current["detail_json"] == detail:
+            if current and current["last_error"] == error and current["detail"] == detail:
                 return
-        elif not current or not current["last_error"] and (current["detail_json"] or "{}") in ("{}", ""):
+        elif not current or not current["last_error"] and (current["detail"] or "{}") in ("{}", ""):
             return
     with store.transaction() as c:
         if error:
-            c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,NULL,?,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail_json=excluded.detail_json",
+            c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,NULL,?,?) "
+                      "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail=excluded.detail",
                       (GITHUB_HEALTH, error, detail))
         else:   # only a recovery is written, so a healthy turn costs no extra write
             # The failure's message goes too, so nothing reads an old failure after a recovery.
-            c.execute("UPDATE service_health SET last_success=?,last_error=NULL,detail_json='{}' WHERE service=? "
-                      "AND (last_error IS NOT NULL OR detail_json<>'{}')", (now, GITHUB_HEALTH))
+            c.execute("UPDATE service_health SET last_succeeded_at=?,last_error=NULL,detail='{}' WHERE service=? "
+                      "AND (last_error IS NOT NULL OR detail<>'{}')", (now, GITHUB_HEALTH))
 
 
 def install(app, store, auth, settings):

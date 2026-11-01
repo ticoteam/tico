@@ -56,21 +56,21 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
       if(p==='/api/v2/conversations'){const bot=url.searchParams.get('chat_with');
         return json({conversations:bot?[{id:'c-'+bot,kind:'chat',scope:'personal',participants:['human:ana','bot:'+bot]}]:[]});}
       if(p.startsWith('/api/v2/conversations/c-')&&p.endsWith('/snapshot')){const bot=p.split('/')[4].slice(2);
-        const body=JSON.stringify({messages:[{id:'m-'+bot,from_actor:'bot:'+bot,body:bot==='legal'?'I need your **review** of these:\n\n- [review packet](https://tico-ui.test/api/v2/files/file-md-0001)\n- [storyboard](https://tico-ui.test/api/v2/files/file-png-0001)\n- [cover photo](https://tico-ui.test/assets/cover.png)\n- [walkthrough](https://youtu.be/dQw4w9WgXcQ)\n- [lease](https://tico-ui.test/api/v2/files/file-pdf-0001)':bot==='designer'?'Here is the [launch page](https://tico-ui.test/api/v2/files/file-html-0001); the [style guide](https://evil.test/guide.html) is on the web.':bot==='finance'?'I gave Inbox [quote instructions](https://tico-ui.test/tasks/979a861b-a309-43db-a443-732a3674de81). See [goals](https://tico-ui.test/#/goals) and [the lender](https://lender.example/).':'Hello from '+bot,created:new Date().toISOString()}],execution:null});
+        const body=JSON.stringify({messages:[{id:'m-'+bot,from_actor:'bot:'+bot,body:bot==='legal'?'I need your **review** of these:\n\n- [review packet](https://tico-ui.test/api/v2/files/file-md-0001)\n- [storyboard](https://tico-ui.test/api/v2/files/file-png-0001)\n- [cover photo](https://tico-ui.test/assets/cover.png)\n- [walkthrough](https://youtu.be/dQw4w9WgXcQ)\n- [lease](https://tico-ui.test/api/v2/files/file-pdf-0001)':bot==='designer'?'Here is the [launch page](https://tico-ui.test/api/v2/files/file-html-0001); the [style guide](https://evil.test/guide.html) is on the web.':bot==='finance'?'I gave Inbox [quote instructions](https://tico-ui.test/tasks/979a861b-a309-43db-a443-732a3674de81). See [goals](https://tico-ui.test/#/goals) and [the lender](https://lender.example/).':'Hello from '+bot,created_at:new Date().toISOString()}],execution:null});
         return setTimeout(()=>route.fulfill({contentType:'application/json',body}),slow);}
-      if(p==='/api/v2/tasks/979a861b-a309-43db-a443-732a3674de81')return json({task:{id:'979a861b-a309-43db-a443-732a3674de81',title:'Seek written financing quotes',owner:'bot:inbox',requester:'bot:finance',status:'todo',lane:'company',labels:[],links:[],parts:{total:0,done:0},version:1,updated:new Date().toISOString()},children:[]});
+      if(p==='/api/v2/tasks/979a861b-a309-43db-a443-732a3674de81')return json({task:{id:'979a861b-a309-43db-a443-732a3674de81',title:'Seek written financing quotes',owner:'bot:inbox',requester:'bot:finance',status:'todo',lane:'company',labels:[],links:[],parts:{total:0,done:0},version:1,updated_at:new Date().toISOString()},children:[]});
       if(p==='/api/v2/tasks'){const owner=url.searchParams.get('owner');
-        const body=JSON.stringify({tasks:owner?[{id:'t-'+owner,title:'Task for '+owner,owner:'bot:'+owner,requester:'human:ana',status:'doing',lane:'company',labels:[],links:[],parts:{total:0,done:0},version:1,updated:new Date().toISOString()}]:[]});
+        const body=JSON.stringify({tasks:owner?[{id:'t-'+owner,title:'Task for '+owner,owner:'bot:'+owner,requester:'human:ana',status:'doing',lane:'company',labels:[],links:[],parts:{total:0,done:0},version:1,updated_at:new Date().toISOString()}]:[]});
         return setTimeout(()=>route.fulfill({contentType:'application/json',body}),slow);}
       if(p==='/api/v2/chat/legal'){
         sends.push(route.request().headers()['idempotency-key']);
         if(offline)return route.abort('internetdisconnected');
-        return json({conversation:{id:'legal-chat'},message:{id:'m1',from_actor:'human:ana',body:'Hello offline',created:new Date().toISOString()}});
+        return json({conversation:{id:'legal-chat'},message:{id:'m1',from_actor:'human:ana',body:'Hello offline',created_at:new Date().toISOString()}});
       }
       if(p==='/api/v2/uploads/chat/legal'){
         uploads.push({path:p,body:route.request().postDataBuffer().toString()});
         if(false)return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{detail:'Fixture upload unavailable'}})});
-        return json({conversation:{id:'legal-upload'},message:{id:'m1',from_actor:'human:ana',body:'Review this fixture',created:new Date().toISOString()}});
+        return json({conversation:{id:'legal-upload'},message:{id:'m1',from_actor:'human:ana',body:'Review this fixture',created_at:new Date().toISOString()}});
       }
       return json(unrouted(p));
     });

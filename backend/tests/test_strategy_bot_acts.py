@@ -27,7 +27,7 @@ def task(api, task_id):
 def proposals(api):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE requester=? AND owner=? AND title LIKE 'Decide %' "
-                                           "ORDER BY created", (STRATEGY_BOT, OWNER))]
+                                           "ORDER BY created_at", (STRATEGY_BOT, OWNER))]
 
 
 def test_at_level_3_one_decision_changes_bot_tasks_under_one_action_id_and_the_owner_undoes_it(api):
@@ -189,7 +189,7 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
         H.task_update(c, OWNER, back, rank=-60, mover=True)                        # ...and away and back
         H.task_update(c, OWNER, back, rank=decided, mover=True)
         H.task_update(c, OWNER, new, owner=OWNER, status="doing", mover=True)      # a person takes on what it made
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='coo'", ('{"harness": "dots"}',))
+        c.execute("UPDATE bot_config SET config=? WHERE bot='coo'", ('{"harness": "dots"}',))
     held = task(api, ticket)["version"]
     post(api, f"strategy-bot/log/{made['id']}/undo", {}, token="ben-test", expected=403)        # an admin doesn't undo
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
@@ -289,8 +289,8 @@ def test_a_decision_never_makes_a_task_private_and_undo_puts_back_one_made_priva
         bot(api, slug)
     level(api, 3)
     with api.app.state.store.transaction() as c:
-        config = H._json(c.execute("SELECT config_json FROM bot_config WHERE bot='finance'").fetchone()[0], {})
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='finance'",
+        config = H._json(c.execute("SELECT config FROM bot_config WHERE bot='finance'").fetchone()[0], {})
+        c.execute("UPDATE bot_config SET config=? WHERE bot='finance'",
                   (encode({**config, "private_tasks_default": True}), ))
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
     held = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "finance"}])
@@ -316,8 +316,8 @@ def test_a_decision_never_creates_a_task_for_a_bot_that_keeps_its_tasks_private(
     bot(api, "finance")
     level(api, 3)
     with api.app.state.store.transaction() as c:
-        config = H._json(c.execute("SELECT config_json FROM bot_config WHERE bot='finance'").fetchone()[0], {})
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='finance'",
+        config = H._json(c.execute("SELECT config FROM bot_config WHERE bot='finance'").fetchone()[0], {})
+        c.execute("UPDATE bot_config SET config=? WHERE bot='finance'",
                   (encode({**config, "private_tasks_default": True}), ))
     held = decide(api, strategy_token, [{"do": "create", "owner": "finance", "title": "Review the vendor contract"}])
     assert held["state"] == "proposed" and not held["done"]
@@ -380,7 +380,7 @@ def test_the_log_pages_through_entries_made_in_the_same_instant(api):
     at = H.now()
     with api.app.state.store.transaction() as c:
         for n in range(53):
-            c.execute("INSERT INTO strategy_actions (id, created, actor, kind, reason, state, changes_json) "
+            c.execute("INSERT INTO strategy_actions (id, created_at, actor, kind, reason, state, changes) "
                       "VALUES (?, ?, ?, 'decision', 'Same instant', 'proposed', '{}')", (f"a{n:02d}", at, STRATEGY_BOT))
     seen, before = [], None
     while True:
@@ -417,7 +417,7 @@ def test_a_decision_never_touches_a_company_task_hidden_from_the_strategy_bot_by
     bot(api, "finance")
     level(api, 3)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET access_json=? WHERE bot='finance'",
+        c.execute("UPDATE bot_config SET access=? WHERE bot='finance'",
                   ('{"see":{"everyone":true},"read":{"people":["ana"]},"write":{"people":["ana"]}}',))
         hidden = H.task_create(c, OWNER, "Restructure the payroll", "Secret salaries", "bot:finance", lint=False)["id"]
     assert not task(api, hidden)["private"]
@@ -452,7 +452,7 @@ def test_a_bot_the_strategy_bot_cant_see_is_answered_as_a_bot_that_isnt_there(ap
     level(api, 3)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET display_name='Payroll Vault' WHERE slug='finance'")
-        c.execute("UPDATE bot_config SET access_json=? WHERE bot='finance'",
+        c.execute("UPDATE bot_config SET access=? WHERE bot='finance'",
                   ('{"see":{"people":["ana"]},"read":{"people":["ana"]},"write":{"people":["ana"]}}',))
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
 

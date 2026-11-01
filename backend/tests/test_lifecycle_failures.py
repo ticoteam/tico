@@ -165,13 +165,13 @@ def send(client, method, path, token, body=None):
 
 def db_attempts(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT id,job_id,state,last_seq FROM attempts ORDER BY created,id")]
+        return [dict(r) for r in c.execute("SELECT id,job_id,state,last_seq FROM attempts ORDER BY created_at,id")]
 
 
 def db_events(api, aid):
     with api.app.state.store.read() as c:
-        return {r["seq"]: json.loads(r["payload_json"])["text"] for r in
-                c.execute("SELECT seq,payload_json FROM attempt_events WHERE attempt_id=?", (aid,))}
+        return {r["seq"]: json.loads(r["payload"])["text"] for r in
+                c.execute("SELECT seq,payload FROM attempt_events WHERE attempt_id=?", (aid,))}
 
 
 def check(api, model, log):

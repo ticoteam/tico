@@ -30,7 +30,7 @@ def state(api):
                 "roster": {p["id"]: p["email"] for p in Access._load_json(c, "people")["people"]},
                 "owner": Access._load_json(c, Access.OWNER), "access": Access._load_json(c, Access.ACCESS),
                 "events": [dict(r) for r in c.execute(
-                    "SELECT ts,actor,target,detail_json FROM events WHERE action='owner.email_changed'")],
+                    "SELECT ts,actor,target,detail FROM events WHERE action='owner.email_changed'")],
                 "joined": c.execute("SELECT count(*) FROM events WHERE action='person.joined'").fetchone()[0]}
 
 
@@ -59,7 +59,7 @@ def test_the_owner_changes_their_email_in_place_and_every_copy_moves_at_once(env
     assert after["access"]["revision"] == before["access"]["revision"] + 1
     [event] = after["events"]
     assert event["actor"] == "human:morgan" and event["target"] == "morgan" and event["ts"]
-    assert json.loads(event["detail_json"]) == {"from": OWNER_EMAIL, "to": NEW, "revision": result["revision"],
+    assert json.loads(event["detail"]) == {"from": OWNER_EMAIL, "to": NEW, "revision": result["revision"],
                                                 "via": "app"}
     assert view(api)["owner"]["email"] == NEW and api.app.state.auth.owner_email == NEW
 
@@ -248,7 +248,7 @@ def test_a_message_bot_keeps_reading_the_old_mailbox_both_ways(environment):
             assert routines.token_mailboxes(c, "coo") == [OWNER_EMAIL]
             [box] = routines.message_bot_mailboxes(c)
             assert box["address"] == OWNER_EMAIL and box["person_id"] == "morgan"
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='coo'").fetchone()[0])
+            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='coo'").fetchone()[0])
             assert routines.inbox_of("coo", config, routines._roster(c))["mailboxes"] == [OWNER_EMAIL]
 
 
@@ -291,7 +291,7 @@ def test_the_host_command_shows_the_change_then_applies_it_without_a_sign_in(env
     assert json.loads(capsys.readouterr().out)["applied"] is True
     after = state(api)
     assert after["humans"]["morgan"] == NEW and after["owner"]["email"] == NEW
-    assert json.loads(after["events"][0]["detail_json"])["via"] == "host" and after["events"][0]["actor"] == "host"
+    assert json.loads(after["events"][0]["detail"])["via"] == "host" and after["events"][0]["actor"] == "host"
     # The running server adopts it on its next request, with no restart.
     assert view(api)["owner"]["email"] == NEW
 
@@ -300,15 +300,15 @@ def test_meetings_and_a_granola_link_filed_under_the_old_address_follow_the_owne
     api = environment()
     with api.app.state.store.transaction() as c:
         for mid, owner, review in (("m-mine", "Morgan@acme.example", "pending"), ("m-riley", "riley@acme.example", "live")):
-            c.execute("INSERT INTO meetings(id,title,owner,metadata_json,created,updated,review_state) VALUES(?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at,review_state) VALUES(?,?,?,?,?,?,?)",
                       (mid, "Sync", owner, json.dumps({"owner": owner, "title": "Sync"}), H.now(), H.now(), review))
         c.execute("INSERT INTO meeting_deliveries(meeting_id,requested_by,sender_name,destination,instructions,requested_at) "
                   "VALUES('m-mine',?,'Morgan','bot:support','',?)", (OWNER_EMAIL, H.now()))
         c.execute("INSERT INTO granola_connections VALUES('human:morgan','granola:x',?,X'00',X'00','{}')", (OWNER_EMAIL,))
     change(api, NEW)
     with api.app.state.store.read() as c:
-        rows = {r["id"]: (r["owner"], json.loads(r["metadata_json"])["owner"])
-                for r in c.execute("SELECT id,owner,metadata_json FROM meetings")}
+        rows = {r["id"]: (r["owner"], json.loads(r["metadata"])["owner"])
+                for r in c.execute("SELECT id,owner,metadata FROM meetings")}
         assert rows == {"m-mine": (NEW, NEW), "m-riley": ("riley@acme.example", "riley@acme.example")}
         assert c.execute("SELECT requested_by FROM meeting_deliveries").fetchone()[0] == NEW
         assert c.execute("SELECT email FROM granola_connections").fetchone()[0] == NEW

@@ -66,7 +66,7 @@ _STRAIGHT = str.maketrans({"‘": "'", "’": "'", "‚": "'", "“": '"', "”"
 # backend/files.py asked_to_read) and the From it was asked for. Two people reading one version are two rows.
 RULE_READS = """CREATE TABLE IF NOT EXISTS rule_reads(
  task_id TEXT PRIMARY KEY, file_id TEXT NOT NULL, version INTEGER NOT NULL, requested_by TEXT NOT NULL,
- created TEXT NOT NULL, truncated INTEGER NOT NULL DEFAULT 0, source_id TEXT)"""
+ created_at TEXT NOT NULL, truncated INTEGER NOT NULL DEFAULT 0, source_id TEXT)"""
 RULE_READS_INDEX = "CREATE INDEX IF NOT EXISTS rule_reads_version ON rule_reads(file_id, version)"
 # A quote shorter than this from a private read could be a word that is in any document: too little to tie the
 # suggestion to the version it cites.
@@ -93,8 +93,8 @@ def ensure(c):
         c.execute("ALTER TABLE rule_reads RENAME TO rule_reads_by_version")
         c.execute(RULE_READS)
         source = "source_id" if "source_id" in columns else "NULL"
-        c.execute("INSERT OR IGNORE INTO rule_reads(task_id, file_id, version, requested_by, created, truncated, "
-                  f"source_id) SELECT task_id, file_id, version, requested_by, created, truncated, {source} "
+        c.execute("INSERT OR IGNORE INTO rule_reads(task_id, file_id, version, requested_by, created_at, truncated, "
+                  f"source_id) SELECT task_id, file_id, version, requested_by, created_at, truncated, {source} "
                   "FROM rule_reads_by_version WHERE task_id IS NOT NULL")
         c.execute("DROP TABLE rule_reads_by_version")
     c.execute(RULE_READS)
@@ -410,7 +410,7 @@ def read(c, auth, who, files, blobs, body, found):
     H.event(c, who.actor, "rules.read_requested", file_id, {"source": source["id"], "version": number,
                                                           "task": task["id"], "bot": SLUG, "truncated": cut,
                                                           "screening": verdict["action"]})
-    c.execute("INSERT INTO rule_reads(task_id, file_id, version, requested_by, created, truncated, source_id) "
+    c.execute("INSERT INTO rule_reads(task_id, file_id, version, requested_by, created_at, truncated, source_id) "
               "VALUES(?,?,?,?,?,?,?)", (task["id"], file_id, number, who.actor, H.now(), int(cut), source["id"]))
     screening.note(c, verdict, "document", file_id, task=task["id"])
     return _receipt(source, file_id, number, title, who_hint, cut, verdict["action"], task["id"], existing=False)

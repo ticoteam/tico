@@ -507,7 +507,7 @@ async function whHookDetail(el, run) {
       <button class="ghost" type="button" data-wh-catchup-do="recover" title="Send again what gave up since then">Retry failed</button>
       <button class="ghost" type="button" data-wh-catchup-do="replay" title="Send the events since then that this endpoint never got">Send missed</button></div>` : ''}
     ${items.length ? `<div class="wh-calls wh-sends" data-wh-sends>${items.map(s => `<div class="wh-call" data-wh-send="${esc(s.id)}">
-        <span class="wh-time" title="${esc(s.created)}">${esc(ago(s.created))}</span>
+        <span class="wh-time" title="${esc(s.created_at)}">${esc(ago(s.created_at))}</span>
         <span class="wh-type"><code>${esc(s.type)}</code></span>
         <span class="wh-outcome"><span class="pill ${WH_SEND_STATES[s.state] ?? ''}">${esc(s.state[0].toUpperCase() + s.state.slice(1))}</span>${s.subject ? ` <span class="muted">${esc(s.subject)}</span>` : ''}</span>
         <span class="tnum muted">${(s.attempts === 1 ? '1 try' : `${s.attempts} tries`)}</span>

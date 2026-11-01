@@ -29,15 +29,15 @@ SYSTEM_BOTS = ("assistant", "botops", "librarian", "goal-manager", "health-monit
 
 
 def _roster(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
     return P.load(json.loads(row[0]) if row else {"people": H.humans(c)})
 
 
 def _configs(c):
     """{slug: config with its `reports_to`}: what `team_of` reads."""
     out = {}
-    for row in c.execute("SELECT bot,config_json,reports_to FROM bot_config"):
-        config = json.loads(row["config_json"] or "{}")
+    for row in c.execute("SELECT bot,config,reports_to FROM bot_config"):
+        config = json.loads(row["config"] or "{}")
         config["reports_to"] = row["reports_to"]
         out[row["bot"]] = config
     return out
@@ -92,11 +92,11 @@ def _save(c, roster, people=None):
 
 
 def _set_bot(c, slug, gid):
-    declared = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()[0] or "{}")
+    declared = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0] or "{}")
     if declared.get("team") and declared["team"] != gid:
         task_caps.forget(c, "bot:" + slug)      # its caps were its old group's (CONTRACT §3)
     was, declared["team"] = declared.get("team") or "", gid
-    c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(declared), slug))
+    c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), slug))
     _follow(c, "bot:" + slug, was, gid)
 
 
@@ -525,7 +525,7 @@ def migrate(c, settings):
     * every live bot then names its group in its config (`team`, "" for none), the roots go, and the roster says
       `groups_migrated`. `reports_to` is not touched.
     """
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
     if not row:
         return False
     doc = json.loads(row[0] or "{}")
@@ -584,7 +584,7 @@ def migrate(c, settings):
                          for gid, g in groups.items()}
     doc.pop("teams", None)
     doc["groups_migrated"] = True
-    c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
+    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(doc),))
     for person in retagged:
         if H.human(c, person.get("id")):
             Access._sync_human(c, P._person(person))

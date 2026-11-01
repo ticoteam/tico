@@ -160,7 +160,7 @@ def recover(store, now=None):
     """`sending` rows whose worker never recorded an answer (a crash, a restart) go back to `ready`."""
     now = now or H.now()
     with store.transaction() as c:
-        back = c.execute("UPDATE webhook_sends SET state='ready', claimed_at=NULL, next_attempt=? "
+        back = c.execute("UPDATE webhook_sends SET state='ready', claimed_at=NULL, next_attempt_at=? "
                          "WHERE state='sending' AND claimed_at<?", (now, H.shift(now, seconds=-STALE))).rowcount
     if back:
         log.warning("%d webhook sends were in flight when their worker stopped; trying them again", back)
@@ -172,9 +172,9 @@ def withhold(store, now=None):
     """A rehearsal copy sends nothing: due sends end as `withheld`."""
     now = now or H.now()
     with store.transaction() as c:
-        return c.execute("UPDATE webhook_sends SET state='withheld', next_attempt=?, "
+        return c.execute("UPDATE webhook_sends SET state='withheld', next_attempt_at=?, "
                          "last_error='Rehearsal: nothing is sent from a copy' "
-                         "WHERE state='ready' AND next_attempt<=?", (now, now)).rowcount
+                         "WHERE state='ready' AND next_attempt_at<=?", (now, now)).rowcount
 
 
 def claim(store, now):
@@ -183,8 +183,8 @@ def claim(store, now):
     with store.transaction() as c:
         rows = c.execute(
             "SELECT s.id, s.webhook_id, w.host, w.rate_per_hour, w.window_start, w.window_count FROM webhook_sends s "
-            "JOIN webhooks w ON w.id=s.webhook_id WHERE s.state='ready' AND s.next_attempt<=? AND w.deleted_at IS NULL "
-            "AND w.enabled=1 ORDER BY s.next_attempt LIMIT 100", (now,)).fetchall()
+            "JOIN webhooks w ON w.id=s.webhook_id WHERE s.state='ready' AND s.next_attempt_at<=? AND w.deleted_at IS NULL "
+            "AND w.enabled=1 ORDER BY s.next_attempt_at LIMIT 100", (now,)).fetchall()
         busy = {}
         for row in rows:
             if row["host"] not in busy:
@@ -197,7 +197,7 @@ def claim(store, now):
             if not start_ or start_ <= H.shift(now, hours=-1):
                 start_, count = now, 0
             if count >= row["rate_per_hour"]:
-                c.execute("UPDATE webhook_sends SET next_attempt=? WHERE id=?", (H.shift(start_, hours=1), row["id"]))
+                c.execute("UPDATE webhook_sends SET next_attempt_at=? WHERE id=?", (H.shift(start_, hours=1), row["id"]))
                 continue
             c.execute("UPDATE webhooks SET window_start=?, window_count=? WHERE id=?", (start_, count + 1, row["webhook_id"]))
             c.execute("UPDATE webhook_sends SET state='sending', claimed_at=? WHERE id=?", (now, row["id"]))
@@ -209,7 +209,7 @@ def deliver(store, vault, send_id, *, transport=None):
     """Post one claimed send and record what came back."""
     with store.read() as c:
         send = c.execute("SELECT s.*, w.url, w.allow_http, w.secret, w.secret_prev, w.secret_prev_until, w.deleted_at, "
-                         "w.headers_json "
+                         "w.headers "
                          "FROM webhook_sends s JOIN webhooks w ON w.id=s.webhook_id WHERE s.id=?", (send_id,)).fetchone()
         if not send:
             return
@@ -263,21 +263,21 @@ def record(store, send, timestamp, status, head, error, abort, ms):
         task_trigger_rules.webhook_result(c, send["event_id"], status)
         if status is not None and 200 <= status < 300:
             c.execute("UPDATE webhook_sends SET state='delivered', attempts=?, last_status=?, last_error='', "
-                      "delivered_at=?, next_attempt=?, claimed_at=NULL WHERE id=?", (attempts, status, now, now, send["id"]))
+                      "delivered_at=?, next_attempt_at=?, claimed_at=NULL WHERE id=?", (attempts, status, now, now, send["id"]))
         elif abort:
             c.execute("UPDATE webhook_sends SET state='cancelled', attempts=?, last_status=?, last_error=?, "
-                      "next_attempt=?, claimed_at=NULL WHERE id=?",
+                      "next_attempt_at=?, claimed_at=NULL WHERE id=?",
                       (attempts, status, "The receiver asked not to be sent this message again", now, send["id"]))
         else:
             wait = retry_delay(attempts)
             if wait is None:
                 c.execute("UPDATE webhook_sends SET state='failed', attempts=?, last_status=?, last_error=?, "
-                          "next_attempt=?, claimed_at=NULL WHERE id=?", (attempts, status, shown, now, send["id"]))
+                          "next_attempt_at=?, claimed_at=NULL WHERE id=?", (attempts, status, shown, now, send["id"]))
                 exhausted(c, send, attempts, status, shown, now)
             else:
                 at = H.shift(now, seconds=wait)
                 c.execute("UPDATE webhook_sends SET state='ready', attempts=?, last_status=?, last_error=?, "
-                          "next_attempt=?, claimed_at=NULL WHERE id=?", (attempts, status, shown, at, send["id"]))
+                          "next_attempt_at=?, claimed_at=NULL WHERE id=?", (attempts, status, shown, at, send["id"]))
                 c.after_commit.append(ring)
 
 
@@ -312,8 +312,8 @@ def prune(c, now=None):
     """The hourly cleanup: events and finished sends after KEEP_DAYS, attempts to KEEP_ATTEMPTS an endpoint, and a
     deleted endpoint once nothing of it is left."""
     cutoff = H.shift(now or H.now(), days=-KEEP_DAYS)
-    c.execute("DELETE FROM webhook_events WHERE created<?", (cutoff,))
-    c.execute(f"DELETE FROM webhook_sends WHERE state IN ({','.join('?' * len(TERMINAL))}) AND next_attempt<?",
+    c.execute("DELETE FROM webhook_events WHERE created_at<?", (cutoff,))
+    c.execute(f"DELETE FROM webhook_sends WHERE state IN ({','.join('?' * len(TERMINAL))}) AND next_attempt_at<?",
               (*TERMINAL, cutoff))
     c.execute("DELETE FROM webhook_attempts WHERE send_id NOT IN (SELECT id FROM webhook_sends)")
     c.execute("DELETE FROM webhook_attempts WHERE rowid IN (SELECT rowid FROM (SELECT rowid, row_number() OVER "

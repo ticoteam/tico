@@ -14,7 +14,7 @@ const {unrouted} = require('./support/routes.cjs');
     page.on('pageerror', e => errors.push(e.message));
     const writes = [];
     const computers = [{id: 'computer-1', label: 'Build server', operator: 'ana', bots: ['helper'], platform: 'linux',
-      last_seen: new Date().toISOString(), readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}}}}];
+      last_seen_at: new Date().toISOString(), readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}}}}];
     let providers = {enabled: ['openai'], default: {runtime: 'codex', model: 'test-model'}, revision: 1,
       providers: [{id: 'openai', label: 'OpenAI', recommended: 'test-model'}]};
     const bots = [{name: 'helper', display_name: 'Helper', status: 'active', operator: 'ana', can_manage: true, users: [], bot_owners: []}];

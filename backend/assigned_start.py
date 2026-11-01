@@ -32,7 +32,7 @@ def page_ledger(c, rows):
                 "ORDER BY task_id,ts DESC,rowid DESC", part):
             owners.setdefault(task_id, (event_id, ts))
         for target, detail in c.execute(
-                f"SELECT target,detail_json FROM events WHERE action=? AND target IN ({marks}) ORDER BY target,ts DESC",
+                f"SELECT target,detail FROM events WHERE action=? AND target IN ({marks}) ORDER BY target,ts DESC",
                 (EVENT, *part)):
             ledger.setdefault(target, []).append(H._json(detail, {}))
     return owners, ledger
@@ -58,13 +58,13 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
     scope = f" AND t.id IN ({','.join('?' for _ in task_ids)})" if task_ids else ''
     params.extend(task_ids or ())
     # Select the current assignment's ledger entry before reading task bodies or provenance.
-    assignment_key = "coalesce((SELECT id FROM task_events WHERE task_id=t.id AND field='owner' ORDER BY ts DESC,rowid DESC LIMIT 1),t.owner||':'||t.created)"
+    assignment_key = "coalesce((SELECT id FROM task_events WHERE task_id=t.id AND field='owner' ORDER BY ts DESC,rowid DESC LIMIT 1),t.owner||':'||t.created_at)"
     ledger = ("SELECT 1 FROM events e WHERE e.target=t.id AND e.action='task.assignment-rewake' "
-              f"AND json_extract(e.detail_json,'$.assignment')={assignment_key}")
+              f"AND json_extract(e.detail,'$.assignment')={assignment_key}")
     if recorded is not None:
         scope += " AND " + ("EXISTS" if recorded else "NOT EXISTS") + "(" + ledger
         if recorded:
-            scope += " AND json_extract(e.detail_json,'$.rewoken_at')<=?"
+            scope += " AND json_extract(e.detail,'$.rewoken_at')<=?"
             params.append(H.shift(at, hours=-ESCALATE_HOURS))
         scope += ")"
     if after:
@@ -80,7 +80,7 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
     # `t.id IN (SELECT id FROM tasks WHERE ...)` SQLite listed every task the rule allows first: 55 ms a call on TIDY.
     visibility = f" AND EXISTS(SELECT 1 FROM tasks v WHERE v.id=t.id AND ({visible}))" if visible != "1" else ""
     rows = H._rows(c.execute("SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug "
-                                 "WHERE t.status='open' AND b.state IN ('active','paused','quarantined') AND t.created<=? "
+                                 "WHERE t.status='open' AND b.state IN ('active','paused','quarantined') AND t.created_at<=? "
                                  + scope + visibility + " ORDER BY t.id LIMIT ?",
                                  (*params, SCAN_LIMIT)))
     if page is not None:
@@ -96,7 +96,7 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
             scanned[:] = [row['id']]
         try:
             owned = owners.get(row['id'])
-            key, since = (owned[0], owned[1]) if owned else (row['owner'] + ':' + row['created'], row['created'])
+            key, since = (owned[0], owned[1]) if owned else (row['owner'] + ':' + row['created_at'], row['created_at'])
             if since > cutoff:
                 continue
             saved = next((entry for entry in ledger.get(row['id'], ()) if entry.get('assignment') == key), None)
@@ -115,13 +115,13 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
             floor, touched = attempts.get(bot, ("9999", {}))
             # Only runs since this assignment can count, so the bot's attempts are read from `since`, not the page's oldest row.
             if since < floor:
-                found = c.execute("SELECT id,created FROM attempts WHERE bot=? AND created>=? AND created<? ORDER BY created DESC",
+                found = c.execute("SELECT id,created_at FROM attempts WHERE bot=? AND created_at>=? AND created_at<? ORDER BY created_at DESC",
                                   (bot, since, floor)).fetchall()
                 # Every run's task set in a fixed number of statements; attempt_tasks then reads each from that snapshot.
                 privacy.prime_attempts(c, [attempt['id'] for attempt in found])
                 for attempt in found:
                     for tid in privacy.attempt_tasks(c, attempt['id']):
-                        touched.setdefault(tid, attempt['created'])
+                        touched.setdefault(tid, attempt['created_at'])
                 attempts[bot] = since, touched
             if touched.get(row['id'], '') >= since:
                 if memo is not None and not writing:
@@ -230,7 +230,7 @@ def _bot_state(c, bot, settings):
     owner = H.bot(c, bot)
     if owner and owner['state'] != 'active':
         return owner['state'], None
-    config = c.execute(f"SELECT bc.config_json,{E.DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
+    config = c.execute(f"SELECT bc.config,{E.DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
                        "FROM bot_config bc WHERE bc.bot=?", (bot,)).fetchone()
     runner = c.execute('SELECT r.* FROM assignments a JOIN runners r ON r.id=a.runner_id '
                        'WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
@@ -238,11 +238,11 @@ def _bot_state(c, bot, settings):
         return 'no_computer', None
     if not config:
         return 'config', None
-    if not runner['last_seen'] or runner['last_seen'] < H.shift(H.now(), minutes=-10):
+    if not runner['last_seen_at'] or runner['last_seen_at'] < H.shift(H.now(), minutes=-10):
         return 'computer_offline', None
-    ready = readiness_document(runner['readiness_json'])
+    ready = readiness_document(runner['readiness'])
     held_bots, held_lanes = E.claimed_busy(runner['id'])
-    why, declared = E.claim_refusal(c, settings, runner, bot, config['config_json'], config['draining'], ready, held_bots)
+    why, declared = E.claim_refusal(c, settings, runner, bot, config['config'], config['draining'], ready, held_bots)
     if why:
         return why, None
     return None, {'runner': runner, 'ready': ready, 'followed': follow(c, bot, declared),
@@ -266,7 +266,7 @@ def reason(c, row, settings, shared=None, suspect=None):
     runner, ready, followed, busy = state['runner'], state['ready'], state['followed'], state['busy']
     jobs = c.execute(f"SELECT j.*,{E.unfenced_sql()} free,{E.scoped_sql()} in_scope "
                      "FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-                     f"WHERE j.bot=? AND j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created,j.id",
+                     f"WHERE j.bot=? AND j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at,j.id",
                      (bot, row['id'])).fetchall()
     if jobs:
         job = jobs[0]

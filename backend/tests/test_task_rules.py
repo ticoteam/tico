@@ -11,10 +11,10 @@ AT = datetime(2026, 10, 24, 12, tzinfo=timezone.utc)
 
 def department(api):
     with api.app.state.store.transaction() as c:
-        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         roster['org_groups'] = {'engineering': {'name': 'Engineering'}, 'web': {'name': 'Web', 'parent': 'engineering'}, 'marketing': {'name': 'Marketing'}}
         next(p for p in roster['people'] if p['id'] == 'cara')['team'] = 'web'
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
 
 
 def done(api, monkeypatch, title='Prepare export', hours=25):
@@ -98,7 +98,7 @@ def test_activity_and_all_holds_protect_done_tasks(api, monkeypatch):
                     H.task_update(c, 'human:ana', t['id'], status='done')
                 elif label == 'waiting': c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (t['id'],))
                 elif label == 'snoozed': c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", ((AT + timedelta(days=1)).isoformat(), t['id']))
-                elif label == 'pin': c.execute("UPDATE tasks SET labels_json='[\"pinned\"]' WHERE id=?", (t['id'],))
+                elif label == 'pin': c.execute("UPDATE tasks SET labels='[\"pinned\"]' WHERE id=?", (t['id'],))
                 elif label == 'question': H.task_comment(c, 'human:ana', t['id'], 'Should this stay open?', wake=False, ask={'to': 'human:ana'})
                 else:
                     c.execute("UPDATE tasks SET status='open' WHERE id=?", (t['id'],))
@@ -108,8 +108,8 @@ def test_activity_and_all_holds_protect_done_tasks(api, monkeypatch):
         if label in ('question', 'approval'):
             with api.app.state.store.transaction() as c:
                 old = R.SR._stamp(AT - timedelta(hours=25))
-                c.execute('UPDATE tasks SET updated=? WHERE id=?', (old, t['id']))
-                c.execute('UPDATE messages SET created=? WHERE conversation_id=?', (old, t['conversation_id']))
+                c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (old, t['id']))
+                c.execute('UPDATE messages SET created_at=? WHERE conversation_id=?', (old, t['conversation_id']))
     eligible = done(api, monkeypatch, 'Eligible export')
     assert not run(api)
     assert task(api, eligible['id'])['status'] == 'closed'
@@ -124,7 +124,7 @@ def test_cap_off_and_failure_receipt_are_durable(api, monkeypatch):
     put(api, 'task-rules/' + R.DEFAULT, {'on': False})
     with api.app.state.store.transaction() as c:
         c.execute("DROP INDEX tasks_rule_done_due")
-        c.execute("CREATE INDEX tasks_rule_due ON tasks(status,updated,id)")
+        c.execute("CREATE INDEX tasks_rule_due ON tasks(status,updated_at,id)")
     api.app.state.store.initialize()  # Upgrade the index without resetting the saved switch.
     with api.app.state.store.read() as c:
         indexes = {r[1] for r in c.execute("PRAGMA index_list(tasks)")}
@@ -153,14 +153,14 @@ def test_bot_department_rights_and_aged_holds_do_not_starve_eligible_tasks(api, 
     _, _, attempt = setup_attempt(api)
     token = attempt['token']
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET team='engineering',config_json=json_set(config_json,'$.team','engineering') WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET team='engineering',config=json_set(config,'$.team','engineering') WHERE bot='ops'")
     rule = post(api, 'task-rules', {'name': 'Close exports'}, token=token)['job']
     assert rule['department']['id'] == 'engineering' and rule['can_change']
     put(api, 'task-rules/' + rule['key'], {'on': False}, token=token)
     for n in range(51):
         held = done(api, monkeypatch, f'Pinned export {n}', hours=48)
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE tasks SET labels_json='[\"pinned\"]' WHERE id=?", (held['id'],))
+            c.execute("UPDATE tasks SET labels='[\"pinned\"]' WHERE id=?", (held['id'],))
     eligible = done(api, monkeypatch, 'Eligible after holds')
     assert not run(api)
     assert task(api, eligible['id'])['status'] == 'closed'
@@ -180,15 +180,15 @@ def test_history_and_scoped_message_activity_with_old_task_timestamps(api, monke
         # A step-only history touch and imported message metadata must protect without tasks.updated.
         c.execute("INSERT INTO task_events(id,task_id,ts,actor,field,old,new,note) "
                   "VALUES(?,?,?,'human:ana','step','before','after','')", (H.new_id(), history['id'], recent))
-        for t, field in zip(scoped, ('created', 'edited_at', 'deleted_at')):
-            times = {'created': old, 'edited_at': None, 'deleted_at': None, field: recent}
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created,edited_at,deleted_at) "
+        for t, field in zip(scoped, ('created_at', 'edited_at', 'deleted_at')):
+            times = {'created_at': old, 'edited_at': None, 'deleted_at': None, field: recent}
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at,edited_at,deleted_at) "
                       "VALUES(?,?,'human:ana','human:ana','say','Fixture',?,?,?,?)",
-                      (H.new_id(), shared, json.dumps({'task': t['id']}), times['created'], times['edited_at'], times['deleted_at']))
+                      (H.new_id(), shared, json.dumps({'task': t['id']}), times['created_at'], times['edited_at'], times['deleted_at']))
         # None of the message fixtures gets a recent history row; all task timestamps stay aged.
         for t in [history, *scoped, unrelated]:
             row = dict(c.execute('SELECT * FROM tasks WHERE id=?', (t['id'],)).fetchone())
-            assert all(not row.get(k) or row[k] <= old for k in ('created', 'updated', 'done_at', 'checkpoint_at'))
+            assert all(not row.get(k) or row[k] <= old for k in ('created_at', 'updated_at', 'done_at', 'checkpoint_at'))
         for t in [*scoped, unrelated]:
             assert c.execute('SELECT max(ts) FROM task_events WHERE task_id=?', (t['id'],)).fetchone()[0] <= old
     assert not run(api)
@@ -201,8 +201,8 @@ def test_close_budget_is_shared_by_two_due_rules(api, monkeypatch):
     put(api, 'task-rules/' + R.DEFAULT, {'triggers': [{'key': 'done_untouched', 'hours': 48}]})
     second = post(api, 'task-rules', {'department': 'engineering', 'name': 'Close after one day'})['job']
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_rules SET created='2020-01-01T00:00:00.000000Z' WHERE id=?", (R.DEFAULT,))
-        c.execute("UPDATE task_rules SET created='2020-01-02T00:00:00.000000Z' WHERE id=?", (second['key'],))
+        c.execute("UPDATE task_rules SET created_at='2020-01-01T00:00:00.000000Z' WHERE id=?", (R.DEFAULT,))
+        c.execute("UPDATE task_rules SET created_at='2020-01-02T00:00:00.000000Z' WHERE id=?", (second['key'],))
     older = [done(api, monkeypatch, f'Older export {n}', hours=49) for n in range(20)]
     younger = [done(api, monkeypatch, f'Younger export {n}', hours=25) for n in range(31)]
     assert not run(api)

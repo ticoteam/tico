@@ -18,7 +18,7 @@ TOOLS = [
 
 def configure(api, bot="ops"):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=?,repo=? WHERE bot=?",
+        c.execute("UPDATE bot_config SET config=?,repo=? WHERE bot=?",
                   (json.dumps({"name": bot, "runtime": "codex", "model": "gpt-6-luna", "reasoning_effort": "high"}),
                    "acme-co/emp-" + bot, bot))
 
@@ -71,7 +71,7 @@ def test_no_value_can_reach_the_row(api):
     assert report(api, machine, "ops", [{**TOOLS[1], "env": {"SLACK_TOKEN": "xoxb-not-a-real-token"}}]).status_code == 422
     assert report(api, machine, "ops", TOOLS).status_code == 200
     with api.app.state.store.read() as c:
-        stored = c.execute("SELECT readiness_json FROM runners").fetchone()[0]
+        stored = c.execute("SELECT readiness FROM runners").fetchone()[0]
     for text in (api.get("/api/v2/bots/ops/tools", headers=headers()).text, stored,
                  api.get("/api/v2/operations", headers=headers()).text, api.get("/api/v2/bots", headers=headers()).text):
         assert "xoxb-not-a-real-token" not in text

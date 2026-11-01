@@ -135,7 +135,7 @@ def test_restore_brings_an_archived_bot_back_to_what_it_was(api):
     # A bot that was archived before the status was recorded comes back planned.
     post(api, "bots/scout/archive", {"expected_revision": get(api, "bots/scout/access")["revision"]})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE events SET detail_json='{}' WHERE action='bot.archived' AND target='scout'")
+        c.execute("UPDATE events SET detail='{}' WHERE action='bot.archived' AND target='scout'")
     assert post(api, "bots/scout/restore", {})["status"] == "planned"
     # Register says where an archived slug went.
     post(api, "bots/scout/archive", {"expected_revision": get(api, "bots/scout/access")["revision"]})

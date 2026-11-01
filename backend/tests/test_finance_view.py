@@ -46,7 +46,7 @@ def test_managers_see_only_their_teams_and_members_only_their_own(books):
 
 
 def _org(c, people, groups):
-    c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
+    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
               (json.dumps({"people": people, "org_groups": groups, "default_user": "ana"}),))
 
 

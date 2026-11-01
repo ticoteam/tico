@@ -18,7 +18,7 @@ def receipt(api, task, head=HEAD):
 
 def usage(c, task_id, bot, model="claude-sonnet-5-5", provider="anthropic"):
     turn = H.new_id()
-    c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES(?,?,?,?,?)",
+    c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES(?,?,?,?,?)",
               (turn, bot, H.now(), H.now(), task_id))
     c.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,output_tokens,model,provider,runtime,"
               "harness,effort) VALUES(?,0,20,20,?,?,? ,?,'high')",
@@ -57,7 +57,7 @@ def check(api, task, title="Review 1: PR #412", owner="bot:cmo"):
 def verdict(api, row, value, head=HEAD):
     with api.app.state.store.transaction() as c:
         H.task_update(c, row["owner"], row["id"], status="done", note="Reviewed.", verdict=value, verdict_head=head)
-        turn = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started DESC,id DESC LIMIT 1",
+        turn = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1",
                          (row["id"],)).fetchone()
         if turn:
             V.after_capture(c, row["id"], head, turn["id"])
@@ -391,7 +391,7 @@ def test_allocator_skips_inactive_pool_members_and_assigns_remaining_checks(api,
         if "onboarding_state" in unavailable:
             c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot='cmo'", (unavailable["onboarding_state"],))
         for key, value in unavailable.get("config", {}).items():
-            c.execute("UPDATE bot_config SET config_json=json_set(config_json, ?, ?) WHERE bot='cmo'",
+            c.execute("UPDATE bot_config SET config=json_set(config, ?, ?) WHERE bot='cmo'",
                       ("$." + key, value))
 
         assert task_allocator.allocate(c) == [(check["id"], "cpo") for check in checks]
@@ -431,7 +431,7 @@ def test_a_green_head_the_gate_refuses_stays_and_the_builder_hears_what_clears_i
     _suite(api, "github-actions", "completed", "success", sha=NEW)
     assert step(api, task) == "Review 1 Fixes", "no receipt at the new head holds the ticket where it is"
     with api.app.state.store.read() as c:
-        told = c.execute("SELECT body FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.review_gate') "
+        told = c.execute("SELECT body FROM messages WHERE conversation_id=? AND json_extract(refs,'$.review_gate') "
                          "IS NOT NULL", (task["conversation_id"],)).fetchall()
     assert len(told) == 1 and "receipt" in told[0][0]
     # Tico remembers the refused move and makes it itself once the receipt names the new head.
@@ -456,7 +456,7 @@ def test_a_failed_check_at_a_review_step_is_a_builder_hand_off(api):
     _suite(api, "github-actions", "completed", "failure", sha=HEAD)
     from backend import github
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value_json=json_set(value_json,'$.due','2000-01-01T00:00:00Z') "
+        c.execute("UPDATE registry_metadata SET value=json_set(value,'$.due','2000-01-01T00:00:00Z') "
                   "WHERE key LIKE 'github-task-wake:%'")
         github.flush_wakes(c)
     failed = [m for m in builder_jobs(api) if m["refs"].get("pr_result") == "fail"]
@@ -534,7 +534,7 @@ def _github(api, monkeypatch, suites, runs, statuses=()):
     from backend import github as G
     service = api.app.state.github_app
     with service.store.transaction() as c:
-        c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated) VALUES(?,1,1,?,?)",
+        c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated_at) VALUES(?,1,1,?,?)",
                   ("ticoteam/tico", "human:ana", H.now()))
     monkeypatch.setattr(service, "row", lambda c=None: {"slug": "test-app", "org": "ticoteam"})
     monkeypatch.setattr(service, "mint", lambda *args, **kw: ("test-token", "later"))
@@ -562,7 +562,7 @@ def _suite_row(id, slug, status, conclusion=None, runs=0, minutes_ago=60):
 def _quiet(api, task, minutes=20):
     """No word from GitHub on the link for `minutes`."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET updated=? WHERE task_id=? AND kind='pr'", (H.shift(H.now(), minutes=-minutes),
+        c.execute("UPDATE task_links SET updated_at=? WHERE task_id=? AND kind='pr'", (H.shift(H.now(), minutes=-minutes),
                                                                                    task["id"]))
 
 
@@ -600,7 +600,7 @@ def test_a_pass_at_head_behind_a_suite_that_never_started_wakes_the_merge_on_the
     assert G.refresh_pending_checks(service) == [_link(api, task)["id"]]
     link = _link(api, task)
     assert link["checks"] == "passing"
-    assert not any(k.startswith("suite:tico-team-bots") for k in H._json(link["detail_json"], {})["checks"])
+    assert not any(k.startswith("suite:tico-team-bots") for k in H._json(link["detail"], {})["checks"])
     merges = [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
     assert len(merges) == 1 and merges[0]["refs"]["pr_head"] == HEAD and "--match-head-commit " + HEAD in merges[0]["body"]
     assert step(api, task) == "In QA", "Tico does not merge; the builder does"
@@ -810,5 +810,5 @@ def test_a_check_github_sends_while_the_read_is_in_flight_is_not_overwritten_by_
     monkeypatch.setattr(service, "_call", webhook_mid_read)
     assert G.refresh_pending_checks(service) == []
     link = _link(api, task)
-    assert link["checks"] == "failing" and H._json(link["detail_json"], {})["checks"].get("suite:lint#7") == "failing"
+    assert link["checks"] == "failing" and H._json(link["detail"], {})["checks"].get("suite:lint#7") == "failing"
     assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]

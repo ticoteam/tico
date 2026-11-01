@@ -31,7 +31,7 @@ def counting(api):
 
 def complete_a_bot_turn(api, when, bot="coo"):
     with sqlite3.connect(str(api.app.state.store.settings.db_path)) as c:
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,finished) "
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,finished_at) "
                   "VALUES(?,'j1',?,'r1',1,?,'completed',?,?,?)", ("a-" + bot, bot, "h-" + bot, when, when, when))
 
 
@@ -72,8 +72,8 @@ def test_the_payload_is_exactly_the_allowed_fields(environment):
     # Older than a week is not "active", and a token or an Assistant acting for a person is not a sign-in.
     old = H.shift(H.now(), days=-8)
     with sqlite3.connect(str(api.app.state.store.settings.db_path)) as raw:
-        raw.execute("UPDATE attempts SET finished=?", (old,))
-        raw.execute("UPDATE registry_metadata SET value_json=json_set(value_json,'$.last_person',?) WHERE key=?",
+        raw.execute("UPDATE attempts SET finished_at=?", (old,))
+        raw.execute("UPDATE registry_metadata SET value=json_set(value,'$.last_person',?) WHERE key=?",
                     (old, census.KEY))
     with api.app.state.store.read() as read:
         assert not c.payload(read, "0.2.13")["active_bots"] and not c.payload(read, "0.2.13")["active_people"]

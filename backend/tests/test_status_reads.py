@@ -67,10 +67,10 @@ def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch
                 (jobs[6], "coo", H.now(), "coo-new", "expired", False),
                 (jobs[7], "finance", "2026-10-24T11:00:00.000000Z", "finance-marked", "expired", True),
                 (jobs[8], "finance", H.now(), "finance-newer", "failed", True)):
-            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,"
-                      "started,finished) SELECT ?,?,?,runner_id,generation,?,?,lease_until,?,?,? FROM attempts WHERE id=?",
+            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,"
+                      "started_at,finished_at) SELECT ?,?,?,runner_id,generation,?,?,lease_until,?,?,? FROM attempts WHERE id=?",
                       (run, job, bot, "hash-" + run, state, created, created if started else None, H.now(), first["id"]))
-            c.execute("UPDATE jobs SET bot=?,state='uncertain',created=?,attempt_id=? WHERE id=?", (bot, created, run, job))
+            c.execute("UPDATE jobs SET bot=?,state='uncertain',created_at=?,attempt_id=? WHERE id=?", (bot, created, run, job))
         c.execute("UPDATE attempts SET state='expired' WHERE id=?", (first["id"],))
         c.execute("DELETE FROM registry_metadata WHERE key='last-stop:ops'")
         for slug, run in (("cpo", "marked"), ("finance", "finance-marked")):
@@ -103,7 +103,7 @@ def busy(api, machine, first, count, live=1):
         H.sync_registry(c, {**bots, **{s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs}},
                         {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for slug in slugs:
-            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,?)",
                       (slug, encode({"name": slug, "runtime": "fake"}), "ana"))
     for slug in slugs:
         assign(api, machine, slug)
@@ -125,7 +125,7 @@ def busy(api, machine, first, count, live=1):
         attempt = claim(api, machine, slug)
         post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + slug}, machine["token"])
     with store.transaction() as c:
-        runs = [row[0] for row in c.execute("SELECT id FROM attempts ORDER BY created")]
+        runs = [row[0] for row in c.execute("SELECT id FROM attempts ORDER BY created_at")]
         for n, slug in enumerate(slugs[live:]):
             c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
                       ("last-stop:" + slug, encode({"attempt_id": runs[n % len(runs)], "at": H.now()})))

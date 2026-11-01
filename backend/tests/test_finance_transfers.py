@@ -282,7 +282,7 @@ def test_migration_73_adds_every_fin_transfers_column_added_since_it_was_first_w
         schema.gaps_books(c)
         schema.gaps_books(c)
         have = {str(r[1]) for r in c.execute("PRAGMA table_info(fin_transfers)").fetchall()}
-    assert {"from_feed_id", "to_feed_id", "settled_at", "submitted_at", "counted_json", "provider_credit_txn_id",
+    assert {"from_feed_id", "to_feed_id", "settled_at", "submitted_at", "counted", "provider_credit_txn_id",
             "find_after"} <= have, have
 
 
@@ -317,7 +317,7 @@ def test_a_transfer_cancelled_after_a_429_gives_back_the_limit_its_claim_reserve
         tid = str(c.execute("SELECT id FROM fin_transfers").fetchone()[0])
         assert act(c, OWNER, "payment_cancel", {"transfer_id": tid}).status == "committed"
     assert _reserved(books, rule_id) == (0, 0)
-    assert tuple(_rows(books, "SELECT status, counted_json FROM fin_transfers")[0]) == ("cancelled", "[]")
+    assert tuple(_rows(books, "SELECT status, counted FROM fin_transfers")[0]) == ("cancelled", "[]")
 
 
 def test_a_transfer_a_later_rule_refuses_after_a_429_gives_back_the_limit_its_claim_reserved(books):
@@ -340,7 +340,7 @@ def test_a_transfer_a_later_rule_refuses_after_a_429_gives_back_the_limit_its_cl
     sync_once(books, fake, LATEST)
     assert len(fake.sent("create_transfer")) == 1
     assert _reserved(books, rule_id) == (0, 0)
-    assert tuple(_rows(books, "SELECT status, counted_json FROM fin_transfers")[0]) == ("cancelled", "[]")
+    assert tuple(_rows(books, "SELECT status, counted FROM fin_transfers")[0]) == ("cancelled", "[]")
 
 
 def test_an_unknown_transfers_out_leg_past_five_thousand_transactions_is_found_by_a_later_poll(books):
@@ -453,7 +453,7 @@ def test_payments_switched_off_for_the_bank_after_queueing_cancel_the_transfer(b
     src, dst = _two(books, fake)
     _queued_by_ben(books, src, dst)
     with books.transaction() as c:
-        c.execute("UPDATE fin_connections SET settings_json=json_set(settings_json, '$.payments_enabled', "
+        c.execute("UPDATE fin_connections SET settings=json_set(settings, '$.payments_enabled', "
                   "json('false'))")
     sync_once(books, fake)
     _assert_cancelled_unsent(books, fake)
@@ -486,7 +486,7 @@ def test_a_transfer_already_sent_or_whose_call_is_claimed_cannot_be_cancelled(bo
         assert sent.code == "conflict" and "Mercury" in sent.reason, sent
     with books.transaction() as c:
         claimed_id = str(act(c, OWNER, "payment_create", _payload(src, dst, 20_000)).result["transfer_id"])
-        c.execute("UPDATE fin_outbox SET claimed_at=? WHERE op='transfer_create' AND payload_json LIKE ?",
+        c.execute("UPDATE fin_outbox SET claimed_at=? WHERE op='transfer_create' AND payload LIKE ?",
                   (AT, f"%{claimed_id}%"))
         held = act(c, OWNER, "payment_cancel", {"transfer_id": claimed_id})
         assert held.code == "conflict" and "Mercury" in held.reason, held

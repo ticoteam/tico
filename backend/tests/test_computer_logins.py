@@ -40,10 +40,10 @@ def test_a_retained_default_home_shares_old_primary_and_new_fallback_holds(api, 
     # This hold predates the handshake: do not discard it or alias it to another account.
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO subscription_assignments VALUES('bot','ops','engineering',NULL,NULL)")
-        before = c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0]
+        before = c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0]
         H._apply(c, H.ONE_LOGIN_PER_COMPUTER_SCHEMA)
         assert not c.execute("SELECT 1 FROM subscription_assignments WHERE scope='bot'").fetchone()
-        assert c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0] == before
+        assert c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0] == before
         login_holds.record(c, rid, 'work', 'codex', H.now(), bot='finance')
     assert get(api, 'config', machine['token'])['computer_logins_v1'] is True
     heartbeat(api, machine, current=True)

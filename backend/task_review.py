@@ -22,7 +22,7 @@ def comment_rights(c, auth, who, task_id):
     from . import lifecycle
     lifecycle.refuse_send(c, who, None, what="task comments")
     if who.role == "bot" and not H.task_participant(c, who.actor, row):
-        delegated = c.execute("SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>?",
+        delegated = c.execute("SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>?",
                               (task_id, who.actor, H.now())).fetchone()
         if not delegated and not H.task_ancestor_party(c, who.actor, row) and not H.type_bot_reads(c, who.actor, row) \
                 and not H.task_manager_acts(c, who.actor, row):
@@ -163,7 +163,7 @@ def edit_version(c, auth, who, task_id, fid, number, body):
         raise Problem("forbidden", "Only whoever added this version may edit its note or question", 403)
     value = check_ask(c, task_id, body.ask, auth, who)
     current = version_review(c, fid, number, actor=privacy.actor(who))
-    c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task_id))
+    c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task_id))
     c.execute("INSERT OR IGNORE INTO task_file_reviews(file_id,version) VALUES(?,?)", (fid, number))
     if "note" in body.model_fields_set:
         c.execute("UPDATE task_file_reviews SET note=? WHERE file_id=? AND version=?", (body.note, fid, number))
@@ -178,7 +178,7 @@ def edit_version(c, auth, who, task_id, fid, number, body):
             asked = H.message(c, existing)
             row = H.task(c, task_id)
             recipient = H.task_ask_recipient(c, who.actor, row, value)
-            c.execute("UPDATE messages SET refs_json=?,to_actor=? WHERE id=?",
+            c.execute("UPDATE messages SET refs=?,to_actor=? WHERE id=?",
                       (encode({**asked["refs"], **value}), recipient, existing))
             return version_review(c, fid, number, actor=privacy.actor(who))
         if value:
@@ -337,20 +337,20 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
 # The newest visual per task. `bot_files_task` (backend/files.py) finds a task's files without scanning every file.
 COVERS_SQL = (
     "WITH visuals AS ("
-    "SELECT f.task_id,f.id,v.version,v.mime,v.created,v.rowid AS position,"
+    "SELECT f.task_id,f.id,v.version,v.mime,v.created_at,v.rowid AS position,"
     "coalesce(v.width,m.width) AS width,coalesce(v.height,m.height) AS height,"
     "coalesce(v.thumb_blob_id,m.thumb_blob_id) AS thumb_blob_id,"
     "coalesce(v.poster_blob_id,m.poster_blob_id) AS poster_blob_id "
     "FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
     "LEFT JOIN blob_media m ON m.blob_id=v.blob_id "
     "WHERE f.task_id IN ({marks}) AND f.archived=0 AND f.locator='tico_blob' "
-    "UNION ALL SELECT a.task_id,b.id,1,b.content_type,b.created,b.rowid,"
+    "UNION ALL SELECT a.task_id,b.id,1,b.content_type,b.created_at,b.rowid,"
     "m.width,m.height,m.thumb_blob_id,m.poster_blob_id "
     "FROM task_assets a JOIN blobs b ON b.id=a.blob_id LEFT JOIN blob_media m ON m.blob_id=b.id "
     "WHERE a.task_id IN ({marks}) AND NOT EXISTS "
     "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)), "
     "ranked AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY task_id "
-    "ORDER BY created DESC,version DESC,position DESC) AS rank FROM visuals "
+    "ORDER BY created_at DESC,version DESC,position DESC) AS rank FROM visuals "
     "WHERE mime LIKE 'image/%' OR (mime LIKE 'video/%' AND poster_blob_id IS NOT NULL)) "
     "SELECT * FROM ranked WHERE rank=1")
 

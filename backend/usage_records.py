@@ -2,11 +2,11 @@
 import json
 
 # New reports retain each primary/fallback segment. Legacy rows remain visible, without guessing their login or effort.
-RUNS = """(SELECT t.id,t.bot,t.started,t.finished,t.task_id,s.input_tokens,s.cached_tokens,s.output_tokens,
+RUNS = """(SELECT t.id,t.bot,t.started_at,t.finished_at,t.task_id,s.input_tokens,s.cached_tokens,s.output_tokens,
  s.model,s.provider,s.est_cost_usd,s.billing,s.runtime,s.harness,s.effort,s.profile,s.est_cost_low,
  NULL AS usage_reason
  FROM turns t JOIN turn_usage_segments s ON s.turn_id=t.id
- UNION ALL SELECT t.id,t.bot,t.started,t.finished,t.task_id,t.input_tokens,t.cached_tokens,t.output_tokens,
+ UNION ALL SELECT t.id,t.bot,t.started_at,t.finished_at,t.task_id,t.input_tokens,t.cached_tokens,t.output_tokens,
  t.model,t.provider,t.est_cost_usd,t.billing,NULL,NULL,NULL,NULL,NULL,t.usage_reason FROM turns t
  WHERE NOT EXISTS (SELECT 1 FROM turn_usage_segments s WHERE s.turn_id=t.id))"""
 
@@ -45,7 +45,7 @@ def ran_on(c, turn_ids):
             if row["id"] not in parts and (row["model"] or row["provider"]):
                 parts[row["id"]] = [{"model": row["model"], "provider": row["provider"], "runtime": None, "harness": None,
                                      "effort": None}]
-        for row in c.execute(f"SELECT id,json_extract(result_json,'$.fallback'),model_json FROM attempts "
+        for row in c.execute(f"SELECT id,json_extract(result,'$.fallback'),model FROM attempts "
                              f"WHERE id IN ({marks})", chunk):
             fallbacks[row[0]] = row[1]
             chosen[row[0]] = _record(row[2])

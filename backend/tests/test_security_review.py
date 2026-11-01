@@ -55,7 +55,7 @@ def test_a_verified_assertion_without_an_email_is_not_a_person(api):
 def test_botops_borrows_only_the_rights_of_the_request_it_is_working_on(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('botops',?, 'ana')",
+        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('botops',?, 'ana')",
                   (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
     # The run is handling the owner's room; the owner's request in another thread is not its to cite.
     _, _, botops = setup_attempt(api, "botops")
@@ -96,7 +96,7 @@ def test_a_person_reads_and_books_only_calendars_they_may_see(api):
 
 def test_leaving_revokes_a_persons_api_tokens(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created,created_by) "
+        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) "
                   "VALUES('t1','cara','x','h','2026-01-01T00:00:00Z','human:cara')")
     post(api, "people/cara", {"left": True})
     with api.app.state.store.read() as c:

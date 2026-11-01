@@ -38,8 +38,8 @@ LIMITS = {"owner": (5000, 20.0), "human": (500, 5.0), "bot": (500, 5.0)}
 OPEN = {"cloud_migrations", "rate_limits", "service_health", "learnings", "sqlite_master"}
 # Table-valued functions SQLite reports like tables of the main schema.
 TABLE_FUNCTIONS = {"json_each", "json_tree"}
-SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_attempt",
-                                "slack_ts", "created", "updated"}}
+SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_attempt_at",
+                                "slack_ts", "created_at", "updated_at"}}
 # Columns nobody reads through SQL. Tables not named in `guarded` (credentials, credential_keys,
 # credential_grants, credential_uses, idempotency, runners, enrollments, session_epochs, bot_session_epochs, settings_changes,
 # backup_verified_blobs, _litestream_*, sqlite_* except sqlite_master) are denied outright.
@@ -71,8 +71,8 @@ def live_masks(unsettled):
         return {}
     hidden = lambda column: f"CASE WHEN source.id IN ({unsettled}) THEN NULL ELSE source.{column} END"  # noqa: E731
     return {"attempts": {"final_text": hidden("final_text"),
-                         "result_json": f"CASE WHEN source.id NOT IN ({unsettled}) THEN source.result_json "
-                                        "WHEN json_valid(source.result_json) THEN json_remove(source.result_json,'$.text') "
+                         "result": f"CASE WHEN source.id NOT IN ({unsettled}) THEN source.result "
+                                        "WHEN json_valid(source.result) THEN json_remove(source.result,'$.text') "
                                         "ELSE NULL END"},
             "turns": {"summary": hidden("summary")}}
 # Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}`, the
@@ -87,7 +87,7 @@ DERIVED = {
     # turn row (one that failed or expired before it started) is counted too, as `unknown`, with no tokens or outcome;
     # one whose turn the caller may not read is not turnless, and is not counted.
     "run_weekly": (("turns", "attempts"), """
-        SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
+        SELECT date(started_at, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
                coalesce(purpose, 'unknown') AS purpose,
                count(*) AS runs,
                sum(CASE WHEN input_tokens IS NOT NULL OR cached_tokens IS NOT NULL
@@ -105,17 +105,17 @@ DERIVED = {
                round(100.0 * sum(coalesce(outcome, '') = 'no_change') / count(*), 1) AS no_change_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
                round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
-        FROM (SELECT started, bot, trigger_kind, purpose, input_tokens, cached_tokens, tokens_in, output_tokens, tokens_out,
+        FROM (SELECT started_at, bot, trigger_kind, purpose, input_tokens, cached_tokens, tokens_in, output_tokens, tokens_out,
                      outcome, did_nothing, rotated
-              FROM {turns} WHERE started IS NOT NULL
+              FROM {turns} WHERE started_at IS NOT NULL
               UNION ALL
-              SELECT coalesce(a.started, a.created), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+              SELECT coalesce(a.started_at, a.created_at), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
               FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {all_turns} t WHERE t.id = a.id))
         GROUP BY 1, 2, 3, 4"""),
     # Runs per week, bot and wake rule (backend/rules.py): the rule that woke the run, with its tokens and how many did
     # nothing. A run from before rules, or whose message carried none, reads `unknown`. Same token sums as run_weekly.
     "rule_weekly": (("turns",), """
-        SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(rule_id, 'unknown') AS rule,
+        SELECT date(started_at, '-6 days', 'weekday 1') AS week, bot, coalesce(rule_id, 'unknown') AS rule,
                count(*) AS runs,
                sum(CASE WHEN input_tokens IS NOT NULL OR cached_tokens IS NOT NULL
                         THEN coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)
@@ -125,7 +125,7 @@ DERIVED = {
                sum(coalesce(outcome, '') = 'acted') AS acted,
                sum(coalesce(did_nothing, 0) = 1) AS did_nothing,
                round(100.0 * sum(coalesce(did_nothing, 0) = 1) / count(*), 1) AS did_nothing_pct
-        FROM {turns} WHERE started IS NOT NULL
+        FROM {turns} WHERE started_at IS NOT NULL
         GROUP BY 1, 2, 3"""),
 }
 # Totals over rows the reader may not read one by one, built only for the owner and a bot the owner granted them
@@ -137,7 +137,7 @@ GRANTED = {
     "assistant_action_weekly": (("assistant_actions",), """
         SELECT week, proposer, status, actions,
                round(100.0 * actions / sum(actions) OVER (PARTITION BY week, proposer), 1) AS share_pct
-        FROM (SELECT date(created, '-6 days', 'weekday 1') AS week,
+        FROM (SELECT date(created_at, '-6 days', 'weekday 1') AS week,
                      coalesce(proposer, proposed_via, 'assistant') AS proposer,
                      status, count(status) AS actions
               FROM {all_assistant_actions} GROUP BY 1, 2, 3)"""),
@@ -151,13 +151,13 @@ GRANTED = {
                      CASE WHEN actor LIKE 'bot:%' AND substr(actor, 5) IN (SELECT slug FROM {bots})
                           THEN substr(actor, 5) END AS bot,
                      CASE WHEN target IN {tool_names} THEN target ELSE 'other' END AS tool,
-                     coalesce(json_extract(detail_json, '$.error'), 0) <> 0 AS error,
-                     coalesce(json_extract(detail_json, '$.ms'), 0) AS ms
+                     coalesce(json_extract(detail, '$.error'), 0) <> 0 AS error,
+                     coalesce(json_extract(detail, '$.ms'), 0) AS ms
               FROM {all_events} WHERE action = 'mcp.call' AND actor LIKE 'bot:%')
         GROUP BY 1, 2, 3"""),
 }
 # Base tables only a GRANTED view reads, and the columns it may see of them.
-GRANTED_SOURCES = {"assistant_actions": ("created", "proposer", "proposed_via", "status")}
+GRANTED_SOURCES = {"assistant_actions": ("created_at", "proposer", "proposed_via", "status")}
 # FTS5 reads these as main.<virtual>_* with no view context; they are not a public API.
 FTS_SHADOWS = ("_data", "_idx", "_content", "_docsize", "_config")
 STATEMENT = re.compile(r"^\s*(?:(?:--[^\n]*\n?|/\*.*?\*/)\s*)*(select|with|explain\s+query\s+plan)\b", re.I | re.S)
@@ -262,9 +262,9 @@ def guarded(c, auth, who, inner, function, columns=None):
         member = rooms.shared_member_bots(c, auth, who.actor, visible)
         shared = [slug for slug in visible if slug in member]
         room_bot = ("COALESCE(NULLIF(substr(room_key,1,instr(room_key||':',':')-1),''),"
-                    "(SELECT substr(value,5) FROM json_each(participants_json) WHERE value LIKE 'bot:%' LIMIT 1))")
-        first_human = "(SELECT value FROM json_each(participants_json) WHERE value LIKE 'human:%' LIMIT 1)"
-        participant = "1" if owner else f"EXISTS (SELECT 1 FROM json_each(participants_json) WHERE value={me})"
+                    "(SELECT substr(value,5) FROM json_each(participants) WHERE value LIKE 'bot:%' LIMIT 1))")
+        first_human = "(SELECT value FROM json_each(participants) WHERE value LIKE 'human:%' LIMIT 1)"
+        participant = "1" if owner else f"EXISTS (SELECT 1 FROM json_each(participants) WHERE value={me})"
         conversations = (f"CASE COALESCE(scope,'direct') WHEN 'personal' THEN COALESCE(owner_actor,{first_human})={me} "
                          f"WHEN 'shared' THEN {room_bot} IN {qlist(shared)} ELSE {participant} END "
                          # A task's own room is read by whoever may read the task (auth.conversation).
@@ -272,13 +272,13 @@ def guarded(c, auth, who, inner, function, columns=None):
         conversations = f"({conversations}) OR " + function("meeting_room") + "(id)"
     tasks = auth.task_sql(c, who, delegations=inner("task_delegations"), unreadable=hidden)
     # Evaluate provenance only for candidate rows, never scan unrelated content first.
-    msg_gate = function("message") + "(id,conversation_id,refs_json,in_reply_to)"
+    msg_gate = function("message") + "(id,conversation_id,refs,in_reply_to)"
     message_columns = set(columns.get("messages", ())) if columns is not None else {r[1] for r in c.execute("PRAGMA table_info(messages)")}
     for deleted in ("deleted_at", "deleted"):
         if deleted in message_columns:
             msg_gate += f" AND coalesce({deleted},0)=0"
     attempt_gate = function("attempt") + "(id)"
-    event_gate = function("event") + "(target,actor,ts,detail_json)"
+    event_gate = function("event") + "(target,actor,ts,detail)"
     tag_gate = function("tag") + "(id,is_template)"
     content_gate = lambda cols: function("content") + "(" + ",".join(cols) + ")"
     blob_gate = function("blob") + "(id)"
@@ -311,10 +311,10 @@ def guarded(c, auth, who, inner, function, columns=None):
         meetings = "0"
     else:
         email = q(who.email.lower())
-        meetings = (f"lower(owner)={email} OR (json_extract(metadata_json,'$.kind')='meeting' AND ("
-                    "coalesce(json_extract(metadata_json,'$.private'),0)=0 OR EXISTS (SELECT 1 FROM "
-                    f"json_each(json_extract(metadata_json,'$.calendar.attendees')) WHERE lower(value)={email}) "
-                    "OR EXISTS (SELECT 1 FROM json_each(json_extract(metadata_json,'$.participants')) "
+        meetings = (f"lower(owner)={email} OR (json_extract(metadata,'$.kind')='meeting' AND ("
+                    "coalesce(json_extract(metadata,'$.private'),0)=0 OR EXISTS (SELECT 1 FROM "
+                    f"json_each(json_extract(metadata,'$.calendar.attendees')) WHERE lower(value)={email}) "
+                    "OR EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.participants')) "
                     f"WHERE lower(json_extract(value,'$.email'))={email})))")
     goals = f"owner NOT IN {qlist(['bot:' + slug for slug in hidden])}" if hidden else "id IS NOT NULL"
     kpis = goals            # a KPI is owned like a goal: a bot's own are read by whoever may read the bot
@@ -356,7 +356,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         "deltas": "turn_id IN (SELECT id FROM turns)" + (f" AND turn_id NOT IN ({unsettled})" if unsettled else ""),
         "jobs": f"{bots_visible('bot')} AND {by_message}",
         "attempts": by_job + " AND " + attempt_gate, "job_recovery": by_job + " AND " + by_attempt,
-        "attempt_events": by_attempt + " AND " + content_gate(("payload_json",)) + (
+        "attempt_events": by_attempt + " AND " + content_gate(("payload",)) + (
             f" AND NOT (kind IN ('delta','message') AND attempt_id IN ({unsettled}))" if unsettled else ""),
         "attempt_inputs": by_attempt, "attempt_conversations": by_attempt,
         "bot_transition_checkpoints": "conversation_id IN (SELECT id FROM conversations)",
@@ -414,7 +414,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         if admin and not bot else "0",
         "events": f"({events}) AND " + event_gate,
         "refusals": "(" + ("1" if owner else mine if bot else f"actor={me}") + ") AND " +
-                    function("event") + "('',actor,ts,detail_json)",
+                    function("event") + "('',actor,ts,detail)",
         "meetings": f"({meetings}) AND id NOT IN (SELECT meeting_id FROM {inner('media_control')} WHERE deleted_at IS NOT NULL)",
         "meeting_versions": by_meeting, "meeting_deliveries": by_meeting, "media_assets": by_meeting, "media_control": by_meeting,
         "meeting_items": by_meeting, "meeting_brain": by_meeting, "meeting_comments": by_meeting,
@@ -531,11 +531,11 @@ class Gates:
     def root(self, alias):
         """A message settled by its own row: no parent, answers or inputs, and (unread here) no run."""
         return (f"coalesce(coalesce({alias}.in_reply_to,'')='' AND {alias}.conversation_id NOT IN "
-                f"(SELECT id FROM {self.rooms}) AND {self.refs(alias + '.refs_json', top=False)}, 0)")
+                f"(SELECT id FROM {self.rooms}) AND {self.refs(alias + '.refs', top=False)}, 0)")
 
     def message(self, alias="source"):
         """ReadIndex.message: the row, its run, and each message it replies to, answers or took in as input."""
-        refs = alias + ".refs_json"
+        refs = alias + ".refs"
         ancestors = (f"SELECT {alias}.in_reply_to AS id UNION ALL "
                      f"SELECT value FROM json_each({refs},'$.answers') WHERE type='text' UNION ALL "
                      f"SELECT value FROM json_each({refs},'$.inputs') WHERE type='text'")
@@ -555,9 +555,9 @@ class Gates:
                 f"AND {aid} NOT IN (SELECT id FROM {self.carriers}) "
                 f"AND NOT EXISTS (SELECT 1 FROM {events} retained WHERE retained.action IN {RUN_EVENTS} "
                 f"AND retained.target={aid} AND NOT coalesce(retained.action='task.next-run.carried' AND "
-                f"(coalesce(retained.detail_json,'')='' OR (json_valid(retained.detail_json) AND "
-                f"json_type(retained.detail_json)='object' AND instr(retained.detail_json,'\\')=0 AND "
-                f"{self.strings('retained.detail_json')})), 0)), 0)")
+                f"(coalesce(retained.detail,'')='' OR (json_valid(retained.detail) AND "
+                f"json_type(retained.detail)='object' AND instr(retained.detail,'\\')=0 AND "
+                f"{self.strings('retained.detail')})), 0)), 0)")
 
 
 def materialize(conn, index, tables, inner, function, private):
@@ -592,7 +592,7 @@ def materialize(conn, index, tables, inner, function, private):
     create("denied_reads", "SELECT key FROM main.read_deps WHERE dep IN (SELECT 't:'||id FROM "
                            f'"{private("denied_tasks")}")')
     gates = Gates(inner, private, index.denied)
-    message = function("message") + "(id,conversation_id,refs_json,in_reply_to)"
+    message = function("message") + "(id,conversation_id,refs,in_reply_to)"
     attempt = function("attempt") + "(id)"
 
     def settled(prefix, fast):
@@ -603,7 +603,7 @@ def materialize(conn, index, tables, inner, function, private):
     # SQLite evaluates the side of an OR without a subquery first, so `fast OR function` asked Python about every
     # row. The fast answer goes in as an argument instead: a fast yes returns before any provenance is read.
     return {table: (predicate.replace(message, function("settled_message") +
-                                      f"(id,conversation_id,refs_json,in_reply_to,{settled('m', gates.message())})")
+                                      f"(id,conversation_id,refs,in_reply_to,{settled('m', gates.message())})")
                     .replace(attempt, function("settled_attempt") + f"(id,{settled('a', gates.attempt('source.id'))})"),
                     hidden)
             for table, (predicate, hidden) in tables.items()}

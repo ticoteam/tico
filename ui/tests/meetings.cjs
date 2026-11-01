@@ -12,8 +12,8 @@ const {unrouted} = require('./support/routes.cjs');
 const {replay: recorderLiveSharing} = require('../../recorder/tests/live-sharing.cjs');
 
 const ago = hours => new Date(Date.now() - hours * 36e5).toISOString();
-const meeting = (id, title, source, hours, extra = {}) => ({id, title, source, kind: 'meeting', status: 'done', started: ago(hours),
-  created: ago(hours), duration_ms: 1800000, participants: [{name: 'Ana', email: 'ana@acme.example'}, {name: 'Ben'}, {name: 'Cara'}],
+const meeting = (id, title, source, hours, extra = {}) => ({id, title, source, kind: 'meeting', status: 'done', started_at: ago(hours),
+  created_at: ago(hours), duration_ms: 1800000, participants: [{name: 'Ana', email: 'ana@acme.example'}, {name: 'Ben'}, {name: 'Cara'}],
   outbox: {doc: [], task: [], feature: []}, ...extra});
 const MEETINGS = [
   meeting('m1', 'Weekly ops sync', 'zoom', 30, {outbox: {doc: [{text: 'Update pricing'}], feature: [],
@@ -23,14 +23,14 @@ const MEETINGS = [
 ];
 // An older server may still send the retired importer in its configuration and sources.
 const IMPORTERS = ['granola', 'fireflies', 'zoom', 'google-meet'].map(source => ({source, name: {granola: 'Granola', fireflies: 'Fireflies',
-  zoom: 'Zoom', 'google-meet': 'Google Meet'}[source], enabled: false, runner_id: '', status: 'off', last_success: null, last_import: null,
+  zoom: 'Zoom', 'google-meet': 'Google Meet'}[source], enabled: false, runner_id: '', status: 'off', last_succeeded_at: null, last_import: null,
   imported_total: 0, error: '', setup: {file: `secrets/${source}.env`, keys: ['API_KEY'], doc: 'docs/meetings.md'}}));
 const NONE = [{id: 'import', name: 'Import', status: 'available'}, {id: 'close', name: 'Close', status: 'needs_setup'}];
 const SOME = [{id: 'import', name: 'Import', status: 'available'},
-  {id: 'close', name: 'Close', status: 'syncing', last_success: ago(0.1), last_import: ago(3)},
-  {id: 'granola', name: 'Granola', status: 'syncing', last_success: ago(0.2), last_import: ago(26)},
+  {id: 'close', name: 'Close', status: 'syncing', last_succeeded_at: ago(0.1), last_import: ago(3)},
+  {id: 'granola', name: 'Granola', status: 'syncing', last_succeeded_at: ago(0.2), last_import: ago(26)},
   {id: 'fireflies', name: 'Fireflies', status: 'needs_setup'},
-  {id: 'zoom', name: 'Zoom', status: 'error', last_success: ago(9)}];
+  {id: 'zoom', name: 'Zoom', status: 'error', last_succeeded_at: ago(9)}];
 
 async function open(browser, viewport, world, options = {}) {
   const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760, isMobile: viewport.width < 760, ...options});

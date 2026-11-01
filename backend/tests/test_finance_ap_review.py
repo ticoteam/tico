@@ -385,7 +385,7 @@ def test_reads_cut_private_amounts_unseen_accounts_and_nested_lists(books):  # n
         assert not [i for i in FR.inbox(c, "human:cara")["items"] if i.get("file_id") == "file-loose"]
         assert FR.pay_from(c, "human:cara")["accounts"] == []                            # Grok 3
         assert len(FR.pay_from(c, OWNER)["accounts"]) == 2
-        data = c.execute("SELECT payload_json FROM fin_events WHERE name='finance.cash.below'").fetchall()
+        data = c.execute("SELECT payload FROM fin_events WHERE name='finance.cash.below'").fetchall()
         assert all("cash" not in json.loads(r[0]) for r in data)                         # Codex 7
         line = next(x for x in FR.chart(c, "bot:coder", for_="bill")["accounts"] if x["number"] == "6100")
         assert not line["company_wide"] and {"team": "web"} in line["attributable"]

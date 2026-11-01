@@ -43,10 +43,10 @@ def test_an_llm_step_waits_for_the_bots_turn_in_its_own_room_and_goes_on(api):
     assert done["steps"][0]["outputs"]["text"] == "A draft" and done["cost"] > 0
     assert done["steps"][0]["cost"] == done["cost"]
     with api.app.state.store.read() as c:
-        told = c.execute("SELECT body, refs_json FROM messages WHERE to_actor='bot:coo' ORDER BY created DESC").fetchone()
+        told = c.execute("SELECT body, refs FROM messages WHERE to_actor='bot:coo' ORDER BY created_at DESC").fetchone()
     # The answer reaches coo as quoted data, never as the automation's own words.
     assert '<data n="1" field="reply.text">\nA draft\n</data n="1">' in told["body"]
-    assert json.loads(told["refs_json"])["automation_run"] == run["id"]
+    assert json.loads(told["refs"])["automation_run"] == run["id"]
 
 
 def test_a_turns_cost_counts_toward_the_spend_cap(api):

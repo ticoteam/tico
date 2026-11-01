@@ -19,12 +19,12 @@ def wait(c, tid, owner="bot:ops", note=None):
 
 
 def notices(c, to, news="ask_withdrawn"):
-    return [m for m in H._rows(c.execute("SELECT body, refs_json FROM messages WHERE to_actor=? ORDER BY created", (to,)))
-            if (H._json(m["refs_json"], {}) or {}).get("news") == news]
+    return [m for m in H._rows(c.execute("SELECT body, refs FROM messages WHERE to_actor=? ORDER BY created_at", (to,)))
+            if (H._json(m["refs"], {}) or {}).get("news") == news]
 
 
 def withdrawn_label(c, ask_id):
-    return (H._json(H.message(c, ask_id)["refs_json"], {}) or {}).get("withdrawn")
+    return (H._json(H.message(c, ask_id)["refs"], {}) or {}).get("withdrawn")
 
 
 def test_a_question_on_an_open_subtask_outlives_its_parent_ending(api):

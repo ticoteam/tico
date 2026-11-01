@@ -153,7 +153,7 @@ def sources(task):
             continue
         if item.get("note"):
             out.append({"task": item["id"], "message": None, "actor": item.get("owner"),
-                        "created": item.get("updated") or "", "source": "note", "text": item["note"]})
+                        "created_at": item.get("updated_at") or "", "source": "note", "text": item["note"]})
         for message in item.get("messages", []):
             if any(message.get(k) for k in REMOVED):
                 continue
@@ -164,8 +164,8 @@ def sources(task):
             if actor not in allowed and not keeper:
                 continue
             out.append({"task": item["id"], "message": message.get("id"), "actor": actor,
-                        "created": message.get("created") or "", "source": "message", "text": text})
-    return sorted(out, key=lambda s: (s["created"], s["message"] or ""))
+                        "created_at": message.get("created_at") or "", "source": "message", "text": text})
+    return sorted(out, key=lambda s: (s["created_at"], s["message"] or ""))
 
 
 def _lines(text):

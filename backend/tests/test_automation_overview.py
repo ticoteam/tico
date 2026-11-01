@@ -12,8 +12,8 @@ def _make(api, name, owner, kind="event"):
     aid = "auto_" + H.new_id()
     flow = {"name": name, "owner": owner, "enabled": True, "builtin": False, "trigger": trigger, "steps": []}
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,flow_json,version,created,created_by,"
-                  "updated) VALUES(?,?,?,?,1,?,1,?,?,?)",
+        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,flow,version,created_at,created_by,"
+                  "updated_at) VALUES(?,?,?,?,1,?,1,?,?,?)",
                   (aid, name, owner, trigger["type"], json.dumps(flow), H.now(), "human:ana", H.now()))
     return aid
 
@@ -23,8 +23,8 @@ def _run(api, aid, status, minutes_ago, payload=None, steps=None, cost=0.0):
     started = H.shift(H.now(), minutes=-minutes_ago)
     state = {"status": status, "steps": steps or [], "payload": payload or {}}
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started,finished,status,cost,"
-                  "state_json) VALUES(?,?,1,'',?,?,?,?,?)", (rid, aid, started, started, status, cost, json.dumps(state)))
+        c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,finished_at,status,cost,"
+                  "state) VALUES(?,?,1,'',?,?,?,?,?)", (rid, aid, started, started, status, cost, json.dumps(state)))
     return rid
 
 
@@ -101,12 +101,12 @@ def test_system_job_runs_show_under_their_built_in(api):
             "trigger": {"type": "event", "name": "tico.builtin.job.still_wanted"}, "steps": [],
             "controls": {"on": True}, "source": {"kind": "system_job", "id": "job:still_wanted"}}
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,builtin,flow_json,version,created,"
-                  "created_by,updated) VALUES('auto_sys','Still wanted','person:ana','event',1,1,?,1,?,?,?)",
+        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,builtin,flow,version,created_at,"
+                  "created_by,updated_at) VALUES('auto_sys','Still wanted','person:ana','event',1,1,?,1,?,?,?)",
                   (json.dumps(flow), H.now(), "human:ana", H.now()))
         for i, ok in enumerate((1, 0)):
             at = H.shift(H.now(), minutes=-(i + 1))
-            c.execute("INSERT INTO system_runs(id,job,started,finished,ok,result,runs) VALUES(?,?,?,?,?,?,1)",
+            c.execute("INSERT INTO system_runs(id,job,started_at,finished_at,ok,result,runs) VALUES(?,?,?,?,?,?,1)",
                       (f"sr{i}", "still_wanted", at, at, ok, "Asked 2" if ok else "Mail down"))
     runs = get(api, "automations/runs?range=1h&trigger=system")["runs"]
     assert [(r["id"], r["status"], r["outcome"]) for r in runs] == [("sys_sr0", "ok", "Asked 2"),
@@ -123,8 +123,8 @@ def test_system_job_runs_show_under_their_built_in(api):
 
 
 def test_folded_system_runs_count_each_repeat_where_it_happened(api):
-    """A quiet repeat folds into the job's last row (system_routines.save): `started` moves to the latest, `runs` grows,
-    `first_started` stays. Counts spread `runs` over that time, so a job that runs hourly is not one run a day."""
+    """A quiet repeat folds into the job's last row (system_routines.save): `started_at` moves to the latest, `runs` grows,
+    `first_started_at` stays. Counts spread `runs` over that time, so a job that runs hourly is not one run a day."""
     import sqlite3
 
     from backend import system_routines as SR
@@ -133,25 +133,25 @@ def test_folded_system_runs_count_each_repeat_where_it_happened(api):
             "source": {"kind": "system_job", "id": "job:health_monitor"}}
     now = H.now()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,builtin,flow_json,version,created,"
-                  "created_by,updated) VALUES('auto_hm','Health','person:ana','event',1,1,?,1,?,?,?)",
+        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,builtin,flow,version,created_at,"
+                  "created_by,updated_at) VALUES('auto_hm','Health','person:ana','event',1,1,?,1,?,?,?)",
                   (json.dumps(flow), now, "human:ana", now))
         # Saved through the job registry: a fold keeps first_started and moves started.
         first = SR.save(c, SR.Run("health_monitor", started=H.shift(now, hours=-30)).did("All well", quiet=True),
                         finished=H.shift(now, hours=-30))
         assert SR.save(c, SR.Run("health_monitor", started=H.shift(now, hours=-29)).did("All well", quiet=True),
                        finished=H.shift(now, hours=-29)) == first
-        row = c.execute("SELECT first_started, started, runs FROM system_runs WHERE id=?", (first,)).fetchone()
-        assert (row["first_started"], row["runs"]) == (H.shift(now, hours=-30), 2) and row["started"] > row["first_started"]
+        row = c.execute("SELECT first_started_at, started_at, runs FROM system_runs WHERE id=?", (first,)).fetchone()
+        assert (row["first_started_at"], row["runs"]) == (H.shift(now, hours=-30), 2) and row["started_at"] > row["first_started_at"]
         # One a hour for a day: 24 repeats from 23h ago to 30 s ago.
         last = H.shift(now, seconds=-30)
-        c.execute("INSERT INTO system_runs(id,job,started,first_started,finished,ok,result,runs) "
+        c.execute("INSERT INTO system_runs(id,job,started_at,first_started_at,finished_at,ok,result,runs) "
                   "VALUES('hm1','health_monitor',?,?,?,1,'All well',24)", (last, H.shift(last, hours=-23), last))
         # Three failures folded over 20 minutes, and an older row without first_started (counts once).
-        c.execute("INSERT INTO system_runs(id,job,started,first_started,finished,ok,result,runs) "
+        c.execute("INSERT INTO system_runs(id,job,started_at,first_started_at,finished_at,ok,result,runs) "
                   "VALUES('hm2','health_monitor',?,?,?,0,'Mail down',3)",
                   (H.shift(now, minutes=-2), H.shift(now, minutes=-22), H.shift(now, minutes=-2)))
-        c.execute("INSERT INTO system_runs(id,job,started,finished,ok,result,runs) "
+        c.execute("INSERT INTO system_runs(id,job,started_at,finished_at,ok,result,runs) "
                   "VALUES('hm3','health_monitor',?,?,1,'All well',5)", (H.shift(now, hours=-3), H.shift(now, hours=-3)))
     hour = get(api, "automations/stats?range=1h")["automations"]
     hm = next(s for s in hour if s["id"] == "auto_hm")
@@ -164,6 +164,6 @@ def test_folded_system_runs_count_each_repeat_where_it_happened(api):
     assert runs["sys_hm1"]["count"] == 24 and runs["sys_hm2"]["count"] == 3
     # A database made before first_started gains it.
     old = sqlite3.connect(":memory:")
-    old.execute("CREATE TABLE system_runs(id TEXT PRIMARY KEY, job TEXT NOT NULL, started TEXT NOT NULL, runs INTEGER)")
+    old.execute("CREATE TABLE system_runs(id TEXT PRIMARY KEY, job TEXT NOT NULL, started_at TEXT NOT NULL, runs INTEGER)")
     SR.ensure(old)
-    assert "first_started" in {r[1] for r in old.execute("PRAGMA table_info(system_runs)")}
+    assert "first_started_at" in {r[1] for r in old.execute("PRAGMA table_info(system_runs)")}

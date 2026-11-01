@@ -267,7 +267,7 @@ function recruitFor({department, briefing, share}) {
         return json({...record, home: 'human:ana'});
       }
       if (p === '/api/v2/setup/getting-started/state') { tourPosts.push(request.postDataJSON()); return json({tour: true, checklist: false, cards: [], skipped: []}); }
-      if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: enrollCode, expires: '2026-09-16T10:15:00Z'}); }
+      if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: enrollCode, expires_at: '2026-09-16T10:15:00Z'}); }
       if (p === '/api/v2/bots' && request.method() === 'POST') { created.push(request.postDataJSON()); return json({bot: {slug: request.postDataJSON().slug}}); }
       if (p === '/api/v2/bots') return json(v2bots());
       // A person's chat with a bot: the first message opens it, and the bot page's Chat tab lists it from then on.
@@ -277,7 +277,7 @@ function recruitFor({department, briefing, share}) {
         const conversation = {id: 'chat-' + bot, kind: 'chat', scope: 'personal', task_id: null, closed_at: null,
                               participants: ['human:ana', 'bot:' + bot]};
         const message = {id: 'msg-' + bot, conversation_id: conversation.id, from_actor: 'human:ana', to_actor: 'bot:' + bot,
-                         kind: 'say', body: text, refs: {}, created: '2026-09-16T10:05:00Z'};
+                         kind: 'say', body: text, refs: {}, created_at: '2026-09-16T10:05:00Z'};
         opened[bot] = {conversation, messages: [message]};
         return json({message, conversation});
       }
@@ -301,8 +301,8 @@ function recruitFor({department, briefing, share}) {
       if (/^\/api\/v2\/tasks\/[^/]+\/chat$/.test(p)) return json({recipient: {slug: 'botops', name: 'BotOps', can_chat: true}, messages: [], conversation: null});
       if (p === '/api/v2/tasks' || p === '/api/v2/tasks/task-content') {
         const task = {id: 'task-content', title: 'Set up Content Marketer',
-          owner: 'bot:botops', status: 'doing', version: 1, updated: '2026-09-16T10:01:00Z',
-          created: '2026-09-16T10:00:30Z', requester: 'human:ana',
+          owner: 'bot:botops', status: 'doing', version: 1, updated_at: '2026-09-16T10:01:00Z',
+          created_at: '2026-09-16T10:00:30Z', requester: 'human:ana',
           body: 'Create the repository and the first routine.'};
         return json(p === '/api/v2/tasks' ? {tasks: [task]} : {task, events: [], children: []});
       }

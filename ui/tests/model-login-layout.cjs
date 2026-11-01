@@ -20,7 +20,7 @@ async function check(engine) {
       await page.evaluate(() => {
         window.S = {config: {hosted: false}};
         window.writes = [];
-        window.row = {id: 'fixture', state: 'starting', created: new Date().toISOString(), lines: []};
+        window.row = {id: 'fixture', state: 'starting', created_at: new Date().toISOString(), lines: []};
         window.post = async (url, body) => {
           writes.push({url, body});
           if (url.endsWith('/cancel')) row.state = 'cancelled';
@@ -33,7 +33,7 @@ async function check(engine) {
       for (const runtime of ['codex', 'claude']) {
         await page.setViewportSize(viewport);
         await page.evaluate(runtime => {
-          row = {id: 'fixture', state: 'starting', created: new Date().toISOString(), lines: []};
+          row = {id: 'fixture', state: 'starting', created_at: new Date().toISOString(), lines: []};
           TicoModelLogin.open({runnerId: 'box', runtime, machine: 'Acme computer', switchAccount: true});
         }, runtime);
         const dialog = page.locator('dialog.model-login[open]');

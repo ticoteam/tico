@@ -108,7 +108,7 @@ async function open(browser, me, branches = false) {
     if (p === '/api/v2/seats' && method === 'GET') return json({seats: seats.filter(seat => !seat.filled).map(seatView)});
     if (p === '/api/v2/seats' && method === 'POST') {
       const body = request.postDataJSON(); calls.push(['POST', 'seats', body]);
-      const seat = {id: 'seat' + (seats.length + 1), team: '', created: '2026-10-24T00:00:0' + seats.length + 'Z', ...body};
+      const seat = {id: 'seat' + (seats.length + 1), team: '', created_at: '2026-10-24T00:00:0' + seats.length + 'Z', ...body};
       seats.push(seat);
       return json(seatView(seat));
     }

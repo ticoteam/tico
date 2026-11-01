@@ -12,7 +12,7 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
 
 const now = Date.now(), at = m => new Date(now - m * 60000).toISOString();
 const task = {id: 't-audit', title: 'Audit the billing page', owner: 'bot:ops', requester: 'human:ana', status: 'open',
-  lane: 'company', version: 1, created: at(30), updated: at(5), conversation_id: 'r-audit'};
+  lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-audit'};
 const MODELS = [
   {id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', harnesses: ['claude'], efforts: ['low', 'medium', 'high'], default_effort: 'high'},
   {id: 'gpt-test', label: 'GPT Test', harnesses: ['codex', 'cursor'], efforts: ['low', 'high'], default_effort: 'low'},

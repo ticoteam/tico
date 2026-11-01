@@ -83,7 +83,7 @@ def test_a_pass_whose_named_model_is_out_of_quota_is_skipped_with_the_reason_and
 def test_a_pass_with_no_memory_commit_since_its_last_pass_is_a_free_skip(api):
     machine, parent, turn = parent_turn(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed,files_json,attempt_id,runner_id,reported)"
+        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed,files,attempt_id,runner_id,reported)"
                   " VALUES('ops',?,?,?,?,?,?,?,?)",
                   ("a" * 40, "Dreamed the pass's own wake turn", "ops", "2026-11-01T20:00:00Z", "[]", turn["id"],
                    machine["runner_id"], "2026-11-01T20:00:00Z"))
@@ -92,7 +92,7 @@ def test_a_pass_with_no_memory_commit_since_its_last_pass_is_a_free_skip(api):
         assert memory_history.changed_since(c, "ops", since, [parent["id"]]) is False, "only the pass's wake turn wrote"
         assert memory_history.changed_since(c, "ops", since, []) is True, "without the pass tasks it is a change"
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed,files_json,attempt_id,runner_id,reported)"
+        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed,files,attempt_id,runner_id,reported)"
                   " VALUES('ops',?,?,?,?,?,?,?,?)",
                   ("b" * 40, "A rule from an ordinary turn", "ops", "2026-11-01T21:00:00Z", "[]", "", machine["runner_id"],
                    "2026-11-01T21:00:00Z"))
@@ -112,9 +112,9 @@ def test_a_skipped_pass_wakes_nothing_on_its_parent_or_its_requester(api):
     out_of_quota(api, machine, check)
     with api.app.state.store.read() as c:
         queued = [dict(r) for r in c.execute(
-            "SELECT m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'").fetchall()]
-    news = [json.loads(r["refs_json"] or "{}").get("news") for r in queued]
+            "SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'").fetchall()]
+    news = [json.loads(r["refs"] or "{}").get("news") for r in queued]
     assert "task_declined" not in news, "the decline is not sent to the requester"
-    assert "subtask_finished" not in [json.loads(r["refs_json"] or "{}").get("wake") for r in queued], "the parent is not woken"
+    assert "subtask_finished" not in [json.loads(r["refs"] or "{}").get("wake") for r in queued], "the parent is not woken"
     leftover = claim(api, machine)   # a requeued notice for the pass is refused at claim: it is never claimed again
     assert leftover is None or leftover["task"]["id"] != sub["id"], leftover

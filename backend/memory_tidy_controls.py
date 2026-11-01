@@ -20,7 +20,7 @@ DEFAULT_PILOTS = [
 
 
 def pilots(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (PILOTS_KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (PILOTS_KEY,)).fetchone()
     return json.loads(row[0]) if row else [dict(p) for p in DEFAULT_PILOTS if H.bot(c, p["bot"])]
 
 
@@ -80,7 +80,7 @@ def validate(c, settings, entries):
 def save(c, settings, actor, entries):
     entries = validate(c, settings, entries)
     before = pilots(c)
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (PILOTS_KEY, json.dumps(entries)))
     if before != entries:
         H.event(c, actor, "memory_tidy.pilots_updated", KEY, {"before": before, "after": entries})
@@ -95,7 +95,7 @@ def nightly(store, auth, at):
         if not cfg["on"]:
             return None
         last = system_routines.last_runs(c).get(KEY)
-        if not system_routines.due(cfg, at, H.parse_ts(last["started"]) if last else None):
+        if not system_routines.due(cfg, at, H.parse_ts(last["started_at"]) if last else None):
             return None
     return run_now(store, auth, H.KEEPER)
 

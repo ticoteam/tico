@@ -39,9 +39,9 @@ def put_back_held(c, row):
                  "AND field IN ('link','related','blocked_by','blocks','parent_id','subtask','follow_up_of','follow_ups') "
                  "LIMIT 1", (row['id'], move['rowid'])).fetchone():
         return False
-    if c.execute("SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.created>=? "
-                 "AND json_extract(m.refs_json,'$.task')=? "
-                 "AND m.from_actor<>? AND m.deleted_at IS NULL AND json_extract(m.refs_json,'$.comment')=1 "
+    if c.execute("SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.created_at>=? "
+                 "AND json_extract(m.refs,'$.task')=? "
+                 "AND m.from_actor<>? AND m.deleted_at IS NULL AND json_extract(m.refs,'$.comment')=1 "
                  "LIMIT 1", (row['conversation_id'], move['ts'], row['id'], H.KEEPER)).fetchone():
         return False
     if c.execute("SELECT 1 FROM task_events e WHERE e.task_id=? AND e.rowid>? AND e.field='blocked_by' "
@@ -67,7 +67,7 @@ def back_off(c, row):
     if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND rowid>? AND field IN ('step','owner') "
                  "AND actor<>? LIMIT 1", (row['id'], move['rowid'], H.KEEPER)).fetchone():
         return False
-    if c.execute('SELECT 1 FROM turns WHERE task_id=? AND finished IS NOT NULL LIMIT 1', (row['id'],)).fetchone():
+    if c.execute('SELECT 1 FROM turns WHERE task_id=? AND finished_at IS NOT NULL LIMIT 1', (row['id'],)).fetchone():
         return False
     H._set_status(c, H.KEEPER, row, status='open', note='Automatic start returned to the queue: a blocker was linked',
                   skip_step_wake=(row['owner'],))
@@ -160,7 +160,7 @@ def prime_waits(c, rows):
     first = {}
     for row in batch("SELECT t.id,r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
                      "WHERE r.to_task IN ({m}) AND r.kind='blocks' AND t.status IN (" + _marks(H.ACTIVE_STATUSES) + ") "
-                     "ORDER BY r.created, r.rowid", H.ACTIVE_STATUSES):
+                     "ORDER BY r.created_at, r.rowid", H.ACTIVE_STATUSES):
         first.setdefault(row['to_task'], row)
     prime(c, live_blocker_sql(len(H.ACTIVE_STATUSES)),
           {(tid, *H.ACTIVE_STATUSES): first.get(tid) for tid in ids})
@@ -168,7 +168,7 @@ def prime_waits(c, rows):
     kids, other = {tid: [] for tid in ids}, set()
     owner_of = {r['id']: r['owner'] for r in rows}
     for row in batch("SELECT t.id,t.owner,t.title,t.status,r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
-                     "WHERE r.kind='parent' AND r.to_task IN ({m}) ORDER BY t.created,t.id"):
+                     "WHERE r.kind='parent' AND r.to_task IN ({m}) ORDER BY t.created_at,t.id"):
         if row['status'] is not None and row['status'] not in ('done', 'closed', 'declined'):
             kids[row['to_task']].append(row)
         if (row['status'] in H.ACTIVE_STATUSES and None not in (row['owner'], owner_of[row['to_task']])
@@ -237,7 +237,7 @@ def maybe_waiting(c, rows):
     found("SELECT DISTINCT r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
           "WHERE r.kind='parent' AND r.to_task IN ({m}) AND t.status NOT IN ('done','closed','declined')", ids)
     found("SELECT DISTINCT task_id FROM task_links WHERE task_id IN ({m}) AND kind='pr' "
-          "AND state IN ('open','draft','merged') AND json_extract(detail_json,'$.wake_once') IS NOT NULL", ids)
+          "AND state IN ('open','draft','merged') AND json_extract(detail,'$.wake_once') IS NOT NULL", ids)
     # an unanswered question the owner asked about the task: owner and task are matched in Python
     pairs = {(r['owner'], r['id']) for r in rows if r['id'] not in suspect}
     for part in H.chunks(sorted({actor for actor, _ in pairs})):
@@ -281,7 +281,7 @@ def carrier_held(c, row):
 
 def notice_releases(c, row, message):
     """An actionable notice starts its own work only after the previous carrier has let go."""
-    if not row.get('next_run') or row['status'] != 'open' or row.get('resume_json'):
+    if not row.get('next_run') or row['status'] != 'open' or row.get('resume'):
         return False
     if not actionable_notice(row, message):
         return False
@@ -303,7 +303,7 @@ def next_run_held(c, row, *, message=None):
     """
     if not row.get('next_run'):
         return False
-    if row.get('resume_json') or row['status'] != 'open' or carrier_held(c, row):
+    if row.get('resume') or row['status'] != 'open' or carrier_held(c, row):
         return True
     if actionable_notice(row, message):
         return not notice_releases(c, row, message)
@@ -315,9 +315,9 @@ def next_run_held(c, row, *, message=None):
                  (row['id'], H.KEEPER, move['rowid'])).fetchone():
         return True
     if row.get('carried_by') and H._has_table(c, 'attempts'):
-        carrier = c.execute("SELECT state,created FROM attempts WHERE id=?", (row['carried_by'],)).fetchone()
+        carrier = c.execute("SELECT state,created_at FROM attempts WHERE id=?", (row['carried_by'],)).fetchone()
         if carrier and (carrier['state'] in ('leased', 'running') or
-                        carrier['state'] == 'completed' and carrier['created'] >= move['ts']):
+                        carrier['state'] == 'completed' and carrier['created_at'] >= move['ts']):
             # Settlement clears untouched work's carrier. A completed carrier retained after this
             # reopen already worked it; only a later reopen makes that delivery obsolete.
             return True
@@ -410,12 +410,12 @@ def missing(c, settings, runner, body, failed=None, waiting=None):
     from .batch_work import report, shared_check, shared_scope, storage_error
     from .shared_bots import follow
     from .store import readiness_document
-    ready = readiness_document(runner['readiness_json'])
+    ready = readiness_document(runner['readiness'])
     busy = set(E.live_lanes(c))
     busy |= {tuple(v.split('|', 1)) for v in body.busy_lanes or () if '|' in v}
     held = E.turns_here(c, runner['id'])
     held_bots = set(body.busy_bots or ()) | ({b for b, _ in busy} if not E.lanes_on(runner) else set())
-    bots = c.execute(f"SELECT a.bot,bc.config_json,bc.onboarding_state,{E.DRAINING_SQL} draining "
+    bots = c.execute(f"SELECT a.bot,bc.config,bc.onboarding_state,{E.DRAINING_SQL} draining "
                      "FROM assignments a JOIN bots b ON b.slug=a.bot JOIN bot_config bc ON bc.bot=a.bot "
                      "WHERE a.runner_id=? AND b.state='active' AND (? IS NULL OR a.bot=?)",
                      (runner['id'], body.bot, body.bot)).fetchall()
@@ -431,7 +431,7 @@ def missing(c, settings, runner, body, failed=None, waiting=None):
             continue
         try:
             with shared_check():
-                why, config = E.claim_refusal(c, settings, runner, slug, bot['config_json'], bot['draining'], ready,
+                why, config = E.claim_refusal(c, settings, runner, slug, bot['config'], bot['draining'], ready,
                                               held_bots)
                 if not why:
                     config = follow(c, slug, config)
@@ -451,7 +451,7 @@ def missing(c, settings, runner, body, failed=None, waiting=None):
         if failed is not None:
             failed.clean.add(slug)
         for row in H._rows(c.execute("SELECT * FROM tasks WHERE owner=? AND status='open' "
-                                     "ORDER BY (rank IS NULL),rank,created,id", ('bot:' + slug,))):
+                                     "ORDER BY (rank IS NULL),rank,created_at,id", ('bot:' + slug,))):
             try:
                 if found := _startable_task(c, row, slug, config, scope, runner, busy):
                     return found

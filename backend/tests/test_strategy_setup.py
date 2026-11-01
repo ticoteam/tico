@@ -160,7 +160,7 @@ def test_no_model_answers_at_once_and_only_the_owner_starts_or_reads_a_job(api, 
     monkeypatch.setattr(SS, "writer", lambda c, settings, store: None)
     monkeypatch.setattr(SS, "spawn", lambda work: pytest.fail("no job runs without a model"))
     job = post(api, "strategy/draft-from", {"url": "https://acme.example", "text": "Bots for landlords"})
-    assert job["state"] == "no_model" and job["finished"] and get(api, "strategy/draft-from/latest")["id"] == job["id"]
+    assert job["state"] == "no_model" and job["finished_at"] and get(api, "strategy/draft-from/latest")["id"] == job["id"]
     post(api, "strategy/draft-from", {}, expected=422)                               # neither a website nor words
     post(api, "strategy/draft-from", {"text": "x"}, token="ben-test", expected=403)
     get(api, "strategy/draft-from/" + job["id"], token="ben-test", expected=403)
@@ -170,7 +170,7 @@ def test_no_model_answers_at_once_and_only_the_owner_starts_or_reads_a_job(api, 
 def test_hub_sql_keeps_the_research_job_to_the_owner(api, monkeypatch):
     monkeypatch.setattr(SS, "writer", lambda c, settings, store: None)
     post(api, "strategy/draft-from", {"text": "Unannounced: bots for landlords"})
-    query = {"sql": "SELECT key, value_json FROM registry_metadata WHERE key=?", "params": [SS.KEY]}
+    query = {"sql": "SELECT key, value FROM registry_metadata WHERE key=?", "params": [SS.KEY]}
     assert "Unannounced" in post(api, "sql", query)["rows"][0][1]
     assert post(api, "sql", query, token="ben-test")["rows"] == []                  # a bot administrator
 
@@ -180,7 +180,7 @@ def test_hub_sql_keeps_an_imported_company_files_unpublished_strategy_to_the_own
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO registry_metadata VALUES(?,?)",
                   (company_import.PLAN_KEY, json.dumps({"strategy": {"bets": [{"statement": "Unannounced bet"}]}})))
-    query = {"sql": "SELECT value_json FROM registry_metadata WHERE key=?", "params": [company_import.PLAN_KEY]}
+    query = {"sql": "SELECT value FROM registry_metadata WHERE key=?", "params": [company_import.PLAN_KEY]}
     assert "Unannounced bet" in post(api, "sql", query)["rows"][0][0]
     assert post(api, "sql", query, token="ben-test")["rows"] == []                  # a bot administrator
     keys = [r[0] for r in post(api, "sql", {"sql": "SELECT key FROM registry_metadata"}, token="ben-test")["rows"]]
@@ -242,7 +242,7 @@ def test_a_run_cut_off_or_left_with_nothing_to_read_stops_and_never_writes(envir
     # A run past STALE_S was already shown as failed: when it answers at last, it writes nothing.
     job = start()
     with store.transaction() as c:
-        SS._put(c, {**SS._find(c, job["id"]), "started": H.shift(H.now(), seconds=-SS.STALE_S - 1)})
+        SS._put(c, {**SS._find(c, job["id"]), "started_at": H.shift(H.now(), seconds=-SS.STALE_S - 1)})
         SS.finish(c, job["id"], FOUND)
     assert latest()["state"] == "failed" and latest()["written"] is None
     assert api.get("/api/v2/strategy", headers=signed_in()).json()["bets"] == []

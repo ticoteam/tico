@@ -110,7 +110,7 @@ def snooze(conn, actor, task_id, until, mover=False, note=None):
     note = clean_note(conn, actor, note)
     if (stamp, note) == (row.get("snoozed_until"), row.get("snoozed_note")):
         return row          # the same date and note again: nothing changes, nobody is told again
-    conn.execute("UPDATE tasks SET snoozed_until=?, snoozed_by=?, snoozed_note=?, updated=?, version=version+1 "
+    conn.execute("UPDATE tasks SET snoozed_until=?, snoozed_by=?, snoozed_note=?, updated_at=?, version=version+1 "
                  "WHERE id=?", (stamp, actor, note, at, task_id))
     H._task_event(conn, task_id, actor, "snoozed_until", row.get("snoozed_until"), stamp, note or "")
     after = H.task(conn, task_id)
@@ -151,7 +151,7 @@ def _wake_refs(refs, note):
 
 def _clear(conn, actor, row, note):
     H = _H()
-    conn.execute("UPDATE tasks SET snoozed_until=NULL, snoozed_by=NULL, snoozed_note=NULL, updated=?, "
+    conn.execute("UPDATE tasks SET snoozed_until=NULL, snoozed_by=NULL, snoozed_note=NULL, updated_at=?, "
                  "version=version+1 WHERE id=?", (H.now(), row["id"]))
     H._task_event(conn, row["id"], actor, "snoozed_until", row["snoozed_until"], None, note)
     H.recount(conn, [row["owner"], row["requester"]])

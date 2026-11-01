@@ -37,7 +37,7 @@ def routine(api, sid, bot="coo", *, cron="0 9 * * *", event=None, on=True, text=
 def rule(api, rid, event="comment", then="wake", scope=("bot", "coo"), position=0, enabled=True):
     with db(api).transaction() as c:
         c.execute("INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, enabled, position, created_by, "
-                  "created, updated) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (rid, scope[0], scope[1], event, then, int(enabled), position, "human:ana",
                    "2026-10-01T00:00:0%dZ" % position, "2026-10-01T00:00:00Z"))
     return rid
@@ -63,7 +63,7 @@ def marks(api):
 def told(api, mid):
     """What the owner got for one migration: tasks and notices that name it."""
     tasks = rows(api, "SELECT id, title, body FROM tasks WHERE title LIKE '%Automations%'")
-    notes = [r for r in rows(api, "SELECT id, refs_json FROM messages WHERE refs_json LIKE ?", (f"%{mid}%",))]
+    notes = [r for r in rows(api, "SELECT id, refs FROM messages WHERE refs LIKE ?", (f"%{mid}%",))]
     return tasks, notes
 
 
@@ -103,9 +103,9 @@ def test_every_object_moves_once_and_runs_from_one_system(api):
         assert after[("routine", sid)]["now"] == "moved"
         old = rows(api, "SELECT deleted_at, next_due FROM schedules WHERE id=?", (sid,))[0]
         assert old["deleted_at"] and old["next_due"] is None                    # the routine never fires again
-        made = rows(api, "SELECT enabled, next_due, flow_json FROM automations WHERE id=?",
+        made = rows(api, "SELECT enabled, next_due, flow FROM automations WHERE id=?",
                     (after[("routine", sid)]["automation"],))[0]
-        flow = json.loads(made["flow_json"])
+        flow = json.loads(made["flow"])
         assert bool(made["enabled"]) is on and flow["steps"][0]["bot"] == "bot:coo"
         if sid == "sch_event":
             assert flow["trigger"] == {"type": "event", "name": "release_published"}
@@ -154,7 +154,7 @@ def test_a_cutover_a_restart_cut_off_resumes_and_moves_nothing_twice(api, monkey
                       "WHERE m.kind='routine' AND a.deleted_at IS NULL")
     assert sorted(m["id"] for m in moved) == ["sch_0", "sch_1", "sch_2"]
     assert len({m["aid"] for m in moved}) == 3
-    assert rows(api, "SELECT count(*) AS n FROM automations WHERE flow_json LIKE '%Routine 0%'") == [{"n": 1}]
+    assert rows(api, "SELECT count(*) AS n FROM automations WHERE flow LIKE '%Routine 0%'") == [{"n": 1}]
 
 
 def test_what_cannot_move_stays_as_it_was_and_the_owner_is_told_once(api, monkeypatch):
@@ -230,8 +230,8 @@ def test_the_librarians_briefing_routine_becomes_the_market_briefing_builtin_nev
             title="Market briefing")
     first_start(api)
     automations.tick(db(api))
-    built = rows(api, "SELECT enabled, flow_json FROM automations WHERE id='auto_builtin_market_briefing'")[0]
-    flow = json.loads(built["flow_json"])
+    built = rows(api, "SELECT enabled, flow FROM automations WHERE id='auto_builtin_market_briefing'")[0]
+    flow = json.loads(built["flow"])
     assert built["enabled"] == 1
     assert flow["trigger"] == {"type": "schedule", "cron": "0 7 * * 1-5", "tz": "America/New_York"}
     assert flow["steps"][0]["prompt"] == "Brief the team." and flow["steps"][1]["do"] == "post_update"
@@ -248,7 +248,7 @@ def test_rehearsal_cases_team_rules_paused_bots_and_long_inbox_instructions(api)
         c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
     post(api, "access/people/cara", {"inbox_bot": "inbox", "mailbox": "cara@acme.example"})
     with db(api).transaction() as c:
-        c.execute("INSERT OR REPLACE INTO mail_agent_instructions(bot, content, runner_id, updated) VALUES(?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO mail_agent_instructions(bot, content, runner_id, updated_at) VALUES(?,?,?,?)",
                   ("inbox", LONG, "", "2026-10-28T00:00:00Z"))
     done = first_start(api)
     assert not done["failed"] and not done["kept"]
@@ -257,11 +257,11 @@ def test_rehearsal_cases_team_rules_paused_bots_and_long_inbox_instructions(api)
     with db(api).read() as c:
         assert [r["id"] for r in M.wake_rows(c, "comment")] == ["rule_dept"]
         assert c.execute("SELECT state FROM bots WHERE slug='inbox'").fetchone()[0] == "paused"   # retired
-        made = c.execute("SELECT flow_json, owner FROM automations WHERE id=?",
+        made = c.execute("SELECT flow, owner FROM automations WHERE id=?",
                          (found[("inbox", "inbox:cara@acme.example")]["automation"],)).fetchone()
-        dept = json.loads(c.execute("SELECT flow_json FROM automations WHERE id=?",
+        dept = json.loads(c.execute("SELECT flow FROM automations WHERE id=?",
                                     (found[("wake_rule", "rule_dept")]["automation"],)).fetchone()[0])
-    step = json.loads(made["flow_json"])["steps"][0]
+    step = json.loads(made["flow"])["steps"][0]
     assert step["type"] == "llm" and step["prompt"].startswith(LONG.rstrip())
     assert dept["owner"] == "person:ana" and dept["wakes"]["scope_kind"] == "department"
     paused = [a for a in get(api, "automations")["automations"] if a["name"] == "Weekly ops check"]
@@ -304,7 +304,7 @@ def test_a_moved_wake_rule_does_what_its_filter_shows_and_an_edit_it_cannot_do_i
     assert r.status_code == 200, r.text
     with db(api).read() as c:
         row = [w for w in M.wake_rows(c, "comment") if w["id"] == "rule_wake"][0]
-    assert row["then_outcome"] == "ignore" and json.loads(row["when_json"]) == {"priority": "low"}
+    assert row["then_outcome"] == "ignore" and json.loads(row["condition"]) == {"priority": "low"}
     bad = steps + [{"id": "x", "type": "action", "do": "note", "args": {"bot": "coo", "text": "Hi"}}]
     r = api.patch(f"/api/v2/automations/{aid}", json={"steps": bad},
                   headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "edit-wakes-bad"})
@@ -332,5 +332,5 @@ def test_a_routine_longer_than_an_automation_takes_moves_off_with_its_text_cut(a
     assert not done["kept"] and not done["failed"]
     mark = marks(api)[("routine", "sch_long")]
     assert mark["outcome"] == "converted" and "cut to fit" in mark["why"]
-    flow = json.loads(rows(api, "SELECT flow_json FROM automations WHERE id=?", (mark["automation"],))[0]["flow_json"])
+    flow = json.loads(rows(api, "SELECT flow FROM automations WHERE id=?", (mark["automation"],))[0]["flow"])
     assert flow["enabled"] is False and len(flow["steps"][0]["prompt"]) == F.MAX_PROMPT

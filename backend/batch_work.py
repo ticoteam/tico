@@ -80,7 +80,7 @@ def isolated(c, kind, row_id, failures=None):
         report(kind, row_id, exc)
         if health_available:
             c.execute("INSERT INTO service_health VALUES(?,NULL,?,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail_json=excluded.detail_json",
+                      "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail=excluded.detail",
                       (service, f"{kind}: {str(exc)[:300]}",
                        json.dumps({"kind": kind, "row": row_id, "error": str(exc)[:300],
                                    "failed_at": datetime.now(timezone.utc).isoformat(),
