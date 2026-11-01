@@ -28,6 +28,9 @@ terminal = false
 # Switch account moves into place only once the new sign-in has finished.
 logout = ["logout"]
 files = ["auth.json"]
+# Connect (Settings > Models): signs in on the side, so the computer's own login stays; the result is this file there.
+connect = ["login", "--device-auth"]
+connect_file = "auth.json"
 
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]

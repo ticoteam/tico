@@ -24,6 +24,12 @@ Usage limits: a subscription is one login wherever it runs, so a limit met on it
 to until the reset (login_holds `sub:<id>`). While held it is passed over like one that needs reconnecting: turns there
 run on the computer's own login, else the Gateway under the company's choice, else wait.
 
+Connect (`connect`): instead of pasting, an owner or admin signs a plan in from the page. One online computer that can
+runs the CLI through the sign-in relay (backend/model_login.py): `claude setup-token`, or `codex login` in a home of its
+own, so that computer's own login stays as it was. The person gets the link in the page, and the runner sends the
+result (`POST runner-logins/<id>/subscription`), which `connected` seals as the subscription the person named, or as
+the new value of the one they are reconnecting. The browser never holds it.
+
 Owners and admins save, rename, reconnect, remove and give subscriptions. A person who sees Settings > Models reads the
 list (never a value). A bot, a run or a Tico support session never saves a value; support writes nothing here.
 
@@ -57,7 +63,7 @@ from pydantic import Field, SecretStr
 
 from . import hubdb as H
 from .models import Contract, ID
-from .store import Problem
+from .store import Problem, readiness_document
 
 CAPABILITY = "model_subscriptions_v1"
 STATUSES = ("new", "working", "needs_reconnect")
@@ -69,10 +75,10 @@ MAX_VALUE = 64 * 1024
 KINDS = {
     "claude_token": {"runtime": "claude", "label": "Claude plan", "env": "CLAUDE_CODE_OAUTH_TOKEN",
                      "billing": "subscription", "secret_label": "Setup token",
-                     "help": "Run `claude setup-token` on any computer and paste the token."},
+                     "help": "Run `claude setup-token` on any computer and paste the token.", "connect": True},
     "codex_login": {"runtime": "codex", "label": "ChatGPT plan", "file": "auth.json", "billing": "subscription",
                     "secret_label": "auth.json",
-                    "help": "Run `codex login` on any computer, then paste the whole ~/.codex/auth.json."},
+                    "help": "Run `codex login` on any computer, then paste the whole ~/.codex/auth.json.", "connect": True},
     "anthropic_key": {"runtime": "claude", "label": "Anthropic API key", "env": "ANTHROPIC_API_KEY", "billing": "api",
                       "secret_label": "API key", "help": "An Anthropic API key (sk-ant-…)."},
     "openai_key": {"runtime": "codex", "label": "OpenAI API key", "file": "auth.json", "billing": "api",
@@ -95,6 +101,8 @@ CREATE TABLE IF NOT EXISTS attempt_subscriptions(
  attempt_id TEXT NOT NULL, runtime TEXT NOT NULL, subscription_id TEXT NOT NULL, revision INTEGER NOT NULL,
  PRIMARY KEY(attempt_id, runtime));
 CREATE INDEX IF NOT EXISTS attempt_subscriptions_sub ON attempt_subscriptions(subscription_id);
+CREATE TABLE IF NOT EXISTS subscription_connects(
+ login_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', subscription_id TEXT NOT NULL DEFAULT '');
 """
 
 
@@ -105,6 +113,20 @@ class SubscriptionWrite(Contract):
     kind: str | None = Field(default=None, max_length=40)
     secret: SecretStr | None = Field(default=None, max_length=MAX_VALUE)
     confirm: bool = False
+
+
+class SubscriptionConnect(Contract):
+    """Sign a plan in from the page: a new subscription (`kind`, `name`), or a saved one's new value (`subscription`).
+    `confirm` accepts that a reconnect stops and restarts the live runs on every computer given it."""
+    kind: str | None = Field(default=None, max_length=40)
+    name: str | None = Field(default=None, max_length=80)
+    subscription: str | None = Field(default=None, max_length=80)
+    confirm: bool = False
+
+
+class SubscriptionConnected(Contract):
+    """What a computer's CLI gave it for a Connect job."""
+    value: SecretStr = Field(max_length=MAX_VALUE)
 
 
 class ComputerSubscription(Contract):
@@ -331,7 +353,7 @@ def listed(c):
 
 def kinds():
     return [{"kind": k, "label": v["label"], "runtime": v["runtime"], "secret_label": v["secret_label"],
-             "help": v["help"]} for k, v in KINDS.items()]
+             "help": v["help"], "connect": bool(v.get("connect"))} for k, v in KINDS.items()]
 
 
 def assignments(c):
@@ -465,6 +487,14 @@ def _tick_provider(c, settings, actor, kind):
                                                  "after": {"enabled": after["enabled"]}, "why": "subscription"})
 
 
+def _confirm_reconnect(c, settings, given):
+    """A new value stops the runs on each computer signed in with this subscription: with some going, ask first."""
+    plans = [_plan(c, settings, runner_id, runtime) for runner_id, runtime in given]
+    running = sum(p["running"] for p in plans)
+    if running:
+        _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)}, {"computers": len(given)})
+
+
 def save(c, vault, settings, who, body, sid=None):
     """Add a subscription, or change a saved one: a new secret reconnects it (status `new`, so it counts again), a name
     renames it. Returns its view."""
@@ -483,11 +513,7 @@ def save(c, vault, settings, who, body, sid=None):
             value, preview = checked(sub["kind"], body.secret.get_secret_value())
             given = _signed_in_with(c, sid)
             if not body.confirm:
-                plans = [_plan(c, settings, runner_id, runtime) for runner_id, runtime in given]
-                running = sum(p["running"] for p in plans)
-                if running:
-                    _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)},
-                             {"computers": len(given)})
+                _confirm_reconnect(c, settings, given)
         if name is not None:
             c.execute("UPDATE model_subscriptions SET name=?,updated=? WHERE id=?", (name, now, sid))
         if body.secret is not None:
@@ -724,6 +750,116 @@ def assignment_fields(c, runner, config):
 
 
 # ------------------------------------------------------------------------------------------------ routes
+# ------------------------------------------------------------------------------------------------ connect
+def _connect_computers(c, runtime, who=None):
+    """The computers that can run `runtime`'s sign-in for a Connect: the person's own first, since the result passes
+    through the computer, then those with nothing signing in for that tool, then the one seen last."""
+    from . import model_login
+    if runtime not in model_login.CONNECT_RUNTIMES:
+        return []
+    busy = {row["runner_id"] for row in c.execute(
+        f"SELECT runner_id FROM model_logins WHERE runtime=? AND {model_login.ACTIVE_SQL} AND expires_at>=?",
+        (runtime, H.now()))}
+    me = H.actor_id(who.actor) if who else ""
+    found = []
+    for runner in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL").fetchall():
+        report = readiness_document(runner["readiness_json"]).get("runtimes") or {}
+        if (model_login.connects(runner) and model_login._online(runner)
+                and (report.get(runtime) or {}).get("installed")):
+            found.append(runner)
+    found.sort(key=lambda r: r["last_seen"] or "", reverse=True)
+    found.sort(key=lambda r: (r["operator"] != me, r["id"] in busy))
+    return found
+
+
+def connect_ready(c):
+    """The kinds a person can Connect right now: their tool's sign-in has a computer to run on."""
+    return [kind for kind, spec in KINDS.items() if spec.get("connect") and _connect_computers(c, spec["runtime"])]
+
+
+def connect(c, settings, who, body):
+    """Start a Connect: queue the sign-in on a computer, remembering what its result becomes. Read back, given a code
+    and cancelled like any sign-in (backend/model_login.py). Its row says where (`computer`)."""
+    from . import model_login
+    name, sid = (body.name or "").strip(), body.subscription or ""
+    if sid:
+        sub = row(c, sid)
+        if not sub:
+            raise Problem("not_found", "Subscription not found", 404)
+        kind = sub["kind"]
+    else:
+        kind = body.kind or ""
+    spec = KINDS.get(kind)
+    if not spec or not spec.get("connect"):
+        raise Problem("kind", "Connect works for a Claude plan or a ChatGPT plan; paste an API key instead", 422)
+    if sid:
+        if not body.confirm:
+            _confirm_reconnect(c, settings, _signed_in_with(c, sid))
+    elif not name:
+        raise Problem("name", "Enter a name", 422)
+    elif c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] >= MAX_SUBSCRIPTIONS:
+        raise Problem("limit", f"The company has {MAX_SUBSCRIPTIONS} subscriptions; remove one first", 422)
+    def answer(login, runner):
+        return {**model_login.view(login), "computer": runner["label"],
+                "not_yours": runner["operator"] != H.actor_id(who.actor)}
+
+    # Asked again (a reloaded page): the sign-in already going picks back up, wherever it runs.
+    model_login.sweep(c)
+    going = c.execute(f"SELECT l.* FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
+                      f"WHERE l.kind='connect' AND l.requested_by=? AND s.kind=? AND s.name=? AND s.subscription_id=? "
+                      f"AND {model_login.ACTIVE_SQL}", (who.actor, kind, name, sid)).fetchone()
+    if going:
+        return answer(going, model_login._runner(c, going["runner_id"]))
+    computers = _connect_computers(c, spec["runtime"], who)
+    if not computers:
+        raise Problem("offline", "Connect needs a computer online, on the latest Tico, with "
+                      f"{RUNTIME_LABELS[spec['runtime']]} installed. Paste instead, or start one", 409)
+    runner = computers[0]
+    login, new = model_login._queue(c, who, runner, spec["runtime"], "", "connect", "connect a subscription")
+    # The job going there is for something else: its result must not land on this one.
+    if not new and login["requested_by"] != who.actor:
+        raise Problem("state", f"Someone else is connecting a subscription on {runner['label']}; try again in a minute",
+                      409)
+    if not new:
+        raise Problem("state", f"You are connecting another subscription on {runner['label']}; finish or cancel that "
+                      "first", 409)
+    c.execute("INSERT INTO subscription_connects(login_id,kind,name,subscription_id) VALUES(?,?,?,?)",
+              (login["id"], kind, name, sid))
+    H.event(c, who.actor, "subscription.connect", sid or login["id"], {"kind": kind, "runner": runner["id"]})
+    return answer(login, runner)
+
+
+def connected(c, vault, settings, who, login_id, body):
+    """A computer sends what its CLI gave it for a Connect it was asked to run: saved as the person asked, as if they
+    had pasted it, and the job is done. A job cancelled or run out by now saves nothing. A value that does not check
+    out fails the job, saying why (never the value)."""
+    from types import SimpleNamespace
+
+    from . import model_login
+    model_login.sweep(c)
+    login = c.execute("SELECT * FROM model_logins WHERE id=? AND runner_id=? AND kind='connect'",
+                      (login_id, who.runner_id)).fetchone()
+    if not login:
+        raise Problem("not_found", "That sign-in does not exist", 404)
+    if login["state"] not in model_login.ACTIVE:
+        raise Problem("state", "That sign-in has ended", 409)
+    target = c.execute("SELECT * FROM subscription_connects WHERE login_id=?", (login_id,)).fetchone()
+    state, message = "done", ""
+    if not target:
+        state, message = "failed", "That sign-in has ended"
+    else:
+        write = SubscriptionWrite(kind=target["kind"], name=target["name"] or None, secret=body.value, confirm=True)
+        try:
+            save(c, vault, settings, SimpleNamespace(actor=login["requested_by"]), write, target["subscription_id"] or None)
+        except Problem as problem:
+            state, message = "failed", model_login.redact(problem.detail)
+    c.execute("UPDATE model_logins SET state=?, message=?, url='', user_code='', pending_code=NULL, lines_json='[]', "
+              "updated=? WHERE id=?", (state, message, H.now(), login_id))
+    c.execute("DELETE FROM subscription_connects WHERE login_id=?", (login_id,))
+    H.event(c, "runner:" + who.runner_id, "runner.login." + state, who.runner_id, {"runtime": login["runtime"]})
+    return {"state": state, "message": message}
+
+
 def install(app, store, auth, mutate, settings):
     from fastapi import Request
 
@@ -737,7 +873,7 @@ def install(app, store, auth, mutate, settings):
         auth.domain(who)
         _reader(who)
         with store.read() as c:
-            return {"subscriptions": listed(c), "kinds": kinds()}
+            return {"subscriptions": listed(c), "kinds": kinds(), "connect": connect_ready(c)}
 
     @app.post("/api/v2/model-subscriptions")
     def add(request: Request, body: SubscriptionWrite):
@@ -745,6 +881,13 @@ def install(app, store, auth, mutate, settings):
         _admin(auth, who, secret=True)
         return vault.change(who, request.url.path, request.headers.get("idempotency-key"), body,
                             lambda c, w: None, lambda c: save(c, vault, settings, who, body))
+
+    # Declared before `/{sid}`. It carries no value: that comes from the computer, to the route below.
+    @app.post("/api/v2/model-subscriptions/connect")
+    def start_connect(request: Request, body: SubscriptionConnect):
+        who = request.state.identity
+        _admin(auth, who, secret=True)
+        return mutate(request, body, lambda c: connect(c, settings, who, body))
 
     @app.post("/api/v2/model-subscriptions/{sid}")
     def change(request: Request, sid: str, body: SubscriptionWrite):
@@ -780,6 +923,16 @@ def install(app, store, auth, mutate, settings):
             _admin(auth, who)
             return give(c, settings, who, body)
         return mutate(request, body, work)
+
+    # Not through `mutate`: a value is kept in no request receipt, as for the refresh below.
+    @app.post("/api/v2/runner-logins/{lid}/subscription")
+    def connect_value(request: Request, lid: str, body: SubscriptionConnected):
+        who = request.state.identity
+        with store.transaction() as c:
+            if who.role != "runner" or not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL",
+                                                     (who.runner_id,)).fetchone():
+                raise Problem("forbidden", "Only a registered computer may send this", 403)
+            return connected(c, vault, settings, who, lid, body)
 
     @app.post("/api/v2/runner-model-subscription-refresh")
     def refresh(request: Request, body: SubscriptionRefresh):
