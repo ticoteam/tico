@@ -17,7 +17,7 @@ function growthIdeaAdopt(d, task) {
 }
 async function growthIdeaLoad(slot, id) {
   let idea, refs;
-  try { [idea, refs] = await Promise.all([get(`/v2/growth/ideas/${encodeURIComponent(id)}`, {fresh: true}), grRefs()]); }
+  try { [idea, refs] = await Promise.all([get(`/v2/growth/ideas/${encodeURIComponent(id)}`, {fresh: true}).then(r => r.idea || r), grRefs()]); }
   catch { if (slot.dataset.task === id) slot.hidden = true; return; }
   if (slot.dataset.task !== id) return;
   const links = [...new Set([idea.follow_up_of, ...(idea.depends_on || [])].filter(Boolean))];
@@ -28,7 +28,7 @@ async function growthIdeaLoad(slot, id) {
 }
 function growthIdeaDraw(slot) {
   const i = slot.giIdea, refs = slot.giRefs, titles = slot.giTitles, task = slot.giTask || {};
-  const may = grAdmin() || grSame(task.owner, grMe()) || grSame(i.assignee, grMe());
+  const may = grAdmin() || grSame(task.owner, grMe()) || grSame(i.assignee, grMe()) || grSame(i.created_by, grMe());
   const bet = refs.bets.find(b => b.id === i.bet_id), kpi = refs.kpis.find(k => k.id === i.kpi_id), judged = refs.kpis.find(k => k.id === i.judged_kpi_id);
   const dl = rows => rows.filter(r => r[1]).map(([k, v, raw]) => `<dt>${esc(k)}</dt><dd>${raw ? v : esc(v)}</dd>`).join('');
   const link = t => `<a href="${grTaskHref(t)}">${esc(titles.get(t) || t)}</a>`;
@@ -54,7 +54,7 @@ function growthIdeaDraw(slot) {
 }
 function growthIdeaBind(slot) {
   const i = slot.giIdea, refs = slot.giRefs, base = `/v2/growth/ideas/${encodeURIComponent(i.task_id)}`;
-  const after = out => { slot.giIdea = out && out.task_id ? out : slot.giIdea; void growthIdeaLoad(slot, slot.dataset.task); };
+  const after = () => void growthIdeaLoad(slot, slot.dataset.task);
   const ice = slot.querySelector('[data-gi-ice]');
   if (ice) ice.onsubmit = async ev => {
     ev.preventDefault();

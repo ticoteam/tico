@@ -22,8 +22,8 @@ const GR_CH_STAGE = {idea: ['Idea', ''], testing: ['Testing', 'in-progress'], sc
 const GR_RESULTS = ['won', 'lost', 'inconclusive', 'dropped'];
 
 // ----------------------------------------------------------------- shared formats and pieces
-// Who may change company-level growth records: the owner (the server checks and is the one that enforces it).
-const grAdmin = () => S.me?.role === 'owner';
+// Who may change company-level growth records: the owner or an admin (the server checks and is the one that enforces it).
+const grAdmin = () => S.me?.role === 'owner' || !!S.me?.bot_admin;
 const grMe = () => myActor();
 // An owner ref as Tico writes them: bot:<slug>, human:<id>, or a bare bot slug.
 const grWho = ref => {
@@ -301,7 +301,7 @@ async function growthWeek(state) {
   const sec = (title, inner, cls = '') => inner ? `<section class="card gr-sec${cls ? ' ' + cls : ''}"><h3 class="gr-k">${esc(title)}</h3>${inner}</section>` : '';
   const guards = (w.guardrails || []).map(g => `<div class="gr-row gr-breach"><span class="gr-row-t">${esc(grChanName(chans, g.channel))} · ${esc(g.kpi_name || '')}</span>
     <span class="gr-num">${esc(grX(g.value))} / ${esc(grX(g.max))}</span></div>`).join('');
-  const readings = (w.readings || []).map(k => `<div class="gr-row"><span class="gr-row-t">${esc(k.name)}</span><span class="muted">${esc({north_star: 'North Star', input: 'Input', guardrail: 'Guardrail'}[k.growth_role] || '')}</span>
+  const readings = (w.readings || []).map(r => ({...r, latest: r.value})).map(k => `<div class="gr-row"><span class="gr-row-t">${esc(k.name)}</span><span class="muted">${esc({north_star: 'North Star', input: 'Input', guardrail: 'Guardrail'}[k.growth_role] || '')}</span>
     <span class="gr-num">${esc(grKpiVal(k))}${k.target != null ? `<span class="muted"> / ${esc(kpiNum(k.target, k.unit))}</span>` : ''}</span></div>`).join('');
   const due = (w.tests_due || []).map(i => `${row(i)}<span class="muted gr-num">${esc(grDay(i.test_to))}</span></a>`).join('');
   const top = (w.top_ideas || []).map(i => `${row(i)}<span class="gr-ice">ICE ${esc(grX(i.ice))}</span></a>`).join('');

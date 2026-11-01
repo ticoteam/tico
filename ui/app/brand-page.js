@@ -36,11 +36,11 @@ const brSw = (c, size = '') => brHex(c.hex) ? `<span class="br-sw${size ? ' ' + 
 // ----------------------------------------------------------------- shared with Go-to-market: draft, publish, versions
 const grDocMay = d => d?.may_edit ?? grAdmin();
 const grDocChanged = d => d?.draft?.changed?.length || 0;
-function grDocToolsHtml(d, state) {
+function grDocToolsHtml(d, state, publish = true) {
   const n = grDocChanged(d), p = d?.published, may = grDocMay(d);
   return `${may && n ? `<span class="pill waiting">${n === 1 ? '1 change' : `${n} changes`}</span>` : ''}${p ? `<span class="muted gr-meta">v${esc(p.n)} · ${esc(grDay(p.published_at))}</span>` : ''}
     ${(d?.versions || []).length ? '<button class="ghost" type="button" data-doc-versions>Versions</button>' : ''}
-    ${may && !state.publishing ? `<button class="primary" type="button" data-doc-publish${n || (!p && d?.draft) ? '' : ' disabled title="Nothing new to publish"'}>Publish</button>` : ''}`;
+    ${may && publish && !state.publishing ? `<button class="primary" type="button" data-doc-publish${n || (!p && d?.draft) ? '' : ' disabled title="Nothing new to publish"'}>Publish</button>` : ''}`;
 }
 const grDocPublishHtml = () => `<form class="strat-publish gr-pub" data-doc-publish-form novalidate>
     <input type="text" name="note" maxlength="200" autocomplete="off" placeholder="What changed" aria-label="What changed" required>
@@ -216,7 +216,7 @@ function brandDraw() {
   if (!state || !body || !state.data) return;
   const d = state.data, may = grDocMay(d), editing = state.view === 'edit';
   const seg = may ? `<nav class="gr-tabs" aria-label="View"><a href="${BRAND_ROUTE}"${editing ? '' : ' aria-current="page"'}>Book</a><a href="${BRAND_ROUTE}/edit"${editing ? ' aria-current="page"' : ''}>Edit</a></nav>` : '';
-  const head = grCrumbs('#/strategy', 'Strategy', 'Brand', `${seg}${grDocToolsHtml(d, state)}`) + (state.publishing ? grDocPublishHtml() : '');
+  const head = grCrumbs('#/strategy', 'Strategy', 'Brand', `${seg}${grDocToolsHtml(d, state, editing)}`) + (state.publishing ? grDocPublishHtml() : '');
   const book = editing ? (d.draft?.body || d.published?.body) : (d.published?.body || (may ? d.draft?.body : null));
   body.innerHTML = head + (editing ? brandEditHtml(state) : book && Object.keys(book).length ? brandBookHtml(book) : '');
   grDocBind(body, '/v2/brand', state, brandDraw, b => brandBookHtml(b, {full: true}));

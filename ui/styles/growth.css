@@ -3,7 +3,7 @@
 
 /* ---------- shared */
 .gr-body{display:flex;flex-direction:column;gap:14px;min-width:0}
-.gr-body .card,.gt-card{display:block;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:var(--s4);margin:0;min-width:0;box-sizing:border-box}
+:where(.gr-body) .card,.gt-card{display:block;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:var(--s4);margin:0;min-width:0;box-sizing:border-box}
 .gr-body section.card{margin:0}
 .gr-k{margin:0;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .gr-meta{font-size:var(--t-sm)}
@@ -30,7 +30,7 @@ a.gr-btn:hover{background:var(--surface2);text-decoration:none}
 .gr-note{margin:0}
 .gr-empty{padding:24px 0}
 .gr-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none}
-.gr-ts-in_progress,.gr-ts-running,.gr-ts-review{background:var(--run)}
+.gr-ts-doing,.gr-ts-running,.gr-ts-review{background:var(--run)}
 .gr-ts-waiting,.gr-ts-blocked{background:var(--wait)}
 .gr-ts-done{background:var(--ok)}
 .gr-ts-failed{background:var(--fail)}
@@ -41,7 +41,7 @@ th .gr-track:empty{width:8px;height:8px;padding:0;border-radius:2px}
 .gr-banner{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border-radius:var(--radius);font-size:var(--t-sm)}
 .gr-amber{background:var(--wait-bg);border:1px solid color-mix(in srgb,var(--wait) 35%,transparent)}
 .gr-flow{display:flex;flex-wrap:wrap;gap:8px}
-.gr-scroll{overflow-x:auto;max-width:100%;-webkit-overflow-scrolling:touch}
+.gr-scroll{position:relative;overflow-x:auto;max-width:100%;-webkit-overflow-scrolling:touch}
 .gr-body .card.gr-scroll{padding:0}
 .gr-sub{display:block;font-weight:400;font-size:var(--t-xs);max-width:340px;white-space:normal}
 .gr-inline select{width:auto;min-width:120px}
@@ -50,7 +50,7 @@ th .gr-track:empty{width:8px;height:8px;padding:0;border-radius:2px}
 .gr-t{width:100%;border-collapse:collapse;font-size:12.5px}
 .gr-t th,.gr-t td{padding:7px 10px;text-align:left;vertical-align:middle;border-bottom:1px solid var(--line);white-space:nowrap}
 .gr-t thead th{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);padding-top:9px}
-.gr-t tbody th{font-weight:600}
+.gr-t :is(tbody,tfoot) th{font-weight:600;text-transform:none;letter-spacing:normal;color:var(--ink);font-size:inherit}
 .gr-t .num{text-align:right;font-variant-numeric:tabular-nums}
 .gr-t tbody tr:last-child>*{border-bottom:0}
 .gr-t tfoot>tr>*{border-top:1px solid var(--line);border-bottom:0;font-weight:600}
@@ -87,7 +87,7 @@ th .gr-track:empty{width:8px;height:8px;padding:0;border-radius:2px}
 .gr-rows{border:0;margin:0;padding:0;min-width:0;display:flex;flex-direction:column;gap:6px}
 .gr-rows-list{display:flex;flex-direction:column;gap:6px}
 .gr-rowed{display:grid;grid-template-columns:var(--cols) 28px;gap:6px;align-items:end}
-.gr-cell{display:flex;flex-direction:column;gap:3px;min-width:0}
+.gr-cell{position:relative;display:flex;flex-direction:column;gap:3px;min-width:0}
 .gr-cap{font-size:var(--t-xs);color:var(--muted)}
 .gr-rowed:not(:first-child) .gr-cap{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .gr-cell input[type=color]{width:100%;height:var(--ctl);padding:2px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);box-sizing:border-box}
@@ -315,7 +315,7 @@ div.gt-mo{cursor:default}
 .gr-cn{display:inline-flex;align-items:center}
 .gt-kn{display:inline-block;padding-left:calc(var(--d,0) * 18px)}
 .gt-nsr .gt-kn{font-size:var(--t-base)}
-.gt-grp th{background:var(--surface2);font-size:var(--t-label);letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
+.gr-t .gt-grp th{background:var(--surface2);font-size:var(--t-label);letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .gt-barc{min-width:90px}
 .gt-model tr.gr-guard>th:first-child{box-shadow:inset 3px 0 0 var(--wait)}
 
