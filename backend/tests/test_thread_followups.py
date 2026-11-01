@@ -103,3 +103,59 @@ def test_the_scheduled_run_nudges_through_the_same_sweep(api):
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT message_id FROM thread_followups").fetchall()
     assert [r["message_id"] for r in rows] == [message["id"]]
+
+
+def test_a_legacy_ask_stays_hidden_from_a_reader_it_was_hidden_from_in_its_nudge(api):
+    """A migrated ask carries its old room's audience. Ana reads it through that room; Cara, a member of the thread,
+    does not. Her view of the nudge must match her view of the ask, and the nudge must not quote it."""
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        tid = threads.create(c, "bot:finance", title="Books", audience="members",
+                             members=["human:ana", "human:cara"])["id"]
+    message = ask(api, tid, "Can you confirm the Q3 invoice?")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET legacy_audience='shared:finance' WHERE id=?", (message["id"],))
+    sweep(api, later(25))
+    with api.app.state.store.transaction() as c:
+        cara = threads.actor_viewer(c, "human:cara")
+        nudge = c.execute("SELECT id, body, legacy_audience FROM messages WHERE conversation_id=? AND kind='notice' "
+                          "AND to_actor='human:ana'", (tid,)).fetchone()
+        assert nudge is not None
+        assert nudge["legacy_audience"] == "shared:finance"
+        assert threads.readable(c, cara, message["id"]) is False
+        assert threads.readable(c, cara, nudge["id"]) is False
+        assert "Can you confirm" not in nudge["body"]
+
+
+def test_an_ask_whose_recipient_lost_access_is_retired_not_nudged(api):
+    setup_attempt(api, "finance")
+    tid = bot_thread(api)
+    ask(api, tid)
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM thread_members WHERE thread_id=? AND actor='human:ana'", (tid,))
+    assert sweep(api, later(25)) == []
+    assert sweep(api, later(48)) == []
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT nudge_message_id FROM thread_followups").fetchall()
+    assert [r["nudge_message_id"] for r in rows] == [None]    # retired: the row stays so it is never reconsidered
+
+
+def test_one_failed_follow_up_does_not_stop_the_others(api, monkeypatch):
+    setup_attempt(api, "finance")
+    first, second = bot_thread(api), bot_thread(api)
+    ask(api, first, "First question?")
+    ask(api, second, "Second question?")
+    real_post = threads.post
+
+    def failing_post(c, principal, thread_id, body, **kw):
+        if thread_id == first and kw.get("kind") == "notice":
+            raise RuntimeError("the write for this one fails")
+        return real_post(c, principal, thread_id, body, **kw)
+    monkeypatch.setattr(threads, "post", failing_post)
+    done = sweep(api, later(25))
+    assert [d["thread"] for d in done] == [second]
+    with api.app.state.store.read() as c:
+        nudged = c.execute("SELECT conversation_id, nudge_message_id FROM thread_followups "
+                           "ORDER BY conversation_id").fetchall()
+    assert {r["conversation_id"]: r["nudge_message_id"] is not None for r in nudged} == {
+        first: False, second: True}
