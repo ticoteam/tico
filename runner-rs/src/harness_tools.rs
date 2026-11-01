@@ -1026,13 +1026,14 @@ impl Harnesses {
         ("queued".into(), format!("{} updates when no turn is using it", m.name))
     }
 
-    /// One pass: harvest the worker, switch in staged versions whose host no running turn uses (`busy`),
-    /// start the next job. Returns owner requests that finished: [(id, state, message)].
-    pub fn step(&mut self, busy: &HashSet<String>) -> Vec<(String, String, String)> {
+    /// One pass: harvest the worker, switch in staged versions whose host no running turn uses, start the next job.
+    /// `busy` is asked at each switch, not before: a turn that started a moment ago must hold its install in place.
+    /// Returns owner requests that finished: [(id, state, message)].
+    pub fn step(&mut self, busy: impl Fn() -> HashSet<String>) -> Vec<(String, String, String)> {
         self.harvest();
         for id in self.staged.keys().cloned().collect::<Vec<_>>() {
             let m = self.manifests[&id].clone();
-            if busy.contains(&m.host) {
+            if busy().contains(&m.host) {
                 continue;
             }
             let job = self.staged.remove(&id).unwrap();
@@ -1050,7 +1051,7 @@ impl Harnesses {
         for (id, m) in self.manifests.clone() {
             // Turned off: removed at a moment no turn uses it and nothing is being installed for it.
             if self.turned_off(&id)
-                && !busy.contains(&m.host)
+                && !busy().contains(&m.host)
                 && !self.staged.contains_key(&id)
                 && self.job.as_ref().is_none_or(|(j, _)| j.harness != id)
             {
@@ -1502,6 +1503,14 @@ pub fn expose_path(bin_dir: &Path, owned: bool) {
     }
 }
 
+/// On a machine Tico owns, give this process the PATH its turns get, for a command that makes no installer (`profile
+/// login`). Called from main while no other thread reads the environment. Anywhere else this does nothing.
+pub fn expose_if_owned(config: &Config) {
+    if crate::cloud_machine::detected() {
+        expose_path(&tools_dir(config).join("bin"), true);
+    }
+}
+
 /// A turn's hosts (its runtime and its fallback's), so no update is switched in under it. Execute calls this
 /// when a turn starts and `turn_done` when it ends (the parent wires it; until then any running turn counts).
 pub fn turn_runtimes(aid: &str, runtimes: &[String]) {
@@ -1548,7 +1557,13 @@ impl Relay {
         client.post(&format!("runner-harness-actions/{id}/report"), &body, None).await.is_ok()
     }
 
-    pub async fn tick(&mut self, h: &Arc<Mutex<Harnesses>>, client: &Client, busy: HashSet<String>, ask: bool) -> Result<(), crate::client::ApiError> {
+    pub async fn tick(
+        &mut self,
+        h: &Arc<Mutex<Harnesses>>,
+        client: &Client,
+        busy: impl Fn() -> HashSet<String> + Send + 'static,
+        ask: bool,
+    ) -> Result<(), crate::client::ApiError> {
         if ask {
             let reply = client.get("runner-harness-actions").await?;
             // The owner's on/off per harness here. A server from before the setting sends none: the computer
@@ -1570,7 +1585,9 @@ impl Relay {
             }
         }
         let h2 = h.clone();
-        let done = tokio::task::spawn_blocking(move || h2.lock().unwrap().step(&busy)).await.unwrap_or_default();
+        let done = tokio::task::spawn_blocking(move || h2.lock().unwrap().step(busy))
+            .await
+            .unwrap_or_default();
         for (id, state, message) in done {
             self.known.insert(id.clone(), state.clone());
             if !Self::send(client, &id, &state, &message).await {
@@ -1786,7 +1803,7 @@ mod tests {
 
         /// What a finished install leaves: a checked copy waiting for its switch.
         fn stage(&mut self, version: &str) {
-            let copy = self.h.tools.join("claude-code").join("abc");
+            let copy = self.h.tools.join("claude-code").join(version);
             fake_cli(&copy.join("node_modules/.bin/claude"), version);
             let job = Job {
                 kind: "install".into(),
@@ -1837,7 +1854,7 @@ mod tests {
         assert_eq!(m.turn_runs(), m.on_path);
         // Installed while a turn runs: nothing moves under it.
         m.stage("2.1.316");
-        m.h.step(&HashSet::from(["claude".to_string()]));
+        m.h.step(|| HashSet::from(["claude".to_string()]));
         assert_eq!(m.turn_runs(), m.on_path);
         let row = m.row();
         assert_eq!(
@@ -1855,7 +1872,7 @@ mod tests {
             )
         );
         // The turn ended: the turn, the readiness check and the report all see the managed copy.
-        m.h.step(&HashSet::new());
+        m.h.step(HashSet::new);
         assert_eq!(m.turn_runs(), m.managed());
         assert_eq!(
             m.h.locate(&m.h.manifests["claude-code"].clone()),
@@ -1899,7 +1916,7 @@ mod tests {
                 Err("npm exited 1: no network".to_string()),
             ))),
         ));
-        m.h.step(&HashSet::new());
+        m.h.step(HashSet::new);
         assert!(
             m.h.job.is_none(),
             "nothing is tried again during the back-off"
@@ -1930,6 +1947,73 @@ mod tests {
         assert_eq!(m.h.next().unwrap().kind, "install");
     }
 
+    /// A server that, on its one request, runs `meanwhile` before it answers `{}`.
+    async fn server_that(meanwhile: impl FnOnce() + Send + 'static) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = socket.read(&mut [0u8; 4096]).await.unwrap();
+            meanwhile();
+            let reply = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}";
+            socket.write_all(reply.as_bytes()).await.unwrap();
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_starts_while_the_relay_waits_on_the_server_keeps_its_install() {
+        let mut m = Machine::new(true);
+        m.h.check_every = f64::INFINITY; // no `step` here starts a real check
+        m.stage("2.1.300");
+        m.h.step(HashSet::new);
+        m.stage("2.1.316");
+        let old = m.h.tools.join("claude-code").join("2.1.300");
+        let spare = Harnesses::new(
+            m.dir.join("spare"),
+            m.dir.join("spare.json"),
+            BTreeMap::new(),
+        );
+        let tools = Arc::new(Mutex::new(std::mem::replace(&mut m.h, spare)));
+
+        let active: Arc<Mutex<HashSet<String>>> = Default::default();
+        let busy = |active: &Arc<Mutex<HashSet<String>>>| {
+            let active = active.clone();
+            move || crate::harness_tools::busy(&active.lock().unwrap().clone())
+        };
+        let turn = active.clone();
+        let url = server_that(move || {
+            turn.lock()
+                .unwrap()
+                .insert("a-turn-claimed-meanwhile".to_string());
+        })
+        .await;
+        let client = Client::new(&url, "t", 5, 1).unwrap();
+        let mut relay = Relay::new();
+        relay
+            .tick(&tools, &client, busy(&active), true)
+            .await
+            .unwrap();
+        assert!(
+            old.join("node_modules/.bin/claude").exists(),
+            "the turn's install is still there"
+        );
+        assert!(
+            tools.lock().unwrap().staged.contains_key("claude-code"),
+            "the new copy waits for the turn"
+        );
+
+        // The turn ended: the next tick switches.
+        active.lock().unwrap().clear();
+        relay
+            .tick(&tools, &client, busy(&active), false)
+            .await
+            .unwrap();
+        assert!(!old.exists());
+        assert!(!tools.lock().unwrap().staged.contains_key("claude-code"));
+    }
+
     #[test]
     fn a_persons_machine_or_docker_box_leaves_a_path_install_alone() {
         let mut m = Machine::new(false);
@@ -1948,7 +2032,7 @@ mod tests {
         // Even with a copy of ours beside it, the person's own still wins.
         m.stage("2.1.316");
         m.h.check_every = f64::INFINITY;
-        m.h.step(&HashSet::new());
+        m.h.step(HashSet::new);
         assert!(m.managed().exists());
         assert_eq!(m.turn_runs(), m.on_path);
         assert_eq!(
@@ -1960,7 +2044,7 @@ mod tests {
         std::fs::remove_file(&only_ours.on_path).unwrap();
         only_ours.stage("2.1.316");
         only_ours.h.check_every = f64::INFINITY;
-        only_ours.h.step(&HashSet::new());
+        only_ours.h.step(HashSet::new);
         only_ours.h.check_every = CHECK_EVERY_S;
         only_ours
             .h
@@ -1982,7 +2066,7 @@ mod tests {
         std::fs::remove_file(&m.on_path).unwrap();
         m.stage("2.1.316");
         m.h.check_every = f64::INFINITY;
-        m.h.step(&HashSet::new());
+        m.h.step(HashSet::new);
         for saved in [epoch_s(), epoch_s() + 90.0 * 86400.0] {
             // Checked minutes before the sleep, or by a clock ahead of this one.
             m.h.section("checked")
@@ -2036,10 +2120,10 @@ mod tests {
         std::fs::create_dir_all(dir.join("tools").join("cursor-agent").join("x")).unwrap();
         std::fs::create_dir_all(h.bin_dir()).unwrap();
         std::os::unix::fs::symlink("../cursor-agent/current/x", h.bin_dir().join(&cursor.executable)).unwrap();
-        h.step(&HashSet::from(["cursor".to_string()]));
+        h.step(|| HashSet::from(["cursor".to_string()]));
         assert!(dir.join("tools").join("cursor-agent").exists()); // busy: kept
         h.check_every = f64::INFINITY;
-        h.step(&HashSet::new());
+        h.step(HashSet::new);
         assert!(!dir.join("tools").join("cursor-agent").exists());
         assert!(std::fs::symlink_metadata(h.bin_dir().join(&cursor.executable)).is_err());
         let _ = std::fs::remove_dir_all(&dir);
