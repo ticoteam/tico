@@ -324,7 +324,8 @@ def _gateway_answer(base, key, body, deadline):
 def _rewrite_call(text, title, boss, deadline, gateway=None):
     """One model call that rewrites the composed description for this role, given up at `deadline` (a monotonic time):
     Gemini when the server has a key, else the Tico AI Gateway with the company's gateway key (`gateway`: its key and
-    base URL, from backend/gateway_connection.py `target`). No request starts once the deadline has passed, and each
+    base URL, from backend/gateway_connection.py `target`, or a function that reads them, called only here, inside the
+    time bound, so a draft that needs no model never reads the vault). No request starts once the deadline has passed, and each
     socket wait is at most the time left. It raises when there is neither key, the call fails or time is up."""
     from clients.docs_qa import NoKey, key
     try:
@@ -341,10 +342,13 @@ def _rewrite_call(text, title, boss, deadline, gateway=None):
                           data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "x-goog-api-key": secret})
         parts = json.loads(_answer(request, urlopen, deadline))["candidates"][0]["content"]["parts"]
         return "".join(part.get("text", "") for part in parts).strip()
-    if gateway and gateway[0]:
+    target = gateway() if callable(gateway) else gateway
+    if time.monotonic() >= deadline:
+        raise TimeoutError("the gateway key came too late")
+    if target and target[0]:
         body = {"model": GATEWAY_REWRITE_MODEL, "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": GATEWAY_MAX_TOKENS, "stream": False}
-        answer = _gateway_answer(G.safe_base(gateway[1]), gateway[0], body, deadline)
+        answer = _gateway_answer(G.safe_base(target[1]), target[0], body, deadline)
         return str(answer["choices"][0]["message"]["content"] or "").strip()
     raise NoKey("no Gemini key and no Tico AI Gateway key")
 

@@ -5491,10 +5491,14 @@ def create_app(settings=None):
         auth.domain(who)
         recruiting.may_draft(who)
         boss = ""
-        with store.read() as c:
-            gateway = gateway_connection.target(c, app.state.vault, settings)[:2]
-            if body.redraft and body.reports_to:
+        if body.redraft and body.reports_to:
+            with store.read() as c:
                 boss = recruiting.boss_name(auth, c, who, body.reports_to)
+
+        def gateway():
+            # Read only when the model is asked, inside its time bound: a catalog draft never waits on the vault.
+            with store.read() as c:
+                return gateway_connection.target(c, app.state.vault, settings)[:2]
         return recruiting.draft(onboarding, body.title, body.team, boss, body.redraft, gateway=gateway)
 
     @app.get("/api/v2/seats/{seat_id}")

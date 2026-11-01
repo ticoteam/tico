@@ -184,6 +184,11 @@ def test_without_a_gemini_key_a_draft_is_written_on_the_tico_gateway_or_stays_em
     assert post(api, "seats/draft", {"title": "Rust engineer"})["description"] == "Owns the Rust services, as Gemini wrote it."
     assert len(asked) == 1
 
+    # A draft that needs no model never reads the gateway key, so a vault that is down cannot break it.
+    from backend import gateway_connection
+    monkeypatch.setattr(gateway_connection, "target", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("vault down")))
+    assert post(api, "seats/draft", {"title": "QA engineer"})["source"] == "catalog"
+
 
 def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch):
     import io
