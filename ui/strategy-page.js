@@ -56,7 +56,7 @@ window.pageStrategy = async function pageStrategy() {
     if (row) { row.scrollIntoView({block: 'center'}); row.classList.add('strat-flash'); }
   };
   if (kept) open(kept.data);
-  for (const key of ['spend', 'rivals', 'news']) void strategyMarketRead(key, load);
+  for (const key of ['spend', 'rivals', 'news', 'growth']) void strategyMarketRead(key, load);
   let data;
   try { data = await get('/v2/strategy'); }
   catch (error) {
@@ -380,6 +380,12 @@ async function strategyMarketRead(key, load, fresh = false) {
   try {
     if (key === 'spend') value = await get('/v2/market/spend', opts);
     else if (key === 'rivals') value = (await get('/v2/market/competitors', opts))?.competitors || [];
+    else if (key === 'growth') {
+      // The Brand strip and the Go-to-market card (ui/app/brand-page.js, gtm-page.js).
+      const [brand, gtm, ch, src, k] = await Promise.all([get('/v2/brand', opts).catch(() => null), get('/v2/gtm', opts).catch(() => null),
+        get('/v2/growth/channels', opts).catch(() => null), get('/v2/growth/sources', opts).catch(() => null), get('/v2/growth/kpis', opts).catch(() => null)]);
+      value = {brand, gtm, channels: ch?.channels || [], sources: src?.sources || [], kpis: k?.kpis || []};
+    }
     else {
       const since = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 19);
       const [stats, insights] = await Promise.all([get(`/v2/listening/stats?since=${encodeURIComponent(since)}`, opts).catch(() => null),
@@ -394,6 +400,12 @@ async function strategyMarketRead(key, load, fresh = false) {
 function strategyPaintMarket(key) {
   if (!STRAT) return;
   const owner = strategyView(STRAT.data).owner;
+  if (key === 'growth') {
+    const g = STRAT_MKT.growth;
+    if ($('#strat-brand')) patchHTML($('#strat-brand'), g ? brandStripHtml(g.brand) : '');
+    if ($('#strat-gtm')) patchHTML($('#strat-gtm'), g ? gtmCardHtml(g.gtm, g) : '');
+    return;
+  }
   const box = {spend: '#strat-where', rivals: '#strat-rivals', news: '#strat-news'}[key];
   const el = $(box);
   if (!el) return;
@@ -440,7 +452,8 @@ const STRAT_FRAME = `<div id="strat-pub"></div>
   <div class="strat-memo" id="strat-doc">
     <section class="card strat-card strat-top strat-summary" id="strat-top"></section>
     <div class="strat-row"><section class="card strat-card strat-where" id="strat-where"></section><section class="card strat-card strat-bets-card" id="strat-sec-bets" aria-labelledby="strat-bets-h"></section></div>
-    <div class="strat-row"><section class="card strat-card" id="strat-rivals"></section><section class="card strat-card" id="strat-news"></section></div>
+    <div class="strat-brand" id="strat-brand"></div>
+    <div class="strat-row strat-gtm-row"><div class="strat-gtm" id="strat-gtm"></div><div class="strat-col"><section class="card strat-card" id="strat-rivals"></section><section class="card strat-card" id="strat-news"></section></div></div>
     <div class="strat-secs" id="strat-secs"></div>
     <div class="strat-add-sec" id="strat-add-sec"></div>
   </div>`;
@@ -467,7 +480,7 @@ function strategyRender() {
   const ol = $('#strat-bets-ol');
   patchHTML(ol, strategyBetRowsHtml(data, view));
   if (!ol.children.length) patchHTML(ol, `<li class="strat-bet strat-none-row"><span class="muted strat-empty">None yet</span></li>`);
-  for (const k of ['spend', 'rivals', 'news']) strategyPaintMarket(k);
+  for (const k of ['spend', 'rivals', 'news', 'growth']) strategyPaintMarket(k);
   patchHTML($('#strat-secs'), strategySectionsHtml(view));
   patchHTML($('#strat-add-sec'), view.owner && !STRAT.addSection ? '<button class="ghost strat-mini" type="button" data-section-add>Add a section</button>' : '');
   for (const [k, value] of typed) {
