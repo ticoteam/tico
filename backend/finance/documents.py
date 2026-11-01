@@ -1193,7 +1193,8 @@ def _arrived(ctx: Ctx, kind: str, doc: Any, money: Any, amount: int, day: str) -
     start, end = _window(day)
     signed = -amount if kind == "bill" else amount
     found = [r for r in SK.transfer_candidates(ctx.c, [str(money["id"])], signed, start, end)
-             if not r["request_id"] and not r["card_id"] and _named(str(r["counterparty"]), str(doc["contact_name"] or ""))
+             if not r["request_id"] and not r["card_id"] and str(r["kind"] or "") not in F.TRANSFER_KINDS
+             and _named(str(r["counterparty"]), str(doc["contact_name"] or ""))
              and not SAP.settled_from(ctx.c, "feed", str(r["id"]))
              and not (r["entry_id"] and len(SK.rows_of_entry(ctx.c, str(r["entry_id"]))) > 1)
              and not may_wait(ctx, r, money)]
