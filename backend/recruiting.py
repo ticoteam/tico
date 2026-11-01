@@ -24,6 +24,8 @@ import time
 from dataclasses import replace
 from urllib.request import Request, urlopen
 
+from clients import gateway as G
+
 from . import hubdb as H
 from . import lifecycle
 from . import models as M
@@ -39,6 +41,10 @@ REWRITE_BYTES = 64 * 1024               # the most of the model's answer read
 REWRITE_CHUNK = 8 * 1024                # read in pieces, so the deadline is checked as the answer arrives
 _REWRITES = threading.BoundedSemaphore(2)   # rewrites at once; a third keeps the composed text instead of queueing
 REWRITE_MODEL = "gemini-3.7-flash"
+# With no Gemini key (a hosted install), the Tico AI Gateway's General · Low tier at version 1.0 (Claude Haiku 5.5, the
+# cheapest general chat tier; backend/gateway_tiers.py). Pinned, so a later version never changes what a draft runs on.
+GATEWAY_REWRITE_MODEL = "tico-general-low-1.0"
+GATEWAY_MAX_TOKENS = 400
 # The tools a card's `prerequisites` name, as a person reads them. Tico's own tasks, docs and the open web need nothing
 # set up, so a candidate needing them has them; any other tool is set up on hire (required) or later (optional).
 TOOL_LABELS = {"hub": "Tico tasks", "docs": "Docs", "web": "Web", "mail": "Email", "calendar": "Calendar",
@@ -252,32 +258,31 @@ def may_draft(who):
         raise Problem("forbidden", "Only a person drafts a job description", 403)
 
 
-def _rewrite_call(text, title, boss, deadline):
-    """One Gemini call that rewrites the composed description for this role, given up at `deadline` (a monotonic
-    time): no request starts once it has passed, each socket wait is at most the time left, and the answer is read in
-    pieces with the deadline checked between them. It raises when there is no key, the call fails or time is up."""
-    from clients.docs_qa import key
-    secret = key()
-    left = deadline - time.monotonic()
-    if left <= 0:
-        raise TimeoutError("the key came too late")
+def _rewrite_prompt(text, title, boss):
+    """The instructions a rewrite is asked with: the composed text to rewrite for this role, or, with no template that is
+    the job, the role written from its title. The same words go to Gemini and to the Tico Gateway."""
     role = f"the role \"{title}\"" + (f", reporting to {boss}" if boss else "")
     rules = ("Plain words, under 150 words, no other headings, and never name a template, a model or a vendor. Answer "
              "with the text only.")
     if text:
-        prompt = (f"Rewrite this job description for {role}. Keep its shape: one opening line, then \"What you'll do\" "
-                  "with three to five short bullets starting with \"- \", then one \"Works in:\" line. " + rules
-                  + "\n\n" + text)
-    else:
-        # No template is this job: written from the title alone, in the same shape less the tools, which nobody named.
-        prompt = (f"Write a job description for an AI teammate in {role}. Its shape: one opening line saying what it "
-                  "owns, then \"What you'll do\" with three to five short bullets starting with \"- \", each a concrete "
-                  "piece of work it delivers. " + rules)
-    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
-    request = Request(f"https://generativelanguage.googleapis.com/v1beta/models/{REWRITE_MODEL}:generateContent",
-                      data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "x-goog-api-key": secret})
+        return (f"Rewrite this job description for {role}. Keep its shape: one opening line, then \"What you'll do\" "
+                "with three to five short bullets starting with \"- \", then one \"Works in:\" line. " + rules
+                + "\n\n" + text)
+    # No template is this job: written from the title alone, in the same shape less the tools, which nobody named.
+    return (f"Write a job description for an AI teammate in {role}. Its shape: one opening line saying what it "
+            "owns, then \"What you'll do\" with three to five short bullets starting with \"- \", each a concrete "
+            "piece of work it delivers. " + rules)
+
+
+def _answer(request, opener, deadline):
+    """The bytes of the answer to `request`, opened with `opener` (urlopen, or the Gateway's transport) and read until
+    `deadline` (a monotonic time): each socket wait is at most the time left, and the answer is read in pieces with the
+    deadline checked between them. It raises when the time is up or the answer is longer than REWRITE_BYTES."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("the request came too late")
     raw = b""
-    with urlopen(request, timeout=left) as response:
+    with opener(request, timeout=left) as response:
         # A server that keeps trickling bytes never lets a read time out, so the connection is cut at the deadline,
         # which ends any read waiting on it; each read also returns whatever has arrived and waits no longer than the
         # time left.
@@ -303,8 +308,45 @@ def _rewrite_call(text, title, boss, deadline):
                     raise ValueError("the model's answer is too long")
         finally:
             cut.cancel()
-    parts = json.loads(raw)["candidates"][0]["content"]["parts"]
-    return "".join(part.get("text", "") for part in parts).strip()
+    return raw
+
+
+def _gateway_answer(base, key, body, deadline):
+    """The Tico AI Gateway's answer to one chat request (`<base>/chat/completions`, OpenAI chat shape, not streamed), as
+    the parsed JSON. Sent with Tico's user agent and never through a redirect (clients/gateway.py `_send`), and read
+    under the same deadline as Gemini's answer. Its own function, so a test can answer without the network."""
+    request = Request(base + "/chat/completions", data=json.dumps(body).encode(), method="POST",
+                      headers={"Authorization": "Bearer " + key, "Content-Type": "application/json",
+                               "Accept": "application/json"})
+    return json.loads(_answer(request, G._send, deadline))
+
+
+def _rewrite_call(text, title, boss, deadline, gateway=None):
+    """One model call that rewrites the composed description for this role, given up at `deadline` (a monotonic time):
+    Gemini when the server has a key, else the Tico AI Gateway with the company's gateway key (`gateway`: its key and
+    base URL, from backend/gateway_connection.py `target`). No request starts once the deadline has passed, and each
+    socket wait is at most the time left. It raises when there is neither key, the call fails or time is up."""
+    from clients.docs_qa import NoKey, key
+    try:
+        secret = key()
+    except Exception:  # noqa: BLE001 - no Gemini key (NoKey) or it could not be read: the Gateway may still answer
+        secret = ""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("the key came too late")
+    prompt = _rewrite_prompt(text, title, boss)
+    if secret:
+        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+        request = Request(f"https://generativelanguage.googleapis.com/v1beta/models/{REWRITE_MODEL}:generateContent",
+                          data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "x-goog-api-key": secret})
+        parts = json.loads(_answer(request, urlopen, deadline))["candidates"][0]["content"]["parts"]
+        return "".join(part.get("text", "") for part in parts).strip()
+    if gateway and gateway[0]:
+        body = {"model": GATEWAY_REWRITE_MODEL, "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": GATEWAY_MAX_TOKENS, "stream": False}
+        answer = _gateway_answer(G.safe_base(gateway[1]), gateway[0], body, deadline)
+        return str(answer["choices"][0]["message"]["content"] or "").strip()
+    raise NoKey("no Gemini key and no Tico AI Gateway key")
 
 
 def _socket_of(response):
@@ -322,10 +364,11 @@ def _cut(sock):
         pass                                # already closed
 
 
-def _rewrite(text, title, boss):
+def _rewrite(text, title, boss, gateway=None):
     """The rewrite, or "" when it fails, is not done within REWRITE_SECONDS in all (finding the key, which may wait on a
     secret store, the request and reading the answer), or two are already running. The worker holds its place until it
-    ends, which is at most about one socket wait past the deadline, so slow calls never pile up."""
+    ends, which is at most about one socket wait past the deadline, so slow calls never pile up. The model is Gemini,
+    else the Tico Gateway with `gateway` (see `_rewrite_call`)."""
     if not _REWRITES.acquire(blocking=False):
         return ""
     deadline = time.monotonic() + REWRITE_SECONDS
@@ -333,7 +376,7 @@ def _rewrite(text, title, boss):
 
     def work():
         try:
-            out["text"] = _rewrite_call(text, title, boss, deadline)
+            out["text"] = _rewrite_call(text, title, boss, deadline, gateway)
         except Exception:  # noqa: BLE001 - no key, slow, failed or odd: the caller keeps the composed text
             out["text"] = ""
         finally:
@@ -349,25 +392,26 @@ def _rewrite(text, title, boss):
     return "" if worker.is_alive() else out.get("text", "")
 
 
-def draft(onboarding, title, team="", boss="", redraft=False):
+def draft(onboarding, title, team="", boss="", redraft=False, gateway=None):
     """A job description for a seat not posted yet: composed in well under a second from the catalog card that is the
     job the title names (`source` "catalog"). `redraft` asks the model to rewrite the composed text once (`source`
     "model"); with no key, a slow or failed call, or in a rehearsal or demo (which never reach a model or read a key),
     the composed text stands. When no card is the job, the model writes one from the title within the same bound
-    (`source` "model"), else "" (`source` "none")."""
+    (`source` "model"), else "" (`source` "none"). The model is Gemini when the server has a key, else the Tico AI
+    Gateway with `gateway` (the company's (key, base URL), or None)."""
     _, cards = _recruitable(onboarding)
     card = _best_card(cards, str(title or "")[:lifecycle.TITLE_MAX], team)
     offline = getattr(onboarding.settings, "rehearsal", False) or getattr(onboarding.settings, "demo", False)
     if not card:
         # Another job's description is no draft ("Rust engineer" is not the QA Engineer): the model writes one from the
         # title, under the same bound, or the box stays empty for the person's own words.
-        written = "" if offline else _rewrite("", str(title).strip()[:lifecycle.TITLE_MAX], boss)
+        written = "" if offline else _rewrite("", str(title).strip()[:lifecycle.TITLE_MAX], boss, gateway)
         if len(written) >= 40:
             return {"description": written[:lifecycle.DESCRIPTION_MAX], "source": "model"}
         return {"description": "", "source": "none"}
     text = compose(card)
     if redraft and not offline:
-        rewritten = _rewrite(text, str(title).strip()[:lifecycle.TITLE_MAX], boss)
+        rewritten = _rewrite(text, str(title).strip()[:lifecycle.TITLE_MAX], boss, gateway)
         if len(rewritten) >= 40:
             return {"description": rewritten[:lifecycle.DESCRIPTION_MAX], "source": "model"}
     return {"description": text, "source": "catalog"}

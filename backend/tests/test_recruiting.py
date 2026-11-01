@@ -54,7 +54,7 @@ def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewr
     # Redraft asks the model once, for this title and boss; a failure, or an answer too short to use, keeps the
     # composed text. The first draft never asks.
     asked = []
-    def rewrite(composed, title, boss, deadline):
+    def rewrite(composed, title, boss, deadline, gateway=None):
         asked.append((title, boss))
         return "Leads our support desk.\n\nWhat you'll do\n- Answer every ticket the same day"
     monkeypatch.setattr(recruiting, "_rewrite_call", rewrite)
@@ -88,7 +88,7 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
     whose name shares only "Engineer". With no template that is the job, the model writes one from the title alone
     (no template text to rewrite), under the same bound; with no model, the box stays empty."""
     asked = []
-    def write(composed, title, boss, deadline):
+    def write(composed, title, boss, deadline, gateway=None):
         asked.append((composed, title))
         return "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day"
     monkeypatch.setattr(recruiting, "_rewrite_call", write)
@@ -149,6 +149,40 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
     qa = post(api, "seats", {"title": "QA engineer", "reports_to": "coo"})
     first = post(api, f"seats/{qa['id']}/recruit", {})["candidates"][0]
     assert first["template"] == "issue-triage" and first["match"] == "strong"
+
+
+def test_without_a_gemini_key_a_draft_is_written_on_the_tico_gateway_or_stays_empty(api, monkeypatch):
+    """A hosted install has no Gemini key: the title's draft is written on the Tico AI Gateway with the company's key,
+    and with no gateway key it stays empty. Gemini still answers first when it has a key. The network is stubbed: the
+    Gemini lookup raises or answers, and the Gateway's answer is canned."""
+    import io
+    from clients import docs_qa
+    from clients import gateway as G
+    asked = []
+    def gateway_answer(base, key, body, deadline):
+        asked.append((base, key, body))
+        return {"choices": [{"message": {"content": "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day"}}]}
+    monkeypatch.setattr(recruiting, "_gateway_answer", gateway_answer)
+    monkeypatch.setattr(docs_qa, "key", lambda: (_ for _ in ()).throw(docs_qa.NoKey("no key")))
+    monkeypatch.delenv("TICO_GATEWAY_URL", raising=False)
+    monkeypatch.setenv("TICO_GATEWAY_KEY", "gw-test-key")
+    drafted = post(api, "seats/draft", {"title": "Rust engineer"})
+    assert drafted == {"description": "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day", "source": "model"}
+    [(base, key, body)] = asked
+    assert (base, key) == (G.DEFAULT_BASE, "gw-test-key") and body["model"] == recruiting.GATEWAY_REWRITE_MODEL
+    assert body["stream"] is False and body["messages"][0]["role"] == "user"
+    assert "the role \"Rust engineer\"" in body["messages"][0]["content"]
+
+    monkeypatch.setenv("TICO_GATEWAY_KEY", "")
+    assert post(api, "seats/draft", {"title": "Rust engineer"}) == {"description": "", "source": "none"}
+    assert len(asked) == 1
+
+    monkeypatch.setenv("TICO_GATEWAY_KEY", "gw-test-key")
+    monkeypatch.setattr(docs_qa, "key", lambda: "gemini-test-key")
+    gemini = {"candidates": [{"content": {"parts": [{"text": "Owns the Rust services, as Gemini wrote it."}]}}]}
+    monkeypatch.setattr(recruiting, "urlopen", lambda request, timeout: io.BytesIO(json.dumps(gemini).encode()))
+    assert post(api, "seats/draft", {"title": "Rust engineer"})["description"] == "Owns the Rust services, as Gemini wrote it."
+    assert len(asked) == 1
 
 
 def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch):
