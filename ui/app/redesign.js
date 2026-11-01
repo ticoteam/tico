@@ -41,8 +41,9 @@ function redesignNav() {
   libRow.append(library, libToggle);
   const subs = document.createElement('div'); subs.className = 'rd-lib'; subs.id = 'rd-lib';
   const tools = link('tools', RD_TOOLS, 'api', 'Tools');   // ui/app/redesign-library.js
+  const connections = link('connections', RD_CONNECTIONS, 'link', 'Connections');   // ui/app/connections.js
   const files = link('files', RD_FILES, 'folder_shared', 'Files');   // ui/app/pages.js
-  subs.append(...[pick('a[data-nav="docs"]'), files, pick('a[data-nav="meetings"]'), tools].filter(Boolean));
+  subs.append(...[pick('a[data-nav="docs"]'), files, pick('a[data-nav="meetings"]'), tools, connections].filter(Boolean));
   // Rules (ui/app/org-rules.js) folds the same way, its tabs under it, folded until opened.
   const rules = link('rules', RULES_ROUTE, RD_NAV_ICONS.rules, 'Rules'); rules.classList.add('rd-lib-head');
   const rulesRow = document.createElement('div'); rulesRow.className = 'nav-row rd-lib-row rd-rules-row';
@@ -105,6 +106,7 @@ function redesignNavCurrent(nav) {
   const r = S.route || '';
   if (nav === 'automations') return rdUnder(r, RD_AUTOMATIONS);
   if (nav === 'tools') return rdUnder(r, RD_TOOLS);
+  if (nav === 'connections') return r.split('?')[0] === RD_CONNECTIONS;
   if (nav === 'files') return rdUnder(r, RD_FILES);
   if (nav === 'strategy') return rdUnder(r, '#/strategy');
   if (nav === 'growth') return rdUnder(r, GR_ROUTE);

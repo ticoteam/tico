@@ -10,7 +10,7 @@ const {unrouted} = require('./support/routes.cjs');
     const page=await browser.newPage({viewport:{width:1440,height:1000},serviceWorkers:'block'});
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
     const calls=[];
-    const inbox={inbox_id:'ibx_a',kind:'email',name:'Account logins',address:'agent-acme-login@tico.team',state:'active',created_by:'human:ana',used_for:'',period_end:null,cancel_pending:0};
+    const inbox={inbox_id:'ibx_a',kind:'email',name:'Account logins',address:'agent-acme-login@tico.team',state:'active',created_by:'human:ana',used_for:'',period_end:null,cancel_pending:0,audience:'company',group_id:null};
     const evil='<img src=x onerror="window.INBOUND_PWNED=1">';
     let preview=evil;
     let connectionFailures=1;
@@ -38,6 +38,7 @@ const {unrouted} = require('./support/routes.cjs');
           }
           return json(result);
         }
+        if(p.endsWith('/audience')){const b=request.postDataJSON();Object.assign(inbox,{audience:b.audience,group_id:b.group_id||null});return json(inbox);}
         if(p.endsWith('/inboxes'))return json({inboxes:[inbox],configured:true,last_sync:1800000000,error:'',gaps:[]});
         if(p.endsWith('/messages'))return json({messages:[{seq:1,message_id:'ses:test:ibx_a',inbox_id:'ibx_a',kind:'email',received_at:1800000000,from:'Login service',subject:'Sign in',preview,has_code:true}],next:null,cursor:1});
         if(p.endsWith('/code'))return json({code:'123456',untrusted:true});
@@ -57,7 +58,7 @@ const {unrouted} = require('./support/routes.cjs');
       if(p==='/api/me')return json({id:'ana',role:'owner',name:'Ana',email:'ana@acme.example',cloud:true,registered:true,config});
       if(p==='/api/v2/config')return json(config);
       if(p==='/api/employees'||p==='/api/issues')return json([]);
-      if(p==='/api/humans'||p==='/api/people')return json({people:[{id:'ana',name:'Ana'}],teams:{}});
+      if(p==='/api/humans'||p==='/api/people')return json({people:[{id:'ana',name:'Ana'}],teams:{},org_groups:[{id:'sales',name:'Sales'}]});
       if(p==='/api/status')return json({cloud:true,active:[],queued:[],recent_runs:[],keeper_alive:true,health_issues:[]});
       if(p==='/api/v2/status')return json({bots:[]});
       if(p==='/api/v2/needs-you')return json({items:[]});
@@ -146,7 +147,15 @@ const {unrouted} = require('./support/routes.cjs');
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'page fits '+width);
       if(process.env.TICO_SHOTS)await page.screenshot({path:process.env.TICO_SHOTS+'/inbound-'+width+'.png'});
     }
+    // Who reads an inbox: an admin narrows it to a group from its row.
+    await page.getByText('Manage inboxes',{exact:true}).click();
+    await page.locator('[data-inbound-audience=ibx_a]').selectOption('sales');
+    await page.waitForFunction(()=>document.querySelector('[data-inbound-audience=ibx_a]')?.value==='sales'&&!document.querySelector('[data-inbound-audience=ibx_a]').disabled);
+    assert.deepEqual(calls.filter(c=>c.p.endsWith('/audience')).map(c=>[c.method,c.p,c.body]),[['PUT','/api/v2/inbound/inboxes/ibx_a/audience',{audience:'team',group_id:'sales'}]]);
     await page.evaluate(()=>{S.me.role='human';S.me.bot_admin=false;return inboundMount();});
+    await page.getByText('Manage inboxes',{exact:true}).click();
+    await page.locator('#inbound-inboxes td').filter({hasText:'Sales'}).waitFor();
+    assert.equal(await page.locator('[data-inbound-audience]').count(),0,'a member reads who reads it');
     assert.equal(await page.locator('#inbound-phone').count(),0);
     assert.equal(await page.locator('#inbound-phone-requests').count(),0);
     assert.equal(await page.locator('#inbound-connection-form').count(),0);

@@ -8031,6 +8031,8 @@ def create_app(settings=None):
     triggers.install(app, settings, store, auth, mutate)
     from . import webhooks
     webhooks.install(app, settings, store, auth, mutate)
+    from . import connections
+    connections.install(app, store, auth, settings)      # Library › Connections: every connection in one list
     # GitHub App per company: manifest setup, installation tokens for runners (docs/github-app.md).
     from .github_app import install_github_app
     install_github_app(app, settings, store)

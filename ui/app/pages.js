@@ -129,7 +129,7 @@ function pageFullDraw(state) {
 // A pin's place (backend/cards.py) as the app's address.
 function pagePlaceHref(place) {
   const [kind, ...rest] = String(place).split(':'), id = encodeURIComponent(rest.join(':'));
-  return kind === 'dashboard' ? OVERVIEW : kind === 'team' ? '#/team/' + id : kind === 'bot' ? '#/bot/' + id : '#/task/' + id;
+  return kind === 'dashboard' ? OVERVIEW : kind === 'person' ? HOME : kind === 'team' ? '#/team/' + id : kind === 'bot' ? '#/bot/' + id : '#/task/' + id;
 }
 function pageFullHead(state) {
   const p = state.page, head = $('#pg-view .pg-head');

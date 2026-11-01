@@ -1,7 +1,18 @@
 # Overview
 
-Open Overview from the desktop sidebar or the mobile More menu. Updates remains the default page. Overview has two tabs:
-**Dashboard**, the default (`#/overview`), and **Campus** (`#/overview/campus`).
+Open Overview from the desktop sidebar or the mobile More menu. It is where Tico opens. Overview has three tabs:
+**Mine**, your own My dashboard and the landing page (`#/home`); **Company**, the company's Dashboard (`#/overview`);
+and **Campus** (`#/overview/campus`).
+
+## My dashboard
+
+My dashboard is yours alone: the place `person:<id>` (`person:me` in the API, CLI and tools). Only you read and arrange
+it; BotOps and the Assistant arrange it for you when you ask. Nobody else, an admin included, can open it or learn what is
+pinned there. A pin there widens nothing: every card and page on it is read with your own rights, so it never shows you
+something you could not already read. You pin only cards you made and pages you may read.
+
+Unarranged, it shows **Needs attention** (your Needs you list), **Unread threads**, **My tasks** (open tasks you own, the
+soonest due first), **Updates** (the newest you may read, with your unread count) and **Latest pages**.
 
 ## Dashboard, team pages and cards
 
@@ -14,6 +25,7 @@ in the sidebar tree; its arrow still folds it) is the same grid for one group. B
 | `team:<group>` | Whoever may Read the group: **Seen by** opens the group's Access (permissions.md, People and groups) | The owner, admins, and a person who leads the group or a group above it |
 | `bot:<slug>` | Whoever may Read the bot | The bot itself, or a person who manages it |
 | `task:<id>` | Whoever may read the task | The bot on it (owner or requester), its people, someone who can move it |
+| `person:<id>` | That person only (My dashboard) | That person, or BotOps and the Assistant acting for them |
 
 A Dashboard nobody arranged shows Tasks by status, Done per week, Needs you and Latest pages for the company; a team page
 shows the first three for its team. The first change saves them as real pins. Arranging: drag a card by its grip, and its
@@ -31,6 +43,10 @@ grid is one column.
 | KPI | One KPI's latest value and trend | kpi |
 | Automation runs | Runs in the last 24 hours, failures first | team |
 | Latest pages | The newest current [pages](pages.md): not archived or replaced | team, count (1 to 10) |
+| Needs attention | The reader's own Needs you: count and top five | none |
+| Unread threads | Threads with something new for the reader: unread (a human message or one addressed to them) first, then bot activity | count (1 to 10) |
+| My tasks | Open tasks the reader owns, the soonest due first | count (1 to 10) |
+| Updates | The newest updates the reader may read, and how many are unread | count (1 to 10) |
 
 Every card is drawn for whoever reads it, from what they may already see: tasks they may read, their own Needs you, KPIs
 whose owner they may read, automations they may see. Spend shows to the owner and admins, and to a lead for a group they

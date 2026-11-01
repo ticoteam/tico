@@ -56,6 +56,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Strategy | The team's strategy: a draft the owner edits, numbered published versions, and the bets goals serve. |
 | Inbound | Shared company inbound email and SMS for people and agents; reads never consume messages. |
 | Triggers | Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again. |
+| Connections | Every connection in one list: who reads what it brings in, its bots and where to configure it. |
 | Webhook relay | Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py). |
 | Sleep when idle | A server Tico hosts stops after quiet hours and starts again on a webhook, a routine or a sign-in (backend/sleep_idle.py). |
 | Screening | Prompt-injection screening of outside text at the doors it comes in by (backend/screening.py). |
@@ -287,6 +288,13 @@ creates a free inbound address under the company quota, with an `Idempotency-Key
 `used_for` remains a local dependency note and is preserved when omitted or when HQ syncs a name change.
 Updating only dependency notes works even while HQ is unavailable.
 Phone edits and releases are owner/admin actions. Releasing an inbox with dependencies requires its exact address in `confirm`.
+
+Each inbox has an audience. `company`, the default, is everyone above. An owner or admin narrows it with
+`PUT inboxes/{id}/audience` and `{audience:"team",group_id}`: then only the people and bots in that group and the groups
+under it read it, with the owner and admins. Outside its audience an inbox is not there on any read: the inbox list,
+`messages` (search included), `cursor`, `wait`, a message and its code (`404`). Each change leaves an `audit_log` row
+(`inbound_inbox:<id>`) and an `inbound.inbox_audience` event. CLI: `hub inbound audience <id> company|team --group G`;
+MCP: `hub_inbound_audience`. Settings > More > Email & Phone shows who reads each inbox, and an admin changes it there.
 Phone cancellation keeps receiving until the paid period ends; email retirement is permanent.
 
 Phone provisioning requires TICO approval until billing is available. Owners and admins can

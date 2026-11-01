@@ -70,6 +70,7 @@ function route(hash = location.hash) {
     location.hash = MEETINGS + (id ? '?meeting=' + encodeURIComponent(id) : ''); return;
   }
   else if (S.route === '#/inbox' || S.route.startsWith('#/inbox?')) { location.hash = MAIL; return; }
+  else if (S.route === HOME) pageDashboard('person:me');
   else if (S.route === OVERVIEW) pageDashboard('dashboard');
   else if (S.route === OVERVIEW_CAMPUS) pageOverview();
   else if (S.route.startsWith(TEAM_PAGE)) pageDashboard('team:' + decodeURIComponent(S.route.slice(TEAM_PAGE.length).split('?')[0]));
@@ -149,7 +150,7 @@ function route(hash = location.hash) {
   else if (/^#\/computers\/[^/?]+\/screen$/.test(S.route)) pageComputerScreen(decodeURIComponent(S.route.split('/')[2]), from);
   else if (/^#\/computers\/[^/?]+\/performance$/.test(S.route)) pageComputerPerformance(decodeURIComponent(S.route.split('/')[2]));
   else if (isAutomationsRoute(S.route)) pageAutomations();
-  else location.hash = UPDATES;         // unknown or empty routes land on Updates, home
+  else location.hash = HOME;            // unknown or empty routes land on My dashboard, home
   redesignAfterRoute();
   // A new page starts at its top; a query change (a filter, an open row) or a redraw keeps the reader's place.
   if (newPath) $('#main').scrollTop = 0;

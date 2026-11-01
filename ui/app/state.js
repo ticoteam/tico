@@ -28,14 +28,14 @@ let BOOT_DEFAULT_ROUTE = false;
 const ENTRY_JUMP = entryJump();
 const ENTRY_ROUTE = entryRoute();
 if (ENTRY_ROUTE) history.replaceState(null, '', location.pathname + ENTRY_ROUTE);
-else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; history.replaceState(null, '', UPDATES); }   // Updates is home
+else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; history.replaceState(null, '', HOME); }   // My dashboard is home
 // Every team-facing name comes from the server (GET /api/me -> config, also GET /api/v2/config),
 // so a second environment shows its own application, team and assistant names. The defaults keep
 // an older server working, and strings built before /api/me answers read the names lazily.
 const CONFIG_DEFAULTS = {environment_id: '', company_name: '', app_name: 'Tico', assistant_name: 'Assistant',
                          assistant_bot: 'coo', public_url: '', runner_url: location.origin, visual_origin: '',
                          github_owner: '', local: false, release: '', onboarding_needed: false, version: '', update: null, s3_view_urls: {}};
-const S = { emps: [], people: [], orgGroups: [], status: null, statusPending: true, issues: [], me: null, route: location.hash || UPDATES,
+const S = { emps: [], people: [], orgGroups: [], status: null, statusPending: true, issues: [], me: null, route: location.hash || HOME,
             config: {...CONFIG_DEFAULTS},
             v2: {on: false, status: {}, needs: []},
             // What each main page last read (Tasks, Strategy, Automations, a dashboard, the campus's hours card): a

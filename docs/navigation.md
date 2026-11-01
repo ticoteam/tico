@@ -39,6 +39,8 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Read or write team knowledge | Docs → Internal docs; outside sources are Linked docs |
 | Find a bot, human or page | ⌘K, or the search icon at the end of the sidebar's **Ask Tico** row (phone: the Search tab) |
 | Find a file or page any bot made | Library → Files (`#/library/files`); search finds text inside ([Files](files.md#library--files)) |
+| See every connection, who reads it and its bots | Library → Connections (`#/library/connections`) ([Connect tools](connect-tools.md#connections)) |
+| Arrange your own landing page | Overview → Mine (`#/home`) ([Overview](overview.md#my-dashboard)) |
 | Open a page full size | Tap its card, or `#/page/<id>` ([Pages](pages.md)) |
 | Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the Strategy Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
 | See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |

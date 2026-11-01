@@ -131,6 +131,10 @@
       "description": "Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again."
     },
     {
+      "name": "Connections",
+      "description": "Every connection in one list: who reads what it brings in, its bots and where to configure it."
+    },
+    {
       "name": "Webhook relay",
       "description": "Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py)."
     },
@@ -5549,6 +5553,72 @@
         },
         "tags": [
           "Team"
+        ]
+      }
+    },
+    "/api/v2/connections": {
+      "get": {
+        "summary": "Slack, GitHub, mail bots, Email & Phone inboxes, meeting importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the company's they may read. Paged with cursor",
+        "operationId": "listConnections",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 400,
+              "default": "",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Connections"
         ]
       }
     },
@@ -15382,6 +15452,68 @@
         ]
       }
     },
+    "/api/v2/inbound/inboxes/{ident}/audience": {
+      "put": {
+        "summary": "An owner or admin sets who reads an inbox: company, or team with group_id (that group and the groups under it)",
+        "operationId": "setInboundInboxAudience",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboxAudience"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboundInbox"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      }
+    },
     "/api/v2/inbound/inboxes/{ident}/release": {
       "post": {
         "summary": "An admin retires email or cancels phone renewal",
@@ -20657,7 +20789,7 @@
     },
     "/api/v2/places/{place}": {
       "get": {
-        "summary": "A place's pins in order (dashboard, team:<group>, bot:<slug>, task:<id>), each card with what it shows the caller; unreadable pages are left out",
+        "summary": "A place's pins in order (dashboard, team:<group>, bot:<slug>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable pages are left out",
         "operationId": "getPlace",
         "parameters": [
           {
@@ -20707,7 +20839,7 @@
         ]
       },
       "put": {
-        "summary": "Save a Dashboard or team page (its default cards become pins); a team page's audience sets its group's Read",
+        "summary": "Save a Dashboard, team page or My dashboard (its default cards become pins); a team page's audience sets its group's Read",
         "operationId": "savePlace",
         "parameters": [
           {
@@ -37513,7 +37645,11 @@
               "spend",
               "kpi",
               "automation_runs",
-              "latest_pages"
+              "latest_pages",
+              "needs_attention",
+              "unread_threads",
+              "my_tasks",
+              "updates"
             ]
           },
           "title": {
@@ -38480,6 +38616,113 @@
           "owner_email",
           "public_url",
           "version"
+        ],
+        "additionalProperties": true
+      },
+      "Connection": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "slack",
+              "github",
+              "mailbox",
+              "inbox",
+              "meetings",
+              "trigger",
+              "webhook",
+              "postal",
+              "listening"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "on",
+              "off",
+              "waiting",
+              "error",
+              "paused"
+            ]
+          },
+          "scope": {
+            "enum": [
+              "company",
+              "team",
+              "person"
+            ]
+          },
+          "readers": {
+            "type": "string"
+          },
+          "bots": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "slug": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "slug"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "more_bots": {
+            "type": "integer"
+          },
+          "configure": {
+            "type": "string"
+          },
+          "can_configure": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bots",
+          "configure",
+          "id",
+          "kind",
+          "name",
+          "readers",
+          "scope",
+          "status"
+        ],
+        "additionalProperties": true
+      },
+      "ConnectionList": {
+        "type": "object",
+        "properties": {
+          "connections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Connection"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "connections",
+          "next"
         ],
         "additionalProperties": true
       },
@@ -45704,6 +45947,48 @@
         ],
         "additionalProperties": true
       },
+      "InboundInbox": {
+        "type": "object",
+        "properties": {
+          "inbox_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "audience": {
+            "enum": [
+              "company",
+              "team"
+            ]
+          },
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "address",
+          "audience",
+          "group_id",
+          "inbox_id",
+          "kind",
+          "name",
+          "state"
+        ],
+        "additionalProperties": true
+      },
       "InboundInboxes": {
         "type": "object",
         "properties": {
@@ -45956,6 +46241,34 @@
           "task"
         ],
         "additionalProperties": true
+      },
+      "InboxAudience": {
+        "properties": {
+          "audience": {
+            "type": "string",
+            "enum": [
+              "company",
+              "team"
+            ],
+            "title": "Audience",
+            "default": "company"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "InboxAudience"
       },
       "InboxSend": {
         "properties": {
@@ -49375,7 +49688,8 @@
               "dashboard",
               "team",
               "bot",
-              "task"
+              "task",
+              "person"
             ]
           },
           "saved": {

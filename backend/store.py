@@ -1177,6 +1177,7 @@ class Store:
             c.executescript(_support.SCHEMA)
             from . import inbound as _inbound
             c.executescript(_inbound.SCHEMA)
+            _inbound.ensure(c)
             from . import bills_address as _bills_address
             c.executescript(_bills_address.SCHEMA)
             from . import support_access as _support_access

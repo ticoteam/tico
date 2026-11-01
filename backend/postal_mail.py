@@ -871,11 +871,16 @@ def install(app, settings, store, auth):
         inbox_id: str | None = Field(default=None, max_length=120)
         senders: list[str] = Field(default_factory=list, max_length=SENDERS)
 
-    def intake_view(c):
+    def intake_view(c, who):
         row = c.execute("SELECT m.*, i.address FROM mail_intake m LEFT JOIN inbound_inboxes i ON i.inbox_id=m.inbox_id "
                         "WHERE m.singleton=1").fetchone()
         if not row:
             return {"intake": None}
+        from . import inbound
+        if row["inbox_id"] in inbound.hidden_inboxes(c, who, auth):
+            # An inbox narrowed to a group the reader is not in (backend/inbound.py audience): it is set, nothing more.
+            return {"intake": {"inbox_id": None, "address": "", "senders": [], "hidden": True,
+                               "set_by": row["set_by"], "set_at": row["set_at"]}}
         return {"intake": {"inbox_id": row["inbox_id"], "address": row["address"] or "", "senders": intake_senders(c),
                            "set_by": row["set_by"], "set_at": row["set_at"]}}
 
@@ -885,7 +890,7 @@ def install(app, settings, store, auth):
         who = request.state.identity
         with store.read() as c:
             member(c, who)
-            return intake_view(c)
+            return intake_view(c, who)
 
     @app.put("/api/v2/postal/intake")
     def mail_intake_set(request: Request, body: Intake):
@@ -910,6 +915,6 @@ def install(app, settings, store, auth):
                 c.execute("INSERT OR REPLACE INTO mail_intake(singleton,inbox_id,set_by,set_at,senders_json) "
                           "VALUES(1,?,?,?,?)", (body.inbox_id, who.actor, H.now(), json.dumps(senders)))
             H.event(c, who.actor, "mail.intake", body.inbox_id or "", {})
-            return intake_view(c)
+            return intake_view(c, who)
 
     return service
