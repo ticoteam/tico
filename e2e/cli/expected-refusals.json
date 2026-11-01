@@ -84,7 +84,7 @@
  "sql": "sql",
  "strategy diff": "not_found",
  "strategy publish": "lint",
- "support file": "support_busy",
+ "support file": "support_unreachable",
  "support send": "not_found",
  "task question": "identity",
  "task relate": "kind",

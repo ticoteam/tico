@@ -9,11 +9,11 @@ recorded in e2e/mcp/expected-refusals.json, so a new refusal (or a fixed one) ma
 import json
 import os
 import re
-import socket
 from pathlib import Path
 
 import pytest
 
+from backend.tests.live import block_outside_network
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_automation_api import NOTE_STEP
 from backend.tests.test_mcp import call
@@ -34,14 +34,8 @@ RECORD = os.environ.get("TICO_E2E_RECORD_REFUSALS", "")
 
 @pytest.fixture
 def no_outside_network(monkeypatch):
-    """External effects off: a name outside this computer does not resolve, so no tool can reach a provider."""
-    real = socket.getaddrinfo
-
-    def local_only(host, *args, **kwargs):
-        if host in ("localhost", "127.0.0.1", "::1"):
-            return real(host, *args, **kwargs)
-        raise socket.gaierror(-2, "the MCP smoke test has no network")
-    monkeypatch.setattr(socket, "getaddrinfo", local_only)
+    """External effects off: no tool can reach a provider."""
+    block_outside_network(monkeypatch, "the MCP smoke test has no network")
 
 
 @pytest.fixture

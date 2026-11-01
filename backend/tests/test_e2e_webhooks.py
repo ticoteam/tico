@@ -12,7 +12,7 @@ import pytest
 
 from backend import webhook_delivery as D
 from backend import webhooks as W
-from backend.tests.live import live  # noqa: F401
+from backend.tests.live import block_outside_network, live  # noqa: F401
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_webhooks import publish, verify
 
@@ -38,6 +38,12 @@ class Receiver(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+
+@pytest.fixture(autouse=True)
+def no_outside_network(monkeypatch):
+    """The receiver and the API are on this computer; nothing else is reached."""
+    block_outside_network(monkeypatch, "the webhook e2e test has no network")
 
 
 @pytest.fixture

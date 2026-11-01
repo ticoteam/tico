@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.tests.live import live  # noqa: F401
+from backend.tests.live import block_outside_network, live  # noqa: F401
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.tests.test_automation_api import NOTE_STEP
 from clients import hubcli
@@ -30,7 +30,8 @@ EXPECTED = json.loads((ROOT / "e2e" / "cli" / "expected-refusals.json").read_tex
 SKIPPED = json.loads((ROOT / "e2e" / "cli" / "skipped.json").read_text())
 # `hub <word>` in running text that is not a command: prose, or a stale reference the CLI no longer answers.
 STALE = json.loads((ROOT / "e2e" / "cli" / "stale.json").read_text())
-SCANNED = ("templates", "skills")
+TEMPLATES = ROOT / "templates"
+SKILLS = ROOT / "skills"
 SKIP_FILES = (".png", ".jpg", ".gif", ".pdf", ".woff", ".woff2", ".zip", ".gz", ".sqlite", ".db")
 # A `hub` command in running text: the word `hub`, then up to four words that name a command.
 COMMAND = re.compile(r"(?:^|[\s`$(\"'|&;])hub ((?:[a-z][a-z0-9-]*)(?: [a-z][a-z0-9-]*){0,3})")
@@ -66,24 +67,23 @@ def used_commands():
     """Every command path the templates and skills use, as {path: (leaf parser, a file that uses it)}, plus the
     `hub <word>` words that name no command at all (a stale reference the CLI does not answer)."""
     used, stale = {}, {}
-    for base in SCANNED:
-        for path in sorted((ROOT / base).rglob("*")):
-            if not path.is_file() or path.suffix in SKIP_FILES:
+    for path in [*sorted(TEMPLATES.rglob("*")), *sorted(SKILLS.rglob("*"))]:
+        if not path.is_file() or path.suffix in SKIP_FILES:
+            continue
+        try:
+            text = path.read_text()
+        except (UnicodeDecodeError, OSError):
+            continue
+        for match in COMMAND.finditer(text):
+            words = match.group(1).split(" ")
+            found, leaf = resolve(words)
+            rel = str(path.relative_to(ROOT))
+            if found is None:
+                stale.setdefault(words[0], rel)
                 continue
-            try:
-                text = path.read_text()
-            except (UnicodeDecodeError, OSError):
-                continue
-            for match in COMMAND.finditer(text):
-                words = match.group(1).split(" ")
-                found, leaf = resolve(words)
-                rel = str(path.relative_to(ROOT))
-                if found is None:
-                    stale.setdefault(words[0], rel)
-                    continue
-                if subparsers(leaf) is not None or leaf.get_default("fn") is None:
-                    continue                      # a group named in prose (`hub task`), not a command to run
-                used.setdefault(" ".join(found), (leaf, rel))
+            if subparsers(leaf) is not None or leaf.get_default("fn") is None:
+                continue                      # a group named in prose (`hub task`), not a command to run
+            used.setdefault(" ".join(found), (leaf, rel))
     return used, stale
 
 
@@ -158,6 +158,12 @@ def argv_for(path, leaf, file_path):
                 value = argument_value(action, path)
                 trailing += [action.option_strings[0], str(file_path) if value == "FILE" else value]
     return argv + EXTRA.get(" ".join(path), []) + trailing
+
+
+@pytest.fixture(autouse=True)
+def no_outside_network(monkeypatch):
+    """External effects off: a support ticket or a gateway call fails as unreachable instead of sending."""
+    block_outside_network(monkeypatch, "the CLI sweep has no network")
 
 
 def run_as_owner(live_url, workspace, argv):
