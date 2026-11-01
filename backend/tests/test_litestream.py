@@ -1,5 +1,6 @@
 """An actual Litestream process, WAL writes, and independent restores from its replica."""
 
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -132,9 +133,9 @@ def restored_ids(binary, replica, tmp_path):
         return [row[0] for row in c.execute("SELECT id FROM rows ORDER BY id")]
 
 
-def reset_stale_state(tmp_path, config, source):
+def reset_stale_state(tmp_path, config, source, **extra_env):
     """The command as the entrypoint runs it: `python -m backend.replication`, with `litestream` on PATH."""
-    env = {**os.environ, "PATH": str(tmp_path / "bin") + os.pathsep + os.environ["PATH"]}
+    env = {**os.environ, "PATH": str(tmp_path / "bin") + os.pathsep + os.environ["PATH"], **extra_env}
     return subprocess.run([sys.executable, "-m", "backend.replication", "reset-stale-litestream", str(config), str(source)],
                           cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
 
@@ -181,3 +182,94 @@ def test_a_populated_replica_is_left_alone_by_the_reset(tmp_path):
     with replicating(binary, config):
         write(source, range(100, 110))
     assert restored_ids(binary, replica, tmp_path) == list(range(5)) + list(range(100, 110))
+
+
+# -- backup generations, with the real binary --------------------------------------------------------------------------
+
+def stuck_copy(tmp_path, binary):
+    """A populated replica whose marker names an environment, and the local state a stuck Litestream leaves: far more L0
+    copies than a healthy install keeps, the newest written two hours after the replica's copies."""
+    config, source, replica, state = stale_state_setup(tmp_path, binary)
+    (replica / "environment.json").write_text(json.dumps({"environment_id": "acme1"}))
+    ahead = time.time() + 2 * 3600
+    for n in range(5001):
+        path = state / "ltx" / "0" / ("%016x-%016x.ltx" % (n + 1000, n + 1000))
+        path.write_bytes(b"ltx")
+        os.utime(path, (ahead, ahead))
+    return config, source, replica, state
+
+
+def generation_of(config):
+    return yaml.safe_load(config.read_text())["dbs"][0]["replica"]["url"].rsplit("/", 1)[1]
+
+
+def entrypoint_restore(tmp_path, backup):
+    """`docker/entrypoint.sh restore` into an empty data volume, with the real litestream on PATH. Returns (result, db)."""
+    data = tmp_path / "restored-volume"
+    data.mkdir()
+    env = {**os.environ, "PATH": str(tmp_path / "bin") + os.pathsep + str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
+           "TICO_DATA_DIR": str(data), "TICO_BACKUP_DIR": str(backup), "TICO_LITESTREAM_CONFIG": str(tmp_path / "restore.yml"),
+           "PYTHONPATH": str(ROOT)}
+    env.pop("TICO_BACKUP_URL", None)
+    env.pop("BASH_ENV", None)
+    result = subprocess.run(["bash", str(ROOT / "docker/entrypoint.sh"), "restore"], cwd=ROOT, env=env,
+                            capture_output=True, text=True, timeout=120)
+    return result, data / "hub.sqlite"
+
+
+def rows_of(db):
+    connection = sqlite3.connect(db)
+    try:
+        return [row[0] for row in connection.execute("SELECT id FROM rows ORDER BY id")]
+    finally:
+        connection.close()
+
+
+@pytest.mark.slow
+def test_a_stuck_copy_moves_to_a_new_generation_and_new_writes_land_there(tmp_path):
+    binary = litestream_binary()
+    config, source, replica, state = stuck_copy(tmp_path, binary)
+    result = reset_stale_state(tmp_path, config, source, TICO_BACKUP_DIR=str(replica))
+    assert result.returncode == 0, result.stderr
+    generation = generation_of(config)
+    assert generation.startswith("gen-") and "started backup generation " + generation in result.stdout
+    assert not state.exists()
+    assert json.loads((replica / "environment.json").read_text()) == {"environment_id": "acme1", "generation": generation}
+    with replicating(binary, config):
+        write(source, range(100, 110))
+    assert restored_ids(binary, replica / generation, tmp_path) == list(range(5)) + list(range(100, 110))
+    assert restored_ids(binary, replica, tmp_path) == list(range(5))     # the copy it had is kept as it was
+
+
+@pytest.mark.slow
+def test_a_restore_after_a_rotation_returns_the_newest_data(tmp_path):
+    binary = litestream_binary()
+    config, source, replica, _ = stuck_copy(tmp_path, binary)
+    assert reset_stale_state(tmp_path, config, source, TICO_BACKUP_DIR=str(replica)).returncode == 0
+    with replicating(binary, config):
+        write(source, range(100, 110))
+    result, restored = entrypoint_restore(tmp_path, replica)
+    assert result.returncode == 0, result.stderr
+    assert rows_of(restored) == list(range(5)) + list(range(100, 110))
+
+
+@pytest.mark.slow
+def test_a_root_layout_replica_without_a_generation_restores_through_the_entrypoint_as_before(tmp_path):
+    binary = litestream_binary()
+    source, replica = tmp_path / "live" / "hub.sqlite", tmp_path / "replica"
+    source.parent.mkdir()
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "litestream").symlink_to(binary.resolve())
+    config = tmp_path / "litestream.yml"
+    config.write_text(yaml.safe_dump({"dbs": [{"path": str(source), "replica": {"url": replica.as_uri(), "sync-interval": "100ms"}}]}))
+    connection = sqlite3.connect(source)
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("CREATE TABLE rows(id INTEGER PRIMARY KEY)")
+    connection.commit()
+    connection.close()
+    with replicating(binary, config):
+        write(source, range(5))
+        wait_until(lambda: any(replica.rglob("*.ltx")), 20)
+    result, restored = entrypoint_restore(tmp_path, replica)
+    assert result.returncode == 0, result.stderr
+    assert rows_of(restored) == list(range(5))

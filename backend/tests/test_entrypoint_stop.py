@@ -38,6 +38,7 @@ if [ "$1 $2" = "-m backend.server" ]; then
   while :; do sleep 0.05; done
 fi
 if [ "$1 $2 $3" = "-m backend.replication loop" ]; then exec sleep 600; fi
+if [ "$1 $2 $3" = "-m backend.replication reset-stale-litestream" ] && [ -n "$STUB_RESET_EXIT" ]; then exit "$STUB_RESET_EXIT"; fi
 exec %s "$@"
 """
 
@@ -129,6 +130,14 @@ def test_a_litestream_that_dies_stops_the_server_and_fails(tmp_path):
     seen = lines(log)
     assert seen.index("litestream died") < seen.index("server TERM"), seen
     assert "Litestream exited; stopping the server" in out
+
+
+def test_a_generation_switch_that_broke_off_keeps_litestream_from_starting_on_its_config(tmp_path):
+    # reset-stale-litestream exits 3 only after environment.json may name a new generation: Litestream must not start.
+    p, log = start(tmp_path, STUB_RESET_EXIT="3", TICO_STOP_GRACE="0.2")
+    out = finish(p, tmp_path)
+    assert p.returncode != 0, out
+    assert "litestream up" not in lines(log), lines(log)
 
 
 def test_backups_off_stops_the_server_the_same_way(tmp_path):

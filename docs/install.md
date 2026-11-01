@@ -1089,6 +1089,19 @@ to exist, or the backup cannot be read at all, it refuses to start and says why,
 and replicating it over your backup. A genuinely new install (nothing anywhere) starts as usual. To begin a new
 team over an existing backup on purpose, set `TICO_INITIALIZE_EMPTY=1` (or run `server --initialize-empty`).
 
+**A stuck copy moves to a new generation.** The copy is kept in generations: the backup location itself holds the first,
+and a new one is a folder `gen-<UTC time>/` beside it (for example `gen-20261101T120000Z/`). `environment.json` names the
+current generation in its `generation` field; a backup without that field is the first one. The server starts a new
+generation when the copy is stuck: its local state holds more than 5,000 copies (a healthy install keeps about 200), and
+the replica has not received a new copy for 20 minutes while the database kept changing. It then stops Litestream, the
+container restarts, and the new generation starts from the database. The copy it had stays where it is, and the other
+fields of `environment.json` are kept. To ask for a new generation by hand, create `/data/.tico-backup-heal` in the
+server's data volume and run `docker compose restart server`. A new generation is started at most once every 6 hours. A
+request inside that window is dropped and the server log says so; a copy that is still stuck when the window ends asks
+again. A request waits only while the backup location cannot be read. `restore` and a first start that restores read the current generation, so after a new one they
+return the newest data; if the current generation cannot be read they stop rather than read an older copy. Older
+generations are kept, and nothing deletes them automatically.
+
 <a id="restore"></a>
 
 **Restore into an empty data volume**, from the bucket or, with no `TICO_BACKUP_URL`, from `tico-backups`:
