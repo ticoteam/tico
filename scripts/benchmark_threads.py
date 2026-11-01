@@ -2,20 +2,31 @@
 """Thread write and live-event timings (docs/dev/threads-contract.md §9) on owned loopback services, fictional data.
 
 Targets: a write's p95 under 150 ms, and an event's p95 under 1 s from the writer's send to the viewer's read. One run
-holds, for --seconds: --viewers live streams on one thread (GET /api/v2/events?thread=), --writers humans posting to it
+holds, for --seconds: --viewers live streams on one room (GET /api/v2/events?thread=), --writers humans posting to it
 at --rate messages a second each (POST /api/v2/threads/{id}/messages), one writer on a thread with --followers
 followers, a --burst of clients reconnecting together halfway through, and one slow consumer that never reads.
-Writer and viewers share one process clock, so latencies are exact to the scheduler, not a network estimate.
+
+--path conversation runs the same load on the write path that predates threads: a direct conversation, streams with
+?conversation= and POST /api/v2/conversations/{id}/messages. It is the baseline, run on a commit without threads.
+
+The server runs in a child process (--serve), so the load generator's threads never share its interpreter lock: the
+latencies are the server's. BENCH_PROFILE=1 makes the server time its write and fan-out functions and print the totals
+when the run ends. Writer and viewers share one clock, so latencies are exact to the scheduler, not a network estimate.
 Run it on a clean VM with scripts/remote.py, not on a laptop, and keep the output with the commit it measured.
 """
 
 import argparse
+import contextlib
+import functools
 import http.client
+import importlib
 import json
 import os
 import platform
 import re
 import socket
+import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -28,13 +39,21 @@ sys.path.insert(0, str(ROOT))
 import conftest  # noqa: E402,F401  isolates the registry and AWS credentials, as the contract tests do
 import uvicorn  # noqa: E402
 
-from backend import events as E  # noqa: E402
 from backend import hubdb as H  # noqa: E402
 from backend.tests import test_api  # noqa: E402
 
 WRITE_P95_MS, EVENT_P95_S = 150, 1.0
 SENT = re.compile(r"sent=([0-9.]+)")
 TOKENS = ["ana-test", "ben-test", "cara-test"]          # the fixture's people; members of both threads
+DM_TOKENS = ["ana-test", "ben-test"]                    # the two people of the baseline's direct conversation
+# What the server times when BENCH_PROFILE=1: the write path, its fan-out and the stream's reads.
+PROFILED = (("backend.threads", ("post", "deliver", "mentions", "audience_has", "_followers", "_insert_delivery",
+                                 "_follow", "wake_mode", "thread_row", "can_post", "denial", "_outside", "view",
+                                 "message_readable", "readable_ids")),
+            ("backend.events", ("read", "latest", "oldest", "_Viewer.__init__", "_Viewer.prime", "_Viewer.conversation",
+                                "_Viewer.bot_readable", "_messages", "_threads", "_bots", "_tasks", "_needs_list")),
+            ("backend.message_links", ("refresh_dirty",)),
+            ("backend.org_rule_check", ("in_force", "apply", "preflight")))
 
 
 def percentile(values, share):
@@ -45,6 +64,68 @@ def percentile(values, share):
 def summary(values):
     return {"n": len(values), "p50": percentile(values, .5), "p95": percentile(values, .95),
             "max": max(values) if values else None}
+
+
+class Profile:
+    """Wall time per call of the functions in PROFILED, and of Store.transaction (its gate wait, body and commit)."""
+
+    def __init__(self, store_module):
+        self.calls, self.cpu = {}, {}
+        for module_name, names in PROFILED:
+            try:
+                module = importlib.import_module(module_name)
+            except ImportError:           # origin/main has no backend.threads: the baseline profiles what exists
+                continue
+            for name in names:
+                owner, attr = module, name
+                if "." in name:                   # Class.method
+                    owner = getattr(module, name.split(".", 1)[0], None)
+                    attr = name.split(".", 1)[1]
+                original = getattr(owner, attr, None) if owner is not None else None
+                if original is not None:
+                    label = f"{module_name.rsplit('.', 1)[-1]}.{name}"
+                    setattr(owner, attr, self.wrap(label, original))
+        gate = getattr(store_module, "WriterGate", None)
+        if gate is not None:                  # the in-process write queue: time waiting for it, apart from the hold
+            gate.acquire = self.wrap("store.writer_gate_acquire", gate.acquire)
+        original_transaction = store_module.Store.transaction
+        recorded = self.calls.setdefault("store.transaction", [])
+
+        @contextlib.contextmanager
+        def transaction(store):
+            began = time.perf_counter()
+            try:
+                with original_transaction(store) as c:
+                    yield c
+            finally:
+                recorded.append((time.perf_counter() - began) * 1000)
+        store_module.Store.transaction = transaction
+
+    def wrap(self, label, function):
+        recorded = self.calls.setdefault(label, [])
+        cpu_recorded = self.cpu.setdefault(label, [])
+
+        @functools.wraps(function)
+        def timed(*args, **kwargs):
+            began, cpu_began = time.perf_counter(), time.thread_time()
+            try:
+                return function(*args, **kwargs)
+            finally:
+                recorded.append((time.perf_counter() - began) * 1000)
+                cpu_recorded.append((time.thread_time() - cpu_began) * 1000)   # the CPU, not the wait for the GIL
+        return timed
+
+    def summary(self):
+        out = {}
+        for label, values in sorted(self.calls.items()):
+            out[label] = {"n": len(values), "total_ms": round(sum(values), 1),
+                          "mean_ms": round(sum(values) / len(values), 3) if values else None,
+                          "p95_ms": round(percentile(values, .95), 3) if values else None,
+                          "max_ms": round(max(values), 3) if values else None}
+            cpu = self.cpu.get(label) or []
+            if cpu:                                  # CPU time of the calling thread: what the call costs the server
+                out[label].update({"cpu_total_ms": round(sum(cpu), 1), "cpu_mean_ms": round(sum(cpu) / len(cpu), 3)})
+        return out
 
 
 def boot(directory):
@@ -64,6 +145,20 @@ def boot(directory):
     return generator, server, thread, sock.getsockname()[1], client.app
 
 
+def serve():
+    """The server alone, in this process: prints its port and database, serves until stdin closes, then prints the
+    profile (when BENCH_PROFILE is set) as its last line."""
+    with tempfile.TemporaryDirectory(prefix="threads-benchmark-") as directory:
+        generator, server, thread, port, app = boot(directory)
+        profile = Profile(sys.modules["backend.store"]) if os.environ.get("BENCH_PROFILE") else None
+        print(json.dumps({"port": port, "db": str(app.state.store.settings.db_path)}), flush=True)
+        sys.stdin.read()                                   # the load generator closes stdin when the run ends
+        server.should_exit = True
+        thread.join(10)
+        generator.close()
+        print(json.dumps({"profile": profile.summary() if profile else None}), flush=True)
+
+
 def call(conn, method, path, token, payload=None):
     headers = {"Authorization": f"Bearer {token}"}
     body = None
@@ -78,8 +173,9 @@ def call(conn, method, path, token, payload=None):
 
 
 def stream(port, token, query, state, started=None):
-    """Read one live stream to its end: the ready time, the latency of each of this run's messages, and resets."""
-    state.update({"ready": None, "latencies": [], "ids": set(), "reset": False, "error": None, "status": None})
+    """Read one live stream to its end: the ready time and seq, the latency of each of this run's messages, resets."""
+    state.update({"ready": None, "ready_seq": None, "latencies": [], "ids": set(), "reset": False, "error": None,
+                  "status": None})
     try:
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=300)
         state["conn"] = conn
@@ -99,12 +195,14 @@ def stream(port, token, query, state, started=None):
             name = event.get("event")
             if name == "ready" and state["ready"] is None:
                 state["ready"] = time.time() - opened
+                state["ready_seq"] = json.loads(event.get("data") or "{}").get("seq")
             elif name == "messages":
                 data = json.loads(event.get("data") or "{}")
-                body = (data.get("message") or {}).get("body") or ""     # a messages event nests the message
-                match = SENT.search(str(body))
-                if match and data.get("id") not in state["ids"]:
-                    state["ids"].add(data["id"])
+                message = data.get("message") if isinstance(data.get("message"), dict) else data  # nested or flat
+                match = SENT.search(str(message.get("body") or ""))
+                key = data.get("id") or message.get("id")
+                if match and key not in state["ids"]:
+                    state["ids"].add(key)
                     state["latencies"].append(time.time() - float(match.group(1)))
             elif name == "reset":
                 state["reset"] = True
@@ -135,7 +233,7 @@ def slow_consumer(port, token, query, state, stop):
         state["error"] = repr(error)
 
 
-def writer(port, token, thread_id, seconds, rate, state):
+def writer(port, token, path, tag, seconds, rate, state):
     """Posts at `rate` a second for `seconds`; each message carries its send time for the viewers to measure."""
     state.update({"writes": [], "ok": 0, "statuses": {}, "error": None})
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
@@ -144,24 +242,41 @@ def writer(port, token, thread_id, seconds, rate, state):
         time.sleep(max(0, next_at - time.time()))
         next_at += period
         n += 1
-        text = f"Benchmark message {thread_id[:8]}-{n} sent={time.time():.6f}"
+        text = f"Benchmark message {tag}-{n} sent={time.time():.6f}"
         began = time.perf_counter()
-        status, _ = call(conn, "POST", f"/api/v2/threads/{thread_id}/messages", token, {"text": text})
+        status, _ = call(conn, "POST", path, token, {"text": text})
         state["writes"].append((time.perf_counter() - began) * 1000)
         state["statuses"][status] = state["statuses"].get(status, 0) + 1
         state["ok"] += status == 200
 
 
-def seed_followers(app, thread_id, count):
+def seed_followers(db, thread_id, count):
     """Followers for the big thread: thread_members and thread_followers rows, as a company's roster would make."""
     now = H.now()
-    with app.state.store.transaction() as c:
+    with contextlib.closing(sqlite3.connect(str(db), timeout=60)) as c, c:
         c.executemany("INSERT INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) "
                       "VALUES(?,?,?,?,?,?,?)", [(uuid.uuid4().hex, thread_id, f"human:member-{i:04d}", "member",
                                                  "human:ana", now, now) for i in range(count)])
         c.executemany("INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,"
                       "created_at,updated_at) VALUES(?,?,?,1,'live','manual',0,?,?)",
                       [(uuid.uuid4().hex, thread_id, f"human:member-{i:04d}", now, now) for i in range(count)])
+
+
+def db_counts(db):
+    """Rows the run left behind: `changes` per topic (each row can wake every stream that reads it), and table counts.
+    A table this branch does not have is left out."""
+    out = {}
+    with contextlib.closing(sqlite3.connect(str(db), timeout=60)) as c:
+        for name, sql in (("changes_by_topic", "SELECT topic, COUNT(*) FROM changes GROUP BY topic"),
+                          ("messages", "SELECT COUNT(*) FROM messages"),
+                          ("message_deliveries", "SELECT COUNT(*) FROM message_deliveries"),
+                          ("thread_followers", "SELECT COUNT(*) FROM thread_followers")):
+            try:
+                found = c.execute(sql).fetchall()
+            except sqlite3.OperationalError:
+                continue
+            out[name] = dict(found) if name == "changes_by_topic" else found[0][0]
+    return out
 
 
 def hang_up(state):
@@ -178,48 +293,57 @@ def start(target, *args):
     return thread
 
 
-def run(args, port, app):
-    room = json.loads(call(http.client.HTTPConnection("127.0.0.1", port, timeout=60), "POST", "/api/v2/threads",
-                           "ana-test", {"title": "Benchmark room", "audience": "members",
-                                        "members": ["human:ben", "human:cara"]})[1])["id"]
-    big = json.loads(call(http.client.HTTPConnection("127.0.0.1", port, timeout=60), "POST", "/api/v2/threads",
-                          "ana-test", {"title": "Big room", "audience": "members",
-                                       "members": ["human:ben", "human:cara"]})[1])["id"]
-    seed_followers(app, big, args.followers)
+def scenario(args, port, db):
+    def connect():
+        return http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+
+    if args.path == "threads":
+        room = json.loads(call(connect(), "POST", "/api/v2/threads", "ana-test",
+                               {"title": "Benchmark room", "audience": "members",
+                                "members": ["human:ben", "human:cara"]})[1])["id"]
+        big = json.loads(call(connect(), "POST", "/api/v2/threads", "ana-test",
+                              {"title": "Big room", "audience": "members",
+                               "members": ["human:ben", "human:cara"]})[1])["id"]
+        seed_followers(db, big, args.followers)
+        scope, post_path, people = f"?thread={room}", f"/api/v2/threads/{room}/messages", TOKENS
+        big_path = f"/api/v2/threads/{big}/messages"
+    else:
+        opened = json.loads(call(connect(), "POST", "/api/v2/messages", "ana-test",
+                                 {"to": "ben", "text": "Benchmark room opened"})[1])
+        room = opened["conversation_id"]
+        scope, post_path, people = f"?conversation={room}", f"/api/v2/conversations/{room}/messages", DM_TOKENS
+        big_path = None
 
     viewers = [{} for _ in range(args.viewers)]
     for i, state in enumerate(viewers):
-        start(stream, port, TOKENS[i % len(TOKENS)], f"?thread={room}", state)
+        start(stream, port, people[i % len(people)], scope, state)
     deadline = time.time() + 60
     while time.time() < deadline and any(v.get("ready") is None for v in viewers):
         time.sleep(0.05)
-    for state in viewers:
-        state.setdefault("ready", None)
     subscribed = sum(1 for v in viewers if v.get("ready") is not None)
     if subscribed < args.viewers:
         raise SystemExit(f"only {subscribed} of {args.viewers} viewers were ready within 60 seconds")
+    resume = next(v["ready_seq"] for v in viewers if v.get("ready_seq") is not None)
 
     stop, slow = threading.Event(), {}
-    start(slow_consumer, port, TOKENS[0], f"?thread={room}", slow, stop)
+    start(slow_consumer, port, people[0], scope, slow, stop)
     time.sleep(0.5)
 
     room_writers = [{} for _ in range(args.writers)]
     big_writer = {}
-    threads = [start(writer, port, TOKENS[i % len(TOKENS)], room, args.seconds, args.rate, state)
-               for i, state in enumerate(room_writers)]
-    threads.append(start(writer, port, "ana-test", big, args.seconds, args.rate, big_writer))
+    threads = [start(writer, port, people[i % len(people)], post_path, f"{room[:8]}-{i}", args.seconds, args.rate,
+                     state) for i, state in enumerate(room_writers)]
+    if big_path:
+        threads.append(start(writer, port, "ana-test", big_path, "big", args.seconds, args.rate, big_writer))
 
     time.sleep(args.seconds / 2)                       # a reconnect burst, halfway through the run
-    with app.state.store.read() as c:
-        resume = E.latest(c)
     burst = [{} for _ in range(args.burst)]
     for i, state in enumerate(burst):
-        start(stream, port, TOKENS[i % len(TOKENS)], f"?thread={room}&after={resume}", state)
+        start(stream, port, people[i % len(people)], f"{scope}&after={resume}", state)
     for thread in threads:
         thread.join()
     stop.set()
-    time.sleep(2)
-    time.sleep(1)
+    time.sleep(3)
     deadline = time.time() + 60
     while time.time() < deadline and any(b.get("ready") is None and b.get("error") is None for b in burst):
         time.sleep(0.05)
@@ -236,10 +360,13 @@ def run(args, port, app):
     for state in viewers + burst + [slow]:
         hang_up(state)
     return {
-        "room_writes": {"posted_ok": posted_ok, "statuses": statuses, "ms": summary(write_ms),
+        "path": args.path,
+        "room_writes": {"posted_ok": posted_ok, "achieved_per_second": round(posted_ok / args.seconds, 2),
+                        "statuses": statuses, "ms": summary(write_ms),
                         "p95_target_ms": WRITE_P95_MS, "p95_met": (percentile(write_ms, .95) or 1e9) < WRITE_P95_MS},
-        "big_thread_writes": {"followers": args.followers, "statuses": big_writer.get("statuses", {}),
-                              "ms": summary(big_writer.get("writes", []))},
+        "big_thread_writes": None if not big_path else {
+            "followers": args.followers, "statuses": big_writer.get("statuses", {}),
+            "ms": summary(big_writer.get("writes", []))},
         "viewers": {"count": args.viewers, "errors": [v["error"] for v in viewers if v.get("error")],
                     "delivered_min": min(per_viewer) if per_viewer else 0,
                     "delivered_max": max(per_viewer) if per_viewer else 0, "expected_each": posted_ok,
@@ -255,6 +382,7 @@ def run(args, port, app):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--path", choices=("threads", "conversation"), default="threads")
     parser.add_argument("--seconds", type=int, default=60)
     parser.add_argument("--viewers", type=int, default=50)
     parser.add_argument("--writers", type=int, default=20)
@@ -262,17 +390,27 @@ def main():
     parser.add_argument("--followers", type=int, default=500)
     parser.add_argument("--burst", type=int, default=200)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--serve", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.serve:
+        return serve()
     if min(args.seconds, args.viewers, args.writers, args.followers, args.burst) < 1 or args.rate <= 0:
         parser.error("counts and seconds must be positive")
-    with tempfile.TemporaryDirectory(prefix="threads-benchmark-") as directory:
-        generator, server, thread, port, app = boot(directory)
-        try:
-            result = run(args, port, app)
-        finally:
-            server.should_exit = True
-            thread.join(10)
-            generator.close()
+    child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--serve"], cwd=str(ROOT),
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    ready = json.loads(child.stdout.readline() or "{}")
+    if "port" not in ready:
+        child.kill()
+        raise SystemExit("the server process did not start")
+    try:
+        result = scenario(args, ready["port"], ready["db"])
+        result["db_rows"] = db_counts(ready["db"])
+    finally:
+        child.stdin.close()
+        tail = child.stdout.read()
+        child.wait(timeout=300)
+    lines = [line for line in tail.splitlines() if line.strip()]
+    result["server_profile"] = json.loads(lines[-1]).get("profile") if lines else None
     result.update({"platform": platform.platform(), "python": sys.version.split()[0], "cpu_count": os.cpu_count(),
                    "load_average": os.getloadavg(), "parameters": {k: str(v) for k, v in vars(args).items()},
                    "targets": {"write_p95_ms": WRITE_P95_MS, "event_p95_s": EVENT_P95_S}})
