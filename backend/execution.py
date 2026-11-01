@@ -373,8 +373,15 @@ def lift_after_connection_change(c, settings, actor, bot):
     if (H.status(c, bot) or {}).get("state") != "limited":
         return
     why = model_change_hold(c, settings, bot)
+    if why == "login" and fallback_takes(c, settings, bot):
+        why = ""        # the named or default fallback runs the turn now (fallback_choice), so the held login does not
     if why:
         until = own_login_hold(c, settings, bot).get("until") or ""
+        if why == "login" and until:
+            # The bot stays held on its own login until that login's hold ends (a replaced plan's later deadline is no
+            # longer the one): the claim releases these at this time (wake_presets.release_quota_resets).
+            c.execute("UPDATE jobs SET hold_until=? WHERE bot=? AND state='queued' AND held=1 "
+                      "AND wake_class='quota-reset' AND hold_reason IS NULL", (until, bot))
         H.status_set(c, actor, bot, state="limited",
                      focus=("Connection changed; the new login is at its usage limit"
                             + (f" until {until[11:16]} UTC" if why == "login" and until else "")
@@ -390,17 +397,39 @@ def lift_after_connection_change(c, settings, actor, bot):
                  reason="Connection changed")
 
 
+def fallback_takes(c, settings, bot):
+    """Whether the bot's named or default fallback takes its turn on its computer now: the same answer the claim gives
+    (fallback_choice), on the config a claim runs (shared_bots.follow)."""
+    from .shared_bots import follow
+    place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+    if not place or not place["runner_id"]:
+        return False
+    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = follow(c, bot, json.loads(row[0]) if row and row[0] else {})
+    return fallback_choice(c, settings, place["runner_id"], bot, config) is not None
+
+
+def lift_limited_on_computer(c, settings, actor, runner_id, runtime):
+    """Re-judge each Rate limited bot on this computer that runs `runtime`, as its primary or its named fallback
+    (lift_after_connection_change). Its config is the one a claim runs (shared_bots.follow). Call it after the
+    computer's sign-in for `runtime` has changed in the database: the re-judge reads the login the bot would use now."""
+    from .shared_bots import follow
+    record = providers.load(c, settings)
+    for row in c.execute("SELECT s.bot FROM bot_status s JOIN assignments a ON a.bot=s.bot "
+                         "WHERE s.state='limited' AND a.runner_id=? ORDER BY s.bot", (runner_id,)).fetchall():
+        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row[0],)).fetchone()
+        filled = providers.fill(record, follow(c, row[0], json.loads(config[0]) if config and config[0] else {}))
+        if runtime == filled.get("runtime") or runtime in model_subscriptions.turn_runtimes(filled):
+            lift_after_connection_change(c, settings, actor, row[0])
+
+
 def lift_after_login_switch(c, settings, actor, runner_id, runtime):
     """A computer's login for `runtime` was switched to another account or key: the hold on it was the old account's.
     It ends as Try now does (login_holds.try_now: one probe turn tests the new account), and every bot that was
     Rate limited on it is freed."""
     for key in {k for k in (login_holds.canonical(c, runner_id, "", runtime), "") if k is not None}:
         login_holds.try_now(c, runner_id, key, runtime)
-    for row in c.execute("SELECT s.bot FROM bot_status s JOIN assignments a ON a.bot=s.bot "
-                         "WHERE s.state='limited' AND a.runner_id=?", (runner_id,)).fetchall():
-        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row[0],)).fetchone()
-        if providers.bot_choice(c, settings, json.loads(config[0]) if config and config[0] else {})[0] == runtime:
-            lift_after_connection_change(c, settings, actor, row[0])
+    lift_limited_on_computer(c, settings, actor, runner_id, runtime)
 
 
 # The room messages a claim hands its turn (the runner forwards only what arrived since the session last answered).
@@ -1564,9 +1593,14 @@ def clear_limits(c, settings, actor, bot):
     """Try now: lift the usage-limit cooldown for the bot and for every bot limited on the same
     runtime on the same computer, since they share the subscription a person has just renewed.
     Returns how many bots it cleared."""
-    def runtime(slug):
+    from .shared_bots import follow
+
+    def config(slug):
         row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
-        return providers.bot_choice(c, settings, json.loads(row[0]) if row and row[0] else {})[0]
+        return follow(c, slug, json.loads(row[0]) if row and row[0] else {})
+
+    def runtime(slug):
+        return providers.bot_choice(c, settings, config(slug))[0]
     mine, place = runtime(bot), c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
     bots = [bot]
     if place and place["runner_id"] and mine:
@@ -1574,12 +1608,10 @@ def clear_limits(c, settings, actor, bot):
                                          "WHERE s.state='limited' AND a.runner_id=? AND s.bot<>? ORDER BY s.bot",
                                          (place["runner_id"], bot)) if runtime(r[0]) == mine]
     for slug in bots:
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if place and place["runner_id"]:
             # The plan behind the login was just renewed: its hold ends for every bot on it, but only one queued job
             # tries it until that turn's result (login_holds.try_now), so a plan still spent sees one turn, not a burst.
-            login_holds.try_now(c, *login_key(c, settings, place["runner_id"], slug,
-                                            json.loads(row[0]) if row and row[0] else {}))
+            login_holds.try_now(c, *login_key(c, settings, place["runner_id"], slug, config(slug)))
         if (H.status(c, slug) or {}).get("state") == "limited":
             H.status_set(c, actor, slug, state="idle", focus="", reason="Try now")
         c.execute("UPDATE jobs SET held=0,hold_until=NULL WHERE bot=? AND state='queued' "
@@ -1590,12 +1622,14 @@ def clear_limits(c, settings, actor, bot):
 
 def own_login_hold(c, settings, bot):
     """The hold on the bot's own login on its computer (backend/login_holds.py), or {}: it can stand while the bot is
-    not `limited`, its work going on on a fallback."""
+    not `limited`, its work going on on a fallback. The bot's config is the one a claim runs (shared_bots.follow)."""
+    from .shared_bots import follow
     place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
     row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     if not place or not place["runner_id"] or not row:
         return {}
-    return login_holds.get(c, *login_key(c, settings, place["runner_id"], bot, json.loads(row[0] or "{}")))
+    config = follow(c, bot, json.loads(row[0] or "{}"))
+    return login_holds.get(c, *login_key(c, settings, place["runner_id"], bot, config))
 
 
 def _github_app(c):
