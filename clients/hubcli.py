@@ -21,6 +21,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            its next_before reads it. The run's prompt names it
     hub thread list [--cursor C] [--limit N]   your threads: needs attention, then unread, then recent; DMs apart
     hub thread show <thread> [--cursor C]      one thread in tree order: a message's sub-thread sits under it
+    hub thread home <actor>                    a teammate's Home thread, made on first use (needs Read on them)
+    hub thread dm <actor>                      your DM with one person or bot: the open one, or a new one (needs Write)
     hub thread create ["<title>"] [--audience members|team|company|personal] [--group G] [--member ACTOR ...]
                     [--body "<text>"]          the first message goes in with --body
     hub thread post <thread> "<text>" [--kind say|ask] [--to ACTOR] [--ref KIND:ID ...]
@@ -919,6 +921,12 @@ def parser():
     s.add_argument("thread")
     thread_page_flags(s)
     s.set_defaults(fn="thread show")
+    s = thread.add_parser("home", help="a teammate's Home thread, made on first use (needs Read on them)")
+    s.add_argument("actor", help="bot:<slug>, human:<id> or group:<id>")
+    s.set_defaults(fn="thread home")
+    s = thread.add_parser("dm", help="your DM with one person or bot: the open one, or a new one")
+    s.add_argument("actor", help="human:<id> or bot:<slug>")
+    s.set_defaults(fn="thread dm")
     s = thread.add_parser("create", help="start a thread: its audience decides who reads it")
     s.add_argument("title", nargs="?")
     s.add_argument("--audience", choices=["members", "team", "company", "personal"], help="members (private) by default")

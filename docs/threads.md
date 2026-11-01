@@ -78,6 +78,8 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 |---|---|---|
 | `hub thread list` | `hub_thread_list` | your threads: needs attention, then unread, then recent; DMs apart |
 | `hub thread show <thread>` | `hub_thread_show` | the messages in tree order, each sub-thread under its message |
+| `hub thread home <actor>` | `hub_thread_home` | a teammate's Home, made on first use; needs Read on them |
+| `hub thread dm <actor>` | `hub_thread_dm` | your DM with one person or bot, the open one or a new one; needs Write |
 | `hub thread create ["title"]` | `hub_thread_create` | start a thread: `--audience`, `--group`, `--member` (repeat), `--body` |
 | `hub thread post <thread> "..."` | `hub_thread_post` | a message: `--kind say\|ask`, `--to`, `--ref KIND:ID` (repeat) |
 | `hub thread reply <thread> <message> "..."` | `hub_thread_reply` | a reply in that message's sub-thread |
