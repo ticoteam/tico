@@ -3693,6 +3693,14 @@ for line in sys.stdin:
     /// over each attempt, and `ready` called with the projects folder first. Also returns what each process was
     /// written after its prompt, while it ran (empty when nothing).
     async fn claude_rig(turns: &[Value], compacting: &[usize], missing: &[usize], failing: &[usize], extra: Value, ready: impl Fn(&Path)) -> (Vec<String>, Vec<String>, Vec<Value>, Vec<String>) {
+        let (threads, prompts, completions, injected, _, dir) = claude_rig_kept(turns, compacting, missing, failing, extra, ready).await;
+        std::fs::remove_dir_all(&dir).ok();
+        (threads, prompts, completions, injected)
+    }
+
+    /// `claude_rig`, keeping its folder for the caller to inspect (remove it when done), and returning every request the
+    /// recording server saw, in order.
+    async fn claude_rig_kept(turns: &[Value], compacting: &[usize], missing: &[usize], failing: &[usize], extra: Value, ready: impl Fn(&Path)) -> (Vec<String>, Vec<String>, Vec<Value>, Vec<String>, Vec<(String, String, Value)>, PathBuf) {
         let _controls = RunControls;
         RUN_SESSION.with(|on| on.set(Some(true)));
         let dir = std::env::temp_dir().join(format!("tico-claude-session-{}", uuid::Uuid::new_v4().simple()));
@@ -3718,6 +3726,7 @@ for line in sys.stdin:
              if [ -e '{d}/missing-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 0, \"errors\": [\"No conversation found with session ID: '$id'\"], \"usage\": {{\"input_tokens\": 0, \"output_tokens\": 0}}}}'; exit 1; fi\n\
              echo '{{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"'$id'\"}}'\n\
              for c in $(cat '{d}/compacts-'$n 2>/dev/null); do echo '{{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"compact_metadata\": {{\"trigger\": \"auto\"}}}}'; done\n\
+             if [ -e '{d}/edits-'$n ]; then mkdir -p memory && echo 'rewritten' > memory/learnings.md && echo 'stray' > stray.txt && git add -A && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'a pass commit' && echo 'more' >> memory/learnings.md; fi\n\
              if [ -e '{d}/fails-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 1, \"errors\": [\"Synthetic failure\"], \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'; exit 1; fi\n\
              echo '{{\"type\": \"assistant\", \"message\": {{\"id\": \"m1\", \"content\": [{{\"type\": \"text\", \"text\": \"Done.\"}}]}}}}'\n\
              echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Done.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
@@ -3756,8 +3765,7 @@ for line in sys.stdin:
             let found: Vec<&Value> = seen.iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/a-claude-{n}/complete"))).map(|(_, _, b)| b).collect();
             found.first().map_or(Value::Null, |b| (*b).clone())
         }).collect();
-        std::fs::remove_dir_all(&dir).ok();
-        (threads, prompts, completions, injected)
+        (threads, prompts, completions, injected, seen, dir)
     }
 
     #[tokio::test]
@@ -4629,6 +4637,63 @@ for line in sys.stdin:
         }
         server.abort();
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    fn repo_git(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[tokio::test]
+    async fn a_memory_pass_that_edits_commits_and_fails_is_discarded_before_its_turn_settles() {
+        let base = Arc::new(Mutex::new(String::new()));
+        let remote_path = Arc::new(Mutex::new(PathBuf::new()));
+        let (base_out, remote_out) = (base.clone(), remote_path.clone());
+        let (_threads, _prompts, completions, _injected, seen, dir) = claude_rig_kept(
+            &[json!({"memory_pass": true})],
+            &[],
+            &[],
+            &[0],
+            json!({"lane": "task:t-pass", "task": {"id": "t-pass"}}),
+            move |projects: &Path| {
+                // A real checkout of the bot's repository, with a remote to compare main against.
+                let root = projects.parent().unwrap().to_path_buf();
+                let checkout = projects.join("bot-ops");
+                std::fs::remove_dir_all(&checkout).ok();
+                let remote = root.join("remote.git");
+                repo_git(&root, &["init", "--bare", "-q", "-b", "main", remote.to_str().unwrap()]);
+                let seed = root.join("seed");
+                repo_git(&root, &["clone", "-q", remote.to_str().unwrap(), seed.to_str().unwrap()]);
+                std::fs::write(seed.join("AGENT.md"), "# Ops\n").unwrap();
+                repo_git(&seed, &["add", "-A"]);
+                repo_git(&seed, &["commit", "-qm", "start"]);
+                repo_git(&seed, &["push", "-q", "origin", "HEAD:main"]);
+                repo_git(&root, &["clone", "-q", remote.to_str().unwrap(), checkout.to_str().unwrap()]);
+                *base_out.lock().unwrap() = repo_git(&checkout, &["rev-parse", "HEAD"]);
+                *remote_out.lock().unwrap() = remote;
+                // Process 0 of the fake Claude edits memory, commits, leaves more uncommitted, then fails.
+                std::fs::write(root.join("edits-0"), "").unwrap();
+            },
+        ).await;
+        let base = base.lock().unwrap().clone();
+        let remote = remote_path.lock().unwrap().clone();
+        assert_eq!(completions[0]["outcome"], "failed", "{:?}", completions[0]);
+        let session = crate::sessions::path_for(&dir.join("projects"), "ops", "t-pass");
+        assert_eq!(repo_git(&session, &["status", "--porcelain"]), "", "the pass left nothing uncommitted");
+        assert_eq!(repo_git(&session, &["rev-parse", "HEAD"]), base, "the pass's own commit was dropped");
+        assert!(!session.join("stray.txt").exists() && !session.join("memory").exists(), "the pass's files were removed");
+        assert_eq!(repo_git(&remote, &["rev-parse", "main"]), base, "main did not move");
+        let discarded = seen.iter().position(|(_, _, body)| body.to_string().contains("Nightly memory tidy: this pass changed"))
+            .expect("the discard was not recorded on the run");
+        let settled = seen.iter().position(|(_, path, _)| path.ends_with("/attempts/a-claude-0/complete")).expect("the turn settled");
+        assert!(discarded < settled, "the discard is recorded before the turn settles");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     async fn placement_wait_survives_start_window(kind: &str) {
