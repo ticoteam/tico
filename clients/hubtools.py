@@ -5646,6 +5646,171 @@ def ack(api, args):
     return api.post("messages/" + args["message_id"] + "/ack", {}, key=_key(args))
 
 
+# ----------------------------------------------------------------------------- threads (docs/threads.md)
+# A thread is any conversation: a root, a sub-thread (a side branch from one message), a DM or a Home. The routes are
+# /api/v2/threads (contract §10); the rules are the server's, and what a person or bot may read is decided there.
+THREAD_ID = _s("Thread id: from hub_thread_list or hub_thread_show")
+THREAD_CURSOR = _s("The page after this cursor: a page's next_cursor")
+THREAD_LIMIT = {"type": "integer", "minimum": 1, "maximum": 100, "description": "Items in this page (default 50)"}
+THREAD_ACTOR = _s("Who: human:<id>, bot:<slug> or group:<id>")
+
+
+def _thread_path(thread, *more):
+    return "/".join(["threads", quote(str(thread), safe="")] + list(more))
+
+
+def _thread_message(args, **more):
+    """A message body for a thread post or reply: the text, its kind, who it is addressed to and its references."""
+    body = {"text": args["text"], "kind": args.get("kind") or "say", "to": args.get("to"), **more}
+    if args.get("refs"):
+        body["refs"] = _refs(args["refs"])
+    return {key: value for key, value in body.items() if value is not None}
+
+
+@tool("hub_thread_list", "Your threads: Needs attention first, then unread, then recent; direct messages are listed "
+      "apart. Paged: next_cursor says whether more follow.",
+      {"cursor": THREAD_CURSOR, "limit": THREAD_LIMIT})
+def thread_list(api, args):
+    return api.get("threads", cursor=args.get("cursor"), limit=args.get("limit"))
+
+
+@tool("hub_thread_show", "One thread in tree order: each message is followed by the sub-thread that branched from it, "
+      "indented. Also its title and breadcrumb. Paged over the thread's own messages; next_cursor reads on.",
+      {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("thread",))
+def thread_show(api, args):
+    return api.get(_thread_path(args["thread"], "timeline"), cursor=args.get("cursor"), limit=args.get("limit"))
+
+
+@tool("hub_thread_create", "Start a thread. Its audience decides who reads it: members (the people and bots you add; "
+      "the default and private), team (the members of a group) or company (everyone). personal starts a direct message "
+      "with the members, and reuses an open one with exactly those members. `body` is the first message. A side topic "
+      "under a message is hub_thread_reply, not a new thread.",
+      {"title": _s("The title"),
+       "audience": {"type": "string", "enum": ["members", "team", "company", "personal"], "default": "members"},
+       "audience_group_id": _s("For audience team: the group's id"),
+       "members": {"type": "array", "items": {"type": "string"},
+                   "description": "The people, bots and groups to add, as human:<id>, bot:<slug> or group:<id>"},
+       "body": _s("The first message")})
+def thread_create(api, args):
+    body = {key: args[key] for key in ("title", "audience", "audience_group_id", "members", "body")
+            if args.get(key) not in (None, "", [])}
+    return api.post("threads", body, key=_key(args))
+
+
+@tool("hub_thread_post", "Post a message to a thread. kind ask asks the person or bot in `to` for an answer. A name in "
+      "the text does not add anyone: someone outside the thread gets a warning and nothing else, until you add them "
+      "with hub_thread_members_add.",
+      {"thread": THREAD_ID, "text": _s("The message"),
+       "kind": {"type": "string", "enum": ["say", "ask"], "default": "say"},
+       "to": THREAD_ACTOR,
+       "refs": {"type": "array", "items": {"type": "string"}, "description": "References like task:<id>"}},
+      required=("thread", "text"), writes=True)
+def thread_post(api, args):
+    return api.post(_thread_path(args["thread"], "messages"), _thread_message(args), key=_key(args))
+
+
+@tool("hub_thread_reply", "Reply in a message's sub-thread: a side branch under that message, made on its first reply. "
+      "Use it for a side topic; the main discussion stays in the thread.",
+      {"thread": THREAD_ID, "message": _s("The message the reply branches from"), "text": _s("The reply"),
+       "refs": {"type": "array", "items": {"type": "string"}, "description": "References like task:<id>"}},
+      required=("thread", "message", "text"), writes=True)
+def thread_reply(api, args):
+    return api.post(_thread_path(args["thread"], "messages"),
+                    _thread_message(args, parent_message_id=args["message"]), key=_key(args))
+
+
+@tool("hub_thread_sub", "Open a message's sub-thread without posting: it is made if it does not exist yet, and the "
+      "thread is returned either way.",
+      {"message": _s("The message whose sub-thread to open")}, required=("message",), writes=True)
+def thread_sub(api, args):
+    return api.post("threads", {"parent_message_id": args["message"]}, key=_key(args))
+
+
+@tool("hub_thread_follow", "Follow a thread, so its activity reaches you at the level you choose. Following never gives "
+      "access: a thread you cannot read stays hidden whatever you follow.",
+      {"thread": THREAD_ID,
+       "notify": {"type": "string", "enum": ["live", "mentions", "digest", "muted"], "default": "live",
+                  "description": "live: every new message; mentions: only what names you; digest: in a batch; "
+                                 "muted: unread counts stay, nothing is sent"}},
+      required=("thread",), writes=True)
+def thread_follow(api, args):
+    return api.call("PUT", _thread_path(args["thread"], "follow"), {"notify": args.get("notify") or "live"},
+                    key=_key(args))
+
+
+@tool("hub_thread_unfollow", "Stop following a thread. You keep whatever you can read.",
+      {"thread": THREAD_ID}, required=("thread",), writes=True)
+def thread_unfollow(api, args):
+    return api.call("DELETE", _thread_path(args["thread"], "follow"), None, key=_key(args))
+
+
+@tool("hub_thread_read", "Mark a thread read up to a message's seq (from hub_thread_show), or all of it with all. "
+      "A sub-thread's read state is its own: reading the thread does not clear its side branches.",
+      {"thread": THREAD_ID,
+       "seq": {"type": "integer", "minimum": 0, "description": "The seq of the last message you read"},
+       "all": {"type": "boolean", "default": False, "description": "Read the thread and every sub-thread under it"}},
+      required=("thread",), writes=True)
+def thread_read(api, args):
+    if args.get("all"):
+        return api.post(_thread_path(args["thread"], "read-all"), {}, key=_key(args))
+    if args.get("seq") is None:
+        raise APIError("invalid", "Give seq, the seq of the last message read, or all")
+    return api.post(_thread_path(args["thread"], "read"), {"seq": args["seq"]}, key=_key(args))
+
+
+@tool("hub_thread_search", "Search the threads you can read, message by message. Only messages you may see are found, "
+      "and a thread you cannot read is not named.",
+      {"q": _s("The words to find"), "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("q",))
+def thread_search(api, args):
+    return api.get("threads/search", q=args["q"], cursor=args.get("cursor"), limit=args.get("limit"))
+
+
+@tool("hub_thread_members_list", "Who can read a thread: its people, bots and groups, with each one's role. Paged.",
+      {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("thread",))
+def thread_members_list(api, args):
+    return api.get(_thread_path(args["thread"], "members"), cursor=args.get("cursor"), limit=args.get("limit"))
+
+
+@tool("hub_thread_members_add", "Add a person, bot or group to a thread, so it can read it. You need Write on them. A "
+      "group's members are resolved live, so leaving the group takes the access away.",
+      {"thread": THREAD_ID, "actor": THREAD_ACTOR,
+       "role": {"type": "string", "enum": ["member", "owner"], "default": "member"}},
+      required=("thread", "actor"), writes=True)
+def thread_members_add(api, args):
+    return api.post(_thread_path(args["thread"], "members"),
+                    {"actor": args["actor"], "role": args.get("role") or "member"}, key=_key(args))
+
+
+@tool("hub_thread_members_remove", "Remove a person, bot or group from a thread: they stop reading it. The thread's "
+      "owner or an admin only.",
+      {"thread": THREAD_ID, "actor": THREAD_ACTOR}, required=("thread", "actor"), writes=True)
+def thread_members_remove(api, args):
+    return api.call("DELETE", _thread_path(args["thread"], "members", quote(args["actor"], safe="")), None,
+                    key=_key(args))
+
+
+@tool("hub_thread_update", "Rename a thread, archive or unarchive it, or change who may read it: members, team (a group) "
+      "or company. Only its starter or an admin can make a thread public.",
+      {"thread": THREAD_ID, "title": _s("The new title"), "archived": {"type": "boolean"},
+       "audience": {"type": "string", "enum": ["members", "team", "company"]},
+       "audience_group_id": _s("For audience team: the group's id")},
+      required=("thread",), writes=True)
+def thread_update(api, args):
+    body = {key: args[key] for key in ("title", "archived", "audience", "audience_group_id") if args.get(key) is not None}
+    return api.patch(_thread_path(args["thread"]), body, key=_key(args))
+
+
+@tool("hub_thread_link_slack", "Link a Slack channel to a thread, both ways, or unlink it with off. Not available in "
+      "this build yet: the Slack bridge is not released.",
+      {"thread": THREAD_ID, "channel": _s("The Slack channel: its id or name"),
+       "off": {"type": "boolean", "default": False}},
+      required=("thread",), writes=True)
+def thread_link_slack(api, args):
+    # The Slack bridge (docs/slack.md) adds its own route here. Until it lands, say so plainly rather than fail on a
+    # missing route.
+    raise APIError("not_available", "Linking a Slack channel to a thread is not available in this build yet.")
+
+
 # ----------------------------------------------------------------------------- the Assistant
 @tool("hub_assistant_propose", "Assistant only: ask the person you are acting for to confirm something with "
       "side effects that matter: approving a Needs-you item, anything that leaves the team, "
