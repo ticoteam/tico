@@ -44,14 +44,14 @@ from .store import H, Problem
 log = logging.getLogger("tico.screening")
 
 SET = "injection-screen"
-SOURCES = ("webhook", "mail", "idea", "watcher", "document")
+SOURCES = ("webhook", "mail", "idea", "watcher", "document", "slack")
 MODES = ("off", "warn", "hold")
 LAYERS = ("patterns", "model")  # the two detectors, each switched on or off for every door
 # The first release observes only: Warn at every door, so nothing is held until the live eval
 # (`python -m evals.screening.run --live`) and a week of `screening.warned` audit rows show the hold line is safe. Turning
 # Hold on by default is this one line (webhook, idea and watcher; mail is never held).
-DEFAULTS = {"webhook": "warn", "mail": "warn", "idea": "warn", "watcher": "warn", "document": "warn"}
-NAMES = {"webhook": "Webhooks", "mail": "Mail", "idea": "Ideas", "watcher": "Watchers", "document": "Documents"}
+DEFAULTS = {"webhook": "warn", "mail": "warn", "idea": "warn", "watcher": "warn", "document": "warn", "slack": "warn"}
+NAMES = {"webhook": "Webhooks", "mail": "Mail", "idea": "Ideas", "watcher": "Watchers", "document": "Documents", "slack": "Slack"}
 KEY = "screening"               # registry_metadata: the modes
 MIN_CHARS = 200                 # shorter text gets the patterns only: too little to carry an attack worth a call
 MAX_CHARS = 20_000              # what the model reads, the same cut as a webhook's body in a task

@@ -7964,6 +7964,8 @@ def create_app(settings=None):
     install_slack_app(app, settings, store)
     from .slack_channels import install as install_slack_channels
     install_slack_channels(app, settings, store, auth)
+    from .slack_threads import install as install_slack_threads
+    install_slack_threads(app, settings, store, auth)
     from .directory import install_directory
     install_directory(app, settings, store, mutate)
     from .scim import install_scim
