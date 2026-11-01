@@ -191,7 +191,7 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/finance/payments")
     def finance_payments(request: Request, status: Literal["queued", "sending", "awaiting_bank_approval", "submitted",
-                                                           "settled", "returned", "failed", "cancelled",
+                                                           "settled", "returned", "failed", "canceled",
                                                            "unknown"] | None = None,
                          cursor: str | None = Query(None, max_length=100), limit: int = Query(50, ge=1, le=200),
                          view_as: str | None = None):

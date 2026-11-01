@@ -123,7 +123,10 @@ def test_a_person_above_marks_onboarding_complete_and_its_automation_turns_start
 def test_any_number_onboard_at_once_and_an_upgrade_maps_set_up_to_onboarding(api):
     onboarding(api, "ops", "finance", "cpo")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET onboarding_state='needs_onboarding' WHERE bot='cpo'")   # an older release's word
+        # A row an older release wrote, before bot_config.onboarding_state had its CHECK: readers still park it.
+        c.execute("PRAGMA ignore_check_constraints=ON")
+        c.execute("UPDATE bot_config SET onboarding_state='needs_onboarding' WHERE bot='cpo'")
+        c.execute("PRAGMA ignore_check_constraints=OFF")
         c.execute("UPDATE bot_config SET onboarding_state='onboarded' WHERE bot='coo'")
         c.execute("UPDATE bots SET state='planned' WHERE slug='doc-updater'")
     stages = {b["slug"]: (b["stage"], b["state"]) for b in get(api, "bots")}

@@ -1375,7 +1375,7 @@ def drop_step_noise(conn):
         flow = _release_flow()
         manager = flow.load(conn)["bot"] or flow.release_manager(conn)   # a paused one's jobs too
         dropped = conn.execute(
-            "UPDATE jobs SET state='cancelled',held=0 WHERE bot=? AND state='queued' AND held=1 AND message_id IN "
+            "UPDATE jobs SET state='canceled',held=0 WHERE bot=? AND state='queued' AND held=1 AND message_id IN "
             "(SELECT id FROM messages WHERE json_extract(refs_json,'$.news')='step_entered' "
             "AND json_extract(refs_json,'$.wake_batch')='rule' AND json_extract(refs_json,'$.rule')='profile_lead_digest')",
             (manager,)).rowcount if manager else 0

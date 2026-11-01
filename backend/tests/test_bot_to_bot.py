@@ -85,7 +85,7 @@ def test_a_quiet_message_is_never_lost_a_failed_run_hands_it_to_the_next_even_da
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
     post(api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='uncertain'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
         c.execute("UPDATE run_backoff SET wait_until=NULL")        # the fast failure's wait is over
     post(api, "chat/cpo", {"text": "Second"})
     second = claim(api, r, "cpo")

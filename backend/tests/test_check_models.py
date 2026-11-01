@@ -456,7 +456,7 @@ def test_a_held_check_that_leaves_the_board_lets_its_queued_turn_go(api, monkeyp
         # The task left the board while held, or before this server started: the next tick lets the turn go.
         c.execute("UPDATE tasks SET status=? WHERE id=?", (status, sub["id"]))
         assert check["job_id"] in execution.hold_unrunnable(c)
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "canceled"
         event = c.execute("SELECT detail_json FROM events WHERE action='job.suppress' AND target=?",
                           (check["job_id"],)).fetchone()
         assert json.loads(event[0])["task_id"] == sub["id"]
@@ -474,7 +474,7 @@ def test_a_declined_checks_notice_is_cancelled_on_claim_without_waiting_for_the_
     later(api, monkeypatch, machine, H.shift(H.now(), minutes=31))
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "canceled"
 
 
 def test_a_held_check_handed_to_another_bot_is_its_ordinary_task_when_it_closes(api):

@@ -426,7 +426,7 @@ def payment_linked(ctx: Ctx, pay: Any) -> None:
     released). A reconciled one keeps its bank line: its spend moves to the payment's line (`_reclass`), which takes
     in the hold, and the payment settles on it."""
     rid = str(pay["provider_request_id"] or "")
-    if not rid or str(pay["status"]) in ("settled", "failed", "cancelled", "returned"):
+    if not rid or str(pay["status"]) in ("settled", "failed", "canceled", "returned"):
         return
     row = SK.payment_debit(ctx.c, str(pay["money_account_id"]), rid)
     if row is None:

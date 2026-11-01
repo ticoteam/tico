@@ -17,7 +17,7 @@ function runStateWord(a) {
   return RUN_STATE_WORDS[word] || String(word || '').replace(/_/g, ' ');
 }
 // The job's state beside its recovery decision; a saved choice still waiting for its lane is held (backend/run_view.py).
-const RUN_JOB_WORDS = {uncertain: 'Held', cancelled: 'Cancelled', queued: 'Queued', leased: 'Running', running: 'Running',
+const RUN_JOB_WORDS = {uncertain: 'Held', canceled: 'Cancelled', queued: 'Queued', leased: 'Running', running: 'Running',
   input: 'Running', completed: 'Done'};
 // "Cancelled: dismissed by BotOps at 09:50Z": the job's state and the resume or dismiss decided about this try, read
 // from the decision record each time (job_recovery), so a later decision replaces it. The decision carries `state` only

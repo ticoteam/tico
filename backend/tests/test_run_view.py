@@ -402,9 +402,9 @@ def test_a_held_runs_decision_shows_beside_its_state_with_who_when_and_the_note(
 
     botops_decides(api, attempt["job_id"], attempt["id"], "dismiss", DEV_563_NOTE, "2026-10-26T09:50:45.103088Z")
     [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
-    assert run["job_state"] == "cancelled"
+    assert run["job_state"] == "canceled"
     assert run["decision"] == {"decision": "dismiss", "attempt_id": attempt["id"], "current": True,
-                               "state": "cancelled", "by": "bot:botops", "by_kind": "botops",
+                               "state": "canceled", "by": "bot:botops", "by_kind": "botops",
                                "at": "2026-10-26T09:50:45.103088Z", "note": DEV_563_NOTE}
     from backend.run_view import decision_label
     assert decision_label(run["decision"], lambda a: "BotOps") == (

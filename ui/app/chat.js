@@ -37,7 +37,7 @@ function v2ChatRoom(conversations, slug, mode = v2ChatMode(slug)) {
     && (!me || (c.participants || []).includes(me))) || null;
 }
 // A run still to show as live: not one that finished, nor one a person stopped or dismissed.
-const v2RunLive = x => !!x && !['completed', 'cancelled'].includes(x.state);
+const v2RunLive = x => !!x && !['completed', 'canceled'].includes(x.state);
 // `room` is a chat the caller already holds (the Assistant page: GET /v2/assistant gives its room and messages), so
 // nothing is looked up; `empty` is what an empty thread shows instead of the default line.
 async function v2ChatLoad(slug, room = null) {

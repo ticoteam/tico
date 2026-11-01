@@ -113,7 +113,7 @@ def test_deferred_input_moves_to_the_next_run_and_the_first_run_keeps_its_task(a
         unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         packet = H.task_create(c, "bot:finance", "Packet", "Figures.", "bot:ops", private=False, lint=False)
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
     post(api, "chat/ops", {"text": "Check the public numbers"})
     first = claim(api, r, "ops")
     post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
@@ -156,7 +156,7 @@ def test_a_deferred_input_moves_to_the_next_run_after_the_history_sweep_indexed_
         unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         packet = H.task_create(c, "bot:finance", "Packet", "Figures.", "bot:ops", private=False, lint=False)
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
     post(api, "chat/ops", {"text": "Check the public numbers"})
     first = claim(api, r, "ops")
     post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
@@ -180,7 +180,7 @@ def test_private_task_input_is_not_folded_into_another_tasks_run_and_runs_on_its
                                 private=True, lint=False)
         public = H.task_create(c, "human:ana", "Public review", "Review the public numbers.", "bot:ops",
                                private=False, lint=False)
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND message_id NOT IN "
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id NOT IN "
                   "(SELECT m.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE cv.task_id=?)",
                   (public["id"],))
     first = claim(api, r, "ops")
@@ -316,7 +316,7 @@ def test_a_requester_bot_steers_its_delegated_tasks_running_turn(api):
     r = two_bots(api)
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:finance", "Close the books", "March.", "bot:ops", private=False, lint=False)
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND bot<>'ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND bot<>'ops'")
     active = claim(api, r, "ops")
     post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, r["token"])
     post(api, "chat/finance", {"text": "Tell ops to use the new ledger"})
@@ -361,7 +361,7 @@ def test_a_comment_taken_back_while_the_turn_read_it_does_not_break_the_turns_fi
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (kept["id"],)).fetchone()[0] == \
             ("completed" if outcome == "completed" else "uncertain")
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (gone["id"],)).fetchone()[0] == \
-            ("completed" if outcome == "completed" else "cancelled")
+            ("completed" if outcome == "completed" else "canceled")
 
 
 def test_a_turn_whose_own_comment_was_taken_back_still_finishes(api):
@@ -370,7 +370,7 @@ def test_a_turn_whose_own_comment_was_taken_back_still_finishes(api):
     ready(api, r, ["ops"])
     task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
     path = f"tasks/{task['id']}/comments"
     said = post(api, path, {"text": "Please look at the totals"})["comment"]
     first = claim(api, r, "ops")
@@ -404,7 +404,7 @@ def test_a_comment_taken_back_before_the_runtime_got_it_is_cancelled_not_requeue
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state,attempt_id FROM jobs WHERE message_id=?", (kept["id"],)).fetchone()[:] == \
             ("queued", None)
-        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (gone["id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (gone["id"],)).fetchone()[0] == "canceled"
         assert not c.execute("SELECT 1 FROM attempt_inputs WHERE message_id IN (?,?)", (kept["id"], gone["id"])).fetchone()
 
 
@@ -415,7 +415,7 @@ def _a_turn_started_by_a_comment(api, bot="ops", r=None):
         ready(api, r, [bot])
     task = post(api, "tasks", {"owner": bot, "title": "Review the report", "body": "Please review."})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
     path = f"tasks/{task['id']}/comments"
     said = post(api, path, {"text": "Please look at the totals"})["comment"]
     attempt = claim(api, r, bot)

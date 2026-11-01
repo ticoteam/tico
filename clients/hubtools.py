@@ -4513,9 +4513,9 @@ def webhook_send(api, args):
 
 
 @tool("hub_webhook_sends", "An endpoint's send log, newest first: type, subject, state (ready, sending, delivered, failed, "
-      "cancelled, withheld), attempts, last status and next attempt. Give `send` for one send with its attempts.",
+      "canceled, withheld), attempts, last status and next attempt. Give `send` for one send with its attempts.",
       {"id": _s("The endpoint id"), "send": _s("One send's id (wh_...)"),
-       "state": {"type": "string", "enum": ["ready", "sending", "delivered", "failed", "cancelled", "withheld"]},
+       "state": {"type": "string", "enum": ["ready", "sending", "delivered", "failed", "canceled", "withheld"]},
        "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "offset": {"type": "integer", "minimum": 0},
        "on_behalf_of": ON_BEHALF_OF}, required=("id",))
 def webhook_sends(api, args):
@@ -4526,7 +4526,7 @@ def webhook_sends(api, args):
     return who.get(_hook_path(args, "sends"), state=args.get("state"), limit=args.get("limit"), offset=args.get("offset"))
 
 
-@tool("hub_webhook_retry", "Send a failed, cancelled or delivered send again now (a delivered one is a resend); it keeps its id, so a receiver that already got it drops the repeat.",
+@tool("hub_webhook_retry", "Send a failed, canceled or delivered send again now (a delivered one is a resend); it keeps its id, so a receiver that already got it drops the repeat.",
       {"id": _s("The endpoint id"), "send": _s("The send's id (wh_...)"), "on_behalf_of": ON_BEHALF_OF},
       required=("id", "send"), writes=True)
 def webhook_retry(api, args):
@@ -5519,7 +5519,7 @@ def turns(api, args):
       "- queues.<bot>.held: jobs a wake preset holds until its release.\n"
       "- queues.<bot>.dead / dead_ids: queued jobs behind an interrupted run nobody reviewed; they never run until that run is resumed or dismissed. Never counted as queued.\n"
       "- queues.<bot>.uncertain: interrupted runs waiting for that review.\n"
-      "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, attempt, current (false once the job has run a later try), state (held, cancelled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Cancelled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
+      "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, attempt, current (false once the job has run a later try), state (held, canceled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Cancelled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
       "- failures.total / by_cause / by_bot: failed, interrupted or expired runs since `since`; causes quota, capacity, restart, timeout, crash, stopped, each with n, first and last time.\n"
       "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).\n"
       "- exceptions[] (the engineering type's manager only; absent for anyone else): key (subject:kind), kind (stuck, run, pool, slots, backlog, outage, refusal, merge), cause and since; ticket (id, number, title, step, owner) when it is about a ticket, check (id, title, owner) when the open check below it is what stands, bot, step or tickets for the others, pr and head on a failed merge. One row per subject and kind, oldest first.",

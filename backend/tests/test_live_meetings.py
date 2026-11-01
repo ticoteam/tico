@@ -150,7 +150,7 @@ def test_meeting_only_bot_read_and_parallel_turns_with_transcript_link(live):
         direct_job_states = c.execute("SELECT DISTINCT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
                                       "WHERE json_extract(m.refs_json,'$.live_meeting.meeting_id')=?",
                                       (mid,)).fetchall()
-        assert {row[0] for row in direct_job_states} == {"cancelled"}
+        assert {row[0] for row in direct_job_states} == {"canceled"}
 
 
 def test_live_turns_use_concurrent_runner_jobs_and_hidden_pass(live):
@@ -248,7 +248,7 @@ def test_end_cancels_open_turns_and_records_final_window_pass(live):
         states = [row[0] for row in c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
                                                "WHERE json_extract(m.refs_json,'$.live_meeting.meeting_id')=?",
                                                (queued["id"],))]
-        assert states == ["cancelled"]
+        assert states == ["canceled"]
 
     final_window = connect(live, title="Partial final window")
     attach(live, final_window["id"], "ops")
@@ -468,7 +468,7 @@ def test_attachment_requires_write_and_keeper_delivery_keeps_human_contact_polic
     with live.app.state.store.read() as c:
         job = c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
                         "WHERE json_extract(m.refs_json,'$.live_meeting.turn_id')=?", (turn_id,)).fetchone()
-    assert job["state"] == "cancelled"
+    assert job["state"] == "canceled"
 
 
 @pytest.mark.slow
@@ -1241,9 +1241,9 @@ def test_a_private_turn_with_no_copy_of_the_repository_ends_and_the_meeting_says
 
     first = fails("Ops, the press embargo lifts Nov 17 9am PT. Got it?")
     with live.app.state.store.transaction() as c:
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0] == "canceled"
         live.app.state.execution.auto_reconcile(c)
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0] == "canceled"
     assert post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None, "not resumed"
     turns = get(live, f"live-meetings/{mid}")["router"]["turns"]
     assert [(t["status"], t["skip_reason"]) for t in turns] == [("skipped", "bot_execution_private_checkout")]

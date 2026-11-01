@@ -257,7 +257,7 @@ def test_a_person_stop_is_unchanged(api):
     renewed = post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
     assert renewed['stop'] is True and 'stop_reason' not in renewed
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 3}, machine['token'])
-    assert job_state(api, attempt['job_id']) == 'cancelled'
+    assert job_state(api, attempt['job_id']) == 'canceled'
     assert end_reason(api, attempt).startswith('Cancelled by ')
 
 

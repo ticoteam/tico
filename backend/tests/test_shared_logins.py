@@ -139,14 +139,14 @@ def test_a_turn_waiting_for_its_login_whose_task_is_closed_meanwhile_is_skipped_
     assert post(api, f"attempts/{a['id']}/renew", {}, r["token"])["stop"] is True
     post(api, f"attempts/{a['id']}/complete", {"outcome": "interrupted", "last_seq": 1}, r["token"])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (a["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (a["job_id"],)).fetchone()[0] == "canceled"
         assert not c.execute("SELECT 1 FROM messages WHERE kind='notice' AND body LIKE 'Stopped by%'").fetchone()
     assert claim(api, r) is None
     # A person's own comment waiting behind the login is never skipped: their words still get an answer.
     tid = post(api, "tasks", {"owner": "ops", "title": "Count the lines", "body": "Count them."})["id"]
     post(api, f"tasks/{tid}/comments", {"text": "@ops count the blank ones too"})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND message_id IN "
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
                   "(SELECT id FROM messages WHERE from_actor NOT LIKE 'human:%')")
     b = claim(api, r)
     with api.app.state.store.transaction() as c:
@@ -169,5 +169,5 @@ def test_a_person_stopping_a_turn_before_it_started_ends_it_unstarted(api):
     # The runner stops before it acknowledges the start (waiting for its login, or preparing): nothing ran.
     post(api, f"attempts/{a['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, r["token"])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (a["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (a["job_id"],)).fetchone()[0] == "canceled"
         assert c.execute("SELECT 1 FROM messages WHERE kind='notice' AND body='Stopped by Ana'").fetchone()

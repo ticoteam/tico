@@ -193,7 +193,7 @@ const BILLS = [
     payment: {id: 'pay-3', status: 'awaiting_bank_approval', amount: 124000, on: '2026-11-11', error: null}}),
   // Its last payment was rejected in Mercury: the bill is open again and says so.
   doc('bill', 'bill-4', 'DD-8812', {id: 'v-datadog', name: 'Datadog'}, 'open', 139000, '2026-10-15', {aging: '1_30', days_late: 16,
-    payment: {id: 'pay-4', status: 'cancelled', amount: 139000, on: '2026-10-14', error: 'rejected in Mercury'}}),
+    payment: {id: 'pay-4', status: 'canceled', amount: 139000, on: '2026-10-14', error: 'rejected in Mercury'}}),
   // Its scheduled payment's approval was declined before any payment existed: open, and says so.
   doc('bill', 'bill-5', 'GH-77', {id: 'v-github', name: 'GitHub'}, 'open', 21000, '2026-10-20', {
     payment: {id: null, status: 'denied', amount: 21000, on: '2026-10-15', error: 'declined by human:ana'}}),

@@ -30,7 +30,7 @@ def profile(c, slug, name):
 
 def settled(c):
     """Every wake so far has had its run: what is left queued is what a test adds."""
-    c.execute("UPDATE jobs SET state='done' WHERE state='queued'")
+    c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
 
 
 def doing(c, row):
@@ -56,7 +56,7 @@ def run(c, row, state, minutes_ago, stop=None):
     msg = H._write_message(c, "human:ana", row["owner"], "go", H.conversation(c, row["conversation_id"]), "say",
                            {"task": row["id"]}, None, None)
     job = c.execute("SELECT id FROM jobs WHERE message_id=?", (msg["id"],)).fetchone()[0]
-    c.execute("UPDATE jobs SET state='done' WHERE id=?", (job,))
+    c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
     aid = H.new_id()
     c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,started,"
               "finished,lane,stop_requested) VALUES(?,?,?,'r1',1,?,?,?,?,?,?,?,?)",
@@ -253,7 +253,7 @@ def test_a_turn_that_ends_doing_with_nothing_queued_wakes_its_owner_once_and_the
         before = unheld_jobs(c, "ops")
         assert step_age.turn_ended(c) == [check["id"]]
         assert unheld_jobs(c, "ops") == before + 1, "a reviewer's profile would hold a status check; this one wakes"
-        c.execute("UPDATE jobs SET state='done' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='ops'")
         assert step_age.turn_ended(c) == [], "once per stay at the step"
         [entry] = listed(c, typ, "stuck")
         assert entry["check"]["id"] == check["id"]

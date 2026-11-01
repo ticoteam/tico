@@ -332,7 +332,7 @@ def test_heartbeat_then_idle_stop_at_break_even_then_wake_with_a_resize(cloud):
     assert cloud.tick(60) == ["heartbeat"]
     assert cloud.tick(10) == ["heartbeat"]                      # once a minute, not every look
     with cloud.store.transaction() as c:                        # the queued chat is not why it stays on
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops'")
     cloud.hq.calls.clear()
     cloud.at[0] = cloud.row()["active_at"] + 299
     cloud.tick()
@@ -364,7 +364,7 @@ def test_work_its_machine_never_takes_does_not_start_it_again_but_new_work_does(
 def test_work_queued_as_it_goes_quiet_keeps_it_on_for_the_runner_to_take(cloud):
     enrolled(cloud)
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops'")
     start = cloud.row()["active_at"]
     cloud.at[0] = start + 290
     work(cloud, text="Another thing")                           # queued (real clock) just before the idle stop
@@ -600,7 +600,7 @@ def test_a_create_hq_answers_as_failed_counts_too(cloud):
 def test_always_on_starts_with_no_work_and_never_idles(cloud):
     enrolled(cloud)
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops'")
     cloud.tick(400)
     assert cloud.row()["state"] == "stopped"
     post(cloud.api, "bots/ops/cloud-machine", {"always_on": True})
@@ -614,7 +614,7 @@ def test_always_on_starts_with_no_work_and_never_idles(cloud):
 def test_a_frequent_watcher_keeps_it_on_and_a_due_one_wakes_it(cloud):
     r = enrolled(cloud)
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops'")
 
     def ran(seconds_ago, every):
         when = H.shift(H.now(), seconds=-seconds_ago + (cloud.at[0] - time.time()))
@@ -709,7 +709,7 @@ def test_moving_to_another_computer_stops_it_and_the_machine_can_then_be_deleted
     enrolled(cloud)
     other = runner(cloud.api, label="Office Mac")
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops'")
         generation = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()["generation"]
     post(cloud.api, "bots/ops/cloud-machine", {"size": "small"}, expected=200)
     delete = cloud.api.delete("/api/v2/bots/ops/cloud-machine", headers=headers())
@@ -800,7 +800,7 @@ def shared_enrolled(cloud, *bots):
 
 def idle(cloud):
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
 
 
 def test_placement_defaults_by_role_and_a_person_switches_it(cloud):

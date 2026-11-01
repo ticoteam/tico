@@ -68,4 +68,4 @@ def test_a_capped_turn_resumes_its_session_without_checkpointing_partial_output_
     post(api, f"attempts/{again['id']}/complete", {"outcome": "interrupted", "yielded": True,
          "last_seq": 0}, machine["token"])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (again["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (again["job_id"],)).fetchone()[0] == "canceled"

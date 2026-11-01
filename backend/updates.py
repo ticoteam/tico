@@ -413,9 +413,9 @@ def settle_sent(c, row):
     job = c.execute("SELECT j.state, a.state attempt_state FROM jobs j LEFT JOIN attempts a ON a.id=j.attempt_id "
                     "WHERE j.message_id=?", (row["message_id"],)).fetchone()
     age = (H.parse_ts(H.now()) - H.parse_ts(row["sent_at"])).total_seconds()
-    if job and job["state"] in ("completed", "cancelled", "uncertain", "held"):
+    if job and job["state"] in ("completed", "canceled", "uncertain", "held"):
         _retry_or_miss(c, row, {"completed": "its run ended without posting an update",
-                                   "cancelled": "the request was cancelled",
+                                   "canceled": "the request was cancelled",
                                    "uncertain": "its run stopped part-way",
                                    "held": "it could not run"}.get(job["state"], job["state"]))
         return False

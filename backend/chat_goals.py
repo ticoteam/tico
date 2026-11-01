@@ -168,7 +168,7 @@ def clear_task_goal(c, conv):
     now = H.now()
     c.execute("UPDATE chat_goals SET status='cleared',note=?,updated_at=?,ended_at=? WHERE id=?",
               ("The task's goal was turned off", now, now, goal["id"]))
-    c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND message_id IN "
+    c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
               "(SELECT id FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.goal_action') IS NOT NULL)",
               (conv["id"],))
     H._write_message(c, H.KEEPER, "bot:" + goal["bot"], "/goal clear", conv, "say",
@@ -292,7 +292,7 @@ def set_goal(c, auth, who, cid, action, objective, send):
                    now if status == "cleared" else None, who.actor, cid))
     goal = current(c, cid)
     # Superseded controls must never reset a newer objective when the computer catches up.
-    c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND message_id IN "
+    c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
               "(SELECT id FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.goal_action') IS NOT NULL)", (cid,))
     text = "/goal clear" if action in ("pause", "clear") else "/goal " + goal["objective"]
     message = send(c, who, M.MessageCreate(to="bot:" + bot, text=text, conversation_id=cid, command=True))

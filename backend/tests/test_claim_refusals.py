@@ -177,7 +177,7 @@ def test_work_fenced_behind_an_interrupted_run_on_its_task(api):
     task = new_task(api, "first")
     attempt = claim(api, machine)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='lost',finished=? WHERE id=?", (H.now(), attempt["id"]))
+        c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (H.now(), attempt["id"]))
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=(SELECT job_id FROM attempts WHERE id=?)", (attempt["id"],))
     post(api, "tasks/" + task["id"] + "/comments", {"text": "Is the first part done?"})
     with api.app.state.store.read() as c:

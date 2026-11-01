@@ -405,7 +405,7 @@ def test_served_wait_reuses_removed_link_without_old_cleanup_intent(prepared):
                   (old, json.dumps({'head_sha': 'a' * 40}), pr['id']))
     assert post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').status_code == 409
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='done' WHERE id='a1'")  # the asking turn ended
+        c.execute("UPDATE attempts SET state='completed' WHERE id='a1'")  # the asking turn ended
     free(api, filler, links[0])
     served = rows(api, 'SELECT * FROM worktree_waits')[0]
     assert served['state'] == 'reserved' and served['link_id'] == retired

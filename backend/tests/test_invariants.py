@@ -83,7 +83,7 @@ def test_a_bot_task_in_progress_with_no_run_for_an_hour_fires_and_one_with_a_que
         c.execute("UPDATE tasks SET status='doing', updated=? WHERE id=?", (ago(hours=2), stuck))
         c.execute("UPDATE tasks SET status='doing', updated=? WHERE id=?", (ago(hours=3), waiting))
         # Finish the first task's run and leave the second task's run queued.
-        c.execute("UPDATE jobs SET state='done' WHERE id=(SELECT id FROM jobs ORDER BY created LIMIT 1)")
+        c.execute("UPDATE jobs SET state='completed' WHERE id=(SELECT id FROM jobs ORDER BY created LIMIT 1)")
     assert sweep(api)["task_stuck"] == 1
     assert stuck in examples(api, "task_stuck")
 

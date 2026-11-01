@@ -104,7 +104,7 @@ def decision_note(actor, detail):
 
 
 # The job's state beside a recovery decision: a saved choice still waiting for its lane is held.
-JOB_WORDS = {"uncertain": "Held", "cancelled": "Cancelled", "queued": "Queued", "leased": "Running", "running": "Running",
+JOB_WORDS = {"uncertain": "Held", "canceled": "Cancelled", "queued": "Queued", "leased": "Running", "running": "Running",
              "input": "Running", "completed": "Done"}
 
 

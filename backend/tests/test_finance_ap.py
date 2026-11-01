@@ -195,7 +195,7 @@ def test_a_payment_rejected_in_mercury_leaves_the_bill_unpaid_and_says_so(books)
     with books.transaction() as c:
         bill = FR.bill(c, OWNER, bid)
         assert (bill["status"], bill["remaining"], bill["pay_on"]) == ("open", 50_000, None)
-        assert (bill["payment"]["status"], bill["payment"]["error"]) == ("cancelled", "rejected in Mercury")
+        assert (bill["payment"]["status"], bill["payment"]["error"]) == ("canceled", "rejected in Mercury")
         assert _balance(c, "2000") == -50_000
         assert c.execute("SELECT status FROM fin_holds WHERE source='payment'").fetchall() == []
         again = act(c, OWNER, "bill_schedule", {"bill_id": bid, "pay_on": "2026-10-16", "money_account_id": _checking(c)})
@@ -910,7 +910,7 @@ def test_sync_now_polls_payments_waiting_on_the_bank_so_a_rejection_lands_at_onc
         assert act(c, OWNER, "connection_sync", {"connection_id": cid}, at=soon).status == "committed"
     sync_once(books, fake, soon)
     with books.read() as c:
-        assert status(c) == "cancelled"
+        assert status(c) == "canceled"
 
 
 def test_padded_ids_are_stored_trimmed_so_a_reschedule_still_withdraws_the_ask(books):

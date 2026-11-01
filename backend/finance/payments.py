@@ -385,7 +385,7 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(CONFLICT, f"that payment is {status}")
 
     def apply(aid: str) -> Result:
-        if SK.update(ctx.c, "fin_payments", str(pay["id"]), {"status": "cancelled", "updated_at": ctx.at},
+        if SK.update(ctx.c, "fin_payments", str(pay["id"]), {"status": "canceled", "updated_at": ctx.at},
                      "status=?", (status,)) != 1:
             raise FinanceError(CONFLICT, "the payment moved on; check its status")
         if pay["hold_id"]:
@@ -393,7 +393,7 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         unreserve(ctx, pay)
         from .documents import payment_ended
         payment_ended(ctx, pay)                    # a bill it was paying is open again
-        return {"payment_id": str(pay["id"]), "status": "cancelled"}
+        return {"payment_id": str(pay["id"]), "status": "canceled"}
     return Plan(K.default_gate(ctx.org, who, "payment_cancel"), f"Cancel the {int(pay['amount']) / 100:.2f} payment",
                 apply)
 
@@ -437,7 +437,7 @@ def end(ctx: Ctx, pay: Any, status: str, why: str = "") -> None:
                                                       "next_try_at": None, "updated_at": ctx.at})
     if pay["hold_id"]:
         budgeting.release(ctx, str(pay["hold_id"]))
-    if status in ("failed", "cancelled"):
+    if status in ("failed", "canceled"):
         unreserve(ctx, pay)
     _event(ctx, FAILED, pay, why or status)
     from .documents import payment_ended
@@ -566,7 +566,7 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     elif money is None or not settings(ctx.c, str(money["connection_id"])).get("payments_enabled"):
         why = "payments were turned off for this bank connection"
     if why:
-        end(ctx, pay, "cancelled", why)
+        end(ctx, pay, "canceled", why)
         return why
     assert line is not None and rec is not None and money is not None
     amount = int(pay["amount"])
@@ -582,7 +582,7 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     verdict = G.evaluate(gating.rules(ctx), found, datetime.fromisoformat(ctx.today).date(), used)
     if verdict.outcome == "deny":
         why = verdict.reason or "a finance rule now refuses it"
-        end(ctx, pay, "cancelled", why)
+        end(ctx, pay, "canceled", why)
         return why
     if verdict.outcome == "needs_approval" and (verdict.stale or
                                                 not approved_for(ctx, action, who, verdict.who, verdict.rule)):
@@ -599,12 +599,12 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
                 continue
             if b.at_limit == "decline":
                 why = f"it no longer fits the {b.name} budget"
-                end(ctx, pay, "cancelled", why)
+                end(ctx, pay, "canceled", why)
                 return why
             return _hold(ctx, pay, f"the {b.name} budget is over")
     elif pay["hold_id"]:
         why = "its budget hold is gone"
-        end(ctx, pay, "cancelled", why)
+        end(ctx, pay, "canceled", why)
         return why
     elif str(pay["obligation"] or "").startswith("bill:"):
         # A bill's payment holds no budget (the bill spent it): its bill's budgets are judged again as at the action,
@@ -657,8 +657,8 @@ def _accepted(ctx: Ctx, pay: Any, answer: Answer, attempts: int) -> None:
         "status": status, "provider_request_id": str(answer.body.get("requestId") or answer.body.get("id") or ""),
         "attempts": attempts, "last_error": None, "unknown_since": None, "next_try_at": _later(ctx, 1),
         "updated_at": ctx.at})
-    if status == "cancelled":
-        end(ctx, pay, "cancelled", "rejected in Mercury")
+    if status == "canceled":
+        end(ctx, pay, "canceled", "rejected in Mercury")
 
 
 def unknown(ctx: Ctx, pay: Any, why: str, attempts: int | None = None) -> None:
@@ -697,15 +697,15 @@ def sent(ctx: Ctx, pay: Any, answer: Answer) -> None:
 def polled(ctx: Ctx, pay: Any, answer: Answer) -> None:
     """A request's status from Mercury. Rejected or cancelled in Mercury ends it and releases its hold; approved
     becomes `submitted` until its bank transaction posts (finance/banking.py settles it)."""
-    if str(pay["status"]) in ("settled", "failed", "cancelled", "returned"):
+    if str(pay["status"]) in ("settled", "failed", "canceled", "returned"):
         return                      # its debit already settled it (or it ended) in this sweep: nothing to move back
     if not answer.ok:
         SK.update(ctx.c, "fin_payments", str(pay["id"]), {"next_try_at": _later(ctx, int(pay["attempts"]) + 1),
                                                           "attempts": int(pay["attempts"]) + 1, "updated_at": ctx.at})
         return
     status = F.request_status(answer.body.get("status"))
-    if status == "cancelled":
-        end(ctx, pay, "cancelled", f"{answer.body.get('status')} in Mercury")
+    if status == "canceled":
+        end(ctx, pay, "canceled", f"{answer.body.get('status')} in Mercury")
         return
     fields: dict[str, object] = {"next_try_at": _later(ctx, 1), "updated_at": ctx.at}
     if status and status != str(pay["status"]):
@@ -781,7 +781,7 @@ def feed_settled(ctx: Ctx, pay: Any, feed_id: str) -> None:
 
 def feed_failed(ctx: Ctx, request_id: str, status: str) -> None:
     pay = SK.payment_by_request(ctx.c, request_id)
-    if pay is not None and str(pay["status"]) not in ("returned", "failed", "cancelled"):
+    if pay is not None and str(pay["status"]) not in ("returned", "failed", "canceled"):
         if str(pay["status"]) == "settled" and pay["hold_id"]:
             SK.update(ctx.c, "fin_payments", str(pay["id"]), {"hold_id": None})
             pay = SK.get(ctx.c, "fin_payments", str(pay["id"]))

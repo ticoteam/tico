@@ -168,7 +168,7 @@ def test_person_stop_overrides_a_time_limit_diagnostic(api):
     machine, _, first = running(api)
     post(api, 'bots/ops/stop', {'attempt_id': first['id']})
     cut(api, machine, first)
-    assert job_state(api, first['job_id']) == 'cancelled'
+    assert job_state(api, first['job_id']) == 'canceled'
 
 
 def test_unknown_fallback_effects_stay_held_even_with_a_time_limit(api):

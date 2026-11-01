@@ -73,7 +73,7 @@ def test_a_run_that_fails_gives_it_back(api):
          token=r["token"])
     assert get(api, "tasks/" + task["id"])["task"]["next_run_waiting"] is True
     with api.app.state.store.transaction() as c:   # clear the review hold the failure left
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='uncertain'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
         c.execute("UPDATE run_backoff SET wait_until=NULL")        # the fast failure's wait is over
     post(api, "chat/ops", {"text": "Second"})
     assert [t["id"] for t in claim(api, r)["next_run"]] == [task["id"]]

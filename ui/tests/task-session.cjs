@@ -56,7 +56,7 @@ async function run(viewport, shot) {
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/tasks') return json({tasks: [task]});
       if (p === '/api/v2/tasks/t-docs')
-        return json({task, comments, events, can_comment: true, children: [], execution: !running ? {...execution, state: 'cancelled', label: 'Stopped'}
+        return json({task, comments, events, can_comment: true, children: [], execution: !running ? {...execution, state: 'canceled', label: 'Stopped'}
           : live2 ? {...execution, parts: [...execution.parts, {kind: 'tool', text: 'Ran grep', at: at(0)}]} : execution});
       const steps = p.match(/^\/api\/v2\/turns\/([^/]+)\/steps$/);
       if (steps) {

@@ -99,7 +99,7 @@ def changes(c, tid):
         H.task_comment(c, "bot:ops", tid, "Heads up: the spec moved.")
 
     def status():
-        c.execute("UPDATE tasks SET status='blocked' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (tid,))
 
     def step():
         c.execute("UPDATE tasks SET step_id=(SELECT id FROM task_steps LIMIT 1) WHERE id=?", (tid,))

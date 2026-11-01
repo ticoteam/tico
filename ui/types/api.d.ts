@@ -1519,7 +1519,7 @@ export type FinanceDocumentRow = {
   error: string | null;
   id: string | null;
   on: string;
-  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown" | "denied" | "expired" | "withdrawn";
+  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "canceled" | "unknown" | "denied" | "expired" | "withdrawn";
 } | null;
   payment_link?: string | null;
   remaining: number;
@@ -1647,7 +1647,7 @@ export type FinancePayments = {
   version?: number;
 } | null;
   settled_at?: string | null;
-  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown";
+  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "canceled" | "unknown";
 }>;
 };
 
@@ -1857,7 +1857,7 @@ export type FinanceTransfers = {
   last_error?: string | null;
   memo?: string;
   settled_at?: string | null;
-  status: "queued" | "submitted" | "unknown" | "failed" | "posted" | "cancelled";
+  status: "queued" | "submitted" | "unknown" | "failed" | "posted" | "canceled";
   to: {
   id: string;
   last4: string | null;
@@ -4816,7 +4816,7 @@ export type WebhookSendRow = {
   last_error: string;
   last_status: number | null;
   next_attempt: string | null;
-  state: "ready" | "sending" | "delivered" | "failed" | "cancelled" | "withheld";
+  state: "ready" | "sending" | "delivered" | "failed" | "canceled" | "withheld";
   subject: string;
   type: string;
   webhook_id: string;
@@ -6710,7 +6710,7 @@ export type ListFinancePayFromResponse = FinancePayFrom;
 export type ListFinancePaymentsParams = {
   cursor?: string | null;
   limit?: number;
-  status?: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown" | null;
+  status?: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "canceled" | "unknown" | null;
   view_as?: string | null;
 };
 export type ListFinancePaymentsBody = never;

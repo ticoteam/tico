@@ -193,7 +193,7 @@ def test_the_release_managers_held_step_notices_are_dropped_once_and_nothing_els
         after = {r["id"]: (r["bot"], r["state"], json.loads(r["refs_json"])["news"]) for r in c.execute(
             "SELECT j.id,j.bot,j.state,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id")}
         assert sorted(after.values()) == [("boss", "queued", "step_entered"),
-                                          ("release-manager", "cancelled", "step_entered"),
+                                          ("release-manager", "canceled", "step_entered"),
                                           ("release-manager", "queued", "step_entered"),
                                           ("release-manager", "queued", "task_done")]
         # Once per install: a later start leaves a step notice a person's row batched since.

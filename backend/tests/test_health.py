@@ -973,7 +973,7 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
     assert fix(update_error="could not start the update: OSError").startswith("BotOps: update the runner on Team box")
     assert fix(release="0.0.1").startswith("BotOps: update the runner on Team box")
     with store.transaction() as c:
-        c.execute("UPDATE attempts SET state='finished' WHERE id='a-dev'")
+        c.execute("UPDATE attempts SET state='completed' WHERE id='a-dev'")
     assert fix(update_state="updating").startswith("BotOps: update the runner on Team box")
 
 

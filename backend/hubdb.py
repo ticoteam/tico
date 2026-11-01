@@ -83,6 +83,7 @@ from .task_rights import represents as task_represents, participant as task_part
 from . import task_roles as TRo
 from . import task_snooze as TS
 from . import run_triggers as RT
+from . import status_values as SV
 from clients.manifest import repo_dir
 from backend.chat_goals_schema import SCHEMA as CHAT_GOALS_SCHEMA
 from backend.repositories_schema import SCHEMA as REPOSITORIES_SCHEMA
@@ -109,15 +110,14 @@ REVIEW_OWNER = "coo"                        # rule 8's first review task
 FLEET_MAINTAINER = "botops"                 # sweeps every bot's stuck tasks and may start them
 STUCK_HOURS = 24                            # an open bot task untouched this long is stuck
 
-BOT_STATES = ("active", "paused", "planned", "quarantined", "archived")
-STATUS_STATES = ("idle", "running", "waiting_human", "waiting_bot", "blocked",
-                 "limited", "crashed", "paused", "quarantined")
+BOT_STATES = SV.BOT_STATES
+STATUS_STATES = SV.BOT_STATUS_STATES
 MESSAGE_KINDS = ("say", "ask", "answer", "notice", "steer")
 CONVERSATION_KINDS = ("chat", "ask", "task", "notice")
 CONVERSATION_SCOPES = ("direct", "personal", "shared", "task")
 # `review` and `ready` belong to the product lane (a PR is open; a PR is merged and waits for
 # a deploy). To everything that only knows the company lane they are a kind of `doing`.
-TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
+TASK_STATUSES = SV.TASK_STATUSES
 ACTIVE_STATUSES = ("open", "doing", "waiting", "review", "ready")   # still on the board
 # tasks_due_active (TASKS_DUE_INDEX) is built from this list. An existing index keeps the list it was created with, so
 # changing it needs that index under a new name and a migration, or upgraded hubs quietly scan every task again.
@@ -971,7 +971,9 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA,
               LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA, LIVE_MEETING_TURN_RETRY_SCHEMA,
               POSTAL_MAIL_SCHEMA, POSTAL_MAIL_V2_SCHEMA, POSTAL_MAIL_V3_SCHEMA, TRIGGERS_CONSUMER_SCHEMA,
-              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA]
+              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA,
+    "",   # 71: the status and state lists; migrate() runs backend/status_values.upgrade, not SQL here
+]
 
 
 class Refused(Exception):
@@ -1333,6 +1335,10 @@ def migrate(conn, adopt_legacy=False):
     _sync_strategy_tables(conn)
     from .flight import begin
     for i in range(version, len(MIGRATIONS)):
+        # A table rebuild (backend/status_values.py) must not cascade into child rows, and foreign keys can only be
+        # switched off outside a transaction: they go off here and come back on after the step's COMMIT.
+        if i == 71:
+            conn.execute("PRAGMA foreign_keys=OFF")
         done = begin(conn)
         try:
             if i == 23:
@@ -1342,6 +1348,8 @@ def migrate(conn, adopt_legacy=False):
             elif i == 39:
                 _apply(conn, MIGRATIONS[i])
                 RT.backfill(conn)
+            elif i == 71:
+                SV.upgrade(conn)
             else:
                 _apply(conn, MIGRATIONS[i])
             conn.execute(f"PRAGMA user_version={i + 1}")
@@ -1351,6 +1359,8 @@ def migrate(conn, adopt_legacy=False):
             raise
         finally:
             done()
+            if i == 71:
+                conn.execute("PRAGMA foreign_keys=ON")
     _keep_old_strategy_tables(conn)
     ensure_market_reads(conn)
     # Cloud added explicit room scopes after the original local schema. Keep old local
@@ -1608,6 +1618,8 @@ def migrate(conn, adopt_legacy=False):
     from . import message_links
     message_links.ensure(conn)
     clear_finished_close_times(conn)
+    # Constraints for columns the steps above add (tasks.blocked_from_status) and for tables a later step creates.
+    SV.enforce(conn)
     return len(MIGRATIONS)
 
 
@@ -3255,7 +3267,7 @@ def _held_queue_settled_sql(conn):
         from .store import EXTERNAL_BOT_SQL
         settled.append("(NOT " + EXTERNAL_BOT_SQL.replace("NEW.", "m.") + " AND EXISTS(SELECT 1 FROM jobs j "
                        "WHERE j.message_id=m.id) AND NOT EXISTS(SELECT 1 FROM jobs j "
-                       "WHERE j.message_id=m.id AND j.state NOT IN ('completed','cancelled')))")
+                       "WHERE j.message_id=m.id AND j.state NOT IN ('completed','canceled')))")
     waiting = NOTE_WAITING_SQL if _has_table(conn, "attempts") else "n.cancelled_at IS NULL"
     settled.append("(EXISTS(SELECT 1 FROM notes n WHERE n.message_id=m.id) AND NOT EXISTS(SELECT 1 FROM notes n "
                    f"WHERE n.to_actor=m.to_actor AND n.message_id=m.id AND {waiting}))")
@@ -5861,7 +5873,7 @@ def task_comment_delete(conn, actor, task_id, message_id):
     conn.execute("UPDATE messages SET answered_by=NULL WHERE answered_by=?", (message_id,))
     conn.execute("UPDATE task_delegations SET expires=? WHERE message_id=? AND expires>?", (ts, message_id, ts))
     cancelled = _has_table(conn, "jobs") and conn.execute(
-        "UPDATE jobs SET state='cancelled' WHERE message_id=? AND state='queued'", (message_id,)).rowcount > 0
+        "UPDATE jobs SET state='canceled' WHERE message_id=? AND state='queued'", (message_id,)).rowcount > 0
     _task_event(conn, task_id, actor, "comment", message_id, None)
     conn.execute("UPDATE tasks SET updated=? WHERE id=?", (ts, task_id))
     row = task(conn, task_id)

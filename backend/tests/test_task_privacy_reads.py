@@ -626,7 +626,7 @@ def test_long_run_reads_a_fixed_number_of_statements_and_keeps_private_provenanc
     hidden = task(api, requester="human:cara", owner="bot:ops")         # Cara's; Ana is no party to it
     with store.transaction() as c:
         queue(c, "plan", cid, {"see": "task:" + hidden["id"]}, sender="human:cara")
-        c.execute("UPDATE jobs SET state='done' WHERE message_id='plan'")   # never an input of this run
+        c.execute("UPDATE jobs SET state='completed' WHERE message_id='plan'")   # never an input of this run
 
     def took(size):
         with store.transaction() as c:

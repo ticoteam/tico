@@ -31,7 +31,7 @@ def sweep(api):
 
 def cancel(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
 
 
 @pytest.mark.parametrize('profile', ['lead', 'doer'])
@@ -328,7 +328,7 @@ def test_unobserved_gap_restarts_refusal_age(api, clock, gap):
     with store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug='ops'")
         c.execute('UPDATE jobs SET held=0 WHERE id=?', (original['job'],))
-        c.execute("UPDATE jobs SET state='cancelled' WHERE id<>? AND state='queued'", (original['job'],))
+        c.execute("UPDATE jobs SET state='canceled' WHERE id<>? AND state='queued'", (original['job'],))
         assert health.refused_queues(c, store.settings) == []
         queue_refusals.observe(c, store.settings)
         assert queue_refusals.state(c, 'ops')['since'] == H.now()
@@ -661,7 +661,7 @@ def fleet(store, bots, tasks, attempts, *, days=30):
                       "VALUES(?, 'fleet-conv','human:ana',?,'task','',?,?)",
                       (f'fleet-m-{i}', 'bot:' + slugs[b], json.dumps({'task': task}) if task and i % 3 == 0 else '{}', at))
             # A message to a bot queues its job under the message's id (store.QUEUE_TRIGGER).
-            c.execute("UPDATE jobs SET state='done' WHERE id=?", (f'fleet-m-{i}',))
+            c.execute("UPDATE jobs SET state='completed' WHERE id=?", (f'fleet-m-{i}',))
             c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
                       "VALUES(?,?,?,'fleet-runner',1,?,'done',?,?)",
                       (f'fleet-a-{i}', f'fleet-m-{i}', slugs[b], f'fleet-h-{i}', now, at))

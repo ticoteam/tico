@@ -63,7 +63,7 @@ def test_frees_only_proven_dead_starts_and_never_blindly_retries_a_turn_that_act
     busy(machine, {'ops'})                      # the computer still runs the bot: a lost lease alone proves nothing
     assert fix(api)[0] == 1                     # only the stopped start
     assert tuple(state(api, 'attempt-0')) == ('leased', 'leased')
-    assert state(api, 'attempt-1')['job'] == 'cancelled'
+    assert state(api, 'attempt-1')['job'] == 'canceled'
     assert notes(api, 'task-1') == ["Tico freed a start a person stopped; it is not retried."]
     busy(machine)                               # its latest claim no longer names the bot: the process is gone
     assert fix(api)[0] == 2

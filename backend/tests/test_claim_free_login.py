@@ -60,4 +60,4 @@ def test_claim_hands_out_the_real_notice_behind_an_obsolete_one_that_health_says
     assert reply["attempt"] is not None, f"claim answered {reply} for work Health says is handed out"
     assert reply["attempt"]["job_id"] == real_job
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (obsolete_job,)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (obsolete_job,)).fetchone()[0] == "canceled"

@@ -70,7 +70,7 @@ def test_pause_resume_edit_clear_and_command_payload(api):
     assert attempt['message']['refs']['goal_action'] == 'clear'
     assert attempt['chat_goal'] == cleared
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE state='cancelled'").fetchone()[0] == 4
+        assert c.execute("SELECT count(*) FROM jobs WHERE state='canceled'").fetchone()[0] == 4
 
 
 @pytest.mark.parametrize('objective', ['x' * 4001])

@@ -973,8 +973,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
             state = "running"
         location = machine(c, job["bot"])
         label = {"queued": "Saved — queued", "leased": "Starting", "running": "Working",
-                 "completed": "Complete", "cancelled": "Delivery dismissed", "uncertain": "Stopped — saved for later"}.get(state, state)
-        if state == "cancelled" and job["stop_requested"]:
+                 "completed": "Complete", "canceled": "Delivery dismissed", "uncertain": "Stopped — saved for later"}.get(state, state)
+        if state == "canceled" and job["stop_requested"]:
             label = "Stopped"
         if input_added and state == "running":
             label = "Working — follow-up added"

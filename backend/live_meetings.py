@@ -537,7 +537,7 @@ def _cancel_queued_turn_job(c, turn_id, reason):
                      "WHERE j.state='queued' AND json_extract(m.refs_json,'$.live_meeting.turn_id')=?",
                      (turn_id,)).fetchall()
     for job in jobs:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE id=? AND state='queued'", (job["id"],))
+        c.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (job["id"],))
         c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?",
                   (H.now(), job["message_id"]))
         H.event(c, H.KEEPER, "job.suppress", job["id"], {"reason": reason, "turn_id": turn_id})

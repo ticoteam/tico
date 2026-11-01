@@ -594,7 +594,7 @@ function finTxCatDraw(r) {
 // payment_cancel while one is still queued. GET /api/v2/finance/transfers?cursor= ->
 // {transfers: [{id, from: {id, name, last4}, to: {…}, amount, memo, status, last_error, created_at, created_by}], next_cursor}.
 const FIN_XFER_STATUS = {queued: ['waiting', 'Queued'], submitted: ['waiting', 'Sent'], unknown: ['fail', 'Check bank'],
-  failed: ['fail', 'Failed'], posted: ['ok', 'Posted'], cancelled: ['idle', 'Cancelled']};
+  failed: ['fail', 'Failed'], posted: ['ok', 'Posted'], canceled: ['idle', 'Cancelled']};
 const finAcctName = a => a ? `${a.name || ''}${a.last4 ? ' ••' + a.last4 : ''}` : '';
 async function finXferLoad(more) {
   const state = FIN.tx, load = ++state.load;

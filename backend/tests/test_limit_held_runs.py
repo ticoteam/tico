@@ -139,7 +139,7 @@ def test_a_run_held_after_a_limit_is_dismissed_once_a_later_turn_on_its_task_fin
         c.execute("UPDATE turns SET task_id=? WHERE id=?", (task["id"], later["id"]))
     at(monkeypatch, "2026-10-21T20:30:00.000000Z", api)
     assert [d["job_id"] for d in sweep(api)] == [first["job_id"]]
-    assert job_state(api, first["job_id"]) == "cancelled" and job_state(api, chat) == "uncertain"
+    assert job_state(api, first["job_id"]) == "canceled" and job_state(api, chat) == "uncertain"
     with api.app.state.store.read() as c:
         assert "covered" in c.execute("SELECT note FROM job_recovery WHERE job_id=?", (first["job_id"],)).fetchone()[0]
         assert H.status(c, "ops")["focus"] == "Tico dismissed 1 held run a later run already covered"

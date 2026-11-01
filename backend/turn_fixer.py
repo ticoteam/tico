@@ -103,7 +103,7 @@ def free(c, execution):
                                                               'job_state': after['job_state']})
         if after['job_state'] == 'queued':
             _note(c, task, FREED)
-        elif after['job_state'] == 'cancelled':
+        elif after['job_state'] == 'canceled':
             _note(c, task, FREED_STOPPED)
         elif after['job_state'] == 'uncertain':
             job = c.execute('SELECT * FROM jobs WHERE id=?', (row['job_id'],)).fetchone()

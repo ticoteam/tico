@@ -38,7 +38,7 @@ def test_owner_put_back_requires_note_and_holds_queued_and_missing_starts_for_an
         c.execute('UPDATE runners SET last_seen=?', (H.now(),))
     assert take(api, machine) is None
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
     assert take(api, machine) is None
     monkeypatch.setattr(H, 'now', lambda: H.shift(returned, minutes=60))
     with api.app.state.store.transaction() as c:
@@ -144,7 +144,7 @@ def test_dev_return_prefers_on_deck_over_backlog_and_owner_can_reopen_steps_only
     task = post(api, 'tasks', {'owner': 'ops', 'title': 'Build requested feature',
                              'body': 'Build the requested feature.', 'type': typ['id'], 'step': 'On Deck'})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
     attempt = take(api, machine)
     result = update(api, task, attempt['token'], 'open', 'Defer until inputs are ready.')
     assert result['step']['name'] == 'On Deck'
@@ -171,7 +171,7 @@ def test_put_back_from_blocked_keeps_queue_destination_and_hold(api, monkeypatch
                              'body': 'Build it.', 'type': typ['id'], 'step': 'In Progress'})
     blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Supply a dependency', 'body': 'Supply it.'})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
         if release == 'manual':
             H.task_update(c, 'bot:ops', task['id'], status='waiting', note='Wait for the next work slot.')
         else:
@@ -220,7 +220,7 @@ def test_auto_start_back_off_on_engineering_board_keeps_queue_resume_without_a_t
                              'body': 'Build it.', 'type': typ['id'], 'step': 'On Deck'})
     blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Prepare the dependency', 'body': 'Prepare it.'})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
     assert take(api, machine)['task']['id'] == task['id']
     with api.app.state.store.read() as c:
         counts = [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'turns')]

@@ -142,7 +142,7 @@ def _stop(ctx: Ctx, o: Any, t: Any, why: str, *, hold: bool) -> None:
                            f"Transfer {tid} was not sent: {why}. Cancel it, or fix what stops it and it goes on its "
                            "own.", private=True)
         return
-    SK.update(ctx.c, "fin_transfers", tid, {"status": "cancelled", "last_error": why[:500], "updated_at": ctx.at},
+    SK.update(ctx.c, "fin_transfers", tid, {"status": "canceled", "last_error": why[:500], "updated_at": ctx.at},
               "status='queued'")
     _give_back(ctx, tid)                         # it never goes to Mercury: the limits its claim reserved come back
     SK.update(ctx.c, "fin_outbox", oid, {"status": "failed", "claimed_at": None, "next_try_at": None,
@@ -247,13 +247,13 @@ def plan_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         # Both writes must still hold: the transfer queued and its write unclaimed. A worker that claimed it first wins.
-        if SK.update(ctx.c, "fin_transfers", tid, {"status": "cancelled", "updated_at": ctx.at}, "status='queued'") != 1 \
+        if SK.update(ctx.c, "fin_transfers", tid, {"status": "canceled", "updated_at": ctx.at}, "status='queued'") != 1 \
                 or SK.update(ctx.c, "fin_outbox", oid, {"status": "failed", "last_error": "cancelled before it was sent",
                                                          "next_try_at": None, "updated_at": ctx.at},
                              "status='pending' AND claimed_at IS NULL") != 1:
             raise FinanceError(CONFLICT, "the transfer moved on; check its status")
         _give_back(ctx, tid)                     # it never goes to Mercury: the limits its claim reserved come back
-        return {"transfer_id": tid, "status": "cancelled"}
+        return {"transfer_id": tid, "status": "canceled"}
     return Plan(K.default_gate(ctx.org, who, "payment_cancel"),
                 f"Cancel the transfer of {int(t['amount']) / 100:.2f} {ctx.book.base_currency}", apply)
 

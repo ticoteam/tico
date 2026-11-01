@@ -26,7 +26,7 @@ def test_stop_settles_a_login_wait_without_starting_or_retrying(api, outcome):
     with api.app.state.store.read() as c:
         row = c.execute("SELECT state,started,finished FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
         assert row["state"] == outcome and row["started"] is None and row["finished"]
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "canceled"
         assert c.execute("SELECT exit FROM turns WHERE id=?", (attempt["id"],)).fetchone()[0] == outcome
         assert H.status(c, "ops")["state"] == "idle"
     # Even after the old lease would have elapsed, no fresh reservation is possible.
@@ -63,7 +63,7 @@ def test_expiry_cancels_stopped_or_finished_work_and_preserves_normal_retry(api,
     # Inspect expiry before claim can hide a mistaken requeue by suppressing the notice.
     with api.app.state.store.transaction() as c:
         api.app.state.execution.expire(c)
-        expected = ("uncertain" if started else "queued") if cause == "open" else "cancelled"
+        expected = ("uncertain" if started else "queued") if cause == "open" else "canceled"
         assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == expected
         assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == "expired"
     again = claim(api, machine)
@@ -94,7 +94,7 @@ def test_all_keeper_notices_are_obsolete_only_on_finished_tasks(api, status, bod
     assert (attempt is not None) == (status == "open")
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == (
-            "leased" if status == "open" else "cancelled")
+            "leased" if status == "open" else "canceled")
         if status != "open":
             assert H.message(c, notice["id"])["delivered_at"]
 
@@ -124,7 +124,7 @@ def test_obsolete_notice_is_cancelled_even_when_idle_claim_finds_no_candidate(ap
     monkeypatch.setattr(api.app.state.execution, "candidate", lambda *a, **kw: None)
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "canceled"
 
 
 def test_a_notice_a_person_caused_on_a_finished_task_leaves_idle_claims_read_only(api, monkeypatch):
@@ -166,7 +166,7 @@ def test_expiry_judges_folded_inputs_by_their_own_task(api, cause):
     expire(api, attempt["id"])
     with api.app.state.store.transaction() as c:
         api.app.state.execution.expire(c)
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "canceled"
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (follow["id"],)).fetchone()[0] == "uncertain"
 
 
@@ -180,7 +180,7 @@ def test_finished_task_notices_to_a_requester_are_also_obsolete(api):
                        conversation_id=task["conversation_id"], refs={"task": task["id"], "trigger": "other", "wake": "update"})
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "canceled"
 
 
 def test_an_explicitly_resumed_job_is_not_an_obsolete_automatic_notice(api):

@@ -265,7 +265,7 @@ def test_a_held_job_is_cancelled_by_the_obsolete_pass_only_after_its_wait_ends(a
     wait_ends(api, monkeypatch, held["id"])
     assert claim(api, machine) is None
     after = hold_of(api, held["id"])
-    assert (after["state"], after["held"], after["hold_reason"]) == ("cancelled", 0, None)
+    assert (after["state"], after["held"], after["hold_reason"]) == ("canceled", 0, None)
     assert item_status(api, held["hold_task_id"]) not in H.ACTIVE_STATUSES
 
 
@@ -275,10 +275,10 @@ def test_release_frees_a_held_job_another_path_cancelled_and_closes_its_item(api
     machine, task_id = held_refresh(api, monkeypatch)
     held = task_jobs(api, task_id)[0]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops' AND state='queued'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops' AND state='queued'")
     assert post(api, "bots/ops/release", {})["released"]["claim"] == 1
     assert item_status(api, held["hold_task_id"]) not in H.ACTIVE_STATUSES
-    assert [(job["state"], job["held"]) for job in task_jobs(api, task_id)] == [("cancelled", 0)]
+    assert [(job["state"], job["held"]) for job in task_jobs(api, task_id)] == [("canceled", 0)]
 
 
 def test_a_start_retry_never_hands_out_an_obsolete_notice(api, monkeypatch):
@@ -293,7 +293,7 @@ def test_a_start_retry_never_hands_out_an_obsolete_notice(api, monkeypatch):
     with store.transaction() as c:
         done = H.task_create(c, H.KEEPER, "Finished export", "Done.", H.bot_actor("ops"), lint=False)["id"]
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (done,))
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops' AND state='queued' AND id<>?", (person_job,))
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops' AND state='queued' AND id<>?", (person_job,))
         conversation = H.task(c, done)["conversation_id"]
         # A claim's obsolete pass cancels a page of CLAIM_MAINTENANCE notices, so one is left queued for the retry.
         for n in range(execution.CLAIM_MAINTENANCE + 1):
@@ -525,7 +525,7 @@ def test_a_claim_passes_over_at_most_claim_picks_obsolete_notices(api, monkeypat
     with store.transaction() as c:
         done = H.task_create(c, H.KEEPER, "Finished export", "Done.", H.bot_actor("ops"), lint=False)["id"]
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (done,))
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops' AND state='queued'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops' AND state='queued'")
         conversation = H.task(c, done)["conversation_id"]
         for n in range(execution.CLAIM_MAINTENANCE + obsolete_ahead):
             H.say(c, H.KEEPER, "bot:ops", f"PR #{n} checks passed", kind="notice", conversation_id=conversation,
@@ -738,7 +738,7 @@ def test_a_bot_check_that_raises_does_not_stop_another_bots_open_task_from_start
     tasks = {bot: post(api, "tasks", {"owner": bot, "title": f"Implement the {bot} report",
                                       "body": "Build the requested feature."}) for bot in ("ops", "cpo")}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")        # no notice queued: only the backfill starts them
+        c.execute("UPDATE jobs SET state='canceled'")        # no notice queued: only the backfill starts them
     calls = bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
     turn = claim(api, machine)
     assert (turn["bot"], turn["task"]["id"]) == ("cpo", tasks["cpo"]["id"])
@@ -760,7 +760,7 @@ def open_task_only(api, machine, bots):
     tasks = {bot: post(api, "tasks", {"owner": bot, "title": f"Implement the {bot} report",
                                       "body": "Build the requested feature."}) for bot in bots}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
     return tasks
 
 
