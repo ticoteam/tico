@@ -162,8 +162,7 @@ async function opsLoad(state, more = false) {
   const f = OPS_FILTERS[state.tab], load = ++state.load;
   const params = {q: f.q, archived: f.inactive ? 'all' : 'hide', limit: 50, cursor: more ? state.next : '', customer_id: f.customer, kind: f.kind, status: f.status};
   if (state.tab === 'equipment') {
-    if (f.due === 'warranty') params.warranty_ending = OPS_WARRANTY_DAYS;
-    else if (f.due) params.due = f.due;
+    if (f.due === 'warranty') params.warranty_ends_by = opsDayAdd(OPS_WARRANTY_DAYS);
   }
   let page, money = state.money;
   try {
@@ -235,7 +234,7 @@ const opsLocationFields = r => {
     ${opsPick('Kind', 'kind', OPS_LOCATION_KINDS, r?.kind || 'store', null)}
     ${opsPick('Parent', 'parent_id', opsLocations(r?.id), r?.parent_id, '—')}
     ${opsPick('Customer', 'customer_id', opsCustomers(), r?.customer_id, '—', r && opsCustomerName(r))}
-    ${opsInput('Address', 'line1', a.line1)}
+    ${opsInput('Street', 'street', a.street || a.line1)}
     ${opsInput('City', 'city', a.city)}${opsInput('State', 'state', a.state)}${opsInput('Postal code', 'postal_code', a.postal_code)}
     ${r ? '' : `<label class="ops-inline"><input type="checkbox" name="in_books" checked><span>In books</span></label>`}`;
 };
@@ -264,7 +263,7 @@ const opsEquipmentFields = r => `${opsInput('Name', 'name', r?.name, 'maxlength=
 function opsFormValues(tab, form) {
   const v = n => form.elements[n]?.value.trim() ?? '';
   if (tab === 'locations') {
-    const address = Object.fromEntries(['line1', 'city', 'state', 'postal_code'].map(k => [k, v(k)]).filter(([, x]) => x));
+    const address = Object.fromEntries(['street', 'city', 'state', 'postal_code'].map(k => [k, v(k)]).filter(([, x]) => x));
     return {name: v('name'), kind: v('kind'), parent_id: v('parent_id'), customer_id: v('customer_id'), address};
   }
   if (tab === 'items') {

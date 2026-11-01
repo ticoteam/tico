@@ -100,10 +100,12 @@ async function open(browser, who, w, hash, viewport = DESKTOP) {
       }
       return json({status: 'committed', result: {}});
     }
+    if (p === '/api/v2/setup' && req.method() === 'PUT') { w.setupPut = req.postDataJSON(); return json({}); }
     if (p === '/api/v2/imports/preview') {
-      return json({rows: [{row: 1, name: 'Rooftop unit 9'}, {row: 2, name: 'Rooftop unit 3', duplicate_of: {name: 'Rooftop unit 3'}}, {row: 3, name: '', errors: ['Name is missing']}]});
+      return json({rows: 3, summary: {new: 1, possible_duplicate: 1, error: 1}, lines: [{line: 2, name: 'Rooftop unit 9', status: 'new', reason: ''},
+        {line: 3, name: 'Rooftop unit 3', status: 'possible_duplicate', reason: 'x', matches: {name: 'Rooftop unit 3'}}, {line: 4, name: '', status: 'error', reason: 'name is blank'}]});
     }
-    if (p === '/api/v2/imports/commit') { w.imports.push(req.postDataJSON()); return json({created: 2, already_there: 0, failed: []}); }
+    if (p === '/api/v2/imports/commit') { w.imports.push(req.postDataJSON()); return json({rows: 3, summary: {created: 2, error: 1}, lines: [{line: 4, name: '', status: 'error', reason: 'name is blank'}]}); }
     if (p === '/api/v2/uploads/tasks' && req.method() === 'POST') {
       w.uploads.push({type: req.headers()['content-type'] || ''});
       return json({task: {id: 't-9'}});
@@ -159,6 +161,13 @@ const close = async (o, label) => { assert.deepEqual(o.errors, [], label + ' pag
     assert.equal(await page.locator('#side a[data-nav="strategy"]').evaluate(a => a.offsetParent), null);
     assert.notEqual(await page.locator('#side a[data-nav="growth"]').evaluate(a => a.offsetParent), null, 'Growth keeps its own link');
     assert.deepEqual((await palette(page)).filter(l => ['Meetings', 'Strategy'].includes(l)), []);
+    // Every tab hidden hides the section; a tab's key is its API name, so Products & services is operations.products.
+    await page.evaluate(() => { S.config.hidden_sections = ['operations.locations', 'operations.products', 'operations.projects', 'operations.equipment']; redesignSections(); });
+    assert.equal(await link.evaluate(a => a.offsetParent), null, 'all tabs hidden hides Operations');
+    w.hidden = ['operations.products'];
+    await page.evaluate(() => { S.config.hidden_sections = ['operations.products']; redesignSections(); OPS = null; location.hash = '#/operations/projects'; });
+    await page.locator('.ops-head a.cur[data-ops-tab="projects"]').waitFor();
+    assert.equal(await page.locator('.ops-head a[data-ops-tab="items"]').count(), 0);
     await close(o, 'X2');
   }
 
@@ -310,17 +319,35 @@ const close = async (o, label) => { assert.deepEqual(o.errors, [], label + ' pag
     await page.locator('dialog.ops-import [name=file]').setInputFiles({name: 'acme.csv', mimeType: 'text/csv', buffer: Buffer.from('name\nRooftop unit 9\n')});
     await page.locator('[data-import-preview]').click();
     await page.locator('[data-import-commit]').waitFor();
-    assert.match(await page.locator('.ops-import-rows').textContent(), /Name is missing/);
+    assert.match(await page.locator('.ops-import-rows').textContent(), /name is blank/);
     await shot(page, 'desktop-import-preview');
     assert.equal(await page.locator('[data-import-commit]').textContent(), 'Import 1');
-    await page.locator('[data-import-keep="2"]').check();
+    await page.locator('[data-import-keep="3"]').check();
     await page.locator('dialog.ops-import [name=location_id]').selectOption('loc-1');
     await page.locator('[data-import-commit]').click();
     await page.locator('dialog.ops-import .fin-kv').first().waitFor();
     const sent = w.imports[0];
-    assert.equal(sent.location_id, 'loc-1');
-    assert.deepEqual(sent.include_duplicates, [2]);
+    assert.deepEqual(sent.assign, {location_id: 'loc-1'});
+    assert.deepEqual(sent.include_lines, [3]);
+    assert.equal(sent.record_type, 'equipment');
     await close(o, 'csv');
+  }
+
+  // Setup: the question asks once the server's record carries the answer, and the answer goes top level on the save.
+  {
+    const w = world(), o = await open(browser, 'ana', w, '#/tasks'), {page} = o;
+    const asked = await page.evaluate(async () => {
+      const older = {catalog: catalogState(catalogCards([]))}, newer = {catalog: catalogState(catalogCards([]))};
+      onbAdopt(older, {}); onbAdopt(newer, {business_type: null});
+      const out = {older: onbStepHTML({...older, step: 0}, 'about').includes('onb-business-type'), newer: onbStepHTML({...newer, step: 0}, 'about').includes('onb-business-type')};
+      await onbSave(older);
+      newer.record.business_type = 'restaurant';
+      await onbSave(newer);
+      return out;
+    });
+    assert.deepEqual(asked, {older: false, newer: true});
+    assert.equal(w.setupPut.business_type, 'restaurant');
+    await close(o, 'setup');
   }
 
   await browser.close();

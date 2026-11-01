@@ -37,7 +37,7 @@
 .ops-sec{margin-top:14px;padding-top:10px;border-top:1px solid var(--line)}
 .ops-sec-h{display:flex;align-items:center;gap:8px;margin:0 0 6px}
 .ops-sec-h h3{margin:0;font-size:var(--t-sm);font-weight:600}
-.ops-mini{height:24px;padding:0 8px;font-size:var(--t-xs);white-space:nowrap}
+.ops-mini{display:inline-flex;align-items:center;height:24px;padding:0 8px;font-size:var(--t-xs);line-height:1;white-space:nowrap}
 .ops-links{margin:0;padding:0;list-style:none}
 .ops-links li{display:flex;justify-content:space-between;gap:10px;padding:3px 0}
 .ops-links li>:first-child{min-width:0;overflow-wrap:anywhere}
@@ -68,16 +68,16 @@
 .side-scroll[data-off~="operations"] a[data-nav="operations"],.side-scroll[data-off~="meetings"] a[data-nav="meetings"]{display:none}
 .rd-hidden-row{display:block;margin:10px 10px 4px;font-size:var(--t-xs);color:var(--muted);text-decoration:none;overflow-wrap:anywhere}
 .rd-hidden-row:hover{color:var(--ink)}
-.sb-rows{display:flex;flex-direction:column}
-.sb-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:34px;font-size:var(--t-base)}
-.sb-row.sb-child{padding-left:18px;font-size:var(--t-sm);color:var(--muted)}
-.sb-type{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
-.sb-type select{width:auto;max-width:60%}
+.sbset-rows{display:flex;flex-direction:column}
+.sbset-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:34px;font-size:var(--t-base)}
+.sbset-row.sbset-child{padding-left:18px;font-size:var(--t-sm);color:var(--muted)}
+.sbset-type{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.sbset-type select{width:auto;max-width:60%}
 
 /* The panel leaves the row when the table needs the width: over the table, then the whole screen. */
 @media (max-width:1100px){
   .ops-split.has-panel{grid-template-columns:minmax(0,1fr)}
-  .ops-panel{position:fixed;top:0;right:0;bottom:0;z-index:70;width:min(420px,100%);overflow-y:auto;box-shadow:var(--shadow-lg,0 8px 30px rgba(0,0,0,.2))}
+  .ops-panel{position:fixed;top:var(--demo-h,0px);right:0;bottom:0;z-index:70;width:min(420px,100%);overflow-y:auto;box-shadow:var(--shadow-lg,0 8px 30px rgba(0,0,0,.2))}
 }
 @media (max-width:640px){
   .ops-panel{left:0;width:100%;padding:12px 16px calc(24px + env(safe-area-inset-bottom));border-left:0;box-shadow:none}

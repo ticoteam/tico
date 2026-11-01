@@ -63,7 +63,7 @@ function opsSources(r) {
 }
 function opsLocationFacts(r) {
   const a = r.address || {};
-  const address = [a.line1, a.line2, [a.city, a.state].filter(Boolean).join(', '), a.postal_code].filter(Boolean).map(esc).join('<br>');
+  const address = [a.street || a.line1, a.line2, [a.city, a.state].filter(Boolean).join(', '), a.postal_code].filter(Boolean).map(esc).join('<br>');
   const parent = r.parent_id && (OPS_REFS?.locations || []).find(l => l.id === r.parent_id);
   return opsKv('Kind', esc(opsLabel(OPS_LOCATION_KINDS, r.kind))) + opsKv('Address', address)
     + opsKv('Parent', parent ? `<a href="${opsHref('locations', parent.id)}">${esc(parent.name)}</a>` : '')
