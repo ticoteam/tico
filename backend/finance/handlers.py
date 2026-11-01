@@ -77,8 +77,9 @@ def sees_budget(ctx: Ctx, who: str, b: B.Budget) -> bool:
 
 def may_write(ctx: Ctx, who: str, account_id: str, tags: Mapping[str, str]) -> bool:
     """Whether `who` may write a line or scope with these tags on `account_id`. Reads take any slice that covers a line;
-    a write checks each tag: the team inside the view on that account, and the teammate the writer or a member of a
-    team the view covers. An untagged (unattributed) one needs company-wide view of the account."""
+    a write checks each tag: the team inside the view on that account, and the teammate the writer, a member of a team
+    the view covers, or one of the writer's reports. An untagged (unattributed) one needs company-wide view of the
+    account."""
     view = ctx.view(who)
     if view.everything:
         return True
@@ -92,7 +93,7 @@ def may_write(ctx: Ctx, who: str, account_id: str, tags: Mapping[str, str]) -> b
         return False
     teams = view.teams(account)
     mine = mate == who and any(s.whose == "own" and s.covers_account(account) for s in view.slices)
-    if mate and not mine and ctx.org.team_of.get(mate, "") not in teams:
+    if mate and not mine and ctx.org.team_of.get(mate, "") not in teams and mate not in view.mates(account):
         return False
     return not team or team in teams or bool(mate) and team == ctx.org.team_of.get(mate, "")
 

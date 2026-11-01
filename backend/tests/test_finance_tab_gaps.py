@@ -258,3 +258,50 @@ def test_a_trend_default_is_fitted_to_the_line_and_split_only_under_a_stored_pro
                                                 "team": "web"}).status == "committed"
         # Web's stored projection stands; sales and eng keep their own defaults, 0 and 300.
         assert FR.line_detail(c, OWNER, revenue, at=AT)["next_month"]["projection"] == 1_300
+
+
+def test_tico_sources_show_with_no_entries_and_net_income_comes_from_the_pnl(books):
+    with books.transaction() as c:
+        groups = {g["group"]: g for g in FR.sources(c, OWNER, at=AT)["groups"]}
+        assert [r["name"] for r in groups["bills_invoices"]["rows"]] == ["Tico invoices"] and groups["tico"]["rows"] == []
+        FA.set_bills_email(c, "bills@acme.example", OWNER, AT)
+        groups = {g["group"]: g for g in FR.sources(c, OWNER, gateway=True, at=AT)["groups"]}
+        assert [(r["kind"], r.get("address")) for r in groups["bills_invoices"]["rows"]] == [
+            ("inbox", "bills@acme.example"), ("documents", None)]
+        assert [(r["kind"], r["entries"], r["connected"]) for r in groups["tico"]["rows"]] == [("usage", 0, True)]
+        net = FR.balance_sheet(c, OWNER, at=AT)["equity"][-1]
+        assert net["name"] == "Net income to date" and net["entry_sources"] == ["pnl"]
+
+
+def test_a_line_projects_next_month_for_each_vendor_team_and_teammate(books):
+    with books.transaction() as c:
+        spend(c, "6100", 1_000, day="2026-09-05", team="web", teammate="human:eve", vendor="acme-tools")
+        spend(c, "6100", 500, day="2026-09-07", team="sales", vendor="acme-cloud")
+        spend(c, "6100", 300, day="2026-10-02", team="web", vendor="acme-tools")
+        line = account(c, "6100")
+        by = FR.line_detail(c, OWNER, line, *OCT, at=AT)["next_by"]      # Software recurs: September's
+        assert by["vendor"] == {"acme-tools": 1_000, "acme-cloud": 500}
+        assert by["team"] == {"web": 1_000, "sales": 500}
+        assert by["teammate"] == {"human:eve": 1_000, "unattributed": 500}
+        assert FR.line_detail(c, "human:dan", line, *OCT, at=AT)["next_by"]["vendor"] == {"acme-cloud": 500}
+
+
+def test_bills_show_their_line_team_and_when_paid_and_late_keeps_those_past_due(books):
+    with books.transaction() as c:
+        vendor = str(act(c, OWNER, "contact_create", {"name": "Acme Tools", "kind": "vendor"}).result["contact_id"])
+
+        def bill(number, day, due, **tags):
+            made = act(c, OWNER, "bill_create", {"vendor_id": vendor, "number": number, "bill_date": day,
+                                                 "due_date": due, "lines": [{"account_id": account(c, "6100"),
+                                                                             "amount": 2_000, "tags": tags}]})
+            assert act(c, OWNER, "bill_approve", {"bill_id": made.result["bill_id"]}).status == "committed"
+            return str(made.result["bill_id"])
+        late = bill("B-1", "2026-09-01", "2026-09-15", team="web")
+        bill("B-2", "2026-10-01", "2026-11-30")
+        paid = bill("B-3", "2026-09-20", "2026-10-01", team="sales")
+        assert act(c, OWNER, "bill_mark_paid", {"bill_id": paid, "date": "2026-10-05"}).status == "committed"
+        rows = {r["number"]: r for r in FR.bills(c, OWNER, at=AT)["bills"]}
+        assert rows["B-1"]["account"]["name"] == "Software" and rows["B-1"]["team"] == "web"
+        assert rows["B-2"]["team"] is None and not rows["B-2"]["split"]
+        assert (rows["B-3"]["paid_on"], rows["B-3"]["paid_by"]) == ("2026-10-05", OWNER)
+        assert [r["id"] for r in FR.bills(c, OWNER, status="unpaid", late=True, at=AT)["bills"]] == [late]

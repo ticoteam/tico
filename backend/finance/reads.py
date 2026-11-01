@@ -36,6 +36,7 @@ from .store import budgets as SB
 from .store import ledger as SL
 from .store import ap as SAP
 from .store import raw_totals as SR
+from .store import tico as ST
 
 UNATTRIBUTED = "Unattributed"
 GROUPS = ("department", "team", "teammate", "bot", "person", "vendor", "account")
@@ -579,6 +580,48 @@ def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
     return {"month": month, "projection": total if found else None, "projection_method": _method(methods)}
 
 
+def _next_by(s: _Seen, ids: Sequence[str], f: _Filter, vendor: str | None) -> dict[str, dict[str, int]]:
+    """Next month's default projection for each vendor, team and teammate of a line (`by` -> key -> amount), from the
+    history this viewer sees split as the drill-down's rows are (`_key`, "" for none), with the line's default method.
+    Stored projections are by line, team and teammate, so these are always the defaults. Empty on a private line
+    without its detail."""
+    if not ids or any(i in s.private and i not in s.view.full_detail for i in ids):
+        return {}
+    today = dates.day(s.ctx.today)
+    cur = today.replace(day=1)
+    nxt = dates.add_months(cur, 1)
+    first = dates.add_months(cur, -PJ.TREND_MONTHS)
+    recent_from = today - timedelta(days=PJ.RATE_DAYS - 1)
+    account = s.ctx.accounts[ids[0]]
+    method = PJ.default_method(account.type, account.subtype)
+    cells = _cells(s, first, today, ids)
+    if vendor is not None:
+        cells = [x for x in cells if x.vendor == vendor]
+    if f.any:
+        cells = [x for x in cells if f.keeps(x.team, x.teammate)]
+    sup = _suppress(s, cells, True, first, today)
+    out: dict[str, dict[str, int]] = {}
+    for by in ("vendor", "team", "teammate"):
+        monthly: dict[str, list[int]] = {}
+        recent: dict[str, int] = {}
+        for cell in sup.cells:
+            if cell.account_id in sup.hidden:
+                continue
+            key = _key(s, cell, by)
+            if key is None:
+                continue
+            day = dates.day(cell.day)
+            amount = (-1 if s.ctx.accounts[cell.account_id].type == "income" else 1) * cell.amount
+            monthly.setdefault(key, [0] * PJ.TREND_MONTHS)
+            recent[key] = recent.get(key, 0) + (amount if day >= recent_from else 0)
+            if day < cur:
+                monthly[key][(day.year - first.year) * 12 + day.month - first.month] += amount
+        days = dates.days(nxt, dates.month_end(nxt))
+        found = {k or "unattributed": PJ.estimate(method, monthly[k], recent[k], days, 2) for k in monthly}
+        out[by] = {k: v for k, v in found.items() if v is not None}
+    return out
+
+
 def _months(a: date, z: date) -> list[date]:
     """The first day of each month from `a`'s month to `z`'s."""
     count = (z.year * 12 + z.month) - (a.year * 12 + a.month)
@@ -689,7 +732,8 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
                 who: str = "both", unattributed: bool = False) -> Row:
     """One line's spend by vendor, team and teammate, and its entries. With `vendor` ("" for lines with none) every
     breakdown, the entries and how they were paid are that vendor's; `teams`, `teammates`, `who` and `unattributed`
-    filter it as the P&L's expenses view does. `next_month` is the line's projection (within the org filter).
+    filter it as the P&L's expenses view does. `next_month` is the line's projection (within the org filter), and
+    `next_by` each vendor's, team's and teammate's default for that month.
 
     Private totals come only from whole cohorts: a vendor filter is always narrow (so a payroll cell is never rebuilt
     from a caller-picked subset and recovered by subtraction), and an org filter is narrow as the P&L's is."""
@@ -741,7 +785,7 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
                 "excluded": excluded, "hidden": _hidden_labels(s, hidden),
                 "vendor": vendor, "filter": {"teams": list(f.teams), "teammates": list(f.teammates), "who": f.who,
                                              "unattributed": f.unattributed},
-                "next_month": _next_month(s, now_ids, f),
+                "next_month": _next_month(s, now_ids, f), "next_by": _next_by(s, now_ids, f, vendor),
                 "seats": contact["seats"] if contact is not None else None,
                 "renewal_on": (contact["renewal_on"] or None) if contact is not None else None}
     for by in ("vendor", "team", "teammate"):
@@ -1579,6 +1623,7 @@ def view_version(c: sqlite3.Connection) -> int:
 balance_sheet = tab.balance_sheet
 cards = tab.cards
 sources = tab.sources
+gateway_connected = ST.gateway_connected       # whether Sources shows the Gateway with no entries yet
 access = tab.access
 view_as = tab.view_as
 # Money out and controls (finance/tab_money.py).

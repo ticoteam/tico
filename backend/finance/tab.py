@@ -29,6 +29,7 @@ GROUPS = ("banks", "cards", "payments", "payroll", "bills_invoices", "tico", "ac
 GROUP_NAMES = {"banks": "Banks", "cards": "Cards", "payments": "Payments", "payroll": "Payroll",
                "bills_invoices": "Bills and invoices", "tico": "Tico", "accounting": "Accounting", "manual": "Manual"}
 OTHER_CODE = "6900"
+BILLS_EMAIL_KEY = "finance_bills_email"     # the install's bills address (actions.set_bills_email writes it)
 
 
 def page_size(limit: int) -> int:
@@ -134,7 +135,7 @@ def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, 
         pnl_ids = [a.id for a in ctx.accounts.values() if a.type in PNL_TYPES]
         earned = -sum(SK.balances(c, ctx.book.id, day, pnl_ids).values())
         sections["equity"].append({"account_id": None, "code": "", "name": "Net income to date", "subtype": "earnings",
-                                   "parent_id": None, "balance": earned, "entry_sources": [], "sources": []})
+                                   "parent_id": None, "balance": earned, "entry_sources": ["pnl"], "sources": []})
         totals["equity"] += earned
     return {"as_of": day, "assets": sections["asset"], "liabilities": sections["liability"],
             "equity": sections["equity"], "totals": totals, "scoped": not whole, "currency": ctx.book.base_currency,
@@ -657,10 +658,13 @@ def _direct_on(c: sqlite3.Connection) -> bool:
     return SL.setting(c, DIRECT_KEY) is True
 
 
-def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, at: str | None = None) -> Row:
+def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, gateway: bool = False,
+            at: str | None = None) -> Row:
     """Every source of the books, grouped (banks, cards, payments, payroll, bills and invoices, Tico, accounting,
     manual) with a count per group, so a card program with 500 cards is one row. Each source shows its account
-    mapping, sync state and who can see it. Owner-only unless granted `sources` (or everything)."""
+    mapping, sync state and who can see it. Tico's own sources show whenever they exist, entries or not: the Gateway
+    while it is connected (`gateway`), the bills inbox while it has an address, and Tico invoices always. Owner-only
+    unless granted `sources` (or everything)."""
     ctx = load(c, at)
     view = ctx.view(viewer)
     if not (view.everything or view.sources):
@@ -706,12 +710,18 @@ def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, at:
                                        "provider": str(r["provider"]), "sync": _sync(r),
                                        "mirror": _books_mirror(c, ctx.book, cid, str(r["status"])),
                                        "outbox": SX.outbox_counts(c, cid)})
-    usage = {k: entries.get(k, 0) for k in ("usage",)}
-    if usage["usage"]:
-        rows["tico"].append({"id": "tico-usage", "kind": "usage", "name": "AI services and video (Gateway meter)",
-                             "entries": usage["usage"]})
-    if docs["bills"] or docs["invoices"]:
-        rows["bills_invoices"].append({"id": "documents", "kind": "documents", "name": "Bills and invoices", **docs})
+    used = entries.get("usage", 0)
+    if gateway or used:
+        rows["tico"].append({"id": "tico-usage", "kind": "usage", "name": "Tico Gateway", "entries": used,
+                             "connected": gateway})
+    address = SL.setting(c, BILLS_EMAIL_KEY)
+    if isinstance(address, str) and address:
+        rows["bills_invoices"].append({"id": "bills-inbox", "kind": "inbox", "name": "Bills inbox", "address": address,
+                                       "bills": docs["bills"]})
+    elif docs["bills"]:
+        rows["bills_invoices"].append({"id": "bills", "kind": "documents", "name": "Bills", "bills": docs["bills"]})
+    rows["bills_invoices"].append({"id": "documents", "kind": "documents", "name": "Tico invoices",
+                                   "invoices": docs["invoices"]})
     manual = {k: entries.get(k, 0) for k in ("manual", "import")}
     if any(manual.values()):
         rows["manual"].append({"id": "manual", "kind": "entries", "name": "Journal entries and imports", **manual})
@@ -739,18 +749,18 @@ def _grant_row(g: VW.Grant, ctx: Ctx) -> Row:
 def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     """Who can see what in Finance (spec §7.5): the org chart with each teammate's default and grants, private lines
     and the defaults. Owner and finance admins (`finance.admin`) see everyone, with rights and private lines. A manager
-    sees their own row and the teammates in the teams they manage (nested), with defaults and grants but no rights and
-    no private lines. Anyone else sees only their own row. The owner may view as anyone."""
+    sees their own row, the teammates in the teams they manage (nested) and everyone who reports to them, with defaults
+    and grants but no rights and no private lines. Anyone else sees only their own row. The owner may view as anyone."""
     ctx = load(c, at)
     org = ctx.org
     owner = bool(org.owner) and viewer == org.owner
     admin = owner or R.is_admin(org, viewer, ctx.rights(viewer))
     led = frozenset[str]().union(*(org.below(t) for t in org.led_by(viewer)))
-    own_team = org.team_of.get(viewer, "")
     if admin:
         shown = sorted(org.humans | org.bots)
     else:
-        shown = sorted({viewer} | {m for m in org.members(led) if m in org.humans or m in org.bots})
+        under = org.members(led) | org.reports(viewer)
+        shown = sorted({viewer} | {m for m in under if m in org.humans or m in org.bots})
     defaults = SA.defaults(c)
     grants = SA.grants(c, "active") + SA.grants(c, "suspended")
     teammates: list[Row] = []
@@ -760,11 +770,11 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
         rights = sorted(ctx.rights(m)) if admin or m == viewer else None
         teammates.append({"teammate": m, "kind": "bot" if m in org.bots else "person",
                           "team": org.team_of.get(m) or None, "reports_to": org.reports_to.get(m) or None,
-                          "default": _default_of(bool(org.led_by(m)), defaults, bool(org.owner) and m == org.owner),
+                          "default": _default_of(org.manages(m), defaults, bool(org.owner) and m == org.owner),
                           "grants": [_grant_row(g, ctx) for g in mine], "rights": rights})
     teams = [{"id": t.id, "name": t.name, "parent": t.parent or None, "lead": t.lead or None}
              for t in sorted(org.teams.values(), key=lambda x: x.name)
-             if admin or t.id in led or t.id == own_team]
+             if admin or t.id in led or t.id in {org.team_of.get(m, "") for m in shown}]
     private = [{"account_id": a, "name": ctx.accounts[a].name if a in ctx.accounts else a,
                 "others_see": p.others_see, "full_detail": sorted(p.full_detail) if owner else None}
                for a, p in sorted(ctx.private().items())] if admin else []

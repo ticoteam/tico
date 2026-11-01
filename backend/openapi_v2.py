@@ -1479,7 +1479,7 @@ STABLE.extend([
      "them; external_rule_id lists those linked to one external rule", "FinanceRules"),
     ("/api/v2/finance/bills", "get", "Finance", "listFinanceBills",
      "Bills the caller sees (payables: a view grant or finance.ap), newest first, filtered by status (comma-separated, "
-     "or unpaid), vendor, dates, aging bucket and a search, with the open total by aging bucket and a cursor",
+     "or unpaid), vendor, dates, aging bucket or late, and a search, with the open total by aging bucket and a cursor",
      "FinanceBills"),
     ("/api/v2/finance/bills/{bill_id}", "get", "Finance", "getFinanceBill",
      "One bill with its lines, the payments settled against it, its attachments and the actions and approvals on it",
@@ -1706,7 +1706,8 @@ SCHEMAS.update({
         "total": "i", "paid": "i", "remaining": "i", "aging": "n", "days_late": "i", "memo": "s", "entry_id": "n",
         "attachments": "i", "created_by": "s", "created_at": "s", "origin": "s", "approved_by": "n",
         "approved_at": "n", "pay_on": "n", "payment": DOC_PAYMENT, "sent_at": "n", "written_off": "i",
-        "payment_link": "n"},
+        "payment_link": "n", "account": {"type": ["object", "null"], "additionalProperties": True}, "split": "b",
+        "team": "n", "paid_on": "n", "paid_by": "n"},
         required=["id", "kind", "number", "date", "status", "currency", "total", "paid", "remaining"]),
     "FinanceDocument": {"allOf": [ref("FinanceDocumentRow"), obj({
         "lines": items(obj({"id": "s", "account": {"type": ["object", "null"], "additionalProperties": True},

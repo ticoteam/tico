@@ -8661,7 +8661,7 @@
     },
     "/api/v2/finance/bills": {
       "get": {
-        "summary": "Bills the caller sees (payables: a view grant or finance.ap), newest first, filtered by status (comma-separated, or unpaid), vendor, dates, aging bucket and a search, with the open total by aging bucket and a cursor",
+        "summary": "Bills the caller sees (payables: a view grant or finance.ap), newest first, filtered by status (comma-separated, or unpaid), vendor, dates, aging bucket or late, and a search, with the open total by aging bucket and a cursor",
         "operationId": "listFinanceBills",
         "parameters": [
           {
@@ -8764,6 +8764,16 @@
                 }
               ],
               "title": "Aging"
+            }
+          },
+          {
+            "name": "late",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Late"
             }
           },
           {
@@ -10002,6 +10012,16 @@
                 }
               ],
               "title": "Aging"
+            }
+          },
+          {
+            "name": "late",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Late"
             }
           },
           {
@@ -40134,6 +40154,34 @@
             "type": "integer"
           },
           "payment_link": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "account": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "split": {
+            "type": "boolean"
+          },
+          "team": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paid_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paid_by": {
             "type": [
               "string",
               "null"
