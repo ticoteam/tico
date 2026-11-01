@@ -199,8 +199,9 @@ fn hello_seen(text: &str) -> Option<Vec<IpAddr>> {
 const PROBE_EVERY: Duration = Duration::from_secs(300);
 const SEEN_PATH: &str = "/api/v2/runners/me/browser-exit/seen";
 
-/// Whether IPv4 sites are refused: this computer has an IPv4 route but the relay has not told it its public IPv4
-/// address (the router's, behind NAT), which a name could resolve to. Refused until a probe over IPv4 succeeds.
+/// Whether IPv4 sites are refused: the relay has not told this computer a public IPv4 address it connects from (the
+/// router's, behind NAT), which a name could resolve to. Refused until a probe over IPv4 learns one, whatever the routes
+/// say: an IPv6-only computer can still reach IPv4 through NAT64, so it reaches no IPv4 site at all.
 static V4_UNKNOWN: AtomicBool = AtomicBool::new(true);
 
 /// Applies to every address that reaches IPv4 (carried_v4): a NAT64 or 6to4 address reaches the same router.
@@ -209,18 +210,13 @@ fn ipv4_unknown(ip: IpAddr) -> Option<&'static str> {
         .then_some("an IPv4 address, refused while this computer's public IPv4 address is unknown (the relay has not answered over IPv4)")
 }
 
-/// Whether this computer can reach the IPv4 internet at all (a UDP connect sends nothing).
-fn has_ipv4_route() -> bool {
-    std::net::UdpSocket::bind("0.0.0.0:0").and_then(|s| s.connect("192.0.2.1:9")).is_ok()
-}
-
 /// Ask the relay, once over IPv4 and once over IPv6 (the hub name's A and AAAA records, dialled separately), which
 /// address each connection came from, and refuse those like this computer's own. The link alone shows only the family
 /// it happened to use. Without IPv6 the IPv4 answer is enough: IPv6 hosts are rarely behind NAT, and their interface
 /// addresses are refused already.
 async fn probe_seen(client: &Client) {
     let learned = probe_families(client).await;
-    V4_UNKNOWN.store(!learned && has_ipv4_route(), Ordering::SeqCst);
+    V4_UNKNOWN.store(!learned, Ordering::SeqCst);
 }
 
 /// Whether a public IPv4 address was learned.
@@ -270,8 +266,97 @@ fn own_and_seen() -> Vec<IpAddr> {
     deny
 }
 
+/// A network this computer is on: an interface's address and prefix length, or a gateway's address (full length).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Net {
+    addr: IpAddr,
+    len: u8,
+}
+
+impl Net {
+    /// The on-link scope of an interface address. On IPv6 a home's devices and router have global addresses in the
+    /// same /64 whatever the interface reports, so the scope is never narrower than /64. A prefix shorter than /8 (IPv4)
+    /// or /32 (IPv6), which a tunnel can report, is taken as that, not as the whole internet.
+    fn interface(addr: IpAddr, len: u8) -> Net {
+        let len = match addr {
+            IpAddr::V4(_) => len.clamp(8, 32),
+            IpAddr::V6(_) => len.clamp(32, 64),
+        };
+        Net { addr, len }
+    }
+
+    fn contains(&self, ip: IpAddr) -> bool {
+        match (self.addr, ip) {
+            (IpAddr::V4(net), IpAddr::V4(ip)) => in_prefix(u32::from(ip) as u128, u32::from(net) as u128, self.len, 32),
+            (IpAddr::V6(net), IpAddr::V6(ip)) => in_prefix(u128::from(ip), u128::from(net), self.len, 128),
+            _ => false,
+        }
+    }
+}
+
+/// Why `ip` is refused as a neighbour: inside a network one of this computer's interfaces is on (a device at home,
+/// the router's global IPv6 address), or a default gateway. The IPv4 address a NAT64 or 6to4 address reaches counts
+/// too.
+fn on_link(ip: IpAddr, nets: &[Net]) -> Option<&'static str> {
+    let ip = canonical(ip);
+    let targets = [Some(ip), carried_v4(ip).map(IpAddr::V4)];
+    targets
+        .into_iter()
+        .flatten()
+        .any(|t| nets.iter().any(|n| n.contains(t)))
+        .then_some("on this computer's own network")
+}
+
+/// The networks this computer is on: its interfaces' prefixes and its default gateways. Read at every dial, so a
+/// laptop that changes networks is never judged by the old one.
+fn own_networks() -> Vec<Net> {
+    let mut nets = interfaces().into_iter().map(|(addr, len)| Net::interface(canonical(addr), len)).collect::<Vec<_>>();
+    nets.extend(gateways().into_iter().map(|addr| Net { addr, len: if addr.is_ipv4() { 32 } else { 128 } }));
+    nets
+}
+
+/// The default gateways, from the kernel's routing tables on Linux. On macOS they aren't read: an IPv4 gateway is
+/// inside the interface's own network, and an IPv6 router is reached at its link-local address (refused) or at a
+/// global one inside the interface's /64, both covered by `on_link`.
+fn gateways() -> Vec<IpAddr> {
+    let mut out = Vec::new();
+    if let Ok(table) = std::fs::read_to_string("/proc/net/route") {
+        out.extend(gateways_v4(&table));
+    }
+    if let Ok(table) = std::fs::read_to_string("/proc/net/ipv6_route") {
+        out.extend(gateways_v6(&table));
+    }
+    out
+}
+
+/// /proc/net/route: `Iface Destination Gateway ...`, each address its network-order bytes printed as a native integer.
+fn gateways_v4(table: &str) -> Vec<IpAddr> {
+    table
+        .lines()
+        .skip(1)
+        .filter_map(|line| u32::from_str_radix(line.split_whitespace().nth(2)?, 16).ok())
+        .filter(|gw| *gw != 0)
+        .map(|gw| IpAddr::V4(Ipv4Addr::from(gw.to_ne_bytes())))
+        .collect()
+}
+
+/// /proc/net/ipv6_route: destination, its length, source, its length, next hop (32 hex digits each but the lengths).
+fn gateways_v6(table: &str) -> Vec<IpAddr> {
+    table
+        .lines()
+        .filter_map(|line| u128::from_str_radix(line.split_whitespace().nth(4)?, 16).ok())
+        .filter(|hop| *hop != 0)
+        .map(|hop| IpAddr::V6(Ipv6Addr::from(hop)))
+        .collect()
+}
+
 /// This computer's interface addresses.
 pub fn own_addresses() -> Vec<IpAddr> {
+    interfaces().into_iter().map(|(addr, _)| addr).collect()
+}
+
+/// Each interface address with its prefix length (from its netmask; full length when there is none).
+fn interfaces() -> Vec<(IpAddr, u8)> {
     let mut out = Vec::new();
     // SAFETY: getifaddrs hands back a list this function walks read-only and frees once.
     unsafe {
@@ -281,16 +366,27 @@ pub fn own_addresses() -> Vec<IpAddr> {
         }
         let mut cur = head;
         while !cur.is_null() {
-            let addr = (*cur).ifa_addr;
+            let (addr, mask) = ((*cur).ifa_addr, (*cur).ifa_netmask);
             if !addr.is_null() {
                 match (*addr).sa_family as i32 {
                     libc::AF_INET => {
                         let sin = addr as *const libc::sockaddr_in;
-                        out.push(IpAddr::V4(Ipv4Addr::from(u32::from_be((*sin).sin_addr.s_addr))));
+                        let len = if mask.is_null() {
+                            32
+                        } else {
+                            u32::from_be((*(mask as *const libc::sockaddr_in)).sin_addr.s_addr).count_ones() as u8
+                        };
+                        out.push((IpAddr::V4(Ipv4Addr::from(u32::from_be((*sin).sin_addr.s_addr))), len));
                     }
                     libc::AF_INET6 => {
                         let sin6 = addr as *const libc::sockaddr_in6;
-                        out.push(IpAddr::V6(Ipv6Addr::from((*sin6).sin6_addr.s6_addr)));
+                        let len = if mask.is_null() {
+                            128
+                        } else {
+                            u128::from_be_bytes((*(mask as *const libc::sockaddr_in6)).sin6_addr.s6_addr).count_ones()
+                                as u8
+                        };
+                        out.push((IpAddr::V6(Ipv6Addr::from((*sin6).sin6_addr.s6_addr)), len));
                     }
                     _ => {}
                 }
@@ -324,16 +420,18 @@ pub async fn dial(host: &str, port: u16) -> Result<TcpStream, String> {
         .map_err(|_| format!("{host} did not resolve in time"))?
         .map_err(|_| format!("{host} does not resolve"))?
         .collect();
-    let deny = own_and_seen();
+    let (deny, nets) = (own_and_seen(), own_networks());
     let mut why = None;
     let allowed: Vec<SocketAddr> = resolved
         .into_iter()
-        .filter(|addr| match refused(addr.ip(), &deny).or_else(|| ipv4_unknown(addr.ip())) {
-            Some(reason) => {
-                why.get_or_insert(reason);
-                false
+        .filter(|addr| {
+            match refused(addr.ip(), &deny).or_else(|| on_link(addr.ip(), &nets)).or_else(|| ipv4_unknown(addr.ip())) {
+                Some(reason) => {
+                    why.get_or_insert(reason);
+                    false
+                }
+                None => true,
             }
-            None => true,
         })
         .collect();
     if allowed.is_empty() {
@@ -1455,21 +1553,18 @@ mod tests {
     async fn the_exit_learns_its_public_ipv4_address_from_the_relay_or_refuses_ipv4_sites() {
         let hub = seen_hub("404 Not Found", "{}").await;
         probe_seen(&Client::new(&hub, "runner-token", 5, 0).unwrap()).await;
-        if has_ipv4_route() {
-            let why = ipv4_unknown("93.184.215.14".parse().unwrap()).unwrap();
-            assert!(why.contains("public IPv4 address is unknown"), "{why}");
-        }
+        // Whatever this computer's routes: an IPv6-only exit reaches the IPv4 internet through NAT64 too.
+        let why = ipv4_unknown("93.184.215.14".parse().unwrap()).unwrap();
+        assert!(why.contains("public IPv4 address is unknown"), "{why}");
         assert_eq!(ipv4_unknown("2606:4700::1111".parse().unwrap()), None, "IPv6 sites go on");
-        if has_ipv4_route() {
-            // The IPv4 Internet reached through IPv6 is the same router: NAT64, 6to4 and IPv4-mapped addresses wait too.
-            for carried in ["64:ff9b::5102:45aa", "2002:5102:45aa::1", "::ffff:81.2.69.170"] {
-                assert!(ipv4_unknown(carried.parse().unwrap()).is_some(), "{carried}");
-            }
-            // A hub reached over the home network sees a private address: the public one is still unknown.
-            let hub = seen_hub("200 OK", r#"{"seen":"192.168.1.20"}"#).await;
-            probe_seen(&Client::new(&hub, "runner-token", 5, 0).unwrap()).await;
-            assert!(ipv4_unknown("93.184.215.14".parse().unwrap()).is_some());
+        // The IPv4 Internet reached through IPv6 is the same router: NAT64, 6to4 and IPv4-mapped addresses wait too.
+        for carried in ["64:ff9b::5102:45aa", "2002:5102:45aa::1", "::ffff:81.2.69.170"] {
+            assert!(ipv4_unknown(carried.parse().unwrap()).is_some(), "{carried}");
         }
+        // A hub reached over the home network sees a private address: the public one is still unknown.
+        let hub = seen_hub("200 OK", r#"{"seen":"192.168.1.20"}"#).await;
+        probe_seen(&Client::new(&hub, "runner-token", 5, 0).unwrap()).await;
+        assert!(ipv4_unknown("64:ff9b::5db8:d70e".parse().unwrap()).is_some());
         let hub = seen_hub("200 OK", r#"{"seen":"81.2.69.170"}"#).await;
         probe_seen(&Client::new(&hub, "runner-token", 5, 0).unwrap()).await;
         assert_eq!(ipv4_unknown("93.184.215.14".parse().unwrap()), None);
@@ -1478,6 +1573,55 @@ mod tests {
             refused("64:ff9b::5102:45aa".parse().unwrap(), &own_and_seen()),
             Some("this computer's own address")
         );
+    }
+
+    #[test]
+    fn neighbours_and_the_router_on_the_exits_own_networks_are_refused() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        // A home with a public IPv6 /64 (reported as /128, as a temporary address can be) and a public IPv4 /24.
+        let nets = [
+            Net::interface(ip("2a01:4f8:1:2::10"), 128),
+            Net::interface(ip("81.2.69.10"), 24),
+            Net::interface(ip("2a02:1:2::7"), 0),
+        ];
+        for refused in [
+            "2a01:4f8:1:2::99",
+            "2a01:4f8:1:2:aaaa:bbbb:cccc:dddd",
+            "2a01:4f8:1:2::1",
+            "81.2.69.1",
+            "81.2.69.200",
+            "::ffff:81.2.69.200",
+            "64:ff9b::5102:4501",
+            "2a02:1:ffff::1",
+        ] {
+            assert_eq!(on_link(ip(refused), &nets), Some("on this computer's own network"), "{refused}");
+        }
+        for allowed in ["2a01:4f8:1:3::99", "2606:4700::1111", "81.2.70.1", "93.184.215.14", "64:ff9b::5db8:d70e"] {
+            assert_eq!(on_link(ip(allowed), &nets), None, "{allowed}");
+        }
+        // A gateway read from the routing table is refused exactly.
+        let gw = [Net { addr: ip("81.2.68.1"), len: 32 }];
+        assert!(on_link(ip("81.2.68.1"), &gw).is_some());
+        assert_eq!(on_link(ip("81.2.68.2"), &gw), None);
+    }
+
+    #[test]
+    fn the_default_gateways_are_read_from_linuxs_routing_tables() {
+        let v4 = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\n\
+                  eth0\t00000000\t0145A8C0\t0003\t0\t0\t100\t00000000\n\
+                  eth0\t0045A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\n";
+        let expect = IpAddr::V4(Ipv4Addr::from(u32::from_str_radix("0145A8C0", 16).unwrap().to_ne_bytes()));
+        assert_eq!(gateways_v4(v4), vec![expect]);
+        let v6 = "00000000000000000000000000000000 00 00000000000000000000000000000000 00 \
+                  2a0104f8000100020000000000000001 00000400 00000001 00000000 00000003 eth0\n\
+                  2a0104f8000100020000000000000000 40 00000000000000000000000000000000 00 \
+                  00000000000000000000000000000000 00000100 00000001 00000000 00000001 eth0\n";
+        assert_eq!(gateways_v6(v6), vec!["2a01:4f8:1:2::1".parse::<IpAddr>().unwrap()]);
+        // Every interface of this computer is one of its own networks, at least its /64 on IPv6.
+        let nets = own_networks();
+        for (addr, _) in interfaces() {
+            assert!(on_link(addr, &nets).is_some(), "{addr}");
+        }
     }
 
     #[test]

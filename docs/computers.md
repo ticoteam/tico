@@ -313,8 +313,10 @@ What the sharing computer allows:
 - Public internet addresses only. The sharing computer looks the name up itself and refuses its own addresses
   (including its home's public address, as Tico's relay sees it), its home network (`10.*`, `172.16-31.*`,
   `192.168.*`), loopback, link-local, `100.64.0.0/10`, multicast, private IPv6 and the other special-purpose ranges
-  IANA lists, and checks the address it actually connects to. It asks the relay for its public address over IPv4 and
-  over IPv6 when it connects and every 5 minutes; while the IPv4 answer is missing, it refuses IPv4 sites.
+  IANA lists, and checks the address it actually connects to. It also refuses every device on the networks its
+  interfaces are on (at least the whole `/64` on IPv6, where home devices have public addresses) and its router.
+  It asks the relay for its public address over IPv4 and over IPv6 when it connects and every 5 minutes; while the
+  IPv4 answer is missing, it refuses IPv4 sites, so an IPv6-only computer reaches no IPv4 site, NAT64 included.
 - Up to the daily cap. Crossing it closes that day's connections through it until midnight UTC. Bytes count on the UTC
   day they pass, so a connection open across midnight counts on both days.
 
