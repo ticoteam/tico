@@ -16632,7 +16632,7 @@
     },
     "/api/v2/items": {
       "get": {
-        "summary": "Products and services by name or sku; q searches both, archived hides them (default), shows only them or both; with a cursor. An item's accounts show to viewers who see them; its price shows with its income account",
+        "summary": "Products and services by name or sku; q searches both, archived hides them (default), shows only them or both; kind narrows to one kind; with a cursor. An item's accounts show to viewers who see them; its price shows with its income account",
         "operationId": "listItems",
         "parameters": [
           {
@@ -16659,6 +16659,31 @@
               "type": "string",
               "default": "hide",
               "title": "Archived"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "service",
+                    "inventory",
+                    "non_inventory",
+                    "bundle",
+                    "category",
+                    "raw_material",
+                    "assembly"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
             }
           },
           {
@@ -18013,7 +18038,7 @@
     },
     "/api/v2/locations": {
       "get": {
-        "summary": "Locations by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
+        "summary": "Locations by name; q searches names, archived hides them (default), shows only them or both; kind and customer_id narrow the list; each row's next_due_on is its earliest open due day or null; with a cursor",
         "operationId": "listLocations",
         "parameters": [
           {
@@ -18040,6 +18065,48 @@
               "type": "string",
               "default": "hide",
               "title": "Archived"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "store",
+                    "office",
+                    "warehouse",
+                    "plant",
+                    "customer_site",
+                    "vehicle",
+                    "other"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "customer_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Customer Id"
             }
           },
           {
@@ -21642,7 +21709,7 @@
     },
     "/api/v2/projects": {
       "get": {
-        "summary": "Projects by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
+        "summary": "Projects by name; q searches names, archived hides them (default), shows only them or both; status and customer_id narrow the list; with a cursor",
         "operationId": "listProjects",
         "parameters": [
           {
@@ -21669,6 +21736,43 @@
               "type": "string",
               "default": "hide",
               "title": "Archived"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "open",
+                    "closed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "customer_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Customer Id"
             }
           },
           {
@@ -46674,7 +46778,9 @@
               "inventory",
               "non_inventory",
               "bundle",
-              "category"
+              "category",
+              "raw_material",
+              "assembly"
             ]
           },
           "unit": {
@@ -48298,6 +48404,12 @@
             ]
           },
           "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_due_on": {
             "type": [
               "string",
               "null"
