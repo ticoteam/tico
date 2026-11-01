@@ -232,11 +232,12 @@ def _matched_line_ids(c: sqlite3.Connection, cid: str, local: Mapping[str, Any],
 
 
 def _sent_line_ids(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any], record: Record | None,
-                   revised: bool) -> tuple[str, ...]:
+                   revised: bool, answered: tuple[str, ...] = ()) -> tuple[str, ...]:
     """The provider's line ids a write's answer brings in, in the order the write sent its lines. A record at the
-    revision the write made lists its lines as sent, so they come in by position; a newer one is matched by content."""
+    revision the write made lists its lines as sent, so they come in by position; a newer one is matched by content.
+    With no record to match against, the ids the answer names stand, since a find answers with its ids alone."""
     if record is None:
-        return ()
+        return answered
     if revised and op in ("bill.create", "invoice.create") and isinstance(record, M.Document):
         return _matched_line_ids(c, cid, local, record)
     return _provider_lines(record)
@@ -2105,7 +2106,7 @@ def outbox(store: Any, books: Books, cid: str, now: str) -> list[str]:
             record_create = op in ("item.create", "location.create", "project.create")
             if revised and (not initial or document or record_create):
                 sent = Sent(ok=True, kind=sent.kind, external_id=sent.external_id, revision=initial,
-                            lines=_sent_line_ids(c, cid, op, local, sent.record, True))
+                            lines=_sent_line_ids(c, cid, op, local, sent.record, True, sent.lines))
             _record(c, cid, o, local, provider, sent, now,
                     confirm=not revised or not initial or document or record_create)
             if revised:

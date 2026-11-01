@@ -1258,6 +1258,36 @@ def test_a_bill_recovered_at_a_newer_revision_keeps_a_line_it_cannot_match_bille
             "WHERE b.number='B-111' ORDER BY l.amount")] == [("L2", 3_500), ("L1", 6_000)]
 
 
+def test_a_recovered_bill_create_keeps_its_line_ids_when_the_next_revision_changes_the_line(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        payload = {"party": _local(c, "Vendor:9", "fin_contacts"), "number": "B-112", "day": "2026-10-05", "due": "",
+                   "memo": "", "lines": [{"account_id": _local(c, "Account:2", "fin_accounts"), "amount": 1_000,
+                                          "description": "seats", "item_id": None, "tags": {"teammate": OWNER}}]}
+        SK.outbox_add(c, connection_id=cid, action_id="", op="bill.create", payload=payload,
+                      key="bill.create:found-2", by=OWNER, at=AT)
+    # The first call was cut off after the provider took the bill. The retry finds it at its first revision, whose line
+    # id comes with the find answer and no record.
+    fake.replies = [mirror.Sent(False, error="QuickBooks did not answer")]
+    _drain(books, fake, cid, now=LATER2)
+    fake.found["bill.create:found-2"] = mirror.Sent(True, kind="Bill", external_id="112", revision="1", lines=("L1",))
+    assert _drain(books, fake, cid, now=LATER3) == []
+    # The provider then changes the line's amount before the change feed reads the bill in. The line keeps its id, so
+    # its tag carries over. A teammate tag is not a provider dimension, so the next revision naming no location keeps it.
+    fake.changes = [M.Document(M.Ext("Bill", "112", "2"), party="Vendor:9", number="B-112", day="2026-10-05", due="",
+                               total=2_000, lines=(M.EntryLine("Account:2", 2_000, description="seats", key="L1"),))]
+    assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z", passes=1) == []
+    with books.read() as c:
+        bill = _local(c, "Bill:112", "fin_bills")
+        assert [(r[0], r[1], json.loads(r[2])) for r in c.execute(
+            "SELECT external_line, amount, tags_json FROM fin_bill_lines WHERE bill_id=?", (bill,))] == [
+            ("L1", 2_000, {"teammate": OWNER})]
+
+
 def test_voiding_a_bill_made_here_gives_the_order_its_hold_and_its_status_back(books):
     fake = FakeBooks()
     _records(fake)
