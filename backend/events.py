@@ -394,6 +394,12 @@ THREAD_TRIGGERS = [
      _row("threads", "members", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
     ("changes_thread_members_delete", "DELETE", "thread_members", None,
      _row("threads", "members", "OLD.thread_id", ref="OLD.actor", conversation="OLD.thread_id")),
+    ("changes_message_reactions_insert", "INSERT", "message_reactions", None,
+     _row("threads", "reactions", "(SELECT conversation_id FROM messages WHERE id=NEW.message_id)", ref="NEW.message_id",
+          conversation="(SELECT conversation_id FROM messages WHERE id=NEW.message_id)")),
+    ("changes_message_reactions_delete", "DELETE", "message_reactions", None,
+     _row("threads", "reactions", "(SELECT conversation_id FROM messages WHERE id=OLD.message_id)", ref="OLD.message_id",
+          conversation="(SELECT conversation_id FROM messages WHERE id=OLD.message_id)")),
     ("changes_thread_followers_insert", "INSERT", "thread_followers", None,
      _row("threads", "read", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
     ("changes_thread_followers_update", "UPDATE", "thread_followers",
@@ -930,10 +936,11 @@ def _threads(view, rows):
     for row in rows:
         if row["kind"] == "read" and row["ref"] != view.who.actor:
             continue
-        last[(row["subject_id"], row["kind"])] = row
-    view.prime(subject for subject, _ in last)
+        # Reactions are per message: one event for each message whose reactions moved.
+        last[(row["subject_id"], row["kind"], row["ref"] if row["kind"] == "reactions" else None)] = row
+    view.prime(subject for subject, _, _ in last)
     out = []
-    for (tid, kind), row in last.items():
+    for (tid, kind, ref), row in last.items():
         if not view.conversation(tid):
             continue
         found = threads.thread_row(view.c, tid)
@@ -944,6 +951,12 @@ def _threads(view, rows):
             mark = view.c.execute("SELECT last_read_seq FROM thread_followers WHERE thread_id=? AND actor=?",
                                   (tid, view.who.actor)).fetchone()
             entry["read"] = {"last_read_seq": mark[0] if mark else 0}
+        elif kind == "reactions":
+            message = H.message(view.c, ref) if ref else None
+            if not message or not threads.message_readable(view.c, view.reader, message, thread_checked=True):
+                continue
+            entry["message_id"] = ref
+            entry["reactions"] = threads.reactions(view.c, [ref]).get(ref, [])
         elif kind == "counters":
             entry["counters"] = {"last_seq": found.get("last_seq") or 0,
                                  "last_unread_seq": found.get("last_unread_seq") or 0}

@@ -2413,6 +2413,9 @@ class Completion(Contract):
     profile_used: str | None = Field(default=None, max_length=80)
     outcome: Literal["completed", "failed", "interrupted"]
     text: str = Field(default="", max_length=200_000)
+    # The message this reply goes under when it answers one in a sub-thread (docs/threads.md). Declared so a runner that
+    # sends it is not refused: Completion forbids fields it does not know.
+    parent_message_id: ID | None = None
     last_seq: int = Field(ge=0)
     tokens_in: int | None = Field(default=None, ge=0)
     tokens_out: int | None = Field(default=None, ge=0)

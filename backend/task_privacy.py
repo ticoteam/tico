@@ -383,6 +383,9 @@ def message_readable(c, actor, message, current=False):
     message = stored or message
     if message.get("deleted_at") or message.get("deleted"):
         return False
+    from . import threads
+    if not threads.legacy_gate(c, actor, message):
+        return False
     try:
         return (meeting_sources(c).message_readable(actor, message)
                 and readable(c, actor, message_tasks(c, message, current=bool(stored))))

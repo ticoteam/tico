@@ -12,7 +12,7 @@ def test_the_unread_page_reads_its_index_without_a_sort_or_a_table_scan(api):
     with api.app.state.store.read() as c:
         plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + H.UNREAD_PAGE_SQL,
                                                      ("bot:ops", H.now(), "￿", "￿", 1 << 62, 100)))
-    assert "USING INDEX messages_unread_to" in plan and "TEMP B-TREE" not in plan and "SCAN" not in plan, plan
+    assert "USING INDEX message_deliveries_waiting" in plan and "TEMP B-TREE" not in plan and "SCAN" not in plan, plan
 
 
 def test_pages_return_every_waiting_message_once_through_ties(api):
@@ -51,7 +51,8 @@ def test_a_backlog_in_rooms_the_turn_was_not_handed_is_not_walked(api, monkeypat
     with store.transaction() as c:
         conv = dict(c.execute("SELECT * FROM conversations WHERE id=?", (msg["conversation_id"],)).fetchone())
         rooms = [uuid.uuid4().hex for _ in range(60)]
-        clone(c, "conversations", conv, 60, id=lambda i: rooms[i], room_key=lambda i: "room-" + rooms[i])
+        clone(c, "conversations", conv, 60, id=lambda i: rooms[i], room_key=lambda i: "room-" + rooms[i],
+              root_id=lambda i: rooms[i], path=lambda i: f"/{rooms[i]}/")     # each its own thread tree
         first = dict(c.execute("SELECT * FROM messages WHERE id=?", (msg["id"],)).fetchone())
         clone(c, "messages", {**first, "from_actor": "keeper", "to_actor": "bot:ops", "kind": "notice",
                               "delivered_at": H.now(), "read_at": None}, 300,
@@ -83,7 +84,8 @@ def test_readable_messages_split_by_hidden_pages_are_found_across_them(api, monk
     with store.transaction() as c:
         conv = dict(c.execute("SELECT * FROM conversations WHERE id=?", (msg["conversation_id"],)).fetchone())
         rooms = [uuid.uuid4().hex for _ in range(40)]
-        clone(c, "conversations", conv, 40, id=lambda i: rooms[i], room_key=lambda i: "room-" + rooms[i])
+        clone(c, "conversations", conv, 40, id=lambda i: rooms[i], room_key=lambda i: "room-" + rooms[i],
+              root_id=lambda i: rooms[i], path=lambda i: f"/{rooms[i]}/")     # each its own thread tree
         first = dict(c.execute("SELECT * FROM messages WHERE id=?", (msg["id"],)).fetchone())
         newer = lambda p: H.shift(first["created"], seconds=len(order) - p)   # noqa: E731
         spots = [p for p, kind in enumerate(order) if kind == "readable"]
@@ -135,3 +137,20 @@ def test_the_newest_hundred_readable_arrive_oldest_first_with_their_answers(api)
     assert [m["id"] for m in inbox["messages"]] == newest[::-1] and inbox["more_messages"] is True
     answered = {m["id"]: m["answered_at"] for m in inbox["messages"]}
     assert answered[ask] and all(at is None for mid, at in answered.items() if mid != ask)
+
+
+def test_a_persons_inbox_leaves_out_threads_they_cannot_read(api):
+    """A delivery waiting for a person in a thread they cannot read (someone else's personal thread: no owner or
+    addressee bypass) never reaches their inbox; one in a thread they read does."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        mine = H.open_conversation(c, "human:ana", ["human:ana", "human:ben"], kind="chat", subject="Ana and Ben")
+        theirs = H.open_conversation(c, "human:cara", ["human:cara", "bot:ops"], kind="chat", subject="Cara's",
+                                     scope="personal", owner_actor="human:cara", room_key="ops")
+        seen = H.say(c, "human:ana", "human:ben", "For Ben", conversation_id=mine["id"])
+        base = dict(c.execute("SELECT * FROM messages WHERE id=?", (seen["id"],)).fetchone())
+        clone(c, "messages", {**base, "conversation_id": theirs["id"], "from_actor": "human:cara"}, 1,
+              body=lambda i: "Cara's private words")
+    inbox = api.get("/api/v2/inbox", headers=headers("ben-test")).json()
+    bodies = [m["body"] for m in inbox["messages"]]
+    assert "For Ben" in bodies and "Cara's private words" not in bodies
