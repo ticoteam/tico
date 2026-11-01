@@ -23,7 +23,7 @@ VERSION_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$")
 # What `docker compose up` and the setup wizard need on a server; nothing else is shipped here.
 # Ship compose.yaml verbatim so upgrades receive its current server environment forwarding.
 # backend/redaction.py is standard library only: the wizard redacts what it offers to send to Tico support with it.
-FILES = ("compose.yaml", ".env.example", "docker/runner.compose.yaml", "scripts/tico-setup", "LICENSE", "NOTICE",
+FILES = ("compose.yaml", ".env.example", "docker/runner.compose.yaml", "docker/runner-memory.sh", "scripts/tico-setup", "LICENSE", "NOTICE",
          "licenses/Apache-2.0.txt", "backend/redaction.py")
 WIZARD_DIR = "setup"
 
