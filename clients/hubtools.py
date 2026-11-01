@@ -5690,7 +5690,7 @@ def thread_show(api, args):
        "audience_group_id": _s("For audience team: the group's id"),
        "members": {"type": "array", "items": {"type": "string"},
                    "description": "The people, bots and groups to add, as human:<id>, bot:<slug> or group:<id>"},
-       "body": _s("The first message")})
+       "body": _s("The first message")}, writes=True)
 def thread_create(api, args):
     body = {key: args[key] for key in ("title", "audience", "audience_group_id", "members", "body")
             if args.get(key) not in (None, "", [])}
