@@ -11,7 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Sequence
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, cast, runtime_checkable
 
 from .mercury import Answer, Opener
 
@@ -33,6 +33,15 @@ class Provider(Protocol):
     def account(self) -> Answer: ...
     def balance(self) -> Answer: ...
     def transactions(self, starting_after: str | None, limit: int = PAGE) -> Answer: ...
+
+
+@runtime_checkable
+class Catalog(Protocol):
+    """The product catalog a Stripe provider can list: products become items, prices their refs. Kept apart from Provider
+    so a provider without it (a fake of the balance alone) still syncs its balance."""
+
+    def products(self, starting_after: str | None, limit: int = PAGE) -> Answer: ...
+    def prices(self, starting_after: str | None, limit: int = PAGE) -> Answer: ...
 
 
 def base_url() -> str:
@@ -102,6 +111,21 @@ class Stripe:
         if starting_after:
             params.append(("starting_after", starting_after))
         return self._get("/balance_transactions", params)
+
+    def products(self, starting_after: str | None, limit: int = PAGE) -> Answer:
+        """Products, active or not, paged the way the balance transactions are."""
+        return self._get("/products", _page(starting_after, limit))
+
+    def prices(self, starting_after: str | None, limit: int = PAGE) -> Answer:
+        """Prices (a product has several: currencies, monthly and yearly intervals), paged the same way."""
+        return self._get("/prices", _page(starting_after, limit))
+
+
+def _page(starting_after: str | None, limit: int) -> list[tuple[str, str]]:
+    params = [("limit", str(limit))]
+    if starting_after:
+        params.append(("starting_after", starting_after))
+    return params
 
 
 def _parse(raw: bytes) -> dict[str, Any]:

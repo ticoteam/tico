@@ -26,6 +26,7 @@ class Org:
     reports_to: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
     humans: frozenset[str] = frozenset()
     bots: frozenset[str] = frozenset()
+    admins: frozenset[str] = frozenset()   # company Admins (people): they hold the records right by default
 
     def below(self, team: str) -> frozenset[str]:
         """`team` and every team nested under it."""

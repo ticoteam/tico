@@ -9,8 +9,8 @@ everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else 
 
 | Tool | Command | Input | Output |
 |---|---|---|---|
-| `hub_finance_search` | `hub finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card; leave it out to search all), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
-| `hub_finance_report` | `hub finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, close), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close | the report, rows past `top_n` folded into "Other · n" |
+| `hub_finance_search` | `hub finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card, po, estimate, item, location, project, equipment, due_date; leave it out to search all), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`), `cursor`, `limit` (up to 200). Record rows (item, location, project) carry `source` and `as_of` | `{results, next_cursor, view_version}` |
+| `hub_finance_report` | `hub finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, revenue_by_item, close), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close | the report, rows past `top_n` folded into "Other · n" |
 | `hub_finance_metric` | `hub finance metric <name>` | `name` (cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days) and its filters | `{value, as_of, ...}` |
 | `hub_finance_act` | `hub finance act <kind>` | `kind`, `payload` (JSON), `dry_run`, `operation_id` | `{status, action_id, code, reason, result?, impact?}` |
 | `hub_finance_action` | `hub finance action <id>` | `action_id` | the action's current status |

@@ -13,14 +13,16 @@ from ..records import store as RS
 from . import mirror
 from .context import Ctx
 from .core import kinds as K
+from .core import rights as R
 from .core import validate as V
-from .core.errors import NOT_FOUND, FinanceError, invalid
+from .core.errors import NOT_FOUND, FinanceError, denied, invalid
 from .handlers import Plan, Planner, Result
 from .store import ap as SAP
 from .store import ledger as SL
 
-ITEM_FIELDS = ("name", "sku", "kind", "unit", "price", "income_account_id", "expense_account_id", "asset_account_id")
-LOCATION_FIELDS = ("name", "kind", "parent_id", "address")
+ITEM_FIELDS = ("name", "sku", "kind", "unit", "price", "description", "taxable", "income_account_id",
+               "expense_account_id", "asset_account_id")
+LOCATION_FIELDS = ("name", "kind", "parent_id", "customer_id", "address")
 PROJECT_FIELDS = ("name", "customer_id", "status")
 # Locations a mirrored book does not take unless asked: a customer site or a vehicle is kept in Tico.
 OUT_OF_BOOKS_LOCATION_KINDS = ("customer_site", "vehicle")
@@ -51,6 +53,37 @@ def _archive_flag(ctx: Ctx, p: V.Payload) -> dict[str, object]:
     return {"archived_at": None if V.flag(p, "active", True) else ctx.at}
 
 
+def _customer(ctx: Ctx, who: str, value: str) -> str:
+    """A customer contact a record names. A records holder names any customer (the customer's name is operational, so
+    every teammate reads it); anyone else needs a view that covers customers. Refused as a missing one otherwise, so a
+    refusal never says that a contact exists (the same rule an account follows)."""
+    row = SAP.get(ctx.c, "fin_contacts", value)
+    view = ctx.view(who)
+    may_name = R.has(ctx.org, who, R.RECORDS, ctx.rights(who)) or view.everything or view.receivables
+    if row is None or str(row["book_id"]) != ctx.book.id or str(row["kind"]) not in ("customer", "both") or \
+            not may_name:
+        raise FinanceError(NOT_FOUND, "no such customer")
+    return str(row["id"])
+
+
+def _accounts_need_books(ctx: Ctx, who: str, f: dict[str, object], old: Any | None) -> None:
+    """An item's accounts change only for a books right holder: the records right sets the rest of an item."""
+    changed = any(key in f and f[key] != (old[key] if old is not None else None) for key, _ in mirror.ITEM_ACCOUNTS)
+    if changed and not R.has(ctx.org, who, R.BOOK, ctx.rights(who)):
+        raise denied("an item's accounts need the books right")
+
+
+def _refuse_cycle(ctx: Ctx, location_id: str, parent_id: str | None) -> None:
+    """Refuses a parent that sits under the location itself, directly or through its own parents."""
+    at, seen = parent_id or "", set[str]()
+    while at and at not in seen:
+        if at == location_id:
+            raise invalid("a location cannot sit under itself or one of its own parts")
+        seen.add(at)
+        row = RR.get(ctx.c, "locations", at)
+        at = str(row["parent_id"] or "") if row is not None else ""
+
+
 def _item_fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str, object]:
     out: dict[str, object] = {}
     if create or "name" in p:
@@ -61,6 +94,10 @@ def _item_fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str, ob
         out["sku"] = V.opt_text(p, "sku", 80) or ""
     if create or "unit" in p:
         out["unit"] = V.opt_text(p, "unit", 20) or ""
+    if create or "description" in p:
+        out["description"] = V.opt_text(p, "description", 2000) or ""
+    if create or "taxable" in p:
+        out["taxable"] = int(V.flag(p, "taxable", False))
     if create or "price" in p:
         price = RC.price(V.opt_amount(p, "price"))
         out["price"] = price
@@ -75,7 +112,7 @@ def _item_fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str, ob
     return out
 
 
-def _location_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
+def _location_fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str, object]:
     out: dict[str, object] = {}
     if create or "name" in p:
         out["name"] = RC.name(V.text(p, "name", RC.MAX_NAME))
@@ -86,6 +123,9 @@ def _location_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
         if parent and not RR.is_active(ctx.c, "locations", parent):
             raise FinanceError(NOT_FOUND, "no such location to sit under")
         out["parent_id"] = RS.resolve(ctx.c, "locations", parent) if parent else None
+    if create or "customer_id" in p:
+        customer = V.opt_text(p, "customer_id", 80) or ""
+        out["customer_id"] = _customer(ctx, who, customer) if customer else None
     if create or "address" in p:
         address = V.obj(p.get("address") or {}, "an address")
         if any(not isinstance(v, str) or len(v) > 200 for v in address.values()) or len(address) > 10:
@@ -96,7 +136,7 @@ def _location_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
     return out
 
 
-def _project_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
+def _project_fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str, object]:
     out: dict[str, object] = {}
     if create or "name" in p:
         out["name"] = RC.name(V.text(p, "name", RC.MAX_NAME))
@@ -104,11 +144,7 @@ def _project_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
         out["status"] = RC.choice(V.opt_text(p, "status", 20) or "open", RC.PROJECT_STATUSES, "a project status")
     if create or "customer_id" in p:
         customer = V.opt_text(p, "customer_id", 80) or ""
-        if customer:
-            row = SAP.get(ctx.c, "fin_contacts", customer)
-            if row is None or str(row["book_id"]) != ctx.book.id or str(row["kind"]) not in ("customer", "both"):
-                raise FinanceError(NOT_FOUND, "no such customer")
-        out["customer_id"] = customer or None
+        out["customer_id"] = _customer(ctx, who, customer) if customer else None
     if not create:
         out.update(_archive_flag(ctx, p))
     return out
@@ -153,6 +189,9 @@ def item_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     f = _shape(lambda: _item_fields(ctx, who, p, create=True))
     if _mirrored(ctx) and f["price"] is None:
         raise invalid("an item the provider holds needs a price")
+    _accounts_need_books(ctx, who, f, None)
+    if _mirrored(ctx) and f["kind"] == "bundle":
+        raise invalid("a bundle cannot be created while the books are mirrored: the provider takes no bundles")
     item_id = SL.new_id()
 
     def apply(aid: str) -> Result:
@@ -173,14 +212,20 @@ def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     old = RR.get(ctx.c, "items", V.text(p, "item_id", 80))
     if old is None or _hides_item(ctx, who, old):
         raise FinanceError(NOT_FOUND, "no such item")
+    if who in ctx.org.bots and old["archived_at"] is not None:
+        raise invalid("a bot cannot change an archived item: a person unarchives it first")
     item_id = str(old["id"])
     f = _shape(lambda: _item_fields(ctx, who, p, create=False))
+    _accounts_need_books(ctx, who, f, old)
+    if _mirrored(ctx) and f.get("kind") == "bundle" and old["kind"] != "bundle":
+        raise invalid("a bundle cannot be made while the books are mirrored: the provider takes no bundles")
     if _mirrored(ctx) and "price" in f and f["price"] is None and old["price"] is not None:
         raise invalid("an item the provider holds keeps a price: set a new one")
-    for key, kind in mirror.ITEM_ACCOUNTS:
-        # QuickBooks and Xero keep an account the update leaves out, so a cleared one would stay on the provider's item.
-        if _mirrored(ctx) and key in f and f[key] is None and old[key] is not None:
-            raise invalid(f"an item the provider holds keeps its {kind} account: set another one")
+    # The provider holds the item's accounts and SKU; a change here would not reach it, so bills would post elsewhere.
+    if _mirrored(ctx) and any(key in f and f[key] != old[key] for key, _ in mirror.ITEM_ACCOUNTS):
+        raise invalid("an item the provider holds keeps its accounts: change them in the books")
+    if _mirrored(ctx) and "sku" in f and old["sku"] and not f["sku"]:
+        raise invalid("an item the provider holds keeps its SKU: set another one")
     if _mirrored(ctx) and "kind" in f and f["kind"] != old["kind"]:
         _books_kind_change(str(old["kind"]), str(f["kind"]))
     gate = K.default_gate(ctx.org, who, "item_update")
@@ -196,7 +241,7 @@ def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def location_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, (*LOCATION_FIELDS, "in_books"))
-    f = _shape(lambda: _location_fields(ctx, p, create=True))
+    f = _shape(lambda: _location_fields(ctx, who, p, create=True))
     books = _mirrored(ctx) and V.flag(p, "in_books", str(f["kind"]) not in OUT_OF_BOOKS_LOCATION_KINDS)
     if books:
         mirror.provider_takes_records(ctx, "a location")
@@ -213,9 +258,9 @@ def location_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if old is None:
         raise FinanceError(NOT_FOUND, "no such location")
     location_id = str(old["id"])
-    if RS.resolve(ctx.c, "locations", str(p.get("parent_id") or "")) == location_id:
-        raise invalid("a location cannot sit under itself")
-    f = _shape(lambda: _location_fields(ctx, p, create=False))
+    f = _shape(lambda: _location_fields(ctx, who, p, create=False))
+    if "parent_id" in f:
+        _refuse_cycle(ctx, location_id, str(f["parent_id"] or ""))
     books = _mirrored(ctx) and not mirror.kept_local(ctx, "locations", location_id)
     if books:
         mirror.provider_takes_records(ctx, "a location")
@@ -229,7 +274,7 @@ def location_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def project_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, PROJECT_FIELDS)
-    f = _shape(lambda: _project_fields(ctx, p, create=True))
+    f = _shape(lambda: _project_fields(ctx, who, p, create=True))
     if _mirrored(ctx):
         mirror.provider_takes_records(ctx, "a job")
         if not f.get("customer_id"):
@@ -247,7 +292,7 @@ def project_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if old is None:
         raise FinanceError(NOT_FOUND, "no such project")
     project_id = str(old["id"])
-    f = _shape(lambda: _project_fields(ctx, p, create=False))
+    f = _shape(lambda: _project_fields(ctx, who, p, create=False))
 
     def apply(aid: str) -> Result:
         return _update(ctx, who, aid, "project.update", "projects", project_id, f, "project_id",

@@ -17,6 +17,7 @@ from pydantic import Field
 from . import company_server, hook_relay
 from .finance import actions as finance
 from .finance import books_link
+from .finance import due_dates as finance_due_dates
 from .finance import record_imports
 from .finance import reads as finance_reads
 from .models import ID, Contract
@@ -29,7 +30,8 @@ Group = Literal["department", "team", "teammate", "bot", "person", "vendor", "ac
                 "location_class", "location_project", "class_project"]
 DAY = r"^\d{4}-\d{2}-\d{2}$"
 Aging = Literal["current", "1_30", "31_60", "61_90", "over_90"]
-Report = Literal["pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by"]
+Report = Literal["pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by",
+                 "revenue_by_item"]
 Metric = Literal["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
                  "ar_overdue", "uncategorized_count", "unreconciled_days"]
 
@@ -332,6 +334,27 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.record(c, actor, kind="location", record_id=location_id))
 
+    @app.get("/api/v2/due-dates")
+    def finance_due_date_list(request: Request, q: str = Query("", max_length=100),
+                              archived: Literal["hide", "only", "all"] = "hide",
+                              subject_type: Literal["location", "equipment", "contact"] | None = None,
+                              subject_id: str | None = Query(None, max_length=80),
+                              cursor: str | None = Query(None, max_length=600),
+                              limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+        """Due dates by name: what they fall on (a location, equipment, or a vendor or customer), the repeat, the next
+        day it falls due and the teammate who works it. `q` searches names, and `archived` hides the archived ones (the
+        default), shows only them, or shows both. `subject_type` (with `subject_id`) narrows to one record; a merged
+        location answers under its record. `next_cursor` pages."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_due_dates.listing(c, actor, q=q, archived=archived, cursor=cursor, limit=limit,
+                                                        subject_type=subject_type, subject_id=subject_id))
+
+    @app.get("/api/v2/due-dates/{due_date_id}")
+    def finance_due_date_one(request: Request, due_date_id: ID, view_as: str | None = None):
+        """One due date with its days, newest first: each day's completion and the task that carried it."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_due_dates.due_date(c, actor, due_date_id=due_date_id))
+
     @app.get("/api/v2/items")
     def finance_items(request: Request, q: str = Query("", max_length=100),
                       archived: Literal["hide", "only", "all"] = "hide",
@@ -365,6 +388,22 @@ def install(app, store, auth, mutate):
         """One project, archived or not."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.record(c, actor, kind="project", record_id=project_id))
+
+    @app.get("/api/v2/customers")
+    def finance_customers(request: Request, q: str = Query("", max_length=100),
+                          cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
+                          view_as: str | None = None):
+        """Active customers by name then id, for pickers: id and name only, to every teammate. `q` matches a name,
+        and an email too for a viewer of receivables; `next_cursor` pages."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.customers(c, actor, q=q, cursor=cursor, limit=limit))
+
+    @app.get("/api/v2/customers/{contact_id}")
+    def finance_customer(request: Request, contact_id: ID, view_as: str | None = None):
+        """A customer's panel: the contact, its active locations, and its open estimates and unpaid invoices where the
+        caller sees receivables (null where not)."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.customer_panel(c, actor, contact_id))
 
     @app.get("/api/v2/finance/invoices")
     def finance_invoices(request: Request, status: str | None = Query(None, max_length=80),
@@ -434,7 +473,8 @@ def install(app, store, auth, mutate):
                        basis: Literal["cash", "accrual"] | None = None, compare: Literal["prior"] | None = None,
                        top_n: int = Query(20, ge=1, le=200), by: Group | None = None, view_as: str | None = None):
         """One report cut to the caller's view: pnl, pnl_by, balance_sheet, cash_flow, budget_vs_actual, ap_aging,
-        ar_aging or spend_by (`by` picks the grouping; pnl_by defaults to location, spend_by to vendor).
+        ar_aging, spend_by or revenue_by_item (`by` picks the grouping; pnl_by defaults to location, spend_by to vendor;
+        revenue_by_item needs the receivables view).
         `compare=prior` adds the window before; rows past `top_n` fold into "Other · n"."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.report(c, actor, kind, start=start, end=end, period=period, basis=basis,
@@ -480,7 +520,7 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/finance/search")
     def finance_search(request: Request,
                        kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location",
-                                     "project", "po", "estimate"] | None = None,
+                                     "project", "po", "estimate", "due_date"] | None = None,
                        q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
                        vendor: str | None = Query(None, max_length=120),
                        contact_id: str | None = Query(None, max_length=80),
