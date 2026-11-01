@@ -89,6 +89,26 @@ def test_payments_marked_paid_meet_one_combined_row_and_an_unclear_row_waits_ins
         assert _balance(c, "1000") - bank == -40_000 and FR.feed_expected(c, OWNER, waits, at=AT)["expected"] == []
 
 
+def test_an_unbooked_row_that_marked_payments_wait_for_cannot_pay_another_bill(books):  # noqa: F811
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        one, two, other = (_approved(c, vendor, 5_000, number=f"W-{n}") for n in (1, 2, 3))
+        _mark(c, one, date="2026-10-13")
+        _mark(c, two, date="2026-10-13")
+        before = (_balance(c, "1000"), _balance(c, "2000"), _balance(c, "6900"))
+        # Two equal payments wait for this 50.00 debit, named for the rail: it stays new for a person to link.
+        row = _ingest(c, _txn("txn-w", -50.0, who="MERCURY ACH"))
+        assert c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE id=?", (row,)).fetchone()[:] == ("new", None)
+        # An open bill of the same amount cannot take the row: that money is already recorded on a marked payment.
+        refused = act(c, OWNER, "bill_mark_paid", {"bill_id": other, "feed_id": row})
+        assert refused.code == "conflict", refused
+        assert FR.bill(c, OWNER, other)["status"] == "open"
+        assert c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE id=?", (row,)).fetchone()[:] == ("new", None)
+        assert (_balance(c, "1000"), _balance(c, "2000"), _balance(c, "6900")) == before
+
+
 def test_a_tico_card_charge_paying_an_entered_bill_clears_ap_instead_of_a_second_expense(books):  # noqa: F811
     from backend.tests.test_finance_banking import _arrives, _card_for_eve, _card_holds, _card_use
     fake = FakeMercury()

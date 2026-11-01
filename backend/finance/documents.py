@@ -1006,6 +1006,18 @@ def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, *, posted: F.Fe
     return "linked"
 
 
+def _may_wait(ctx: Ctx, kind: str, money: Any, amount: int, day: str) -> bool:
+    """Whether expected_match leaves an unbooked row of this amount to a person: a payment marked paid from this money
+    account waits for it (alone, or in a set that sums to it), or the search could not look at every candidate."""
+    start, end = _window(day)
+    exact, cut = _waiting(ctx, kind, money, amount, start, end)
+    if exact or cut:
+        return True
+    waiting, cut = _waiting(ctx, kind, money, 0, start, end)
+    sets, partial = _combined(waiting, amount)
+    return bool(sets) or cut or partial
+
+
 def _link(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any],
           fees: Sequence[dict[str, object]] = ()) -> str:
     """The row is the bank side of these waiting payments: one takes its entry as it is; several, or one with fees
@@ -1383,6 +1395,11 @@ def _pay(kind: str) -> Any:
             free = gross - SAP.settled_from(ctx.c, "feed", str(row["id"]))
             if amount > free:
                 raise invalid(f"that row has {free} left to apply")
+            # An unbooked row may be the bank side of payments already marked paid: a person links it, no new payment.
+            if not row["entry_id"] and row_money is not None and gross and \
+                    _may_wait(ctx, kind, row_money, gross, str(row["txn_date"])):
+                raise FinanceError(CONFLICT, "that row may be a payment already marked paid that waits for its bank "
+                                             "row; link it with feed_match")
             day = V.opt_day(p, "date") or str(row["txn_date"])
         elif row is not None:
             day = V.opt_day(p, "date") or str(row["txn_date"])
