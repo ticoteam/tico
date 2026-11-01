@@ -11,8 +11,9 @@
 //!
 //! The exit's side: while its owner shares (the heartbeat says so) the runner holds one link to the relay and, for
 //! each tunnel it is sent, resolves the hostname here and dials it, ports 80 and 443 only, refusing every address
-//! that is not on the public internet or is one of this computer's own (`refused`). The address checked is the one
-//! dialled, so a name that resolves differently a second time changes nothing.
+//! that is not on the public internet or is one of this computer's own (`refused`): its interfaces, and the public
+//! address the relay saw its link come from (its router's, behind NAT). The address checked is the one dialled, so a
+//! name that resolves differently a second time changes nothing.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -48,16 +49,74 @@ const PORT_SPAN: u16 = 8000;
 
 // ------------------------------------------------------------------------------------------ addresses
 
-/// Why an exit refuses to dial `ip`, or None for an address on the public internet. `own` is this computer's
-/// interface addresses: a service listening on its public address is still the computer's own.
-pub fn refused(ip: IpAddr, own: &[IpAddr]) -> Option<&'static str> {
+/// What the special-purpose registries say about a prefix: refuse it, or look at the IPv4 address it carries.
+#[derive(Clone, Copy)]
+enum Rule {
+    Refuse(&'static str),
+    /// NAT64 (64:ff9b::/96) reaches the IPv4 address in its last 32 bits.
+    Nat64,
+    /// 6to4 (2002::/16) reaches the IPv4 address in bits 16 to 48.
+    SixToFour,
+}
+
+/// IPv4 prefixes that are not on the public internet: the IANA IPv4 Special-Purpose Address Registry (only the
+/// entries marked not globally reachable; 192.0.0.0/24 whole, as its global anycast entries are no websites) and
+/// multicast. First match wins.
+const V4: &[([u8; 4], u8, &str)] = &[
+    ([0, 0, 0, 0], 8, "an unspecified address"),
+    ([10, 0, 0, 0], 8, "a private network address"),
+    ([100, 64, 0, 0], 10, "a carrier-grade NAT address"),
+    ([127, 0, 0, 0], 8, "a loopback address"),
+    ([169, 254, 0, 0], 16, "a link-local address"),
+    ([172, 16, 0, 0], 12, "a private network address"),
+    ([192, 0, 0, 0], 24, "a protocol assignment address"),
+    ([192, 0, 2, 0], 24, "a documentation address"),
+    ([192, 88, 99, 0], 24, "a 6to4 relay address"),
+    ([192, 168, 0, 0], 16, "a private network address"),
+    ([198, 18, 0, 0], 15, "a benchmarking address"),
+    ([198, 51, 100, 0], 24, "a documentation address"),
+    ([203, 0, 113, 0], 24, "a documentation address"),
+    ([224, 0, 0, 0], 4, "a multicast address"),
+    ([240, 0, 0, 0], 4, "a reserved address"),
+];
+
+/// IPv6 prefixes from the IANA IPv6 Special-Purpose Address Registry (not globally reachable ones; 2001::/23 whole,
+/// as its global entries are anycast infrastructure), the transition prefixes whose IPv4 address is checked instead,
+/// and everything outside 2000::/3, the only space allocated for global unicast. First match wins.
+const V6: &[([u16; 8], u8, Rule)] = &[
+    ([0, 0, 0, 0, 0, 0, 0, 0], 128, Rule::Refuse("an unspecified address")),
+    ([0, 0, 0, 0, 0, 0, 0, 1], 128, Rule::Refuse("a loopback address")),
+    ([0x64, 0xff9b, 0, 0, 0, 0, 0, 0], 96, Rule::Nat64),
+    ([0x64, 0xff9b, 1, 0, 0, 0, 0, 0], 48, Rule::Refuse("a local NAT64 address")),
+    ([0x100, 0, 0, 0, 0, 0, 0, 0], 64, Rule::Refuse("a discard address")),
+    ([0x2001, 0, 0, 0, 0, 0, 0, 0], 32, Rule::Refuse("a Teredo address")),
+    ([0x2001, 0xdb8, 0, 0, 0, 0, 0, 0], 32, Rule::Refuse("a documentation address")),
+    ([0x2001, 0, 0, 0, 0, 0, 0, 0], 23, Rule::Refuse("a protocol assignment address")),
+    ([0x2002, 0, 0, 0, 0, 0, 0, 0], 16, Rule::SixToFour),
+    ([0x3fff, 0, 0, 0, 0, 0, 0, 0], 20, Rule::Refuse("a documentation address")),
+    ([0xfc00, 0, 0, 0, 0, 0, 0, 0], 7, Rule::Refuse("a unique local address")),
+    ([0xfe80, 0, 0, 0, 0, 0, 0, 0], 10, Rule::Refuse("a link-local address")),
+    ([0xfec0, 0, 0, 0, 0, 0, 0, 0], 10, Rule::Refuse("a site-local address")),
+    ([0xff00, 0, 0, 0, 0, 0, 0, 0], 8, Rule::Refuse("a multicast address")),
+    ([0x2000, 0, 0, 0, 0, 0, 0, 0], 3, Rule::Refuse("")), // global unicast: no rule, see refused_v6
+];
+
+fn in_prefix(value: u128, base: u128, len: u8, bits: u32) -> bool {
+    let mask = if len == 0 { 0 } else { u128::MAX << (bits - len as u32) };
+    value & mask == base & mask
+}
+
+/// Why an exit refuses to dial `ip`, or None for an address on the public internet. `deny` is this computer's own
+/// addresses: its interfaces and the public address the relay saw it connect from. A service on any of them is
+/// still the computer's own (or its router's), whatever the registry says.
+pub fn refused(ip: IpAddr, deny: &[IpAddr]) -> Option<&'static str> {
     let ip = canonical(ip);
-    if own.iter().any(|o| canonical(*o) == ip) {
+    if deny.iter().any(|o| canonical(*o) == ip) {
         return Some("this computer's own address");
     }
     match ip {
         IpAddr::V4(v4) => refused_v4(v4),
-        IpAddr::V6(v6) => refused_v6(v6),
+        IpAddr::V6(v6) => refused_v6(v6, deny),
     }
 }
 
@@ -69,51 +128,58 @@ fn canonical(ip: IpAddr) -> IpAddr {
 }
 
 fn refused_v4(ip: Ipv4Addr) -> Option<&'static str> {
-    let [a, b, ..] = ip.octets();
-    if ip.is_unspecified() || a == 0 {
-        Some("an unspecified address")
-    } else if ip.is_loopback() {
-        Some("a loopback address")
-    } else if ip.is_private() {
-        Some("a private network address")
-    } else if ip.is_link_local() {
-        Some("a link-local address")
-    } else if a == 100 && (b & 0xc0) == 64 {
-        Some("a carrier-grade NAT address")
-    } else if ip.is_multicast() {
-        Some("a multicast address")
-    } else if a >= 240 {
-        Some("a reserved address")
-    } else {
-        None
+    let value = u32::from(ip) as u128;
+    V4.iter().find(|(base, len, _)| in_prefix(value, u32::from(Ipv4Addr::from(*base)) as u128, *len, 32)).map(|r| r.2)
+}
+
+fn refused_v6(ip: Ipv6Addr, deny: &[IpAddr]) -> Option<&'static str> {
+    let value = u128::from(ip);
+    let rule = V6.iter().find(|(base, len, _)| in_prefix(value, u128::from(Ipv6Addr::from(*base)), *len, 128));
+    let carried = |bits: u128| IpAddr::V4(Ipv4Addr::from(bits as u32));
+    match rule.map(|r| (r.1, r.2)) {
+        // A transition address is the IPv4 address it reaches: every IPv4 rule and this computer's own apply.
+        Some((_, Rule::Nat64)) => refused(carried(value), deny),
+        Some((_, Rule::SixToFour)) => refused(carried(value >> 80), deny),
+        Some((3, _)) => None,
+        Some((_, Rule::Refuse(why))) => Some(why),
+        None => Some("an unallocated address"),
     }
 }
 
-fn refused_v6(ip: Ipv6Addr) -> Option<&'static str> {
-    let s = ip.segments();
-    let low = Ipv4Addr::new((s[6] >> 8) as u8, s[6] as u8, (s[7] >> 8) as u8, s[7] as u8);
-    if ip.is_unspecified() {
-        Some("an unspecified address")
-    } else if ip.is_loopback() {
-        Some("a loopback address")
-    } else if s[0] & 0xff00 == 0xff00 {
-        Some("a multicast address")
-    } else if s[0] & 0xfe00 == 0xfc00 {
-        Some("a unique local address")
-    } else if s[0] & 0xffc0 == 0xfe80 {
-        Some("a link-local address")
-    } else if s[0] & 0xffc0 == 0xfec0 {
-        Some("a site-local address")
-    } else if s[..6] == [0; 6] {
-        Some("a reserved address") // IPv4-compatible (::a.b.c.d), long deprecated
-    } else if s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0; 4] {
-        refused_v4(low) // NAT64 reaches the IPv4 address it carries
-    } else if s[0] == 0x2002 {
-        refused_v4(Ipv4Addr::new((s[1] >> 8) as u8, s[1] as u8, (s[2] >> 8) as u8, s[2] as u8))
-    // 6to4
-    } else {
-        None
+/// How many public addresses the relay has seen this computer connect from are kept: IPv4 and IPv6, or a laptop
+/// that moves between networks.
+const SEEN_KEPT: usize = 8;
+
+fn seen() -> &'static Mutex<Vec<IpAddr>> {
+    static SEEN: OnceLock<Mutex<Vec<IpAddr>>> = OnceLock::new();
+    SEEN.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Remember the addresses the relay saw this computer's link come from, newest first. Behind NAT that is the
+/// router's public address, which no interface here has: a name resolving to it would reach the router's own pages or
+/// a forwarded service at home.
+fn remember_seen(addresses: &[IpAddr]) {
+    let mut kept = seen().lock().unwrap();
+    for ip in addresses.iter().rev().map(|ip| canonical(*ip)) {
+        kept.retain(|k| *k != ip);
+        kept.insert(0, ip);
     }
+    kept.truncate(SEEN_KEPT);
+}
+
+/// The relay's first message on the link: `{"op":"hello","seen":["203.0.113.9"]}`.
+fn hello_seen(text: &str) -> Option<Vec<IpAddr>> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    (v["op"] == "hello").then(|| {
+        v["seen"].as_array().into_iter().flatten().take(4).filter_map(|ip| ip.as_str()?.parse().ok()).collect()
+    })
+}
+
+/// Every address this computer refuses to dial as its own: its interfaces and what the relay saw.
+fn own_and_seen() -> Vec<IpAddr> {
+    let mut deny = own_addresses();
+    deny.extend(seen().lock().unwrap().iter().copied());
+    deny
 }
 
 /// This computer's interface addresses.
@@ -170,11 +236,11 @@ pub async fn dial(host: &str, port: u16) -> Result<TcpStream, String> {
         .map_err(|_| format!("{host} did not resolve in time"))?
         .map_err(|_| format!("{host} does not resolve"))?
         .collect();
-    let own = own_addresses();
+    let deny = own_and_seen();
     let mut why = None;
     let allowed: Vec<SocketAddr> = resolved
         .into_iter()
-        .filter(|addr| match refused(addr.ip(), &own) {
+        .filter(|addr| match refused(addr.ip(), &deny) {
             Some(reason) => {
                 why.get_or_insert(reason);
                 false
@@ -363,6 +429,10 @@ async fn run_link(client: &Client) -> Result<(), String> {
         tokio::select! {
             frame = ws.next() => match frame {
                 Some(Ok(Message::Text(text))) => {
+                    if let Some(addresses) = hello_seen(&text) {
+                        remember_seen(&addresses);
+                        continue;
+                    }
                     let Some(open) = Open::parse(&text) else { continue };
                     let client = client.clone();
                     let permit = room.clone().try_acquire_owned().ok();
@@ -691,34 +761,91 @@ mod tests {
 
     #[test]
     fn only_public_addresses_that_are_not_the_computers_own_are_dialled() {
-        let own: Vec<IpAddr> = vec!["203.0.113.7".parse().unwrap()];
+        // 93.184.215.7 an interface's public address, 81.2.69.160 what the relay saw (the router), one IPv6 too.
+        let deny: Vec<IpAddr> =
+            ["93.184.215.7", "81.2.69.160", "2a00:1450:4001::7"].iter().map(|ip| ip.parse().unwrap()).collect();
         for (ip, why) in [
-            ("127.0.0.1", "a loopback address"),
+            ("0.0.0.0", "an unspecified address"),
+            ("0.1.2.3", "an unspecified address"),
             ("10.1.2.3", "a private network address"),
-            ("172.16.0.1", "a private network address"),
-            ("192.168.1.1", "a private network address"),
-            ("169.254.169.254", "a link-local address"),
             ("100.64.0.1", "a carrier-grade NAT address"),
             ("100.127.255.255", "a carrier-grade NAT address"),
+            ("127.0.0.1", "a loopback address"),
+            ("169.254.169.254", "a link-local address"),
+            ("172.16.0.1", "a private network address"),
+            ("172.31.255.255", "a private network address"),
+            ("192.0.0.9", "a protocol assignment address"),
+            ("192.0.0.170", "a protocol assignment address"),
+            ("192.0.2.1", "a documentation address"),
+            ("192.88.99.1", "a 6to4 relay address"),
+            ("192.168.1.1", "a private network address"),
+            ("198.18.0.1", "a benchmarking address"),
+            ("198.19.255.255", "a benchmarking address"),
+            ("198.51.100.7", "a documentation address"),
+            ("203.0.113.7", "a documentation address"),
             ("224.0.0.1", "a multicast address"),
-            ("0.0.0.0", "an unspecified address"),
+            ("239.255.255.250", "a multicast address"),
+            ("240.0.0.1", "a reserved address"),
             ("255.255.255.255", "a reserved address"),
-            ("203.0.113.7", "this computer's own address"),
-            ("::1", "a loopback address"),
+            ("93.184.215.7", "this computer's own address"),
+            ("81.2.69.160", "this computer's own address"),
             ("::", "an unspecified address"),
+            ("::1", "a loopback address"),
+            ("::a00:1", "an unallocated address"),
+            ("::ffff:10.0.0.1", "a private network address"),
+            ("::ffff:81.2.69.160", "this computer's own address"),
+            ("64:ff9b::a00:1", "a private network address"),
+            ("64:ff9b::5102:45a0", "this computer's own address"),
+            ("64:ff9b:1::5db8:d70e", "a local NAT64 address"),
+            ("100::1", "a discard address"),
+            ("2001::1", "a Teredo address"),
+            ("2001:0:4136:e378:8000:63bf:3fff:fdd2", "a Teredo address"),
+            ("2001:2::1", "a protocol assignment address"),
+            ("2001:db8::1", "a documentation address"),
+            ("2002:c0a8:101::1", "a private network address"),
+            ("2002:5102:45a0::1", "this computer's own address"),
+            ("2002:c612:1::1", "a benchmarking address"),
+            ("3fff::1", "a documentation address"),
+            ("2a00:1450:4001::7", "this computer's own address"),
+            ("5f00::1", "an unallocated address"),
+            ("fc00::1", "a unique local address"),
             ("fd00::1", "a unique local address"),
             ("fe80::1", "a link-local address"),
+            ("fec0::1", "a site-local address"),
             ("ff02::1", "a multicast address"),
-            ("::ffff:10.0.0.1", "a private network address"),
-            ("::ffff:203.0.113.7", "this computer's own address"),
-            ("64:ff9b::a00:1", "a private network address"),
-            ("2002:c0a8:101::1", "a private network address"),
         ] {
-            assert_eq!(refused(ip.parse().unwrap(), &own), Some(why), "{ip}");
+            assert_eq!(refused(ip.parse().unwrap(), &deny), Some(why), "{ip}");
         }
-        for ip in ["93.184.215.14", "100.128.0.1", "172.32.0.1", "2606:4700::1111", "64:ff9b::5db8:d70e"] {
-            assert_eq!(refused(ip.parse().unwrap(), &own), None, "{ip}");
+        for ip in [
+            "93.184.215.14",
+            "100.128.0.1",
+            "172.32.0.1",
+            "192.0.1.1",
+            "198.20.0.1",
+            "2606:4700::1111",
+            "2001:4860:4860::8888",
+            "64:ff9b::5db8:d70e",
+            "2002:5db8:d70e::1",
+        ] {
+            assert_eq!(refused(ip.parse().unwrap(), &deny), None, "{ip}");
         }
+    }
+
+    #[test]
+    fn the_address_the_relay_saw_is_refused_too_newest_first_and_kept_small() {
+        assert_eq!(hello_seen(r#"{"op":"open"}"#), None);
+        let heard = hello_seen(r#"{"op":"hello","seen":["81.2.69.161","::ffff:81.2.69.162","nonsense"]}"#).unwrap();
+        assert_eq!(heard.len(), 2);
+        remember_seen(&heard);
+        let deny = own_and_seen();
+        assert_eq!(refused("81.2.69.161".parse().unwrap(), &deny), Some("this computer's own address"));
+        assert_eq!(refused("81.2.69.162".parse().unwrap(), &deny), Some("this computer's own address"));
+        for n in 0..20u8 {
+            remember_seen(&[IpAddr::V4(Ipv4Addr::new(81, 2, 70, n))]);
+        }
+        let kept = seen().lock().unwrap().clone();
+        assert_eq!(kept.len(), SEEN_KEPT);
+        assert_eq!(kept[0], IpAddr::V4(Ipv4Addr::new(81, 2, 70, 19)));
     }
 
     #[tokio::test]

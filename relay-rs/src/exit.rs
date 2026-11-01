@@ -386,11 +386,23 @@ pub(super) fn grant(app: &App, exits: &mut Exits, g: Grant) -> std::result::Resu
     Ok(json!({"ticket": ticket}))
 }
 
-/// The exit computer's link. Python checks its runner token and that its owner shares it.
+/// The exit computer's link on the private listener, where its address is not known.
 pub(super) async fn link(
     State(app): State<App>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
+) -> Response {
+    link_seen(app, headers, ws, None).await
+}
+
+/// The exit computer's link. Python checks its runner token and that its owner shares it. `seen` is the address it
+/// connects from (gateway.rs `client_ip`): the first message tells the exit, which refuses to dial it, since behind
+/// NAT it is the router's public address and reaches the router or a service forwarded at home.
+pub(super) async fn link_seen(
+    app: App,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+    seen: Option<std::net::IpAddr>,
 ) -> Response {
     let bearer = headers
         .get("authorization")
@@ -410,10 +422,18 @@ pub(super) async fn link(
     else {
         return StatusCode::FORBIDDEN.into_response();
     };
-    ws.on_upgrade(move |socket| link_task(app, exit, socket))
+    ws.on_upgrade(move |socket| link_task(app, exit, socket, seen))
 }
 
-async fn link_task(app: App, exit: String, mut socket: WebSocket) {
+async fn link_task(app: App, exit: String, mut socket: WebSocket, seen: Option<std::net::IpAddr>) {
+    let hello =
+        json!({"op": "hello", "seen": seen.iter().map(|ip| ip.to_string()).collect::<Vec<_>>()});
+    if !matches!(
+        tokio::time::timeout(WRITE, socket.send(Message::Text(hello.to_string().into()))).await,
+        Ok(Ok(()))
+    ) {
+        return;
+    }
     let (open, mut opens) = mpsc::unbounded_channel();
     let (cancel, mut cancelled) = watch::channel(None);
     let serial = {
@@ -829,12 +849,22 @@ mod tests {
             super::grant(&app, &mut hub.exits, grant("t1", "ops", 1, 0)).unwrap()
         };
         let ticket = answer["ticket"].as_str().unwrap().to_owned();
+        let mut hello = None;
         let open = loop {
             match link.next().await.unwrap().unwrap() {
-                M::Text(text) => break serde_json::from_str::<Value>(&text).unwrap(),
+                M::Text(text) => {
+                    let message = serde_json::from_str::<Value>(&text).unwrap();
+                    if message["op"] == "hello" {
+                        hello = Some(message);
+                        continue;
+                    }
+                    break message;
+                }
                 _ => continue,
             }
         };
+        // The link came from loopback, a trusted proxy here with no X-Forwarded-For: that is the address it saw.
+        assert_eq!(hello.unwrap()["seen"], json!(["127.0.0.1"]));
         let exit_url = format!(
             "{relay}/api/v2/runners/me/browser-exit/tunnels/t1/exit?ticket={}",
             open["ticket"].as_str().unwrap()

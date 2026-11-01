@@ -134,6 +134,45 @@ fn client_headers(headers: &mut HeaderMap, peer: IpAddr, trusted: &[Network]) {
     }
 }
 
+/// The address a request came from: the peer, or, when the peer is a trusted proxy (Caddy, cloudflared), the nearest
+/// address in X-Forwarded-For that is not one. None when that chain cannot be read.
+pub(super) fn client_ip(headers: &HeaderMap, peer: IpAddr, trusted: &[Network]) -> Option<IpAddr> {
+    let peer = canonical(peer);
+    if !trusted.iter().any(|network| network.contains(peer)) {
+        return Some(peer);
+    }
+    let chain = headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .map(|h| h.to_str().ok())
+        .collect::<Option<Vec<_>>>()?
+        .join(",");
+    let mut nearest = peer;
+    for hop in chain
+        .split(',')
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .rev()
+    {
+        nearest = canonical(hop.parse().ok()?);
+        if !trusted.iter().any(|network| network.contains(nearest)) {
+            break;
+        }
+    }
+    Some(nearest)
+}
+
+/// The exit computer's link, told the address it connects from (exit.rs `hello`).
+async fn exit_link(
+    State(app): State<App>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let seen = client_ip(&headers, peer.ip(), &app.trusted_proxies);
+    super::exit::link_seen(app, headers, ws, seen).await
+}
+
 fn strip_hop_headers(headers: &mut HeaderMap) {
     let connection = headers
         .get("connection")
@@ -319,7 +358,7 @@ pub(super) fn routes(app: App) -> Router {
     Router::new()
         .route("/api/v2/runners/{rid}/screen/ws", get(browser))
         .route("/api/v2/runners/me/screen/{sid}/ws", get(runner))
-        .route("/api/v2/runners/me/browser-exit/ws", get(super::exit::link))
+        .route("/api/v2/runners/me/browser-exit/ws", get(exit_link))
         .route(
             "/api/v2/runners/me/browser-exit/tunnels/{tid}/ws",
             get(super::exit::client),
@@ -355,6 +394,46 @@ mod tests {
         client_headers(&mut headers, "203.0.113.8".parse().unwrap(), &trusted);
         assert_eq!(headers["x-forwarded-for"], "203.0.113.8");
         assert!(!headers.contains_key("cf-connecting-ip"));
+    }
+
+    #[test]
+    fn the_client_address_is_the_peer_or_the_nearest_untrusted_forwarded_hop() {
+        let trusted = trusted_proxies("127.0.0.1/32,172.20.0.0/24").unwrap();
+        let empty = HeaderMap::new();
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        // An untrusted peer is the client, whatever it claims.
+        let mut claims = HeaderMap::new();
+        claims.insert("x-forwarded-for", "198.51.100.9".parse().unwrap());
+        assert_eq!(
+            client_ip(&claims, ip("81.2.69.160"), &trusted),
+            Some(ip("81.2.69.160"))
+        );
+        // Behind Caddy and cloudflared: the hop before the trusted ones, never a spoofed first entry.
+        let mut chain = HeaderMap::new();
+        chain.insert(
+            "x-forwarded-for",
+            "10.9.9.9, 81.2.69.160, 172.20.0.3".parse().unwrap(),
+        );
+        assert_eq!(
+            client_ip(&chain, ip("172.20.0.2"), &trusted),
+            Some(ip("81.2.69.160"))
+        );
+        let mut mapped = HeaderMap::new();
+        mapped.insert("x-forwarded-for", "::ffff:81.2.69.160".parse().unwrap());
+        assert_eq!(
+            client_ip(&mapped, ip("::ffff:127.0.0.1"), &trusted),
+            Some(ip("81.2.69.160"))
+        );
+        assert_eq!(
+            client_ip(&empty, ip("127.0.0.1"), &trusted),
+            Some(ip("127.0.0.1"))
+        );
+        let mut junk = HeaderMap::new();
+        junk.insert(
+            "x-forwarded-for",
+            "81.2.69.160, not-an-address".parse().unwrap(),
+        );
+        assert_eq!(client_ip(&junk, ip("127.0.0.1"), &trusted), None);
     }
 
     #[test]

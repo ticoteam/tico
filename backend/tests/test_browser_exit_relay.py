@@ -34,6 +34,8 @@ def test_a_tunnel_through_the_relay_carries_bytes_is_logged_and_stops_with_shari
                             "port": 443}, headers={"Authorization": "Bearer " + server["token"]})
         assert ask().json()["error"]["detail"] == "Cara's MacBook is offline"           # no link yet
         with service.websocket("/api/v2/runners/me/browser-exit/ws", token=laptop["token"]) as link:
+            hello = json.loads(link.recv(timeout=5))        # the address the relay saw: the exit refuses to dial it
+            assert hello["op"] == "hello"                     # "seen" is empty on the private listener
             granted = []
             service.eventually(lambda: granted.append(ask()) or granted[-1].status_code == 200)
             grant = granted[-1].json()
