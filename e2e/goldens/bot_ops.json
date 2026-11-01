@@ -35,6 +35,7 @@
     "goals": "",
     "harness": "fake",
     "host": "dispatcher",
+    "id": "ops",
     "keep_tasks_going": null,
     "last_turn_at": "<time>",
     "manages_reports": true,
