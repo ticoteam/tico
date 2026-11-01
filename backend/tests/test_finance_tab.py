@@ -6,6 +6,8 @@ import pytest
 from backend.finance.actions import FinanceError
 from backend.finance import actions as FA
 from backend.finance import reads as FR
+from backend.finance import tab as TB
+from backend.finance.core.org import Org, Team
 from backend.finance.store import banking as SK
 from backend.tests.test_api import api, get  # noqa: F401
 from backend.tests.test_finance_fixtures import (  # noqa: F401
@@ -184,6 +186,26 @@ def test_access_shows_each_viewer_their_part_and_only_the_owner_views_as(books):
             FR.view_as(c, "human:ben", "human:cara", at=AT)
         with pytest.raises(FinanceError):
             FR.view_as(c, OWNER, "human:nobody", at=AT)
+
+
+def test_a_managers_default_names_the_one_top_team_it_covers(books):
+    """Access names a manager's default by its team ("Engineering expenses") when it covers exactly one top team: the
+    team they lead, or the single team their reports sit in. Several teams, or a report on no team, stay generic."""
+    with books.transaction() as c:
+        rows = {m["teammate"]: m for m in FR.access(c, OWNER, at=AT)["teammates"]}
+    assert rows["human:ben"]["default_team"] == "eng"          # leads Engineering, Web under it, Cara reports to him
+    assert rows["human:cara"]["default_team"] == "web" and rows["human:dan"]["default_team"] == "sales"
+    assert rows["human:eve"]["default_team"] is None and rows["human:ana"]["default_team"] is None
+    teams = {"eng": Team("eng", "Engineering"), "web": Team("web", "Web", parent="eng"), "ops": Team("ops", "Ops"),
+             "sales": Team("sales", "Sales", lead="human:lea")}
+    team_of = {"human:a": "web", "human:b": "web", "human:c": "ops", "human:d": "", "human:e": "eng"}
+    org = Org(owner=OWNER, teams=teams, team_of=team_of, humans=frozenset([*team_of, "human:lea"]),
+              reports_to={"human:a": "human:solo", "human:b": "human:solo", "human:c": "human:wide",
+                          "human:e": "human:wide", "human:d": "human:loose", "human:x": "human:lea"})
+    assert TB.default_team(org, "human:solo") == "web"        # reports only, all in Web
+    assert TB.default_team(org, "human:wide") is None         # reports in Engineering and Ops
+    assert TB.default_team(org, "human:loose") is None        # a reporting line on no team
+    assert TB.default_team(org, "human:lea") is None          # leads Sales, but a report sits on no team
 
 
 def test_tab_routes_answer_in_the_callers_view(api):

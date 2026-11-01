@@ -38728,6 +38728,12 @@
                     "none"
                   ]
                 },
+                "default_team": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "grants": {
                   "type": "array",
                   "items": {
@@ -38750,6 +38756,7 @@
               },
               "required": [
                 "default",
+                "default_team",
                 "grants",
                 "kind",
                 "may_grant",

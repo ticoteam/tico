@@ -1203,6 +1203,7 @@ export type FinanceAccess = {
 }>;
   teammates: Array<{
   default: "everything" | "team_expenses" | "own_expenses" | "none";
+  default_team: string | null;
   grants: Array<Record<string, unknown>>;
   kind: string;
   may_grant: boolean;
