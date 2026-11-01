@@ -624,12 +624,20 @@ UPDATE_STALE_S = 24 * 3600  # an older cut is dismissed, not resumed: its work i
 
 def flag_cut(c, cause, update=None):
     """Flag every live run (leased or running) as cut by `cause`: 'update' as Tico's update starts (`update` its
-    target), 'restart' as the hub starts on the runs its last process held. How many it flagged."""
-    rows = c.execute("SELECT id,bot,job_id FROM attempts WHERE state IN ('leased','running')").fetchall()
-    for row in rows:
+    target), 'restart' as the hub starts on the runs its last process held. How many it flagged now. A run has one flag
+    per cause, so a hub that starts again while the run is still live (its computer carried on) writes nothing new."""
+    live = c.execute("SELECT id,bot,job_id,created FROM attempts WHERE state IN ('leased','running')").fetchall()
+    if not live:
+        return 0
+    # A run's flags come after its creation, so the read starts at the oldest live run (events_ts), not the table's start.
+    flagged = {target for target, detail in c.execute("SELECT target,detail_json FROM events WHERE action=? AND ts>=?",
+                                                      (UPDATE_CUT, min(row['created'] for row in live)))
+               if (json.loads(detail or '{}') or {}).get('cause') == cause}
+    fresh = [row for row in live if row['id'] not in flagged]
+    for row in fresh:
         H.event(c, H.KEEPER, UPDATE_CUT, row['id'], {'bot': row['bot'], 'job_id': row['job_id'], 'cause': cause,
                                                      **({'update': update} if update else {})})
-    return len(rows)
+    return len(fresh)
 
 
 def cut_by_update(c, attempt_id):

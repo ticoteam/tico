@@ -114,6 +114,27 @@ def test_a_run_the_last_process_held_is_flagged_at_start_and_resumes_if_it_lapse
         assert "by a Tico restart" in again["message"]["body"]
 
 
+def test_a_server_that_boots_again_while_a_run_is_live_flags_that_run_once(api):
+    """Each start flags the runs its last process held, but a run already flagged by a start gets no second event: after
+    the second boot it still has one restart flag. An update's flag is its own cause, so it is still written."""
+    from fastapi.testclient import TestClient
+    from backend.app import create_app
+    from backend.execution import flag_cut
+    r, _, a = setup_attempt(api)
+    post(api, f"attempts/{a['id']}/started", {"thread_id": "boot-twice"}, r["token"])
+
+    def flags():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM events WHERE action='attempt.update_cut' AND target=?",
+                             (a["id"],)).fetchone()[0]
+    for _ in range(2):
+        with TestClient(create_app(api.app.state.store.settings)):
+            assert flags() == 1
+    with api.app.state.store.transaction() as c:
+        assert flag_cut(c, "update", "0.4.18") == 1
+    assert flags() == 2
+
+
 def test_every_cloud_migration_number_is_used_once_and_in_order():
     """Two branches picked the same migration number twice on 2026-09-24 (#493): the second block
     then never runs on a database that already recorded the number. With no CI, this is the check
