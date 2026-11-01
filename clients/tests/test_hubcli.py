@@ -94,6 +94,7 @@ def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
                                            "refs": {"task": ["t9", "t10"]}})),
         (["thread", "reply", "th1", "m7", "Side note"],
          ("POST", "threads/th1/messages", {"text": "Side note", "kind": "say", "parent_message_id": "m7"})),
+        (["thread", "edit", "m7", "Fixed"], ("PATCH", "messages/m7", {"text": "Fixed"})),
         (["thread", "sub", "m7"], ("POST", "threads", {"parent_message_id": "m7"})),
         (["thread", "follow", "th1", "--notify", "mentions"], ("PUT", "threads/th1/follow", {"notify": "mentions"})),
         (["thread", "follow", "th1"], ("PUT", "threads/th1/follow", {"notify": "live"})),
@@ -116,7 +117,7 @@ def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
     with pytest.raises(APIError, match="not available"):
         remotecli.run(hubcli.parser().parse_args(["thread", "link-slack", "th1", "#ops"]))
     assert {"hub_thread_list", "hub_thread_show", "hub_thread_create", "hub_thread_post", "hub_thread_reply",
-            "hub_thread_sub", "hub_thread_follow", "hub_thread_unfollow", "hub_thread_read", "hub_thread_search",
+            "hub_thread_sub", "hub_thread_edit", "hub_thread_follow", "hub_thread_unfollow", "hub_thread_read", "hub_thread_search",
             "hub_thread_members_list", "hub_thread_members_add", "hub_thread_members_remove", "hub_thread_update",
             "hub_thread_link_slack"} <= set(hubtools.BY_NAME)
 

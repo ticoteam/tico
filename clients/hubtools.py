@@ -5719,6 +5719,13 @@ def thread_reply(api, args):
                     _thread_message(args, parent_message_id=args["message"]), key=_key(args))
 
 
+@tool("hub_thread_edit", "Edit a message you wrote: its text becomes a new revision, shown as edited. Asks, answers and "
+      "notices cannot be edited. A progress message is one edited message per task, not a line per step.",
+      {"message": _s("The message's id"), "text": _s("The new text")}, required=("message", "text"), writes=True)
+def thread_edit(api, args):
+    return api.patch("messages/" + quote(args["message"], safe=""), {"text": args["text"]}, key=_key(args))
+
+
 @tool("hub_thread_sub", "Open a message's sub-thread without posting: it is made if it does not exist yet, and the "
       "thread is returned either way.",
       {"message": _s("The message whose sub-thread to open")}, required=("message",), writes=True)

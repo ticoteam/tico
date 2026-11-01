@@ -25,6 +25,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--body "<text>"]          the first message goes in with --body
     hub thread post <thread> "<text>" [--kind say|ask] [--to ACTOR] [--ref KIND:ID ...]
     hub thread reply <thread> <message> "<text>"   a side topic: the reply goes in that message's sub-thread
+    hub thread edit <message> "<text>"         edit a message you wrote: a new revision
     hub thread sub <message>                   open a message's sub-thread without posting
     hub thread follow|unfollow <thread> [--notify live|mentions|digest|muted]
     hub thread read <thread> [--seq N | --all]
@@ -939,6 +940,10 @@ def parser():
     s.add_argument("text")
     s.add_argument("--ref", dest="refs", action="append", metavar="KIND:ID", help="a reference such as task:<id>; repeat for more")
     s.set_defaults(fn="thread reply")
+    s = thread.add_parser("edit", help="edit a message you wrote: its text becomes a new revision")
+    s.add_argument("message")
+    s.add_argument("text")
+    s.set_defaults(fn="thread edit")
     s = thread.add_parser("sub", help="open a message's sub-thread without posting; it is made if it does not exist")
     s.add_argument("message")
     s.set_defaults(fn="thread sub")
