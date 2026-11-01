@@ -1667,8 +1667,8 @@ def customers(c: sqlite3.Connection, viewer: str, *, q: str = "", cursor: str | 
 
 def customer_panel(c: sqlite3.Connection, viewer: str, contact_id: str, at: str | None = None) -> Row:
     """A customer's panel: the contact, the active locations it is the customer of, its open estimates (draft,
-    sent or accepted) and its unpaid invoices. A teammate without the receivables view reads the contact by id and name and its
-    locations; its estimates and invoices are null. A missing contact, or one that is not a customer, is not_found."""
+    sent or accepted) and its unpaid invoices. A teammate without the receivables view reads the contact by id and name
+    and its locations; its estimates and invoices are null. A missing contact, or one that is not a customer, is not_found."""
     ctx = load(c, at)
     view = ctx.view(viewer)
     _teammate_or_refuse(ctx, viewer)
