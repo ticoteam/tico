@@ -229,6 +229,8 @@ def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise invalid("an item the provider holds keeps its accounts: change them in the books")
     if _mirrored(ctx) and "sku" in f and old["sku"] and not f["sku"]:
         raise invalid("an item the provider holds keeps its SKU: set another one")
+    if _mirrored(ctx) and "active" in p and not V.flag(p, "active") and not mirror.item_archive_taken(ctx):
+        raise invalid("an item Xero holds is archived in Xero: archive it there")
     if _mirrored(ctx) and "kind" in f and f["kind"] != old["kind"]:
         _books_kind_change(str(old["kind"]), str(f["kind"]))
     gate = K.default_gate(ctx.org, who, "item_update")
