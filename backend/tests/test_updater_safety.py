@@ -40,7 +40,7 @@ def test_a_snapshot_is_taken_before_the_switch_and_left_alone_when_the_update_wo
     assert updater.status["state"] == "healthy" and updater.status["snapshot"].startswith("pre-update-v0.1.0-")
     verbs = docker.verbs()
     assert verbs.index("exec") < verbs.index("up") and "run" not in verbs and updater.status["restored"] is False
-    exec_call = next(a for a, _ in docker.calls if "exec" in a)
+    exec_call = next(a for a, _ in docker.calls if "exec" in a and "/data/snapshots" in a)
     assert "/data/snapshots" in exec_call and "hub.sqlite" in updater.SNAPSHOT_SCRIPT and "backup(" in updater.SNAPSHOT_SCRIPT
 
 
@@ -69,7 +69,8 @@ def test_the_snapshot_script_removes_parts_left_by_an_attempt_that_ran_out_of_ti
                                "0.2"], capture_output=True, text=True, timeout=30)
     finally:
         blocker.execute("rollback"); blocker.close()
-    assert late.returncode == 1 and "did not finish" in late.stderr and "Traceback" not in late.stderr, late.stderr
+    assert late.returncode == 1 and "Traceback" not in late.stderr, late.stderr
+    assert "database snapshot check exceeded 0.2 seconds on a " in late.stderr and "GB database" in late.stderr, late.stderr
     # The next attempt sweeps whatever partial copy an attempt like that reached.
     for leftover in (".part", ".part-journal"):
         (folder / ("pre-update-v0.1.0-2.sqlite" + leftover)).write_bytes(b"x")
@@ -116,7 +117,7 @@ def test_a_snapshot_restore_that_runs_over_is_not_called_a_rollback(monkeypatch,
 
     def hang(argv, env=None, **kw):
         if argv[:2] == ["docker", "compose"] and "run" in argv:
-            raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+            raise updater.Stalled(argv, kw.get("timeout"))
         return run(argv, env=env, **kw)
     monkeypatch.setattr(updater, "docker_run", hang)
     settled = []
@@ -438,3 +439,147 @@ def test_a_subnet_clash_names_the_settings_that_move_the_edge_network(monkeypatc
     assert message.startswith(stderr)
     assert ("TICO_EDGE_SUBNET" in message and "update again" in message) is hinted
     assert ("docker compose down, then docker compose up -d, then update again" in message) is hinted
+
+
+def test_a_snapshot_check_that_runs_over_names_its_limit_and_the_database_size(monkeypatch, tmp_path):
+    """The snapshot script ends itself at its own limit and says so with the size; the update says it went back."""
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Fake(updater, monkeypatch, [True])
+    run = docker.run
+
+    def stall(argv, env=None, timeout=None, **kw):
+        if "exec" in argv:
+            raise updater.Stalled(argv, timeout)   # what docker_run raises when the exec runs past its whole limit
+        return run(argv, env=env, timeout=timeout, **kw)
+    monkeypatch.setattr(updater, "docker_run", stall)
+    monkeypatch.setattr(updater, "database_note", lambda: " on a 12.3 GB database")
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "rolled_back"
+    assert updater.status["message"] == ("could not snapshot the database first (the database snapshot check exceeded "
+                                         "900 seconds on a 12.3 GB database). Went back to v0.1.0.")
+    assert "exec" not in docker.verbs() and updater.status["restored"] is False and "stop" not in docker.verbs()
+
+
+def test_a_stalled_pull_names_its_step_and_limit_and_the_previous_version_keeps_running(monkeypatch, tmp_path):
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    monkeypatch.setattr(updater, "healthy", lambda seconds: any(docker.containers[c]["tag"] == "v0.1.0" for c in docker.live()))
+    run = docker.run
+
+    def stall(argv, env=None, timeout=None, **kw):
+        if "pull" in argv:
+            raise updater.Stalled(argv, timeout)   # what docker_run raises when the pull runs past its limit
+        return run(argv, env=env, timeout=timeout, **kw)
+    monkeypatch.setattr(updater, "docker_run", stall)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "rolled_back"
+    assert updater.status["message"] == "Pulling the new server image exceeded 600 seconds. Went back to v0.1.0."
+    assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.1.0"]    # the old server never stopped
+
+
+def test_a_docker_call_that_runs_over_is_killed_and_named_by_the_step_it_was_in(monkeypatch, tmp_path):
+    import subprocess
+    updater = load(monkeypatch, "", tmp_path)
+    with updater.step("Pulling the new server image"):
+        with pytest.raises(updater.Stalled) as caught:
+            updater.docker_run(["sleep", "30"], timeout=0.2)
+    assert str(caught.value) == "Pulling the new server image exceeded 0.2 seconds"
+    assert isinstance(caught.value, subprocess.TimeoutExpired) and isinstance(caught.value, RuntimeError)
+
+
+def test_a_prune_that_runs_over_after_a_healthy_update_keeps_the_update(monkeypatch, tmp_path):
+    """Once the new version answers, rolling it back would undo a good update: the overrun is said, not rolled back."""
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Fake(updater, monkeypatch, [True])
+
+    def prune(keep, keep_ids=()):
+        raise updater.Stalled(["docker", "rmi"], 120)
+    monkeypatch.setattr(updater, "prune_images", prune)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "healthy"
+    assert updater.status["message"] == "Updated, but old images were not removed: Removing old images exceeded 120 seconds."
+    assert "stop" not in docker.verbs() and "run" not in docker.verbs()
+
+
+def test_a_stall_reading_the_front_door_before_any_change_rolls_back_cleanly(monkeypatch, tmp_path):
+    """Reading the front door sits inside the rollback path: a stall there is said by its step and the old server stays up."""
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    monkeypatch.setattr(updater, "healthy", lambda seconds: any(docker.containers[c]["tag"] == "v0.1.0" for c in docker.live()))
+
+    def stalled():
+        raise updater.Stalled(["docker", "compose", "config"], 600)
+    monkeypatch.setattr(updater, "selected_caddy", stalled)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "rolled_back"
+    assert updater.status["message"] == "Reading the server's services exceeded 600 seconds. Went back to v0.1.0."
+    assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.1.0"]
+
+
+def test_a_service_that_does_not_restart_after_a_healthy_update_is_named_and_the_update_is_kept(monkeypatch, tmp_path):
+    """After the new version is healthy, a service that does not restart is named with its limit; the update is kept."""
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    monkeypatch.setattr(updater, "healthy", lambda seconds: True)
+    monkeypatch.setattr(updater, "BUNDLE", "always")
+    monkeypatch.setattr(updater, "fetch_bundle", lambda release, into: {})
+    monkeypatch.setattr(updater, "tunnel_services", lambda: [])
+    monkeypatch.setattr(updater, "other_services", lambda: ["slack"])
+    run = docker.run
+
+    def stall(argv, env=None, timeout=None, **kw):
+        if "slack" in argv and "up" in argv:
+            raise updater.Stalled(argv, timeout)   # what docker_run raises when the start runs past its limit
+        return run(argv, env=env, timeout=timeout, **kw)
+    monkeypatch.setattr(updater, "docker_run", stall)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "healthy"
+    assert updater.status["message"] == "Updated, but slack did not restart: Starting slack exceeded 600 seconds. It may still start."
+    assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.2.0"]     # the new version is still running
+
+
+def test_a_service_list_that_runs_over_after_a_healthy_update_is_named_and_the_update_is_kept(monkeypatch, tmp_path):
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    monkeypatch.setattr(updater, "healthy", lambda seconds: True)
+    monkeypatch.setattr(updater, "BUNDLE", "always")
+    monkeypatch.setattr(updater, "fetch_bundle", lambda release, into: {})
+    monkeypatch.setattr(updater, "tunnel_services", lambda: [])
+    monkeypatch.setattr(updater, "selected_caddy", lambda: False)
+    run = docker.run
+
+    def stall(argv, env=None, timeout=None, **kw):
+        if "--services" in argv:
+            raise updater.Stalled(argv, timeout)   # the service list read after the switch, not the one before it
+        return run(argv, env=env, timeout=timeout, **kw)
+    monkeypatch.setattr(updater, "docker_run", stall)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "healthy"
+    assert updater.status["message"] == "Updated, but the other services did not start: Reading the server's services exceeded 600 seconds."
+    assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.2.0"]
+
+
+def test_a_front_door_start_that_runs_over_after_a_healthy_update_is_named_and_the_snapshot_is_not_restored(monkeypatch, tmp_path):
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    monkeypatch.setattr(updater, "healthy", lambda seconds: True)
+    monkeypatch.setattr(updater, "BUNDLE", "always")
+    monkeypatch.setattr(updater, "fetch_bundle", lambda release, into: {})
+    monkeypatch.setattr(updater, "tunnel_services", lambda: [])
+    monkeypatch.setattr(updater, "selected_caddy", lambda: True)
+    monkeypatch.setattr(updater, "other_services", lambda: [])
+    monkeypatch.setattr(updater, "containers_of_service", lambda service: {})
+    run = docker.run
+
+    def stall(argv, env=None, timeout=None, **kw):
+        if "--force-recreate" in argv:
+            raise updater.Stalled(argv, timeout)   # the front door's recreate runs past its limit
+        return run(argv, env=env, timeout=timeout, **kw)
+    monkeypatch.setattr(updater, "docker_run", stall)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "healthy"
+    limit = updater.HEALTH_SECONDS + updater.INSPECT_SECONDS   # the front door's recreate limit
+    assert updater.status["message"] == ("Updated, but the front door did not start: Starting the front door exceeded %d seconds."
+                                         " It may still start." % limit)
+    assert updater.status["restored"] is False and docker.restored == []   # no rollback, so no snapshot restore
+    assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.2.0"]

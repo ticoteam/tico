@@ -32,6 +32,7 @@ install whose updater is pinned to a local-only tag (TICO_UPDATER_PULL=never, do
 """
 
 import collections
+import contextlib
 import hashlib
 import hmac
 import json
@@ -144,16 +145,80 @@ def docker_run(argv, timeout, env=None, check=False, capture_output=True, text=T
             except ProcessLookupError:
                 pass
             proc.wait()
-            raise
+            raise Stalled(argv, timeout)
     result = subprocess.CompletedProcess(argv, proc.returncode, out, err)
     if check:
         result.check_returncode()
     return result
 
 
+_step = threading.local()   # the update step this thread is running: a Docker call that runs over names it
+
+
+@contextlib.contextmanager
+def step(name):
+    """Names the update step now running in this thread, so a Docker call that runs over says which step it was and
+    for how long, instead of quoting the command."""
+    outer = getattr(_step, "name", "")
+    _step.name = name
+    try:
+        yield
+    finally:
+        _step.name = outer
+
+
+def subcommand(argv):
+    """The Docker subcommand a call runs, for a message: `compose up`, `inspect`."""
+    if argv[:2] == ["docker", "compose"] and "--project-directory" in argv:
+        rest = argv[argv.index("--project-directory") + 2:]
+        return "compose " + next((word for word in rest if not word.startswith("-")), "")
+    return " ".join(argv[1:2])
+
+
+class Stalled(subprocess.TimeoutExpired, RuntimeError):
+    """A Docker call that ran past its time limit and was killed. Code that handles a timeout catches it as a
+    TimeoutExpired, and the update's failure handling catches it as a RuntimeError. Its text names the step."""
+
+    def __init__(self, argv, seconds):
+        super().__init__(argv, seconds)
+        self.text = "%s exceeded %s seconds" % (getattr(_step, "name", "") or "A Docker call (%s)" % subcommand(argv), seconds)
+
+    def __str__(self):
+        return self.text
+
+
+def reason(exc, what):
+    """Why a step failed, for a status message: a Docker call that ran over is already named by its step; anything
+    else is `what`, with the error."""
+    return str(exc) if isinstance(exc, Stalled) else "%s (%s)" % (what, exc)
+
+
 class Unsettled(RuntimeError):
     """A command that changes containers did not report back. Killing the client does not cancel what the daemon
     already accepted (an accepted stop runs to its end), so what that command does to the containers is unknown."""
+
+
+def timed_out(exc):
+    """A Docker call that ran past its limit, or a changing command that did (Unsettled wraps that timeout)."""
+    return isinstance(exc, Stalled) or isinstance(exc.__cause__, Stalled)
+
+
+def kept_note(what, exc):
+    """The note for a start after the new version is healthy that did not finish. Docker may still act on a command
+    that did not report back, so an Unsettled start says so."""
+    return "Updated, but %s: %s.%s" % (what, exc, " It may still start." if isinstance(exc, Unsettled) else "")
+
+
+def start_after_healthy(notes, what, name, action, *args):
+    """Starts a front door or tunnel once the new version is healthy. A timeout is kept and named in notes: a rollback
+    would put back the database snapshot and lose what was written since the update. Any other failure still rolls back."""
+    try:
+        with step(name):
+            action(*args)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        if not timed_out(exc):
+            raise
+        notes.append(kept_note(what, exc))
 
 
 def compose(*args, tag=None, timeout=600, extra_env=None):
@@ -165,9 +230,10 @@ def compose(*args, tag=None, timeout=600, extra_env=None):
     try:
         result = docker_run(["docker", "compose", *files, "--project-directory", PROJECT, *args], env=env,
                                 capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:   # docker_run killed and reaped its whole group; the daemon may not have stopped
-        message = "docker compose %s did not finish within %d seconds" % (args[0], timeout)
-        raise Unsettled(message) if args[0] in MUTATING else RuntimeError(message)
+    except subprocess.TimeoutExpired as exc:   # docker_run killed and reaped its whole group; the daemon may not have stopped
+        if args[0] in MUTATING:
+            raise Unsettled(str(exc)) from exc
+        raise
     if result.returncode:
         lines = (result.stderr or result.stdout).strip().splitlines()
         raise RuntimeError((lines[-1] if lines else "docker compose failed") + overlap_hint(result.stderr or result.stdout))
@@ -444,11 +510,9 @@ def restore_bundle():
 
 
 def other_services():
-    """Services of the (new) compose file that follow the release, except the one being moved and this updater."""
-    try:
-        names = compose("config", "--services").split()
-    except RuntimeError:
-        return []
+    """Services of the (new) compose file that follow the release, except the one being moved and this updater.
+    A call that runs over raises, so the update names it instead of starting nothing without a word."""
+    names = compose("config", "--services").split()
     return [n for n in names if n not in (SERVICE, "updater")]
 
 
@@ -579,7 +643,11 @@ worker.start()
 worker.join(max(0.0, deadline - time.monotonic()))
 if worker.is_alive():
     remove_part()
-    print("the snapshot did not finish within %d seconds" % seconds, file=sys.stderr, flush=True)
+    try:
+        size = " on a %.1f GB database" % (os.path.getsize("/data/hub.sqlite") / 1024 ** 3)
+    except OSError:
+        size = ""
+    print("the database snapshot check exceeded %g seconds%s" % (seconds, size), file=sys.stderr, flush=True)
     os._exit(1)
 if result != ["ok"]:
     remove_part()
@@ -650,21 +718,38 @@ sync_dir(folder)
 """
 
 
+def database_note():
+    """The note ' on a N GB database' for a status message, from the live database; '' when Docker cannot say."""
+    try:
+        size = int(compose("exec", "-T", SERVICE, "python", "-c",
+                           "import os; p = '/data/hub.sqlite'; print(sum(os.path.getsize(f) for f in (p, p + '-wal') if os.path.exists(f)))",
+                           timeout=INSPECT_SECONDS).strip())   # the write-ahead log is part of what the snapshot copies
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        return ""
+    return " on a %.1f GB database" % (size / 1024 ** 3)
+
+
 def take_snapshot(previous):
     """A consistent copy of the database, made by the running server's own container. Returns its file name."""
     name = "pre-update-%s-%s.sqlite" % (re.sub(r"[^0-9A-Za-z.-]", "", previous) or "unknown", time.strftime("%Y%m%d%H%M%S"))
-    compose("exec", "-T", SERVICE, "python", "-c", SNAPSHOT_SCRIPT, SNAPSHOTS, name, str(KEEP_SNAPSHOTS),
-            str(max(SNAPSHOT_SECONDS - 60, SNAPSHOT_SECONDS * 4 // 5)), timeout=SNAPSHOT_SECONDS)
+    note = database_note()
+    try:
+        compose("exec", "-T", SERVICE, "python", "-c", SNAPSHOT_SCRIPT, SNAPSHOTS, name, str(KEEP_SNAPSHOTS),
+                str(max(SNAPSHOT_SECONDS - 60, SNAPSHOT_SECONDS * 4 // 5)), timeout=SNAPSHOT_SECONDS)
+    except subprocess.TimeoutExpired:   # the Docker call itself outlived the snapshot's whole limit
+        raise RuntimeError("the database snapshot check exceeded %d seconds%s" % (SNAPSHOT_SECONDS, note))
     return name
 
 
 def restore_snapshot(name, previous):
     """Server stopped (and Litestream with it, which runs inside the server container), the old image's own container
     puts the snapshot back in place of the migrated database and clears Litestream's tracking directory."""
-    compose("stop", SERVICE)
+    with step("Stopping the server for the snapshot restore"):
+        compose("stop", SERVICE)
     try:
-        compose("run", "--rm", "--no-deps", "-T", "--entrypoint", "python", SERVICE, "-c", RESTORE_SCRIPT,
-                SNAPSHOTS + "/" + name, tag=previous)
+        with step("Restoring the database snapshot"):
+            compose("run", "--rm", "--no-deps", "-T", "--entrypoint", "python", SERVICE, "-c", RESTORE_SCRIPT,
+                    SNAPSHOTS + "/" + name, tag=previous)
     except Unsettled as exc:   # the one-off may still be putting the snapshot back
         exc.restoring = True
         raise
@@ -755,7 +840,8 @@ def settle(tag, outcome):
                 set_status(settle_tunnel=tunnel)
             if one_offs_done(outcome):
                 before = {cid for cid, (oneoff, _) in containers_of_service().items() if not oneoff}
-                compose("up", "-d", "--no-deps", "--force-recreate", "--pull", "never", SERVICE, tag=tag)
+                with step("Starting the previous %s" % SERVICE):
+                    compose("up", "-d", "--no-deps", "--force-recreate", "--pull", "never", SERVICE, tag=tag)
                 now = [cid for cid, (oneoff, _) in containers_of_service().items() if not oneoff]
                 if len(now) == 1 and now[0] not in before:
                     back = healthy(HEALTH_SECONDS)
@@ -929,7 +1015,8 @@ def update(version, running=""):
     can change nothing more: every docker call has a time limit (docker_run() kills and reaps one that runs over), an
     overrun goes through the same rollback as a failure, and the outcome is set after the last call. Killing the
     client does not undo what Docker accepted, so after a container-changing command overran this says uncertain
-    (still holding) until settle() has Docker confirm the old version."""
+    (still holding) until settle() has Docker confirm the old version. Each step runs under step(), so the status
+    names the step that ran over and its limit. Once the new version is up, a step that fails is reported and kept."""
     staging = None
     bundled = False
     snapshot, switched = "", False
@@ -938,9 +1025,10 @@ def update(version, running=""):
     unsettled = False   # a command that changes containers did not report back: settle() before any outcome
     try:
         try:
-            image_id, previous = running_image()
+            with step("Reading the running server"):
+                image_id, previous = running_image()
         except (RuntimeError, OSError, IndexError, subprocess.SubprocessError) as exc:
-            set_status(state="failed", to=version, message="Not updated: could not read the running %s (%s)." % (SERVICE, exc))
+            set_status(state="failed", to=version, message="Not updated: %s." % reason(exc, "could not read the running %s" % SERVICE))
             return
         if not release_name(previous) and release_name(running):
             previous = release_name(running)   # an untagged or `latest` image: the server knows which release it is
@@ -949,9 +1037,10 @@ def update(version, running=""):
         target = release_name(version)
         # Everything that can refuse the update happens here, before any file or container changes.
         try:
-            pinned = pinned_services(version)
+            with step("Reading the compose files"):
+                pinned = pinned_services(version)
         except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
-            set_status(state="failed", message="Not updated: could not read the compose files (%s)." % exc)
+            set_status(state="failed", message="Not updated: %s." % reason(exc, "could not read the compose files"))
             return
         if pinned:
             set_status(state="failed", message="Not updated: %s pins the image for %s; remove `image:` so updates can change it."
@@ -966,24 +1055,29 @@ def update(version, running=""):
                 set_status(state="failed", message="Not updated: %s." % exc)
                 return
             target = release_name(release)
-        caddy = selected_caddy()
-        set_status(settle_caddy=caddy)
-        if BUNDLE != "never":
-            apply_bundle(files, release)
-            bundled = True
         try:
-            if bundled:   # listed first: a runner, or a server without the profile, has no cloudflared to ask about
-                tunnel = tunnel_services()
-                tunnel = tunnel if tunnel and selected_tunnel() else []
+            with step("Reading the server's services"):
+                caddy = selected_caddy()
+            set_status(settle_caddy=caddy)
+            if BUNDLE != "never":
+                apply_bundle(files, release)
+                bundled = True
+            with step("Reading the server's services"):
+                if bundled:   # listed first: a runner, or a server without the profile, has no cloudflared to ask about
+                    tunnel = tunnel_services()
+                    tunnel = tunnel if tunnel and selected_tunnel() else []
             set_status(settle_tunnel=bool(tunnel))
             if PULL != "never":
-                compose("pull", SERVICE, tag=version)
+                with step("Pulling the new %s image" % SERVICE):
+                    compose("pull", SERVICE, tag=version)
                 if caddy:
                     # The verified target bundle may pin a new front-door image.
                     # Stage it before switching; rollback/settle use local images.
-                    compose("pull", "caddy", tag=version)
+                    with step("Pulling the new front-door image"):
+                        compose("pull", "caddy", tag=version)
                 if tunnel:   # likewise the hold and cloudflared: one that cannot be pulled refuses the update here
-                    compose("pull", *tunnel, tag=version)
+                    with step("Pulling the new tunnel image"):
+                        compose("pull", *tunnel, tag=version)
             if MODE == "server":
                 # Last thing before the switch, so little is lost if it is undone: a new version may migrate the
                 # schema and then fail its health check, and the old image cannot read a newer schema.
@@ -1001,21 +1095,25 @@ def update(version, running=""):
             else:
                 set_status(state="restarting")
             switched = True
-            compose("up", "-d", "--no-deps", "--pull", "never", SERVICE, tag=version)
+            with step("Starting the new %s" % SERVICE):
+                compose("up", "-d", "--no-deps", "--pull", "never", SERVICE, tag=version)
             if not healthy(HEALTH_SECONDS):
                 raise RuntimeError(("the runner" if MODE == "runner" else "the server") + " did not come up healthy within %d seconds" % HEALTH_SECONDS)
-            check_switched(version, target)
+            with step("Checking the new version"):
+                check_switched(version, target)
+            notes = []   # the new version is healthy from here: what fails after this is named, and a timeout is kept
             if caddy:
-                reconcile_caddy(version)
+                start_after_healthy(notes, "the front door did not start", "Starting the front door", reconcile_caddy, version)
             if tunnel:
-                reconcile_tunnel(version)
-        except (RuntimeError, subprocess.SubprocessError) as exc:
+                start_after_healthy(notes, "the tunnel did not start", "Starting the tunnel", reconcile_tunnel, version)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
             unsettled = isinstance(exc, Unsettled)
             restoring = False
             # The old image is still on disk; point its tag back at it and start it again, with the old bundle.
             restored = ""
             try:
-                docker_run(["docker", "tag", image_id, IMAGE + ":" + previous], check=False, timeout=INSPECT_SECONDS)
+                with step("Putting the old image back"):
+                    docker_run(["docker", "tag", image_id, IMAGE + ":" + previous], check=False, timeout=INSPECT_SECONDS)
                 if bundled:
                     restore_bundle()
                 if switched and snapshot:
@@ -1034,12 +1132,15 @@ def update(version, running=""):
                     print("tico-updater: rollback:" + restored, flush=True)
                 back = False
                 if not restoring:   # else settle() starts the old server once no restore can still act
-                    compose("up", "-d", "--no-deps", "--pull", "never", SERVICE, tag=previous)
+                    with step("Starting the previous %s" % SERVICE):
+                        compose("up", "-d", "--no-deps", "--pull", "never", SERVICE, tag=previous)
                     back = healthy(HEALTH_SECONDS)
                     if back and caddy and not unsettled:
-                        reconcile_caddy(previous)
+                        with step("Starting the front door"):
+                            reconcile_caddy(previous)
                     if back and tunnel and not unsettled:
-                        reconcile_tunnel(previous)   # the restored bundle's route: unchanged unless it had moved
+                        with step("Starting the tunnel"):
+                            reconcile_tunnel(previous)   # the restored bundle's route: unchanged unless it had moved
             except (RuntimeError, OSError, subprocess.SubprocessError) as rollback_exc:
                 unsettled = unsettled or isinstance(rollback_exc, Unsettled)
                 back = False
@@ -1050,21 +1151,34 @@ def update(version, running=""):
             set_status(state="rolled_back" if back else "failed", settle_tag="", settle_outcome="", settle_caddy=False, settle_tunnel=False,
                        message=str(exc) + (". Went back to " + previous + "." if back else ". The old version did not start either.") + restored)
             return
+        # The new version is up and healthy from here on: a step that fails is said, never rolled back.
         remember(version)
-        prune_images(keep={version, previous, release_name(version), release_name(previous)}, keep_ids={image_id})
-        message = ""
+        try:
+            with step("Removing old images"):
+                prune_images(keep={version, previous, release_name(version), release_name(previous)}, keep_ids={image_id})
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            notes.append("Updated, but old images were not removed: %s." % exc)
         if bundled and MODE == "server":
             # Slack, the front door and anything new follow the new compose file; the updater itself stays put.
-            for name in other_services():
+            try:
+                with step("Reading the server's services"):
+                    names = other_services()
+            except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+                notes.append(kept_note("the other services did not start", exc))
+                names = []
+            for name in names:
                 if name == "caddy" or name in tunnel:   # front doors were reconciled above; do not enable another profile
                     continue
                 try:
-                    compose("up", "-d", "--no-deps", name, tag=version)
+                    with step("Starting %s" % name):
+                        compose("up", "-d", "--no-deps", name, tag=version)
                 except RuntimeError as exc:
-                    message = "Updated, but %s did not restart: %s" % (name, exc)
+                    notes.append(kept_note("%s did not restart" % name, exc))
+        message = " ".join(notes)
         set_status(state="healthy", message=message, settle_tag="", settle_outcome="", settle_caddy=False, settle_tunnel=False)
         save_status()
-        note = replace_updater(version)   # last: this container may be gone a moment after it starts the helper
+        with step("Replacing the updater"):
+            note = replace_updater(version)   # last: this container may be gone a moment after it starts the helper
         if note:
             set_status(message=(message + " " + note).strip())
     except Exception as exc:  # anything unexpected must show in /status rather than kill the thread
