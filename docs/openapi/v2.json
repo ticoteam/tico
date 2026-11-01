@@ -5583,7 +5583,7 @@
             "required": false,
             "schema": {
               "type": "string",
-              "maxLength": 12,
+              "maxLength": 400,
               "default": "",
               "title": "Cursor"
             }
