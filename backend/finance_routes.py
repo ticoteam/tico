@@ -375,8 +375,8 @@ def install(app, store, auth, mutate):
     def finance_customers(request: Request, q: str = Query("", max_length=100),
                           cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
                           view_as: str | None = None):
-        """Active customers by name then id, for pickers: id and name only, to every teammate. `q` matches a name or an
-        email; `next_cursor` pages."""
+        """Active customers by name then id, for pickers: id and name only, to every teammate. `q` matches a name,
+        and an email too for a viewer of receivables; `next_cursor` pages."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.customers(c, actor, q=q, cursor=cursor, limit=limit))
 

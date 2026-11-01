@@ -1558,8 +1558,8 @@ STABLE.extend([
     ("/api/v2/projects/{project_id}", "get", "Finance", "getProject",
      "One project, archived or not", "ProjectOne"),
     ("/api/v2/customers", "get", "Finance", "listCustomers",
-     "Active customers by name for pickers: id and name only, to every teammate; q matches a name or an email; with a "
-     "cursor", "Customers"),
+     "Active customers by name for pickers: id and name only, to every teammate; q matches a name, and an email for a "
+     "viewer of receivables; with a cursor", "Customers"),
     ("/api/v2/customers/{contact_id}", "get", "Finance", "getCustomer",
      "A customer's panel: the contact, its active locations, and its open estimates and unpaid invoices where the "
      "caller sees receivables (null where not)", "CustomerPanel"),

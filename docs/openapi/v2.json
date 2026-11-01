@@ -6210,7 +6210,7 @@
     },
     "/api/v2/customers": {
       "get": {
-        "summary": "Active customers by name for pickers: id and name only, to every teammate; q matches a name or an email; with a cursor",
+        "summary": "Active customers by name for pickers: id and name only, to every teammate; q matches a name, and an email for a viewer of receivables; with a cursor",
         "operationId": "listCustomers",
         "parameters": [
           {
