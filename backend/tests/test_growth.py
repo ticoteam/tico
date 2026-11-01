@@ -67,6 +67,23 @@ def test_economics_route_reads_the_month_and_flags_a_breached_guardrail(api):
     assert len(unknown) == 1 and unknown[0]["new_customers"] == 18 and unknown[0]["kept_d30"] == 70
 
 
+def test_economics_without_numbers_lists_each_active_channel_and_unknown_blank(api):
+    add_channel(api)
+    add_channel(api, slug="referrals", name="Referrals")
+    add_channel(api, slug="flyers", name="Flyers")
+    post(api, "growth/channels/flyers/retire", {})
+    eco = get(api, "growth/economics")
+    assert eco["month"] is None and eco["months"] == []
+    assert [r["channel"] for r in eco["rows"]] == ["google-search", "referrals", "unknown"]
+    assert all(r["spend"] is None and r["cac"] is None and r["quality"] is None for r in eco["rows"])
+    assert eco["total"]["new_customers"] is None and eco["total"]["quality"] is None
+    # A month without numbers, once another month has some, is blank too.
+    put(api, "growth/cohorts", {"channel": "referrals", "month": "2026-10", "new_customers": 4})
+    assert [r["channel"] for r in get(api, "growth/economics")["rows"]] == ["referrals"]
+    empty = get(api, "growth/economics?month=2026-11")
+    assert empty["month"] == "2026-11" and len(empty["rows"]) == 3 and empty["rows"][1]["new_customers"] is None
+
+
 # ----------------------------------------------------------------------------- permissions
 def test_channel_and_cohort_permissions(api):
     ops, finance = bot(api, "ops"), bot(api, "finance")

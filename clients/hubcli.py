@@ -2105,7 +2105,7 @@ def parser():
     s.set_defaults(fn="growth economics")
     for word, text in (("week", "tests running and due, verdicts, guardrails, the North Star"),
                        ("evidence", "each bet with the verdicts for and against it"),
-                       ("working", "won tests and channels by CAC"),
+                       ("working", "open work under ideas and on channel-labelled tasks"),
                        ("kpis", "the KPI tree: North Star, inputs, guardrails")):
         json_flag(growth.add_parser(word, help=text)).set_defaults(fn="growth " + word)
     s = json_flag(growth.add_parser("settings", help="unit, revenue, margin, win threshold; --set: owner or admin"))

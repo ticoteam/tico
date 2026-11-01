@@ -119,7 +119,7 @@ function grIdeaFields(refs, i = {}) {
   for (const slug of i.channels || []) if (!chans.some(([s]) => s === slug)) chans.push([slug, grChanName(refs.channels, slug)]);
   return `${refs.failed ? '<p class="err">Some lists did not load</p>' : ''}${grField('Title', `<input name="title" maxlength="300" required value="${esc(i.title || '')}">`)}
     ${grField('Hypothesis', `<textarea name="hypothesis" rows="3">${esc(i.hypothesis || '')}</textarea>`)}
-    ${i.task_id ? grField('Prediction', `<textarea name="prediction" rows="2">${esc(i.prediction || '')}</textarea>`) : ''}
+    ${grField('Prediction', `<input name="prediction" maxlength="500" value="${esc(i.prediction || '')}">`)}
     ${grField('Bet', `<select name="bet_id">${grOpts(bets, i.bet_id)}</select>`)}
     ${grField('KPI', `<select name="kpi_id">${grOpts(kpis, i.kpi_id)}</select>`)}
     ${chans.length ? `<fieldset class="gr-fs"><legend>Channels</legend>${grChecks('channels', chans, i.channels || [])}</fieldset>` : ''}`;
@@ -143,6 +143,15 @@ function grNewIdea(after) {
   }));
 }
 
+// The ask itself carries the steps, for a lead whose bot predates the propose-ideas playbook.
+const GR_PROPOSE_BODY = `File 3–8 growth ideas. Start no tests.
+
+1. Read: \`hub gtm show\`, \`hub brand summary\`, \`hub growth channel list\`, \`hub growth kpis\`, \`hub growth idea list\`, \`hub strategy show\`.
+2. Skip duplicates: \`hub growth idea list --q "<two words>"\`.
+3. File each with \`hub growth idea create --title ... --hypothesis "If we X for Y, Z moves because W" --prediction "<KPI> from <now> to <number> by <date>" --kpi <id> --channel <slug> --i N --c N --e N --source-kind strategy|competitor|listening|peec|lost_test|person|other --source-ref <item>\`, adding \`--bet <id>\` when a strategy bet fits. With no bets yet, file without one.
+4. Follow the brand and the go-to-market wishes.
+5. Close this task with the count and the top three by ICE; say so if the strategy has no bets.`;
+
 // The marketing lead: who "Propose ideas" asks.
 const grLead = () => (S.emps || []).find(e => e.status !== 'archived' && (e.template === 'marketing-lead' || e.name === 'marketing-lead'
   || /^(head of marketing|growth lead|marketing lead)$/i.test(String(e.display_name || '').trim())));
@@ -151,7 +160,7 @@ async function grPropose(button) {
   if (!lead) return;
   if (button) button.disabled = true;
   try {
-    await post('/v2/tasks', {title: 'Propose growth ideas', body: 'File ideas with `hub growth idea create`.', owner: lead.name});
+    await post('/v2/tasks', {title: 'Propose growth ideas', body: GR_PROPOSE_BODY, owner: lead.name});
     toast(`Sent to ${lead.display_name || lead.name}`);
   } catch (e) { toast(e.message || 'Not sent', true); if (button) button.disabled = false; }
 }
@@ -204,18 +213,16 @@ function growthMainDraw(state) {
   const d = state.data, body = $('#gr-body');
   if (!body || !d) return;
   patchHTML($('#strat-actions'), `<a class="ghost gr-btn" href="${GR_WEEK}">This week</a><a class="ghost gr-btn" href="${GR_CHANNELS}">Channels</a>`
-    + `<a class="ghost gr-btn" href="${GR_LEARNING}">Learning</a><button class="primary" type="button" data-gr-new>+ Idea</button>`);
-  const lead = grLead();
-  const view = !d.ideas.length
-    ? (lead ? `<div class="gr-empty"><button class="primary" type="button" data-gr-propose>Propose ideas</button></div>` : '')
-    : grView(state.fw, d);
+    + `<a class="ghost gr-btn" href="${GR_LEARNING}">Learning</a>${grLead() ? '<button class="ghost" type="button" data-gr-propose>Propose ideas</button>' : ''}`
+    + '<button class="primary" type="button" data-gr-new>+ Idea</button>');
+  const view = grView(state.fw, d);
   const now = d.working.length ? `<aside class="card gr-now" aria-label="Working now"><h2 class="gr-k">Working now</h2>${d.working.map(w =>
     `<a class="gr-now-row" href="${grTaskHref(w.task_id)}"><span class="gr-now-top"><b>${esc(grWho(w.assignee) || '—')}</b>${w.channel ? `<span class="gr-tag">${esc(grChanName(d.channels, w.channel))}</span>` : ''}</span>
       <span class="gr-now-t">${w.status ? `<span class="gr-dot gr-ts-${esc(w.status)}" aria-hidden="true"></span>` : ''}${esc(w.title)}</span>${w.idea_title ? `<span class="muted gr-now-i">${esc(w.idea_title)}</span>` : ''}</a>`).join('')}</aside>` : '';
   body.innerHTML = `<div class="gr-bar">${grSeg('fw', 'Framework', GR_FWS, state.fw)}</div>
     <div class="gr-split${now ? '' : ' gr-solo'}"><div class="gr-view" id="gr-view">${view}</div>${now}</div>`;
   $('#strat-actions [data-gr-new]').onclick = () => grNewIdea(() => void growthMain(state));
-  const propose = body.querySelector('[data-gr-propose]');
+  const propose = $('#strat-actions [data-gr-propose]');
   if (propose) propose.onclick = () => void grPropose(propose);
   body.querySelector('[data-gr-seg="fw"]').onclick = ev => {
     const b = ev.target.closest('button[data-v]'); if (!b || b.dataset.v === state.fw) return;
@@ -290,9 +297,9 @@ function grGrid(d) {
   const chans = d.channels.filter(c => !c.retired_at);
   const has = (i, slug) => slug ? (i.channels || []).includes(slug) : !(i.channels || []).some(s => chans.some(c => c.slug === s));
   const bets = [...d.bets.map(b => ({id: b.id, label: `${b.n} · ${b.statement}`}))];
-  if (d.ideas.some(i => !i.bet_id || !d.bets.some(b => b.id === i.bet_id))) bets.push({id: '', label: 'No bet'});
+  if (!bets.length || d.ideas.some(i => !i.bet_id || !d.bets.some(b => b.id === i.bet_id))) bets.push({id: '', label: 'No bet'});
   const cols = [...chans.map(c => ({slug: c.slug, name: c.name, track: c.track}))];
-  if (d.ideas.some(i => has(i, ''))) cols.push({slug: '', name: 'No channel', track: ''});
+  if (!cols.length || d.ideas.some(i => has(i, ''))) cols.push({slug: '', name: 'No channel', track: ''});
   const inBet = (i, id) => id ? i.bet_id === id : !i.bet_id || !d.bets.some(b => b.id === i.bet_id);
   return `<div class="card gr-scroll"><table class="gr-grid"><thead><tr><th scope="col"><span class="sr-only">Bet</span></th>${cols.map(c =>
     `<th scope="col">${c.track ? `<span class="gr-track gr-track-${esc(c.track)}">${c.track === 'brand' ? 'Brand' : 'Performance'}</span>` : ''}<span>${esc(c.name)}</span></th>`).join('')}</tr></thead>

@@ -402,6 +402,7 @@ function strategyPaintMarket(key) {
   const owner = strategyView(STRAT.data).owner;
   if (key === 'growth') {
     const g = STRAT_MKT.growth;
+    if ($('#strat-setup')) patchHTML($('#strat-setup'), g ? brandSetupHtml(g.brand) + gtmSetupHtml(g.gtm, g) : '');
     if ($('#strat-brand')) patchHTML($('#strat-brand'), g ? brandStripHtml(g.brand) : '');
     if ($('#strat-gtm')) patchHTML($('#strat-gtm'), g ? gtmCardHtml(g.gtm, g) : '');
     return;
@@ -452,6 +453,7 @@ const STRAT_FRAME = `<div id="strat-pub"></div>
   <div class="strat-memo" id="strat-doc">
     <section class="card strat-card strat-top strat-summary" id="strat-top"></section>
     <div class="strat-row"><section class="card strat-card strat-where" id="strat-where"></section><section class="card strat-card strat-bets-card" id="strat-sec-bets" aria-labelledby="strat-bets-h"></section></div>
+    <div class="strat-setup" id="strat-setup"></div>
     <div class="strat-brand" id="strat-brand"></div>
     <div class="strat-row strat-gtm-row"><div class="strat-gtm" id="strat-gtm"></div><div class="strat-col"><section class="card strat-card" id="strat-rivals"></section><section class="card strat-card" id="strat-news"></section></div></div>
     <div class="strat-secs" id="strat-secs"></div>
