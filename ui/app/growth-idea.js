@@ -6,19 +6,33 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// The panel element lives across redraws of the same task; it reads again when the task changes (its version) and
+// on every opening (the modal forgets d.giEl when it closes).
 function growthIdeaAdopt(d, task) {
   const slot = $('[data-growth-idea]', d);
   if (!slot) return;
-  const id = String(task.id);
+  const id = String(task.id), ver = String(task.version ?? task.updated ?? '');
   if (pipelineTypeId(task) !== 'idea') { slot.hidden = true; return; }
-  if (d.giEl && d.giEl.dataset.task === id) { d.giEl.giTask = task; slot.replaceWith(d.giEl); return; }
-  d.giEl = slot; slot.dataset.task = id; slot.giTask = task;
+  if (d.giEl && d.giEl.dataset.task === id) {
+    d.giEl.giTask = task; slot.replaceWith(d.giEl);
+    if (d.giEl.dataset.ver !== ver) { d.giEl.dataset.ver = ver; void growthIdeaLoad(d.giEl, id); }
+    return;
+  }
+  d.giEl = slot; slot.dataset.task = id; slot.dataset.ver = ver; slot.giTask = task;
   void growthIdeaLoad(slot, id);
 }
 async function growthIdeaLoad(slot, id) {
   let idea, refs;
-  try { [idea, refs] = await Promise.all([get(`/v2/growth/ideas/${encodeURIComponent(id)}`, {fresh: true}).then(r => r.idea || r), grRefs()]); }
-  catch { if (slot.dataset.task === id) slot.hidden = true; return; }
+  try { [idea, refs] = await Promise.all([get(`/v2/growth/ideas/${encodeURIComponent(id)}`, {fresh: true}).then(r => r.idea || r), grRefs(true)]); }
+  catch (e) {
+    if (slot.dataset.task !== id) return;
+    if (e?.status === 404 || e?.status === 403) { slot.hidden = true; return; }
+    slot.innerHTML = `<div class="gi-head"><span class="gr-k">Idea</span><span class="muted">${esc(e?.message || 'Did not load')}</span><span class="spacer"></span>
+      <button class="ghost small" type="button" data-gi-retry>Retry</button></div>`;
+    slot.hidden = false;
+    slot.querySelector('[data-gi-retry]').onclick = () => void growthIdeaLoad(slot, id);
+    return;
+  }
   if (slot.dataset.task !== id) return;
   const links = [...new Set([idea.follow_up_of, ...(idea.depends_on || [])].filter(Boolean))];
   const titles = new Map(await Promise.all(links.map(t => get(`/v2/tasks/${encodeURIComponent(t)}`).then(r => [t, r.title || r.task?.title || t]).catch(() => [t, t]))));
@@ -28,7 +42,8 @@ async function growthIdeaLoad(slot, id) {
 }
 function growthIdeaDraw(slot) {
   const i = slot.giIdea, refs = slot.giRefs, titles = slot.giTitles, task = slot.giTask || {};
-  const may = grAdmin() || grSame(task.owner, grMe()) || grSame(i.assignee, grMe()) || grSame(i.created_by, grMe());
+  // As the server allows: the assignee or an admin runs the test and gives the verdict; the creator also edits and scores.
+  const run = grAdmin() || grSame(i.assignee ?? task.owner, grMe()), may = run || grSame(i.created_by, grMe());
   const bet = refs.bets.find(b => b.id === i.bet_id), kpi = refs.kpis.find(k => k.id === i.kpi_id), judged = refs.kpis.find(k => k.id === i.judged_kpi_id);
   const dl = rows => rows.filter(r => r[1]).map(([k, v, raw]) => `<dt>${esc(k)}</dt><dd>${raw ? v : esc(v)}</dd>`).join('');
   const link = t => `<a href="${grTaskHref(t)}">${esc(titles.get(t) || t)}</a>`;
@@ -42,9 +57,9 @@ function growthIdeaDraw(slot) {
   const verdict = done || i.result || i.learning ? `<section class="gi-sec"><h4 class="gr-k">Verdict</h4><dl class="br-dl">${dl([['Result', i.result], ['Learning', i.learning],
       ['Bet', i.bet_effect && i.bet_effect !== 'none' ? (i.bet_effect === 'supports' ? 'Supports' : 'Weakens') : ''], ['Confidence', i.confidence],
       ['By', [grWho(i.verdict_by), grDay(i.verdict_at)].filter(Boolean).join(' · ')]])}</dl></section>` : '';
-  const actions = may ? `${!testing && !done ? '<button class="primary small" type="button" data-gi-start>Start test</button>' : ''}
-      ${testing || i.status === 'paused' ? '<button class="primary small" type="button" data-gi-verdict>Verdict</button>' : ''}
-      ${!done ? '<button class="ghost small" type="button" data-gi-drop>Drop</button>' : ''}<button class="ghost small" type="button" data-gi-edit>Edit</button>` : '';
+  const actions = `${run && !testing && !done ? '<button class="primary small" type="button" data-gi-start>Start test</button>' : ''}
+      ${run && (testing || i.status === 'paused') ? '<button class="primary small" type="button" data-gi-verdict>Verdict</button>' : ''}
+      ${run && !done ? '<button class="ghost small" type="button" data-gi-drop>Drop</button>' : ''}${may ? '<button class="ghost small" type="button" data-gi-edit>Edit</button>' : ''}`;
   slot.innerHTML = `<div class="gi-head"><span class="gr-k">Idea</span>${grStatus(i.status)}${ice}<span class="spacer"></span>${actions}</div>
     <dl class="br-dl gi-dl">${dl([['Hypothesis', i.hypothesis], ['Prediction', i.prediction], ['Bet', bet ? `${bet.n} · ${bet.statement}` : i.bet_title],
       ['Metric', kpi ? `${kpi.name} ${grKpiVal(kpi)}` : ''], ['Channels', (i.channels || []).map(s => `<span class="gr-tag">${esc(grChanName(refs.channels, s))}</span>`).join(''), true],
@@ -63,7 +78,11 @@ function growthIdeaBind(slot) {
     try { after(await post(base + '/score', {i: v('i'), c: v('c'), e: v('e')})); toast('Scored'); } catch (e) { toast(e.message || 'Not saved', true); }
   };
   const edit = slot.querySelector('[data-gi-edit]');
-  if (edit) edit.onclick = () => grDialog('Edit idea', grIdeaFields(refs, i), 'Save', async form => { after(await patch(base, grIdeaBody(form))); toast('Saved'); });
+  if (edit) edit.onclick = () => grDialog('Edit idea', grIdeaFields(refs, i), 'Save', async form => {
+    const body = grIdeaBody(form, i);
+    if (!Object.keys(body).length) return;
+    after(await patch(base, body)); toast('Saved');
+  });
   const start = slot.querySelector('[data-gi-start]');
   if (start) start.onclick = () => {
     const today = new Date().toISOString().slice(0, 10), two = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);

@@ -260,6 +260,7 @@ a.gr-row:hover .gr-row-t{text-decoration:underline}
 .br-check{display:flex;flex-direction:column;gap:6px}
 .br-check button{align-self:flex-end}
 .br-hits{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.br-hits:empty{display:none}
 .br-hit{display:inline-flex;align-items:center;gap:6px;padding:2px 4px 2px 8px;border:1px solid var(--line);border-radius:999px;font-size:var(--t-xs)}
 .br-hit .pill{margin:0}
 

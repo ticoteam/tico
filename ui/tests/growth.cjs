@@ -97,6 +97,13 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
     .catch(async () => assert.fail(`${tag}: the section saved (${await page.locator('.toast').allInnerTexts()} ${JSON.stringify(page.errors)})`));
   await page.locator('[data-sub="voice"]').click();
   await page.locator('form[data-sec="voice"] .gr-rowed').first().waitFor({timeout: t(5000)});
+  // Check copy shows its hits and leaves an unsaved edit in the section alone.
+  const trait = page.locator('form[data-sec="voice"] .gr-rowed input').first();
+  await trait.fill('Warm and quick');
+  await page.locator('[data-check] textarea').fill('Our maid team is cheap');
+  await page.locator('[data-check] [type=submit]').click();
+  await page.locator('[data-hits] .br-hit').first().waitFor({timeout: t(5000)});
+  assert.equal(await trait.inputValue(), 'Warm and quick', `${tag}: the unsaved edit stays`);
   await flat(page, `${tag}: Brand edit`);
   await snap(page, `${tag}-03-brand-edit`);
   await page.locator('[data-doc-publish]').click();

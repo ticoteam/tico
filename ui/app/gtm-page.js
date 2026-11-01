@@ -62,7 +62,8 @@ function pageGtm() {
   if (!GT_TABS.some(t => t[0] === tab)) { location.replace(GTM_ROUTE); return; }
   document.querySelectorAll('dialog.gr-dlg').forEach(d => d.close());
   const keep = GT || {};
-  GT = {load: ++GR_LOAD, tab, data: keep.data || null, publishing: false, ch: keep.ch || null, src: keep.src || null, conflicts: keep.conflicts || [], kpis: keep.kpis || null};
+  GT = {load: ++GR_LOAD, tab, data: keep.data || null, publishing: false, ch: keep.ch || null, src: keep.src || null, conflicts: keep.conflicts || [], kpis: keep.kpis || null,
+    chMay: keep.chMay, srcMay: keep.srcMay};
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
   main.innerHTML = redesignStrategyHead('gtm') + `<div id="gr-body" class="gr-body">${GT.data ? '' : skelRows(6, {dot: false})}</div>`;
@@ -74,9 +75,9 @@ async function gtmRead(state) {
     const [data, ch, src, k] = await Promise.all([get('/v2/gtm', {fresh: true}), get('/v2/growth/channels', {fresh: true}),
       get('/v2/growth/sources', {fresh: true}), get('/v2/growth/kpis', {fresh: true}).catch(() => ({kpis: []}))]);
     if (GT !== state) return;
-    const next = {data, ch: ch.channels || [], src: src.sources || [], conflicts: src.conflicts || [], kpis: k.kpis || []};
+    const next = {data, ch: ch.channels || [], src: src.sources || [], conflicts: src.conflicts || [], kpis: k.kpis || [], chMay: ch.may_edit, srcMay: src.may_edit};
     // A page already drawn from the last read keeps what is being typed when nothing changed.
-    const same = state.drawn && JSON.stringify(next) === JSON.stringify({data: state.data, ch: state.ch, src: state.src, conflicts: state.conflicts, kpis: state.kpis});
+    const same = state.drawn && JSON.stringify(next) === JSON.stringify({data: state.data, ch: state.ch, src: state.src, conflicts: state.conflicts, kpis: state.kpis, chMay: state.chMay, srcMay: state.srcMay});
     Object.assign(state, next);
     if (same) return;
   } catch (e) { if (GT === state) $('#gr-body').innerHTML = grFail(e); return; }
@@ -141,7 +142,11 @@ function gtWishesHtml(state) {
 function gtDocBind(state) {
   const body = $('#gr-body'), save = (sections, btn) => {
     if (btn) btn.disabled = true;
-    return grDocSave('/v2/gtm', state, sections, gtmDraw).then(ok => { if (ok) toast('Saved'); else if (btn?.isConnected) btn.disabled = false; });
+    return grDocSave('/v2/gtm', state, sections, gtmDraw).then(ok => {
+      if (ok) { toast('Saved'); return; }
+      if (btn?.isConnected) btn.disabled = false;
+      body.querySelectorAll('[data-motion]').forEach(x => { x.disabled = false; });
+    });
   };
   body.querySelectorAll('[data-motion]').forEach(b => {
     b.onclick = () => {
@@ -169,7 +174,7 @@ function gtDocBind(state) {
 
 // ----------------------------------------------------------------- Channels
 function gtChannelsHtml(state) {
-  const may = grAdmin(), list = (state.ch || []).filter(c => !c.retired_at).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || String(a.name).localeCompare(String(b.name)));
+  const may = state.chMay ?? grAdmin(), list = (state.ch || []).filter(c => !c.retired_at).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || String(a.name).localeCompare(String(b.name)));
   const src = id => (state.src || []).find(s => s.id === id), kpi = id => (state.kpis || []).find(k => k.id === id);
   const add = may ? `<div class="gr-bar"><span class="spacer"></span><button class="primary" type="button" data-ch-add>+ Channel</button></div>` : '';
   if (!list.length) return add;
@@ -234,7 +239,7 @@ function gtChannelsBind(state) {
 
 // ----------------------------------------------------------------- Sources
 function gtSourcesHtml(state) {
-  const may = grAdmin(), list = (state.src || []).filter(s => !s.retired_at).sort((a, b) => String(a.truth_for).localeCompare(String(b.truth_for)));
+  const may = state.srcMay ?? grAdmin(), list = (state.src || []).filter(s => !s.retired_at).sort((a, b) => String(a.truth_for).localeCompare(String(b.truth_for)));
   const clash = new Set((state.conflicts || []).map(t => String(t).toLowerCase()));
   const banners = (state.conflicts || []).map(t => {
     const rows = list.filter(s => String(s.truth_for).toLowerCase() === String(t).toLowerCase());
@@ -294,7 +299,9 @@ function gtSourcesBind(state) {
 
 // ----------------------------------------------------------------- Model: the KPI tree
 function gtModelHtml(state) {
-  const kpis = state.kpis || [], may = grAdmin();
+  // The growth KPI read carries no edit flag: the company owner changes any KPI but those Tico computes (auto:).
+  // Anyone else may only through a KPI they keep, which this read does not say, so they see no Edit.
+  const kpis = state.kpis || [], mayKpi = k => S.me?.role === 'owner' && !String(k.id).startsWith('auto:'), may = kpis.some(mayKpi);
   if (!kpis.length) return '';
   const ns = kpis.find(k => k.growth_role === 'north_star');
   const tree = ns ? grTree(kpis, ns.id) : [];
@@ -305,7 +312,7 @@ function gtModelHtml(state) {
   const row = (k, depth = 0, cls = '') => `<tr class="${cls}"><th scope="row"><span class="gt-kn" style="--d:${depth}">${esc(k.name)}</span></th>
       <td class="num">${esc(grKpiVal(k))}</td><td class="num">${k.target != null ? esc(kpiNum(k.target, k.unit)) : '—'}</td><td class="gt-barc">${gtBar(k.latest, k.target)}</td>
       <td>${esc(GT_ROLES.find(r => r[0] === k.growth_role)?.[1] || '')}</td><td>${esc(stage(k.stage))}</td><td>${esc(k.loop_name ? `${k.loop_name}${k.loop_step != null ? ' · ' + k.loop_step : ''}` : '')}</td>
-      ${may ? `<td><button class="ghost small" type="button" data-kpi-edit="${esc(k.id)}">Edit</button></td>` : ''}</tr>`;
+      ${may ? `<td>${mayKpi(k) ? `<button class="ghost small" type="button" data-kpi-edit="${esc(k.id)}">Edit</button>` : ''}</td>` : ''}</tr>`;
   const group = (label, rows) => rows ? `<tbody><tr class="gt-grp"><th scope="rowgroup" colspan="${may ? 8 : 7}">${esc(label)}</th></tr>${rows}</tbody>` : '';
   return `<div class="card gr-scroll"><table class="gr-t gt-model"><thead><tr><th scope="col">KPI</th><th scope="col" class="num">Now</th><th scope="col" class="num">Target</th>
     <th scope="col"><span class="sr-only">Progress</span></th><th scope="col">Role</th><th scope="col">Stage</th><th scope="col">Loop</th>${may ? '<th scope="col"><span class="sr-only">Edit</span></th>' : ''}</tr></thead>

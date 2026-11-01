@@ -208,7 +208,7 @@ async function brandRead(state) {
     if (BR !== state) return;
     // A page already drawn from the last read keeps what is being typed when nothing changed.
     const same = state.drawn && JSON.stringify([data, props]) === JSON.stringify([state.data, state.props]);
-    state.data = data; state.props = props;
+    state.data = data; state.props = grDocMay(data) ? props : [];
     if (same) return;
   } catch (e) { if (BR === state) $('#gr-body').innerHTML = grFail(e); return; }
   if (state.view === 'edit' && !grDocMay(state.data)) { location.replace(BRAND_ROUTE); return; }
@@ -258,6 +258,8 @@ function brandSectionValue(sec, form) {
   const rows = grRowsRead(form, sec);
   return rows.length ? rows : null;
 }
+const brandHitsHtml = hits => !hits ? '' : hits.length ? hits.map(h => `<span class="br-hit" title="${esc(h.rule || '')}">“${esc(h.match)}”<span class="pill ${BR_LEVEL[h.level] || ''}">${h.level === 'block' ? 'Block' : 'Warn'}</span></span>`).join('')
+  : '<span class="pill ok">No hits</span>';
 function brandEditHtml(state) {
   const d = state.data, b = d.draft?.body || d.published?.body || {}, changed = new Set(d.draft?.changed || []);
   const nav = `<nav class="br-subs" aria-label="Sections">${BR_SUBS.map(([k, label]) => `<button type="button" data-sub="${k}"${state.sub === k ? ' aria-current="true"' : ''}>
@@ -268,11 +270,9 @@ function brandEditHtml(state) {
       <span>${esc(p.reason || p.card?.title || Object.keys(p.payload?.sections || {}).join(', ') || 'Brand change')}</span>
       <span class="muted">${esc(grWho(p.proposed_by))} · ${esc(grDay(p.proposed_at))}</span>
       ${p.may_decide !== false ? '<span class="br-prop-b"><button class="primary small" type="button" data-decide="confirm">Add to draft</button><button class="ghost small" type="button" data-decide="reject">Decline</button></span>' : ''}</div>`).join('')}</section>` : '';
-  const hits = state.hits;
   const check = `<section class="card gr-sec"><h3 class="gr-k">Check copy</h3><form class="br-check" data-check novalidate>
       <label class="sr-only" for="br-check-t">Copy</label><textarea id="br-check-t" name="text" rows="3">${esc(state.text)}</textarea>
-      <button class="ghost small" type="submit">Check</button></form>
-      ${hits ? `<div class="br-hits">${hits.length ? hits.map(h => `<span class="br-hit" title="${esc(h.rule || '')}">“${esc(h.match)}”<span class="pill ${BR_LEVEL[h.level] || ''}">${h.level === 'block' ? 'Block' : 'Warn'}</span></span>`).join('') : '<span class="pill ok">No hits</span>'}</div>` : ''}</section>`;
+      <button class="ghost small" type="submit">Check</button></form><div class="br-hits" data-hits>${brandHitsHtml(state.hits)}</div></section>`;
   const vers = (d.versions || []).length ? `<section class="card gr-sec"><h3 class="gr-k">Versions</h3><ul class="gr-vers">${d.versions.slice().sort((a, b) => b.n - a.n).slice(0, 6).map(x =>
       `<li><button type="button" class="gr-ver" data-ver="${esc(x.n)}"><b>v${esc(x.n)}</b><span>${esc(x.note || '')}</span><span class="muted">${esc(grDay(x.published_at))}</span></button></li>`).join('')}</ul></section>` : '';
   return `<div class="br-edit">${nav}${editor}<aside class="br-rail" aria-label="Brand tools">${props}${check}${vers}</aside></div>`;
@@ -297,7 +297,9 @@ function brandEditBind(state) {
     state.text = check.elements.text.value;
     if (!state.text.trim()) return;
     try { state.hits = (await post('/v2/brand/check', {text: state.text})).hits || []; } catch (e) { toast(e?.message || 'Not checked', true); return; }
-    brandDraw();
+    // Only the results change, so a section being edited keeps what is typed.
+    const out = check.parentElement.querySelector('[data-hits]');
+    if (BR === state && out?.isConnected) out.innerHTML = brandHitsHtml(state.hits);
   };
   body.querySelectorAll('[data-ver]').forEach(b => { b.onclick = () => void grDocVersions('/v2/brand', state.data, x => brandBookHtml(x, {full: true}), b.dataset.ver); });
   body.querySelectorAll('[data-prop] [data-decide]').forEach(b => {

@@ -74,7 +74,7 @@ async function grRefs(fresh = false) {
   const opts = fresh ? {fresh: true} : undefined;
   const [k, c, s] = await Promise.all([get('/v2/growth/kpis', opts).catch(() => null), get('/v2/growth/channels', opts).catch(() => null),
     get('/v2/strategy', opts).catch(() => null)]);
-  return {kpis: k?.kpis || [], channels: c?.channels || [], bets: grBetsOf(s)};
+  return {kpis: k?.kpis || [], channels: c?.channels || [], bets: grBetsOf(s), failed: !k || !c || !s};
 }
 
 // A small dialog: a title, a form, Cancel and the primary button. `onSave(form)` throws to show an error.
@@ -104,23 +104,31 @@ const grChecks = (name, pairs, on = []) => `<div class="gr-checks" role="group">
   `<label class="gr-check"><input type="checkbox" name="${esc(name)}" value="${esc(v)}"${on.includes(v) ? ' checked' : ''}>${esc(l)}</label>`).join('')}</div>`;
 const grChecked = (form, name) => [...form.querySelectorAll(`input[name="${CSS.escape(name)}"]:checked`)].map(i => i.value);
 
-// The idea form's fields (+ Idea, and editing an idea on its task).
+// The idea form's fields (+ Idea, and editing an idea on its task). The idea's own bet, KPI and channels stay
+// choosable when a list did not load or no longer holds them (retired), so saving never drops them.
 function grIdeaFields(refs, i = {}) {
-  const live = (refs.channels || []).filter(c => !c.retired_at);
-  return `${grField('Title', `<input name="title" maxlength="300" required value="${esc(i.title || '')}">`)}
+  const bets = refs.bets.map(b => [b.id, `${b.n} · ${b.statement}`]), kpis = refs.kpis.map(k => [k.id, k.name]);
+  if (i.bet_id && !bets.some(([id]) => id === i.bet_id)) bets.push([i.bet_id, i.bet_title || i.bet_id]);
+  if (i.kpi_id && !kpis.some(([id]) => id === i.kpi_id)) kpis.push([i.kpi_id, i.kpi_name || i.kpi_id]);
+  const chans = (refs.channels || []).filter(c => !c.retired_at).map(c => [c.slug, c.name]);
+  for (const slug of i.channels || []) if (!chans.some(([s]) => s === slug)) chans.push([slug, grChanName(refs.channels, slug)]);
+  return `${refs.failed ? '<p class="err">Some lists did not load</p>' : ''}${grField('Title', `<input name="title" maxlength="300" required value="${esc(i.title || '')}">`)}
     ${grField('Hypothesis', `<textarea name="hypothesis" rows="3">${esc(i.hypothesis || '')}</textarea>`)}
     ${i.task_id ? grField('Prediction', `<textarea name="prediction" rows="2">${esc(i.prediction || '')}</textarea>`) : ''}
-    ${grField('Bet', `<select name="bet_id">${grOpts(refs.bets.map(b => [b.id, `${b.n} · ${b.statement}`]), i.bet_id)}</select>`)}
-    ${grField('KPI', `<select name="kpi_id">${grOpts(refs.kpis.map(k => [k.id, k.name]), i.kpi_id)}</select>`)}
-    ${live.length ? `<fieldset class="gr-fs"><legend>Channels</legend>${grChecks('channels', live.map(c => [c.slug, c.name]), i.channels || [])}</fieldset>` : ''}`;
+    ${grField('Bet', `<select name="bet_id">${grOpts(bets, i.bet_id)}</select>`)}
+    ${grField('KPI', `<select name="kpi_id">${grOpts(kpis, i.kpi_id)}</select>`)}
+    ${chans.length ? `<fieldset class="gr-fs"><legend>Channels</legend>${grChecks('channels', chans, i.channels || [])}</fieldset>` : ''}`;
 }
-function grIdeaBody(form) {
+// The form as a body; given the idea it edits, only the fields that changed.
+function grIdeaBody(form, was = null) {
   const v = n => form.elements[n]?.value.trim() ?? undefined;
   const body = {title: v('title'), hypothesis: v('hypothesis'), bet_id: v('bet_id') || null, kpi_id: v('kpi_id') || null,
     channels: grChecked(form, 'channels')};
   if (form.elements.prediction) body.prediction = v('prediction');
   if (!body.title) throw new Error('A title');
-  return body;
+  if (!was) return body;
+  const same = (a, b) => Array.isArray(a) ? [...a].sort().join('\n') === [...(b || [])].sort().join('\n') : (a ?? '') === (b ?? '');
+  return Object.fromEntries(Object.entries(body).filter(([k, x]) => !same(x, was[k])));
 }
 function grNewIdea(after) {
   void grRefs().then(refs => grDialog('New idea', grIdeaFields(refs), 'Add', async form => {
@@ -144,13 +152,17 @@ async function grPropose(button) {
 }
 
 // ----------------------------------------------------------------- the page
-// After every route: forget the Growth, Brand and Go-to-market pages once off them, so late answers draw nothing.
+// After every route: forget each of the Growth, Brand and Go-to-market pages once off it, so a late answer for one
+// never draws over another (each page's reads check that its own state is still the open one).
 window.growthStop = function growthStop() {
   const r = S.route || '';
-  if ([GR_ROUTE, BRAND_ROUTE, GTM_ROUTE].some(base => rdUnder(r, base))) return;
-  if (!GR && !BR && !GT) return;
-  GR_LOAD++; GR = null; BR = null; GT = null;
-  document.querySelectorAll('dialog.gr-dlg').forEach(d => d.close());
+  const off = base => !rdUnder(r, base);
+  if (!(GR && off(GR_ROUTE)) && !(BR && off(BRAND_ROUTE)) && !(GT && off(GTM_ROUTE))) return;
+  GR_LOAD++;
+  if (off(GR_ROUTE)) GR = null;
+  if (off(BRAND_ROUTE)) BR = null;
+  if (off(GTM_ROUTE)) GT = null;
+  if ([GR_ROUTE, BRAND_ROUTE, GTM_ROUTE].every(off)) document.querySelectorAll('dialog.gr-dlg').forEach(d => d.close());
 };
 function pageGrowth() {
   const path = (S.route || '').split('?')[0];
@@ -180,7 +192,7 @@ async function growthMain(state) {
   let saved = '';
   try { saved = localStorage.getItem(GR_FW_KEY) || ''; } catch { /* not kept */ }
   const known = f => GR_FWS.some(([v]) => v === f);
-  state.fw = (!grAdmin() && known(saved) && saved) || (known(data.settings.framework) && data.settings.framework) || 'north_star';
+  state.fw = (!(data.settings.may_edit ?? grAdmin()) && known(saved) && saved) || (known(data.settings.framework) && data.settings.framework) || 'north_star';
   growthMainDraw(state);
 }
 function growthMainDraw(state) {
@@ -203,7 +215,7 @@ function growthMainDraw(state) {
   body.querySelector('[data-gr-seg="fw"]').onclick = ev => {
     const b = ev.target.closest('button[data-v]'); if (!b || b.dataset.v === state.fw) return;
     state.fw = b.dataset.v;
-    if (grAdmin()) void put('/v2/growth/settings', {framework: state.fw}).catch(e => toast(e.message || 'Not saved', true));
+    if (d.settings.may_edit ?? grAdmin()) void put('/v2/growth/settings', {framework: state.fw}).catch(e => toast(e.message || 'Not saved', true));
     try { localStorage.setItem(GR_FW_KEY, state.fw); } catch { /* not kept */ }
     growthMainDraw(state);
   };

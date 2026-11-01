@@ -23,18 +23,19 @@ async function gcRead(state) {
   let econ, ideas, chans, sources;
   try {
     [econ, ideas, chans, sources] = await Promise.all([get('/v2/growth/economics' + (state.month ? `?month=${encodeURIComponent(state.month)}` : ''), {fresh: true}),
-      get('/v2/growth/ideas').then(r => r.ideas || []).catch(() => []), get('/v2/growth/channels').then(r => r.channels || []).catch(() => []),
+      get('/v2/growth/ideas').then(r => r.ideas || []).catch(() => []), get('/v2/growth/channels').catch(() => ({})),
       get('/v2/growth/sources').then(r => r.sources || []).catch(() => [])]);
   } catch (e) { if (GR === state) $('#gr-body').innerHTML = grCrumbs(GR_ROUTE, 'Growth', 'Channels') + grFail(e); return; }
   if (GR !== state) return;
-  state.data = {econ, ideas, chans, sources};
+  // may_edit on the channels read: the caller is the owner or an admin, who keeps settings and cohorts.
+  state.data = {econ, ideas, chans: chans.channels || [], sources, may: chans.may_edit ?? grAdmin()};
   state.month = econ.month || state.month;
   gcDraw(state);
 }
 function gcDraw(state) {
   const body = $('#gr-body'), {econ, chans} = state.data || {};
   if (!body || !econ) return;
-  const st = econ.settings || {}, rows = econ.rows || [], may = grAdmin();
+  const st = econ.settings || {}, rows = econ.rows || [], may = !!state.data.may;
   const months = (econ.months || []).slice().sort().reverse();
   if (state.month && !months.includes(state.month)) months.unshift(state.month);
   const pick = months.length ? `<label class="gr-inline"><span class="sr-only">Month</span><select data-gc-month>${months.map(m => `<option value="${esc(m)}"${m === state.month ? ' selected' : ''}>${esc(grMonth(m))}</option>`).join('')}</select></label>` : '';
@@ -65,7 +66,8 @@ function gcDraw(state) {
 async function gcDetail(state) {
   const k = state.pick, {econ, ideas, chans, sources} = state.data;
   const r = (econ.rows || []).find(x => gcKey(x.channel) === k) || {channel: k === 'unknown' ? null : k};
-  const ch = chans.find(c => c.slug === k), may = grAdmin() || grSame(ch?.owner_ref, grMe());
+  // The server records a cohort for the owner, an admin or a bot; a human channel owner is none of these.
+  const ch = chans.find(c => c.slug === k), may = !!state.data.may || S.me?.role === 'bot';
   const box = $('#gc-detail');
   box.innerHTML = `<section class="card gc-detail">${skelRows(3, {dot: false})}</section>`;
   let cohorts = [];
@@ -106,8 +108,9 @@ function gcCohortDialog(state, k, c, fresh = false) {
     ${grField('Spend from', `<input name="src_spend" maxlength="300" value="${esc(srcs.spend || '')}">`)}
     ${grField('New from', `<input name="src_new" maxlength="300" value="${esc(srcs.new_customers || '')}">`)}`, 'Save', async form => {
       const v = name => form.elements[name].value;
+      // The server merges these keys into what it keeps; an empty one removes that key.
       const sources = {...srcs};
-      const setSrc = (f, val) => { if (val.trim()) sources[f] = val.trim(); else delete sources[f]; };
+      const setSrc = (f, val) => { sources[f] = val.trim(); };
       setSrc('spend', v('src_spend')); setSrc('new_customers', v('src_new'));
       const month = fresh ? v('month') : c.month;
       if (!/^\d{4}-\d{2}$/.test(month)) throw new Error('A month');

@@ -21,7 +21,7 @@ function taskDialogWire(d) {
     if (d.open || d.taskOpening?.pending) return;
     if (!TASK_CHAT || TASK_CHAT.dialog === d) taskChatStop();
     d.tfEl?.querySelector('video, audio')?.pause();
-    d.tfEl = null; d.tfOpen = null;
+    d.tfEl = null; d.tfOpen = null; d.giEl = null;
     d.taskOpening = {}; d.askDrafts = new Map();
   });
 }
