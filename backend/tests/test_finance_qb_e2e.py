@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,13 @@ def _free_port() -> int:
 _direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+def _read(base: str, sql: str) -> dict[str, Any]:
+    """A query as the QuickBooks client sends it (bearer token and all), answered with the rows the fake stored."""
+    url = f"{base}/v3/company/1234567/query?" + urllib.parse.urlencode({"query": sql})
+    with _direct.open(urllib.request.Request(url, headers={"Authorization": "Bearer local-token"}), timeout=10) as reply:
+        return json.loads(reply.read())
+
+
 def _fake(base: str, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base + path, data=data, method=method, headers={"Content-Type": "application/json"})
@@ -80,6 +88,18 @@ def fake_quickbooks():
     finally:
         proc.terminate()
         proc.wait(timeout=10)
+
+
+def test_an_invoice_keeps_its_estimate_link_through_quickbooks(fake_quickbooks):
+    _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    body = {"day": "2026-10-06", "memo": "", "party": "Customer:50", "number": "", "due": "", "linked_estimate": "900",
+            "lines": [{"item": "Item:40", "amount": 150_000, "description": "work", "project": ""}]}
+    made = client.send("invoice.create", body, "invoice:linked-estimate")
+    assert made.ok and made.external_id, made
+    stored = _read(fake_quickbooks, "SELECT * FROM Invoice STARTPOSITION 1 MAXRESULTS 10")["QueryResponse"]["Invoice"]
+    assert [(row["Id"], row["LinkedTxn"]) for row in stored] == \
+        [(made.external_id, [{"TxnId": "900", "TxnType": "Estimate"}])]
 
 
 def test_a_connected_book_backfills_from_quickbooks_and_its_pnl_reads_by_location(books, fake_quickbooks):  # noqa: F811

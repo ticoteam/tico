@@ -20,9 +20,10 @@ from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-ENTITIES = ("Account", "Vendor", "Customer", "JournalEntry", "Item", "Department", "Class", "PurchaseOrder", "Estimate")
+ENTITIES = ("Account", "Vendor", "Customer", "JournalEntry", "Item", "Department", "Class", "PurchaseOrder", "Estimate",
+            "Invoice")
 CREATE = {"account": "Account", "vendor": "Vendor", "customer": "Customer", "journalentry": "JournalEntry",
-          "purchaseorder": "PurchaseOrder", "estimate": "Estimate"}
+          "purchaseorder": "PurchaseOrder", "estimate": "Estimate", "invoice": "Invoice"}
 LOCK = threading.Lock()
 STATE: dict[str, object] = {}
 
