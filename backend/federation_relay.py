@@ -8,6 +8,7 @@ apply what was sent to this install, and ack it. A failing tick backs off; the s
 import asyncio
 import base64
 import calendar
+import json
 import threading
 import time
 
@@ -24,6 +25,8 @@ SYNC_EVERY = 60              # seconds between reads of the peerings from HQ
 PULL_LIMIT = 50              # envelopes asked for per pull
 PAGES = 10                   # pulls in one tick while HQ says there is more
 BACKOFF_MAX = 300
+SWEEP_ROUNDS = 200             # passes over the lane heads in one tick (each pass moves a row on)
+DRAIN_ROUNDS = 200           # passes over the held lane heads in one tick
 now = time.time              # tests' controlled clock
 
 
@@ -42,6 +45,12 @@ def epoch(value):
         return float(calendar.timegm(time.strptime(value, "%Y-%m-%dT%H:%M:%SZ")))
     except (TypeError, ValueError):
         return now()
+
+
+def refusable(failed):
+    """A failure that will not change on a retry: a 4xx other than a timeout, a rate limit, or a pause (a pause lifts, so
+    the row waits for it). Anything else waits and is tried again."""
+    return bool(failed.status) and 400 <= failed.status < 500 and failed.status not in (408, 429) and failed.code != "paused"
 
 
 def status_of(view, pinned):
@@ -93,7 +102,6 @@ class Relay:
         self.next_try = 0.0
         self.synced = 0.0
         self.interval = EVERY
-        self.deferred = None          # why the pull stopped short this tick (the peer is paused, or a check is not done)
 
     @property
     def off(self):
@@ -165,34 +173,45 @@ class Relay:
             "x-tico-signature": outbound["signature"]})
 
     def sweep(self, link):
-        """Stages what core and the home need sent, then sends each waiting row. A refusal by HQ or the peer that will not
-        change is settled as failed; anything else waits and is tried again with a longer wait."""
+        """Stages what core and the home need sent, then sends the head of each lane (one peer and one root). A later row of
+        a lane waits until its head is taken or settled, so a root's stream reaches each peer in order. A paused peering,
+        or any failure that may pass, waits and is tried again; other lanes are not held back by it."""
         with self.store.transaction() as c:
             F.set_company(c, self.company())
             S.stage(c, self.vault(), now())
-        with self.store.read() as c:
-            rows = S.due_outbox(c, now())
-        for row in rows:
+        for _ in range(SWEEP_ROUNDS):
+            with self.store.read() as c:
+                rows = S.due_outbox(c, now())
+            moved = False
+            for row in rows:
+                moved = self.send_row(link, row) or moved
+            if not moved:
+                return
+
+    def send_row(self, link, row):
+        """Sends one waiting row. True when it was taken, settled, or put back to wait. False when its peering is not
+        active, so it is left alone (and its lane with it)."""
+        with self.store.transaction() as c:
+            if F.active(c, row["recipient"]) is None:
+                return False
+            outbound = S.envelope(c, self.vault(), row, now())
+            if outbound is None:                 # no longer to be sent: a waiting delivery goes moot
+                S.dropped(c, row)
+                return True
+        try:
+            self.send(link, row, outbound)
+        except HR.Stop:
+            raise
+        except HR.Failed as failed:
             with self.store.transaction() as c:
-                if F.active(c, row["recipient"]) is None:
-                    continue
-                outbound = S.envelope(c, self.vault(), row, now())
-                if outbound is None:                 # no longer to be sent: a waiting delivery goes moot
-                    S.dropped(c, row)
-                    continue
-            try:
-                self.send(link, row, outbound)
-            except HR.Stop:
-                raise
-            except HR.Failed as failed:
-                with self.store.transaction() as c:
-                    if failed.status and 400 <= failed.status < 500 and failed.status not in (408, 429):
-                        S.refused(c, row, failed.code)
-                    else:
-                        S.retry(c, row, failed.code, now())
-                continue
-            with self.store.transaction() as c:
-                S.sent(c, row, outbound)
+                if refusable(failed):
+                    S.refused(c, row, failed.code)
+                else:
+                    S.retry(c, row, failed.code, now())
+            return True
+        with self.store.transaction() as c:
+            S.sent(c, row, outbound)
+        return True
 
     def screen_ahead(self, sender, body, me):
         """The org-rule and injection verdicts for the carried texts an envelope brings, made before its write: the model
@@ -244,10 +263,11 @@ class Relay:
         return {author: found} if found["key_id"] == key_id else {}
 
     def pull_once(self, link):
-        """One page of envelopes from HQ, each applied in its own transaction and then acked. True when HQ has more."""
+        """One page of envelopes from HQ. Each is applied now, or held here when it cannot be applied yet (a rule check has
+        not run, the peering is paused), or when its root already has a held envelope from that peer. A held envelope is
+        kept by this install and acked, so the mailbox moves on. True when HQ has more."""
         with self.store.read() as c:
             cursor = c.execute("SELECT cursor FROM federation_state WHERE singleton=1").fetchone()[0]
-            me = F.install(c)
         try:
             answer = self.call(link, "POST", "pull", {"cursor": cursor, "limit": PULL_LIMIT})
         except HR.Failed as failed:
@@ -266,26 +286,65 @@ class Relay:
             if not (isinstance(sender, str) and isinstance(envelope_id, str) and isinstance(headers, dict) and body is not None):
                 through = item.get("hq_seq", through)
                 continue
-            fetched = self.fetch_authors(link, me, sender, body) if me else {}
-            verdicts = self.screen_ahead(sender, body, me) if me else {}
-            try:
-                with self.store.transaction() as c:
-                    if F.install(c):
-                        S.receive(c, now(), sender, envelope_id, headers, body, epoch(item.get("received_at")), fetched,
-                                  gate=self.gate(verdicts), vault=self.vault())
-            except S.Deferred as deferred:       # not decided yet: this item and those after it wait for a later pull
-                self.deferred = deferred.code
-                break
+            received, lane = epoch(item.get("received_at")), S.lane_of(body)
+            with self.store.read() as c:
+                waiting = S.lane_waiting(c, sender, lane)
+            if waiting:
+                self.hold(sender, lane, envelope_id, headers, body, received, "behind_earlier")
+            else:
+                self.receive_or_hold(link, sender, lane, envelope_id, headers, body, received)
             through = item.get("hq_seq", through)
-        if self.deferred:
-            top = through
-        else:
-            top = answer.get("cursor") if isinstance(answer.get("cursor"), int) else through
+        top = answer.get("cursor") if isinstance(answer.get("cursor"), int) else through
         if top > cursor:
             self.call(link, "POST", "ack", {"through_hq_seq": top})
         with self.store.transaction() as c:
             c.execute("UPDATE federation_state SET cursor=?, acked=?, last_pull_at=? WHERE singleton=1", (top, top, now()))
-        return answer.get("more") is True and not self.deferred
+        return answer.get("more") is True
+
+    def apply(self, link, sender, envelope_id, headers, body, received):
+        """One envelope applied in its own transaction. The lookups and model checks it needs run first, outside it. Raises
+        S.Deferred for a check that has not run or a peering that is paused, and HR.Failed for a lookup that did not answer."""
+        with self.store.read() as c:
+            me = F.install(c)
+        fetched = self.fetch_authors(link, me, sender, body) if me else {}
+        verdicts = self.screen_ahead(sender, body, me) if me else {}
+        with self.store.transaction() as c:
+            if F.install(c):
+                S.receive(c, now(), sender, envelope_id, headers, body, received, fetched, gate=self.gate(verdicts),
+                          vault=self.vault())
+
+    def receive_or_hold(self, link, sender, lane, envelope_id, headers, body, received):
+        try:
+            self.apply(link, sender, envelope_id, headers, body, received)
+        except HR.Stop:
+            raise
+        except (S.Deferred, HR.Failed) as deferred:
+            self.hold(sender, lane, envelope_id, headers, body, received, deferred.code)
+
+    def hold(self, sender, lane, envelope_id, headers, body, received, reason):
+        with self.store.transaction() as c:
+            S.hold(c, now(), sender, lane, envelope_id, headers, body, received, reason)
+
+    def drain(self, link):
+        """Held envelopes that are due, tried in each lane's order. A lane stops at its first one that still cannot be
+        applied; the other lanes go on, and that one is tried again when it is due."""
+        for _ in range(DRAIN_ROUNDS):
+            with self.store.read() as c:
+                heads = S.held_heads(c, now())
+            if not heads:
+                return
+            for held in heads:
+                try:
+                    self.apply(link, held["peer_install"], held["envelope_id"], json.loads(held["headers_json"]),
+                               bytes(held["body"]), held["received_at"])
+                except HR.Stop:
+                    raise
+                except (S.Deferred, HR.Failed) as deferred:
+                    with self.store.transaction() as c:
+                        S.held_again(c, held, deferred.code, now())
+                    continue
+                with self.store.transaction() as c:
+                    S.held_done(c, held["id"])
 
     # ------------------------------------------------------------------------- the loop
     def tick(self):
@@ -296,7 +355,7 @@ class Relay:
                 return
             self._tick()
             self.failures, self.next_try = 0, 0.0
-            self.note(self.deferred)
+            self.note(None)
         except HR.Stop:
             self.trouble("refused")
         except HR.Failed as failed:
@@ -307,7 +366,6 @@ class Relay:
             self.lock.release()
 
     def _tick(self):
-        self.deferred = None
         with self.store.read() as c:
             link = self.link(c)
             key = F.key(c)
@@ -319,7 +377,7 @@ class Relay:
             self.sync(link)
             self.synced = now()
         self.sweep(link)
-        self.deferred = None
+        self.drain(link)
         for _ in range(PAGES):
             if not self.pull_once(link):
                 break
@@ -353,7 +411,8 @@ class Relay:
         key = F.key(c)
         state = dict(c.execute("SELECT * FROM federation_state WHERE singleton=1").fetchone())
         pending = c.execute("SELECT count(*) FROM federation_outbox").fetchone()[0]
+        held = c.execute("SELECT count(*) FROM federation_deferrals").fetchone()[0]
         return {"gateway": self.link(c) is not None, "install": F.install(c) or None,
                 "key": {"key_id": key["key_id"], "registered": key["registered_at"] is not None} if key else None,
-                "outbox": pending, "last_pull_at": state["last_pull_at"], "failing_since": state["failing_since"],
+                "outbox": pending, "held": held, "last_pull_at": state["last_pull_at"], "failing_since": state["failing_since"],
                 "last_error": state["last_error"], "listed_at": state["listed_at"]}

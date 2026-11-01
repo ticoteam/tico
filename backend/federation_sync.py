@@ -23,6 +23,7 @@ is the one outcome that writes nothing: the envelope is tried again on a later p
 """
 import base64
 import hashlib
+import json
 import re
 
 from . import federation as F
@@ -94,17 +95,18 @@ def valid_text(value, limit):
 
 
 # ----------------------------------------------------------------------------- outbox
-def queue(c, *, recipient, kind, item_id=None, delivery_id=None, payload=None):
+def queue(c, *, recipient, kind, item_id=None, delivery_id=None, payload=None, thread_origin=""):
+    """A row to send to `recipient`. `thread_origin` is the root's origin id: the lane the row waits in."""
     c.execute("INSERT OR IGNORE INTO federation_outbox(id,recipient,kind,delivery_id,item_id,payload,attempts,next_attempt_at,"
-              "last_error,created_at) VALUES(?,?,?,?,?,?,0,0,'',?)",
-              (H.new_id(), recipient, kind, delivery_id, item_id, payload, stamp()))
+              "last_error,created_at,thread_origin) VALUES(?,?,?,?,?,?,0,0,'',?,?)",
+              (H.new_id(), recipient, kind, delivery_id, item_id, payload, stamp(), thread_origin))
 
 
 def enqueue(c, thread, item):
     """The item to every active member. A member the item is not for gets a skip in its place (see envelope)."""
     for member in members_of(c, thread["thread_id"]):
         if member["status"] == "active":
-            queue(c, recipient=member["install"], kind="item", item_id=item["id"])
+            queue(c, recipient=member["install"], kind="item", item_id=item["id"], thread_origin=thread["origin_id"])
 
 
 def anchor_seq(c, origin_id):
@@ -128,7 +130,7 @@ def request_catch_up(c, now, thread, after):
         return
     c.execute("UPDATE federation_threads SET catch_up_requested_at=?, updated_at=? WHERE id=?", (now, stamp(), thread["id"]))
     payload = E.payload_bytes({"type": "catch_up", "thread": thread["origin_id"], "after": int(after)})
-    queue(c, recipient=thread["home_install"], kind="catch_up", payload=payload)
+    queue(c, recipient=thread["home_install"], kind="catch_up", payload=payload, thread_origin=thread["origin_id"])
 
 
 # ----------------------------------------------------------------------------- the home's numbering
@@ -297,7 +299,7 @@ def stage(c, vault, now, limit=100):
             c.execute("INSERT INTO federation_messages(id,origin_id,message_id,thread_id,author,revision,home_seq,sent_revision,"
                       "created_at,updated_at) VALUES(?,?,?,?,?,?,NULL,NULL,?,?)",
                       (H.new_id(), origin, row["message_id"], thread["thread_id"], actor, revision, stamp(), stamp()))
-        queue(c, recipient=thread["home_install"], kind="delivery", delivery_id=delivery)
+        queue(c, recipient=thread["home_install"], kind="delivery", delivery_id=delivery, thread_origin=thread["origin_id"])
         staged += 1
     return staged
 
@@ -360,7 +362,7 @@ def unshare(c, vault, now, thread_id, install_id):
               (item["home_seq"], stamp(), member["id"]))
     T.remove_outside(c, thread_id, install_id)
     enqueue(c, thread_local(c, thread_id), item)
-    queue(c, recipient=install_id, kind="item", item_id=item["id"])
+    queue(c, recipient=install_id, kind="item", item_id=item["id"], thread_origin=row["origin_id"])
     return {"thread_id": thread_id, "install": install_id, "removed_at_seq": item["home_seq"]}
 
 
@@ -422,7 +424,7 @@ def _receive(c, now, me, sender, envelope_id, headers, body, received_at, fetche
     if peer["status"] != "active":
         return "not_active"
     if peer["paused_at"]:
-        raise Deferred("paused")                        # kept on HQ until the peer is resumed
+        raise Deferred("paused")                        # held here until the peer is resumed
     if headers.get("x-tico-key-id") != peer["peer_key_id"]:
         return "key_mismatch"
     sent = int(headers.get("x-tico-sent-at") or 0)
@@ -557,7 +559,7 @@ def on_catch_up(c, me, sender, payload):
     for item in items:
         if bound is not None and item["home_seq"] > bound:
             break
-        queue(c, recipient=sender, kind="item", item_id=item["id"])
+        queue(c, recipient=sender, kind="item", item_id=item["id"], thread_origin=thread["origin_id"])
     return "applied"
 
 
@@ -780,7 +782,8 @@ def refuse(c, to, payload, reason):
     id and revision) and why. The sender posts a quiet note to the message's author. Returns the reason."""
     origin = payload.get("origin_id")
     if isinstance(origin, str) and origin:
-        queue(c, recipient=to, kind="refusal", payload=refusal_bytes(payload.get("thread"), origin, payload.get("revision"),
+        queue(c, recipient=to, kind="refusal", thread_origin=str(payload.get("thread") or "")[:200],
+              payload=refusal_bytes(payload.get("thread"), origin, payload.get("revision"),
                                                                     reason))
     return reason
 
@@ -804,7 +807,7 @@ def on_refusal(c, me, sender, payload):
         T.post_notice(c, row["thread_id"], REASON_NOTES.get(reason, REASON_NOTES["rules"]), author)
         return "applied"
     if author_install and author_install != sender:
-        queue(c, recipient=author_install, kind="refusal",
+        queue(c, recipient=author_install, kind="refusal", thread_origin=str(payload.get("thread") or "")[:200],
               payload=refusal_bytes(payload.get("thread"), origin, payload.get("revision"), reason))
         return "relayed"
     return "unknown_message"
@@ -837,10 +840,58 @@ def on_roster(c, now, sender, thread, seq, payload):
     return "applied"
 
 
+# ----------------------------------------------------------------------------- held inbound envelopes
+def lane_of(body):
+    """The root an envelope's payload names (its origin id), or '' when it names none. A lane is per peer and per root:
+    a root's numbers and edits keep their order, and another root or peer never waits for them."""
+    payload = E.parse_payload(body)
+    value = payload.get("thread") if payload else None
+    return value if valid_text(value, 200) else ""
+
+
+def lane_waiting(c, peer, lane):
+    """Whether this peer's envelopes for this root are held here: a later one waits behind them."""
+    return c.execute("SELECT 1 FROM federation_deferrals WHERE peer_install=? AND thread_origin=? LIMIT 1",
+                     (peer, lane)).fetchone() is not None
+
+
+def hold(c, now, peer, lane, envelope_id, headers, body, received_at, reason):
+    """Keeps an envelope this install cannot apply yet, in arrival order. It is acked to HQ once it is held here, so the
+    mailbox moves on. The lane waits for it; `held_heads` tries it again when it is due."""
+    c.execute("INSERT OR IGNORE INTO federation_deferrals(id,peer_install,thread_origin,envelope_id,headers_json,body,"
+              "received_at,reason,attempts,next_attempt_at,created_at) VALUES(?,?,?,?,?,?,?,?,0,?,?)",
+              (H.new_id(), peer, lane, envelope_id, json.dumps(headers, sort_keys=True, separators=(",", ":")), body,
+               received_at, reason, now, stamp()))
+
+
+def held_heads(c, now, limit=50):
+    """Each lane's earliest held envelope, when it is due. Only that one is tried next: a lane stops at its first envelope
+    that still cannot be applied, while the other lanes go on."""
+    return [dict(r) for r in c.execute(
+        "SELECT h.* FROM federation_deferrals h WHERE h.next_attempt_at<=? AND h.rowid=(SELECT MIN(i.rowid) FROM "
+        "federation_deferrals i WHERE i.peer_install=h.peer_install AND i.thread_origin=h.thread_origin) "
+        "ORDER BY h.rowid LIMIT ?", (now, limit)).fetchall()]
+
+
+def held_again(c, held, reason, now):
+    attempts = held["attempts"] + 1
+    wait = min(BACKOFF_MAX, RETRY_FIRST * 2 ** min(attempts, 8))
+    c.execute("UPDATE federation_deferrals SET attempts=?, reason=?, next_attempt_at=? WHERE id=?",
+              (attempts, reason, now + wait, held["id"]))
+
+
+def held_done(c, held_id):
+    c.execute("DELETE FROM federation_deferrals WHERE id=?", (held_id,))
+
+
 # ----------------------------------------------------------------------------- outbound, to HQ
 def due_outbox(c, now, limit=50):
-    return [dict(r) for r in c.execute("SELECT * FROM federation_outbox WHERE next_attempt_at<=? ORDER BY created_at, id "
-                                       "LIMIT ?", (now, limit)).fetchall()]
+    """The first waiting row of each (recipient, root) lane, when it is due. A later row of a lane waits behind it, so a
+    root's stream reaches each peer in order, while other lanes are not held back."""
+    return [dict(r) for r in c.execute(
+        "SELECT o.* FROM federation_outbox o WHERE o.next_attempt_at<=? AND o.rowid=(SELECT MIN(i.rowid) FROM "
+        "federation_outbox i WHERE i.recipient=o.recipient AND i.thread_origin=o.thread_origin) "
+        "ORDER BY o.rowid LIMIT ?", (now, limit)).fetchall()]
 
 
 def staged_payload(c, row, me):

@@ -212,13 +212,9 @@ def tick(side):
     assert error == "", error
 
 
-def tick_raw(side):
-    """One relay tick that returns the state row's error instead of asserting there is none (for a deferred pull)."""
-    relay = side.app.state.federation_relay
-    relay.synced, relay.next_try = 0.0, 0.0
-    relay.tick()
-    with side.app.state.store.read() as c:
-        return c.execute("SELECT last_error FROM federation_state WHERE singleton=1").fetchone()[0]
+def held_reasons(side):
+    """Why each envelope this install holds (in arrival order): a check that has not run, a paused peering, or behind one."""
+    return [r[0] for r in rows(side, "SELECT reason FROM federation_deferrals ORDER BY rowid")]
 
 
 def drive(*sides, rounds=6):
@@ -400,7 +396,7 @@ def test_a_removed_install_gets_the_removal_and_nothing_after(make_side, hq):
     assert hq.mail.get(b.id, []) == []
 
 
-def test_the_kill_switch_stops_both_directions_and_resume_repairs(make_side, hq):
+def test_the_kill_switch_stops_both_directions_and_resume_repairs(make_side, hq, clock):
     a, b = make_side("alpha"), make_side("beta")
     connect(a, b, hq)
     tid = make_thread(a, "Launch")
@@ -417,6 +413,7 @@ def test_the_kill_switch_stops_both_directions_and_resume_repairs(make_side, hq)
     assert "from beta while paused" not in texts(a, tid)
     resumed = a.client.post(f"/api/v2/federation/peerings/{row_for(a, b.id)}/pause", json={"paused": False}, headers=OWNER)
     assert resumed.json()["paused"] is False
+    clock["t"] += 600                                    # the refused sends wait out their backoff
     drive(a, b, rounds=3)
     assert "while paused" in texts(b, there)            # what was missed is caught up on resume
     assert "from beta while paused" in texts(a, tid)    # and beta's own message reaches alpha
@@ -763,7 +760,7 @@ def test_a_guest_from_a_third_install_is_written_under_its_own_name_on_every_rep
     assert rows(a, "SELECT from_actor FROM messages WHERE conversation_id=? AND body=?", (tid, "from gamma")) == [(guest,)]
 
 
-def test_a_paused_peer_defers_what_waits_and_resume_applies_it(make_side, hq):
+def test_a_paused_peer_defers_what_waits_and_resume_applies_it(make_side, hq, clock):
     a, b = make_side("alpha"), make_side("beta")
     connect(a, b, hq)
     tid = make_thread(a, "Launch")
@@ -774,15 +771,18 @@ def test_a_paused_peer_defers_what_waits_and_resume_applies_it(make_side, hq):
     tick(a)                                                  # sent to HQ before the pause
     paused = a.client.post(f"/api/v2/federation/peerings/{row_for(a, b.id)}/pause", json={"paused": True}, headers=OWNER)
     assert paused.status_code == 200
-    assert tick_raw(b) == "paused"
+    tick(b)
+    assert held_reasons(b) == ["paused"]                     # HQ hands it over; this install holds it, and acks it
     assert "held while paused" not in texts(b, there)
     resumed = a.client.post(f"/api/v2/federation/peerings/{row_for(a, b.id)}/pause", json={"paused": False}, headers=OWNER)
     assert resumed.status_code == 200
+    clock["t"] += 600
     drive(a, b, rounds=3)
     assert "held while paused" in texts(b, there)
+    assert held_reasons(b) == []
 
 
-def test_an_org_check_that_did_not_run_defers_the_text_until_it_can(make_side, hq, monkeypatch):
+def test_an_org_check_that_did_not_run_defers_the_text_until_it_can(make_side, hq, monkeypatch, clock):
     a, b = make_side("alpha"), make_side("beta")
     connect(a, b, hq)
     tid = make_thread(a, "Launch")
@@ -795,11 +795,112 @@ def test_an_org_check_that_did_not_run_defers_the_text_until_it_can(make_side, h
                         else real(store, judge, actor, text, install, origin_id, thread_id))
     say(a, tid, "UNCHECKED: waiting for the model")
     tick(a)
-    assert tick_raw(b) == "rules_unchecked"
+    tick(b)
+    assert held_reasons(b) == ["rules_unchecked"]
     assert "UNCHECKED: waiting for the model" not in texts(b, there)
     monkeypatch.setattr(T, "checked_inbound", real)
+    clock["t"] += 600
     drive(a, b)
     assert texts(b, there) == ["UNCHECKED: waiting for the model"]
+
+
+def test_a_paused_peer_holds_only_its_own_root_while_other_peers_and_roots_flow(make_side, hq, clock, monkeypatch):
+    a, b, c = make_side("alpha"), make_side("beta"), make_side("gamma")
+    connect(a, b, hq)
+    connect(a, c, hq)
+    first, second = make_thread(a, "Launch"), make_thread(a, "Press")
+    share(a, first, b)
+    share(a, second, c)
+    drive(a, b, c)
+    there_b, there_c = local_thread(b, first, a), local_thread(c, second, a)
+    attempts = []                                        # (recipient, envelope id) of every send HQ receives
+    real = hq.envelope
+
+    def spy(me, request):
+        attempts.append((request.headers.get("x-tico-to"), request.headers.get("x-tico-envelope")))
+        return real(me, request)
+
+    monkeypatch.setattr(hq, "envelope", spy)
+    paused = a.client.post(f"/api/v2/federation/peerings/{row_for(a, b.id)}/pause", json={"paused": True}, headers=OWNER)
+    assert paused.status_code == 200
+    say(a, first, "A1 while paused")
+    say(a, second, "C1 other root")
+    drive(a, c, rounds=2)
+    assert texts(c, there_c) == ["C1 other root"]        # another peer's root is not held back
+    say(a, first, "A2 same root")
+    for _ in range(3):
+        clock["t"] += 600
+        tick(a)
+    assert [env for recipient, env in attempts if recipient == b.id] == []   # nothing goes to a paused peer: A1 and A2 wait
+    assert texts(b, there_b) == []
+    resumed = a.client.post(f"/api/v2/federation/peerings/{row_for(a, b.id)}/pause", json={"paused": False}, headers=OWNER)
+    assert resumed.status_code == 200
+    clock["t"] += 600
+    attempts.clear()
+    drive(a, b, rounds=3)
+    assert texts(b, there_b) == ["A1 while paused", "A2 same root"]
+    assert len(set(env for recipient, env in attempts if recipient == b.id)) == 2   # both sent once the peer resumes
+
+
+def test_a_transient_failure_holds_the_later_post_to_the_same_peer_and_root(make_side, hq, clock, monkeypatch):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    attempts = []
+    real = hq.envelope
+    unavailable = {"left": 1}
+
+    def spy(me, request):
+        if request.headers.get("x-tico-to") == b.id:
+            attempts.append(request.headers.get("x-tico-envelope"))
+            if unavailable["left"]:
+                unavailable["left"] -= 1
+                return httpx.Response(503, json={"error": "unavailable"})
+        return real(me, request)
+
+    monkeypatch.setattr(hq, "envelope", spy)
+    say(a, tid, "first")
+    tick(a)                                              # HQ does not take it: it waits for its backoff
+    say(a, tid, "second")
+    tick(a)
+    assert len(attempts) == 1                            # second is not sent past first while first waits
+    clock["t"] += 600
+    drive(a, b, rounds=2)
+    assert texts(b, there) == ["first", "second"]
+    assert len(attempts) == 3                            # first (refused once, then taken), then second
+
+
+def test_a_held_envelope_holds_only_its_own_root_from_that_peer(make_side, hq, clock, monkeypatch):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    one, two = make_thread(a, "Launch"), make_thread(a, "Press")
+    share(a, one, b)
+    share(a, two, b)
+    drive(a, b)
+    there_one, there_two = local_thread(b, one, a), local_thread(b, two, a)
+    real = T.checked_inbound
+    monkeypatch.setattr(T, "checked_inbound", lambda store, judge, actor, text, install, origin_id, thread_id:
+                        {"outcome": "unchecked", "error": "no_engine"} if "UNCHECKED" in text
+                        else real(store, judge, actor, text, install, origin_id, thread_id))
+    say(a, one, "UNCHECKED: waiting for the model")
+    tick(a)
+    tick(b)
+    assert held_reasons(b) == ["rules_unchecked"]
+    say(a, two, "other root")
+    drive(a, b, rounds=2)
+    assert texts(b, there_two) == ["other root"]         # another root from the same peer goes on
+    say(a, one, "after the held one")
+    drive(a, b, rounds=2)
+    assert texts(b, there_one) == []
+    assert held_reasons(b) == ["rules_unchecked", "behind_earlier"]   # the same root waits behind the held one
+    monkeypatch.setattr(T, "checked_inbound", real)
+    clock["t"] += 600
+    drive(a, b, rounds=3)
+    assert texts(b, there_one) == ["UNCHECKED: waiting for the model", "after the held one"]
+    assert held_reasons(b) == []
 
 
 def test_a_sub_thread_reaches_the_other_install_both_ways(make_side, hq):
