@@ -87,9 +87,10 @@ GENERATION_CACHE = ".tico-backup-generation"
 URL_LINE = re.compile(r"^([ \t]+)url: .*$", re.M)
 GENERATION_SUFFIX = re.compile("/" + GENERATION_PATTERN.pattern + "$")
 # The heal. A copy is stuck when its local state holds more L0 copies than a healthy install keeps (about 200) and the newest
-# of them is more than HEAL_LAG ahead of the replica. The replication loop asks for a heal once the replica has not moved for
-# HEAL_AFTER while the database kept changing, and stops Litestream so the container restarts. At most one heal per
-# HEAL_INTERVAL. HEAL_FLAG, in the data volume, holds the request and when the last heal began.
+# of them is more than heal_lag_seconds() ahead of the replica. The replication loop asks for a heal once the replica has not
+# moved for heal_after_seconds() while the database kept changing, and stops Litestream so the container restarts. The limits
+# are these minimums, raised with the sync interval: an install that uploads once an hour is not stuck for being quiet between
+# uploads. At most one heal per HEAL_INTERVAL. HEAL_FLAG, in the data volume, holds the request and when the last heal began.
 LOCAL_STUCK_FILES = 5000
 HEAL_LAG = 30 * 60
 HEAL_AFTER = 20 * 60
@@ -140,6 +141,24 @@ def sync_interval_seconds(env=None):
 def behind_warn_seconds(env=None):
     """How long the backup location may stay behind before it is a warning: ten sync intervals, at least ten minutes."""
     return max(BEHIND_WARN_MIN_S, 10 * sync_interval_seconds(env))
+
+
+def stuck_file_limit(env=None):
+    """More local L0 copies than this is a stuck copy. Litestream writes at most about one L0 file a second, so three sync
+    intervals of writes is what a healthy install can hold between uploads: at least LOCAL_STUCK_FILES."""
+    return max(LOCAL_STUCK_FILES, 3 * sync_interval_seconds(env))
+
+
+def heal_after_seconds(env=None):
+    """How long the replica may stay still while the database changes before it is healed: two sync intervals, and at
+    least HEAL_AFTER."""
+    return max(HEAL_AFTER, 2 * sync_interval_seconds(env))
+
+
+def heal_lag_seconds(env=None):
+    """How far the newest local copy may run ahead of the replica before it counts as stuck: two sync intervals, and at
+    least HEAL_LAG."""
+    return max(HEAL_LAG, 2 * sync_interval_seconds(env))
 
 
 def _stamp(seconds):
@@ -557,7 +576,7 @@ def _has_database(db):
         return False
 
 
-def sync_generation(config, db, env=None, strict=False):
+def sync_generation(config, db, env=None, strict=False, write_cache=True):
     """Makes the Litestream config and the data volume's cache name the backup generation that environment.json names. This
     is the start's one read of environment.json: backup_configuration reads only the cache, so a slow bucket cannot hold up
     the start, and the reset job (run before Litestream starts) corrects the config here.
@@ -571,10 +590,12 @@ def sync_generation(config, db, env=None, strict=False):
     strict is for a restore and a seed, which must not restore from a guess: environment.json has to be readable, and an
     unreadable one raises GenerationUnknown with no use of the cache or the root. A generation this version does not know
     raises in both modes. Raises GenerationUnknown when nothing says which generation the data is in, or when the config
-    names another location than the backup settings do: the config is then left as it is."""
+    names another location than the backup settings do: the config is then left as it is. A rehearsal reads environment.json
+    the same way: nothing is written to the backup location, and the config and cache are local. write_cache=False leaves the
+    cache to the caller, which writes it once the local state is dealt with (reset_stale_litestream)."""
     env = os.environ if env is None else env
-    if no_mirror(env):
-        return "none"
+    if mode_from_env(env) == "off" or env.get("TICO_BACKUP_MODE") == "off":
+        return "none"    # no backup location, so backup_configuration wrote no config to read
     data_dir = Path(db).parent
     try:
         cached = read_generation_cache(data_dir)
@@ -608,12 +629,15 @@ def sync_generation(config, db, env=None, strict=False):
                                     "backup generation the data is in") from None
         print("tico: warning: could not read environment.json (" + reason + "); " + what, file=sys.stderr, flush=True)
     if outcome == "read" and not generation and cached:
+        if strict:
+            raise GenerationUnknown("environment.json names the root of the backup location, but the data volume's cache "
+                                    "names " + cached + ", so the backup generation the data is in is not known")
         generation, outcome = cached, "kept"
     try:
         point_config_at(config, root + ("/" + generation if generation else ""))
     except Exception as exc:
         raise GenerationUnknown("the Litestream config could not name the backup generation (" + type(exc).__name__ + ")") from None
-    if outcome == "read" and cached != generation:
+    if write_cache and outcome == "read" and cached != generation:
         try:
             write_generation_cache(data_dir, generation)
         except OSError as exc:
@@ -814,19 +838,19 @@ def local_copies(state):
     return len(files), max((p.stat().st_mtime for p in files), default=None)
 
 
-def stuck_by_local_state(state, listing):
-    """True when the local state is provably stuck: more local L0 copies than a healthy install keeps, and the newest of them
-    is more than HEAL_LAG ahead of the replica's newest L0 or L1 file (or the replica has none at all). A healthy install
-    copies within about a minute, so a backlog this size is not one that is catching up. A time that cannot be read proves
-    nothing."""
+def stuck_by_local_state(state, listing, env=None):
+    """True when the local state is provably stuck: more local L0 copies than stuck_file_limit allows, and the newest of them
+    is more than heal_lag_seconds ahead of the replica's newest L0 or L1 file (or the replica has none at all). Both limits
+    grow with the sync interval, since an install that uploads once an hour holds an hour's copies. A time that cannot be
+    read proves nothing."""
     count, local = local_copies(state)
-    if count <= LOCAL_STUCK_FILES or local is None:
+    if count <= stuck_file_limit(env) or local is None:
         return False
     try:
         remote = replica_newest_copy(listing)
     except ValueError:
         return False
-    return remote is None or local - remote > HEAL_LAG
+    return remote is None or local - remote > heal_lag_seconds(env)
 
 
 def heal_flag_path(db):
@@ -915,13 +939,23 @@ def replica_root_url(env):
     return (env.get("TICO_BACKUP_URL") or "file://" + (env.get("TICO_BACKUP_DIR") or "/backups")).rstrip("/")
 
 
-def config_root(config):
-    """The backup location the Litestream config's replica url names, without a generation folder. Raises when the config
-    does not hold exactly one replica url."""
+def config_url(config):
+    """The one replica url in the Litestream config, as written. Raises when the config does not hold exactly one."""
     urls = re.findall(r"^[ \t]+url: (.*)$", Path(config).read_text(), re.M)
     if len(urls) != 1:
         raise ValueError("the Litestream config does not hold exactly one replica url")
-    return GENERATION_SUFFIX.sub("", urls[0].strip())
+    return urls[0].strip()
+
+
+def config_root(config):
+    """The backup location the Litestream config's replica url names, without a generation folder."""
+    return GENERATION_SUFFIX.sub("", config_url(config))
+
+
+def config_generation(config):
+    """The generation folder the Litestream config's replica url names: "" for the root layout."""
+    found = GENERATION_SUFFIX.search(config_url(config))
+    return found.group(0)[1:] if found else ""
 
 
 def point_config_at(config, url):
@@ -940,10 +974,11 @@ def start_generation(config, db, env, now, mirror=None):
       2. the Litestream config names the new folder (a failure leaves the old config in place);
       3. environment.json names the new folder. This is the commit. If the write failed and did not land, the old config is
          put back (GenerationRefused); if it may have landed, the start must read it again (GenerationSwitchFailed);
-      4. the data volume's cache names the new folder (a failure is GenerationSwitchFailed, as the start reads it again);
-      5. the local state is removed (a failure is GenerationSwitchFailed).
-    Litestream reads its config when it starts, so it always runs against the folder environment.json names. The old folder
-    is kept, and nothing is written to it again. Returns the line to print."""
+      4. the local state is removed (a failure is GenerationSwitchFailed, and the next start finishes the job).
+    The data volume's cache is not written here: reset_stale_litestream writes it last, once the local state is gone, so the
+    status loop never pairs the new folder with the old folder's local copies. Litestream reads its config when it starts, so
+    it always runs against the folder environment.json names. The old folder is kept, and nothing is written to it again.
+    Returns the line to print."""
     mirror = mirror_from_env(env) if mirror is None else mirror
     root, new = replica_root_url(env), new_generation_name(now)
     try:
@@ -979,17 +1014,26 @@ def start_generation(config, db, env, now, mirror=None):
                                          "back") from None
         raise GenerationRefused("environment.json could not be written (" + type(exc).__name__ + ")") from None
     try:
-        write_generation_cache(Path(db).parent, new)
-    except OSError as exc:
-        raise GenerationSwitchFailed("the backup generation file could not be written (" + str(exc)[:160] + "); the next start "
-                                     "reads environment.json again") from None
-    try:
         shutil.rmtree(litestream_state_dir(db))
     except OSError as exc:
         raise GenerationSwitchFailed("the local Litestream state could not be removed (" + str(exc)[:160] + ")") from None
     previous = root + "/" + old_generation if old_generation else root
     return ("tico: the local Litestream state was stuck; started backup generation " + new + " at " + root + "/" + new
             + " (the copy at " + previous + " is kept)")
+
+
+def _follow_config_with_cache(config, db):
+    """Writes the data volume's cache to the generation the Litestream config names. The reset job does this last, after the
+    local state is dealt with: the status loop reads the cache every round and must not pair a new generation with the local
+    copies of the old one. A failure is GenerationSwitchFailed; the next start reads environment.json again."""
+    data_dir = Path(db).parent
+    generation = config_generation(config)
+    try:
+        if read_generation_cache(data_dir) != generation:
+            write_generation_cache(data_dir, generation)
+    except (OSError, ValueError) as exc:
+        raise GenerationSwitchFailed("the backup generation file could not be written (" + str(exc)[:160] + "); the next "
+                                     "start reads environment.json again") from None
 
 
 def reset_stale_litestream(config, db, binary="litestream", env=None, now=None):
@@ -1004,7 +1048,15 @@ def reset_stale_litestream(config, db, binary="litestream", env=None, now=None):
     GenerationSwitchFailed when a generation switch broke off after it began. First, the config is made to name the generation
     environment.json names (sync_generation): GenerationUnknown propagates when nothing says which generation that is."""
     env = os.environ if env is None else env
-    sync_generation(config, db, env)
+    outcome = sync_generation(config, db, env, write_cache=False)
+    message = _reset_local_state(config, db, binary, env, now)
+    if outcome == "read":
+        _follow_config_with_cache(config, db)    # last, once the local state is dealt with
+    return message
+
+
+def _reset_local_state(config, db, binary, env, now):
+    """reset_stale_litestream's work, once the config names the generation environment.json names."""
     state = litestream_state_dir(db)
     flag_path = heal_flag_path(db)
     flag = read_heal_flag(flag_path)
@@ -1024,7 +1076,7 @@ def reset_stale_litestream(config, db, binary="litestream", env=None, now=None):
         except OSError as exc:
             return "tico: the backup location is empty but Litestream's stale local state could not be removed: " + str(exc)[:200]
         return "tico: the backup location is empty; removed Litestream's stale local state (" + state.name + ")"
-    if no_mirror(env) or not (asked or stuck_by_local_state(state, listing)):
+    if no_mirror(env) or not (asked or stuck_by_local_state(state, listing, env)):
         return None
     now = time.time() if now is None else now
     if not heal_allowed(flag, now):
@@ -1063,21 +1115,21 @@ def database_mtime(db):
 
 class StallWatch:
     """Notices a replica that has stopped moving while the database kept changing. Feed it once per round the replica's newest
-    copy time and the database's change time; observe() is true once that has gone on for HEAL_AFTER seconds."""
+    copy time and the database's change time; observe() is true once that has gone on for `after` seconds."""
     def __init__(self):
         self.replica, self.since = None, None
 
     def reset(self):
         self.replica, self.since = None, None
 
-    def observe(self, replica, changed, now):
+    def observe(self, replica, changed, now, after):
         if replica != self.replica:
             self.replica, self.since = replica, None    # the replica moved, so what was pending has been copied
         if changed is not None and (replica is None or changed > replica):
             self.since = now if self.since is None else self.since
         else:
             self.since = None
-        return self.since is not None and now - self.since >= HEAL_AFTER
+        return self.since is not None and now - self.since >= after
 
 
 def stop_litestream(env):
@@ -1098,22 +1150,24 @@ def stop_litestream(env):
 
 
 def stuck_replica_check(env, mirror, watch, now):
-    """One round of the runtime check. It asks for a heal when the replica has not moved for HEAL_AFTER while the database
-    kept changing and the local state holds more than LOCAL_STUCK_FILES copies, and at most once per HEAL_INTERVAL. The heal
-    itself is reset_stale_litestream's, run by the container's next start. Returns True when it asked."""
+    """One round of the runtime check. It asks for a heal when the replica has not moved for heal_after_seconds while the
+    database kept changing and the local state holds more copies than stuck_file_limit allows, and at most once per
+    HEAL_INTERVAL. The heal itself is reset_stale_litestream's, run by the container's next start. Returns True when it
+    asked."""
     db = env.get("TICO_DB") or "/data/hub.sqlite"
-    if local_copies(litestream_state_dir(db))[0] <= LOCAL_STUCK_FILES:
+    after = heal_after_seconds(env)
+    if local_copies(litestream_state_dir(db))[0] <= stuck_file_limit(env):
         watch.reset()    # a healthy install: no listing of the replica, and no stall to time
         return False
     generation = replica_generation(mirror)
-    if not watch.observe(replica_newest(mirror, generation), database_mtime(db), now):
+    if not watch.observe(replica_newest(mirror, generation), database_mtime(db), now, after):
         return False
     flag_path = heal_flag_path(db)
     flag = read_heal_flag(flag_path)
     if not heal_allowed(flag, now):
         return False
     write_heal_flag(flag_path, True, flag.get("last_heal_at"))
-    print("tico: the backup copy is stuck: the replica has not moved for " + str(HEAL_AFTER // 60) + " minutes while the "
+    print("tico: the backup copy is stuck: the replica has not moved for " + str(after // 60) + " minutes while the "
           "database changed. Stopping Litestream, so the container restarts and starts a new backup generation.", flush=True)
     stop_litestream(env)
     return True

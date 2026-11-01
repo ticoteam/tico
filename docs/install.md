@@ -1097,7 +1097,9 @@ team over an existing backup on purpose, set `TICO_INITIALIZE_EMPTY=1` (or run `
 and a new one is a folder `gen-<UTC time>/` beside it (for example `gen-20261101T120000Z/`). `environment.json` names the
 current generation in its `generation` field; a backup without that field is the first one. The server starts a new
 generation when the copy is stuck: its local state holds more than 5,000 copies (a healthy install keeps about 200), and
-the replica has not received a new copy for 20 minutes while the database kept changing. It then stops Litestream, the
+the replica has not received a new copy for 20 minutes while the database kept changing. Both limits grow with
+`TICO_BACKUP_SYNC_INTERVAL`: three sync intervals of copies, and two sync intervals without a new one, when that is more
+than the numbers above (an hourly sync allows 10,800 copies and two hours). It then stops Litestream, the
 container restarts, and the new generation starts from the database. The copy it had stays where it is, and the other
 fields of `environment.json` are kept. To ask for a new generation by hand, create `/data/.tico-backup-heal` in the
 server's data volume and run `docker compose restart server`. A new generation is started at most once every 6 hours. A
