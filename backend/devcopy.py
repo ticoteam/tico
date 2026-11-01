@@ -91,7 +91,7 @@ EMPTY = (
     "automation_inboxes", "automation_effects", "automation_holds", "automation_guard_holds", "automation_turn_answers",
     "redesign_migrations",
     # Task cap counts are today's sends; the caps themselves are kept.
-    "task_cap_sends", "task_cap_log",
+    "task_cap_log",
     # A hard delete's queue of bytes still to remove from storage: the copy never deletes from the source's stores.
     "blob_purges",
     # Finance: what moves money or calls a provider (connections and their tokens, cursors and id maps, the outbox and

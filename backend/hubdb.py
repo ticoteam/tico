@@ -836,19 +836,14 @@ CREATE TABLE IF NOT EXISTS market_sources (
 TASK_CAPS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_caps(sender TEXT, receiver TEXT, per_day INTEGER, updated TEXT, updated_by TEXT,
   PRIMARY KEY(sender, receiver));
-CREATE TABLE IF NOT EXISTS task_cap_sends(task_id TEXT PRIMARY KEY, sender TEXT, receiver TEXT, sent_at TEXT);
-CREATE INDEX IF NOT EXISTS task_cap_sends_pair ON task_cap_sends(sender, receiver, sent_at);
 """
 
 # Every task cap send is kept (backend/task_caps.py): one row per task, sender, receiver and time, so a hand-over adds a
-# send and never replaces the one before it. `task_cap_sends` (one row per task) is copied in and no longer written.
+# send and never replaces the one before it.
 TASK_CAP_LOG_SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_cap_log(task_id TEXT NOT NULL, sender TEXT NOT NULL, receiver TEXT NOT NULL,
   sent_at TEXT NOT NULL, PRIMARY KEY(task_id, sender, receiver, sent_at));
 CREATE INDEX IF NOT EXISTS task_cap_log_pair ON task_cap_log(sender, receiver, sent_at);
-INSERT OR IGNORE INTO task_cap_log(task_id, sender, receiver, sent_at)
-  SELECT task_id, sender, receiver, sent_at FROM task_cap_sends
-  WHERE task_id IS NOT NULL AND sender IS NOT NULL AND receiver IS NOT NULL AND sent_at IS NOT NULL;
 """
 
 # A pull request's last activity (CONTRACT section 6, PR find): the time of its newest GitHub pull_request, review or
@@ -971,7 +966,9 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA,
               LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA, LIVE_MEETING_TURN_RETRY_SCHEMA,
               POSTAL_MAIL_SCHEMA, POSTAL_MAIL_V2_SCHEMA, POSTAL_MAIL_V3_SCHEMA, TRIGGERS_CONSUMER_SCHEMA,
-              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA]
+              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA,
+              # 71: the retired per-task cap log (TASK_CAP_LOG_SCHEMA replaced it); its rows were copied in long ago.
+              "DROP TABLE IF EXISTS task_cap_sends;"]
 
 
 class Refused(Exception):
