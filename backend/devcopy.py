@@ -115,7 +115,7 @@ KEEP = frozenset((
     "bot_task_tabs", "bot_tool_requests", "cards", "deferrals", "pin_places", "pins", "bot_transition_checkpoints", "bot_transitions", "bots", "strategy_actions",
     "ask_ingest_items", "ask_ingest_settings", "strategy_merges", "changes", "chat_goals",
     "ceo_actions", "ceo_merges",  # the names before the rename, kept, mirrored, for one release (hubdb.STRATEGY_TABLES)
-    "cloud_migrations", "company_events", "company_profile", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
+    "cloud_migrations", "schema_migrations", "company_events", "company_profile", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
     "document_versions", "documents", "external_documents", "file_deletions", "external_sections", "external_snapshot_docs",
     "external_snapshots", "external_versions", "feed_sources", "feed_updates", "flight_db", "flight_events",
     "flight_process", "flight_requests",

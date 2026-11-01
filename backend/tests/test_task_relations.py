@@ -65,8 +65,9 @@ def test_a_previous_release_database_upgrades_through_the_cloud_store(tmp_path):
     with sqlite3.connect(path) as c:
         ids = [r[0] for r in c.execute("SELECT id FROM tasks ORDER BY created, id")]
         c.execute("UPDATE tasks SET parent_id=? WHERE id=?", (ids[0], ids[1]))
-    boot(path)
-    boot(path)
+    # Below the bridge (test_migrations), so this is the legacy import path: adopt_legacy, as manage.migrate_legacy boots.
+    boot(path, adopt_legacy=True)
+    boot(path, adopt_legacy=True)
     with sqlite3.connect(path) as c:
         assert not {"parent_id", "blocked_by"} & columns(c)
         assert c.execute("SELECT from_task,to_task,kind FROM task_relations").fetchall() == [(ids[1], ids[0], "parent")]

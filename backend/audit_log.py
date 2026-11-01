@@ -2,19 +2,13 @@
 
 Every change writes one row with who made it, the object it changed (`<kind>:<id>`, e.g. `task_cap:<id>`,
 `automation:<id>`) and the whole object before and after (null when created or deleted), in the same transaction as
-the change, so a change without its row cannot exist. Rows are never edited or pruned.
+the change, so a change without its row cannot exist. Rows are never edited or pruned. The table is migration 0001
+(backend/migrations).
 """
 import json
 
 from .store import H, encode
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS audit_log(
- id TEXT PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, object TEXT NOT NULL,
- before_json TEXT, after_json TEXT, via TEXT);
-CREATE INDEX IF NOT EXISTS audit_log_object ON audit_log(object, at);
-CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log(at);
-"""
 LIMIT = 50
 LIST_BYTES = 262_144                     # as the automations list: a page stays under 256 KB
 

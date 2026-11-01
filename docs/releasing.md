@@ -57,6 +57,34 @@ manages the Dev tickets type run `hub release now`. Routines can run `on: releas
 Releases are started by the Release Manager only. Release validation never runs on a schedule or on a push to main:
 each run is a full gate for one candidate.
 
+## Supported versions
+
+What a server accepts is what the code enforces. This is the matrix the release notes refer to.
+
+| Part | Accepted | Enforced by |
+|---|---|---|
+| Database | schema version 71 (`MIN_BRIDGE_USER_VERSION`) and newer up to this release's; cloud steps up to 75 | `backend/migrations` `preflight`, before the first write |
+| Runner | release `MIN_RUNNER_RELEASE` (0.4.0) and newer | `backend/runner_versions.py`: claims from an older runner are paused, with the reason |
+| Runner wire | the current and previous minor release, both directions | `scripts/check_wire_contract.py`, [runner-wire-contract.md](runner-wire-contract.md) |
+| Desktop app | the release's own version, or the previous release's files when the shell did not change | the release workflow; see [Desktop apps follow the release](#desktop-apps-follow-the-release) |
+
+A database below schema version 71 is refused, with the message "upgrade to v0.5.x first". Open it once with a v0.5.x
+release (the one that writes version 71), then upgrade. The legacy import (`manage.migrate_legacy`) is the only path that
+opens an older file directly. A newer database, one whose recorded migration this code does not know, and one whose
+migration file changed after it ran are all refused before anything is written.
+
+## Migrations
+
+Every persistent schema change is a file in `backend/migrations`: `NNNN_name.sql` (its statements) or `NNNN_name.py`
+(an `up(conn)` that does not commit). The number is the next after the highest file. A file runs once, in its own
+transaction with its `schema_migrations` row, so a failure leaves neither. Never edit a file that has run: its checksum is
+recorded, and a start refuses the database if it changed. Make the change in a new file. Temporary views and tables
+(`CREATE TEMP`, `backend/sql.py`) are per connection and stay in code.
+
+`backend/tests/test_ddl_guard.py` counts the `CREATE`, `ALTER TABLE` and `add_column` statements still outside
+migrations, per file, in `backend/migrations/ddl_allowlist.txt`. A new one fails the test; when a statement moves into a
+migration, lower its file's count in the same change.
+
 ## The release command
 
 The Release Manager uses the Rust `tico-release` command through `scripts/release` for each approved release.
