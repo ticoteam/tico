@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Runs the browser scripts in ui/tests/*.cjs a few at a time (npm run test:ui).
 // Each script's output is held and printed together, so a failure reads as one block.
-// Usage: node scripts/ui-tests.cjs [-j N] [--all] [--list] [name-or-path ...]   (free-core jobs, or $TICO_UI_JOBS)
+// Usage: node scripts/ui-tests.cjs [-j N] [--all] [--group NAME] [--list] [name-or-path ...]   (free-core jobs, or $TICO_UI_JOBS)
 // --list prints the scripts the same arguments would run, one name per line, and runs nothing (CI splits them
 // across VMs). With TICO_UI_TIMINGS set, each passing script's seconds are written there as JSON {name: seconds}.
 // With no names it runs CORE, the main pages and the privacy boundaries; --all runs every script (the release
-// check does). A name runs that script whether or not it is in CORE. Run locally, it waits for one of the box's
+// check does). A name runs that script whether or not it is in CORE. --group runs every script whose name starts
+// with the group's prefix (see GROUPS): `--group e2e` is the end-to-end journeys, one per feature, run per role. Run locally, it waits for one of the box's
 // heavy-job slots first (scripts/heavy.sh). A script still running after TICO_UI_SCRIPT_TIMEOUT seconds (120, times the
 // slowdown) is stopped with every process it started and fails with its name and the browser calls it was waiting on
 // (or "cleanup incomplete" and why, if a process could not be stopped), so one hang does not hold the job until CI
@@ -217,6 +218,9 @@ function stoppedReport({pending, calls, stopped}) {
   return report.length > TRACE.report ? `${report.slice(0, TRACE.report)}\n… (report cut at ${TRACE.report} characters)` : report;
 }
 
+// Named groups of scripts: a group is every ui/tests script whose name starts with its prefix.
+const GROUPS = {e2e: 'e2e-'};
+
 async function main() {
   const dir = path.join(__dirname, '..', 'ui', 'tests');
   const CORE = ['account-status', 'bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'org-rules', 'org-rules-counsel', 'people-access', 'recruit-unit',
@@ -226,6 +230,7 @@ async function main() {
   let all = false;
   let list = false;
   const wanted = [];
+  const groups = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '-j') {
       jobs = Number(args[++i]);
@@ -233,11 +238,18 @@ async function main() {
     }
     else if (args[i] === '--all') all = true;
     else if (args[i] === '--list') list = true;
+    else if (args[i] === '--group') {
+      const group = args[++i];
+      if (!Object.hasOwn(GROUPS, group)) throw new Error(`--group must be one of: ${Object.keys(GROUPS).join(', ')}`);
+      groups.push(group);
+    }
     else wanted.push(path.basename(args[i]).replace(/\.cjs$/, ''));
   }
-  const chosen = wanted.length ? wanted : all ? null : CORE;
-  const files = fs.readdirSync(dir).filter(f => f.endsWith('.cjs')).sort()
-    .filter(f => !chosen || chosen.includes(f.replace(/\.cjs$/, '')));
+  const allFiles = fs.readdirSync(dir).filter(f => f.endsWith('.cjs')).sort();
+  const grouped = groups.flatMap(group => allFiles.filter(f => f.startsWith(GROUPS[group])).map(f => f.replace(/\.cjs$/, '')));
+  const named = [...wanted, ...grouped];
+  const chosen = named.length ? named : all ? null : CORE;
+  const files = allFiles.filter(f => !chosen || chosen.includes(f.replace(/\.cjs$/, '')));
   if (!files.length) { console.error('no UI test scripts matched'); process.exit(1); }
   if (list) { console.log(files.map(f => f.replace(/\.cjs$/, '')).join('\n')); return; }
   const {cores, idleFraction} = await sampleCpu();
