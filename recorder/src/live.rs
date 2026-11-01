@@ -544,7 +544,11 @@ pub fn capture_time(record: &Recording) -> u64 {
     }
     chrono::DateTime::parse_from_rfc3339(&record.started_at)
         .ok()
-        .map(|start| (chrono::Utc::now() - start).num_milliseconds().max(0) as u64)
+        .map(|start| {
+            (chrono::Utc::now() - start.with_timezone(&chrono::Utc))
+                .num_milliseconds()
+                .max(0) as u64
+        })
         .unwrap_or(saved)
         .max(saved)
 }
