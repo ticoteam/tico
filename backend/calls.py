@@ -645,6 +645,8 @@ class Calls:
         room = row["room_name"]
         exists = self.media.room_exists(room)
         if not exists and (row["media_seen_at"] or _started_long_ago(row["started_at"])):
+            # Speech already said is transcribed while the call is still live: _transcribe keeps a clip only then.
+            self.finish_speech(call_id)
             with self.store.transaction() as c:
                 self.finish(c, call_id, "media_lost")
             self.after_end(call_id)
