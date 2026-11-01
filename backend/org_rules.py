@@ -61,6 +61,7 @@ SCHEMA = (
     "CREATE TABLE IF NOT EXISTS org_rules(id TEXT PRIMARY KEY, "
     "kind TEXT NOT NULL CHECK (kind IN ('internal','external')), text TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', "
     "source_id TEXT, cite_json TEXT, who_json TEXT NOT NULL, with_json TEXT NOT NULL DEFAULT '{}', "
+    "where_terms TEXT NOT NULL DEFAULT '[]', "
     "if_broken TEXT NOT NULL DEFAULT 'block' CHECK (if_broken IN ('block','escalate','warn')), reviewer TEXT, "
     "status TEXT NOT NULL CHECK (status IN ('suggested','active','retired')), suggested_by TEXT NOT NULL, "
     "decided_by TEXT, decided_at TEXT, via TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, "
@@ -79,6 +80,10 @@ SCHEMA = (
 def ensure(c):
     for statement in SCHEMA:
         c.execute(statement)
+    # A database made before `where:` keeps its org_rules as they are (CREATE TABLE IF NOT EXISTS), so the column is
+    # added here once.
+    if "where_terms" not in {row[1] for row in c.execute("PRAGMA table_info(org_rules)")}:
+        c.execute("ALTER TABLE org_rules ADD COLUMN where_terms TEXT NOT NULL DEFAULT '[]'")
     D.ensure(c)
 
 
@@ -108,10 +113,67 @@ def _has(scope):
                                 or scope.get("bots") or scope.get("people"))
 
 
+WHERE_MAX = 20          # terms one rule's `where` may name
+WHERE_THREAD_CHARS = 100
+
+
+def _where_terms(c, value):
+    """A rule's `where` as stored: `thread:<id>` (a conversation's id), `team:<group>` (by its id or name, resolved
+    to the
+    group's id), `kind:dm` and `has_outside_members`. Any other term is refused, never kept: a rule that silently
+    matched nothing would look like a rule that never fires."""
+    if not value:
+        return []
+    if not isinstance(value, list) or len(value) > WHERE_MAX:
+        raise Problem("validation", f"Where is a list of up to {WHERE_MAX} terms", 422)
+    ctx, out = None, []
+    for raw in value:
+        text = str(raw or "").strip()
+        head, sep, rest = text.partition(":")
+        rest = rest.strip()
+        if text in ("has_outside_members", "kind:dm"):
+            term = text
+        elif head == "thread" and sep and rest and len(rest) <= WHERE_THREAD_CHARS:
+            term = "thread:" + rest
+        elif head == "team" and sep and rest:
+            ctx = ctx or _ctx(c)
+            term = "team:" + _resolve(ctx, rest, ("group",))[1]
+        else:
+            raise Problem("validation", "Where takes thread:<id>, team:<group>, kind:dm or has_outside_members, "
+                          f"not {text or raw}", 422)
+        if term not in out:
+            out.append(term)
+    return out
+
+
+def _where_hits(terms, place):
+    """Whether a write's place meets a rule's `where`. No terms: every write. Otherwise one term must hold, and a write
+    with no place (a task, a mail) meets none."""
+    if not terms:
+        return True
+    if not place:
+        return False
+    for term in terms:
+        if term == "has_outside_members":
+            hit = bool(place.get("outside"))
+        elif term == "kind:dm":
+            hit = place.get("kind") == "dm"
+        elif term.startswith("thread:"):
+            hit = bool(place.get("thread")) and term[len("thread:"):] == place["thread"]
+        elif term.startswith("team:"):
+            hit = term[len("team:"):] in (place.get("teams") or ())
+        else:
+            hit = False
+        if hit:
+            return True
+    return False
+
+
 def _row(r):
     d = dict(r)
     d["who"] = json.loads(d.pop("who_json") or "{}")
     d["with"] = json.loads(d.pop("with_json") or "{}")
+    d["where"] = json.loads(d.pop("where_terms", None) or "[]")
     d["cite"] = json.loads(d.pop("cite_json") or "null")
     return d
 
@@ -125,8 +187,8 @@ def _get(c, rule_id):
 
 def _core(row):
     """The stored fields an audit row keeps (the derived views are not stored)."""
-    keep = ("id", "kind", "text", "description", "source_id", "cite", "who", "with", "if_broken", "reviewer", "status",
-            "version")
+    keep = ("id", "kind", "text", "description", "source_id", "cite", "who", "with", "where", "if_broken", "reviewer",
+            "status", "version")
     return {k: row.get(k) for k in keep}
 
 
@@ -372,9 +434,16 @@ def any_active(c):
     return c.execute("SELECT 1 FROM org_rules WHERE status='active' LIMIT 1").fetchone() is not None
 
 
-def matching(c, author, recipients=()):
-    """The active rules that apply to one write: the author is in Who, and With is empty or names a recipient. With no
-    rule in force it reads nothing more; the recipients are looked up only once a rule's Who names the author."""
+def any_where(c):
+    """Whether a rule in force names a place (`where`): a write's place is read only then."""
+    return c.execute("SELECT 1 FROM org_rules WHERE status='active' AND where_terms!='[]' LIMIT 1").fetchone() \
+        is not None
+
+
+def matching(c, author, recipients=(), place=None):
+    """The active rules that apply to one write: the author is in Who, With is empty or names a recipient, and Where is
+    empty or meets the write's place (`place`, from org_rule_check.place_for). With no rule in force it reads nothing
+    more; the recipients are looked up only once a rule's Who names the author."""
     if not any_active(c):
         return []
     ctx = _ctx(c)
@@ -382,7 +451,7 @@ def matching(c, author, recipients=()):
     keys = None
     out = []
     for row in _active(c):
-        if not _hits(row["who"], author_key):
+        if not _hits(row["who"], author_key) or not _where_hits(row["where"], place):
             continue
         if _has(row["with"]):
             keys = [who_key(c, r, ctx) for r in recipients] if keys is None else keys
@@ -467,6 +536,7 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
         "id": row["id"], "kind": row["kind"], "text": row["text"], "description": row["description"],
         "who": _scope_view(ctx, row["who"]),
         "with": _scope_view(ctx, row["with"], flags=False) if row["kind"] == "internal" else None,
+        "where": row["where"],
         "source": ctx["sources"].get(row["source_id"]) if row["source_id"] else None,
         "if_broken": row["if_broken"], "reviewer": reviewer, "status": row["status"],
         "suggested_by": row["suggested_by"], "decided_by": row["decided_by"], "decided_at": row["decided_at"],
@@ -643,20 +713,23 @@ def add_rule(c, auth, who, body):
         scope = _scope_checked(c, auth, who, body.get("who") or {})
     with_scope = scope_in(c, body.get("with") or {}, flags=False) if kind == "internal" else \
         {"groups": [], "bots": [], "people": []}
+    where = _where_terms(c, body.get("where"))
     # A bot's add is a suggestion, and so is a person's add they may not manage (the rule is theirs to suggest). Whoever may
     # manage the rule, Everyone included, makes it active at once.
     status = "active" if who.role != "bot" and may_manage(c, auth, who, scope, ctx) else "suggested"
     now = H.now()
     row = {"id": H.new_id(), "kind": kind, "text": text, "description": description, "source_id": source_id,
            "cite_json": _json(cite) if cite else None, "who_json": _json(scope), "with_json": _json(with_scope),
+           "where_terms": _json(where),
            "if_broken": _if_broken(body.get("if_broken") or "block"), "reviewer": _reviewer(c, body.get("reviewer")),
            "status": status, "suggested_by": who.actor, "decided_by": who.actor if status == "active" else None,
            "decided_at": now if status == "active" else None, "via": _via(who), "version": 1,
            "created_at": now, "updated_at": now}
-    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite_json, who_json, with_json, if_broken, "
-              "reviewer, status, suggested_by, decided_by, decided_at, via, version, created_at, updated_at) VALUES "
-              "(:id, :kind, :text, :description, :source_id, :cite_json, :who_json, :with_json, :if_broken, :reviewer, "
-              ":status, :suggested_by, :decided_by, :decided_at, :via, :version, :created_at, :updated_at)", row)
+    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite_json, who_json, with_json, "
+              "where_terms, if_broken, reviewer, status, suggested_by, decided_by, decided_at, via, version, "
+              "created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite_json, :who_json, "
+              ":with_json, :where_terms, :if_broken, :reviewer, :status, :suggested_by, :decided_by, :decided_at, "
+              ":via, :version, :created_at, :updated_at)", row)
     stored = _get(c, row["id"])
     _audit(c, who.actor, row["id"], None, _core(stored), who)
     _event(c, who.actor, "added", row["id"], {"kind": kind, "status": status})
@@ -689,6 +762,8 @@ def edit_rule(c, auth, who, rule_id, body):
         changes["if_broken"] = _if_broken(body["if_broken"])
     if body.get("reviewer") is not None:
         changes["reviewer"] = _reviewer(c, body["reviewer"])
+    if body.get("where") is not None:
+        changes["where_terms"] = _json(_where_terms(c, body["where"]))
     if body.get("source_id") is not None:
         if row["kind"] != "external":
             raise Problem("validation", "Only an external rule has a From", 422)
@@ -910,13 +985,14 @@ def seed_external(c, who, text, source_name, source_kind):
     now = H.now()
     row = {"id": H.new_id(), "kind": "external", "text": text, "description": "", "source_id": source["id"],
            "cite_json": None, "who_json": _json(scope), "with_json": _json({"groups": [], "bots": [], "people": []}),
-           "if_broken": "warn", "reviewer": None, "status": "active", "suggested_by": who.actor,
+           "where_terms": "[]", "if_broken": "warn", "reviewer": None, "status": "active", "suggested_by": who.actor,
            "decided_by": who.actor, "decided_at": now, "via": _via(who), "version": 1, "created_at": now,
            "updated_at": now}
-    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite_json, who_json, with_json, if_broken, "
-              "reviewer, status, suggested_by, decided_by, decided_at, via, version, created_at, updated_at) VALUES "
-              "(:id, :kind, :text, :description, :source_id, :cite_json, :who_json, :with_json, :if_broken, :reviewer, "
-              ":status, :suggested_by, :decided_by, :decided_at, :via, :version, :created_at, :updated_at)", row)
+    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite_json, who_json, with_json, "
+              "where_terms, if_broken, reviewer, status, suggested_by, decided_by, decided_at, via, version, "
+              "created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite_json, :who_json, "
+              ":with_json, :where_terms, :if_broken, :reviewer, :status, :suggested_by, :decided_by, :decided_at, "
+              ":via, :version, :created_at, :updated_at)", row)
     _audit(c, who.actor, row["id"], None, _core(_get(c, row["id"])), who)
     _event(c, who.actor, "added", row["id"], {"kind": "external", "status": "active"})
     return row["id"]
@@ -1096,6 +1172,7 @@ class RuleCreate(Contract):
     cite: RuleCite | None = None
     if_broken: Literal["block", "escalate", "warn"] | None = None
     reviewer: str | None = Field(default=None, max_length=200)
+    where: list[str] = Field(default_factory=list, max_length=WHERE_MAX)
 
 
 class RuleEdit(Contract):
@@ -1107,6 +1184,7 @@ class RuleEdit(Contract):
     source_id: str | None = Field(default=None, max_length=100)
     if_broken: Literal["block", "escalate", "warn"] | None = None
     reviewer: str | None = Field(default=None, max_length=200)
+    where: list[str] | None = Field(default=None, max_length=WHERE_MAX)
 
 
 class RuleDecide(Contract):
