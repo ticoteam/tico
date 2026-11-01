@@ -102,6 +102,12 @@ EMPTY = (
     # Calls: a live call's room and recorder are on the source's LiveKit, so the copy holds no live call. Its
     # transcripts and action items are thread messages, kept with the history.
     "calls", "call_participants",
+    # Federation: the install's keys, its peerings and what it sends or received from other installs; a copy never
+    # speaks for the source to another company (the shared threads' messages are kept with the history).
+    "federation_keys", "federation_peerings", "federation_outbox", "federation_receipts", "federation_state",
+    "federation_directory", "federation_threads", "federation_members", "federation_items", "federation_messages",
+    # Slack links: an active link posts to Slack both ways; its queue and message map only serve that link.
+    "slack_thread_links", "slack_link_members", "slack_message_links", "slack_inbound_queue",
 )
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
@@ -124,7 +130,10 @@ KEEP = frozenset((
     "flight_process", "flight_requests",
     "flight_slow", "flight_sql", "provenance_clock", "roster_clock", "row_clock", "goal_asks", "goal_checkins", "goal_events", "goal_kpis", "goal_proposals", "goals",
     "health_findings", "health_reports", "humans", "import_refs", "invariant_state", "intake_items", "kpi_definitions", "kpi_readings",
-    "kpis", "learning_cursors", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
+    "kpis", "learning_cursors",
+    # Threads: the search index (its triggers follow the messages kept), and the digest and follow-up ledgers, which
+    # stop the copy emailing or nudging again what the source already did.
+    "message_search_keys", "thread_digests", "thread_followups", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
     "listen_items", "listen_judgments", "listen_runs", "live_meeting_chat", "live_meeting_chat_routes",
     "live_meeting_access", "live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_events", "live_meeting_humans",
     "live_meeting_turns", "live_meeting_windows", "live_meetings", "mail_agent_instructions", "mail_messages",

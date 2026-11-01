@@ -6804,7 +6804,8 @@ def inbound_wait(api,args):
       'it, its bots and where to configure it. Follow next with cursor.',
       {'cursor':_s('The previous page\'s next'),'limit':{'type':'integer','minimum':1,'maximum':100}})
 def connections_list(api,args):
-    return _as_person(api).get('connections',**{k:args[k] for k in ('cursor','limit') if args.get(k) is not None})
+    page = dict(limit=args.get('limit'), cursor=args.get('cursor'))
+    return _as_person(api).get('connections', **{k: v for k, v in page.items() if v is not None})
 
 
 # ----------------------------------------------------------------------------- physical mail (backend/postal_mail.py)
