@@ -181,7 +181,11 @@ def follow_merge(c, actor, segment_id, into_id):
                 c.execute("UPDATE growth_cohorts SET segment_id=? WHERE id=?", (row["id"], cohort["id"]))
                 continue
             both = [{**r, "channel": r["channel_id"] or ""} for r in (same, cohort)]
-            total = G.aggregate(both, {})
+            # Defaults fill a missing revenue or margin on one side; both missing stays missing (still the default).
+            total = G.aggregate(both, G.settings(c))
+            for k in ("revenue_month", "margin_pct"):
+                if same[k] is None and cohort[k] is None:
+                    total[k] = None
             sources = {**MK.loads(cohort["sources_json"], {}), **MK.loads(same["sources_json"], {})}
             keys = ("spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "kept_d180", "revenue_month",
                     "margin_pct", "quality")
