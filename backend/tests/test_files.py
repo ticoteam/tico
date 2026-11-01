@@ -196,3 +196,13 @@ def test_local_rules_refuse_traversal_links_env_and_oversize(tmp_path):
                 "reports/.env", "reports/huge.csv", "reports"):
         with pytest.raises(BF.Refused):
             BF.local_file(root, bad)
+
+
+def test_task_covers_find_a_tasks_files_through_an_index(api):
+    """A task list page asks for every task's cover: the files of those tasks must be found by task, not by scanning
+    every bot file (bot_files_task, backend/files.py)."""
+    from backend.task_review import COVERS_SQL
+    with api.app.state.store.read() as c:
+        plan = " ".join(str(row[3]) for row in c.execute("EXPLAIN QUERY PLAN " + COVERS_SQL.format(marks="?,?"),
+                                                         ("a", "b", "a", "b")))
+    assert "bot_files_task" in plan and "SCAN f" not in plan

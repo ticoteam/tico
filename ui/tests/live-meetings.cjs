@@ -11,7 +11,11 @@ const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_actor:
   humans: [{actor: 'human:ana', name: 'Ana'}], bots: [{bot: 'ops'}],
   chunks: [{seq: 1, revision: 1, speaker: 'Ana', text: 'We should ship the new plan.'},
     {seq: 2, revision: 2, speaker: 'Ben', text: 'Ops, can you review?', start_ms: 30000}],
-  chat: [{id: 'c1', actor: 'human:ana', role: 'human', text: 'Welcome', transcript_seq: 1}],
+  chat: [{id: 'c1', actor: 'human:ana', role: 'human', text: 'Welcome', transcript_seq: 1, created: '2026-10-30T10:00:01.000000Z'}],
+  notices: [
+    {event_id: 3, kind: 'waiting', bot: 'ops', reason: 'runner_update', detail: 'Test Mac needs a Tico update before it can join private meetings', created: '2026-10-30T10:00:00.000000Z'},
+    {event_id: 4, kind: 'deferred', bot: 'ops', reason: 'busy', behind: null, created: '2026-10-30T10:00:02.000000Z'},
+    {event_id: 5, kind: 'failed', bot: 'ops', reason: 'private_checkout', detail: "ops can't answer in this private meeting: Test Mac couldn't make a private copy of its repository", created: '2026-10-30T10:00:03.000000Z'}],
   router: {windows: [{window_index: 0, start_ms: 0, end_ms: 30000, outcome: 'pass', trace: {reason: 'below threshold', answers: {ops: 0.2}}}],
     turns: [{id: 't1', bot: 'ops', window_index: null, status: 'pending'}],
     bypasses: [{event_id: 6, bypass: 'named', source_key: 'chunk:2', targets: ['ops'], skipped: []}]}});
@@ -102,6 +106,7 @@ async function main() {
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/meetings');
+    assert.equal(await page.locator('#meet-recorder').getAttribute('href'), 'https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg');
     await page.locator('#meet-live-now').click();
     await page.locator('#live-connect').waitFor();
     await page.locator('#live-connect input[name=title]').fill('Weekly sync');
@@ -113,6 +118,11 @@ async function main() {
     assert.equal(await page.locator('.live-chat').innerText().then(text => text.includes('Welcome')), true);
     assert.equal(await page.locator('.live-router').innerText().then(text => text.includes('pass')), true);
     assert.equal(await page.locator('.live-chat').innerText().then(text => text.includes('below threshold')), false, 'PASS trace stays out of chat');
+    assert.deepEqual(await page.locator('.live-chat > p').evaluateAll(rows => rows.map(row => row.dataset.liveNotice || 'chat')),
+      ['waiting', 'chat', 'deferred', 'failed'], 'bot notices sit in the chat in time order');
+    assert.equal(await page.locator('.live-chat [data-live-notice=failed]').getAttribute('class'), 'live-notice failed');
+    assert.equal(await page.locator('.live-chat [data-live-notice=failed] span').innerText(), "Can't answer in this private meeting: Test Mac couldn't make a private copy of its repository", 'the name is not said twice');
+    assert.equal(await page.locator('.live-chat [data-live-notice=deferred] span').innerText(), 'Busy. Will answer after its current work.');
     assert.equal(await page.locator('.live-router').innerText().then(text => text.includes('Named mentions')), true);
     await page.locator('.live-transcript-link').click();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'live-chunk-1', 'chat reply links to its transcript sequence');
@@ -225,6 +235,15 @@ async function main() {
     await page.locator('[data-live-finalize]').click();
     await page.locator('.live-finalized').waitFor();
     assert(calls.some(([op]) => op === 'finalize'));
+    assert.doesNotMatch(await page.locator('.live-card-head').innerText(), /From Tico Recorder/);
+    world.detail.client = 'tico-recorder';
+    // The stable Open in Tico link selects even an ended meeting absent from the list.
+    world.meetings = [];
+    await page.goto('https://tico-ui.test/#/meetings?live=live-1');
+    await page.locator('.live-card').waitFor();
+    assert.match(await page.locator('.live-card-head').innerText(), /From Tico Recorder/);
+    await page.locator('#live-back').click();
+    await page.locator('#meet-live-now').waitFor();
     assert.deepEqual(errors, []);
     await context.close();
   } finally { await browser.close(); }

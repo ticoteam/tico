@@ -22,8 +22,8 @@ repository you could not read.
 
 ## 3. Check each string
 
-Against the glossary (banned synonyms, capitalisation, one name per object), the error rules (what
-happened, what to do, no blame, no bare codes), and the patterns: buttons that say what they do, empty
+Against the glossary (banned synonyms, capitalisation, one name per object; `skills/audit-one-name-per-thing/SKILL.md`), the error rules (what
+happened, what to do, no blame, no bare codes; `skills/rewrite-an-error-message/SKILL.md`), and the patterns: buttons that say what they do, empty
 states with one action, confirmations that name the thing. Skip strings that are fine; do not restyle
 working copy for taste.
 

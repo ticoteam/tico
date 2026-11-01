@@ -1,0 +1,464 @@
+{
+ "tools": {
+  "label": "Available tools",
+  "integrations": [
+   {
+    "service": "close-crm",
+    "title": "Close CRM",
+    "kind": "api",
+    "summary": "Acme's leads, contacts and deals",
+    "access": "REST API over HTTPS",
+    "credentials": [
+     "CLOSE_API_KEY"
+    ],
+    "declared_as": "credentials: close\n",
+    "writes": "approval",
+    "owner": "Ana Silva",
+    "aliases": [
+     "close"
+    ],
+    "query_count": 0,
+    "status": "problem",
+    "bots": [
+     "eng-lead",
+     "release"
+    ],
+    "connections": [
+     {
+      "bot": "eng-lead",
+      "status": "ready",
+      "identity": "ops@acme.example",
+      "can": [
+       "read",
+       "write"
+      ],
+      "env": "CLOSE_API_KEY",
+      "write": "approval"
+     },
+     {
+      "bot": "release",
+      "status": "problem",
+      "identity": "",
+      "can": [
+       "read"
+      ],
+      "problem": "Credential missing on Test Mac",
+      "env": "CLOSE_API_KEY",
+      "write": "never"
+     }
+    ],
+    "learning_count": 2
+   },
+   {
+    "service": "postgres",
+    "title": "Acme Postgres",
+    "kind": "sql",
+    "summary": "The product database, read only",
+    "access": "hub db",
+    "credentials": [
+     "DB_ACME_URL"
+    ],
+    "declared_as": "databases: [acme]\n",
+    "writes": "never",
+    "owner": "Ana Silva",
+    "aliases": [],
+    "query_count": 1,
+    "status": "ready",
+    "bots": [
+     "builder"
+    ],
+    "connections": [
+     {
+      "bot": "builder",
+      "status": "ready",
+      "identity": "acme",
+      "can": [
+       "query"
+      ],
+      "write": "never"
+     }
+    ],
+    "learning_count": 0
+   },
+   {
+    "service": "acme-ops",
+    "title": "Acme Ops MCP",
+    "kind": "mcp",
+    "summary": "Configured by a bot",
+    "access": "See the bot's Tools for scope and connection status",
+    "credentials": [],
+    "declared_as": "",
+    "writes": "allowed",
+    "owner": "Ana Silva",
+    "aliases": [],
+    "query_count": 0,
+    "status": "pending",
+    "bots": [
+     "eng-lead"
+    ],
+    "connections": [
+     {
+      "bot": "eng-lead",
+      "status": "pending",
+      "identity": "",
+      "can": [
+       "read",
+       "write"
+      ],
+      "mcp": {
+       "host": "ops.acme.example",
+       "transport": "http"
+      },
+      "write": "allowed"
+     }
+    ],
+    "learning_count": 0
+   },
+   {
+    "service": "aside",
+    "title": "Aside browser",
+    "kind": "browser",
+    "summary": "A real browser for sites without an API",
+    "access": "hub browse",
+    "credentials": [
+     "None needed"
+    ],
+    "declared_as": "browser: true\n",
+    "writes": "never",
+    "owner": "Ana Silva",
+    "aliases": [],
+    "query_count": 0,
+    "status": "not_configured",
+    "bots": [],
+    "connections": [],
+    "learning_count": 0
+   },
+   {
+    "service": "mail",
+    "title": "Mail",
+    "kind": "mail",
+    "summary": "Acme's shared inbox",
+    "access": "IMAP and SMTP",
+    "credentials": [
+     "MAIL_PASSWORD"
+    ],
+    "declared_as": "mail: support@acme.example\n",
+    "writes": "approval",
+    "owner": "Ana Silva",
+    "aliases": [],
+    "query_count": 0,
+    "status": "not_configured",
+    "bots": [],
+    "connections": [],
+    "learning_count": 1
+   },
+   {
+    "service": "github",
+    "title": "GitHub",
+    "kind": "cli",
+    "summary": "Code and pull requests",
+    "access": "gh CLI",
+    "credentials": [
+     "GH_TOKEN"
+    ],
+    "declared_as": "cli: gh\n",
+    "writes": "allowed",
+    "owner": "Ana Silva",
+    "aliases": [],
+    "query_count": 0,
+    "status": "not_configured",
+    "bots": [],
+    "connections": [],
+    "learning_count": 0
+   },
+   {
+    "service": "old-wiki",
+    "title": "old-wiki",
+    "kind": "api",
+    "summary": "Tool removed",
+    "access": "See the bot's Tools for scope and connection status",
+    "credentials": [],
+    "declared_as": "",
+    "writes": "never",
+    "owner": "Ana Silva",
+    "aliases": [],
+    "query_count": 0,
+    "status": "removed",
+    "read_only": true,
+    "bots": [],
+    "connections": [],
+    "learning_count": 1
+   }
+  ]
+ },
+ "pages": {
+  "close-crm": {
+   "service": "close-crm",
+   "title": "Close CRM",
+   "kind": "api",
+   "summary": "Acme's leads, contacts and deals",
+   "access": "REST API over HTTPS",
+   "credentials": [
+    "CLOSE_API_KEY"
+   ],
+   "declared_as": "credentials: close\n",
+   "writes": "approval",
+   "owner": "Ana Silva",
+   "aliases": [
+    "close"
+   ],
+   "status": "ready",
+   "bots": [
+    "eng-lead",
+    "release"
+   ],
+   "connections": [
+    {
+     "bot": "eng-lead",
+     "status": "ready",
+     "identity": "ops@acme.example",
+     "can": [
+      "read",
+      "write"
+     ],
+     "env": "CLOSE_API_KEY",
+     "write": "approval"
+    },
+    {
+     "bot": "release",
+     "status": "problem",
+     "identity": "",
+     "can": [
+      "read"
+     ],
+     "problem": "Credential missing on Test Mac",
+     "env": "CLOSE_API_KEY",
+     "write": "never"
+    }
+   ],
+   "queries": [],
+   "body": "## What it is\n\nAcme's CRM for leads and deals.\n\n## What data it has\n\nLeads, contacts, opportunities.\n\n## How a bot uses it\n\nRead with `hub tool`. Join leads to accounts in [Acme Postgres](postgres.md).\n\n## Rules\n\nNever email a lead from here.\n\n## Recipes\n\nNone yet.\n\n## Gotchas\n\nThe API pages at 100.\n\n## Learnings\n\nSee below.\n",
+   "learnings": [
+    {
+     "id": "l2",
+     "integration": "close-crm",
+     "actor": "bot:sdr",
+     "text": "Search by email with the `email` filter, not `query`.",
+     "created": "2026-10-26T10:00:00Z"
+    },
+    {
+     "id": "l1",
+     "integration": "close-crm",
+     "actor": "person:ana",
+     "text": "Deals in stage Won are archived after 90 days.",
+     "created": "2026-10-20T09:00:00Z"
+    }
+   ]
+  },
+  "postgres": {
+   "service": "postgres",
+   "title": "Acme Postgres",
+   "kind": "sql",
+   "summary": "The product database, read only",
+   "access": "hub db",
+   "credentials": [
+    "DB_ACME_URL"
+   ],
+   "declared_as": "databases: [acme]\n",
+   "writes": "never",
+   "owner": "Ana Silva",
+   "aliases": [],
+   "status": "ready",
+   "bots": [
+    "builder"
+   ],
+   "connections": [],
+   "queries": [
+    {
+     "id": "signups",
+     "title": "Signups by day",
+     "description": "New Acme accounts per day",
+     "category": "growth",
+     "tags": [],
+     "database": "acme",
+     "sql": "SELECT date(created) AS day, count(*) FROM accounts GROUP BY 1 ORDER BY 1 DESC LIMIT 30",
+     "params": []
+    }
+   ],
+   "body": "## What it is\n\nThe Acme product database.\n\n## What data it has\n\nAccounts and orders.\n\n## How a bot uses it\n\n`hub db acme`.\n\n## Rules\n\nRead only.\n\n## Recipes\n\nSee the queries.\n\n## Gotchas\n\nTimestamps are UTC.\n\n## Learnings\n\nSee below.\n",
+   "learnings": []
+  },
+  "mail": {
+   "service": "mail",
+   "title": "Mail",
+   "kind": "mail",
+   "summary": "Acme's shared inbox",
+   "access": "IMAP and SMTP",
+   "credentials": [
+    "MAIL_PASSWORD"
+   ],
+   "declared_as": "mail: support@acme.example\n",
+   "writes": "approval",
+   "owner": "Ana Silva",
+   "aliases": [],
+   "status": "not_configured",
+   "bots": [],
+   "connections": [],
+   "queries": [],
+   "body": "## What it is\n\nAcme's shared inbox.\n",
+   "learnings": []
+  },
+  "github": {
+   "service": "github",
+   "title": "GitHub",
+   "kind": "cli",
+   "summary": "Code and pull requests",
+   "access": "gh CLI",
+   "credentials": [
+    "GH_TOKEN"
+   ],
+   "declared_as": "cli: gh\n",
+   "writes": "allowed",
+   "owner": "Ana Silva",
+   "aliases": [],
+   "status": "not_configured",
+   "bots": [],
+   "connections": [],
+   "queries": [],
+   "body": "## What it is\n\nAcme's code.\n",
+   "learnings": []
+  }
+ },
+ "vault": {
+  "can_manage": true,
+  "configured": true,
+  "people": [
+   {
+    "id": "ana",
+    "name": "Ana Silva",
+    "email": "ana@acme.example"
+   }
+  ],
+  "bots": [
+   {
+    "id": "eng-lead",
+    "name": "Head of Engineering",
+    "operator": "ana"
+   },
+   {
+    "id": "coo",
+    "name": "Assistant",
+    "operator": "ana"
+   }
+  ],
+  "computers": [],
+  "credentials": [
+   {
+    "id": "c1",
+    "name": "Close CRM",
+    "username": "",
+    "kind": "api_key",
+    "env": "CLOSE_API_KEY",
+    "preview": "sk_\u2022\u2022\u2022\u20229f2",
+    "source": "close-crm",
+    "revision": 2,
+    "created": "2026-10-01T09:00:00Z",
+    "updated": "2026-10-20T09:00:00Z",
+    "stored": true,
+    "can_reveal": true,
+    "last_used": "2026-10-27T15:00:00Z",
+    "last_used_by": "eng-lead",
+    "grants": [
+     {
+      "id": "g1",
+      "subject": "bot:eng-lead",
+      "granted_by": "human:ana",
+      "parent_id": null,
+      "can_revoke": true
+     },
+     {
+      "id": "g2",
+      "subject": "human:ana",
+      "granted_by": "human:ana",
+      "parent_id": null,
+      "can_revoke": true
+     }
+    ]
+   },
+   {
+    "id": "c2",
+    "name": "Mail password",
+    "username": "support@acme.example",
+    "kind": "password",
+    "env": "MAIL_PASSWORD",
+    "preview": "",
+    "source": "mail",
+    "revision": 1,
+    "created": "2026-10-02T09:00:00Z",
+    "updated": "2026-10-02T09:00:00Z",
+    "stored": false,
+    "can_reveal": true,
+    "last_used": null,
+    "last_used_by": "",
+    "grants": []
+   },
+   {
+    "id": "c3",
+    "name": "OpenAI key",
+    "username": "",
+    "kind": "api_key",
+    "env": "OPENAI_API_KEY",
+    "preview": "sk-\u2022\u2022\u2022\u2022a1",
+    "source": "",
+    "revision": 1,
+    "created": "2026-10-03T09:00:00Z",
+    "updated": "2026-10-03T09:00:00Z",
+    "stored": true,
+    "can_reveal": true,
+    "last_used": null,
+    "last_used_by": "",
+    "grants": [
+     {
+      "id": "g3",
+      "subject": "bot:coo",
+      "granted_by": "human:ana",
+      "parent_id": null,
+      "can_revoke": true
+     }
+    ]
+   }
+  ]
+ },
+ "groups": [
+  {
+   "id": "eng",
+   "name": "Engineering",
+   "parent": "",
+   "people": [],
+   "bots": [
+    "eng-lead"
+   ]
+  },
+  {
+   "id": "platform",
+   "name": "Platform",
+   "parent": "eng",
+   "people": [],
+   "bots": [
+    "builder"
+   ]
+  },
+  {
+   "id": "ops",
+   "name": "Operations",
+   "parent": "",
+   "people": [
+    "ana"
+   ],
+   "bots": [
+    "coo",
+    "release"
+   ]
+  }
+ ]
+}

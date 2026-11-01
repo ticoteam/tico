@@ -80,7 +80,7 @@
 .ca-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:var(--s2);margin:0;padding:0;list-style:none}
 .ca-tile{display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;padding:14px 6px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font:500 13px/1.2 var(--sans);cursor:pointer}
 .ca-tile:hover{background:var(--surface2)}
-.ca-tile:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ca-tile:focus-visible{outline:var(--focus-ring);outline-offset:2px}
 .ca-logo{display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;border-radius:50%;background:var(--surface2);color:var(--ink)}
 .ca-logo svg{width:18px;height:18px}
 .ca-logo .ca-initials{font:600 12px/1 var(--sans)}
@@ -103,7 +103,7 @@
 [data-copied]{color:var(--ok);border-color:var(--ok)}
 .ca-steps{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;counter-reset:ca;font-size:14px;line-height:1.45}
 .ca-steps li{display:flex;align-items:baseline;gap:10px;counter-increment:ca}
-.ca-steps li::before{content:counter(ca);flex:none;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:var(--ok-bg);color:var(--accent);font-size:11.5px;font-weight:600;transform:translateY(-1px)}
+.ca-steps li::before{content:counter(ca);flex:none;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:var(--surface2);color:var(--ink);font-size:11.5px;font-weight:600;transform:translateY(-1px)}
 .ca-steps code{font:12.5px var(--mono)}
 .ca-block{border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);min-width:0;overflow:hidden}
 .ca-block-head{display:flex;align-items:center;gap:var(--s2);padding:6px 6px 6px 12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
@@ -149,7 +149,8 @@
       .catch(() => toast('Could not copy; select the text and copy it', true));
   }
 
-  window.connectAgent = function connectAgent() {
+  // `preselect` is an agent's id (`claude`, `codex`): the dialog opens on that agent's steps, not the picker.
+  window.connectAgent = function connectAgent(preselect = '') {
     if (!document.getElementById('connect-agent-style')) {
       const style = document.createElement('style');
       style.id = 'connect-agent-style'; style.textContent = CSS;
@@ -276,6 +277,12 @@
     async function poll() {
       timer = 0;
       if (closed || !issued) return;
+      // A background tab used to keep hitting /v2/me/tokens every few seconds for five minutes
+      // while waiting for the agent's first call. Resume when the tab is shown again.
+      if (document.hidden) {
+        timer = setTimeout(poll, POLL_MS);
+        return;
+      }
       const id = issued.id;
       let row;
       try { row = ((await get('/v2/me/tokens')).tokens || []).find(r => r.id === id); }
@@ -287,15 +294,26 @@
       timer = setTimeout(poll, POLL_MS);
     }
 
+    // Only a scheduled poll is pulled forward: no timer means a request is in flight or polling has ended
+    // (connected, or given up), and starting one then would run a second chain or ask unprompted.
+    const onVis = () => {
+      if (document.hidden || closed || !issued || !timer) return;
+      clearTimeout(timer);
+      timer = setTimeout(poll, 0);
+    };
+    document.addEventListener('visibilitychange', onVis);
+
     dialog.querySelector('[data-close]').onclick = () => dialog.close();
     dialog.onclose = () => {
       closed = true; stopPolling(); issued = null;
+      document.removeEventListener('visibilitychange', onVis);
       dialog.remove();
       if (typeof renderSettingsTokens === 'function' && document.getElementById('set-tokens')) void renderSettingsTokens();
-      window.dispatchEvent(new Event('tico:agents-changed'));     // the team chart's Connect button (ui/app/sidebar.js)
     };
     document.body.appendChild(dialog); dialog.showModal();
-    void showPicker();
+    const chosen = byId(preselect);
+    if (chosen) void showAgent(chosen);
+    else void showPicker();
   };
 
 })();

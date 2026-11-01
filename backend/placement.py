@@ -27,7 +27,9 @@ def candidates(c, auth, bot):
     def takes(r):
         # A member's bot: its member's computer, or one opened to members' bots. Any other: its operator's or the owner's.
         return (r["operator"] == operator or bool(r["accepts_member_bots"])) if member else r["operator"] in (operator, owner)
-    rows = [r for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL") if takes(r)]
+    from .cloud_machines import cloud_runners
+    others = cloud_runners(c, but=bot)          # a cloud machine (another bot's own, or the shared one) never is
+    rows = [r for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL") if takes(r) and r["id"] not in others]
     # A bot BotOps builds has its repository on BotOps's computer, so it goes there when that computer takes it; a starter
     # the runner sets up itself goes anywhere.
     declared = H._json((c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone() or {"config_json": "{}"})["config_json"], {}) or {}
@@ -44,6 +46,9 @@ def auto_place(c, execution, bot, by=""):
     from .agents import external_harness
     if external_harness(c, bot):
         return None                    # an external agent has a credential, not a computer
+    from . import cloud_machines
+    if cloud_machines.offered(c, execution.store.settings) and cloud_machines.adopt(c, bot, by or H.KEEPER):
+        return None                    # its cloud machine is made when it has work (backend/cloud_machines.py)
     try:
         who = execution.auth.owner_identity(c)
     except Problem:

@@ -1,7 +1,7 @@
 # Weekly market briefing
 
 Once a week the Librarian writes one short page on what changed in your market, and the server works out which of your
-bets it touches. The CEO Bot looks only at those.
+bets it touches. The Strategy Bot looks only at those.
 
 [Strategy](strategy.md) · [Librarian](librarian.md) · [Market watch](market-watch.md) · [Routines](routines.md)
 
@@ -16,6 +16,24 @@ bets it touches. The CEO Bot looks only at those.
 There is one briefing a week, named by its ISO week (`2026-W44`). Posting the same week again replaces it and keeps the
 first date.
 
+## Built-in automations
+
+The hub makes two built-in automations for the Librarian (see Automations):
+
+- **Market briefing**: daily at 07:00 team time. The Librarian's turn writes the briefing (a one-line title, then a
+  bullet per point); the run's `post_update` step, `{"to": ["market", "updates"]}`, posts it as this week's briefing
+  and adds one line pointing at it to the Librarian's daily update. A daily briefing replaces the week's.
+- **Market listening · <destination>**: one per listening destination the Librarian receives. Each match is a
+  Librarian turn; the turn changes the graph through the market routes, never the match itself.
+
+What an automation's turn posts or changes names it: the briefing and the update carry `source: {automation, run,
+task}` (each briefing read also says its `cadence`: `daily` when its automation posts more than once a week, so
+Market dates it by the day; else `weekly`), and each entity or edge on `GET /api/v2/market/graph` that a turn changed carries `source: {automation, run,
+turn: {attempt, bot, task}, match}`, `match` being the listening post that started it. The top of the org may pause
+either built-in; neither can be deleted. Each stands down while the team's own Librarian automation does the same
+work, and the briefing starts paused while a Librarian briefing routine still runs. Converting the routines turns
+that routine into the built-in, on the routine's time and words.
+
 ## Where it shows
 
 On the Market tab of [Strategy](strategy.md), one line under the tabs: the week, the title, the number of items and a
@@ -23,15 +41,15 @@ chip for each bet it touches. **Read** opens the page. With no briefing the line
 
 ## What follows
 
-When a briefing is posted the server emits `market.briefing` for that week. The CEO Bot has a routine on it, **Market
+When a briefing is posted the server emits `market.briefing` for that week. The Strategy Bot has a routine on it, **Market
 briefing**, which opens a task only when the briefing touches a bet. For each touched bet it asks whether the bet is
-still right. Most weeks the answer is yes and nothing more happens. When it is not, the CEO Bot files one
+still right. Most weeks the answer is yes and nothing more happens. When it is not, the Strategy Bot files one
 `strategy_draft` proposal in your Needs you, marked as from the weekly briefing. Publishing stays your click.
 
 A replacement that touches different bets than before opens one more task for them.
 
-A new CEO Bot starts with this routine. A CEO Bot that already exists keeps the routines it has: add this one with
-`hub routine set market-briefing --on market.briefing --text-file playbooks/market-briefing.md`
+A new Strategy Bot starts with this routine. A Strategy Bot that already exists keeps the routines it has: add this one as an
+automation on the event `market.briefing` with a Strategy Bot turn that follows `playbooks/market-briefing.md`
 ([Routines](routines.md)).
 
 ## Commands

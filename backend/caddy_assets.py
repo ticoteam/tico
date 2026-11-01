@@ -3,6 +3,13 @@
 The app keeps its ordinary proxy. A separately opted-in visual site accepts only
 unambiguous signed-token reads; the backend still verifies every token and reader.
 No credentials or signing keys are written into this configuration.
+
+Both proxies hold a request while the server restarts (an update, a deploy), the policy of
+setup/cell.py's router: a dial that fails is tried again every HOLD_EVERY for up to HOLD_FOR,
+so the request waits and gets its normal answer. Only a dial is retried for every method
+(nothing reached the server); an error after the connection opened is retried for GET only,
+Caddy's default, so a write is never sent twice. What still fails is answered with a plain 503
+and Retry-After, never a 502. compose.yaml's `hold` service does the same for the tunnel.
 """
 import hashlib
 import ipaddress
@@ -23,6 +30,8 @@ TOKEN_PATH = r"^/visuals/[A-Za-z0-9_-]+[.][A-Za-z0-9_-]{43}$"
 RAW_TOKEN_PATH = r"^/visuals/[A-Za-z0-9_-]+[.][A-Za-z0-9_-]+$"
 AUTH_HEADERS = ["Cookie", "Authorization", "Proxy-Authorization", "Cf-Access-*", "X-Amzn-Oidc-*", "X-Tico-*"]
 LOG = logging.getLogger("tico.caddy")
+HOLD_FOR, HOLD_EVERY = "30s", "250ms"
+HOLD_BODY = "Tico is starting. Try again in a few seconds."
 
 
 def _hostname(value, *, allow_ip=False):
@@ -86,10 +95,11 @@ def _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals):
                                       "fields": {"request": {"filter": "delete"}}}}}},
         "apps": {"http": {"servers": {}}}}
     if app:
-        proxy = {"handler": "reverse_proxy", "upstreams": [{"dial": "server:8765"}]}
+        hold = {"try_duration": HOLD_FOR, "try_interval": HOLD_EVERY}
+        proxy = {"handler": "reverse_proxy", "upstreams": [{"dial": "server:8765"}], "load_balancing": hold}
         routes = [{"match": [{"host": [app]}], "handle": [proxy], "terminal": True}]
         if visual:
-            asset_proxy = {"handler": "reverse_proxy", "upstreams": [{"dial": "server:8765"}],
+            asset_proxy = {"handler": "reverse_proxy", "upstreams": [{"dial": "server:8765"}], "load_balancing": dict(hold),
                            "headers": {"request": {"delete": list(AUTH_HEADERS)},
                                        "response": {"delete": ["Set-Cookie"]}}}
             routes.append({"match": [{"host": [visual], "method": ["GET", "HEAD"],
@@ -101,7 +111,9 @@ def _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals):
                 "handle": [asset_proxy], "terminal": True})
         routes.append({"handle": [{"handler": "static_response", "status_code": 404}], "terminal": True})
         config["apps"]["http"]["servers"]["tico"] = {
-            "listen": [":443"], "tls_connection_policies": [{}], "routes": routes}
+            "listen": [":443"], "tls_connection_policies": [{}], "routes": routes,
+            "errors": {"routes": [{"handle": [{"handler": "static_response", "status_code": 503,
+                                               "headers": {"Retry-After": ["5"]}, "body": HOLD_BODY}]}]}}
     # Hash the canonical base before inserting the entire readiness server, so
     # the marker is deterministic and occurs exactly once without self-reference.
     generation = hashlib.sha256(_encoded(config)).hexdigest()

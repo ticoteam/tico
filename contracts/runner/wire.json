@@ -1,0 +1,176 @@
+{
+  "title": "Tico runner wire contract",
+  "version": "1.0",
+  "x-note": "The core turn path between a runner and its server (docs/runner-wire-contract.md). Requests are the server's own models (requests.json, generated from backend/models.py); answers and errors are declared here from what the handlers send. An object with additionalProperties false is fully declared: the server sends nothing else. One with additionalProperties true is not contracted below that level yet: readers keep it as opaque JSON. x-open-enum marks a string whose readers must accept values not listed.",
+  "endpoints": {
+    "heartbeat": {"method": "POST", "path": "/api/v2/runners/heartbeat", "request": "Heartbeat", "answer": "HeartbeatAnswer"},
+    "claim": {"method": "POST", "path": "/api/v2/jobs/claim", "request": "Claim", "answer": "ClaimAnswer"},
+    "start_place": {"method": "POST", "path": "/api/v2/attempts/{aid}/start-place", "request": "StartPlace", "answer": "StartPlaceAnswer"},
+    "started": {"method": "POST", "path": "/api/v2/attempts/{aid}/started", "request": "Started", "answer": "StartedAnswer"},
+    "events": {"method": "POST", "path": "/api/v2/attempts/{aid}/events", "request": "EventBatch", "answer": "EventsAnswer"},
+    "renew": {"method": "POST", "path": "/api/v2/attempts/{aid}/renew", "request": "Empty", "answer": "RenewAnswer"},
+    "complete": {"method": "POST", "path": "/api/v2/attempts/{aid}/complete", "request": "Completion", "answer": "CompleteAnswer"},
+    "runner_events": {"method": "GET", "path": "/api/v2/runners/me/events", "stream": {
+      "ready": "ReadyFrame", "runner": "RunnerFrame", "reset": "ResetFrame", "expired": "ExpiredFrame"}}
+  },
+  "error": "ErrorEnvelope",
+  "gated": {
+    "x-note": "Request fields, values and endpoints a runner sends only after the server says it takes them (or drops on a 422 that names them). The check allows them in the new-runner/old-server direction. Key: '<endpoint>.request<path>' as the check prints it; value: how the runner gates it.",
+    "heartbeat.request.capabilities[]=\"private_lanes_v1\"": "runner-rs lanes::refused_field drops it on the 422 that refuses it and sends it again ten minutes later",
+    "heartbeat.request.capabilities[]=\"model_subscriptions_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
+    "heartbeat.request.readiness.trust": "runner-rs/src/readiness.rs trust_field: sent only once GET config says readiness_trust (fallback.rs server_takes_trust)"
+  },
+  "$defs": {
+    "ErrorEnvelope": {
+      "type": "object", "additionalProperties": false, "required": ["error"],
+      "properties": {"error": {"$ref": "#/$defs/Error"}}
+    },
+    "Error": {
+      "type": "object", "additionalProperties": true, "required": ["code", "detail", "retryable"],
+      "x-note": "A refusal may carry one more fact beside these (store.Problem extra); readers ignore what they do not know.",
+      "properties": {
+        "code": {"type": "string", "x-open-enum": true, "enum": [
+          "validation", "idempotency_key", "busy", "storage_unavailable", "identity", "forbidden", "stale_lease",
+          "already_started", "start_wait", "wrong_thread", "event_conflict", "event_gap", "terminal", "escape",
+          "privacy", "not_found"]},
+        "detail": {"type": "string"},
+        "retryable": {"type": "boolean"}
+      }
+    },
+    "HeartbeatAnswer": {
+      "type": "object", "additionalProperties": false,
+      "required": ["server_time", "start_places", "runtime_credential_source", "subscription_accounts",
+                   "worktree_record_stamp", "worktree_actions", "performance", "turns_at_once", "assignments"],
+      "properties": {
+        "server_time": {"type": "string"},
+        "start_places": {"type": "boolean", "x-note": "The server takes start_places on claims (Claim.start_places)."},
+        "runtime_credential_source": {"type": "boolean"},
+        "subscription_accounts": {"type": "boolean"},
+        "worktree_record_stamp": {"type": "boolean"},
+        "worktree_actions": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "worktree_actions_skipped": {"type": "integer", "minimum": 1},
+        "performance": {"type": "boolean"},
+        "turns_at_once": {"type": ["integer", "null"], "minimum": 1},
+        "restart": {"const": true},
+        "assignments": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+      }
+    },
+    "ClaimAnswer": {
+      "type": "object", "additionalProperties": false, "required": ["attempt"],
+      "properties": {
+        "attempt": {"oneOf": [{"$ref": "#/$defs/Attempt"}, {"type": "null"}]},
+        "paused": {"type": "string", "x-note": "Why this computer gets no work (runner_versions.paused)."},
+        "waiting": {"type": "string", "x-note": "Why no turn starts here now (computer busy, company turn limit)."}
+      }
+    },
+    "Attempt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "job_id", "bot", "lane", "generation", "lease_until", "lease_seconds", "token", "message",
+                   "conversation", "task", "history", "principal", "config", "chat_goal", "routine", "login_class",
+                   "recovery", "computer_label", "computer_logins_v1", "onboarding", "mailboxes", "next_run", "notes",
+                   "credential_vault", "gateway", "worktrees", "learned", "updates", "session_epoch", "bot_session_epoch"],
+      "properties": {
+        "id": {"type": "string"},
+        "job_id": {"type": "string"},
+        "bot": {"type": "string"},
+        "lane": {"type": "string"},
+        "generation": {"type": "integer"},
+        "lease_until": {"type": "string"},
+        "lease_seconds": {"type": "integer"},
+        "start_reservation_seconds": {"type": "integer", "x-note": "Sent when the claim asked with start_places."},
+        "token": {"type": "string", "x-note": "The turn's own bearer token; a fixture holds a placeholder."},
+        "message": {"type": "object", "additionalProperties": true},
+        "conversation": {"type": "object", "additionalProperties": true},
+        "task": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
+        "history": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "principal": {"type": ["string", "null"]},
+        "config": {"type": "object", "additionalProperties": true},
+        "chat_goal": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
+        "routine": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
+        "login_class": {"type": "string", "enum": ["release", "review", "other"], "x-open-enum": true},
+        "recovery": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
+        "computer_label": {"type": "string"},
+        "computer_logins_v1": {"type": "boolean"},
+        "onboarding": {"type": "string"},
+        "mailboxes": {"type": "array", "items": {"type": "string"}},
+        "next_run": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "notes": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "deferred": {"type": "string", "x-note": "The prompt's block on what was deferred to this turn: its count line (\"Deferred since your last turn: 2 comments, 1 task\"), then the deferred comments and messages themselves, one a line, a bounded page; empty when nothing; an older server omits it."},
+        "credential_vault": {"type": "boolean"},
+        "gateway": {"type": "boolean"},
+        "continue_thread": {"type": "string"},
+        "subscriptions": {"type": "array", "x-note": "The company subscriptions this turn signs in with (its computer's, per runtime) (backend/model_subscriptions.py hand_out): ids and kinds, never values, which the run reads from credential-runtime. Only to a runner with model_subscriptions_v1; absent when none.", "items": {"type": "object", "additionalProperties": true}},
+        "source_continuation": {"type": "object", "additionalProperties": true},
+        "worktrees": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "learned": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
+        "updates": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
+        "session_epoch": {"type": "integer"},
+        "bot_session_epoch": {"type": "integer"}
+      }
+    },
+    "StartPlaceAnswer": {
+      "type": "object", "additionalProperties": false, "required": ["reserved"],
+      "properties": {
+        "reserved": {"type": "boolean"},
+        "start_until": {"type": "string"},
+        "stop": {"const": true},
+        "waiting": {"type": "string"}
+      }
+    },
+    "StartedAnswer": {
+      "type": "object", "additionalProperties": false, "required": ["started"],
+      "properties": {"started": {"const": true}}
+    },
+    "EventsAnswer": {
+      "type": "object", "additionalProperties": false, "required": ["ack_seq", "historical"],
+      "properties": {
+        "ack_seq": {"type": "integer", "minimum": 0},
+        "historical": {"type": "boolean", "x-note": "The lease had lapsed: the output is archived, not applied."}
+      }
+    },
+    "RenewAnswer": {
+      "type": "object", "additionalProperties": false, "required": ["lease_until", "lease_seconds"],
+      "properties": {
+        "lease_until": {"type": "string"},
+        "lease_seconds": {"type": "integer", "minimum": 0},
+        "stop": {"const": true},
+        "stop_reason": {"type": "string"}
+      }
+    },
+    "CompleteAnswer": {
+      "type": "object", "additionalProperties": false, "required": ["attempt_id", "outcome", "message"],
+      "properties": {
+        "attempt_id": {"type": "string"},
+        "outcome": {"type": "string", "enum": ["completed", "failed", "interrupted"]},
+        "message": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
+        "job_state": {"type": "string", "x-note": "A returned, never-started lease: the job's state after the hand-back."},
+        "filed": {"const": true, "x-note": "A late answer filed on its run rather than posted."}
+      }
+    },
+    "ReadyFrame": {
+      "type": "object", "additionalProperties": false, "required": ["seq", "after", "release"],
+      "properties": {
+        "seq": {"type": "integer"},
+        "after": {"type": "integer"},
+        "release": {"type": "string", "x-note": "The release runners should run; empty on a development server."}
+      }
+    },
+    "RunnerFrame": {
+      "type": "object", "additionalProperties": false, "required": ["seq", "kind", "bots"],
+      "properties": {
+        "seq": {"type": "integer"},
+        "kind": {"type": "string", "x-open-enum": true, "enum": [
+          "work", "assignments", "repositories", "credentials", "config", "worktrees", "restart", "performance",
+          "capacity", "logins", "harness_actions", "credential_imports", "subscription_refresh", "screen_open"],
+          "x-note": "A runner re-reads everything for a kind it does not know (runner-rs/src/events.rs channels)."},
+        "bots": {"type": "array", "items": {"type": "string"}},
+        "session_id": {"type": "string"}
+      }
+    },
+    "ResetFrame": {
+      "type": "object", "additionalProperties": false, "required": ["seq"],
+      "properties": {"seq": {"type": "integer"}}
+    },
+    "ExpiredFrame": {"type": "object", "additionalProperties": false, "properties": {}}
+  }
+}

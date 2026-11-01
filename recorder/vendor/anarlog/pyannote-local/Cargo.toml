@@ -1,0 +1,18 @@
+[package]
+name = "pyannote-local"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+build = "../models.rs"
+
+[features]
+default = []
+coreml = ["anlg-onnx/coreml", "anlg-embedding/coreml"]
+
+[dependencies]
+anlg-embedding = { path = "../embedding" }
+anlg-onnx = { path = "../onnx" }
+anlg-voiceprint = { path = "../voiceprint" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"

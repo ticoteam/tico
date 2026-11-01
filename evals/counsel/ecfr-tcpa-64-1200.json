@@ -1,0 +1,29 @@
+{
+  "expected": [
+    {
+      "text": "Do not make autodialed or prerecorded calls without prior express consent, unless an exception applies.",
+      "quote": "initiate any telephone call (other than a call made for emergency purposes or is made with the prior express consent of the called party)",
+      "section": "(a)(1)",
+      "who_hint": "marketing"
+    },
+    {
+      "text": "Verify that a fax number taken from another source was made available for public distribution.",
+      "quote": "the sender must take reasonable steps to verify that the recipient agreed to make the number available for public distribution",
+      "section": "(a)(3)",
+      "who_hint": "marketing"
+    },
+    {
+      "text": "Honor a called party's request to opt out of future calls under the residential-line exception.",
+      "quote": "honors the called party's request to opt out of future calls",
+      "section": "(b)(2)",
+      "who_hint": "marketing"
+    }
+  ],
+  "url": "https://www.ecfr.gov/current/title-47/chapter-I/subchapter-B/part-64/subpart-L/section-64.1200",
+  "fetched_at": "2026-10-30T23:40:34Z",
+  "from": {
+    "name": "47 CFR 64.1200 (TCPA rules)",
+    "kind": "government"
+  },
+  "truncated": true
+}

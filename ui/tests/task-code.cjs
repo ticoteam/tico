@@ -585,8 +585,8 @@ async function botDetail(browser) {
     assert.equal(await modal.locator('.tmodal-title').innerText(), 'Write the release notes', 'a slower earlier tap cannot replace the latest task');
     await modal.locator('[data-modal-close]').click();
     await manager.page.waitForFunction(() => !history.state?.taskModal);
-    await manager.page.evaluate(() => { void taskModalOpen('tt-checkout'); location.hash = '#/goals'; });
-    await manager.page.waitForFunction(() => S.route === '#/goals');
+    await manager.page.evaluate(() => { void taskModalOpen('tt-checkout'); location.hash = '#/updates'; });
+    await manager.page.waitForFunction(() => S.route === '#/updates');
     await releaseHeld(); await lateDone(2);
     assert.equal(await modal.isVisible(), false, 'navigating away cancels a pending open');
     assert.equal(await manager.page.evaluate(() => !!history.state?.taskModal || document.body.classList.contains('task-modal-open')), false, 'no stale history or scroll lock');

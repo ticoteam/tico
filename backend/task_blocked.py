@@ -1,7 +1,9 @@
 """One persisted hold and active-build clock for task boards, filters and stall checks.
 
-Waiting remains the wire status. Engineering types give it a real Blocked column;
-the previous step is retained so clearing a hold never skips a review gate.
+A hold is a mark on the ticket, not a place on the board: the ticket keeps the step it is in, and its wire status is
+waiting while it is held, so wakes, claims and the build clock see it held. The hold's own columns (blocked_since,
+blocked_from_step, blocked_from_status) say when it began and where clearing it returns the ticket, so clearing a hold
+never skips a review gate.
 """
 import threading
 import time
@@ -14,29 +16,16 @@ def ensure(c):
         ('blocked_since', 'TEXT'), ('blocked_reason', 'TEXT'), ('blocked_kind', 'TEXT'),
         ('blocked_from_step', 'TEXT'), ('blocked_from_status', 'TEXT'), ('blocked_gate_json', 'TEXT'),
         ('building_started_at', 'TEXT'), ('building_seconds', 'REAL NOT NULL DEFAULT 0'),
+        # When its last tracked hold cleared, for a task still waiting: the stranded sweep's clock (task_holds.py).
+        ('holds_cleared_at', 'TEXT'),
     ):
         H.add_column(c, 'tasks', name, kind)
     c.execute('CREATE INDEX IF NOT EXISTS tasks_blocked_since ON tasks(blocked_since) WHERE blocked_since IS NOT NULL')
 
 
-def ensure_steps(c):
-    """Place the engineering hold before the first working step, retaining every step id."""
-    from . import hubdb as H
+def stamp_builds(c):
+    """Stamp the start of every active build that predates the building clock's own column. Runs at every start."""
     for typ in c.execute("SELECT id FROM task_types WHERE role='engineering'").fetchall():
-        steps = [dict(s) for s in c.execute('SELECT * FROM task_steps WHERE type_id=? ORDER BY position,id', (typ[0],))]
-        blocked = next((s for s in steps if s['name'] == 'Blocked' and s['status'] == 'waiting'), None)
-        rest = [s for s in steps if s != blocked]
-        at = next((i for i, s in enumerate(rest) if s['status'] != 'open'), len(rest))
-        if not blocked:
-            blocked = {'id': H.new_id(), 'position': None}
-            # Role claiming also runs before the public-name migration backfills its defaults.
-            public = 'public_name' in {r[1] for r in c.execute('PRAGMA table_info(task_steps)')}
-            c.execute("INSERT INTO task_steps(id,type_id,name,position,status" + (",public_name" if public else "") +
-                      ") VALUES(?,?,'Blocked',?,'waiting'" + (",'Blocked'" if public else "") + ")",
-                      (blocked['id'], typ[0], at))
-        for position, step in enumerate(rest[:at] + [blocked] + rest[at:]):
-            if step['position'] != position:
-                c.execute('UPDATE task_steps SET position=? WHERE id=?', (position, step['id']))
         # Upgrade active builds without restarting their age at server startup. This runs inside a deferred
         # transaction that has already read, so a write statement, even one matching nothing, fails at once with
         # "database is locked" if another connection committed meanwhile: write only when a build needs it.
@@ -49,14 +38,72 @@ def ensure_steps(c):
 
 
 def backfill(c):
-    """Run after retiring legacy held steps, so the saved resume step still exists."""
+    """Run after retiring legacy held steps, so the saved resume step still exists. A ticket in a team's own waiting
+    step stays there on any board, held as if moved there by hand (hubdb.declared_hold), so no sweep reopens it. This
+    includes a ticket parked in the Blocked step an earlier version made. The Product roadmap's steps follow its
+    delivery tickets, not holds."""
     from . import hubdb as H
-    for row in H._rows(c.execute("SELECT t.* FROM tasks t JOIN task_types ty ON ty.id=t.type_id "
-                                "WHERE ty.role='engineering' AND t.status='waiting' AND t.blocked_since IS NULL")):
-        step = H._one(c, 'SELECT status FROM task_steps WHERE id=?', (row.get('step_id'),))
+    from .roadmap_flow import PRODUCT
+    for row in H._rows(c.execute(
+            "SELECT t.* FROM tasks t JOIN task_types ty ON ty.id=t.type_id LEFT JOIN task_steps s ON s.id=t.step_id "
+            "WHERE t.status='waiting' AND t.blocked_since IS NULL AND coalesce(ty.role,'')<>? "
+            "AND (ty.role='engineering' OR s.status='waiting')", (PRODUCT,))):
+        step = H._one(c, 'SELECT s.name,s.status,ty.role FROM task_steps s JOIN task_types ty ON ty.id=s.type_id '
+                         'WHERE s.id=?', (row.get('step_id'),))
         H._set_status(c, H.KEEPER, row, 'waiting', note=row.get('note') or 'Waiting on a hold')
         previous = step['status'] if step and step['status'] != 'waiting' else 'open'
         c.execute('UPDATE tasks SET blocked_from_status=? WHERE id=?', (previous, row['id']))
+        if step and step['status'] == 'waiting':
+            c.execute("UPDATE tasks SET blocked_kind='manual',blocked_reason=? WHERE id=?",
+                      (f"In {step['name']}"[:1000], row['id']))
+
+
+def forget_retired_resumes(c):
+    """A held engineering ticket resumes at On Deck, not at the step it would go back to, when that step is only where
+    retiring its waiting step put it: a step read from its history, often weeks old, that nobody chose. Its last move
+    tells: retiring wrote it, and a hold moves nothing. A ticket held in Blocked by an older version has that hold's
+    move after it, so its step and the move before it tell. Writes only when a ticket needs it, as stamp_builds does."""
+    from . import hubdb as H
+    for task_id, saved, step in c.execute(
+            "SELECT t.id,t.blocked_from_step,t.step_id FROM tasks t JOIN task_types ty ON ty.id=t.type_id "
+            "WHERE ty.role='engineering' AND t.blocked_since IS NOT NULL "
+            "AND t.blocked_from_step IS NOT NULL").fetchall():
+        moves = c.execute("SELECT new,note FROM task_events WHERE task_id=? AND field='step' "
+                          "ORDER BY ts DESC,rowid DESC LIMIT 2", (task_id,)).fetchall()
+        retired_here = bool(moves) and moves[0][0] == saved and moves[0][1] == H.RETIRED_WAITING
+        held_in_blocked = (len(moves) == 2 and moves[0][0] == step and moves[1][0] == saved
+                           and moves[1][1] == H.RETIRED_WAITING)
+        if retired_here or held_in_blocked:
+            c.execute("UPDATE tasks SET blocked_from_step=NULL,blocked_from_status='open' WHERE id=?", (task_id,))
+
+
+def leave_retired_blocked(c):
+    """Holds an earlier version parked in its own Blocked step go back to a working step: the one they left when it
+    still exists, else the step its last move into Blocked came from (the history), else On Deck (after
+    forget_retired_resumes, so a stale step is already gone). The hold itself stays, reason and clock unchanged; a
+    person's manual hold stays put. The Blocked step is left empty for the team to delete.
+    Writes only when a ticket is in that step, as stamp_builds does."""
+    from . import hubdb as H
+    rows = c.execute(
+        "SELECT t.id,t.type_id,t.blocked_from_step,t.step_id FROM tasks t "
+        "JOIN task_types ty ON ty.id=t.type_id JOIN task_steps s ON s.id=t.step_id "
+        "WHERE ty.role='engineering' AND t.status='waiting' AND t.blocked_since IS NOT NULL "
+        "AND coalesce(t.blocked_kind,'')<>'manual' AND s.name='Blocked' AND s.status='waiting'").fetchall()
+    for task_id, type_id, saved, step_id in rows:
+        steps = {s[0]: (s[1], s[2]) for s in c.execute(
+            "SELECT id,name,status FROM task_steps WHERE type_id=?", (type_id,)).fetchall()}
+        came_from = c.execute("SELECT old FROM task_events WHERE task_id=? AND field='step' AND new=? "
+                              "ORDER BY ts DESC,rowid DESC LIMIT 1", (task_id, step_id)).fetchone()
+        target = next((sid for sid in (saved, came_from and came_from[0])
+                       if sid in steps and steps[sid][1] in H.ACTIVE_STATUSES and steps[sid][1] != 'waiting'), None)
+        if not target:
+            target = next((sid for sid, (name, status) in steps.items()
+                           if name == 'On Deck' and status == 'open'), None)
+        if not target:
+            continue
+        c.execute("UPDATE tasks SET step_id=?,step_rank=? WHERE id=?",
+                  (target, H._step_end(c, target, task_id), task_id))
+        H._task_event(c, task_id, H.KEEPER, 'step', step_id, target, 'Its hold left the retired Blocked step')
 
 
 def seconds(start, at):
@@ -72,7 +119,7 @@ def clocks(row, at):
             'blocked_seconds': seconds(row.get('blocked_since'), at)}
 
 
-def transition(c, row, effective, step_id, note, at, manual=False):
+def transition(c, row, effective, step_id, note, at, manual=False, stepped=False):
     """Called in the same transaction as every status/step move."""
     from . import hubdb as H
     if 'blocked_since' not in row:
@@ -85,16 +132,32 @@ def transition(c, row, effective, step_id, note, at, manual=False):
               (elapsed, at if building else None, row['id']))
     if effective == 'waiting':
         if not row.get('blocked_since'):
-            reason = str(note or '').strip().splitlines()[0] if str(note or '').strip() else 'Waiting on a hold'
+            if manual:
+                reason = str(note or '').strip().splitlines()[0] if str(note or '').strip() else 'Waiting on a hold'
+                kind = 'manual'
+            else:
+                # Named from what holds it, never from the note: a note can't say it waits on someone it doesn't.
+                from . import task_holds
+                reason, kind = task_holds.reason(c, row)
             reason = reason[:1000]
-            kind = 'manual' if manual else 'dependency' if H.waiting_for(c, row) else 'stranded'
             c.execute('UPDATE tasks SET blocked_since=?,blocked_reason=?,blocked_kind=?,blocked_from_step=?,blocked_from_status=? WHERE id=?',
                       (at, reason, kind, row.get('step_id'), row.get('status') or 'open', row['id']))
             H._task_event(c, row['id'], H.KEEPER, 'blocked_since', None, at, reason)
-        elif manual and str(note or '').strip():
-            c.execute("UPDATE tasks SET blocked_reason=?,blocked_kind='manual' WHERE id=?", (str(note).strip().splitlines()[0][:1000], row['id']))
+        elif manual and (str(note or '').strip() or row.get('blocked_kind') != 'manual'):
+            # A person's move into a waiting step declares the hold even over one Tico found: the old reason, written
+            # for the hold it replaces, never stays on a ticket parked by hand.
+            text = str(note).strip().splitlines()[0][:1000] if str(note or '').strip() else 'Waiting on a hold'
+            c.execute("UPDATE tasks SET blocked_reason=?,blocked_kind='manual' WHERE id=?", (text, row['id']))
+        if stepped and row.get('blocked_since') and step_id and step_id != row.get('step_id'):
+            # A move to another working step while held (a person's, or a retry's that stays held): the hold clears
+            # onto the step it was moved to, not the one it left (hubdb._task_state's resume).
+            landed = c.execute('SELECT status FROM task_steps WHERE id=?', (step_id,)).fetchone()
+            if landed and landed[0] != 'waiting':
+                c.execute('UPDATE tasks SET blocked_from_step=?,blocked_from_status=? WHERE id=?',
+                          (step_id, landed[0], row['id']))
     elif row.get('blocked_since'):
-        c.execute('UPDATE tasks SET blocked_since=NULL,blocked_reason=NULL,blocked_kind=NULL,blocked_from_step=NULL,blocked_from_status=NULL,blocked_gate_json=NULL WHERE id=?', (row['id'],))
+        c.execute('UPDATE tasks SET blocked_since=NULL,blocked_reason=NULL,blocked_kind=NULL,blocked_from_step=NULL,blocked_from_status=NULL,blocked_gate_json=NULL'
+                  + (',holds_cleared_at=NULL' if 'holds_cleared_at' in row else '') + ' WHERE id=?', (row['id'],))
         H._task_event(c, row['id'], H.KEEPER, 'blocked_since', row['blocked_since'], None, 'Hold cleared')
 
 
@@ -184,7 +247,9 @@ def reconcile(c, task_id, snapshots=None):
     row = H.task(c, task_id)
     action = reconciliation(c, row, snapshots)
     if action == 'dependency':
-        c.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason='Waiting on a dependency',updated=? WHERE id=?", (H.now(), task_id))
+        from . import task_holds
+        c.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=?,updated=? WHERE id=?",
+                  (task_holds.words(c, task_holds.holds(c, row))[:1000], H.now(), task_id))
         bump(c, row)
     if action != 'resume':
         return
@@ -307,7 +372,9 @@ def sweep(c, at, task_ids=None):
                 from . import check_blocked
                 check_blocked.apply(c, row['id'])
             else:
-                hold(c, row['id'], 'Waiting on ' + detail['why'])
+                from . import task_holds
+                found = task_holds.holds(c, row)
+                hold(c, row['id'], task_holds.words(c, found) if found else 'Waiting on ' + detail['why'])
     for row in H._rows(c.execute('SELECT t.* FROM tasks t WHERE blocked_since IS NOT NULL' + scope, args)):
         reconcile(c, row['id'])
         row = H.task(c, row['id'])

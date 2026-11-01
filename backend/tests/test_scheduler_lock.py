@@ -1,7 +1,7 @@
 """The scheduler tick never holds the write lock for the whole pass (support ticket TK-RCZJXEWA).
 
-A tick on a hub with many tasks and routines used to run every step, every routine and the due-date reminder
-scan in one write transaction; the reminder scan read every task row under it, so the lock was held 20-30 s.
+A tick on a hub with many tasks and routines (schedule automations now) used to run every step, every routine and the
+due-date reminder scan in one write transaction; the reminder scan read every task row under it, so the lock was held 20-30 s.
 Work under the lock is counted in SQLite VM instructions, not seconds, so the bound holds on a slow machine.
 """
 import json
@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from backend.tests.test_api import api, post  # noqa: F401
+from backend import routines
 from backend.scheduler import Scheduler, stamp
 from backend.store import H
 
@@ -41,9 +42,18 @@ def seed(store):
     with store.transaction() as c:
         c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,due,conversation_id,created,updated) "
                       "VALUES(?,?,?,?,?,?,?,?,?,?)", rows)
-        c.executemany("INSERT INTO schedules(id,bot,cron,title,playbook,last_fired,next_due) VALUES(?,?,?,?,?,?,?)",
-                      [(f"r{i}", "coo", "0 9 * * *", f"Routine {i}", "Do it", None, None) for i in range(ROUTINES)])
+        for i in range(ROUTINES):                      # each moves to its schedule automation
+            routine(c, f"r{i}", f"Routine {i}")
         c.execute("UPDATE bots SET state='paused' WHERE slug='finance'")
+
+
+def routine(c, key, title, due=None):
+    """A routine of the COO's, seeded the way Tico seeds one: its schedule automation, due at `due` when given."""
+    aid = routines.create(c, H.KEEPER, "coo", {"title": title, "cron": "0 9 * * *", "timezone": "UTC",
+                                                "text": "Do it"}, key=key)["automation"]
+    if due:
+        c.execute("UPDATE automations SET next_due=? WHERE id=?", (due, aid))
+    return aid
 
 
 def watch(store, monkeypatch):
@@ -137,15 +147,15 @@ def test_split_tick_still_fires_each_occurrence_and_reminder_once(api):
     task = post(api, "tasks", {"owner": "coo", "title": "File the report", "body": "Due today",
                                "due": "2026-09-10T15:00:00Z"})
     with store.transaction() as c:
-        c.executemany("INSERT INTO schedules(id,bot,cron,title,playbook,last_fired,next_due) VALUES(?,?,?,?,?,?,?)",
-                      [(f"m{i}", "coo", "0 9 * * *", f"Morning {i}", "Review", None, "2026-09-09T16:00:00.000000Z")
-                       for i in range(3)])
+        made = [routine(c, f"m{i}", f"Morning {i}", due="2026-09-09T16:00:00.000000Z") for i in range(3)]
     # Two schedulers, as across a restart: neither the occurrences nor the reminder fire twice.
     first = Scheduler(store, api.app.state.execution).tick(AT)
     second = Scheduler(store, api.app.state.execution).tick(AT)
-    assert len(first["fired"]) == 3 and not second["fired"]
+    assert not first["failures"] and not second["failures"]
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM schedule_occurrences").fetchone()[0] == 3
+        runs = [r[0] for r in c.execute("SELECT automation_id FROM automation_runs WHERE automation_id IN (?,?,?)", made)]
+        assert sorted(runs) == sorted(made)
+        assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:coo' AND title LIKE 'Morning %'").fetchone()[0] == 3
         assert c.execute("SELECT count(*) FROM task_reminders WHERE task_id=?", (task["id"],)).fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM messages WHERE conversation_id=? AND body LIKE 'Due: %'",
                          (task["conversation_id"],)).fetchone()[0] == 1
@@ -186,20 +196,3 @@ def test_reminder_sent_meanwhile_is_not_sent_again(api, monkeypatch):
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM messages WHERE conversation_id=? AND body LIKE 'Due: %'",
                          (task["conversation_id"],)).fetchone()[0] == 1
-
-
-def test_routine_deleted_after_the_read_does_not_fire(api, monkeypatch):
-    import backend.scheduler as scheduler
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute("INSERT INTO schedules(id,bot,cron,title,playbook,last_fired,next_due) "
-                  "VALUES('gone','coo','0 9 * * *','Gone','Review',NULL,'2026-09-09T16:00:00.000000Z')")
-
-    def delete_then_due(row, at):
-        with store.transaction() as c:
-            c.execute("UPDATE schedules SET deleted_at=? WHERE id=?", ("2026-09-10T16:59:00Z", row["id"]))
-        return False
-    monkeypatch.setattr(scheduler, "waiting", delete_then_due)
-    assert not Scheduler(store, api.app.state.execution).tick(AT)["fired"]
-    with store.read() as c:
-        assert not c.execute("SELECT 1 FROM schedule_occurrences WHERE schedule_id='gone'").fetchone()

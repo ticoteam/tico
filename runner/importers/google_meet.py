@@ -105,7 +105,7 @@ class GoogleMeet(Importer):
         self._tokens[user] = (value, time.time() + int(answer.get("expires_in") or 3600))
         return value
 
-    def get(self, user, path, **query):
+    def get(self, user, path, /, **query):
         url = API + path + ("?" + urllib.parse.urlencode({k: v for k, v in query.items() if v not in (None, "")})
                             if query else "")
         try:
@@ -117,7 +117,7 @@ class GoogleMeet(Importer):
                                     exc.status) from None
             raise
 
-    def pages(self, user, path, key, **query):
+    def pages(self, user, path, key, /, **query):
         token, out = "", []
         for _ in range(PAGES):
             page = self.get(user, path, pageSize=PAGE, pageToken=token, **query)

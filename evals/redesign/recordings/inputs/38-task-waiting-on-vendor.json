@@ -1,0 +1,23 @@
+{
+  "id": "38-task-waiting-on-vendor",
+  "kind": "task",
+  "questions": "stale-review",
+  "level": "low",
+  "state": {
+    "task": {
+      "title": "Get the data processing addendum signed by the hosting vendor",
+      "status": "waiting",
+      "step": "Waiting on the vendor's legal team",
+      "owner": "legal",
+      "created": "2026-10-15",
+      "updated": "2026-10-22",
+      "parent": null,
+      "reason": "Quiet for six days while waiting",
+      "comments": [
+        "Sent the draft addendum on 15 October",
+        "Vendor counsel is reviewing"
+      ]
+    }
+  },
+  "note": "Waiting on an outside party, still wanted: leave."
+}

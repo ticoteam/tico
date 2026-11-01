@@ -1,0 +1,62 @@
+"""Watch checks (spec §11) as pure functions in finance core: runway, unusual spend, duplicate charges and price
+increases, each silent when there is nothing to say. Plain values only, no fixtures."""
+from datetime import date
+
+from backend.finance import reads as FR
+from backend.finance.core import watch as W
+from backend.tests.test_finance_fixtures import OWNER, act, books, finance_template, store  # noqa: F401
+
+
+def charge(i: str, payee: str, amount: int, day: str) -> W.Charge:
+    return W.Charge(id=i, payee=payee, amount=amount, day=date.fromisoformat(day))
+
+
+def test_runway_is_news_under_six_months_of_burn_and_silent_without_burn():
+    assert W.runway(4.2, 1_000_000)[0]["label"] == "Cash covers 4.2 months of average burn (under 6)"
+    assert W.runway(6.0, 1_000_000) == []
+    assert W.runway(None, 1_000_000) == []
+    assert W.runway(3.0, None) == []
+
+
+def test_unusual_spend_is_twice_the_usual_and_a_hundred_dollars_more_for_a_payee_already_spending():
+    series = {"Acme": [10_000, 12_000, 11_000, 40_000], "Newco": [0, 0, 0, 90_000],
+              "Steady": [10_000, 10_000, 10_000, 15_000]}
+    found = W.unusual_spend(series, "2026-10")
+    assert [f["key"] for f in found] == ["unusual_spend:Acme:2026-10"]
+    assert found[0]["label"] == "Acme: 400.00 this month, usually 110.00"
+
+
+def test_a_repeat_charge_within_three_days_is_a_possible_duplicate_and_a_week_apart_is_not():
+    found = W.duplicate_charges([charge("a", "acme", 1_200, "2026-10-01"), charge("b", "acme", 1_200, "2026-10-03"),
+                                 charge("c", "acme", 1_200, "2026-10-20"), charge("d", "acme", 900, "2026-10-02")])
+    assert [f["key"] for f in found] == ["duplicate_charge:b"]
+
+
+def test_a_recurring_charge_that_rises_ten_percent_and_ten_dollars_is_a_price_increase():
+    rows = [charge("1", "cloudco", 5_000, "2026-08-01"), charge("2", "cloudco", 5_000, "2026-09-01"),
+            charge("3", "cloudco", 6_000, "2026-10-01")]
+    assert [f["key"] for f in W.price_increases(rows)] == ["price_increase:3"]
+    assert W.price_increases(rows[:2]) == []
+    # The two charges before the latest must be the same amount: a charge that already moved is not a recurring one.
+    assert W.price_increases([charge("1", "x", 5_000, "2026-08-01"), charge("2", "x", 5_900, "2026-09-01"),
+                              charge("3", "x", 6_000, "2026-10-01")]) == []
+
+
+def test_new_posting_rules_lists_the_rules_made_since_a_time(books):  # noqa: F811
+    with books.transaction() as c:
+        made = act(c, OWNER, "rule_create", {"kind": "posting", "name": "Acme Cafe asks",
+                                             "when": {"counterparty": "Acme Cafe"}, "outcome": {"outcome": "ask"},
+                                             "examples": [{"input": {"counterparty": "Acme Cafe"}, "expect": "ask"}]})
+        assert made.status == "committed", made
+        assert [r["name"] for r in FR.new_posting_rules(c, "2026-10-08T00:00:00.000000Z")] == ["Acme Cafe asks"]
+        assert FR.new_posting_rules(c, "2026-10-16T00:00:00.000000Z") == []
+
+
+def test_a_rise_of_exactly_ten_percent_is_a_price_increase_and_a_cent_less_is_not():
+    """Integer math: 110,000 is exactly ten percent above 100,000, which a float compare against 1.1 misses."""
+    exact = [charge("1", "cloudco", 100_000, "2026-08-01"), charge("2", "cloudco", 100_000, "2026-09-01"),
+             charge("3", "cloudco", 110_000, "2026-10-01")]
+    assert [f["key"] for f in W.price_increases(exact)] == ["price_increase:3"]
+    short = [charge("1", "cloudco", 100_000, "2026-08-01"), charge("2", "cloudco", 100_000, "2026-09-01"),
+             charge("3", "cloudco", 109_999, "2026-10-01")]
+    assert W.price_increases(short) == []

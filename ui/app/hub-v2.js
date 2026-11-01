@@ -84,6 +84,8 @@ async function v2Refresh() {
   if (st) { const el = $('#side-update'); if (el) el.hidden = !st.updating; }
   if (needs && typeof OVERVIEW_PAGE !== 'undefined' && OVERVIEW_PAGE) overviewNeedsDraw();
   if (needs && !needs.unchanged && typeof BOT !== 'undefined' && BOT && isKeeper(BOT.slug)) botNeedsChanged(BOT.slug);
+  if (needs && !needs.unchanged && typeof DEC !== 'undefined' && DEC) decideRefresh(DEC, S.v2.needs || []);   // the open Needs you card
+  if (needs && !needs.unchanged && typeof askPeek === 'function') askPeek();   // a peek beside Ask's dot
 }
 // Needs you as the page holds it: the first items of the list, a page at a time (GET /v2/needs-you?limit=), in the
 // server's order, with its version, its whole count, each bot's count over the whole list (`bots`) and where the next

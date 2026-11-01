@@ -3,6 +3,10 @@
 Triggered by a task with the payroll register of a run just processed, or the day after a pay date.
 Budget 20 minutes. The outcome is a pass, or a list of corrections for the next run. Nothing is changed.
 
+Inputs: the payroll register of the run, the documented change summary for that run, and `knowledge/baseline.md`.
+
+Done when: the pass or the list of differences is on the task, and any baseline update is committed with its register date.
+
 ---
 
 ## 1. Read both
@@ -24,5 +28,5 @@ and the correction the payroll owner may want in the next run or off-cycle. The 
 
 ## 4. Update the baseline
 
-when requested the register is final, write the new headcount and gross by pay group to
+once the register is final, and when a human asks, write the new headcount and gross by pay group to
 `knowledge/baseline.md` with the register date, commit, and finish the task.

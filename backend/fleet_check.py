@@ -28,14 +28,23 @@ def check(c, who, auth, settings):
         "SELECT a.bot,a.runner_id,r.label FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE r.revoked_at IS NULL")}
     lacking = {bot: (label, why) for bot, label, why in missing_repositories(c, online)}
     issues = []
+    # One company Default for every bot's spend check: without it each `over` rebuilds pools/groups.
+    limits = usage_limits.company(c)
 
     def add(bot, kind, severity, text, fix):
         issues.append({"bot": bot["slug"], "name": bot["display_name"] or bot["slug"], "kind": kind, "severity": severity,
                        "text": text, "fix": fix})
 
     from .agents import external_harness
-    for bot in c.execute("SELECT b.slug,b.display_name,b.state,b.created,bc.onboarding_state FROM bots b "
-                         "JOIN bot_config bc ON bc.bot=b.slug WHERE b.state<>'archived' ORDER BY b.slug"):
+    from . import events, views
+    bots = c.execute("SELECT b.slug,b.display_name,b.state,b.created,bc.onboarding_state FROM bots b "
+                     "JOIN bot_config bc ON bc.bot=b.slug WHERE b.state<>'archived' ORDER BY b.slug").fetchall()
+    # The rows each bot's check reads, read once for every bot (a snapshot keeps them; the loop finds them there).
+    slugs = [bot["slug"] for bot in bots]
+    views.prime_machines(c, slugs)
+    events.prime_bot_rows(c, slugs)
+    usage_limits.prime_own(c, slugs)
+    for bot in bots:
         slug = bot["slug"]
         if not (seen.get(slug) or {}).get("see"):
             continue
@@ -72,12 +81,15 @@ def check(c, who, auth, settings):
                 add(bot, "needs_setup", MEDIUM, f"{name} is waiting for its first setup with its owner.", f"hub bot go-live {slug}")
         if state == "active":
             try:
-                met = usage_limits.over(c, slug, default=usage_limits.company(c))
+                met = usage_limits.over(c, slug, default=limits)
             except Exception:
                 met = None
             if met and met["scope"] == "bot":
                 add(bot, "paused_over_limit", HIGH, f"{name} is paused: it reached its spending limit.",
                     f"hub api PUT usage/limits/{slug} (a card: raising a limit is their click)")
+            elif met and met["scope"] == "budget":
+                add(bot, "paused_over_limit", HIGH, f"{name} is paused: the {met['name']} budget is used up.",
+                    "a person raises the budget in Finance (a card: raising a budget is their click)")
             elif met:
                 where = "company" if met["scope"] == usage_limits.COMPANY else "groups/" + met["scope"].split(":", 1)[1]
                 add(bot, "paused_over_limit", HIGH, f"{name} is paused: {met['name']} reached its {met['period']} spending limit.",

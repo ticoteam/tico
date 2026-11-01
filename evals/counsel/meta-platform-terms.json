@@ -1,0 +1,41 @@
+{
+  "expected": [
+    {
+      "text": "Have a notice and takedown process if the app shows content from users or other third parties.",
+      "quote": "If your App contains content submitted or provided by your Users or other third parties, you must have an appropriate notice and takedown process",
+      "section": "Content",
+      "who_hint": "product"
+    },
+    {
+      "text": "Comply with the Digital Millennium Copyright Act in the United States.",
+      "quote": "Without limiting that compliance, in the United States, you must comply with all requirements of the Digital Millennium Copyright Act.",
+      "section": "Compliance with law",
+      "who_hint": "legal"
+    },
+    {
+      "text": "Do not process platform data without a user's valid consent to build or augment user profiles.",
+      "quote": "Processing Platform Data without valid User consent in order to build or augment user profiles for any purpose.",
+      "section": "Restricted uses",
+      "who_hint": "data"
+    },
+    {
+      "text": "Tell the user why we request their restricted platform data.",
+      "quote": "It must be clear to the User why you are requesting their Restricted Platform Data in order to improve the quality of their experience.",
+      "section": "Restricted data",
+      "who_hint": "product"
+    },
+    {
+      "text": "Comply with the Developer Policies and the Developer Docs.",
+      "quote": "You must also comply with the applicable requirements in our Developer Policies and those made available on our Developer Site",
+      "section": "Developer Policies",
+      "who_hint": "engineering"
+    }
+  ],
+  "url": "https://developers.facebook.com/terms/",
+  "fetched_at": "2026-10-30T23:39:36Z",
+  "from": {
+    "name": "Meta Platform Terms",
+    "kind": "vendor"
+  },
+  "truncated": false
+}

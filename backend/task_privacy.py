@@ -198,6 +198,29 @@ def _attempt_tasks(c, aid):
     return ids
 
 
+def carried_tasks(c, aid):
+    """The tasks a run carries the text of: attempt_tasks without the ids an assignment notice names only in its
+    `reconcile` list (the requester's other open tasks with this bot: id, title and status, never their bodies)."""
+    snapshot(c)
+    ids = set()
+    rows = c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                     "JOIN messages m ON m.id=j.message_id WHERE a.id=? UNION "
+                     "SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
+                     "WHERE i.attempt_id=?", (aid, aid)).fetchall()
+    for row in rows:
+        row = dict(row)
+        refs = H._json(row.get("refs_json"), {}) or {}
+        if isinstance(refs, dict) and "reconcile" in refs:
+            refs = {key: value for key, value in refs.items() if key != "reconcile"}
+            row = {**row, "refs": refs, "refs_json": json.dumps(refs)}
+        ids.update(_message_tasks(c, row, include_run=False, current=True))
+    ids.update(r[0] for r in c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)))
+    for row in c.execute("SELECT detail_json FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND target=?",
+                         (aid,)):
+        ids.update(references(c, H._json(row[0], {}) or {}))
+    return ids
+
+
 def prime_attempts(c, aids):
     """Read the provenance of many runs in a fixed number of queries, for a page that then checks each run
     (a task's comments and runs). The results are the ones attempt_tasks and the meeting index would build one
@@ -254,7 +277,8 @@ def prime_attempts(c, aids):
 
 def _parent_ids(message, refs):
     """The messages a provenance walk reads next from `message`: the one it replies to and those it answers."""
-    out = {message.get("in_reply_to")}
+    parent = message.get("in_reply_to")
+    out = {parent} if isinstance(parent, str) else set()
     for key in ("answers", "inputs"):
         if isinstance(refs, dict) and isinstance(refs.get(key), list):
             out.update(v for v in refs[key] if isinstance(v, str))
@@ -308,9 +332,14 @@ def prime_messages(c, messages):
         meeting_sources(c).prime_conversations(rooms)
     runs = set()
     for ref in refs + ancestry:
-        if isinstance(ref, dict):
-            run = ref.get("run")
-            runs.add(ref.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None))
+        if not isinstance(ref, dict):
+            continue
+        run = ref.get("run")
+        # Only a string run id can be primed. A list or object here used to be reached only when that
+        # message was checked; a deleted or past-the-page row must not abort the whole page.
+        aid = ref.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
+        if isinstance(aid, str) and aid:
+            runs.add(aid)
     prime_attempts(c, runs)
     about = {H.message_task_id({**m, "refs": r}, H.conversation(c, m["conversation_id"])
                               if m.get("conversation_id") else None)
@@ -402,29 +431,53 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
             clauses.append("id IN (SELECT value FROM json_each(?))")
             args.append(json.dumps(sorted(ids)))
     visible, reader, size, full = [], actor(who), 0, False
-    for row in c.execute("SELECT * FROM messages WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC", args):
-        # message_readable's own steps, with the row's tasks worked out once: a task's page skips another
-        # task's message before its privacy check, so a read costs the room once, not twice.
-        stored = dict(row)
+
+    def consider(stored):
+        """The same skip rules as one row of the old loop. True once the page must stop."""
+        nonlocal size, full
         if stored.get("deleted_at") or stored.get("deleted"):
-            continue
+            return False
         try:
             tasks = message_tasks(c, stored, current=True)
             if task_id and task_id not in tasks:
-                continue
+                return False
             if not readable(c, reader, tasks):
-                continue
+                return False
         except Problem:
-            continue
-        message = {**stored, "refs": H._json(row["refs_json"], {}) or {}}
+            return False
+        message = {**stored, "refs": H._json(stored["refs_json"], {}) or {}}
         if max_bytes and len(visible) < limit:
             size += len(json.dumps(message, default=str).encode())
             if visible and size > max_bytes:
                 full = True
-                break
+                return True
         visible.append(message)
-        if len(visible) > limit:
+        return len(visible) > limit
+
+    window = []
+
+    def flush():
+        """Prime this window, then apply the same visibility rules. A hidden message is still skipped."""
+        if not window:
+            return False
+        prime_messages(c, window)
+        stop = False
+        for stored in window:
+            if consider(stored):
+                stop = True
+                break
+        window.clear()
+        return stop
+
+    # message_readable's own steps, with the row's tasks worked out once: a task's page skips another
+    # task's message before its privacy check, so a read costs the room once, not twice. The window is
+    # primed before those checks, so rooms, replies, inputs and runs are not one query per message.
+    for row in c.execute("SELECT * FROM messages WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC", args):
+        window.append(dict(row))
+        if len(window) >= 80 and flush():
             break
+    else:
+        flush()
     more = full or len(visible) > limit
     messages = list(reversed(visible[:limit]))
     return {"messages": messages, "has_more": more,
@@ -949,6 +1002,26 @@ def content_readable_rows(c, actor, rows):
     return [row for row in rows if content_readable(c, actor, row)]
 
 
+# What a private meeting's bot turn may write besides its own meeting's chat (guard_write): reads that go over POST, the
+# hub's MCP door (each tool call it makes is a request of its own, gated here), its run files, which keep the run's
+# provenance and so the meeting's readers, and a GitHub token, which is read-only for it (github_app.py token). Its
+# repository stays out of the bot's checkout too (runner-rs/src/sessions.rs, private lanes). The meeting's owner shares
+# its notes and action items after it, by review.
+PRIVATE_MEETING_WRITES = ("/api/v2/sql", "/api/v2/mcp", "/api/v2/tasks/dry-run", "/api/v2/files/uploads",
+                          "/api/v2/files/imports", "/api/v2/github/token")
+PRIVATE_MEETING_REFUSAL = "This is a private meeting: nothing from it is saved or shared until its owner reviews it."
+
+
+def private_meeting_run(c, attempt_id):
+    """Whether a run carries a private meeting (guard_write's test): a source that cannot be read counts as one."""
+    if not attempt_id:
+        return False
+    try:
+        return bool(private_meetings(c, meeting_sources(c).attempt(attempt_id)))
+    except Problem:
+        return True
+
+
 def guard_write(c, who, path, auth):
     """A private execution has no automatic company-publication capability."""
     # These controls already enforce their own run ownership and never publish company content.
@@ -959,14 +1032,13 @@ def guard_write(c, who, path, auth):
     meetings = meeting_sources(c).attempt(who.attempt_id)
     if private_meetings(c, meetings):
         # A meeting turn is one scoped reply, not an ordinary task or company publisher.
-        # Run artifacts retain their attempt provenance through the existing file/read fence.
-        if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/files/uploads", "/api/v2/files/imports"):
+        if path in PRIVATE_MEETING_WRITES:
             return
         scoped = re.fullmatch(r"/api/v2/live-meetings/([^/]+)/(chat|turns/[^/]+/claim)", path)
         if (scoped and meetings == {scoped[1]} and not any(
                 H.task_private(c, H.task(c, tid)) for tid in attempt_tasks(c, who.attempt_id))):
             return
-        raise Problem("privacy", "Private meeting work can only reply to its meeting or retain scoped run files", 403)
+        raise Problem("privacy", PRIVATE_MEETING_REFUSAL, 403)
     if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/tasks/dry-run"):
         return
     if path == "/api/v2/task-questions":
@@ -983,16 +1055,59 @@ def guard_write(c, who, path, auth):
         return
     if path.endswith(("/status", "/usage")) or path == "/api/v2/status":
         return
+    if path == "/api/v2/rules":
+        from . import counsel
+        if counsel.run_read(c, who):
+            return          # Counsel's suggestions from its own read task; the route checks each (counsel.private_suggestion)
     raise Problem("privacy", "Private task work cannot publish into company-wide resources", 403)
 
 
 def tag_readable(c, who, row):
     snapshot(c)
     linked = {r[0] for r in c.execute("SELECT task_id FROM task_tags WHERE tag_id=?", (row["id"],))}
-    for event in c.execute("SELECT detail_json FROM events WHERE target=? AND action='tag.attach'", (row["id"],)):
-        linked.update(references(c, H._json(event[0], {}) or {}))
+    return _tag_readable(c, who, row, linked, tag_attaches(c, [row["id"]]).get(row["id"], ()))
+
+
+# Attach events of a batch of tags. The index is named because the general target/action index fetches every event
+# row from a table of millions; this one holds the attach events alone, covering their detail. Read as one row of
+# JSON, as status_tasks is: a busy tag list is thousands of attach rows, each step a GIL hand-off (41 ms on TIDY).
+TAG_ATTACHES_SQL = ("SELECT json_group_array(json_array(target,detail_json)) FROM events INDEXED BY events_tag_attach "
+                    "WHERE target IN ({marks}) AND action='tag.attach'")
+
+
+def tag_attaches(c, tags):
+    """{tag: [attach detail, ...]} for up to H.chunks' size of tags."""
+    out = {}
+    packed = c.execute(TAG_ATTACHES_SQL.format(marks=",".join("?" * len(tags))), tags).fetchone()[0]
+    for tag, detail in json.loads(packed or "[]"):
+        out.setdefault(tag, []).append(H._json(detail, {}) or {})
+    return out
+
+
+def tags_readable(c, who, rows):
+    """The rows tag_readable passes, with every tag's task links and attach events read together and the tasks they
+    name looked up together first: one query per tag and per attachment was most of a tag list's SQL."""
+    snapshot(c)
+    rows = list(rows)
+    linked, attached = {}, {}
+    for part in H.chunks([row["id"] for row in rows]):
+        marks = ",".join("?" * len(part))
+        for tag, tid in c.execute(f"SELECT tag_id,task_id FROM task_tags WHERE tag_id IN ({marks})", part):
+            linked.setdefault(tag, set()).add(tid)
+        attached.update(tag_attaches(c, part))
+    prime_references(c, [detail for found in attached.values() for detail in found] + rows)
+    _task_rows(c, set().union(*linked.values()))
+    return [row for row in rows if _tag_readable(c, who, row, linked.get(row["id"], set()), attached.get(row["id"], ()))]
+
+
+def _tag_readable(c, who, row, linked, attached):
+    linked = set(linked)
+    for detail in attached:
+        linked.update(references(c, detail))
+    # The parties row (id, private, owner, requester, guest) is all task_readable reads; no body is loaded.
+    parties = _task_rows(c, linked) if linked and not row.get("is_template") else {}
     return (not linked or bool(row.get("is_template")) or
-            any(task_readable(c, who, _task(c, tid)) for tid in linked)) and content_readable(c, actor(who), row)
+            any(task_readable(c, who, parties[tid]) for tid in linked)) and content_readable(c, actor(who), row)
 
 
 def require_destination(c, who, to, conversation_id, refs, reply=None, guest=None, sealed=()):
@@ -1057,8 +1172,19 @@ def status_tasks_sql(match):
     return (f"SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE owner{match} AND {live} "
             f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE requester{match} AND {live} "
             # `+` keeps the few private tasks on their own index (tasks_private), not the owner's every task.
-            f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE private IS NOT 0 "
+            f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks INDEXED BY tasks_private_status WHERE private IS NOT 0 "
             f"AND (+owner{match} OR +requester{match})")
+
+
+def status_tasks(c, match, args):
+    """`status_tasks_sql`'s rows as dicts of STATUS_TASK_COLUMNS, read as one row of JSON. The rows are a thousand on a
+    busy team (most of them its private tasks), and each row stepped is the GIL given up and taken back: with other
+    requests running Python each take back waits up to the 5 ms switch interval, so a 2 ms read took 100 ms to 1 s on
+    Tico Team. One row is one wait."""
+    names = STATUS_TASK_COLUMNS.split(",")
+    packed = c.execute(f"SELECT json_group_array(json_array({STATUS_TASK_COLUMNS})) FROM ({status_tasks_sql(match)})",
+                       args).fetchone()[0]
+    return [dict(zip(names, values)) for values in json.loads(packed)]
 
 
 def status_inputs(c, bots):
@@ -1069,8 +1195,7 @@ def status_inputs(c, bots):
     for part in H.chunks(out):
         actors = ["bot:" + bot for bot in part]
         marks = " IN (" + ",".join("?" * len(actors)) + ")"
-        for t in c.execute(status_tasks_sql(marks), actors * 4):
-            t = dict(t)
+        for t in status_tasks(c, marks, actors * 4):
             for party in {t["owner"], t["requester"]}:
                 if party in actors:
                     out[H.actor_id(party)]["tasks"].append(t)
@@ -1093,8 +1218,7 @@ def status(c, who, row, *, tasks=None, approvals=None, asks=None):
         return row
     row = dict(row)
     tid = row.get("task_id")
-    tasks = tasks if tasks is not None else [dict(t) for t in c.execute(
-        status_tasks_sql("=?"), ("bot:" + row["bot"],) * 4)]
+    tasks = tasks if tasks is not None else status_tasks(c, "=?", ("bot:" + row["bot"],) * 4)
     task = next((t for t in tasks if t["id"] == tid), None) if tid else None
     if tid and task is None:
         task = _task(c, tid)

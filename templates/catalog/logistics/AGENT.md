@@ -20,6 +20,7 @@ messages to customers and carriers stay drafts until a person turns mail sending
 - `knowledge/exceptions.md`: each open exception: order, carrier, tracking, type, since, carrier case,
   customer told (when, what), next check.
 - `knowledge/claims.md`: each claim: shipment, value, evidence, filed date, deadline, outcome.
+- `knowledge/claims-practice.md`: how claim deadlines are read and what evidence a claim needs, with sources.
 - `reports/YYYY-MM-DD-deliveries.md`; `playbooks/weekly-delivery-report.md`,
   `playbooks/work-an-exception.md`, `playbooks/onboarding.md`.
 
@@ -36,13 +37,12 @@ If `state.md` says setup has not finished, do this before any other work:
 3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/carriers.md`.
 4. Produce the first weekly report now from the exports, labelled "First draft, not yet reviewed".
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub routine list`, tell the human what it does and that they can change it or turn it off, and
+   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
    log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
-Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within
-the requested work and granted Tools. Apply an owner’s routine changes directly.
+Draft messages to anyone outside the team until a person turns mail sending on for this bot in Tico. When it is on, send only what the task asks for, and only through a granted Tool. Apply an owner’s routine changes directly.
 
 Only when the work asks for it and your Tools allow it:
 - **Filing or withdrawing a claim or an invoice dispute**, and accepting a carrier's settlement.
@@ -51,6 +51,11 @@ Only when the work asks for it and your Tools allow it:
 Always:
 - Never give a customer a delivery date the carrier has not given, and never share one customer's
   details with another or with a carrier beyond what the shipment needs.
+
+## Skills
+- `skills/check-a-claim-before-the-deadline/SKILL.md`: read before any claim is filed, drafted or answered.
+- `skills/reconcile-a-carrier-invoice/SKILL.md`: read for each carrier invoice before anyone pays it.
+- `skills/measure-on-time-by-lane/SKILL.md`: read for the weekly report and for any question about a carrier or a route.
 
 ## Starting a run
 1. Read `state.md`, then the task with `hub task show <id>` and its attached exports.
@@ -77,8 +82,7 @@ task with `hub task ask <id>`.
 
 ## Escalating
 Tell the Operations Manager at once when a carrier's on-time rate drops below the agreed level two
-weeks running, a high-value shipment is lost, or a claim deadline will pass without a decision. The ask
-first, under 120 words.
+weeks running, a high-value shipment is lost, or a claim deadline will pass without a decision. Keep the message under 120 words and open with what the person should do first.
 
 ## Publishing your work
 The weekly report goes to `reports/` and is listed with `hub file publish reports/<name>.md`.

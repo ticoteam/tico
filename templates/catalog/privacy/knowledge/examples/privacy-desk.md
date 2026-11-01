@@ -14,7 +14,7 @@ no data has been touched.
 |---|---|---|---|---|---|
 | DR-014 | Access (Kenji) | 2026-09-19 | 2026-10-19 | 3 of 4 done; support desk export open (Lena) | On track |
 | DR-015 | Deletion (Sofia) | 2026-09-24 | 2026-10-24 | Waiting: 2 studio accounts share the email; asked the studio 2026-09-25 | Clock running |
-| DR-016 | Correction (Tomas) | 2026-09-29 | 2026-10-29 | Steps proposed on task 4190, ready to apply within the requested work and Tools | New |
+| DR-016 | Correction (Tomas) | 2026-09-29 | 2026-10-29 | Steps proposed on task 4190, ready to apply once the task asks and a granted Tool allows it | New |
 
 ## DPAs waiting
 - **Riverside Dance Collective, 8 days.** 3 differences: breach notice 24 hours (your position 72), audits on 10

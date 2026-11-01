@@ -17,7 +17,7 @@ def write(path, data):
 
 def test_the_readers_take_either_manifest(tmp_path):
     from clients import registry
-    from clients.remotecli import seed_routines
+    from clients.remotecli import seed_automations
     from connectors.mail import access as mail
 
     routine = {"id": "daily", "title": "Daily", "cron": "0 9 * * 1-5", "enabled": False, "instructions": "Do it"}
@@ -31,12 +31,15 @@ def test_the_readers_take_either_manifest(tmp_path):
 
         def post(self, path, body):
             self.posts.append((path, body))
-            return {"routine": {"id": "r%d" % len(self.posts)}}
+            return {"id": "auto_%d" % len(self.posts)}
 
     for folder in ("old", "new"):
         hub = Hub()
-        assert seed_routines(hub, folder, M.repo_dir(tmp_path, folder)) == ["r1"]
-        assert hub.posts[0][1]["key"] == "daily" and hub.posts[0][1]["enabled"] is False
+        assert seed_automations(hub, folder, M.repo_dir(tmp_path, folder)) == ["auto_1"]
+        path, body = hub.posts[0]
+        assert path == "automations" and body["name"] == "Daily" and body["enabled"] is False
+        assert body["trigger"]["type"] == "schedule" and body["trigger"]["cron"] == "0 9 * * 1-5"
+        assert body["steps"][0]["bot"] == "bot:" + folder and body["steps"][0]["prompt"] == "Do it"
     merged = registry.merge_employee({"name": "old"}, {}, root=tmp_path)
     assert registry.declared_env_keys(merged) == ["OLD_KEY"]
     assert registry.declared_env_keys(registry.merge_employee({"name": "new"}, {}, root=tmp_path)) == ["NEW_KEY"]

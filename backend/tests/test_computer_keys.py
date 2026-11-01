@@ -570,3 +570,29 @@ def test_switch_to_an_api_key_rights_and_an_old_or_offline_computer(environment)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM model_logins WHERE kind='to_key'").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM credentials WHERE source LIKE 'computer:%'").fetchone()[0] == 0
+
+
+def test_a_poll_with_no_key_to_send_takes_no_write_lock_and_a_sent_key_is_audited(environment, monkeypatch):
+    """Most polls send nothing (signed out, switching, subscription): they are answered from a read. A key that is
+    sent is still audited, in the write transaction that sends it."""
+    api = setup(environment)
+    db = api.app.state.store
+    grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
+    sends = computer(api, "Alpha", source="shared")
+    idle = computer(api, "Bravo")
+    real = db.transaction
+    opened = []
+
+    def counted():
+        opened.append(1)
+        return real()
+
+    monkeypatch.setattr(db, "transaction", counted)
+    assert fetch(api, idle, runtime="claude") == {"credentials": []}
+    assert opened == [], "a computer with no key to send opens no write transaction"
+    assert fetch(api, sends)["credentials"][0]["value"] == SHARED
+    assert opened == [1], "a sent key opens exactly one write transaction"
+    monkeypatch.setattr(db, "transaction", real)
+    with db.read() as c:
+        audited = c.execute("SELECT count(*) FROM events WHERE action='credential.sent_to_computer'").fetchone()[0]
+    assert audited >= 1

@@ -10,10 +10,11 @@ from typing import Literal
 
 from fastapi import Request
 from pydantic import Field
-from clients import git_repository
+from clients import git_repository, sessions
 
 from . import hubdb as H, repositories as R, task_relations as TR, worktree_waits as waits
 from .auth import validate_identity
+from .live_privacy import ROOM_PREFIX
 from .models import Contract
 from .roadmap_flow import READY_FROM
 from .store import Problem, readiness_document
@@ -306,7 +307,9 @@ def inventory(c, computer):
     owner = "coalesce(json_extract(l.detail_json,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner END)"
     return [dict(r) for r in c.execute(f"SELECT l.*,{owner} AS owner,t.status AS task_status,"
             "coalesce(b.state,'active') AS bot_state FROM task_links l JOIN tasks t ON t.id=l.task_id "
-            f"LEFT JOIN bots b ON ('bot:' || b.slug)={owner} "
+            # 'bot:'||slug = owner exactly when owner starts with 'bot:' and slug = its rest. Written that way the
+            # join seeks bots' slug key; the expression form scanned every bot for each worktree link kept.
+            f"LEFT JOIN bots b ON b.slug=substr({owner},5) AND substr({owner},1,4)='bot:' "
             "WHERE l.kind='worktree' AND l.computer_id=? AND (coalesce(l.state,'unknown')<>'removed' "
             "OR (t.status NOT IN ('done','closed','declined') AND b.state='active'))", (computer,))]
 
@@ -530,7 +533,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
     hosted = [r[0] for r in c.execute("SELECT 'bot:' || bot FROM assignments WHERE runner_id=?", (who.runner_id,))]
     waits.serve(c, hosted, default_org)
     if not capable:
-        c.execute("UPDATE task_links SET state='unknown' WHERE kind='worktree' AND computer_id=? AND state<>'removed'", (who.runner_id,))
+        c.execute("UPDATE task_links SET state='unknown' WHERE kind='worktree' AND computer_id=? AND state<>'removed' AND state<>'unknown'", (who.runner_id,))
         return []
     # Serving can revive a removed link from the inventory read before the reports. Use its new allocation
     # state and detail, or this cleanup pass can overwrite the reset with the retired allocation's flags.
@@ -951,6 +954,18 @@ def install(app, store, auth, mutate):
                 raise Problem('forbidden', 'A registered computer is required', 403)
             out = []
             for item in body.sessions:
+                if item.task.startswith(sessions.PRIVATE_FOLDER):
+                    # A private meeting's own checkout (clients/sessions.py PRIVATE_LANE): done once the meeting ends.
+                    conv = item.task[len(sessions.PRIVATE_FOLDER):]
+                    if c.execute("SELECT 1 FROM attempts WHERE runner_id=? AND bot=? AND lane=?",
+                                 (who.runner_id, item.bot, sessions.private_lane(conv))).fetchone():
+                        room = c.execute("SELECT room_key FROM conversations WHERE id=?", (conv,)).fetchone()
+                        key = (room["room_key"] if room else "") or ""
+                        meeting = key.startswith(ROOM_PREFIX) and c.execute(
+                            "SELECT state FROM live_meetings WHERE id=?", (key[len(ROOM_PREFIX):],)).fetchone()
+                        out.append({'bot': item.bot, 'task': item.task,
+                                    'status': 'open' if meeting and meeting['state'] != 'ended' else 'done'})
+                    continue
                 row = c.execute("SELECT t.status FROM tasks t WHERE t.id=? AND EXISTS (SELECT 1 FROM attempts a "
                                 "WHERE a.runner_id=? AND a.bot=? AND a.lane=?)",
                                 (item.task, who.runner_id, item.bot, 'task:' + item.task)).fetchone()

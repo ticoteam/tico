@@ -80,6 +80,13 @@ def test_spec11_only_sign_ins_count_guests_do_not_and_empty_org_counts_one(api):
     assert (value['people'], value['warning'], value['stop']) == (1, 40, 100)
 
 
+def test_settings_turn_levels_get_uses_admission_not_fleet_snapshot(api):
+    """The settings page only renders levels and in_use; classifying every queued bot is wasted work."""
+    value = get(api, 'settings/turn-levels')
+    assert 'in_use' in value and 'at_stop' in value and 'warning_per_person' in value
+    assert 'running' not in value and 'queued' not in value and 'waiting' not in value
+
+
 def test_spec15_admin_levels_persist_apply_and_non_admin_is_denied_by_server(api):
     """Synthetic permission regression; acceptance 15 still requires a separate live check."""
     value = post(api, 'settings/turn-levels', {'warning_per_person': 5, 'stop_per_person': 9}, 'ben-test')
@@ -115,6 +122,31 @@ def test_recovery_is_fifo_across_computers_and_new_requests_cannot_jump_waiters(
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='completed' WHERE id='attempt-98'")
         c.execute("UPDATE jobs SET state='completed' WHERE attempt_id='attempt-98'")
+    assert claim(api, other, 'doc-updater') is not None
+
+
+def test_a_cloud_machine_being_stopped_does_not_hold_other_computers_behind_its_waiter(api):
+    """The oldest waiter's computer is a cloud machine reserved for a stop (backend/cloud_machines.py `held`): it
+    takes no turn, so the next computer's waiter goes instead of every computer waiting on it."""
+    import time
+    one_person(api)
+    machine = waiters(api, n=99, running=1)
+    independent(api, machine)
+    other = runner(api, label='Other synthetic computer')
+    assign(api, other, 'doc-updater')
+    ready(api, other, ['doc-updater'])
+    post(api, 'chat/doc-updater', {'text': 'Younger synthetic request'})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET created=? WHERE bot='finance' AND state='queued'", (H.shift(H.now(), minutes=-2),))
+        c.execute("UPDATE jobs SET created=? WHERE bot='doc-updater' AND state='queued'", (H.shift(H.now(), minutes=-1),))
+    assert claim(api, other, 'doc-updater') is None
+    assert claim(api, machine, 'finance') is None
+    age_claim(machine)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='completed' WHERE id='attempt-99'")
+        c.execute("UPDATE jobs SET state='completed' WHERE attempt_id='attempt-99'")
+        c.execute("INSERT INTO cloud_machines(bot,runner_id,state,stop_until) VALUES('finance',?,'running',?)",
+                  (machine['runner_id'], time.time() + 60))
     assert claim(api, other, 'doc-updater') is not None
 
 
@@ -394,3 +426,16 @@ def test_snapshot_shares_one_company_default_across_runners(api, monkeypatch):
     assert {first['runner_id'], second['runner_id']} <= runners
     assert len(calls) == 1
     assert set(('running', 'starting', 'waiting', 'queued')) <= value.keys()
+
+
+def test_turns_in_use_reads_the_live_attempts_index_not_every_attempt(api):
+    """Every claim counts the company's turns: a scan of all attempts ever run took ~90 ms a call on a live install."""
+    from backend import org_turns
+    with api.app.state.store.read() as c:
+        sent = []
+        c.set_trace_callback(sent.append)
+        org_turns.in_use(c)
+        c.set_trace_callback(None)
+        count = next(sql for sql in sent if "count(*) FROM attempts" in sql)
+        plan = " | ".join(row[-1] for row in c.execute("EXPLAIN QUERY PLAN " + count))
+    assert "attempts_live_lease" in plan, plan

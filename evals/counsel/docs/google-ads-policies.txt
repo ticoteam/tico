@@ -1,0 +1,299 @@
+Google Ads policies - Advertising Policies Help Skip to main content 
+
+Google Ads policies
+
+Google provides translated versions of the Advertising Policies Help Center, though they're not meant to change the content of the policies. The English version is the official language used to enforce Google Ads policies. To view this article in a different language, use the language dropdown at the bottom of the page.
+
+Display & Video 360 users must comply with this Google Ads policy. Visit the Display & Video 360 help center for additional restrictions.
+
+Welcome to the Google Advertising Policies Center
+
+Overview of our policies and how we enforce them
+
+We strive to support a healthy digital advertising ecosystem that's trustworthy and transparent for users, advertisers, and publishers. The purpose of this help center is to help you build Google Ads campaigns that align with our advertising policies listed below.
+
+These policies are designed to ensure a safe and positive experience for our users and abide by applicable laws. This means that our policies prohibit content that is harmful to users and the overall advertising ecosystem.
+
+Our advertising policies cover 4 broad areas:
+
+ Prohibited content: Content you can't advertise on the Google Network
+
+ Prohibited practices: Things you can't do if you want to advertise with us
+
+ Restricted content and features: Content you can advertise, but with limitations
+
+ Editorial and technical: Quality standards for your ads, websites, and apps
+
+To learn more about which policies are included in these broad categories, click the links for the category names to review the content below. For additional details about each policy, click the header of the section to learn more.
+
+We use a combination of Google AI and human evaluation to ensure that ads comply with these policies. Our enforcement technologies use Google AI, modeled on human reviewers’ decisions, to help protect our users and keep our ad platforms safe. More complex, nuanced or severe cases are often reviewed and evaluated by our specially-trained experts.
+
+We take action on content that violates our policies. This may include disapproving violating ads so they don’t serve, as well as suspending accounts for repeat or egregious violations. We take repeat violations of our policies seriously and continue to expand a strike system for repeat offenders.
+
+We will provide you with information on our decision for any policy violation enforcement actions we take. If one of your ads is disapproved, you can fix that ad or appeal the decision. You can also appeal an account suspension decision. For these links to work, you’ll need to be signed into your Google Ads account.
+
+Note: For DV360 ad disapprovals, learn more about how to Find and fix rejected creatives. You can also Appeal a DV360 account suspension.
+
+Prohibited content
+
+Counterfeit goods
+
+Google Ads prohibits the sale or promotion for sale of counterfeit goods. Counterfeit goods contain a trademark or logo that is identical to or substantially indistinguishable from the trademark of another. They mimic the brand features of the product in an attempt to pass themselves off as a genuine product of the brand owner. This policy applies to the content of your ad and your website or app. 
+
+Dangerous products or services
+
+We want to help keep people safe both online and offline, so we don't allow the promotion of some products or services that cause damage, harm, or injury.
+
+Examples of dangerous content (non-exhaustive): Recreational drugs (chemical or herbal); psychoactive substances; equipment to facilitate drug use; weapons, ammunition, explosive materials and fireworks; instructions for making explosives or other harmful products; tobacco products
+
+Enabling dishonest behavior
+
+Google Ads values honesty and fairness and doesn’t allow the promotion of products or services that are designed to enable dishonest behavior. Below are some examples of what to avoid in your ads. Learn more about What happens if you violate our policies.
+
+Examples of products or services that enable dishonest behavior (non-exhaustive): Hacking software or instructions; services designed to artificially inflate ad or website traffic; fake documents; academic cheating services
+
+Inappropriate content
+
+Google Ads values diversity and respect for others and strives to avoid offending users, so ads or destinations that display shocking content or promote hatred, intolerance, discrimination, or violence aren’t allowed.
+
+Examples of inappropriate or offensive content (non-exhaustive): bullying or intimidation of an individual or group, racial discrimination, content promoting hate groups or hate group paraphernalia, graphic crime scene or accident images, cruelty to animals, murder, self-harm, extortion or blackmail, sale or trade of endangered species, ads using profane language, and content promoting the sexual exploitation of minors
+
+Prohibited practices
+
+Abusing the ad network
+
+Ads across the Google Network should be useful, varied, relevant, and safe for users. Google Ads doesn't allow advertisers to attempt to trick or circumvent our ad review processes with their ads, content, or destinations.
+
+Learn more about the Abusing the ad network policy.
+
+Examples of abusing of the ad network (non-exhaustive): promoting content that contains malware; "cloaking" or using other techniques to hide the true destination that users are directed to; "arbitrage" or promoting destinations for the sole or primary purpose of showing ads; promoting "bridge" or "gateway" destinations that are solely designed to send users elsewhere; advertising with the sole or primary intent of gaining public social network endorsements from the user; "gaming" or manipulating settings in an attempt to circumvent our policy review systems
+
+Data collection and use
+
+Google wants users to trust that information about them will be respected and handled with appropriate care. As such, the advertising partners shouldn’t misuse this information, nor collect it for unclear purposes or without appropriate disclosures or security measures.
+
+Note: Additional policies apply when using personalized advertising, which includes remarketing and custom audiences. If you use personalized advertising targeting features, be sure to review the personalized ads data collection and use policies.
+
+Examples of user information that should be handled with care (non-exhaustive): full name; email address; mailing address; phone number; national identity, pension, social security, tax ID, health care, or driver's license number; birth date or mother's maiden name in addition to any of the above information; financial status; political affiliation; sexual orientation; race or ethnicity; religion
+
+Examples of irresponsible data collection & use (non-exhaustive): obtaining credit card information over a non-secure server, promotions that claim to know a user's sexual orientation or financial status, violations of our policies that apply to interest-based advertising and remarketing
+
+Misrepresentation
+
+Ads or destinations that deceive users by excluding relevant product information or providing misleading information about products, services, and businesses can compromise user trust in the Google Ads platform. The Misrepresentation policy strives to ensure that ads are clear, honest, and provide information that users need to make informed decisions.
+
+Below are some examples of what to avoid in your ads. If your ads or website violate these policies, you can learn more about What happens if you violate our policies.
+
+Examples of misrepresentation (non-exhaustive): omitting or obscuring billing details such as how, what, and when users will be charged; omitting or obscuring charges associated with financial services such as interest rates, fees, and penalties; failing to display tax or licence numbers, contact information, or physical address where relevant; making offers that aren't actually available; making misleading or unrealistic claims regarding weight loss or financial gain; collecting donations under false pretenses; "phishing" or falsely purporting to be a reputable company in order to get users to part with valuable personal or financial information
+
+Restricted content and features
+
+The policies below cover content that is sometimes legally or culturally sensitive. Online advertising can be a powerful way to reach customers, but in sensitive areas, we also work hard to avoid showing these ads when and where they might be inappropriate.
+
+For that reason, we allow the promotion of the content below, but on a limited basis. These promotions may not show to every user in every location, and advertisers may need to meet additional requirements before their ads are eligible to run. Note that not all ad products, features, or networks are able to support this restricted content. Further details can be found in the Policy Manager.
+
+Ad protections for children and teens
+
+Our child and teen ads policies, along with other Google Ads policies (including but not limited to those for alcohol, gambling, and high fat, sugar, and salt food and beverages), work together to provide strong protections that include:
+
+Disabling ads personalization
+
+Restricting sensitive ad content and categories
+
+We require all our advertisers to follow local legal requirements when using our products, including any regulations on advertising to users under age 18, as well as all Google Ads policies. Learn more about our Ad protections for children and teens and relevant ad policies, where they apply, and what they mean for advertisers.
+
+Sexual content
+
+Ads should respect user preferences and comply with legal regulations. Google Ads restricts certain kinds of sexual content in ads and destinations, which will only show in limited scenarios based on user search queries, user age and local laws where the ad is being served. Ads must not target minors.
+
+Examples of restricted sexual content (non-exhaustive): Visible genitalia and female breasts, sex toys, strip clubs, sexually suggestive live chat, models in sexualized poses
+
+Alcohol
+
+We abide by local alcohol laws and industry standards, so we don’t allow certain kinds of alcohol-related advertising, both for alcohol and drinks that resemble alcohol. Some types of alcohol-related ads are allowed if they meet the policies below, don’t target minors, and target only countries that are explicitly allowed to show alcohol ads.
+
+Examples of restricted alcoholic beverages (non-exhaustive): beer, wine, sake, spirits or hard alcohol, Champagne, fortified wine, non-alcoholic beer, non-alcoholic wine, non-alcoholic distilled spirits
+
+Copyrights
+
+We abide by local copyright laws and protect the rights of copyright holders, so we don’t allow ads that are unauthorized to use copyrighted content. If you are legally authorized to use copyrighted content, apply for certification (or here for DV360) to advertise. If you see unauthorized content, submit a copyright-related complaint.
+
+Examples of restricted copyrighted content (non-exhaustive): sites or apps that facilitate unauthorized offline distribution of copyrighted content; unauthorized sites or software that capture, copy, or provide access to copyrighted content
+
+Gambling and games
+
+We support responsible gambling advertising and abide by local gambling laws and industry standards, so we don’t allow certain kinds of gambling-related advertising. Gambling-related ads are allowed if they comply with the policies below and the advertiser has received the proper Google Ads certification. Gambling ads must target approved countries, have a landing page that displays information about responsible gambling, and never target minors. Check local regulations for the areas you want to target.
+
+Examples of restricted gambling-related content (non-exhaustive): physical casinos; sites where users can bet on poker, bingo, roulette, or sports events; national or private lotteries; sports odds aggregator sites; sites offering bonus codes or promotional offers for gambling sites; online educational materials for casino-based games; sites offering "poker-for-fun" games; non-casino-based cash game sites
+
+Healthcare and medicines
+
+Google Ads is dedicated to following advertising regulations for healthcare and medicine, so ads and destinations are expected to follow appropriate laws and industry standards. Some types of healthcare-related content can’t be advertised at all, while others can only be advertised in certain locations by advertisers who have applied and been approved to advertise those products or services using Google Ads. 
+
+For most healthcare policies, if your ad campaign targets allowed locations and the domain is properly certified, your ad will be labeled "Eligible (limited)" and can run in allowed locations.
+
+Below are some examples of healthcare content that is allowed in certain circumstances. You’re expected to familiarize yourself with the local law and regulations for any location your ads target. Learn about what happens if you violate our policies.
+
+Examples of restricted healthcare content (non-exhaustive): clinical trial recruitment; HIV home tests; addiction services; prescription drug services
+
+Political content
+
+We support responsible political advertising and expect all political ads and destinations to comply with local campaign and election laws for any areas they target. This policy includes legally mandated election “silence periods.” 
+
+Examples of political content (non-exhaustive): promotion of political parties or candidates, political issue advocacy
+
+Financial products and services
+
+Google is committed to helping users make informed financial decisions. Google Ads policies are designed to provide users with the information they need to weigh the costs of financial products and services and to protect them from harmful or deceptive practices.
+
+Under this policy, financial products and services are defined as products and services related to the management or investment of money and cryptocurrencies, including personalized advice.
+
+When promoting financial products and services, you must comply with state and local regulations for any location that your ads target. For example, include specific disclosures required by local law. Advertisers are expected to do their own research on the local regulations for any location their ads target.
+
+This policy is updated with additional product-specific guidelines on an ongoing basis. Learn more about What happens if you violate our policies.
+
+Examples of restricted Financial products and services (non-exhaustive): personal loans, loan modification, credit repair services
+
+Cryptocurrencies and related products
+
+Due to the complex and evolving nature of regulations related to cryptocurrencies and related products and services, we allow certain categories of cryptocurrency-related products and services to be advertised with and without certification by Google in limited circumstances.
+
+While most advertisers must be certified by Google, there may be limited circumstances where certification is not required.
+
+Examples of cryptocurrency businesses that may not require certification (non-exhaustive): businesses accepting payment in cryptocurrency, cryptocurrency mining hardware, NFT games that allow players to purchase in-game items, like virtual apparel for a player’s characters, consumed or used in a game to enhance a user’s experience or aid users in advancing the game.
+
+Examples of cryptocurrency businesses that require certification (non-exhaustive): cryptocurrency exchanges, cryptocurrency wallets, cryptocurrency coin trusts
+
+When promoting cryptocurrencies and related products, you must comply with state and local regulations for any region or country that your ads target. Refer to our non-exhaustive list of location-specific requirements for more information but note that advertisers are expected to do their own research on the local regulations for any location their ads target.
+
+Prediction Markets
+
+Due to the inherent complexities, speculative nature, and unique regulatory classification involved in trading Prediction Market contracts and related products (defined as platforms that facilitate the listing of or provide customer access to Exchange-Listed Event Contracts related to economics, sports, or current events), Google Ads only allows advertisements for these products in the locations listed in the location specifics section below and only if they meet all of the following criteria:
+
+The advertiser is a licensed Prediction Market provider that holds all applicable local financial, commodity, and/or gaming licenses, including those required as part of Google’s certification process.
+
+The products and ads comply with all local laws, financial regulations, industry standards and all other Google Ads Policies. Advertisers are expected to do their own research on the local regulations for any location their ads target and comply with these.
+
+The targeted location is eligible for certification for advertising under this policy.
+
+The account has received certification and approval from Google to run ads about these products.
+
+Dating and Companionship
+
+Google values diversity, inclusivity, and respect for others, so we support the promotion of general dating services that aren’t discriminatory, exploitative, or deceptive. Dating and Companionship ads are allowed if they comply with our policies, don’t allow users under 18, and the advertiser has received the proper Google Ads certification. These ads may be restricted based on the ad category, user age, local laws, the user’s SafeSearch settings, and the user’s sexual content search queries.
+
+Examples of restricted dating and companionship content (non-exhaustive): Aggregators that list or review other dating sites, dating ads or landing pages that feature racy content, and dating explicitly focused on sexual themes or encounters such as hook-up, swinger, or affair dating services
+
+Trademarks
+
+ There are multiple factors that determine when trademarks can be used in ads. Along with the factors described in our Policy Center, these policies apply only when a trademark owner has submitted a valid complaint to Google.
+
+Legal requirements
+
+You’re always responsible for ensuring that you comply with all applicable laws and regulations, in addition to Google's advertising policies, for all of the locations where your ads are showing.
+
+Other restricted businesses
+
+ Google uses continuous reviews and feedback from users, regulators, and consumer protection authorities to help identify products and services that are prone to abuse and user exploitation. Google Ads may limit or stop ads from businesses that pose an unreasonable risk to user safety or experience, even if they comply with other policies.
+
+Restricted ad formats and features
+
+There are multiple factors that determine access to advanced ad formats and features on Google Ads. Certain ad formats are not available for all advertisers until they meet our specific requirements or complete the certification process.
+
+Limited ad serving
+
+To protect the integrity of our Google Ads ecosystem, we limit impressions of ads that have a higher potential of causing abuse or a poor experience for our users. In these specific instances, only qualified advertisers will be able to serve ads without impression limits. Learn more about when limited ad serving applies and who is a qualified advertiser.
+
+Editorial and technical requirements
+
+We want to deliver ads that are engaging for users without being annoying or difficult to interact with, so we've developed editorial requirements to help keep your ads appealing to users. We've also specified technical requirements to help users and advertisers get the most out of the variety of ad formats we offer.
+
+Editorial
+
+To ensure that ads on the Google Ad Network uphold high editorial and professional standards, Google Ads only allows ads, assets, and destinations that are clear, easy to interact with, and relevant to users.
+
+Learn about what happens if you violate our policies.
+
+Examples of promotions that don't meet these editorial and professional requirements (non-exhaustive): overly generic ads that contain vague phrases such as "Buy products here"; gimmicky use of words, numbers, letters, punctuation, or symbols such as FREE, f-r-e-e, and F₹€€!!
+
+Destination requirements
+
+We want consumers to have a good experience when they click on an ad, so ad destinations must offer unique value to users and be functional, useful, and easy to navigate.
+
+Examples of promotions that don't meet destination requirements (non-exhaustive): Display URLs that don’t accurately reflect the URL of the landing page, sites or apps that are under construction; sites that aren’t viewable in commonly used browsers; sites that have disabled the browser’s back button
+
+Technical requirements
+
+In order to provide an engaging user experience, Google requires that all ads, assets, and destinations meet certain technical requirements to make sure your ads are useful and appealing. Ads must be clear, functional, and lead users to content that is relevant and easy to interact with.
+
+Examples of promotions that don't meet technical requirements (non-exhaustive): exceeding account limits for ads and other content; ads or destination content in an unsupported targeting language; HTML5 ads that don’t function properly or appear blank
+
+Ad format requirements
+
+In order to help you provide a quality user experience and deliver attractive, professional-looking ads, we only allow ads that comply with specific requirements for each ad format. Review the requirements for all ad formats that you're using.
+
+We don't allow Non-family safe ads in image ads, video ads, and other non-text ad formats. Learn more about our Sexual content policy.
+
+Advertisers participating in beta programs of new ad formats should reach out to their Google Ads representatives or Google Ads customer support to learn about format-specific policy requirements.
+
+Examples of ad format requirements (non-exhaustive): character limits for the ad headline or body, image size requirements, file size limits, video length limits, aspect ratios
+
+About our policies
+
+Google Ads enables businesses of all sizes, from around the world, to promote a wide variety of products, services, applications, and websites on Google and across our network. We want to help you reach existing and potential customers and audiences. However, to help create a safe and positive experience for users, we listen to their feedback and concerns about the types of ads they see. We also regularly review changes in online trends and practices, industry norms, and regulations. And finally, in crafting our policies, we also think about our values and culture as a company, as well as operational, technical, and business considerations. As a result, we have created a set of policies that apply to all promotions on the Google Network.
+
+Google requires that advertisers comply with all applicable laws and regulations and the Google policies described above. It's important that you familiarize yourself with and keep up to date on these requirements for the places where your business operates, as well as any other places your ads are showing. When we find content that violates these requirements, we may block it from appearing, and in cases of repeated or egregious violations, we may stop you from advertising with us.
+
+Advertisers have a responsibility not to promote content or engage in behavior that risks harm to our users, employees, or the Ads ecosystem. If we see such content or behavior, we may take action, including but not limited to restricting or blocking your ads or suspending your account.
+
+Need help?
+
+If you have questions about these policies, review the policy guidelines and examples provided or contact Google Ads Support.
+
+Rate how helpful this page is and share your feedback with us below:
+
+Was this helpful?
+
+How can we improve it?
+
+false
+
+Search
+
+Clear search
+
+Close search
+
+Google apps
+
+Main menu
+
+3668076979117123714
+
+true
+
+Search Help Center
+
+true
+
+true
+
+true
+
+true
+
+true
+
+true
+
+73067
+
+false
+
+true
+
+true
+
+false
+
+false

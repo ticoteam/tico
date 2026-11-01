@@ -6,9 +6,9 @@ reminders, a service key's mapping) and the conversations that belong to them (`
 with every message into `task_trash`, in one transaction. A chat room a task only points at (a bot's
 room, a person's room with it) is never moved: the task just stops pointing at it. Every read of
 `tasks` then simply no longer sees the task, and a restore puts the same rows back. A task that
-carries work is refused whole, so nothing anyone or any bot did is touched: a turn, a job, an
-approval, a bot's own file, a routine occurrence, a meeting delivery, a subtask or a blocked task
-outside the list. Files attached to the task or its comments are part of it, not work: their
+carries work is refused whole by the offline command, so nothing anyone or any bot did is touched: a turn, a
+job, an approval, a bot's own file, a routine occurrence, a meeting delivery, a subtask or a blocked task
+outside the list. A person's delete through the API takes it anyway (keep_work): the work stays where it is. Files attached to the task or its comments are part of it, not work: their
 attachment rows go into the trash, a task file stays where it is (no one may open it while its task
 is gone, since its visibility is the task's) and its append-only activity stays as history. Its relations to other tasks (task_relations, from either end) go into the trash with it, and a
 restore puts back each one whose other task still exists. The audit log keeps one `task.deleted` (and `task.restored`, `task.purged`) event per task.
@@ -37,13 +37,16 @@ TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
 # Rows that only describe the task: kept with it in the trash.
 TASK_ROWS = ("task_events", "task_links", "task_tags", "task_delegations", "task_reminders",
              "service_key_tasks", "task_roles", "task_assets", "task_requesters", "task_milestone_waits",
-             "task_check_models")
+             "task_check_models", "task_run_models", "growth_ideas", "growth_idea_channels")
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = ("turns", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
              "watcher_items")
 # A file a person attached to the task itself (scope `task:<id>`) is not work; any other file touched on the task is.
+# A verdict on a file under review (`reviewed`, backend/file_reviews.py) is not work either: the file is the work, and
+# a deleted task's verdicts stop counting.
 FILE_WORK = (("bot_files", "SELECT count(*) FROM bot_files WHERE task_id IN ({}) AND scope <> 'task:' || task_id"),
-             ("bot_file_activity", "SELECT count(*) FROM bot_file_activity a WHERE a.task_id IN ({}) AND NOT EXISTS "
+             ("bot_file_activity", "SELECT count(*) FROM bot_file_activity a WHERE a.task_id IN ({}) "
+                                   "AND a.action <> 'reviewed' AND NOT EXISTS "
                                    "(SELECT 1 FROM bot_files f WHERE f.id=a.file_id AND f.scope='task:' || a.task_id)"),
              # A task file a bot made (from a run, or as itself) is work even though it sits on the task.
              ("bot_file_versions", "SELECT count(*) FROM bot_files f WHERE f.task_id IN ({}) AND f.scope='task:' || f.task_id "
@@ -72,11 +75,15 @@ def ensure(c):
         c.execute("ALTER TABLE task_trash ADD COLUMN guest TEXT")
     c.execute(TRASH_ASSETS)
     c.execute("CREATE INDEX IF NOT EXISTS task_trash_assets_blob ON task_trash_assets(blob_id)")
-    # A task deleted before this table existed has its attachments only in its trash row.
+    # A task deleted before this table existed has its attachments only in its trash row. Only the rows that
+    # mention attachments and have none listed are parsed: every delete runs this, and parsing all of the trash's
+    # rows_json grows with the trash.
     c.execute("INSERT OR IGNORE INTO task_trash_assets(task_id, blob_id) "
               "SELECT t.task_id, json_extract(a.value, '$.blob_id') FROM task_trash t, "
               "json_each(t.rows_json, '$.rows.task_assets') a "
-              "WHERE t.purged_at IS NULL AND json_extract(a.value, '$.blob_id') IS NOT NULL")
+              "WHERE t.purged_at IS NULL AND instr(t.rows_json, '\"task_assets\"') > 0 "
+              "AND NOT EXISTS (SELECT 1 FROM task_trash_assets x WHERE x.task_id=t.task_id) "
+              "AND json_extract(a.value, '$.blob_id') IS NOT NULL")
 
 
 def _columns(c, table):
@@ -163,14 +170,8 @@ def _snapshot(c, tid, relations=None):
     return rows, conversations, messages, pointers
 
 
-def delete_tasks(c, ids, apply=False, actor=None):
-    """What deleting `ids` moves to the trash, and with apply=True moves it. Refuses the whole list if
-    any task is unknown or carries work; the report says which and why."""
-    ids = list(dict.fromkeys(i.strip() for i in ids if i and i.strip()))
-    found = set(_column(c, "SELECT id FROM tasks WHERE id IN ({})", ids))
-    missing = [i for i in ids if i not in found]
-    conversations = _owned_conversations(c, ids)
-    messages = _column(c, "SELECT id FROM messages WHERE conversation_id IN ({})", conversations)
+def _refusals(c, ids, conversations, messages):
+    """The work `ids` carry, by where it sits: empty when deleting them takes nothing anyone did."""
     chosen = set(ids)
     refusals = {}
     for table in TASK_WORK:
@@ -198,23 +199,59 @@ def delete_tasks(c, ids, apply=False, actor=None):
     if pointing:
         refusals["delegations of another task"] = len(pointing)
     # A bot not yet woken about the task (its notice waits in a shared room) would wake to a missing task.
-    waking = _column(c, "SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id "
+    # CROSS JOIN keeps jobs the outer loop: each job reads its message by primary key, where the plain JOIN
+    # scanned every message to read its refs_json.
+    waking = _column(c, "SELECT j.id FROM jobs j CROSS JOIN messages m ON m.id=j.message_id "
                         "WHERE j.state NOT IN ('completed','cancelled','failed') "
                         "AND json_extract(m.refs_json,'$.task') IN ({})", ids)
     if waking:
         refusals["bot work queued about the task"] = len(waking)
+    return refusals
+
+
+def _task_work(c, tid):
+    conversations = _owned_conversations(c, [tid])
+    messages = _column(c, "SELECT id FROM messages WHERE conversation_id IN ({})", conversations)
+    return _refusals(c, [tid], conversations, messages)
+
+
+def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
+    """What deleting `ids` moves to the trash, and with apply=True moves it. Refuses the whole list if
+    any task is unknown or carries work; the report says which and why. With keep_work=True a task that
+    carries work is deleted anyway: its conversation and messages stay where they are, since turns, jobs
+    and runs point at them, and no one can read them while the task is gone (task_privacy.readable needs
+    the task). Its queued bot jobs are cancelled. A restore links the conversation back."""
+    ids = list(dict.fromkeys(i.strip() for i in ids if i and i.strip()))
+    found = set(_column(c, "SELECT id FROM tasks WHERE id IN ({})", ids))
+    missing = [i for i in ids if i not in found]
+    conversations = _owned_conversations(c, ids)
+    messages = _column(c, "SELECT id FROM messages WHERE conversation_id IN ({})", conversations)
+    refusals = _refusals(c, ids, conversations, messages)
     report = {"tasks": len(found), "missing": missing, "refused": refusals,
               "conversations": len(conversations), "messages": len(messages),
               "rows": {t: _count(c, t, "task_id", ids) for t in TASK_ROWS},
               "applied": False}
-    if missing or refusals or not apply:
+    if missing or (refusals and not keep_work) or not apply:
         return report
+    kept = {tid for tid in ids if _task_work(c, tid)} if refusals else set()
+    if kept:
+        # A bot not yet woken about the task would wake to a missing task.
+        # Queued jobs only (jobs_queued), each checked against its own message by primary key.
+        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND EXISTS "
+                  "(SELECT 1 FROM messages m WHERE m.id=jobs.message_id AND (json_extract(m.refs_json,'$.task') IN ({}) "
+                  "OR m.conversation_id IN (SELECT id FROM conversations WHERE task_id IN ({}))))"
+                  .format(_marks(list(kept)), _marks(list(kept))), [*kept, *kept])
     ensure(c)
     actor = actor or H.KEEPER
     now = H.now()
     relations = {tid: TR.snapshot_rows(c, tid) for tid in ids}
+    found_rows = {tid: H.task(c, tid) for tid in ids}
     for tid in ids:
         rows, convs, msgs, pointers = _snapshot(c, tid, relations[tid])
+        if tid in kept:
+            for table in ("conversations", "messages", *{t for t, _ in MESSAGE_ROWS + CONVERSATION_ROWS}):
+                rows.pop(table, None)
+            convs, msgs = [], []
         task = rows["tasks"][0]
         c.execute("INSERT INTO task_trash(task_id,number,title,requester,owner,status,private,deleted_at,"
                   "deleted_by,rows_json,guest) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -234,6 +271,9 @@ def delete_tasks(c, ids, apply=False, actor=None):
         # Status lines and filed insights keep their own history; they only stop pointing at the task.
         if _has(c, "bot_status", "task_id"):
             c.execute("UPDATE bot_status SET task_id=NULL WHERE task_id=?", (tid,))
+        if tid in kept and _has(c, "schedule_occurrences", "task_id"):
+            # The routine's occurrence keeps its outcome, so it does not file the task again.
+            c.execute("UPDATE schedule_occurrences SET task_id=NULL WHERE task_id=?", (tid,))
         for table, _, column in POINTERS:
             if _has(c, table, column):
                 c.execute(f"UPDATE {table} SET {column}=NULL WHERE {column}=?", (tid,))
@@ -246,12 +286,20 @@ def delete_tasks(c, ids, apply=False, actor=None):
         t = c.execute("SELECT title,requester,owner,status FROM task_trash WHERE task_id=?", (tid,)).fetchone()
         parties += [t[1], t[2]]
         H.event(c, actor, "task.deleted", tid, {"title": t[0], "requester": t[1], "owner": t[2], "status": t[3],
-                                                "restorable": True})
+                                                "restorable": True, **({"kept_work": True} if tid in kept else {})})
     H.recount(c, parties)       # what a bot waited on a person for leaves with the task
     from .roadmap_flow import sync
     # A roadmap item counts its children and the Dev tickets it is blocked by.
     for parent in {r["to_task"] for edges in relations.values() for r in edges if r["kind"] in ("parent", "blocks")}:
         sync(c, parent)
+    # A deleted child or blocker is a hold cleared on the task it held (backend/task_holds.py).
+    from . import task_holds
+    held = {r["to_task"]: r["from_task"] for edges in relations.values() for r in edges
+            if r["kind"] in ("parent", "blocks") and r["from_task"] in ids and r["to_task"] not in ids}
+    for tid, gone in held.items():
+        t = found_rows[gone]
+        live = t["status"] not in ("done", "closed", "declined")
+        task_holds.refresh(c, tid, f"{task_holds.title(c, t)} was deleted" if live else None)
     report["applied"] = True
     return report
 

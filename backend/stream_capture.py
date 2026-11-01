@@ -89,6 +89,10 @@ def keep(c, row, body):
         # A secret was taken out while this run was going; the stream may still carry it.
         c.execute("DELETE FROM attempt_captures WHERE attempt_id=?", (row["id"],))
         return {"kept": False, "reason": "a secret was removed during this run"}
+    if json.loads(row["result_json"] or "{}").get("held_reply"):
+        # The org rule check held this run's reply (backend/org_rule_check.py): its stream would carry it again.
+        c.execute("DELETE FROM attempt_captures WHERE attempt_id=?", (row["id"],))
+        return {"kept": False, "reason": "this run's reply was held by an org rule"}
     frames = mask(body.frames)
     c.execute("INSERT INTO attempt_captures(attempt_id,bot,provider,frames,truncated,dropped_bytes,bytes,created) "
               "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(attempt_id) DO UPDATE SET provider=excluded.provider,"
@@ -135,6 +139,10 @@ def export(c, who, auth, aid, full=True):
     if not may_read(c, who):
         raise Problem("forbidden", "Only owners and engineering bots read a run's raw stream", 403)
     attempt, msg = require_run(c, who, auth, aid)
+    from .org_rule_check import hides_run
+    if hides_run(c, attempt):
+        # Its reply is not checked yet, or was held (backend/org_rule_check.py): the stream and events would show it.
+        raise Problem("not_found", "This run's stream is held back until its reply is checked", 404)
     cap = c.execute("SELECT * FROM attempt_captures WHERE attempt_id=? AND created>=?",
                     (aid, H.shift(H.now(), days=-KEEP_DAYS))).fetchone()
     from . import run_diagnostics

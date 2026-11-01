@@ -25,7 +25,7 @@ def test_every_built_in_job_is_listed_with_its_group_word_and_six_are_marked_con
     assert [j["key"] for j in data["jobs"]] == [job.key for job in SR.JOBS] + ["task-rule-close-after-done"]
     assert {k for k, j in jobs.items() if j["controllable"]} == {
         "stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-        "propose_demotions", "stall_triage", "engineering_exceptions"}
+        "stall_triage", "engineering_exceptions", "bookkeeper_check"}
     assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings", "stall_triage"}
     assert all(j["needed"] == (j["group"] == "housekeeping") for j in jobs.values())
     assert jobs["stale_review"]["schedule"] == "Hourly" and jobs["learnings"]["schedule"] == "Nightly at 03:00"
@@ -41,7 +41,7 @@ def test_a_scheduler_tick_records_each_run_with_its_result_and_next_run(api):
     Scheduler(store, api.app.state.execution).tick(at)
     jobs, _ = rows(api)
     for key in ("still_wanted", "ask_deadlines", "approval_expiry", "stall_checks", "health_scan", "kpi_asks",
-                "due_reminders", "snooze_ends", "routine_timer", "cleanup"):
+                "due_reminders", "snooze_ends", "cleanup"):
         assert jobs[key]["last"] and jobs[key]["last"]["ok"], key
         assert jobs[key]["last"]["result"], key
     assert jobs["still_wanted"]["last"]["result"] == "No idle tasks"
@@ -198,7 +198,7 @@ def test_each_wrapped_block_still_reports_its_old_failure_name(api, monkeypatch)
 
     def broken(*a, **k):
         raise RuntimeError("x")
-    for module, name in ((G, "refresh"), (goal_asks, "sync"), (health_monitor, "scan"), (go_live, "expire"),
+    for module, name in ((G, "refresh"), (goal_asks, "sync"), (health_monitor, "check"), (go_live, "expire"),
                          (ask_deadlines, "sweep"), (approval_expiry, "sweep"), (still_needed, "sweep"),
                          (billing_check, "read_later"), (still_wanted, "ask_idle")):
         monkeypatch.setattr(module, name, broken)

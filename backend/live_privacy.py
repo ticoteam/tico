@@ -254,3 +254,13 @@ def require_conversation(c, actor, cid):
         raise Problem("not_found", "Conversation not found", 404)
     # Client-supplied message references can narrow access, never grant room membership.
     return index.bound_conversation(cid)
+
+
+def private_room(c, room_key):
+    """The meeting a conversation's room is, unless that meeting is open to the team, else None."""
+    if not (room_key or "").startswith(ROOM_PREFIX):
+        return None
+    row = c.execute("SELECT id FROM live_meetings WHERE id=? AND visibility<>'team'",
+                    (room_key[len(ROOM_PREFIX):],)).fetchone()
+    return row["id"] if row else None
+

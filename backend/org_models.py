@@ -1,4 +1,4 @@
-"""The published Tico starter org charts the CEO Bot may use to discuss team structure.
+"""The published Tico starter org charts the Strategy Bot may use to discuss team structure.
 
 These checked-in model files are the published catalog. This read never consults the
 install's imported company plan or another company's bots, people or work.

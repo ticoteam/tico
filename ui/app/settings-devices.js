@@ -143,8 +143,6 @@ function settingsTokenShow(issued) {
   dialog.onclose = () => { dialog.remove(); void renderSettingsTokens(); };
   document.body.appendChild(dialog); dialog.showModal();
 }
-// Connect an agent: ui/connect-agent.js.
-$('#connect-agent').onclick = () => window.connectAgent?.();
 async function settingsTokenRevoke(id, label) {
   if (!confirm(`Revoke the token ${label}? Anything using it stops at once.`)) return;
   try { await post(`/v2/me/tokens/${encodeURIComponent(id)}/revoke`, {}); toast(`Token ${label} revoked`); }
@@ -359,25 +357,98 @@ function machineUpdateWords(update) {
     return `<span class="pill ${update.state === 'incompatible' ? 'fail' : 'waiting'}" data-runner-outdated title="${esc([update.label, update.target ? `to ${update.target}` : ''].filter(Boolean).join(' '))}">Update</span>`;
   return '';
 }
-// One compact row per computer: name, status, operator and Tico version in one cell, then its AI tool chips and Add.
-// A click opens the pop-up.
+// Turns at once on a computer: a whole number from 1 to 256, or empty for automatic. Anything else is named under the
+// row and not sent. The note is set from the answer, since a pop-up whose field is still focused is not redrawn.
+async function settingsTurnsAtOnceSave(input) {
+  // The field is disabled while its save is in flight, so a change that lands then starts no second save
+  // here. The server has not seen that value: it is sent once this save answers, from what the field holds
+  // then (below).
+  if (input.disabled) return;
+  settingsFieldClear(input);
+  const text = input.value, n = Number(text);
+  const whole = input.checkValidity() && (text === '' || (Number.isInteger(n) && n >= 1 && n <= 256));
+  if (!whole) {
+    settingsFieldError(input, 'Enter a whole number from 1 to 256, or leave it empty for automatic.');
+    return;
+  }
+  if (text === (input.dataset.current || '')) return;
+  const turns_at_once = text === '' ? null : n;
+  input.disabled = true;
+  let saved = false;
+  try {
+    const path = `/v2/computers/${encodeURIComponent(input.dataset.turnsAtOnce)}/turns-at-once`;
+    const done = await post(path, {turns_at_once});
+    saved = true;
+    input.dataset.current = text;
+    input.defaultValue = text;
+    input.disabled = false;
+    const machine = (SETTINGS_DATA.machines || []).find(row => row.id === input.dataset.turnsAtOnce);
+    const note = input.closest('label')?.querySelector('[data-turns-note]');
+    if (note && machine) {
+      const turn_limit = done?.turn_limit ?? machine.turn_limit;
+      note.textContent = machineTurnsNote({...machine, turns_at_once, turn_limit});
+    }
+    toast(turns_at_once == null ? 'Turns at once is automatic' : `Turns at once set to ${turns_at_once}`);
+  } catch (error) {
+    toast(error.message, true);
+    // A value typed during the failed save is kept and sent below; only an unchanged field goes back to what is saved.
+    if (input.value === text) input.value = input.dataset.current;
+    input.disabled = false;
+  }
+  // The value the field holds now differs from what the server holds: send it, and its own save reloads the page.
+  if (input.value !== (input.dataset.current || '')) return settingsTurnsAtOnceSave(input);
+  if (saved) await loadSettings();
+}
+// What a computer is doing now: "1 running · 55 queued", idle, asleep (a cloud computer stopped to save), or offline.
+function machineNowWords(machine) {
+  if (machine.revoked_at) return 'revoked';
+  const counts = machine.turn_counts || {};
+  const parts = [['running', 'running'], ['starting', 'starting'], ['queued', 'queued'], ['waiting', 'waiting']]
+    .filter(([key]) => Number(counts[key]) > 0).map(([key, word]) => `${counts[key]} ${word}`);
+  if (parts.length) return parts.join(' · ');
+  if (['stopped', 'stopping'].includes(machine.cloud_machine?.state)) return 'asleep';
+  return machineOnline(machine) ? 'idle' : 'offline';
+}
+// The AI tools that get a column: those a subscription can be given to first (a picker each), then every other tool a
+// computer reports (its login's chip, as in the computer's pop-up).
+function machineToolColumns(machines) {
+  const pickers = subsComputersReady() ? subsTools() : [];
+  const seen = new Map();
+  for (const machine of machines) for (const conn of machineShown(machine)) if (!pickers.includes(conn.runtime)) seen.set(conn.runtime, conn.tool);
+  const others = [...seen].sort((a, b) => a[1].localeCompare(b[1])).map(([runtime]) => runtime);
+  return {pickers, others};
+}
+function machineToolCellHTML(machine, runtime) {
+  if (machine.revoked_at) return '<span class="muted">—</span>';
+  const chips = machineShown(machine).filter(conn => conn.runtime === runtime).map(conn => machineChipHTML(machine, conn)).join('');
+  return chips ? `<div class="machine-chips">${chips}</div>` : '<span class="muted">—</span>';
+}
+// One dense row per computer: status and name, its bots, a column per AI tool, and what it is doing now. A click on
+// the row (not on a picker) opens the computer's pop-up.
 function renderSettingsMachines() {
   const el = $('#set-machines'); if (!el) return;
   const showRevoked = el.dataset.showRevoked === 'true';
   const revoked = SETTINGS_DATA.machines.filter(machine => machine.revoked_at).length;
   const machines = SETTINGS_DATA.machines.filter(machine => showRevoked || !machine.revoked_at);
+  const {pickers, others} = machineToolColumns(machines);
   const cards = machines.map(machine => {
     const online = machineOnline(machine);
-    const status = [machine.revoked_at ? 'failed' : online ? 'ok' : '', machinePresenceWords(machine)];
+    const dot = machine.revoked_at ? 'failed' : online ? 'ok' : '';
+    const presence = machinePresenceWords(machine);
     const failures = Object.values(machine.readiness?.bots || {}).filter(value => !value.ready).length;
-    const facts = [settingsPersonName(machine.operator), machine.version ? `Tico ${machine.version}` : ''].filter(Boolean).join(' · ');
+    const waiting = machineWaiting(machine) ? `<span class="pill waiting" data-machine-waiting title="Waiting for ${esc(machine.label)}">Waiting</span>` : '';
+    const now = machineNowWords(machine);
     return `<tr class="machine-card" data-computer-row="${esc(machine.id)}">
-      <td><span class="machine-head"><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button><span class="machine-status" data-machine-status><span class="dot ${status[0]}" aria-hidden="true"></span>${esc(status[1])}</span></span>
-        ${machine.turn_summary ? `<p class="muted machine-turn-counts">${esc(machine.turn_summary)}</p>` : ''}
-        <span class="settings-cell-note machine-facts">${esc(facts)} ${machineUpdateWords(machine.update)}</span>${failures ? `<span class="settings-cell-note err">${failures} bot${failures === 1 ? '' : 's'} not ready</span>` : ''}${online && machine.restarting ? `<span class="settings-cell-note" data-machine-restarting title="${esc(`Since ${machine.restarting.slice(0, 16).replace('T', ' ')} UTC`)}">Restarting: it starts new work once its running turns end</span>` : ''}</td>
-      <td data-label="AI tools">${machineChipsHTML(machine)}</td></tr>`;
+      <td class="machine-cell"><span class="machine-head"><span class="machine-status" data-machine-status title="${esc(presence)}"><span class="dot ${dot}" aria-hidden="true"></span><span class="sr-only">${esc(presence)}</span></span><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button>${machineUpdateWords(machine.update)}${waiting}${failures ? `<span class="pill fail" title="${failures} bot${failures === 1 ? '' : 's'} not ready">${failures} not ready</span>` : ''}</span></td>
+      <td class="num tnum machine-bot-count">${(machine.bots || []).length}</td>
+      ${pickers.map(runtime => `<td data-label="${esc(subsToolName(runtime))}" data-subs-cell>${subsPickerHTML(machine, runtime)}</td>`).join('')}
+      ${others.map(runtime => `<td data-label="${esc(machineToolName(machine, runtime))}">${machineToolCellHTML(machine, runtime)}</td>`).join('')}
+      <td class="machine-now${['idle', 'asleep', 'offline', 'revoked'].includes(now) ? ' muted' : ''}" data-machine-now>${esc(now)}${online && machine.restarting ? ' <span class="muted" data-machine-restarting>· restarting</span>' : ''}</td></tr>`;
   }).join('');
+  const toolHead = runtime => `<th>${esc(machines.map(m => machineToolName(m, runtime)).find(Boolean) || subsToolName(runtime))}</th>`;
   el.onchange = async event => {
+    const pick = event.target.closest('[data-subs-pick]');
+    if (pick) { await subsPick(pick); return; }
     if (event.target.matches('[data-show-revoked-computers]')) {
       el.dataset.showRevoked = String(event.target.checked);
       renderSettingsMachines();
@@ -414,6 +485,8 @@ function renderSettingsMachines() {
       } catch (error) { toast(error.message, true); inbox.checked = !inbox.checked; inbox.disabled = false; }
       return;
     }
+    const turns = event.target.closest('[data-turns-at-once]');
+    if (turns) { await settingsTurnsAtOnceSave(turns); return; }
     const box = event.target.closest('[data-member-bots]');
     if (!box) return;
     box.disabled = true;
@@ -431,6 +504,12 @@ function renderSettingsMachines() {
     // Add, on the row or in the pop-up, opens its own pop-up (before the row's click opens the computer's).
     const add = event.target.closest('[data-add-connection]');
     if (add) { if (!add.disabled) computerAddOpen(add.dataset.addConnection); return; }
+    if (event.target.closest('[data-subs-cell] select, [data-subs-reconnect]')) {
+      const reconnect = event.target.closest('[data-subs-reconnect]');
+      if (reconnect) subsDialog('reconnect', subsById(reconnect.dataset.subsReconnect));
+      return;
+    }
+    if (event.target.closest('#machine-add-dialog')) return;
     const row = event.target.closest('[data-computer-open], [data-computer-row]');
     if (row && !event.target.closest('a')) { computerDetailOpen(row.dataset.computerOpen || row.dataset.computerRow); return; }
     const perfLink = event.target.closest('[data-computer-performance]');
@@ -447,13 +526,13 @@ function renderSettingsMachines() {
     if (remove) {
       const machine = SETTINGS_DATA.machines.find(m => m.id === remove.dataset.computerRemove);
       const bots = (machine?.bots || []).length;
-      if (!confirm(`Revoke ${machine?.label || 'this computer'}? It stops taking work at once${bots ? `; its ${bots === 1 ? 'bot waits' : `${bots} bots wait`} until reassigned on the Bots page` : ''}.`)) return;
+      if (!await settingsConfirm({title: `Revoke ${machine?.label || 'this computer'}?`, text: `It stops taking work at once${bots ? `; its ${bots === 1 ? 'bot waits' : `${bots} bots wait`} until reassigned on the Bots page` : ''}.`, ok: 'Revoke'})) return;
       remove.disabled = true;
       try {
         await post(`/v2/computers/${encodeURIComponent(remove.dataset.computerRemove)}/revoke`, {});
         dialog?.close();
         await loadSettings();
-        $('#machine-enroll-status').innerHTML = 'Computer revoked. Its bots wait until reassigned in Bots. For Docker, stop its runner from its install directory: <code>docker compose -f runner.compose.yaml down</code>. Include <code>-f runner.override.yaml</code> before <code>down</code> if that file is present. This keeps repositories and sign-in.';
+        $('#machine-note').innerHTML = 'Computer revoked. Its bots wait until reassigned in Bots. For Docker, stop its runner from its install directory: <code>docker compose -f runner.compose.yaml down</code>. Include <code>-f runner.override.yaml</code> before <code>down</code> if that file is present. This keeps repositories and sign-in.';
         toast('Computer revoked');
       } catch (error) { toast(error.message, true); remove.disabled = false; }
       return;
@@ -472,28 +551,35 @@ function renderSettingsMachines() {
       <td>${esc(settingsPersonName(S.emps.find(row => row.name === agent.bot)?.operator))}</td>
       <td>${agent.model ? `${esc(agent.model)}${agent.provider ? `<span class="settings-cell-note">${esc(agent.provider)}</span>` : ''}` : '<span class="muted">—</span>'}</td>
       <td><span class="machine-status"><span class="dot ${agent.revoked_at ? 'failed' : agent.online ? 'ok' : ''}" aria-hidden="true"></span>${agent.revoked_at ? 'revoked' : agent.online ? 'reporting in' : 'not reporting'}${agent.last_seen ? `<span class="muted"> · ${esc(ago(agent.last_seen))}</span>` : ''}</span></td></tr>`).join('');
-  const list = `${revoked ? `<label class="settings-cell-note"><input type="checkbox" data-show-revoked-computers${showRevoked ? ' checked' : ''}> Show revoked computers (${revoked})</label>` : ''}
-    ${cards ? `<div class="scroll"><table class="settings-table settings-machines"><thead><tr><th>Computer</th><th>AI tools</th></tr></thead><tbody>${cards}</tbody></table></div>` : `<div class="empty">${!SETTINGS_PRESENCE.at && SETTINGS_PRESENCE.failed ? 'Computer presence unavailable · checking…' : revoked ? 'No active computers.' : 'No computers yet.'}</div>`}
+  const empty = !SETTINGS_PRESENCE.at && SETTINGS_PRESENCE.failed ? 'Computer presence unavailable · checking…' : revoked ? 'No active computers.' : 'No computers yet.';
+  const list = `${cards ? `<div class="scroll"><table class="settings-table settings-machines"><thead><tr><th>Computer</th><th class="num">Bots</th>${pickers.map(toolHead).join('')}${others.map(toolHead).join('')}<th>Now</th></tr></thead><tbody>${cards}</tbody></table></div>` : `<div class="empty">${empty}</div>`}
+    ${revoked ? `<label class="settings-cell-note machine-show-revoked"><input type="checkbox" data-show-revoked-computers${showRevoked ? ' checked' : ''}> Show revoked (${revoked})</label>` : ''}
     ${agents ? `<h3 class="settings-agents-title">External agents${betaPill('external_agents')}</h3><div class="scroll"><table class="settings-table"><thead><tr><th>Agent</th><th>Owner</th><th>Model</th><th>Status</th></tr></thead><tbody>${agents}</tbody></table></div>` : ''}`;
-  // Only the list is redrawn; the Add computer form (and the code it shows) keeps what was typed.
-  if (!el.querySelector('.machine-enroll')) el.innerHTML = `<div data-machines-list></div>
-    <div class="machine-enroll"><select class="settings-inline-select" id="machine-operator" aria-label="Computer owner">
-      ${people.map(person => `<option value="${esc(person.id)}" ${person.id === S.me?.id ? 'selected' : ''}>${esc(person.name || person.id)}</option>`).join('')}</select>
-      <select class="settings-inline-select" id="machine-kind" aria-label="Kind of computer">${S.config?.hosted ? '<option value="hosted">Hosted computer</option>' : ''}<option value="mac" selected>Mac</option><option value="linux">Linux or cloud server</option><option value="windows">Windows PC (WSL 2${betaFeature('windows') ? ', Beta' : ''})</option></select>
-      <input id="machine-label" type="text" autocomplete="off" aria-label="Computer name" placeholder="Computer name" value="${esc(settingsPersonName(people.find(person => person.id === S.me?.id)?.id || people[0]?.id) + "'s Mac")}">
-      <button class="primary" type="button" id="register-machine">Add computer</button>
-      <div class="machine-enroll-status" id="machine-enroll-status"></div></div>`;
+  // Only the list is redrawn; the Add computer dialog (and the code it shows) keeps what was typed.
+  if (!el.querySelector('#machine-add-dialog')) el.innerHTML = `<div data-machines-list></div><p class="settings-cell-note" id="machine-note" role="status"></p>
+    <dialog class="tmodal tmodal-shell machine-add" id="machine-add-dialog" aria-label="Add computer"><header><h2>Add computer</h2><button class="ghost" type="button" data-machine-add-close>Close</button></header>
+    <div class="tmodal-body machine-enroll subs-form">
+      <label class="subs-field" data-machine-operator-field><span class="k">Owner</span><select class="settings-inline-select" id="machine-operator">
+        ${people.map(person => `<option value="${esc(person.id)}" ${person.id === S.me?.id ? 'selected' : ''}>${esc(person.name || person.id)}</option>`).join('')}</select></label>
+      <label class="subs-field"><span class="k">Kind</span><select class="settings-inline-select" id="machine-kind">${S.config?.hosted ? '<option value="hosted">Hosted computer</option>' : ''}<option value="mac" selected>Mac</option><option value="linux">Linux or cloud server</option><option value="windows">Windows PC (WSL 2${betaFeature('windows') ? ', Beta' : ''})</option></select></label>
+      <label class="subs-field" data-machine-label-field><span class="k">Name</span><input id="machine-label" type="text" autocomplete="off" placeholder="Chris's Mac" value="${esc(settingsPersonName(people.find(person => person.id === S.me?.id)?.id || people[0]?.id) + "'s Mac")}"></label>
+      <div class="onb-actions"><span class="spacer"></span><button class="primary" type="button" id="register-machine">Get code</button></div>
+      <div class="machine-enroll-status" id="machine-enroll-status"></div></div></dialog>`;
+  const addDialog = $('#machine-add-dialog');
+  addDialog.querySelector('[data-machine-add-close]').onclick = () => addDialog.close();
+  const addOpen = $('#machine-add-open');
+  if (addOpen) addOpen.onclick = () => { if (!addDialog.open) addDialog.showModal(); $('#machine-kind').focus(); };
   const listRoot = el.querySelector('[data-machines-list]'), restoreFocus = computerFocusRestore(listRoot);
   patchHTML(listRoot, `${window.runnerOutdatedBanner?.(machines, S.me?.id, settingsPersonName, machineOnline) || ''}${list}`);
   restoreFocus();
   computerDetailPaint();
-  renderSettingsProviderNext();
   const machineDefaultLabel = () => $('#machine-kind').value === 'linux' && S.config?.local ? 'This computer'
     : `${settingsPersonName($('#machine-operator').value)}'s ${({linux: 'server', windows: 'PC'})[$('#machine-kind').value] || 'Mac'}`;
   $('#machine-operator').onchange = () => { $('#machine-label').value = machineDefaultLabel(); };
   // A hosted computer is named and sized on app.tico.dev, so the owner and name fields step aside.
   const machineKindPaint = () => { const hosted = $('#machine-kind').value === 'hosted';
-    $('#machine-operator').hidden = hosted; $('#machine-label').hidden = hosted; };
+    el.querySelector('[data-machine-operator-field]').hidden = hosted; el.querySelector('[data-machine-label-field]').hidden = hosted;
+    $('#register-machine').textContent = hosted ? 'Open hosting' : 'Get code'; };
   $('#machine-kind').onchange = () => { $('#machine-label').value = machineDefaultLabel(); machineKindPaint(); };
   machineKindPaint();
   $('#register-machine').onclick = async event => {

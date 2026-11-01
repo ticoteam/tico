@@ -1,4 +1,4 @@
-// Settings > Computers: one compact row per computer (name, status, operator and Tico version; AI tool chips and Add) and the
+// Settings > Computers: one compact row per computer (status dot and name, bots, a column per AI tool, what it does now) and the
 // pop-up a row opens (Connections, Screen, Bots on this computer, Versions and updates, Settings). A chip only for a
 // connection that was added, usage as "% left" with the reset on hover, a red dot only when bots depend on a
 // broken one; one login per AI tool, named subscriptions a runner still reports not shown; each bot's actual connection,
@@ -26,6 +26,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
       wanted: true, pinned: false, update_available: false, detail: ''});
     const box = {id: 'box', label: 'Team box', operator: 'ana', bots: ['helper', 'ops', 'writer'], platform: 'linux', version: '0.3.52',
       turn_summary: '3 running · 1 starting · 37 waiting for shared login (oldest 2 h) · 5 queued',
+      turn_counts: {running: 3, starting: 1, waiting: 37, queued: 5, waits: []},
       last_seen: at(-3000), needed_runtimes: ['claude', 'codex'], bot_runtimes: ['claude', 'codex'], harness_choices: {grok: false},
       update: {state: 'needs_update', label: 'Needs update', target: '0.3.53'}, inbox_only: false,
       readiness: {
@@ -110,16 +111,21 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await page.waitForFunction(() => SETTINGS_PRESENCE.at && !SETTINGS_PRESENCE.checking);
     const cells = async locator => (await locator.locator('td').allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim());
 
-    // 1. Two cells per row, and nothing else inline: no bots, tool table, sign-in rows or menu.
+    // 1. One row per computer: status and name, bots, a column per AI tool (this server keeps no subscriptions, so each
+    // shows the computer's login), and what it does now. No tool table, sign-in rows or menu inline.
     assert.deepEqual(await page.locator('#set-machines thead th').allInnerTexts().then(a => a.map(t => t.toLowerCase())),
-      ['computer', 'ai tools']);
-    assert.equal((await cells(row('box')))[0], `Team box online ${box.turn_summary} Ana · Tico 0.3.52 Update`);
-    assert.equal((await cells(row('empty')))[0].endsWith('Tico 0.3.53'), true, 'Update only when one waits');
+      ['computer', 'bots', 'claude code', 'codex', 'muse code', 'now']);
+    assert.equal((await cells(row('box')))[0], 'online Team box Update');
+    assert.equal(await row('box').locator('.machine-bot-count').innerText(), '3');
+    assert.equal(await row('box').locator('[data-machine-now]').innerText(), '3 running · 1 starting · 5 queued · 37 waiting');
+    assert.equal((await cells(row('empty')))[0], 'online Spare server', 'Update only when one waits');
+    assert.equal(await row('empty').locator('[data-machine-now]').innerText(), 'idle');
     assert.equal(await page.locator('#set-machines table [role=table], #set-machines table .people-more, #set-machines table [data-model-login]').count(), 0);
 
-    // 4, 5, 8, 9. A chip per connection: tool, thin bar and % left; hover says the rest; a red dot only where bots are stuck.
-    const chips = row('box').locator('.machine-chip:not(.machine-chip-add)');
-    assert.deepEqual(await chips.allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())), ['Claude Code', 'Codex 30%', 'Muse Code']);
+    // 4, 5, 8, 9. A chip per connection under its tool's column: its state, thin bar and % left; hover says the rest;
+    // a red dot only where bots are stuck.
+    const chips = row('box').locator('.machine-chip');
+    assert.deepEqual(await chips.allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())), ['Signed in', 'Signed in 30%', 'Expired']);
     assert.deepEqual(await chips.evaluateAll(list => list.map(c => [c.querySelector('meter')?.value ?? null, !!c.querySelector('.machine-chip-dot')])),
       [[null, false], [30, false], [null, true]]);
     assert.match(await chips.nth(1).getAttribute('title'), /^Codex · Computer's login · 30% left · resets \w{3} \d{1,2}:\d{2}\s?[AP]M$/);
@@ -128,17 +134,15 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     assert.doesNotMatch(await row('box').innerText(), /Acme|beta|Cursor|Grok|signed out/i);
 
     // 24. No connection; never reported yet; revoked hidden.
-    assert.equal((await cells(row('empty')))[1], 'No AI connection + Add');
-    assert.equal(await row('empty').locator('.machine-chip.attention .machine-chip-dot').count(), 1);
-    assert.equal((await cells(row('fresh')))[1], 'Waiting for Fresh Mac');
+    assert.deepEqual((await cells(row('empty'))).slice(2, 5), ['—', '—', '—']);
+    assert.equal(await row('fresh').locator('[data-machine-waiting]').innerText(), 'Waiting');
     assert.equal(await row('old').count(), 0);
 
     // 10. A click on the row opens the pop-up, sections in order.
-    await row('box').locator('.machine-facts').click();
+    await row('box').locator('.machine-name').click();
     const dialog = page.locator('#set-machines dialog.computer-detail[open]');
     await dialog.waitFor();
     assert.equal(await dialog.locator('[data-turn-counts]').innerText(), box.turn_summary);
-    assert.equal(await row('box').locator('.machine-turn-counts').innerText(), box.turn_summary);
     assert.deepEqual(await dialog.locator('section h3').allInnerTexts().then(a => a.map(t => t.toLowerCase())),
       ['connections', 'screen', 'bots on this computer', 'versions and updates', 'settings']);
     // 7. One line per AI tool, the computer's login, used by all its bots on that tool.
@@ -178,14 +182,14 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
       await add.waitFor({state: 'detached'});
     }
     assert.equal(await dialog.locator('[data-connection][data-machine-tool=grok], [data-connection][data-machine-tool=cursor]').count(), 0);
-    assert.doesNotMatch(await row('box').locator('.machine-chips').innerText(), /Grok|Cursor/);
+    assert.doesNotMatch(await row('box').innerText(), /Grok|Cursor/);
     // Usage reads as what is left, everywhere in the pop-up and the list.
     assert.doesNotMatch(await page.locator('#set-machines').innerText(), /% used/);
 
-    // 13. Each bot's actual connection, read-only, with the way to change it.
+    // 13. The bots on this computer, read-only, with the way to change them.
     const bots = dialog.locator('[data-detail-section=bots]');
     assert.deepEqual(await bots.locator('li').allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())),
-      ["Helper Runs on Claude Code · Computer's login", "Ops Runs on Codex · Computer's login", "Writer Runs on Codex · Computer's login"]);
+      ['Helper', 'Ops', 'Writer']);
     assert.equal(await bots.locator('select, input').count(), 0);
     assert.equal(await bots.locator('a[data-computer-bots=box]').innerText(), 'Assign on the Bots page');
 
@@ -211,7 +215,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     box.readiness.runtimes.codex.account = {kind: 'api_key'};
     box.bot_connections[1].warning = 'API credit is not checked here. Check billing or switch to the intended subscription.';
     await page.evaluate(() => loadSettings('devices'));
-    await row('box').locator('.machine-facts').click();
+    await row('box').locator('.machine-name').click();
     await dialog.locator('[data-login-warning=codex]').waitFor();
     assert.match(await dialog.locator('[data-login-warning=codex]').innerText(), /API credit is not checked/);
     assert.equal(await codex.getByRole('button', {name: 'Switch to subscription', exact: true}).isEnabled(), true);
@@ -225,7 +229,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await page.evaluate(() => loadSettings('devices'));
 
     // 24. The pop-up of a computer with no connection.
-    await row('empty').locator('[data-no-connection]').click();
+    await row('empty').locator('.machine-name').click();
     assert.match(await dialog.locator('[data-detail-section=connections]').innerText(), /Bots here can't run until a connection is added/);
     assert.equal(await dialog.locator('[data-add-connection=empty]').count(), 1);
     await page.keyboard.press('Escape');
@@ -332,16 +336,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await page.clock.runFor(100);
     await page.evaluate(() => window.computerClosed);
     assert.equal(await rowButton.evaluate(node => node === document.activeElement), true, 'unfocused name click returns to the computer name');
-    // Add can open from either the list or the detail; polling replaces both openers.
-    const listAdd = row('box').locator('[data-add-connection=box]');
-    await rowButton.focus();
-    await listAdd.dispatchEvent('click');
-    await add.waitFor();
-    await page.evaluate(() => settingsMachinesRefresh());
-    await page.keyboard.press('Escape');
-    await page.clock.runFor(100);
-    await add.waitFor({state: 'detached'});
-    assert.equal(await listAdd.evaluate(node => node === document.activeElement), true, 'Escape returns to the refreshed list Add opener');
+    // Add connection opens from the pop-up; polling replaces its opener and Escape returns to it.
     await rowButton.click();
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
     const detailAdd = dialog.locator('[data-add-connection=box]');
@@ -355,12 +350,6 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     assert.equal(await detailAdd.evaluate(node => node === document.activeElement), true, 'Escape returns to the refreshed detail Add opener');
     assert.ok(presenceReads > openedReads, 'open and reopen read presence');
     await online();
-
-    // Provider and gateway drafts are outside the presence guidance and never repainted by a poll.
-    const providerSignIn = page.locator('#set-provider-next [data-model-login][data-runner=box]');
-    assert.equal(await providerSignIn.count(), 1, 'provider guidance offers the same online sign-in');
-    const providerDraft = page.locator('#set-prov [data-provider-check]');
-    await providerDraft.evaluate(node => { node.value = 'unfinished model choice'; });
 
     // Carry the actual draft node through repaint, including focus and the selected text range.
     await dialog.locator('[data-connection="own:codex"]').evaluate(node => {
@@ -407,8 +396,6 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await page.evaluate(() => settingsMachinesRefresh());
     await online();
     assert.match(await dialog.locator('[data-computer-status]').innerText(), /checking/);
-    assert.equal(await providerSignIn.count(), 1, 'failed read cannot age provider sign-in offline');
-    assert.equal(await providerDraft.inputValue(), 'unfinished model choice');
 
     // An outdated online computer remains in its banner while presence is stale.
     await page.evaluate(() => {
@@ -423,21 +410,14 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     assert.match(await row('box').locator('[data-machine-status]').innerText(), /^offline/);
     assert.match(await dialog.locator('[data-computer-status]').innerText(), /^offline/);
     assert.equal(await dialog.locator('[data-add-connection=box]').isDisabled(), true);
-    assert.equal(await providerSignIn.count(), 0, 'provider guidance follows confirmed disconnect');
     presenceMode = 'live';
     await page.evaluate(() => settingsMachinesRefresh());
     await online();
-    assert.equal(await providerSignIn.count(), 1, 'provider guidance follows reconnect without a tab change');
     for (const held of heldPresence.splice(0)) await held.fulfill({status: 200, contentType: 'application/json',
       body: JSON.stringify({machines: [{...box, last_seen: at(-3 * 3600000)}], services: []})});
     await online(); // A late answer to the timed-out read cannot replace the newer heartbeat.
     await dialog.locator('[data-presence-draft]').evaluate(node => node.remove());
     await page.keyboard.press('Escape');
-    // Provider guidance is keyboard reachable too; a poll never replaces the editable provider form.
-    await providerSignIn.focus();
-    await page.evaluate(() => settingsMachinesRefresh());
-    assert.equal(await providerSignIn.evaluate(node => node === document.activeElement), true);
-    assert.equal(await providerDraft.inputValue(), 'unfinished model choice');
 
     // A first-load presence timeout is local to Computers; the rest of Settings still loads.
     presenceMode = 'slow';
@@ -466,15 +446,10 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await page.clock.resume();
     presenceMode = 'fixed';
 
-    // The list's stacked phone cards must expose the same counts as the pop-up.
+    // On a phone the table scrolls inside its card, never the page; the queue line stays in the pop-up.
     await page.setViewportSize({width: 390, height: 844});
-    const phoneCounts = row('box').locator('.machine-turn-counts');
-    assert.equal(await phoneCounts.innerText(), box.turn_summary);
-    assert.ok(await phoneCounts.evaluate(el => {
-      const cell = el.closest('td'), card = el.closest('tr');
-      return cell.clientWidth >= card.clientWidth - 1 &&
-        el.scrollWidth <= el.clientWidth + 1 && cell.scrollWidth <= cell.clientWidth + 1;
-    }), 'computer row exposes the full counts, wait age and queue on a phone');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways page scroll');
+    assert.ok(await page.locator('#set-machines .scroll').evaluate(el => el.scrollWidth > el.clientWidth), 'the table scrolls in its card');
     await page.setViewportSize({width: 1440, height: 900});
 
     // 25. Revoked computers on request; Revoke lives in the pop-up only.
@@ -494,7 +469,9 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     assert.deepEqual(await dialog.locator('[data-connection]').evaluateAll(list => list.map(c => c.dataset.connection)),
       ['own:claude', 'own:codex', 'own:musecode']);
     assert.doesNotMatch(await dialog.innerText(), /@/, 'no account emails');
-    assert.equal(await dialog.locator('[data-model-login], [data-add-connection], [data-machine-copy-login], [data-computer-remove], [data-inbox-only], [data-member-bots], [data-computer-screen], [data-harness-choice], [data-performance-mode]').count(), 0);
+    assert.equal(await dialog.locator('[data-model-login], [data-add-connection], [data-machine-copy-login], '
+      + '[data-computer-remove], [data-inbox-only], [data-member-bots], [data-turns-at-once], [data-computer-screen], '
+      + '[data-harness-choice], [data-performance-mode]').count(), 0);
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);

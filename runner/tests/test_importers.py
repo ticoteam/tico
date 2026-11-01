@@ -249,6 +249,15 @@ def test_zoom_refuses_a_download_outside_zoom_and_never_follows_redirects_elsewh
     assert not zoom.zoom_host("http://zoom.us/x")
 
 
+def test_zoom_sends_a_query_field_named_path_in_the_query_string(tmp_path):
+    """`get(path, **query)`: the URL path is positional, so a query field may be called `path` and still be sent."""
+    transport = Recorder(zm_route(lambda c, t: {"meetings": [], "next_page_token": ""}, []))
+    importer, _, _ = make(zoom.Zoom, tmp_path, transport, ZOOM_ENV)
+    importer.get("/users", path="a/b c", page_size=5)
+    (call,) = [c for c in transport.calls if c.path == "/v2/users"]
+    assert call.query == {"path": "a/b c", "page_size": "5"}
+
+
 # ---------------------------------------------------------------- Google Meet
 
 def service_account(tmp_path):

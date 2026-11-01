@@ -1,0 +1,24 @@
+{
+  "id": "06-mail-legal-demand",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "counsel@acme.example",
+    "from_name": "Whitcombe and Reyes LLP for Kestrel Books Ltd",
+    "to": "dana@acme.example",
+    "date": "2026-10-26T09:50:00Z",
+    "subject": "Demand to stop using the Kestrel name in onboarding",
+    "snippet": "We act for Kestrel Books Ltd. Our client objects to the Kestrel label in your onboarding flow. Please confirm within 14 days that this use will stop.",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [],
+    "is_internal": false,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX"
+    ]
+  },
+  "note": "A legal demand with a deadline: needs the owner, and legal risk."
+}

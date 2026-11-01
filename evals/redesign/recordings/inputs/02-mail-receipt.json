@@ -1,0 +1,24 @@
+{
+  "id": "02-mail-receipt",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "receipts@acme.example",
+    "from_name": "Harbor Cloud Hosting",
+    "to": "dana@acme.example",
+    "date": "2026-10-27T03:15:00Z",
+    "subject": "Your receipt for October (INV-20418)",
+    "snippet": "Thanks for your payment of $148.00 on 27 October. Your plan renews on 27 November. The invoice is in the billing portal.",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [],
+    "is_internal": false,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX"
+    ]
+  },
+  "note": "A receipt: money is involved, but nothing is asked. Archive or watch."
+}

@@ -26,13 +26,13 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
       if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-      if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+      if (p === '/api/employees') return json([{name: 'sales', display_name: 'Sales', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/conversations')
-        return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
+        return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:sales']}] : []});
       if (p.endsWith('/snapshot')) { await snapshotHeld; return json({messages: [], execution: null}); }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      if (p === '/api/v2/chat/botops') {
+      if (p === '/api/v2/chat/sales') {
         const text = route.request().postDataJSON().text;
         if (answer === 'error') return json({error: {code: 'internal', detail: 'Server error'}}, 500);
         if (answer === 'html') return route.fulfill({contentType: 'text/html', body: '<!doctype html><title>Sign in</title>'});
@@ -42,7 +42,7 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
       }
       return json(unrouted(p));
     });
-    await page.goto('https://tico-ui.test/#/bot/botops');
+    await page.goto('https://tico-ui.test/#/bot/sales');
     const box = page.locator('#chat-composer textarea');
     const value = () => box.inputValue();
     const toasts = () => page.locator('.toast.err').allInnerTexts();

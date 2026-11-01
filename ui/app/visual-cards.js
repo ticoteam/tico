@@ -29,6 +29,18 @@ function visualSrc(f, field = 'src') {
   }
   return /^https?:$/.test(url.protocol) && /^\/visuals\/[A-Za-z0-9_.-]+$/.test(url.pathname) && !url.search ? url.href : null;
 }
+// A page held in Tico file hosting has a `src` on the app's own route, which sends its frame on to the company's files
+// address (backend/visuals.py serve). The desktop app follows a frame there only once it has acknowledged that address
+// from the signed-in config (NATIVE_VISUAL_FILES, app/src/visual_origin.rs); until then, and in a shell too old to
+// know it, the page is an Open card rather than a frame whose redirect would open the browser. Pictures and SVG are
+// <img>, never a navigation, so they need nothing.
+function visualFrameOk(kind, src) {
+  if (kind !== 'page' || !(window.ticoNative || /TicoHub/.test(navigator.userAgent))) return true;
+  let url; try { url = new URL(src, location.href); } catch { return false; }
+  return url.origin !== location.origin || !!NATIVE_VISUAL_FILES;
+}
+// The approved address a page's frame shows from, or null for an Open card (pages, ui/app/pages.js).
+const visualPageSrc = src => { const ok = visualSrc({src}); return ok && visualFrameOk('page', ok) ? ok : null; };
 // An ACK can arrive after a live snapshot painted chips. Reuse only the open
 // threads' cached authorized data; no new read, draft reset or whole-page refresh.
 function nativeVisualRepaint() {
@@ -46,7 +58,7 @@ const VISUAL_OPEN_KINDS = new Set(['page', 'svg']);
 function visualState(f) {
   if (!f || typeof f !== 'object' || !f.file_id || !Number.isInteger(Number(f.version)) || !VISUAL_BODY[f.kind]) return null;
   if (f.removed) return 'removed';
-  if (visualSrc(f)) return 'ready';
+  if (visualSrc(f)) return visualFrameOk(f.kind, visualSrc(f)) ? 'ready' : 'open';
   return f.open === true && VISUAL_OPEN_KINDS.has(f.kind) ? 'open' : null;
 }
 function visualOpenBody(f) {

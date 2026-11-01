@@ -57,7 +57,7 @@ def depts(draft):
     return counts
 
 
-SPEC_COUNTS = {"everything": 73, "software": 51, "services": 38, "local": 41, "store": 39}
+SPEC_COUNTS = {"everything": 72, "software": 50, "services": 37, "local": 40, "store": 38}
 
 
 def test_1_each_model_has_its_spec_seat_count_and_every_seat_names_a_template_or_a_seat_to_build():
@@ -107,7 +107,7 @@ def test_the_first_chart_comes_from_the_model_the_company_s_signals_pick():
     # Finance reporting lines: the Controller under the Head of Finance, the books under the Controller.
     by = {b["title"]: b for b in draft["bots"]}
     assert D.manager_of(draft, by["Controller"]) == by["Head of Finance"]["id"]
-    assert D.manager_of(draft, by["Bookkeeper"]) == by["Controller"]["id"]
+    assert D.manager_of(draft, by["Billing Specialist"]) == by["Controller"]["id"]
     assert D.manager_of(draft, by["FP&A Analyst"]) == by["Head of Finance"]["id"]
     # A chart with bots on it is never seeded again, even after the visitor took most of them off.
     trimmed = {**draft, "bots": draft["bots"][:3]}
@@ -180,6 +180,9 @@ def test_6_a_person_fills_a_seat_with_no_bot_yet():
     assert not results[0]["ok"]
     # "cap table" names the Equity Manager role for bot_add.
     assert A.find_role("cap table")["slug"] == "equity-manager"
+    # The built-in's old name and its new one both name it; a bare "CEO" is a person's title, not the bot.
+    assert A.find_role("CEO Bot")["slug"] == A.find_role("Strategy Bot")["slug"] == "goal-manager"
+    assert A.find_role("CEO") is None
 
 
 def test_7_show_me_everything_switches_the_chart_to_the_everything_model():
@@ -188,8 +191,8 @@ def test_7_show_me_everything_switches_the_chart_to_the_everything_model():
                          ("seat_fill", {"seat": "Equity Manager", "name": "Ana"}),
                          ("model_use", {"model": "everything"}))
     assert all(r["ok"] for r in results), results
-    assert results[2]["said"] == "The chart is now the Everything model (73 seats)."
-    assert len(draft["bots"]) == 73 and depts(draft)["finance"] == 13
+    assert results[2]["said"] == "The chart is now the Everything model (72 seats)."
+    assert len(draft["bots"]) == 72 and depts(draft)["finance"] == 12
     assert next(b for b in draft["bots"] if b["title"] == "Equity Manager")["person"] == "ana", "a held seat stays"
     assert "undo" in draft, "switching models is a change the visitor can undo"
     for key in ("software", "services", "local", "store"):
@@ -206,7 +209,7 @@ def test_a_held_seat_renamed_in_another_case_survives_a_model_switch_and_keeps_i
                          ("bot_rename", {"bot": seat(draft, "controller")["id"], "title": "controller"}),
                          ("model_use", {"model": "software"}))
     assert all(r["ok"] for r in results), results
-    bookkeeper = seat(draft, "bookkeeping")
+    bookkeeper = seat(draft, "billing")
     draft, results = run(draft, ("seat_fill", {"seat": bookkeeper["title"], "name": "Ana"}),
                          ("bot_rename", {"bot": bookkeeper["id"], "title": bookkeeper["title"].lower()}),
                          ("model_use", {"model": "everything"}))
@@ -215,9 +218,9 @@ def test_a_held_seat_renamed_in_another_case_survives_a_model_switch_and_keeps_i
     assert len(names) == len(set(names)), "no seat twice in another case"
     controller = seat(draft, "controller")
     assert controller["title"] == "controller" and controller["person"] == "ben"
-    assert seat(draft, "bookkeeping")["person"] == "ana"
+    assert seat(draft, "billing")["person"] == "ana"
     # The held lowercase Controller still heads the seats under it, kept and new alike.
-    assert seat(draft, "bookkeeping")["reports_to"] == controller["id"]
+    assert seat(draft, "billing")["reports_to"] == controller["id"]
     assert seat(draft, "accounts-payable")["reports_to"] == controller["id"]
 
 
@@ -235,7 +238,7 @@ def test_filling_a_seat_on_an_empty_team_keeps_the_visitor_the_owner():
 
 def test_8_a_company_no_model_fits_starts_from_everything():
     draft, line = first_chart("We do a bit of everything.", ["small_team"])
-    assert len(draft["bots"]) == 73
+    assert len(draft["bots"]) == 72
     assert line == "Nothing you said points to one kind of company, so we started from the Everything model."
 
 
@@ -253,17 +256,17 @@ def test_9_the_cap_table_belongs_to_the_equity_manager_only():
 
 def test_5_the_visitor_s_own_edits_stand_and_a_removed_bot_stays_off():
     draft = started()
-    draft["bots"] = [b for b in draft["bots"] if b["template"] != "bookkeeping"]
+    draft["bots"] = [b for b in draft["bots"] if b["template"] != "billing"]
     draft["bots"][4]["title"] = "Ada"
-    draft["removed"] = [{"template": "bookkeeping", "title": "Bookkeeper"}]
+    draft["removed"] = [{"template": "billing", "title": "Billing Specialist"}]
     after, results = run(draft, ("bot_set_start", {"bot": "Ada", "start": "now"}))
-    assert results[0]["ok"] and "Bookkeeper" not in titles(after) and "Ada" in titles(after)
-    assert after["removed"] == [{"template": "bookkeeping", "title": "Bookkeeper"}]
+    assert results[0]["ok"] and "Billing Specialist" not in titles(after) and "Ada" in titles(after)
+    assert after["removed"] == [{"template": "billing", "title": "Billing Specialist"}]
     after, results = run(after, ("bot_remove", {"bot": "Ada"}))
-    assert [r["title"] for r in after["removed"]] == ["Bookkeeper", "Ada"]
+    assert [r["title"] for r in after["removed"]] == ["Billing Specialist", "Ada"]
     # Asked for again, it comes back and leaves the list.
-    after, results = run(after, ("bot_add", {"template": "Bookkeeper", "reason": "Invoices eat your Fridays."}))
-    assert results[0]["ok"] and "Bookkeeper" in titles(after) and [r["title"] for r in after["removed"]] == ["Ada"]
+    after, results = run(after, ("bot_add", {"template": "Billing Specialist", "reason": "Invoices eat your Fridays."}))
+    assert results[0]["ok"] and "Billing Specialist" in titles(after) and [r["title"] for r in after["removed"]] == ["Ada"]
 
 
 def test_6_undo_takes_back_the_last_change_once_and_leaves_pending_alone():
@@ -295,7 +298,7 @@ def test_7_the_file_matches_the_draft_and_reads_back_after_any_edits():
             goals = [g["id"] for g in turn.draft["goals"]] or ["none"]
             name, args = rng.choice([
                 ("company_set", {"name": rng.choice(odd), "about": rng.choice(odd), "signals": ["small_team"]}),
-                ("bot_add", {"template": rng.choice(["bookkeeping", "SEO", "Recruiter"]), "reason": rng.choice(odd),
+                ("bot_add", {"template": rng.choice(["billing", "SEO", "Recruiter"]), "reason": rng.choice(odd),
                              "title": rng.choice(odd) or "Helper"}),
                 ("bot_remove", {"bot": rng.choice(bots)}), ("bot_rename", {"bot": rng.choice(bots), "title": rng.choice(odd)}),
                 ("bot_set_reports_to", {"bot": rng.choice(bots), "to": rng.choice(bots + ["you"])}),
@@ -597,11 +600,11 @@ def test_10_scrubbing_copies_and_a_second_pass_finds_nothing():
 
 
 BAD = [
-    ("nonsense", {}), ("bot_add", {"template": "bookkeeping"}), ("bot_add", {"template": "bookkeeping", "reason": ""}),
-    ("bot_add", {"template": "bookkeeping", "reason": "x", "colour": "red"}),
-    ("bot_add", {"template": "bookkeeping", "reason": "x", "title": "Builder"}),
+    ("nonsense", {}), ("bot_add", {"template": "billing"}), ("bot_add", {"template": "billing", "reason": ""}),
+    ("bot_add", {"template": "billing", "reason": "x", "colour": "red"}),
+    ("bot_add", {"template": "billing", "reason": "x", "title": "Builder"}),
     ("bot_add", {"template": "botops", "reason": "a second one"}),
-    ("bot_add", {"template": "bookkeeping", "reason": "x" * 301}), ("bot_add", {"template": 7, "reason": "x"}),
+    ("bot_add", {"template": "billing", "reason": "x" * 301}), ("bot_add", {"template": 7, "reason": "x"}),
     ("bot_remove", {"bot": "botops"}), ("bot_remove", {"bot": "ghost"}), ("bot_rename", {"bot": "builder", "title": "Reviewer 1"}),
     ("bot_rename", {"bot": "builder", "title": " "}), ("bot_set_reports_to", {"bot": "engineering-lead", "to": "builder"}),
     ("bot_set_reports_to", {"bot": "builder", "to": "builder"}), ("bot_set_reports_to", {"bot": "builder", "to": "Dispatcher"}),
@@ -666,7 +669,7 @@ def test_pending_rides_along_outside_the_file_and_the_undo_and_lets_go_of_a_team
 
 
 def test_one_bot_has_the_first_job_and_it_starts_now():
-    draft, results = run(started(), ("bot_set_first_job", {"bot": "bookkeeping", "job": "Chase last month's invoices"}),
+    draft, results = run(started(), ("bot_set_first_job", {"bot": "billing", "job": "Chase last month's invoices"}),
                          ("bot_set_first_job", {"bot": "Builder", "job": "Fix the signup bug"}))
     marked = [b for b in draft["bots"] if b.get("first_job")]
     assert all(r["ok"] for r in results) and [(b["title"], b["start"]) for b in marked] == [("Builder", True)]
@@ -692,6 +695,51 @@ def test_an_agent_the_visitor_already_runs_keeps_only_what_the_file_can_hold():
     # No rule needing a person is written as an empty list, not as nothing.
     none, _ = run(draft, ("rules_set_never", {"never": []}))
     assert yaml.safe_load(C.to_yaml(none, CREATED))["rules"]["never_without_a_person"] == []
+
+
+def test_a_bot_s_team_is_written_only_when_set_and_reads_back_as_it_was_written():
+    """The name of a bot's group rides in the file as `team`, for an employee and for an agent the visitor runs."""
+    draft, _ = run(started(), ("agent_set", {"runtime": "codex", "job": "Reviews pull requests"}))
+    staff = next(b for b in draft["bots"] if not b["core"] and not b["existing"])
+    agent = next(b for b in draft["bots"] if b["existing"])
+    staff["team"], agent["team"] = "Lab network", "Biopharma accounts"
+    text = C.to_yaml(draft, CREATED)
+    doc = yaml.safe_load(text)
+    assert [e["team"] for e in doc["employees"] if "team" in e] == ["Lab network"]
+    assert [e["team"] for e in doc["existing_agents"]] == ["Biopharma accounts"]
+    assert C.to_yaml(C.from_yaml(text), CREATED) == text
+    assert {b["title"]: b["team"] for b in C.from_yaml(text)["bots"] if "team" in b} == {
+        staff["title"]: "Lab network", agent["title"]: "Biopharma accounts"}
+    # A bot with no team has no such line, and the draft holds none.
+    assert all("team" not in e for e in yaml.safe_load(C.to_yaml(started(), CREATED))["employees"])
+
+
+def test_a_team_is_trimmed_clipped_and_scrubbed_on_read_and_a_blank_one_is_no_team():
+    doc = yaml.safe_load(C.to_yaml(started(), CREATED))
+    first, blank, secret, wrong = doc["employees"][:4]
+    first["team"], blank["team"], secret["team"] = "  " + "L" * 50 + "  ", "   ", GITHUB
+    bots = {b["id"]: b for b in C.from_yaml(yaml.safe_dump(doc, sort_keys=False))["bots"]}
+    assert bots[first["id"]]["team"] == "L" * 40
+    assert "team" not in bots[blank["id"]]
+    assert bots[secret["id"]]["team"] == "[removed]"
+    wrong["team"] = ["Lab", "network"]
+    with pytest.raises(D.DraftError, match="team"):
+        C.from_yaml(yaml.safe_dump(doc, sort_keys=False))
+    draft = started()
+    draft["bots"][0]["team"] = "x" * 41
+    with pytest.raises(D.DraftError, match="team"):
+        C.to_yaml(draft, CREATED)
+
+
+def test_a_team_rides_in_the_starter_plan_as_text_and_packed():
+    draft = started()
+    draft["company"]["name"] = "Acme Build"
+    draft["bots"] = draft["bots"][:4]           # a small chart: the packed plan must fit the 7 KB environment limit
+    next(b for b in draft["bots"] if not b["core"])["team"] = "Lab network"
+    text = C.to_yaml(draft, CREATED)
+    saved = starter.load(text)
+    assert [b["team"] for b in saved["bots"] if "team" in b] == ["Lab network"]
+    assert starter.unpack(starter.pack(text)) == saved
 
 
 def test_a_reports_to_whose_target_left_the_chart_falls_back_to_the_line_the_file_draws():
@@ -759,16 +807,16 @@ def chart(bots, people=1):
 
 @pytest.mark.parametrize("seat", [61, 100, 300])
 def test_4_the_chat_adds_a_61st_100th_and_300th_bot_with_no_limit_message(seat):
-    draft, (result,) = run(chart(seat - 1), ("bot_add", {"template": "bookkeeping", "title": "Extra Bookkeeper",
+    draft, (result,) = run(chart(seat - 1), ("bot_add", {"template": "billing", "title": "Extra Billing Specialist",
                                                           "reason": "More invoices."}))
-    assert result["ok"] and len(draft["bots"]) == seat and "Extra Bookkeeper" in titles(draft)
+    assert result["ok"] and len(draft["bots"]) == seat and "Extra Billing Specialist" in titles(draft)
     assert not any(word in result["said"].lower() for word in ("limit", "most", "plan can hold"))
     assert C.Turn(draft, TODAY).finish()["bots"] == draft["bots"]          # and the page can send it back
 
 
 def test_the_301st_seat_is_refused_with_a_plain_error_and_a_301_bot_draft_is_refused():
     full = chart(300)
-    for name, args in (("bot_add", {"template": "bookkeeping", "title": "Extra Bookkeeper", "reason": "x"}),
+    for name, args in (("bot_add", {"template": "billing", "title": "Extra Billing Specialist", "reason": "x"}),
                        ("agent_set", {"runtime": "codex", "job": "Writes our code."})):
         turn = C.Turn(full, TODAY)
         result = turn.apply(name, args)
@@ -790,7 +838,7 @@ def test_a_41st_person_joins_and_the_301st_is_refused_plainly():
 
 
 def test_a_full_300_seat_chart_with_its_undo_and_chat_fits_the_draft_and_the_company_file():
-    draft, _ = run(chart(300, people=300), ("bot_rename", {"bot": "bookkeeping", "title": "Books"}))
+    draft, _ = run(chart(300, people=300), ("bot_rename", {"bot": "billing", "title": "Books"}))
     draft["chat"] = [{"who": "me" if i % 2 else "bot", "text": "x" * D.LIMITS["chat_text"]} for i in range(D.LIMITS["chat"])]
     assert len(draft["undo"]["bots"]) == 300
     assert C.Turn(draft, TODAY).finish()["bots"] == draft["bots"]
@@ -1006,7 +1054,7 @@ def test_a_full_strategy_at_every_limit_beside_a_300_seat_chart_fits_the_starter
         "listening": {"requests": [("%d " % i + prose(L["request"]))[:L["request"]] for i in range(L["requests"])],
                       "posts": [{"source": "web", "url": url, "title": prose(L["post_title"]), "when": "2026-10-24",
                                  "tag": "market"} for _ in range(L["posts"])]}}
-    draft, _ = run(chart(300, people=300), ("bot_rename", {"bot": "bookkeeping", "title": "Books"}))
+    draft, _ = run(chart(300, people=300), ("bot_rename", {"bot": "billing", "title": "Books"}))
     owner_only = {**draft, "company": {**draft["company"], "name": "Acme"}, "people": [p for p in draft["people"] if p["owner"]],
                   "strategy": strategy}
     saved = starter.load(C.to_yaml(owner_only, CREATED))
@@ -1034,3 +1082,19 @@ def test_a_bet_added_to_a_plan_with_no_strategy_starts_the_block_and_undo_takes_
     assert "version: 0.3" in C.to_yaml(draft, CREATED)
     undone, _ = run(draft, ("undo", {}))
     assert "strategy" not in undone
+
+
+def test_a_saved_draft_with_a_retired_template_loses_that_seat_and_keeps_the_rest():
+    draft = started()
+    controller = next(b for b in draft["bots"] if b["template"] == "controller")
+    old = {**copy.deepcopy(controller), "id": "books", "template": "bookkeeping", "title": "Acme Books", "lead": False,
+           "reports_to": controller["id"]}
+    under = {**copy.deepcopy(controller), "id": "books-helper", "template": "billing", "title": "Acme Billing",
+             "lead": False, "reports_to": "books"}
+    built = {**copy.deepcopy(controller), "id": "old-books", "template": "bookkeeping", "title": "Our Books",
+             "lead": False, "existing": True, "runtime": "hermes"}
+    draft["bots"] = [b for b in draft["bots"] if b["template"] != "billing"] + [old, under, built]
+    out = D.check(draft)
+    by_id = {b["id"]: b for b in out["bots"]}
+    assert "books" not in by_id and "old-books" in by_id
+    assert "reports_to" not in by_id["books-helper"]

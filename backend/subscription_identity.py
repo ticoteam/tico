@@ -20,6 +20,14 @@ def identity(c, runner, profile):
     return {'id': sid, 'display_name': label}
 
 
+def display_names(c):
+    """{connection_id: display_name} for every renamed subscription in one pass (Operations shared_logins), from the
+    subscription rows Operations' profiles already read in this snapshot."""
+    from .subscriptions import subscription_meta
+    return {key: value['display_name'] for key, value in subscription_meta(c).items()
+            if key.startswith('subscription:') and value.get('display_name')}
+
+
 def usage_label(c, sid):
     if sid.startswith('subscription:'):
         runner, profile = json.loads(sid.removeprefix('subscription:'))

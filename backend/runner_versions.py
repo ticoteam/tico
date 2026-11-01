@@ -15,7 +15,7 @@ stuck gets a nudge.
 from . import releases
 from .store import H
 
-MIN_RUNNER_RELEASE = "0.1.0"
+MIN_RUNNER_RELEASE = "0.4.0"
 NUDGE_AFTER_S = 3600
 KINDS = ("mac", "linux", "docker")
 LABELS = {"current": "Up to date", "updating": "Updating", "needs_update": "Needs update",
@@ -156,12 +156,21 @@ def update_since(c, runner_id, state):
     return now
 
 
+VERSION_SQL = "SELECT * FROM runner_versions WHERE runner_id=?"
+
+
+def _version(c, runner_id):
+    """One runner_versions row for the current read snapshot (Health drain lines and holding_since share it)."""
+    from .read_cache import one
+    return one(c, VERSION_SQL, (runner_id,))
+
+
 def holding_since(c, runner_id):
     """Since when this computer has taken no new work because it is updating, or None while it still takes work.
     New runners report drain counts as soon as they stop claiming. Older runners keep claiming for UPDATE_DRAIN_S.
     An `updating` runner claims nothing, whatever release it is on (a Docker update still settling reports it on the
     new release)."""
-    row = c.execute("SELECT update_state,update_since FROM runner_versions WHERE runner_id=?", (runner_id,)).fetchone()
+    row = _version(c, runner_id)
     if not row or row["update_state"] not in ("waiting", "updating") or not row["update_since"]:
         return None
     progress = drain_progress(c, runner_id)
@@ -173,16 +182,20 @@ def holding_since(c, runner_id):
 
 def drain_progress(c, runner_id):
     """Counts only, safe wherever a computer's update hold is already visible. Old runners report neither."""
-    row = c.execute("SELECT update_state,update_running,update_handed_back FROM runner_versions WHERE runner_id=?",
-                    (runner_id,)).fetchone()
+    row = _version(c, runner_id)
     if not row or row["update_state"] not in ("waiting", "updating") or row["update_running"] is None:
         return ""
     return f"{row['update_running']} running, {row['update_handed_back'] or 0} handed back"
 
 
 def paused(c, runner_id):
-    """Why this computer must not claim work, or "" when it may."""
-    row = c.execute("SELECT release FROM runner_versions WHERE runner_id=?", (runner_id,)).fetchone()
+    """Why this computer must not claim work, or "" when it may.
+
+    Claim waiter order asks once per candidate computer; reuse the release row for the
+    current read snapshot via `read_cache.one`.
+    """
+    from .read_cache import one
+    row = one(c, "SELECT release FROM runner_versions WHERE runner_id=?", (runner_id,))
     if not row or not incompatible(row["release"]):
         return ""
     return (f"This computer runs Tico {row['release']}, which this server ({releases.version()}) cannot work with; "
@@ -190,7 +203,18 @@ def paused(c, runner_id):
 
 
 def load(c):
-    return {r["runner_id"]: dict(r) for r in c.execute("SELECT * FROM runner_versions")}
+    """{runner_id: row} for every computer. Cached for the current read snapshot so Health /
+    `/computers` / Operations callers that ask once per machine (via `computer_details`) do not
+    re-SELECT the whole table each time."""
+    from . import read_cache
+    values = read_cache.cache(c)
+    key = "runner_versions.load"
+    if values is not None and key in values:
+        return values[key]
+    out = {r["runner_id"]: dict(r) for r in c.execute("SELECT * FROM runner_versions")}
+    if values is not None:
+        values[key] = out
+    return out
 
 
 # What a runner before this release said when nothing supervised it; the line now says how to fix that.

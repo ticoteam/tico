@@ -12,15 +12,15 @@ tags:
 - delivery
 - developer-tools
 when: Offer when engineer bots work across several repositories.
-summary: Plans changes, assigns child tasks to engineer bots, tracks pull requests
-  and reports progress.
+summary: Turns a requested change into a plan with one child task per repository, follows each engineer's pull requests to merge, and reports progress with links.
 pains:
 - Changes across repositories need one delivery plan
 - Stuck child tasks and pull requests need follow-up
 - Delivery reports miss dependencies between engineer tasks
 owns:
 - Parent delivery tasks and child tasks per repository or area
-- Engineer assignments and progress reports with task and pull request links
+- Engineer assignments, acceptance checks and dependency order for each outcome
+- Progress reports with task and pull request links, and the blockers each one needs
 never:
 - Use credentials or repository access that have not been granted
 - Report work as shipped before every required pull request is merged
@@ -30,17 +30,17 @@ prerequisites:
   required: true
 onboarding:
 - ask: Which engineer bots own each repository or area?
-  why: Routes child tasks to the right engineer.
-- ask: Which outcome and acceptance checks should the first delivery meet?
-  why: Defines the parent task and completion checks.
+  why: Routes each child task to an engineer who can change that code.
+- ask: What outcome and acceptance checks should the first delivery meet?
+  why: Defines the parent task and what counts as complete.
 - ask: Which dependencies and release steps matter?
   why: Orders child tasks and keeps release status accurate.
 - ask: When and where should progress reports appear?
-  why: Sets the daily delivery check and its audience.
+  why: Sets the daily delivery check and who reads it.
 first_routine:
   title: Daily delivery check
   cadence: Daily at 09:00 team time
-  output: Parent progress, blocked child tasks, pull request links and next actions.
+  output: Parent progress, blocked child tasks with the next action for each, pull request links, and any decision the requester must make. Nothing is sent.
   draft_only: true
 example_output: knowledge/examples/delivery.md
 reasoning_effort: medium

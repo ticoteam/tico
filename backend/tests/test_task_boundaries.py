@@ -1,52 +1,12 @@
 """Task provenance and explicit lifecycle decisions survive secondary read/write paths."""
 import json
 
-import pytest
-
-from backend import routines
 from backend.store import H, encode
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post  # noqa: F401
 
 
 def make_task(api, title, **fields):
     return post(api, 'tasks', {'owner': 'ops', 'title': title, 'body': 'Review the packet.', **fields})
-
-
-def routine(api):
-    return post(api, 'bots/ops/routines', {'title': 'Review the scheduled packet',
-                'cron': '0 9 * * *', 'timezone': 'UTC', 'text': 'Review the packet.'})['routine']['id']
-
-
-def test_occurrences_filter_before_limit_and_revoke_after_reassignment(api):
-    bot_token(api)
-    sid = routine(api)
-    public = make_task(api, 'Review public packet')
-    hidden = make_task(api, 'Review private packet', private=True)
-    with api.app.state.store.transaction() as c:
-        for when, tid in [('1', public['id']), ('2', hidden['id'])]:
-            c.execute('INSERT INTO schedule_occurrences VALUES(?,?,?,?)', (sid, when, tid, 'created'))
-        config = c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0]
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (encode({'private_tasks_default': True}),))
-        private_default = routines.open_task(c, api.app.state.auth, routines.row(c, sid), 'Private default run', 'Review it.', H.now())
-        c.execute('INSERT INTO schedule_occurrences VALUES(?,?,?,?)', (sid, '3', private_default['id'], 'created'))
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (config,))
-        assert private_default['private']
-        # A visible occurrence cannot disclose execution metadata derived from a second private task.
-        mid = c.execute('SELECT j.message_id FROM jobs j JOIN attempts a ON a.job_id=j.id LIMIT 1').fetchone()[0]
-        c.execute('UPDATE messages SET refs_json=? WHERE id=?', (encode({'task': public['id'], 'source': hidden['id']}), mid))
-        c.execute("UPDATE attempts SET started='2026-10-02T12:00:00Z',finished='2026-10-02T12:01:00Z',state='completed'")
-
-    assert [r['task_id'] for r in get(api, f'routines/{sid}/occurrences?limit=1', 'ben-test')['occurrences']] == [public['id']]
-    assert get(api, f'routines/{sid}/occurrences?limit=1')['occurrences'][0]['task_id'] == private_default['id']
-    # The bot's manager also reads a private routine-owned task; unrelated Ben still sees only public work.
-    outsider = get(api, f'routines/{sid}/occurrences', 'ben-test')['occurrences'][0]
-    assert all(outsider[k] is None for k in ('started', 'finished', 'duration_s', 'exit'))
-    own = get(api, f'routines/{sid}/occurrences')['occurrences']
-    assert next(r for r in own if r['task_id'] == public['id'])['duration_s'] == 60
-    public = post(api, 'tasks/' + public['id'], {'version': public['version'], 'private': True, 'owner': 'ben'})
-    assert [r['task_id'] for r in get(api, f'routines/{sid}/occurrences', 'ben-test')['occurrences']] == [public['id']]
-    post(api, 'tasks/' + public['id'], {'version': public['version'], 'owner': 'priya'})
-    assert get(api, f'routines/{sid}/occurrences', 'ben-test')['occurrences'] == []
 
 
 def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receipts(api):
@@ -113,58 +73,6 @@ def test_nested_answers_and_file_reviews_filter_each_source_message(api):
     assert replay.status_code == 200 and 'Restricted' not in replay.text
     assert 'Restricted review' in json.dumps(get(api, f"tasks/{target['id']}/comments"))
     assert 'Restricted note' in json.dumps(get(api, f"tasks/{target['id']}/files"))
-
-
-@pytest.mark.parametrize('prior_attempt,legacy', [(True, True)])
-def test_routine_removal_preserves_unrelated_work(api, prior_attempt, legacy):
-    if prior_attempt:
-        bot_token(api)
-    sid = routine(api)
-    tid = post(api, f'routines/{sid}/run', {})['task_id']
-    other = make_task(api, 'Review unrelated packet')
-    chat = post(api, 'messages', {'to': 'ops', 'text': 'Unrelated chat', 'conversation_id': other['conversation_id']})
-    with api.app.state.store.transaction() as c:
-        # Coalesced firings must not close/bump the same task twice.
-        c.execute('INSERT INTO schedule_occurrences VALUES(?,?,?,?)', (sid, 'extra', tid, 'coalesced_into_existing_task'))
-        before = H.task(c, tid)
-        if legacy:
-            conv = H.open_conversation(c, H.KEEPER, ['bot:ops'], kind='task', subject='Legacy task')
-            c.execute('UPDATE conversations SET task_id=? WHERE id=?', (tid, conv['id']))
-            c.execute('UPDATE messages SET conversation_id=?,refs_json=? WHERE json_extract(refs_json,\'$.task\')=?',
-                      (conv['id'], '{}', tid))
-            c.execute('UPDATE tasks SET conversation_id=? WHERE id=?', (conv['id'], tid))
-        unrelated = [dict(r) for r in c.execute('SELECT j.id,j.state,m.delivered_at FROM jobs j JOIN messages m ON m.id=j.message_id '
-                     'WHERE json_extract(m.refs_json,\'$.task\')=?', (other['id'],))]
-        assert unrelated and all(r['state'] == 'queued' and r['delivered_at'] is None for r in unrelated)
-    post(api, f'routines/{sid}/delete', {})
-    with api.app.state.store.read() as c:
-        after = H.task(c, tid)
-        assert after['status'] == 'closed' and after['version'] == before['version'] + 1
-        assert H.task(c, other['id'])['status'] == 'open'
-        assert H.message(c, chat['id'])['delivered_at'] is None
-        assert c.execute('SELECT state FROM jobs WHERE message_id=?', (chat['id'],)).fetchone()[0] == 'queued'
-        assert [dict(r) for r in c.execute('SELECT j.id,j.state,m.delivered_at FROM jobs j JOIN messages m ON m.id=j.message_id '
-                    'WHERE json_extract(m.refs_json,\'$.task\')=?', (other['id'],))] == unrelated
-        assert not c.execute('SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id '
-                             f'WHERE {H.MESSAGE_TASK_SQL}=? AND m.to_actor LIKE \'bot:%\' AND m.delivered_at IS NULL', (tid,)).fetchone()
-        assert not c.execute('SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id '
-                             f"WHERE {H.MESSAGE_TASK_SQL}=? AND j.state='queued'", (tid,)).fetchone()
-
-
-@pytest.mark.parametrize('claimed_by', ['input'])
-def test_routine_removal_preserves_work_carried_by_an_unrelated_attempt(api, claimed_by):
-    bot_token(api)
-    sid = routine(api)
-    tid = post(api, f'routines/{sid}/run', {})['task_id']
-    with api.app.state.store.transaction() as c:
-        aid = c.execute('SELECT id FROM attempts LIMIT 1').fetchone()[0]
-        if claimed_by == 'carried':
-            c.execute('UPDATE tasks SET carried_by=? WHERE id=?', (aid, tid))
-        else:
-            mid = c.execute('SELECT id FROM messages WHERE json_extract(refs_json,\'$.task\')=? LIMIT 1', (tid,)).fetchone()[0]
-            c.execute('INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)', (aid, mid))
-    post(api, f'routines/{sid}/delete', {})
-    assert get(api, 'tasks/' + tid)['task']['status'] == 'open'
 
 
 def test_pipeline_cannot_remap_hidden_done_task_but_names_and_order_are_editable(api):

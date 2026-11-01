@@ -18,7 +18,7 @@
 .bot-tool-strip{position:relative;display:inline-flex;align-items:center;flex:none;margin-left:6px}
 .bts-stack{display:inline-flex;align-items:center;gap:0;height:24px;padding:0 6px 0 3px;border:0;border-radius:11px;background:none;color:var(--muted);cursor:pointer;font:inherit}
 .bts-stack:hover,.bts-stack[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
-.bts-stack:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.bts-stack:focus-visible{outline:var(--focus-ring);outline-offset:1px}
 .bts-icon{position:relative;flex:none;display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;background:var(--surface2);color:var(--ink);box-shadow:0 0 0 2px var(--bg)}
 .bts-stack .bts-icon+.bts-icon{margin-left:-3px}   /* about a third under the one before, which stays on top */
 .bts-stack .bts-icon:nth-child(1){z-index:3}.bts-stack .bts-icon:nth-child(2){z-index:2}.bts-stack .bts-icon:nth-child(3){z-index:1}
@@ -33,15 +33,15 @@
 .bts-row .bts-name{flex:none;font-weight:600;color:var(--ink)}
 .bts-row .bts-id{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
 .bts-row .bt-problem{flex:none;font-size:11.5px}
-.bts-manage{display:block;margin-top:4px;padding:5px 10px 3px;border-top:1px solid var(--line);font-size:12px;color:var(--accent-quiet)}
-.bts-manage:hover{color:var(--accent)}
+.bts-manage{display:block;margin-top:4px;padding:5px 10px 3px;border-top:1px solid var(--line);font-size:12px;color:var(--link-quiet)}
+.bts-manage:hover{color:var(--link)}
 .tool-initials{font-size:11.5px;font-weight:600;letter-spacing:.01em}
 .bt-list .bt-item{border-top:1px solid var(--line);font-size:13px;line-height:1.45}
 .bt-list .bt-item:first-child{border-top:0}
 .bt-list summary{list-style:none;display:flex;align-items:center;gap:8px;min-width:0;padding:7px 2px;border-radius:6px;cursor:pointer}
 .bt-list summary::-webkit-details-marker{display:none}
 .bt-list summary:hover{background:var(--surface2)}
-.bt-list summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.bt-list summary:focus-visible{outline:var(--focus-ring);outline-offset:-2px}
 .bt-list summary::after{content:'›';flex:none;width:12px;text-align:center;color:var(--muted);font-size:15px;line-height:1;transition:transform var(--dur-fast) var(--ease)}
 .bt-list details[open]>summary::after{transform:rotate(90deg)}
 .bt-list .bt-icon-static{flex:none;width:22px;height:22px;border-radius:50%;background:var(--surface2);display:inline-grid;place-items:center;color:var(--ink)}
@@ -58,6 +58,7 @@
 .bt-list .bt-repo summary{padding:5px 2px}
 .bt-list .bt-repo .bt-name{font-weight:500;max-width:55%}
 .bt-list .bt-repo .bt-body{padding-left:2px}
+.bt-list .bt-open{display:inline-block;margin-top:6px;font-size:var(--t-sm)}
 .bt-list dl{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 12px}
 .bt-list dt{color:var(--muted);font-size:12px;padding-top:1px}
 .bt-list dd{margin:0;min-width:0;overflow-wrap:anywhere}
@@ -191,7 +192,23 @@
       render();
     }
     refresh();
-    const timer = setInterval(() => { if (!host.isConnected) clearInterval(timer); else refresh(); }, 60000);
+    // Same as Files: do not refresh tools for a hidden tab; wake when it is shown again.
+    // A tab shown again reloads only when its last load is about an interval old (a little under, so timer jitter
+    // never skips a minute): switching tabs often must not
+    // ask more than the minute timer did.
+    let loadedAt = Date.now();
+    const due = () => { if (!document.hidden && Date.now() - loadedAt >= 55000) { loadedAt = Date.now(); refresh(); } };
+    const onVis = () => {
+      if (!host.isConnected) { document.removeEventListener('visibilitychange', onVis); return; }
+      due();
+    };
+    const timer = setInterval(() => {
+      if (!host.isConnected) {
+        clearInterval(timer); document.removeEventListener('visibilitychange', onVis); return;
+      }
+      due();
+    }, 60000);
+    document.addEventListener('visibilitychange', onVis);
   }
 
   // The Tools card under More: one line a tool (icon, name, its key values, status) that opens to every detail,
@@ -221,7 +238,9 @@
         ? `<span class="bt-problem">${esc(tool.problem)}</span>`
         : `${statusPill(tool)}${shownDetail(tool) ? ` <span class="muted">${esc(shownDetail(tool))}</span>` : ''}`;
       rows.push(['Status', status]);
-      return `<div class="bt-body"><dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl></div>`;
+      // Who else has it and its credentials live in Library › Tools (ui/app/redesign-library.js).
+      const open = tool.service ? `<a class="bt-open" href="#/library/tools/${encodeURIComponent(tool.service)}?who=bot:${encodeURIComponent(slug)}">Open in Tools</a>` : '';
+      return `<div class="bt-body"><dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>${open}</div>`;
     }
     // The line's key values: the model and effort for the model, access for a repository, otherwise who it acts
     // as and what it may do. A problem takes their place, so it is read without opening the tool.

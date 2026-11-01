@@ -16,8 +16,8 @@ function v2ChatStop() {
   clearTimeout(V2C.waitTimer);
   V2C = null;
 }
-// Which of the viewer's rooms with a bot is its chat: the shared room, or one of their own. The bot page and the
-// CEO Bot on Goals both show this one room.
+// Which of the viewer's rooms with a bot is its chat: the shared room, or one of their own. The bot page shows this
+// one room.
 function v2ChatMode(slug) {
   slug = botBranchChatTarget(slug);
   const bot = (S.emps || []).find(e => e.name === slug);
@@ -384,6 +384,8 @@ function v2MessageHTML(m) {
     const title = Object.values(m.ref_tasks || {})[0]?.title || chatLine(plainActors(m.body), 80);
     return `<details class="chat-system chat-fold" ${v2FoldAttrs(m)}><summary><b>Note</b> · ${esc(title)} ${when}</summary><div class="md">${safeMd(plainActors(m.body), {shortLinks: true})}</div></details>`;
   }
+  // A bot's reply held by an org rule: one line naming the rule, never the text (ui/app/org-rule-holds.js).
+  if (m.refs?.org_rule && m.kind === 'notice') return ruleHeldNoteHTML(m);
   if (m.kind === 'notice') return `<div class="chat-system" data-message="${esc(m.id || '')}"><b>Task</b> ${esc(plainActors(m.body))}<div class="chat-meta">${when}</div></div>`;
   // One bot's message to another, landed in a person's room: shown as an aside, not a reply.
   if (String(m.from_actor || '').startsWith('bot:') && String(m.to_actor || '').startsWith('bot:') && m.to_actor !== m.from_actor)
@@ -783,6 +785,7 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     watch.end('sent');
     if (pending) pending.acknowledged = true;       // restored composers share this identity too
     pillAcknowledge(P, text, files, draftScope);
+    pillWaySent(P, extra);
     if (j.message?.refs?.action_result) toast(j.message.refs.action_result.decision === 'approved' ? 'Approved' : 'Declined');
     v2ChatAdopt(slug, j);
     P.retryTries = 0;

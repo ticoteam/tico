@@ -4,12 +4,11 @@ person-only one never; the owner's "Assistant acts without asking" off makes eve
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
-import json
 import re
 
 import pytest
 
-from backend import assistant as assistant_mod, settings_catalog
+from backend import settings_catalog
 from backend.assistant import valid_operation
 from backend.auth import Identity
 from backend.settings_entries import ENTRIES
@@ -153,64 +152,31 @@ def test_the_assistant_never_runs_two_settings_at_once_nor_cards_a_person_only_o
     assert card["status"] == "pending"
 
 
-def outbound_and_quiet_rules(api):
-    """A stored wake rule that sends outside, off, and a quiet one: synthetic rows, no delivery worker runs here."""
+def outbound_automation(api):
+    """A stored automation that sends outside, off: synthetic rows, no delivery worker runs here. Wake rules that sent
+    outside became automations; an automation is no catalogue setting, so it is never the Assistant's to change."""
     hook = post(api, "webhooks", {"name": "Synthetic", "url": "https://example.com/hook", "events": ["*"]})["webhook"]
-    rule = post(api, "rules", {"scope_kind": "team", "event": "status_or_relation", "then": "action",
-                                "params": {"action": "send_webhook", "webhook": hook["id"],
-                                           "type": "custom.settings_test", "data": {}}, "on": False})["rule"]
-    quiet = post(api, "rules", {"scope_kind": "team", "event": "status_or_relation", "then": "note",
-                                 "on": False})["rule"]
-    return rule, quiet
+    return post(api, "automations", {"name": "Send out", "owner": "person:ana", "enabled": False,
+                                     "trigger": {"type": "event", "name": "task.created"},
+                                     "steps": [{"id": "send", "type": "action", "do": "call_webhook",
+                                                "args": {"webhook": hook["id"], "type": "custom.settings_test"}}]})
 
 
-def stored_rule(api, rule_id):
-    with api.app.state.store.read() as c:
-        row = c.execute("SELECT enabled,then_outcome,params_json,revision FROM rules WHERE id=?", (rule_id,)).fetchone()
-    return row["enabled"], row["then_outcome"], json.loads(row["params_json"]).get("action"), row["revision"]
-
-
-KEEPS_THE_STORED_ACTION = ({"expected_revision": 1, "on": True},
-                           {"expected_revision": 1, "event": "assignment", "when": {"state": "open"}},
-                           {"expected_revision": 1, "then": None, "params": None, "on": True},
-                           {"expected_revision": 1, "then": "action", "params": None, "on": True})
-
-
-def test_the_assistant_cannot_partially_enable_or_edit_a_stored_outbound_wake_rule(api):
-    rule, quiet = outbound_and_quiet_rules(api)
-    before = stored_rule(api, rule["id"])
-    r, attempt = assistant_turn(api, "ana-test", "Update my wake rules")
+def test_the_assistant_cannot_turn_on_or_edit_an_automation_that_sends_outside_nor_card_it(api):
+    made = outbound_automation(api)
+    r, attempt = assistant_turn(api, "ana-test", "Turn my automations on")
     token = attempt["token"]
     cited = {**headers(token), "X-Tico-On-Behalf-Of": "turn"}
-    # Left out or sent as null, the rule's action and params stay the stored send-out (rules.update).
-    for value in KEEPS_THE_STORED_ACTION:
-        # Neither the catalogue nor the write itself, sent on the person's words: the body keeps the stored send-out.
-        err, refused = mcp(api, "hub_settings_set", {"key": "rules.wake", "id": rule["id"], "value": value,
-                                                     "on_behalf_of": "turn"}, token)
-        assert err and refused["error"] == "person_only", refused
-        raw = api.post(f"/api/v2/rules/{rule['id']}", json=value, headers=cited)
-        assert raw.status_code == 403 and raw.json()["error"]["code"] == "person_only", raw.text
-        assert api.app.state.store.settings.public_url.rstrip("/") + "/#/settings/" in raw.json()["error"]["detail"]
-        assert stored_rule(api, rule["id"]) == before == (0, "action", "send_webhook", 1)
-    # A stored rule that keeps to Tico turns on at once on their words.
-    raw = api.post(f"/api/v2/rules/{quiet['id']}", json={"expected_revision": 1, "on": True}, headers=cited)
-    assert raw.status_code == 200 and stored_rule(api, quiet["id"])[0] == 1, raw.text
-
-
-def test_a_card_never_holds_a_change_to_a_stored_outbound_wake_rule(api, monkeypatch):
-    # Wake rules are not on cards yet (NO_CARD_YET); once they are, a card holds the same class `plan` gives.
-    monkeypatch.setattr(assistant_mod, "catalogue_card", lambda method, path: True)
-    rule, quiet = outbound_and_quiet_rules(api)
-    r, attempt = assistant_turn(api, "ana-test", "Turn my wake rules on")
-    for value in KEEPS_THE_STORED_ACTION:
-        refused = post(api, "assistant/actions", {"summary": "Wake rule on", "method": "POST",
-                                                  "path": f"/api/v2/rules/{rule['id']}", "body": value},
-                       token=attempt["token"], expected=422)
-        assert "not the person's own to change in Settings" in refused["error"]["detail"], (value, refused)
-    card = post(api, "assistant/actions", {"summary": "Wake rule on", "method": "POST",
-                                           "path": f"/api/v2/rules/{quiet['id']}",
-                                           "body": {"expected_revision": 1, "on": True}}, token=attempt["token"])
-    assert card["action"]["status"] == "pending", card
+    for value in ({"enabled": True}, {"name": "Renamed"}, {"steps": []}):
+        # Sent on the person's words, the write itself is refused: it waits for the person's own yes.
+        raw = api.patch(f"/api/v2/automations/{made['id']}", json=value, headers=cited)
+        assert raw.status_code == 403 and raw.json()["error"]["code"] == "confirm_required", raw.text
+        # Nor may it hold one on a Confirm card.
+        post(api, "assistant/actions", {"summary": "Automation on", "method": "PATCH",
+                                        "path": f"/api/v2/automations/{made['id']}", "body": value},
+             token=token, expected=422)
+    after = get(api, f"automations/{made['id']}")
+    assert (after["enabled"], after["name"], after["version"], len(after["steps"])) == (False, "Send out", 1, 1)
 
 
 def test_with_the_rule_off_a_repository_setting_is_a_card_the_tap_runs(api):

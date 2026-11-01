@@ -616,6 +616,41 @@ class Gateway:
                 "SELECT * FROM slack_events WHERE state='received' AND (processed IS NULL OR processed<=?) "
                 "ORDER BY received, ts LIMIT 50", (H.shift(self.clock(), seconds=-RETRY_SECONDS),))]
 
+    def offer(self):
+        """A stored channel message (the readers' copy) is offered once to `automations.on_slack`, after the same sender
+        and channel checks as a DM. The row keeps its `stored` state, so the readers, the edit path and an `@Tico` copy
+        that promotes it are unchanged; `processed` alone records the offer. Only while an enabled message automation
+        names a channel, and only for messages that arrived after the oldest such automation was made, so a new one does
+        not replay the channel's history."""
+        from . import automations
+        with self.store.read() as c:
+            since = c.execute(
+                "SELECT MIN(created) FROM automations WHERE trigger_type='message' AND enabled=1 AND deleted_at IS NULL "
+                "AND flow_json LIKE '%slack:#%'").fetchone()[0]
+            if not since:
+                return []
+            rows = [dict(r) for r in c.execute(
+                "SELECT * FROM slack_events WHERE state='stored' AND author='human' AND channel_kind='channel' "
+                "AND processed IS NULL AND received>=? ORDER BY received, ts LIMIT 50", (since,))]
+        out = []
+        for event in rows:
+            with self.store.read() as c:
+                person, _user, denied = self.verify_sender(c, event)
+            channel, channel_denied = self.verify_channel(event) if person and not denied else (None, None)
+            taken = []
+            if person and channel and not channel_denied:
+                try:
+                    with self.store.transaction() as c:
+                        taken = automations.on_slack(c, event, person, channel, self.settings)
+                except Exception:
+                    # Offered once either way: one message an automation cannot take must not stop every later tick.
+                    LOG.exception("slack: offering %s to message automations failed", event["event_id"])
+            with self.store.transaction() as c:
+                c.execute("UPDATE slack_events SET processed=? WHERE event_id=?", (self.clock(), event["event_id"]))
+            if taken:
+                out.append({"event_id": event["event_id"], "state": "stored", "reason": "automation"})
+        return out
+
     def verify_sender(self, c, event):
         """The verified person behind the event, or (None, reason). Network first, then the roster."""
         try:
@@ -1018,6 +1053,14 @@ class Gateway:
                 self.finish(c, event, "denied", reason=denied)
             LOG.info("Event %s denied: %s", event["event_id"], denied)
             return {"event_id": event["event_id"], "state": "denied", "reason": denied}
+        from . import automations
+        # A message automation on this channel handles it (backend/automations.py); the server drains its run.
+        with self.store.transaction() as c:
+            taken = automations.on_slack(c, event, person, channel, self.settings)
+            if taken:
+                self.finish(c, event, "recorded", actor="human:" + person["id"], reason="automation")
+        if taken:
+            return {"event_id": event["event_id"], "state": "recorded", "reason": "automation"}
         with self.store.read() as c:
             state = self.state(c, event, person, channel)
         fleet, thread = state["roster"], state["thread"]
@@ -1340,6 +1383,9 @@ class Gateway:
                 if not privacy.public_message(c, H.message(c, post["message_id"])):
                     c.execute("UPDATE slack_posts SET state='cancelled',text='',error='Task privacy prevents delivery',updated=? "
                               "WHERE message_id=? AND state IN ('ready','rate_limited')", (self.clock(), post["message_id"]))
+                    continue
+                from . import automation_actions
+                if automation_actions.slack_held(c, post):    # its inbox's send switch went off since it was queued
                     continue
                 shaped = self.rendered(c, post)
                 claimed = c.execute("UPDATE slack_posts SET state='sending',attempts=attempts+1,updated=? "
@@ -1675,7 +1721,8 @@ class Gateway:
 
     # ------------------------------------------------------------------ the loop
     def tick(self):
-        """One pass: pending events, then replies to mirror, then posts to send, then the readers' pass when due."""
+        """One pass: pending events, the channel messages message automations hear, then replies to mirror, then posts to
+        send, then the readers' pass when due."""
         out = []
         for event in self.pending():
             try:
@@ -1685,6 +1732,7 @@ class Gateway:
                 with self.store.transaction() as c:
                     self.finish(c, event, "failed", reason=f"{type(exc).__name__}: {exc}")
                 out.append({"event_id": event["event_id"], "state": "failed"})
+        out.extend(self.offer())
         self.task_completions()
         self.originate()
         self.mirror()

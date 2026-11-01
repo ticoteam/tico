@@ -14,7 +14,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
 
 const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
-  bot('goal-manager', 'CEO Bot', 'p:ana', {reports_to: ''})];
+  bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''})];
 const people = [{id: 'ana', name: 'Ana Silva', org_parent: ''}, {id: 'ben', name: 'Ben Park', org_parent: 'p:ana'},
   {id: 'cara', name: 'Cara Diaz', org_parent: 'p:ana'}];
 const SIGNAL_COLOUR = {on_track: 'green', at_risk: 'yellow', off_track: 'red'};
@@ -69,7 +69,7 @@ const judged = g => g.kpis.some(k => ['red', 'yellow', 'green'].includes(k.statu
         posted.push({goal: add[1], body, key: req.headers()['idempotency-key']});
         if (hold) await hold;
         if (refuse === 'drop') return route.abort('failed');
-        if (refuse === 'forbidden') return json({error: {code: 'forbidden', detail: 'The goal\'s owner, the owner of the goal it serves, someone above them or the CEO Bot records a check-in'}}, 403);
+        if (refuse === 'forbidden') return json({error: {code: 'forbidden', detail: 'The goal\'s owner, the owner of the goal it serves, someone above them or the Strategy Bot records a check-in'}}, 403);
         // The server's colour (backend/goals.py score): a judged measure wins, else the latest check-in that answered.
         const g = goals.find(x => x.id === add[1]);
         const checkin = {id: 'c' + posted.length, goal_id: g.id, ts: new Date().toISOString(), author: 'human:ben', source_actor: 'human:ben', body: body.body, signal: body.signal || null};
@@ -87,7 +87,7 @@ const judged = g => g.kpis.some(k => ['red', 'yellow', 'green'].includes(k.statu
     const panel = page.locator('#goal-panel');
     const openPanel = async owner => {
       if (await panel.evaluate(d => d.open).catch(() => false)) await panel.locator('[data-gp-close]').click();
-      await page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont)`).click();
+      await page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont) .gt-name`).click();
       await panel.locator('.gp-goal').first().waitFor();
     };
     const goal = id => panel.locator(`[data-gp-goal="${id}"]`);

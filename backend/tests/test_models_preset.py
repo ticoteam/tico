@@ -33,10 +33,18 @@ def heartbeat(api, machine, bot, signed_in, isolated):
                  "bots": {bot: {"ready": signed_in, "runtime": "claude", "model": CLAUDE["model"],
                                 "repository_present": True, "configuration_valid": True,
                                 "problems": [] if signed_in else ["claude is not signed in"]}}}
-    if isolated is not None:
-        readiness["isolated"] = isolated
+    says(readiness, isolated)
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": readiness},
          token=machine["token"])
+
+
+def says(readiness, isolated):
+    """`readiness` saying it isolates bots (True/False), nothing (None), or "cloud": a cloud machine, not isolated
+    but one company's trust group (runner-rs/src/cloud_machine.rs), which runs Tico models too."""
+    if isolated == "cloud":
+        readiness.update(isolated=False, trust="cloud_machine")
+    elif isolated is not None:
+        readiness["isolated"] = isolated
 
 
 def connected(api, monkeypatch):
@@ -143,6 +151,15 @@ def test_a_bot_that_names_its_own_fallback_keeps_it(api, monkeypatch):
     own = {**CLAUDE, "fallback": {"harness": "codex", "model": "gpt-5.5"}}
     assert models_preset.with_gateway_fallback(record, {"isolated": True}, own) == own
     assert "gateway_fallback" not in models_preset.with_gateway_fallback(record, {"isolated": False}, CLAUDE)
+    cloud = {"isolated": False, "trust": "cloud_machine"}
+    assert "gateway_fallback" in models_preset.with_gateway_fallback(record, cloud, CLAUDE)
+
+
+def test_only_isolation_or_a_cloud_machines_trust_group_runs_gateway_work():
+    assert models_preset.runs_gateway({"isolated": True})
+    assert models_preset.runs_gateway({"isolated": False, "trust": "cloud_machine"})
+    for ready in ({"isolated": False}, {}, None, {"isolated": "true"}, {"isolated": False, "trust": "other"}):
+        assert not models_preset.runs_gateway(ready), ready
 
 
 def test_the_turn_carries_what_each_gateway_model_reads():
@@ -223,7 +240,7 @@ def test_no_sign_in_card_under_the_other_choices(api):
         assert needs(api) == []
 
 
-@pytest.mark.parametrize("isolated", [True, False, None])
+@pytest.mark.parametrize("isolated", [True, False, None, "cloud"])
 def test_a_computer_that_cannot_run_gateway_work_says_so_and_the_picker_marks_tico_models(api, monkeypatch, isolated):
     from backend import readiness
     from backend.tests.test_api import get
@@ -257,14 +274,13 @@ def on_tico(api, machine, isolated):
     readiness = {"schema_version": 1, "runtimes": {"pi": {"installed": True, "authenticated": "missing"}},
                  "bots": {"ops": {"ready": True, "runtime": "pi", "model": "tico-general-medium-1.0",
                                   "repository_present": True, "configuration_valid": True}}}
-    if isolated is not None:
-        readiness["isolated"] = isolated
+    says(readiness, isolated)
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": readiness},
          token=machine["token"])
 
 
 @pytest.mark.parametrize("preset", [models_preset.RECOMMENDED, ""])
-@pytest.mark.parametrize("isolated", [True, False, None])
+@pytest.mark.parametrize("isolated", [True, False, None, "cloud"])
 def test_a_bot_on_a_tico_model_waits_where_the_computer_does_not_say_it_runs_bots_as_their_own_user(
         api, monkeypatch, preset, isolated):
     """A Tico model the bot names itself, under any choice: no attempt is handed out that its runner must refuse
@@ -280,6 +296,10 @@ def test_a_bot_on_a_tico_model_waits_where_the_computer_does_not_say_it_runs_bot
     if isolated:
         attempt = claim(api, machine, "ops")
         assert attempt["config"]["model"] == "tico-general-medium-1.0" and attempt["gateway"] is True
+        if isolated == "cloud":
+            # The runner says `trust` only to a server whose config answer takes it (runner-rs/src/readiness.rs).
+            from backend.tests.test_api import get
+            assert get(api, "config", machine["token"])["readiness_trust"] is True
         return
     rows, found = held(api, machine)
     reason = "not_isolated" if isolated is False else "isolation_unknown"

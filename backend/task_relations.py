@@ -155,11 +155,16 @@ def prime_ancestry(conn, task_ids):
 
 def live_blocker(conn, task_id, statuses):
     """The first blocker still in one of `statuses`, or None."""
-    marks = ",".join("?" * len(statuses))
-    row = conn.execute("SELECT t.id FROM task_relations r JOIN tasks t ON t.id=r.from_task "
-                       f"WHERE r.to_task=? AND r.kind='blocks' AND t.status IN ({marks}) "
-                       "ORDER BY r.created, r.rowid LIMIT 1", (task_id, *statuses)).fetchone()
+    from .read_cache import one
+    row = one(conn, live_blocker_sql(len(statuses)), (task_id, *statuses))
     return row[0] if row else None
+
+
+def live_blocker_sql(count):
+    """live_blocker's read for `count` statuses (auto_tasks.prime_waits seeds it for many tasks)."""
+    return ("SELECT t.id FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+            f"WHERE r.to_task=? AND r.kind='blocks' AND t.status IN ({','.join('?' * count)}) "
+            "ORDER BY r.created, r.rowid LIMIT 1")
 
 
 def live_blockers(conn, task_id, statuses):
@@ -325,6 +330,11 @@ def _history(conn, actor, from_id, to_id, kind, added, note="", at=None):
     for here, field, other in ((from_id, out_field, to_id), (to_id, in_field, from_id)):
         H._task_event(conn, here, actor, field, None if added else other, other if added else None, note)
         conn.execute("UPDATE tasks SET updated=? WHERE id=?", (at, here))
+    if added and kind == "blocks":
+        # A blocker added changes what the task waits on (backend/task_holds.py). One taken off is recomputed by
+        # remove_blocker after reconcile; a child moved in or out by set_parent and task_create.
+        from . import task_holds
+        task_holds.refresh(conn, to_id)
 
 
 def _mine(conn, actor, row, mover):
@@ -493,6 +503,14 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
     if old and row["status"] not in ("done", "closed", "declined"):
         # The old parent may have nothing left open now.
         H._parent_finished(conn, {**row, "status": "closed"}, row["status"], actor, parent=old)
+    # What each parent waits on changed: the old one lost a child (a hold cleared, when it was open), the new one
+    # gained one (backend/task_holds.py).
+    from . import task_holds
+    if old:
+        live = row["status"] not in ("done", "closed", "declined")
+        task_holds.refresh(conn, old, f"{task_holds.title(conn, row)} moved away" if live else None)
+    if new:
+        task_holds.refresh(conn, new)
     from .roadmap_flow import changed, sync
     changed(conn, child_id)
     if old:
@@ -598,12 +616,16 @@ def remove_blocker(conn, actor, task_id, blocker_id, mover=None, note="", keeper
     if actor != H.KEEPER:
         H._task_private_writer(conn, actor, row)
         _blocker_gate(conn, actor, row, _mover(conn, actor, mover))
+    blocker = H.task(conn, blocker_id)
     if not _delete(conn, blocker_id, task_id, "blocks"):
         H.refuse(conn, actor, "not-found", f"{blocker_id} does not block {task_id}")
     _history(conn, actor, blocker_id, task_id, "blocks", False, note if keeper_note is None else keeper_note)
     H.event(conn, actor, "task.unrelate", task_id, {"task": blocker_id, "kind": "blocked_by"})
     from .task_blocked import reconcile
     reconcile(conn, task_id)
+    from . import task_holds
+    # The blocker taken off is a hold cleared: the last one sends a bot's task back to work (task_holds.refresh).
+    task_holds.refresh(conn, task_id, f"{task_holds.title(conn, blocker)} no longer blocks it" if blocker else None)
     from .check_blocked import changed
     changed(conn, task_id)
     from .blocker_asks import unjoined

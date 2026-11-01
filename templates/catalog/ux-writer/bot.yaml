@@ -31,5 +31,5 @@ tools:
     can: [read]
     note: "reads pull requests and diffs that change user-facing text; every review is a draft on the task for an engineer to post"
 # Writing to GitHub is the owner's decision, not the template's: the team's GitHub App token can write, so the only
-# thing between this bot and a public comment is its declared access and.claude/settings.json, which deny every write
+# thing between this bot and a public comment is its declared access and .claude/settings.json, which deny every write
 # verb. It stays read only; public comments stay drafts until a person turns mail sending on in Tico; requested posts need granted write access.

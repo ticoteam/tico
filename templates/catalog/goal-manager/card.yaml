@@ -1,8 +1,8 @@
-# The CEO Bot. Installed with every environment: it proposes the strategy to the owner, keeps the KPIs and sets the
+# The Strategy Bot. Installed with every environment: it proposes the strategy to the owner, keeps the KPIs and sets the
 # goals' automatic colours.
 template: goal-manager
 slug: goal-manager
-name: CEO Bot
+name: Strategy Bot
 required: true
 bootstrap: true
 icon: target

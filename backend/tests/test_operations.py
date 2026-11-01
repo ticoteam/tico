@@ -71,8 +71,11 @@ def test_backup_notifications_follow_active_implementation_without_rewriting_his
     current = {"mode": "remote", "target_kind": "s3", "last_replicated_at": H.now()}
     monkeypatch.setattr(replication, "status", lambda: current)
     assert issues() == []
-    current["last_replicated_at"] = old
+    current["last_replicated_at"] = old     # an old copy with nothing behind it is a quiet database, not a problem
+    assert issues() == []
+    current["behind_since"] = old           # the backup has lacked a transaction the database has for 50 hours
     assert len(issues()) == 1 and issues()[0]["title"] == "Backups need attention"
+    del current["behind_since"]
     current.update(mode="off", last_replicated_at=None)
     assert issues()[0]["severity"] == "error"
     current.update(mode="remote", last_replicated_at=H.now(),

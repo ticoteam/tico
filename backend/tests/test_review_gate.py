@@ -66,7 +66,7 @@ def test_receipt_at_current_head_allows_review_child_and_other_receipts_do_not_w
         assert bool(c.execute("SELECT 1 FROM jobs WHERE bot='cmo'").fetchone()) is allowed
     if not allowed:
         current = get(api, 'tasks/' + task['id'])['task']
-        assert current['step']['name'] == 'Blocked' and current['version'] > task['version']
+        assert current['step']['name'] == 'In Progress' and current['version'] > task['version']
         assert HEAD in response.text and (OLD if receipt else 'no receipt') in response.text
         assert len(notices(api, task)) == 1  # child request and step retries share the fixed notice
 

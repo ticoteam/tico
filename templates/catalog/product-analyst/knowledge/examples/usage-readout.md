@@ -24,6 +24,13 @@ Checked: the "class_created" event fired normally; the drop coincides with the n
 ## Retention by signup week (active studios)
 Cohorts 2026-08-03 to 2026-09-21: week-4 retention 61% to 66%, within range. No cohort flagged.
 
+## What moved
+- Activation fell to 38% from a 4-week average of 44%, at "add first class" (53% of signups against 64% on average). The timing matches the class form released 2026-09-22; the cause is not established.
+- Mobile events stop at 18:00 on 2026-09-28. Web events are at normal volume, so this looks like ingest lag, not a fall in use.
+
+## One question answered
+Did the new class form cause the activation drop? Not yet. The timing fits, but nothing separates it from the other changes that week. A staged test of the old form against the new one would answer it.
+
 ## Could not read
 Mobile events after 2026-09-28 18:00 are missing from `app` (ingest lag); mobile numbers stop there.
 

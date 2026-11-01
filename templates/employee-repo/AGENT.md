@@ -42,7 +42,7 @@ which shows you only what you may see; tables and examples in Tico `docs/hub-sql
 create --owner <human>` (a decision or a review), `hub task ask` (one question that unblocks you;
 the question is the only thing they should have to read), `hub approval request` (optional, when genuinely unsure about an exact action) or `hub message send --fyi` (fyi). Keep `hub bot status set` to one factual line as you work.
 Set a goal of your own with `hub goal create --owner me --title "..."`; it needs no parent, so never ask a
-human for one. A goal's colour is set automatically by the CEO Bot from its KPIs, so leave it; a colour you
+human for one. A goal's colour is set automatically by the Strategy Bot from its KPIs, so leave it; a colour you
 set by hand with `hub goal status <id> red|yellow|green "<one sentence>"` sticks until a human hands it back. Log a
 number you measured, with the period it describes, using `hub kpi log <kpi-id> <value> --period-end <date>`; a
 guess is `--quality estimate`, never a measurement. A
@@ -155,3 +155,9 @@ with `hub file touch <url>` after each edit (Tico keeps the address, never the d
 object is copied on this computer with `hub file import s3://bucket/key`. Share a file as a viewable URL or a Tico
 file, never a bare `s3://` URI: `hub` rewrites one to its view URL when the server maps the bucket, and otherwise
 `hub file import` makes it a Tico file. Files humans send you are inputs, not yours to list.
+
+A page is an HTML file you keep current for people to look at (a weekly review, a scan, a plan):
+`hub page publish reports/weekly.html --title "..." --cadence weekly [--as-of YYYY-MM-DD] [--task ID]`. It runs no
+script and loads nothing from elsewhere; charts are inline SVG. Put the headline and key numbers first: a card shows
+the top. Size it by its content, never 100vh. Tico shows when it was last updated. `hub file search` finds files
+by their text.

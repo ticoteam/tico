@@ -2,9 +2,9 @@
 
 A check is a subtask of a Dev ticket requesting one of its board's check steps (Review 1, Review 2 or QA on the Dev
 board: backend/step_flow.titled), owned by a bot. It is blocked when it is Waiting or
-waits on an open blocker. Its ticket then shows Blocked (backend/task_blocked.py) with the check's reason, and the
-ticket's builder gets one notice in the ticket's own room per blocked episode, never Head of Engineering. When the
-check works again, or finishes, the ticket goes back to the step it was at.
+waits on an open blocker. Its ticket then shows the hold (backend/task_blocked.py) with the check's reason, and the
+ticket's builder gets one notice in the ticket's own room per blocked episode, never Head of Engineering. The ticket
+stays at its step while held. When the check works again, or finishes, the hold clears and the ticket is where it was.
 """
 import re
 
@@ -13,6 +13,8 @@ from . import review_gate
 GENERIC = "Waiting on a hold"       # task_blocked.transition's reason when a wait had no note
 # A person wait's note starts "Blocked on Ana: "; the ticket's reason names who it waits on at its end instead.
 PERSON_PREFIX = re.compile(r"^Blocked on [^:]{1,120}: ")
+# A reason Tico derived from the check's holds names its holder first (backend/task_holds.py); the ticket names it last.
+HOLDER_PREFIX = re.compile(r"^Waiting on [^:]{1,120}(: |$)")
 
 
 def _H():
@@ -43,6 +45,12 @@ def blocked(c, child):
     if child["status"] == "waiting":
         detail = H.wait_detail(c, child) or {}
         why = PERSON_PREFIX.sub("", str(child.get("blocked_reason") or "").strip())
+        if child.get("blocked_kind") != "manual":
+            from .task_holds import NOTHING, LEFT
+            why = "" if why.startswith((NOTHING, LEFT)) else HOLDER_PREFIX.sub("", why)
+            # Held by nothing Tico tracks: the check's own note says why, as detail beneath the ticket's reason.
+            why = why or PERSON_PREFIX.sub("", next((s.strip() for s in str(child.get("note") or "").splitlines()
+                                                     if s.strip()), ""))[:300]
         if not why or why == GENERIC:
             why = detail.get("why") or "it is waiting"
         return {"why": why, "on": detail.get("on") or child.get("waiting_on")}

@@ -75,3 +75,28 @@ def test_a_pushed_item_is_a_hub_task_with_the_meeting_it_came_from(api):
     # A task with no owner is refused rather than guessed.
     bare = add(api, rid, {"section": "task", "text": "Someone should follow up"})["item"]["id"]
     push(api, rid, bare, expected=422)
+
+
+def test_the_v2_aliases_answer_what_the_old_paths_do(api):
+    """The runner hostname only routes /api/v2, so Tico Recorder's Send calls these; each answers as its old path does."""
+    rid = record(api, {"title": "Old and new paths"})
+    old_edit = api.post(f"/api/meetings/{rid}/edit", json={"title": "Via v1", "version": 1}, headers=headers())
+    new_edit = api.post(f"/api/v2/meetings/{rid}/edit", json={"title": "Via v2", "version": 2}, headers=headers())
+    assert old_edit.status_code == new_edit.status_code == 200, new_edit.text
+    assert old_edit.json()["title"] == "Via v1" and new_edit.json()["title"] == "Via v2"
+
+    detail = {"owner": "human:ben", "priority": "p1"}
+    old_item = add(api, rid, {"section": "task", "text": "Send the pricing sheet", "detail": detail})["item"]
+    created = api.post(f"/api/v2/meetings/{rid}/items", json={"section": "task", "text": "Send the pricing deck",
+                                                               "detail": detail}, headers=headers())
+    assert created.status_code == 200, created.text
+    new_item = created.json()["item"]
+    shape = lambda item: {k: item[k] for k in ("section", "status")}
+    assert shape(new_item) == shape(old_item)
+
+    old_push = push(api, rid, old_item["id"])
+    new_push = api.post(f"/api/v2/meetings/{rid}/items/{new_item['id']}/push", json={}, headers=headers())
+    assert new_push.status_code == 200, new_push.text
+    assert old_push["pushed"] is True and new_push.json()["pushed"] is True
+    titles = [get(api, "tasks/" + result["item"]["result_ref"])["task"]["title"] for result in (old_push, new_push.json())]
+    assert titles == ["Send the pricing sheet", "Send the pricing deck"]

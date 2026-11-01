@@ -121,6 +121,8 @@ pub struct Capabilities {
     /// run as a leased per-turn OS user (crate::turn_users) and still sign in. Without it the turn runs as `bot`.
     pub isolated_user: bool,
     pub compaction: bool,
+    /// The harness says in its stream when it compacts a session, so a resumed turn can leave out what it holds.
+    pub compaction_events: bool,
     pub resume_command: String,
     /// "" | host | command
     pub model_list: String,
@@ -158,6 +160,7 @@ impl Default for Capabilities {
             one_turn_per_login: false,
             isolated_user: false,
             compaction: false,
+            compaction_events: false,
             resume_command: String::new(),
             model_list: String::new(),
             model_list_args: vec![],
@@ -502,6 +505,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "one_turn_per_login" => c.one_turn_per_login = flag(k, v)?,
             "isolated_user" => c.isolated_user = flag(k, v)?,
             "compaction" => c.compaction = flag(k, v)?,
+            "compaction_events" => c.compaction_events = flag(k, v)?,
             "resume_command" => c.resume_command = text(k, v)?,
             "model_list" => c.model_list = choice(k, v, &["host", "command"])?,
             "model_list_args" => c.model_list_args = list(k, v)?,
@@ -1584,9 +1588,10 @@ mod tests {
         assert_eq!((caps.sign_in_status.check.as_str(), caps.sign_in_status.field.as_str(), caps.sign_in_status.timeout_s), ("json", "loggedIn", 30));
         assert!(caps.compaction && caps.repo_commands && caps.resume_after_interrupt && !caps.persistent_session);
         assert!(all["codex"].capabilities.resume_after_interrupt && all["codex"].capabilities.goal_runs_across_turns);
-        // Steering is declared, never inferred from a name: only Claude Code and Codex take input mid-turn.
+        // Steering is declared, never inferred from a name: only Claude Code, Codex and pi take input mid-turn.
         let steers: Vec<&str> = all.iter().filter(|(_, m)| m.capabilities.steer).map(|(id, _)| id.as_str()).collect();
-        assert_eq!(steers, vec!["claude-code", "codex"]);
+        assert_eq!(steers, vec!["claude-code", "codex", "pi"]);
+        assert!(all["pi"].capabilities.persistent_session && all["pi"].capabilities.compaction);
         assert!(!all["gemini-cli"].variants[0].capabilities.steer);
         let gemini = &all["gemini-cli"];
         assert_eq!(gemini.variants.len(), 1);

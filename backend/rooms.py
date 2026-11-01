@@ -12,28 +12,31 @@ SHARED = "shared"
 # The one private room each person has with the Assistant (backend/assistant.py); distinct from the
 # room the person's tasks for the assistant bot land in, so its history is only what they said to it.
 ASSISTANT_ROOM = "assistant"
-# The owner's chat with the CEO Bot (backend/ceo_bot.py), which the owner has in place of an Assistant room: one per
-# company, belonging to the owner seat, so a transfer of ownership moves it to the new owner (backend/assistant.py).
-CEO_ROOM = "ceo"
+# The owner's earlier chat with the Strategy Bot (backend/strategy_bot.py), from when the owner had it in place of an
+# Assistant room: one per company, belonging to the owner seat, history now (read-only under "Earlier chats",
+# backend/assistant.py). No new message goes to it; a transfer of ownership still moves it to the new owner. Its stored
+# value stays "ceo": the rows stored so far carry it.
+STRATEGY_ROOM = "ceo"
 # The one private room each person has with the Librarian (backend/librarian.py): their Ask the Librarian questions.
 DOCS_ROOM = "docs"
 
 
 def session_config(conversation, bot, config):
-    """The config a turn is handed. In the owner's CEO Bot chat it keys its session on that conversation
-    (clients/sessions.py, `session: task`), so the owner's chat is one session and the CEO Bot's goals session (its
+    """The config a turn is handed. In the owner's earlier Strategy Bot chat (a turn queued there before it became
+    history) it keys its session on that conversation
+    (clients/sessions.py, `session: task`), so the owner's chat is one session and the Strategy Bot's goals session (its
     regular checks and goal work) another, and neither shares the other's context. The bot's own `session` setting
     never applies here: `session: bot` would put the owner's chat on the thread its goals session and other bots'
     messages use. Every runner reads `session` from the turn it is handed, so none needs to know this room."""
-    from .ceo_bot import SLUG
+    from .strategy_bot import SLUG
     if (bot == SLUG and conversation and conversation.get("scope") == PERSONAL
-            and conversation.get("room_key") == CEO_ROOM):
+            and conversation.get("room_key") == STRATEGY_ROOM):
         return {**(config or {}), "session": "task"}
     return config
 
 
-def roster(c):
-    return read_cache.value(c, ("roster",), lambda: _roster(c))
+def roster(c, shared=False):
+    return read_cache.value(c, ("roster",), lambda: _roster(c), shared)
 
 
 def _roster(c):
@@ -41,8 +44,8 @@ def _roster(c):
     return P.load(json.loads(row[0])) if row else P.load({"people": H.humans(c)})
 
 
-def entries(c):
-    return read_cache.value(c, ("room_entries",), lambda: _entries(c))
+def entries(c, shared=False):
+    return read_cache.value(c, ("room_entries",), lambda: _entries(c), shared)
 
 
 def _entries(c):
@@ -88,7 +91,46 @@ def shared_member_ids(c, auth, bot):
 
 
 def shared_member(c, auth, actor, bot):
-    return str(actor).startswith("human:") and H.actor_id(actor) in shared_member_ids(c, auth, bot)
+    return bot in shared_member_bots(c, auth, actor, [bot])
+
+
+def shared_member_bots(c, auth, actor, slugs):
+    """The slugs in `slugs` whose shared room `actor` is a member of: `shared_member_ids` answered for
+    `actor` alone, for every bot at once. The roster and configs are read once (not per bot), the access rows
+    in one statement, and the read check runs only for `actor`, only where the bot's read is not open to everyone."""
+    slugs = list(dict.fromkeys(slugs))
+    if not slugs or not str(actor).startswith("human:"):
+        return set()
+    actor_id = H.actor_id(actor)
+    # Read only below: the snapshot's own roster and configurations, never copied (read_cache.value).
+    people, configs = roster(c, shared=True), entries(c, shared=True)
+    owner_email = auth.owner_email
+    owner = next((p["id"] for p in people["people"] if str(p.get("email") or "").lower() == owner_email), None)
+    stored = {}
+    for start in range(0, len(slugs), 500):
+        part = slugs[start:start + 500]
+        stored.update({row["bot"]: row["access_json"] for row in c.execute(
+            "SELECT bot,access_json FROM bot_config WHERE bot IN (" + ",".join("?" * len(part)) + ")", part)})
+    found, needs_read = set(), []
+    for slug in slugs:
+        if owner == actor_id:
+            found.add(slug)
+            continue
+        if actor_id not in {p["id"] for p in P.primary_users(slug, people, configs)}:
+            continue
+        if slug in stored and not A.document(stored[slug])["read"]["everyone"]:
+            needs_read.append(slug)
+        else:
+            found.add(slug)
+    if needs_read:
+        try:
+            who = auth.identity_for_actor(c, "human:" + actor_id)
+        except Problem:
+            who = None
+        if who is not None:
+            access = auth.bot_accesses(c, who, needs_read)
+            found.update(slug for slug in needs_read if access[slug]["read"])
+    return found
 
 
 def room_bot(conversation):
