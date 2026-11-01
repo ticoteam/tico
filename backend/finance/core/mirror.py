@@ -183,7 +183,8 @@ class Settlement:
 class Order:
     """A provider purchase order or estimate: a document the books keep as an order. It posts no entry (it moves no
     money). `status` is the books' own: approved | closed for a purchase order, sent | accepted | declined for an
-    estimate. Its lines are the provider's lines, on their accounts (the item's when a line names one)."""
+    estimate. Its lines are the provider's lines, on their accounts (the item's when a line names one). `tax` is the
+    order's sales tax in minor units: it lands on the sales tax account as a line of its own, as a document's does."""
     ext: Ext
     party: str          # the vendor or customer key ("Vendor:9", "Customer:4")
     number: str
@@ -192,6 +193,7 @@ class Order:
     lines: tuple[EntryLine, ...]
     memo: str = ""
     status: str = ""
+    tax: int = 0
 
 
 @dataclass(frozen=True)

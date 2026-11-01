@@ -290,7 +290,8 @@ def order_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[str
     lines = tuple(x for x in (_doc_line(raw, items, location) for raw in as_list(row.get("Line"))) if x is not None)
     status = ORDER_STATUS[kind].get(_id(row.get("POStatus" if purchase else "TxnStatus")), "")
     return M.Order(ext, party=party, number=_id(row.get("DocNumber")), day=_id(row.get("TxnDate")),
-                   total=_units(row.get("TotalAmt")) or 0, lines=lines, memo=_memo(row), status=status)
+                   total=_units(row.get("TotalAmt")) or 0, lines=lines, memo=_memo(row), status=status,
+                   tax=_tax(row))
 
 
 def settlement_record(row: dict[str, Any], kind: str) -> M.Settlement:

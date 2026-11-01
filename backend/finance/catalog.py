@@ -252,6 +252,7 @@ def project_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     project_id = str(old["id"])
     f = _shape(lambda: _project_fields(ctx, p, create=False))
     if _mirrored(ctx):
+        mirror.provider_takes_records(ctx, "a job")  # Xero has no jobs: say so, not that the job is not in the provider
         mirror.record_in_provider(ctx, "projects", project_id)
         if "customer_id" in f and not f["customer_id"]:
             raise invalid("a job in a mirrored book sits under a customer")
