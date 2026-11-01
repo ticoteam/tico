@@ -720,13 +720,22 @@ def test_moving_to_another_computer_stops_it_and_the_machine_can_then_be_deleted
     assert cloud.tick(10) == ["stop"]
     work(cloud, text="More")
     assert cloud.tick(10) == ["stop"]                           # its work goes to the other computer
+    pending = []                                                # HQ keeps m1 live until boat confirms
+    cloud.hq.delete = lambda machine_id: (cloud.hq.calls.append(("delete", machine_id)), pending.append(machine_id))
     delete = cloud.api.delete("/api/v2/bots/ops/cloud-machine", headers=headers())
     assert delete.status_code == 200, delete.text
-    assert cloud.hq.calls[-1] == ("delete", "m1")
-    assert cloud.row() == {**cloud.row(), "mode": "computer", "placement": "own", "machine_id": None, "runner_id": None}
-    # Choosing its own machine again makes a new one at its next work.
+    assert pending == ["m1"]
+    assert cloud.row() == {**cloud.row(), "mode": "computer", "placement": "own", "machine_id": "m1",
+                           "state": "deleted", "runner_id": None}
+    assert employee(cloud.api)["cloud_machine"]["state"] == "deleted"
+    assert cloud.api.delete("/api/v2/bots/ops/cloud-machine", headers=headers()).status_code == 404
+    assert pending == ["m1"]
+    # Choosing its own machine again makes a new one at its next work: not the doomed m1 HQ still answers with.
     post(cloud.api, "bots/ops/cloud-machine", {"mode": "cloud"})
-    assert cloud.tick(10)[-1] == "create"
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["create"] and cloud.row()["machine_id"] == "m1" and cloud.row()["state"] == "deleted"
+    cloud.hq.machines["m1"]["state"] = "deleted"                # boat confirmed
+    assert cloud.tick(CM.BACKOFF) == ["create", "create"] and cloud.row()["machine_id"] == "m2"
 
 
 def test_nothing_defaults_to_a_machine_before_hq_lists_sizes(api, monkeypatch):  # noqa: F811
@@ -885,7 +894,7 @@ def test_switching_own_and_shared_moves_the_bot_and_stops_the_machine_it_left(cl
     # Its own machine can go now that it runs elsewhere.
     delete = cloud.api.delete("/api/v2/bots/ops/cloud-machine", headers=headers())
     assert delete.status_code == 200, delete.text
-    assert cloud.row()["machine_id"] is None and cloud.row()["placement"] == "shared"
+    assert cloud.row()["state"] == "deleted" and cloud.row()["runner_id"] is None and cloud.row()["placement"] == "shared"
     with cloud.store.read() as c:
         assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (own,)).fetchone()["revoked_at"]
     # Back to its own: a new one is made for the move, and the shared one, with no member left, stops.
@@ -1394,19 +1403,36 @@ def test_owners_and_admins_delete_a_broken_shared_machine_and_the_next_work_make
     cloud.hq.fail["delete"] = [CM.Refused("unreachable")]
     assert cloud.api.delete(url, headers=headers("ben-test")).status_code == 502
     assert cloud.row(CM.SHARED)["machine_id"] == machine                # HQ first: nothing changed, try again
+    pending = []                                                        # HQ keeps it live until boat confirms
+    cloud.hq.delete = lambda machine_id: (cloud.hq.calls.append(("delete", machine_id)), pending.append(machine_id))
     delete = cloud.api.delete(url, headers=headers("ben-test"))
     assert delete.status_code == 200, delete.text
-    assert cloud.hq.calls[-1] == ("delete", machine)
+    assert pending == [machine]
     shared = cloud.row(CM.SHARED)
-    assert (shared["machine_id"], shared["runner_id"], shared["state"], shared["size"]) == (None, None, "none", "large")
+    assert (shared["machine_id"], shared["runner_id"], shared["state"], shared["size"]) == (
+        machine, None, "deleted", "large")
     with cloud.store.read() as c:
         assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (old,)).fetchone()["revoked_at"]
-    assert get(cloud.api, "cloud-machines")["shared"]["bots"] == ["finance", "ops"]     # members stay members
-    assert cloud.api.delete(url, headers=headers("ben-test")).status_code == 404
-    # A member's next work makes a fresh one at the company's size, and its members go onto it.
+    view = get(cloud.api, "cloud-machines")["shared"]
+    assert view["bots"] == ["finance", "ops"] and view["state"] == "deleted" and view["runner_id"] is None
+    assert cloud.api.delete(url, headers=headers("ben-test")).status_code == 404   # nothing left: HQ not asked
+    assert pending == [machine]
+    # A member's next work asks for a fresh one: HQ answers with the doomed one until boat confirms, which is no new
+    # machine; then it makes one at the company's size, and its members go onto it.
     cloud.hq.calls.clear()
     work(cloud, "finance")
-    assert cloud.tick(10) == ["create"] and cloud.hq.calls[-1][1:3] == (CM.SHARED, "large")
+    assert cloud.tick(10) == ["create"] and cloud.row(CM.SHARED)["machine_id"] == machine
+    assert cloud.row(CM.SHARED)["state"] == "deleted" and not cloud.row(CM.SHARED)["enroll_by"]
+    cloud.hq.machines[machine]["state"] = "deleted"                     # boat confirmed
+    cloud.hq.calls.clear()
+    assert cloud.tick(CM.BACKOFF) == ["create"] and cloud.hq.calls[-1][1:3] == (CM.SHARED, "large")
+    assert cloud.row(CM.SHARED)["machine_id"] not in (None, machine)
     new = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm",
                                              "platform": "linux"})["runner_id"]
     assert placed(cloud)["ops"] == new and placed(cloud)["finance"] == new
+
+def test_decide_stops_a_paused_machine_out_of_credit_whatever_its_runner_does():
+    on = machine_row(state="running", active_at=1000, heartbeat_at=1000)
+    for busy in ({"updating": True}, {"turns": True}, {}):
+        assert CM.decide(on, facts(active=False, frozen=True, **busy), 1100, 300) == ("stop", "out_of_credit")
+    assert CM.decide(machine_row(), facts(active=False, frozen=True), 1100, 300) == (None, "out_of_credit")

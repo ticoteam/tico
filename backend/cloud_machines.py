@@ -674,7 +674,10 @@ def decide(current, found, at, idle_s):
     if not found["active"]:
         # Paused, drained, archived or moved (every member, on the shared one): stopped, but never under a turn still
         # out (a drain lets it finish), nor mid-update (a cut-short update is a broken runner at the next start). Only
-        # out of credit and a person's delete stop it under one: HQ stops a frozen company's machines itself.
+        # out of credit and a person's delete stop it under one: HQ stops a frozen company's machines itself (and the
+        # fence, `reserve`, still sends no stop while an attempt is leased or running there).
+        if found["frozen"]:
+            return ("stop" if on else None), "out_of_credit"
         if on and (found["turns"] or found["updating"]):
             return ("heartbeat" if at - (current["heartbeat_at"] or 0) >= HEARTBEAT else None), None
         return ("stop" if on else None), None
@@ -1169,12 +1172,18 @@ def removable(c, auth, who, key):
     elif not (auth.bot_admin(who) or auth.bot_manager(c, who, key)):
         raise Problem("forbidden", "You do not manage this bot's computer", 403)
     current = row(c, key)
-    if not current or not (current["machine_id"] or current["runner_id"]):
+    if not current or not (present(current) or current["runner_id"]):
         raise Problem("not_found", "There is no shared cloud machine" if key == SHARED
                       else "This bot has no cloud machine of its own", 404)
     if key != SHARED and current["mode"] == "cloud" and current["placement"] == "own":
         raise Problem("in_use", "Move the bot to another computer or the shared cloud machine first", 409)
     return current
+
+
+def present(current):
+    """Whether the row names a machine HQ may still have: one deleted here keeps its id (HQ keeps it live until boat
+    confirms, and a create meanwhile answers with it: `act`), but there is nothing left to delete."""
+    return bool(current["machine_id"]) and current["state"] != "deleted"
 
 
 def remove(store, hq, who, auth, key):
@@ -1183,7 +1192,7 @@ def remove(store, hq, who, auth, key):
     one). HQ first: a failure there leaves everything as it was, to try again."""
     with store.read() as c:
         current = removable(c, auth, who, key)
-    if current["machine_id"]:
+    if present(current):
         if hq is None:
             raise Problem("gateway", "Connect Tico Gateway first", 409)
         try:
@@ -1197,8 +1206,10 @@ def remove(store, hq, who, auth, key):
         if current["runner_id"]:
             c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"]))
         # The machine goes; the choices stay (size, Always on, where the bot runs): a bot's own is not made again unless
-        # someone picks it, and the shared one is made again at a member's next work (or at once if Always on).
-        save(c, key, machine_id=None, runner_id=None, state="none", machine_size=None, started_at=None,
+        # someone picks it, and the shared one is made again at a member's next work (or at once if Always on). Its id
+        # stays, as deleted, as never_enrolled leaves it: a create before boat confirms the delete gets this machine
+        # back from HQ (idempotent on key), which `act` takes for no new one and tries again later.
+        save(c, key, runner_id=None, state="deleted", machine_size=None, started_at=None,
              stopped_at=None, cost_month_usd=0, starts_month=0, last_error="", active_at=None, heartbeat_at=None,
              ttl_s=None, next_try=None, failures=0, problem="", problem_at=None, wake_key=None, woke_at=None,
              enroll_by=None, enroll_fails=0, stop_until=None, changed_by=who.actor)

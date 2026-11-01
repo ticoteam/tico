@@ -18,7 +18,8 @@ cloud machine" under Computer).
   stop only once every bot on it has been idle for its size's `idle_stop_s`. Its size and Always on are the
   company's, set by owners and admins (`POST /api/v2/cloud-machines/shared`). They can also delete it, to replace a
   broken one (`DELETE /api/v2/cloud-machines/shared`): HQ deletes its disk, its computer is revoked, its size, Always on
-  and members stay, and a member's next work makes a fresh one. A bot's own machine is deleted once the bot runs
+  and members stay, and a member's next work makes a fresh one. The row keeps the old id as `deleted`: HQ keeps the
+  machine live until boat confirms, and a create meanwhile answers with it, which is not taken for the new one. A bot's own machine is deleted once the bot runs
   elsewhere (`DELETE /api/v2/bots/{bot}/cloud-machine`).
 - Its computer is "Shared cloud machine", owned by the company owner and open to member bots: a bot that joins is
   assigned to it, one that leaves (to its own machine or a computer) is unassigned, and the machine keeps running.
@@ -91,7 +92,8 @@ A stopped machine whose runner is behind the server's release is started once to
 0-10 minutes per runner and release after the server first ran the release (`update_due`: a hash of the runner id and
 release, from `releases.history`), so a release on a shared host does not start every company's machines at once
 against boat's start limits. Work, watchers and Always on never wait. No stop (idle, paused, drained, last bot gone)
-lands while the runner reports a fresh `updating`, except out of credit (HQ stops those itself) and a person's delete.
+lands while the runner reports a fresh `updating`, except out of credit (HQ stops those itself, so a paused machine
+of a frozen company stops at once too) and a person's delete.
 
 The runner knows it is on a cloud machine by the marker `/etc/tico/cloud-machine.json` (root's, naming the runner's
 user), which the base step writes. Machines made before Tico models ran here have it too, so they take Tico models once
