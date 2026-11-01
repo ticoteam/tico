@@ -15,6 +15,15 @@ CREATE TABLE IF NOT EXISTS audit_log(
 CREATE INDEX IF NOT EXISTS audit_log_object ON audit_log(object, at);
 CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log(at);
 """
+# Append-only in the database, so no statement can rewrite or remove a change. The one copy that is cut (devcopy's
+# history cut) drops these triggers while it prunes and puts them back, the same as every other trigger.
+TRIGGERS = """
+CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+
+CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+"""
 LIMIT = 50
 LIST_BYTES = 262_144                     # as the automations list: a page stays under 256 KB
 

@@ -190,3 +190,19 @@ def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets
     # Without the option the same tables are emptied, as before.
     plain, _ = devcopy.build(source, tmp_path / "plain" / "hub.sqlite", days=30)
     assert plain["schedules"] == 1 and plain["triggers"] == 1 and plain["automations"] == 1
+
+
+def test_a_dev_copy_cuts_old_audit_rows_and_keeps_the_audit_log_append_only(tmp_path):
+    source = source_db(tmp_path)
+    with closing(sqlite3.connect(source)) as c:
+        c.executemany("INSERT INTO audit_log(id,at,actor,object,before_json,after_json,via) VALUES(?,?,?,?,?,?,?)",
+                      [("old", OLD, "human:morgan", "task_cap:1", None, "{}", None),
+                       ("new", H.now(), "human:morgan", "task_cap:1", None, "{}", None)])
+        c.commit()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    removed, _ = devcopy.build(source, dest, days=30)
+    assert removed["audit_log"] == 1
+    with closing(sqlite3.connect(dest)) as c:
+        assert [r[0] for r in c.execute("SELECT id FROM audit_log ORDER BY id")] == ["new"]
+        triggers = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+        assert {"audit_log_no_update", "audit_log_no_delete"} <= triggers

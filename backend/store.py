@@ -1142,6 +1142,7 @@ class Store:
             c.executescript(_task_rules.SCHEMA)
             from . import audit_log as _audit_log
             c.executescript(_audit_log.SCHEMA)
+            c.executescript(_audit_log.TRIGGERS)
             from . import rules as _rules
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)
