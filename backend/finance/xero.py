@@ -331,33 +331,38 @@ class Xero:
         return (self._roles or {}).get(name, "")
 
     def _ensure(self) -> None:
-        """The lookups a pass takes records by: accounts by role and code, and tracking options by their names. A tracking
-        list Xero does not give leaves its options out; its own read reports why."""
+        """The lookups a pass takes records by: accounts by role and code, and tracking options by their names. Both
+        are read in full or not at all: a list Xero does not give raises, and nothing is kept, so the next call asks
+        again. A partial mapping would take in records without the options they name."""
         if self._roles is not None:
             return
         rows, reply = self._rows("accounts", 1)
         if reply.status != 200:
             raise ValueError(_fault(reply) if reply.status else reply.note)
         roles: dict[str, str] = {}
+        codes: dict[str, str] = {}
         for row in rows:
             ident = str(row.get("AccountID") or "")
             if not ident:
                 continue
             key = f"Account:{ident}"
-            self._codes[key] = str(row.get("Code") or "")
+            codes[key] = str(row.get("Code") or "")
             if row.get("SystemAccount"):
                 roles.setdefault(str(row["SystemAccount"]), key)
             if row.get("Code"):
                 roles.setdefault(f"code:{row['Code']}", key)
         categories, reply = self._rows("tracking", 1)
-        if reply.status == 200:
-            for category in categories:
-                cid = str(category.get("TrackingCategoryID") or "")
-                for raw in as_list(category.get("Options")):
-                    option = as_map(raw) or {}
-                    roles.setdefault(f"option:{category.get('Name') or ''}/{option.get('Name') or ''}",
-                                     f"TrackingOption:{cid}/{option.get('TrackingOptionID') or ''}")
+        if reply.status != 200:
+            detail = _fault(reply) if reply.status else reply.note
+            raise ValueError(f"Xero's tracking options could not be read: {detail}")
+        for category in categories:
+            cid = str(category.get("TrackingCategoryID") or "")
+            for raw in as_list(category.get("Options")):
+                option = as_map(raw) or {}
+                roles.setdefault(f"option:{category.get('Name') or ''}/{option.get('Name') or ''}",
+                                 f"TrackingOption:{cid}/{option.get('TrackingOptionID') or ''}")
         roles["location"] = self._location
+        self._codes.update(codes)
         self._roles = roles
 
     def page(self, entity: str, start: int, size: int) -> Read:
@@ -443,15 +448,21 @@ class Xero:
                 return _lookup_failure(reply)
             for row in rows:
                 if row.get(id_key) and _live(entity, row) and hit(row):
+                    try:
+                        record = self._found(entity, row)
+                    except ValueError as e:  # its options cannot be read yet: found again, not bound bare
+                        return Sent(False, error=f"Xero did not answer the lookup: {e}"[:MAX_TEXT])
                     return Sent(True, kind=kind, external_id=str(row[id_key]),
-                                revision=X.stamp(row.get("UpdatedDateUTC")), record=self._found(entity, row))
+                                revision=X.stamp(row.get("UpdatedDateUTC")), record=record)
             if entity in UNPAGED or len(rows) < PAGE:
                 return None
         return Sent(False, error="UNKNOWN: too many rows to tell whether Xero holds the write", final=True,
                     unknown=True)
 
     def _found(self, entity: str, row: dict[str, Any]) -> M.Document | M.Journal | M.Settlement | None:
-        """The record a found row reads as, for the books to check the write it answers against."""
+        """The record a found row reads as, for the books to check the write it answers against. Raises ValueError when
+        the lookups the record reads by cannot be read, so the caller asks again rather than binding it without one."""
+        self._ensure()
         got = self._taken(entity, [row])
         for record in (got.records if got.ok else ()):
             if isinstance(record, (M.Document, M.Journal, M.Settlement)):

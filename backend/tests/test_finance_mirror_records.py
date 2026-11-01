@@ -360,6 +360,94 @@ def test_two_changes_to_a_location_before_the_provider_confirms_both_reach_the_r
     assert (name, json.loads(address)) == ("Austin HQ", {"line1": "1 Main St"})
 
 
+def _item_sends(fake: FakeBooks) -> list[tuple[str, int]]:
+    return [(body["name"], body["price"]) for op, body, _ in fake.sent if op == "item.update"]
+
+
+def test_a_change_made_after_a_write_is_read_and_before_it_is_claimed_is_sent_with_that_write(books, monkeypatch):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item = _local(c, "Item:5", "items")
+        assert act(c, OWNER, "item_update", {"item_id": item, "name": "Consulting Pro"}).status == "committed"
+    real_claim = SK.outbox_claim
+    added: list[str] = []
+
+    def claim_after_a_change(c: Any, outbox_id: str, at: str) -> bool:
+        # The worker read this write from the queue; a price change lands before the worker takes its claim.
+        if not added:
+            added.append(outbox_id)
+            assert act(c, OWNER, "item_update", {"item_id": item, "price": 20_000}).status == "committed"
+        return real_claim(c, outbox_id, at)
+
+    monkeypatch.setattr(SK, "outbox_claim", claim_after_a_change)
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert added, "the price change was never made between the read and the claim"
+    assert _item_sends(fake)[-1] == ("Consulting Pro", 20_000), _item_sends(fake)
+    with books.read() as c:
+        assert tuple(c.execute("SELECT name, price FROM items WHERE id=?", (item,)).fetchone()) == \
+            ("Consulting Pro", 20_000)
+
+
+def test_a_price_change_made_while_a_rename_waits_to_retry_is_sent_with_the_rename_and_never_reverted(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item = _local(c, "Item:5", "items")
+        assert act(c, OWNER, "item_update", {"item_id": item, "name": "Consulting Pro"}).status == "committed"
+    fake.replies.append(mirror.Sent(False, error="the provider is busy"))
+    assert _drain(books, fake, cid) == ["item.update: the provider is busy"]
+    with books.transaction() as c:
+        assert act(c, OWNER, "item_update", {"item_id": item, "price": 20_000}).status == "committed"
+        pending = c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op='item.update' AND status='pending'").fetchone()
+        assert pending[0] == 1
+    # The rename is still backing off: the price change must not go out ahead of it and then be undone by its retry.
+    assert _drain(books, fake, cid) == []
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert _item_sends(fake)[-1] == ("Consulting Pro", 20_000), _item_sends(fake)
+    with books.read() as c:
+        assert tuple(c.execute("SELECT name, price FROM items WHERE id=?", (item,)).fetchone()) == \
+            ("Consulting Pro", 20_000)
+
+
+def test_a_change_made_while_a_write_is_in_flight_waits_behind_it_and_is_sent_after_it(books, monkeypatch):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item = _local(c, "Item:5", "items")
+        assert act(c, OWNER, "item_update", {"item_id": item, "name": "Consulting Pro"}).status == "committed"
+    fake.replies.append(mirror.Sent(False, error="the provider is busy"))
+    real_send = mirror._send
+    changed: list[str] = []
+
+    def send_while_a_price_change_is_made(books_: Any, o: Any, provider: Any) -> Any:
+        # The rename is out at the provider; a price change is made before its answer comes back.
+        if not changed and str(o["op"]) == "item.update":
+            changed.append(str(o["id"]))
+            with books.transaction() as c:
+                assert act(c, OWNER, "item_update", {"item_id": item, "price": 20_000}).status == "committed"
+        return real_send(books_, o, provider)
+
+    monkeypatch.setattr(mirror, "_send", send_while_a_price_change_is_made)
+    assert _drain(books, fake, cid) == ["item.update: the provider is busy"]
+    assert changed, "the price change was never made while the rename was in flight"
+    assert _drain(books, fake, cid, now=LATER) == []
+    # The rename goes first, carrying only its own change; the price change follows it and carries both.
+    assert _item_sends(fake) == [("Consulting Pro", 15_000), ("Consulting Pro", 15_000), ("Consulting Pro", 20_000)]
+    with books.read() as c:
+        assert tuple(c.execute("SELECT name, price FROM items WHERE id=?", (item,)).fetchone()) == \
+            ("Consulting Pro", 20_000)
+
+
 def test_a_teammate_without_the_estimate_lines_is_denied_converting_it_and_not_told_it_is_invoiced(books):
     fake = FakeBooks()
     _records(fake)

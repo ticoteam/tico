@@ -1653,20 +1653,18 @@ def queue_record(ctx: Ctx, who: str, aid: str, op: str, body: Mapping[str, Any])
     return _queue(ctx.c, _cid(ctx), op, body, by=who, action_id=aid, at=ctx.at)
 
 
-def queue_record_update(ctx: Ctx, who: str, aid: str, op: str, record_id: str, fields: Mapping[str, Any],
-                        row: Mapping[str, Any]) -> str:
-    """A changed shared record's write, carrying the record as it will stand once the writes already owed for it are
-    confirmed. The local row changes only when a write is confirmed, so a later change builds on the newest open write
-    for the record (every change owed before it is in that write), not on the row: otherwise confirming the later write
-    would send the record back to its older fields. A write not yet claimed is amended in place."""
-    columns = RECORD_COLUMNS[op.partition(".")[0]]
-    latest = SK.record_write_latest(ctx.c, op, record_id)
-    base: dict[str, Any] = {k: row[k] for k in columns}
-    if latest is not None:
-        base.update({k: v for k, v in SK.loads(latest["payload_json"]).items() if k in columns})
-    body = {**base, **fields, "local_id": record_id, "day": ctx.today}
-    if latest is not None and SK.outbox_amend(ctx.c, str(latest["id"]), body, ctx.at):
-        return str(latest["id"])
+def queue_record_update(ctx: Ctx, who: str, aid: str, op: str, record_id: str, fields: Mapping[str, Any]) -> str:
+    """A changed shared record's write, carrying only the change. The local row changes when the provider confirms the
+    write, so the write is built when it is sent (_prepare), from the row as it then stands and the provider's current
+    revision: a retry never sends an older copy of the record. A change made while the record's newest write still waits
+    to be claimed joins that write; otherwise it is a write of its own, which goes out behind the writes already owed
+    to the record (SK.IN_ORDER)."""
+    waiting = SK.record_write_pending(ctx.c, op, record_id)
+    body = {**fields, "local_id": record_id, "day": ctx.today}
+    if waiting is not None:
+        joined = {**SK.loads(waiting["payload_json"]), **body}
+        if SK.outbox_amend(ctx.c, str(waiting["id"]), joined, ctx.at):
+            return str(waiting["id"])
     return queue_record(ctx, who, aid, op, body)
 
 
@@ -1844,8 +1842,20 @@ def _prepare(c: sqlite3.Connection, cid: str, o: Any, now: str) -> tuple[dict[st
     if int(o["attempts"]) == 0 and str(o["op"]) == "bill.create" and _over_order(c, local):
         _finish(c, o, "a purchase order line was billed past what it has left before this went out", now, "failed")
         return None
+    op = str(o["op"])
+    state = local
+    if op in SK.RECORD_UPDATE_OPS:
+        # The record as it stands now, with the change this write carries: a change made while the write waited is in
+        # it, and a change the provider confirmed since is not undone. The write keeps only its own change, so
+        # confirming it writes that change alone.
+        kind = op.partition(".")[0]
+        row = RR.get(c, RECORD_KINDS[kind][0], str(local["local_id"]))
+        if row is None:
+            _finish(c, o, "the record is gone", now, "failed")
+            return None
+        state = {**{k: row[k] for k in RECORD_COLUMNS[kind]}, **local}
     try:
-        provider = _translate(c, cid, str(o["op"]), local)
+        provider = _translate(c, cid, op, state)
     except _Missing as e:
         _later(c, o, str(e), now)
         return None
@@ -2126,10 +2136,12 @@ def outbox(store: Any, books: Books, cid: str, now: str) -> list[str]:
                                                        "updated_at": now})
         due = SK.outbox_due(c, now, OUTBOX_MOST, cid)
     problems: list[str] = []
-    for o in due:
+    for listed in due:
         with store.transaction() as c:
-            if not SK.outbox_claim(c, str(o["id"]), now):
+            if not SK.outbox_claim(c, str(listed["id"]), now):
                 continue
+            # The write as it stands once claimed: a change made to it after the list was read is in the row now.
+            o = SK.get(c, "fin_outbox", str(listed["id"]))
             prepared = _prepare(c, cid, o, now)
         if prepared is None:
             continue

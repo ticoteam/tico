@@ -139,15 +139,19 @@ def _option(key: object) -> str:
 
 
 def _tags(item: Mapping[str, Any], system: System | None) -> tuple[tuple[str, str], ...]:
-    """A line's tracking options as tags: the location's option is a location, any other option is a class."""
+    """A line's tracking options as tags: the location's option is a location, any other option is a class. An option
+    the books do not hold raises: dropping it would take the line in without the tag it carries, and the books would
+    lose the tag the line already has."""
     if system is None:
         return ()
     out: list[tuple[str, str]] = []
     for raw in as_list(item.get("Tracking")):
         option = as_map(raw) or {}
-        key = system(f"option:{option.get('Name') or ''}/{option.get('Option') or ''}")
-        if key:
-            out.append(("location" if _option(key).partition("/")[0] == system("location") else "class", key))
+        name = f"{option.get('Name') or ''}/{option.get('Option') or ''}"
+        key = system(f"option:{name}")
+        if not key:
+            raise _Unavailable(f"Xero holds no tracking option {name}, so the line cannot be taken in")
+        out.append(("location" if _option(key).partition("/")[0] == system("location") else "class", key))
     return tuple(out)
 
 
@@ -340,7 +344,7 @@ def applied_record(j: Mapping[str, Any], kind: str) -> M.Settlement | M.Ext | M.
                         credits=((f"{kind}:{ident}", sum(amount for _, amount in links)),) if links else ())
 
 
-def manual_journal_record(j: Mapping[str, Any], system: System) -> M.Journal | M.Ext | None:
+def manual_journal_record(j: Mapping[str, Any], system: System) -> M.Journal | M.Ext | M.Refused | None:
     """A manual journal. Tax is taken out of a line's amount only when the journal is Inclusive of it; an Exclusive or
     NoTax journal keeps its amounts and its tax is posted on the sales tax account on top. A journal Xero keeps out of its
     cash-basis reports is accrual only."""
@@ -349,7 +353,10 @@ def manual_journal_record(j: Mapping[str, Any], system: System) -> M.Journal | M
         return replace(ext, deleted=True)
     if _status(j) != "POSTED":
         return None
-    lines, tax = _lines(j.get("JournalLines"), str(j.get("LineAmountTypes") or "") == "Inclusive", system=system)
+    try:
+        lines, tax = _lines(j.get("JournalLines"), str(j.get("LineAmountTypes") or "") == "Inclusive", system=system)
+    except _Unavailable as e:
+        return M.Refused(ext, str(e))
     if tax:
         lines.append(M.EntryLine(M.TAX_ACCOUNT, tax, description="tax"))
     basis = "accrual" if j.get("ShowOnCashBasisReports") is False else "both"
@@ -378,7 +385,11 @@ def bank_record(j: Mapping[str, Any], system: System) -> M.Journal | M.Ext | M.R
         return M.Refused(ext, why)
     sign = -1 if kind_type.startswith("RECEIVE") else 1
     party = _contact(j)
-    contra, tax = _lines(j.get("LineItems"), str(j.get("LineAmountTypes") or "") == "Inclusive", sign, party)
+    try:
+        contra, tax = _lines(j.get("LineItems"), str(j.get("LineAmountTypes") or "") == "Inclusive", sign, party,
+                             system=system)
+    except _Unavailable as e:
+        return M.Refused(ext, str(e))
     if tax:
         contra.append(M.EntryLine(M.TAX_ACCOUNT, sign * tax, party=party, description="tax"))
     if not contra and kind != "BankTransaction":

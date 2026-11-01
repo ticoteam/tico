@@ -5,7 +5,6 @@ first (mirror.queue_record) and the local record changes when the provider confi
 change asks a finance admin, since a price changes what every new line posts."""
 import json
 from collections.abc import Callable
-from typing import Any
 
 from ..records import core as RC
 from ..records import reads as RR
@@ -130,11 +129,11 @@ def _create(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, f
 
 
 def _update(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, fields: dict[str, object],
-            row: Any, key: str, *, books: bool) -> Result:
-    """A changed record: written here, or queued for the provider with the record as it will be (its columns, changed,
-    and any change still owed to it before this one)."""
+            key: str, *, books: bool) -> Result:
+    """A changed record: written here, or queued for the provider as the change alone (the record it lands on is read
+    when the write is sent)."""
     if books:
-        return {key: record_id, "outbox_id": mirror.queue_record_update(ctx, who, aid, op, record_id, fields, row),
+        return {key: record_id, "outbox_id": mirror.queue_record_update(ctx, who, aid, op, record_id, fields),
                 "status": "queued"}
     RS.update(ctx.c, table, record_id, {**fields, "updated_at": ctx.at, "updated_by_id": who})
     return {key: record_id}
@@ -178,7 +177,7 @@ def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         mirror.record_in_provider(ctx, "items", item_id)
 
     def apply(aid: str) -> Result:
-        return _update(ctx, who, aid, "item.update", "items", item_id, f, old, "item_id", books=_mirrored(ctx))
+        return _update(ctx, who, aid, "item.update", "items", item_id, f, "item_id", books=_mirrored(ctx))
     return Plan(gate, f"Change item {old['name']}"[:200], apply)
 
 
@@ -210,7 +209,7 @@ def location_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         mirror.record_in_provider(ctx, "locations", location_id)
 
     def apply(aid: str) -> Result:
-        return _update(ctx, who, aid, "location.update", "locations", location_id, f, old, "location_id",
+        return _update(ctx, who, aid, "location.update", "locations", location_id, f, "location_id",
                        books=books)
     return Plan(K.default_gate(ctx.org, who, "location_update"), f"Change location {location_id}"[:200], apply)
 
@@ -238,7 +237,7 @@ def project_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     f = _shape(lambda: _project_fields(ctx, p, create=False))
 
     def apply(aid: str) -> Result:
-        return _update(ctx, who, aid, "project.update", "projects", project_id, f, old, "project_id",
+        return _update(ctx, who, aid, "project.update", "projects", project_id, f, "project_id",
                        books=_mirrored(ctx))
     return Plan(K.default_gate(ctx.org, who, "project_update"), f"Change project {project_id}"[:200], apply)
 

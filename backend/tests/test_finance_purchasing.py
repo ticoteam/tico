@@ -19,6 +19,7 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, OWNER, FakeMercury, account, act, books, budget, connect, finance_template, store)
 
 EVE = "human:eve"
+FAY = "human:fay"
 
 
 def _vendor(c, name="Acme Supplies", **more) -> str:
@@ -720,3 +721,51 @@ def test_a_spend_within_the_room_set_aside_for_its_teammate_fits_the_budget_and_
         assert approved.status == "committed", approved
         assert [a for _, a in _holds(c, targeted)] == [40_000]
         assert _status(c, targeted) == ("approved", "")
+
+
+def test_teammates_each_within_their_own_set_aside_are_approved_together_when_the_order_fits_the_budget(books):
+    with books.transaction() as c:
+        _software(c, amount=100_000)
+        for teammate in (EVE, FAY):
+            assert act(c, OWNER, "allocation_set", {"budget_id": budget(c, "Software"), "target_kind": "teammate",
+                                                    "target_id": teammate, "amount": 50_000}).status == "committed"
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 40_000, tags={"teammate": EVE}),
+                                _line(c, 40_000, tags={"teammate": FAY})], approve=False)
+        assert act(c, OWNER, "po_send", {"po_id": po}).status == "committed"
+        approved = act(c, OWNER, "po_approve", {"po_id": po})
+        assert approved.status == "committed", approved
+        assert [a for _, a in _holds(c, po)] == [40_000, 40_000]
+        assert _status(c, po) == ("approved", "")
+
+
+def test_a_teammate_past_their_own_set_aside_is_refused_while_another_teammates_set_aside_is_reserved(books):
+    with books.transaction() as c:
+        _software(c, amount=100_000)
+        for teammate in (EVE, FAY):
+            assert act(c, OWNER, "allocation_set", {"budget_id": budget(c, "Software"), "target_kind": "teammate",
+                                                    "target_id": teammate, "amount": 50_000}).status == "committed"
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 60_000, tags={"teammate": EVE}),
+                                _line(c, 30_000, tags={"teammate": FAY})], approve=False)
+        assert act(c, OWNER, "po_send", {"po_id": po}).status == "committed"
+        refused = act(c, OWNER, "po_approve", {"po_id": po})
+        assert refused.status == "denied" and "Software" in str(refused.reason), refused
+        assert _status(c, po) == ("sent", "")
+
+
+def test_a_teammates_bill_inside_their_set_aside_is_not_held_by_a_spend_that_overran_the_unallocated_room(books):
+    with books.transaction() as c:
+        _budget_at(c, 100_000, "warn")
+        software = budget(c, "Software")
+        assert act(c, OWNER, "allocation_set", {"budget_id": software, "target_kind": "teammate", "target_id": EVE,
+                                                "amount": 50_000}).status == "committed"
+        vendor = _vendor(c)
+        untargeted = _bill(c, vendor, [_line(c, 55_000)])
+        assert untargeted.status == "committed", untargeted
+        mine = _bill(c, vendor, [_line(c, 40_000, tags={"teammate": EVE})])
+        assert mine.status == "committed", mine
+        assert act(c, OWNER, "budget_update", {"budget_id": software, "at_limit": "hold_payment"}).status == "committed"
+        # Eve's bill is inside what was set aside for her; the untargeted bill took the room that was not set aside.
+        assert DOC.bill_budget(load(c, AT), str(mine.result["bill_id"])).outcome == "allow"
+        assert DOC.bill_budget(load(c, AT), str(untargeted.result["bill_id"])).outcome == "needs_approval"

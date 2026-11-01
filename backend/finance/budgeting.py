@@ -388,12 +388,14 @@ def reserve_growth(ctx: Ctx, budget_id: str, allocation_on: str, target_kind: st
 
 
 def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[str] = (),
-          read: Netted | None = None) -> B.State:
+          read: Netted | None = None, exempt: Sequence[str] = ()) -> B.State:
     """A budget now: amount, actual, held (holds and allocations' reserves in its whole subtree), remaining, percent.
     With a `target` and the budget `path` a spend sits on, that target's own unused allocations on that path are not
     counted against it (it may spend what was set aside for it there); its allocations on other branches still are.
-    A read passes its `Netted`: the actual, the held and what depends on them (rollover, reserves) leave out the
-    settled private payroll the viewer can't see, and the State says so (`excluded`). Enforcement passes none."""
+    `exempt` names more targets whose unused allocations on that path are not counted: an order that spends for several
+    teammates is checked together with each one's set-aside left out. A read passes its `Netted`: the actual, the held
+    and what depends on them (rollover, reserves) leave out the settled private payroll the viewer can't see, and the
+    State says so (`excluded`). Enforcement passes none."""
     b = ctx.budgets().get(budget_id)
     if b is None:
         raise FinanceError(NOT_FOUND, "no such budget")
@@ -403,7 +405,7 @@ def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[s
     tree = subtree(ctx, b.id)
     mine = set(path)
     reserve = sum(v for bid, t, v in _reserve(ctx, tree, start, end, read)
-                  if not (target and t == target and bid in mine))
+                  if not (bid in mine and ((target and t == target) or t in exempt)))
     held = _held(ctx, tree, start, end, read) + reserve
     st = B.state(b, period, _amount(ctx, b, versions, period, at, read), actual(ctx, b, start, end, read=read), held)
     return st if read is None else replace(st, excluded=read.excluded)
@@ -466,13 +468,15 @@ def _scope(ctx: Ctx, budget_scope: str | Mapping[str, object]) -> B.Budget | Non
                 vendor_text(p, "vendor"))
 
 
-def decide(ctx: Ctx, leaf_id: str, amount: int, target: str = "", path: Sequence[str] | None = None) -> B.Decision:
+def decide(ctx: Ctx, leaf_id: str, amount: int, target: str = "", path: Sequence[str] | None = None,
+           exempt: Sequence[str] = ()) -> B.Decision:
     """What a new spend of `amount` meets across its budget and every parent. `path` is the budgets the spend sits on
     (default: the chain of `leaf_id`). An aggregate over several leaves passes the leaves' paths, so the target's own
-    allocations on any of them are not held against it, as a spend on one leaf would not be."""
+    allocations on any of them are not held against it, as a spend on one leaf would not be. `exempt` names the other
+    targets whose allocations on those paths are left out too (see state)."""
     at = dates.day(ctx.today)
     spent_on = chain_of(ctx, leaf_id) if path is None else list(path)
-    chain = [(b, state(ctx, b.id, at, target, spent_on)) for b in B.chain(ctx.budgets(), leaf_id)]
+    chain = [(b, state(ctx, b.id, at, target, spent_on, exempt=exempt)) for b in B.chain(ctx.budgets(), leaf_id)]
     return B.decide(chain, amount)
 
 

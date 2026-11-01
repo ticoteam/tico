@@ -936,7 +936,9 @@ def bill_budget(ctx: Ctx, bill_id: str) -> K.Gate:
 
 
 def _bill_pasts(ctx: Ctx, bill: Any) -> list[str]:
-    """Every budget a bill's expense lines (and their parents) leave past its amount, at a limit other than warn."""
+    """Every budget a bill's expense lines (and their parents) leave past its amount, at a limit other than warn. A line
+    is judged for the teammate its spend is set aside for, as a new spend is: that teammate's own set-aside on the
+    line's budgets is not held against it."""
     at = dates.day(str(bill["bill_date"]))
     out: list[str] = []
     for x in doc_lines_of(ctx, "bill", str(bill["id"])):
@@ -945,10 +947,12 @@ def _bill_pasts(ctx: Ctx, bill: Any) -> list[str]:
             continue
         tags = scope_tags(x.tags)
         b = budgeting.leaf(ctx, account.id, tags.get("team", ""), tags.get("teammate", ""), str(bill["vendor_id"]))
-        for bid in budgeting.chain_of(ctx, b.id) if b is not None else []:
+        chain = budgeting.chain_of(ctx, b.id) if b is not None else []
+        target = budgeting.scope_target(tags)
+        for bid in chain:
             if bid in out:
                 continue
-            st = budgeting.state(ctx, bid, at)
+            st = budgeting.state(ctx, bid, at, target, chain)
             if st.remaining is not None and st.remaining < 0 and ctx.budgets()[bid].at_limit != "warn":
                 out.append(bid)
     return out

@@ -258,15 +258,22 @@ def po_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     return Plan(K.default_gate(ctx.org, who, "po_send"), f"Mark purchase order {po['number']} sent", apply)
 
 
+def _add_spend(spend: dict[str, tuple[int, set[str]]], bid: str, amount: int, chain: Sequence[str]) -> None:
+    """A line's amount added into one budget's spend, with the budgets (its chain) the spend sits on."""
+    total, path = spend.get(bid, (0, set()))
+    spend[bid] = (total + amount, path | set(chain))
+
+
 def _budget_gate(ctx: Ctx, po: Any, lines: Sequence[Any]) -> K.Gate:
     """What the budgets the order's expense lines meet ask of approving it, the check a card or a bill makes. The lines
-    are checked together: every line that lands in a budget (through its chain) is summed into that budget, so lines
-    that each fit it are refused when their sum does not. Decline refuses the order, ask routes it to a finance admin,
-    and warn or hold_payment goes ahead (approval holds the spend; a hold_payment bill waits for its payment)."""
+    are grouped by the teammate their spend is set aside for (a line for no one is a group of its own), and each group
+    is checked against that room. The whole order is then checked together, each teammate's set-aside left out of it, so
+    lines that each fit a budget are refused when their sum does not. The worst outcome wins: decline refuses the order,
+    ask routes it to a finance admin, and warn or hold_payment goes ahead (approval holds the spend; a hold_payment bill
+    waits for its payment)."""
     budgets = ctx.budgets()
-    spend: dict[str, int] = {}
-    paths: dict[str, set[str]] = {}
-    targets: dict[str, set[str]] = {}
+    by_target: dict[str, dict[str, tuple[int, set[str]]]] = {}
+    whole: dict[str, tuple[int, set[str]]] = {}
     for line in lines:
         account = ctx.accounts.get(str(line["account_id"] or ""))
         if account is None or account.type != "expense":
@@ -278,15 +285,17 @@ def _budget_gate(ctx: Ctx, po: Any, lines: Sequence[Any]) -> K.Gate:
         target = budgeting.scope_target(DOC.scope_tags(tags))
         chain = budgeting.chain_of(ctx, leaf.id)
         for bid in chain:
-            spend[bid] = spend.get(bid, 0) + int(line["amount"])
-            paths.setdefault(bid, set()).update(chain)
-            targets.setdefault(bid, set()).add(target)
+            _add_spend(by_target.setdefault(target, {}), bid, int(line["amount"]), chain)
+            _add_spend(whole, bid, int(line["amount"]), chain)
+    # (budget, target, amount, path, other targets whose set-asides are left out)
+    checks: list[tuple[str, str, int, list[str], list[str]]] = []
+    for target, spend in by_target.items():
+        checks += [(bid, target, amount, sorted(path), []) for bid, (amount, path) in spend.items()]
+    teammates = sorted(target for target in by_target if target)
+    checks += [(bid, "", amount, sorted(path), teammates) for bid, (amount, path) in whole.items()]
     worst: tuple[int, str, str] = (-1, "", "")
-    for bid, amount in spend.items():
-        # Spend for one teammate takes what was set aside for them, as the hold its line makes does (the target a bill's
-        # hold takes). Spend for several targets is checked without one, as before.
-        target = next(iter(targets[bid])) if len(targets[bid]) == 1 else ""
-        d = budgeting.decide(ctx, bid, amount, target, sorted(paths[bid]))
+    for bid, target, amount, path, exempt in checks:
+        d = budgeting.decide(ctx, bid, amount, target, path, exempt)
         if d.action in ("ok", "warn"):
             continue
         if B.STRICTNESS[d.action] > worst[0]:
