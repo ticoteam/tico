@@ -391,6 +391,7 @@ impl Runner {
         let (agent_instructions, versions) = readiness::changed_agent_instructions(&self.config, &assignments, &published);
         let mut readiness_doc = readiness::document(&runtimes, &checks, &self.state.directory);
         let mut capabilities = crate::lanes::capabilities();
+        capabilities.push("memory_tidy_packets_v1");
         if computer_logins {
             readiness_doc["computer_profile"] = json!(crate::profiles::computer_login(&config.data).map(|p| p.name).unwrap_or_default());
             capabilities.push("computer_logins_v1");

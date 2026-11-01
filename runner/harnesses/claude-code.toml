@@ -37,6 +37,7 @@ keychain = ["darwin"]
 
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]
+packet_only = true
 terminal_login = ["auth", "login"]
 api_keys = "computer"
 # Switch to API key asks Anthropic about the new key before the subscription is signed out: one short reply, in an

@@ -262,7 +262,8 @@ def test_two_eligible_bots_serialize_and_next_admission_uses_first_cost(api, mon
     store = setup(api)
     put(api, 'system-routines/memory_tidy', {'pilots': [entry(), entry(bot='coo')]})
     filed = []
-    monkeypatch.setattr(runs.check_models, 'choose', lambda *a, **kw: {})
+    monkeypatch.setattr(runs.check_models, 'choose', lambda *a, **kw: {'harness': 'codex'})
+    monkeypatch.setattr(runs, 'packet_runner', lambda *a: True)
     monkeypatch.setattr(runs.check_models, 'file_pass', lambda c, settings, task, model: filed.append(task))
     with store.transaction() as c:
         H.sync_registry(c, {'product-lead': {'name': 'Product', 'status': 'active', 'runtime': 'fake'}}, {})

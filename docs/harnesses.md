@@ -467,6 +467,7 @@ another bot's home; all turns use the original login in its own home.
 | `model_list` | `host`: the host adapter lists the models in readiness; `command`: the CLI lists them (`model_list_args`) | No model list |
 | `readiness` | The runner reports install and sign-in for it | `true`; `false` reports nothing, so checks say unknown |
 | `repo_permission_lint` | Readiness warns about permission rules in the bot's repository | No lint |
+| `packet_only` | A tidy check runs from a supplied packet without Hub MCP or checkout tools; Codex also uses its read-only sandbox | The harness cannot run tidy packets |
 | `repo_commands` | The bot's repository skills and commands are offered as chat commands | Built-in commands only |
 
 Goals, chat commands and controls stay probed: the runner reports them per installed version in its heartbeat.

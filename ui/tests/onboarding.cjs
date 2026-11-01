@@ -751,16 +751,16 @@ function recruitFor({department, briefing, share}) {
       Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async value => { window.copied.push(value); }}}); });
     const copies = async () => {
       await page.evaluate(() => { window.copied = []; });
-      const buttons = [...await page.locator('.onb-steps [data-onb-copy]').all(),
-        ...await page.locator('#onb-other [data-onb-copy]').all(), page.locator('#onb-code-copy')];
+      const buttons = [...await page.locator('.onb-steps [data-onb-copy]:visible').all(),
+        ...await page.locator('#onb-other [data-onb-copy]:visible').all(), page.locator('#onb-code-copy')];
       for (const button of buttons) await button.click();
       await page.waitForFunction(count => window.copied.length === count, buttons.length);
       const values = await page.evaluate(() => window.copied);
-      assert.deepEqual(values, [...await page.locator('.onb-cmd code').allTextContents(), await page.locator('#onb-code-value').textContent()]);
+      assert.deepEqual(values, [...await page.locator('.onb-cmd code:visible').allTextContents(), await page.locator('#onb-code-value').textContent()]);
       return [values[0], values.at(-2), values.at(-1)];
     };
     const shown = async () => {
-      const commands = await page.locator('.onb-cmd code').allTextContents();
+      const commands = await page.locator('.onb-cmd code:visible').allTextContents();
       return [commands[0], commands.at(-1), await page.locator('#onb-code-value').textContent()];
     };
     let [installer, other, code] = await copies();

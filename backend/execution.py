@@ -3519,6 +3519,9 @@ class Execution:
         # runners/assignments resolves it: the runner starts exactly what this says.
         record = providers.load(c, self.store.settings)
         config = providers.fill(record, followed)
+        if check and check.get('memory_pass') and c.execute(
+                'SELECT 1 FROM memory_tidy_passes WHERE check_task_id=?', (task['id'],)).fetchone():
+            config = {**config, 'memory_tidy_packet': True}
         # The company's models choice: the Gateway while the bot's subscription is not signed in here, and the
         # Gateway as its last fallback, on a computer that can run it (backend/models_preset.py).
         here = readiness_document(runner["readiness_json"])

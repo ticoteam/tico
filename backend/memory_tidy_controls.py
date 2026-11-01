@@ -90,19 +90,29 @@ UNAVAILABLE = "Nightly memory tidy passes are not available yet"
 
 
 def nightly(store, auth, at):
-    with store.read() as c:
+    from . import memory_tidy_runs
+    from .updates import ZONE
+    with store.transaction() as c:
+        # Withdrawal is maintenance, including while the switch is off. A pass
+        # never depends on the bot having received a nightly learnings packet.
+        memory_tidy_runs.sweep(c, at)
         cfg = system_routines.config_of(c, KEY)
-        if not cfg["on"]:
+        if not cfg['on']:
             return None
-        last = system_routines.last_runs(c).get(KEY)
-        if not system_routines.due(cfg, at, H.parse_ts(last["started"]) if last else None):
+        local = at.astimezone(ZONE)
+        hour, minute = map(int, (cfg.get('at') or '03:30').split(':'))
+        if (local.hour, local.minute) < max((3, 0), (hour, minute)):
             return None
-    return run_now(store, auth, H.KEEPER)
+    # Revisit after each settlement to admit the next pilot. A log line from the
+    # first pilot cannot suppress all remaining pilots for the rest of the night.
+    return run_now(store, auth, H.KEEPER, at=at)
 
 
-def run_now(store, auth, actor):
-    with store.read() as c:
-        if not system_routines.config_of(c, KEY)["on"]:
-            raise Problem("conflict", "Nightly memory tidy is off. Switch it on to run it.", 409)
-    # Deliberately no fallback to an ordinary bot turn while the executor is absent.
-    raise Problem("conflict", UNAVAILABLE, 409)
+def run_now(store, auth, actor, *, at=None):
+    from . import memory_tidy_runs
+    with store.transaction() as c:
+        if not system_routines.config_of(c, KEY)['on']:
+            raise Problem('conflict', 'Nightly memory tidy is off. Switch it on to run it.', 409)
+        rows = memory_tidy_runs.admit(c, store.settings, at or H.parse_ts(H.now()))
+        return any(c.execute("SELECT status FROM memory_tidy_passes WHERE id=?", (ident,)).fetchone()[0] == 'filed'
+                   for ident in rows)

@@ -114,7 +114,15 @@ def unsettled(c):
         "SELECT 1 FROM memory_tidy_passes p JOIN turns t ON t.task_id=p.check_task_id "
         "WHERE t.finished IS NULL OR (t.usage_reason IS NOT NULL AND "
         "NOT EXISTS(SELECT 1 FROM turn_usage_segments s WHERE s.turn_id=t.id) "
-        "AND coalesce(t.input_tokens,0)+coalesce(t.output_tokens,0)=0) LIMIT 1").fetchone() is not None
+        "AND coalesce(t.input_tokens,0)+coalesce(t.output_tokens,0)=0 "
+        "AND (NOT EXISTS(SELECT 1 FROM attempts a WHERE a.id=t.id) OR "
+        "EXISTS(SELECT 1 FROM attempts a WHERE a.id=t.id AND a.started IS NOT NULL))) LIMIT 1").fetchone() is not None
+
+
+def packet_runner(c, bot):
+    row = c.execute('SELECT r.capabilities_json FROM assignments a JOIN runners r ON r.id=a.runner_id '
+                    'WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
+    return bool(row and 'memory_tidy_packets_v1' in json.loads(row[0] or '[]'))
 
 
 def before_start(c, settings, task_id, at):
@@ -128,7 +136,7 @@ def before_start(c, settings, task_id, at):
     selected = controls.eligible(c, settings, row['bot'])
     reason = ('skipped: spend stop' if total >= STOP else
               'skipped: not finished' if stamp(at) >= row['deadline'] else
-              'skipped: model unavailable' if not selected or selected['model'] != row['model'] else
+              'skipped: model unavailable' if not selected or selected['model'] != row['model'] or not packet_runner(c, row['bot']) else
               'skipped: spend limit' if usage_limits.blocked(c, row['bot'], at) else '')
     if reason:
         close_pass(c, row, reason)
@@ -176,7 +184,10 @@ def admit(c, settings, at):
             if not hasattr(check_models, 'file_pass'):
                 raise Problem('conflict', controls.UNAVAILABLE, 409)
             try:
-                check_models.choose(c, settings, bot, model, 'check', memory_pass=True)
+                choice = check_models.choose(c, settings, bot, model, 'check', memory_pass=True)
+                from clients.harness_manifests import caps
+                if not packet_runner(c, bot) or not caps(choice['harness']).get('packet_only'):
+                    reason = 'skipped: model unavailable'
             except check_models.CheckModelError:
                 reason = 'skipped: model unavailable'
         ident = H.new_id()

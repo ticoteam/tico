@@ -172,6 +172,8 @@ pub struct Settings {
     pub background_wait: Option<std::time::Duration>,
     /// A capacity continuation must fail if its saved session is missing; rebuilding context may repeat work.
     pub require_existing_session: bool,
+    /// Packet-only tidy turns have no checkout tools or Hub MCP server.
+    pub packet_only: bool,
 }
 
 /// `background_wait_s` in the bot's run config: seconds, 0 for off; five minutes when unset.

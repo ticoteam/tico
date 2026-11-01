@@ -130,6 +130,7 @@ pub struct Capabilities {
     pub readiness: bool,
     pub repo_permission_lint: bool,
     pub repo_commands: bool,
+    pub packet_only: bool,
     pub sign_in_status: SignInStatus,
 }
 
@@ -167,6 +168,7 @@ impl Default for Capabilities {
             readiness: true,
             repo_permission_lint: false,
             repo_commands: false,
+            packet_only: false,
             sign_in_status: SignInStatus { check: "none".into(), ..Default::default() },
         }
     }
@@ -512,6 +514,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "readiness" => c.readiness = flag(k, v)?,
             "repo_permission_lint" => c.repo_permission_lint = flag(k, v)?,
             "repo_commands" => c.repo_commands = flag(k, v)?,
+            "packet_only" => c.packet_only = flag(k, v)?,
             "sign_in_status" => c.sign_in_status = sign_in_status(v, at)?,
             other => return Err(format!("{at}: unknown capability {other}")),
         }

@@ -587,6 +587,7 @@ impl ClaudeHost {
             argv.extend(["--setting-sources".into(), "project,local".into()]);
         }
         argv.push("--strict-mcp-config".into());
+        if t.settings.packet_only { argv.extend(["--tools".into(), "".into()]); }
         let project = std::fs::read_to_string(std::path::Path::new(&t.settings.cwd).join(".mcp.json"))
             .ok()
             .and_then(|text| serde_json::from_str::<Value>(&text).ok())
