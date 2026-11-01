@@ -1523,8 +1523,8 @@ STABLE.extend([
      "group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
      "FinanceReportOf"),
     ("/api/v2/finance/search", "get", "Finance", "searchFinance",
-     "Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees; with kind it pages by "
-     "cursor, without it returns the first few of each kind", "FinanceSearch"),
+     "Search entries, bank and card rows, bills, invoices, contacts, rules and equipment the caller sees; with kind it "
+     "pages by cursor, without it returns the first few of each kind", "FinanceSearch"),
     ("/api/v2/purchase-orders", "get", "Finance", "listPurchaseOrders",
      "Purchase orders the caller sees (payables), newest first, by status, vendor and a search over number, memo and "
      "vendor name, with a cursor", "PurchaseOrders"),
@@ -1541,6 +1541,12 @@ STABLE.extend([
      "Locations"),
     ("/api/v2/locations/{location_id}", "get", "Finance", "getLocation",
      "One location, archived or not", "LocationOne"),
+    ("/api/v2/equipment", "get", "Finance", "listEquipment",
+     "Equipment and vans by name, serial, make or model; kind, customer_id and location_id narrow it, warranty_ends_by "
+     "keeps the warranties ending on or before a day; archived hides them (default), shows only them or both; with a "
+     "cursor", "Equipments"),
+    ("/api/v2/equipment/{equipment_id}", "get", "Finance", "getEquipment",
+     "One piece of equipment, archived or not", "EquipmentOne"),
     ("/api/v2/due-dates", "get", "Finance", "listDueDates",
      "Due dates by name: what each falls on, its repeat, the next day due and its teammate; q searches names, archived "
      "hides them (default), shows only them or both; subject_type with subject_id narrows to one record; with a cursor",
@@ -1806,6 +1812,13 @@ SCHEMAS.update({
     "Estimate": {"allOf": [ref("FinanceOrderRow"), obj({
         "lines": items(obj({"id": "s", "line_no": "i"}, required=["id", "line_no"])), "view_version": "i"},
         required=["lines"])]},
+    "Equipments": obj({"equipment": items(ref("Equipment")), "next_cursor": "n"},
+                      required=["equipment", "next_cursor"]),
+    "EquipmentOne": obj({"equipment": ref("Equipment")}, required=["equipment"]),
+    "Equipment": obj({"id": "s", "name": "s", "kind": {"type": "string", "enum": ["owned", "customer"]},
+                      "location_id": "n", "customer_id": "n", "make": "s", "model": "s", "serial": "s",
+                      "installed_on": "n", "warranty_ends_on": "n", "photo_file_id": "n", "archived_at": "n"},
+                     required=["id", "name", "kind", "make", "model", "serial"]),
     "Locations": obj({"locations": items(ref("Location")), "next_cursor": "n"}, required=["locations", "next_cursor"]),
     "LocationOne": obj({"location": ref("Location")}, required=["location"]),
     "DueDates": obj({"due_dates": items(ref("DueDate")), "next_cursor": "n"}, required=["due_dates", "next_cursor"]),
@@ -1840,7 +1853,8 @@ SCHEMAS.update({
                           "invoices": {"type": ["object", "null"], "additionalProperties": True}},
                          required=["contact", "locations", "estimates", "invoices"]),
     "FinanceSearch": obj({"results": items(obj({"kind": {"type": "string", "enum": [
-        "entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project"]}, "id": "s",
+        "entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project",
+        "equipment"]}, "id": "s",
         "label": "s"})),
         "next_cursor": "n", "currency": "s", "view_version": "i"}),
     "FinanceMetric": obj({"name": "s", "value": {"type": ["integer", "string", "null"]}, "unit": {

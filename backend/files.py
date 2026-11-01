@@ -202,6 +202,19 @@ def file_visible(c, auth, who, row, cache):
     return cards.widened(c, auth, who, row["id"], cache)
 
 
+def readable_by(c, auth, actor, file_id):
+    """Whether `actor` may read a Library file by its id, by the same check as every file read: a file they may not
+    read is no file to them. A missing or archived file is not readable (finance's photos use this)."""
+    row = c.execute("SELECT * FROM bot_files WHERE id=?", (file_id,)).fetchone()
+    if row is None or row["archived"]:
+        return False
+    try:
+        who = Identity(actor, "bot") if actor.startswith("bot:") else auth.identity_for_actor(c, actor)
+    except Problem:
+        return False
+    return file_visible(c, auth, who, row, {})
+
+
 class Files:
     def __init__(self, app, store, auth, blobs, mutate):
         self.app, self.store, self.auth, self.blobs, self.mutate = app, store, auth, blobs, mutate

@@ -110,6 +110,9 @@ def _money(amount: int) -> str:
 CONTACT_FIELDS = ("name", "kind", "emails", "default_account_id", "is_1099", "recipient_id", "active", "seats",
                   "renewal_on")
 TAX_FIELDS = ("tax_id_ref", "tax_id_fp", "tax_id_last4")
+# Vendor terms and ownership, set on contact_update: a bill's default due date (V1), who owns the vendor, and the
+# notice a cancel-by deadline needs (P3).
+VENDOR_FIELDS = ("payment_terms_days", "owner_id", "renewal_notice_days")
 
 
 def _need_contact_rights(ctx: Ctx, who: str, kind: str) -> None:
@@ -155,15 +158,29 @@ def _contact_fields(ctx: Ctx, p: V.Payload, old: Any = None) -> dict[str, object
         last4 = V.opt_text(p, "tax_id_last4", 4) or ""
         out["tax_id_last4"] = last4 or None
         out["tax_id_ref"] = (V.opt_text(p, "tax_id_ref", 80) or None) if last4 else None
-    if "seats" in p or "renewal_on" in p:
+    if any(k in p for k in ("seats", "renewal_on", "renewal_notice_days", "payment_terms_days")):
         kind = str(out.get("kind") or (old["kind"] if old is not None else ""))
         if kind == "customer":
-            raise invalid("seats and renewal dates belong to vendors")
+            raise invalid("seats, renewal dates and payment terms belong to vendors")
     if "seats" in p:
         out["seats"] = None if p.get("seats") is None else V.integer(p, "seats", 0, 1_000_000)
     if "renewal_on" in p:
         out["renewal_on"] = V.opt_day(p, "renewal_on")
+    if "renewal_notice_days" in p:
+        out["renewal_notice_days"] = _days_or_none(p, "renewal_notice_days")
+    if "payment_terms_days" in p:
+        out["payment_terms_days"] = _days_or_none(p, "payment_terms_days")
+    if "owner_id" in p:
+        owner = V.opt_text(p, "owner_id", 80) or ""
+        if owner and not tico.known_actor(ctx.c, owner):
+            raise FinanceError(NOT_FOUND, "no such teammate or bot")
+        out["owner_id"] = owner or None
     return out
+
+
+def _days_or_none(p: V.Payload, key: str) -> int | None:
+    """Whole days 0 to MAX_TERMS, or None when the payload clears the field."""
+    return None if p.get(key) is None else V.integer(p, key, 0, AP.MAX_TERMS)
 
 
 def _vendor_alias(ctx: Ctx, name: str, kind: str, contact_id: str) -> str:
@@ -193,7 +210,7 @@ def _vendor_alias(ctx: Ctx, name: str, kind: str, contact_id: str) -> str:
 def contact_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """A vendor or customer. Its tax id was sealed into the vault before this runs (payments.strip_details): the
     payload carries the vault ref and the last 4 only."""
-    V.only(p, (*CONTACT_FIELDS, *TAX_FIELDS))
+    V.only(p, (*CONTACT_FIELDS, *TAX_FIELDS, *VENDOR_FIELDS))
     f = _contact_fields(ctx, p)
     _need_contact_rights(ctx, who, str(f["kind"]))
     if "tax_id_last4" in p and not f.get("tax_id_ref") and f.get("tax_id_last4"):
@@ -213,7 +230,7 @@ def contact_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 def contact_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    V.only(p, ("contact_id", *CONTACT_FIELDS, *TAX_FIELDS))
+    V.only(p, ("contact_id", *CONTACT_FIELDS, *TAX_FIELDS, *VENDOR_FIELDS))
     old = SAP.get(ctx.c, "fin_contacts", V.text(p, "contact_id", 80))
     if old is None or str(old["book_id"]) != ctx.book.id:
         raise FinanceError(NOT_FOUND, "no such contact")
@@ -375,8 +392,11 @@ def bill_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if number and SAP.number_taken(ctx.c, "bill", str(vendor["id"]), number):
         raise FinanceError(CONFLICT, f"{vendor['name']} already has a bill {number}")
     day = V.day(p, "bill_date")
+    typed_due = V.opt_day(p, "due_date")
     terms = V.integer(p, "terms_days", 0, AP.MAX_TERMS) if p.get("terms_days") is not None else None
-    due = AP.due_date(day, V.opt_day(p, "due_date"), terms)
+    if terms is None and typed_due is None and vendor["payment_terms_days"] is not None:
+        terms = int(vendor["payment_terms_days"])       # the vendor's terms make the default due date (V1)
+    due = AP.due_date(day, typed_due, terms)
     from . import purchasing as PU
     linked, orders = PU.link_bill_lines(ctx, who, str(vendor["id"]), AP.doc_lines(p.get("lines")))
     lines, asked = resolve_lines(ctx, who, "bill", vendor, linked)
@@ -1632,10 +1652,12 @@ def watch(ctx: Ctx) -> int:
                                                   "due_date": inv["due_date"]}, stage)
             n += 1
     for vendor in SAP.renewals_due(ctx.c, ctx.book.id):
-        stage = AP.renewal_stage(vendor["renewal_on"], today)
+        # Counted to the cancel-by day, so the task lands before the vendor's notice runs out (P3).
+        notice_by = AP.renewal_notice_by(vendor["renewal_on"], vendor["renewal_notice_days"])
+        stage = AP.renewal_stage(notice_by, today)
         if stage:
             _event(ctx, RENEWAL_DUE, str(vendor["id"]), {"contact_id": str(vendor["id"]), "stage": stage,
-                                                         "renewal_on": vendor["renewal_on"]},
+                                                         "renewal_on": vendor["renewal_on"], "notice_by": notice_by},
                    f"{vendor['renewal_on']}:{stage}")
             n += 1
     return n

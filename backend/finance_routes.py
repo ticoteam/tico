@@ -14,10 +14,11 @@ from fastapi import Path, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import Field
 
-from . import company_server, hook_relay
+from . import company_server, files, hook_relay
 from .finance import actions as finance
 from .finance import books_link
 from .finance import due_dates as finance_due_dates
+from .finance import equipment as equipment_planner
 from .finance import reads as finance_reads
 from .models import ID, Contract
 from .store import Problem
@@ -87,6 +88,9 @@ def books_problem(e: books_link.BrokerFailed) -> Problem:
 
 
 def install(app, store, auth, mutate):
+    # Equipment photos are Library files: the read check needs this app's Auth (files.readable_by).
+    equipment_planner.set_file_check(lambda c, actor, file_id: files.readable_by(c, auth, actor, file_id))
+
     def viewer(request):
         who = request.state.identity
         auth.domain(who)
@@ -361,6 +365,33 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.record(c, actor, kind="item", record_id=item_id))
 
+    @app.get("/api/v2/equipment")
+    def finance_equipment(request: Request, q: str = Query("", max_length=100),
+                          archived: Literal["hide", "only", "all"] = "hide",
+                          kind: Literal["owned", "customer"] | None = None,
+                          customer_id: str | None = Query(None, max_length=80),
+                          location_id: str | None = Query(None, max_length=80),
+                          warranty_ends_by: str | None = Query(None, pattern=DAY),
+                          warranty: Literal["ending"] | None = None,
+                          due: Literal["soon", "overdue"] | None = None,
+                          cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
+                          view_as: str | None = None):
+        """Equipment and vans by name, serial, make or model; `kind`, `customer_id` and `location_id` narrow it, and
+        `warranty_ends_by` keeps the warranties ending on or before that day. `warranty=ending` keeps the warranties
+        ending within the next 90 days; `due=soon|overdue` keeps the pieces with a due date soon or past due (each
+        row's `next_due_on`). `archived` as on locations; paging counts the filtered list."""
+        actor = as_viewer(request, view_as)
+        filters = {"kind": kind, "customer_id": customer_id, "location_id": location_id,
+                   "warranty_ends_by": warranty_ends_by, "warranty": warranty, "due": due}
+        return read(lambda c: finance_reads.records(c, actor, kind="equipment", q=q, archived=archived, cursor=cursor,
+                                                    limit=limit, filters={k: v for k, v in filters.items() if v}))
+
+    @app.get("/api/v2/equipment/{equipment_id}")
+    def finance_equipment_one(request: Request, equipment_id: ID, view_as: str | None = None):
+        """One piece of equipment, archived or not."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.record(c, actor, kind="equipment", record_id=equipment_id))
+
     @app.get("/api/v2/projects")
     def finance_projects(request: Request, q: str = Query("", max_length=100),
                          archived: Literal["hide", "only", "all"] = "hide",
@@ -512,7 +543,7 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/finance/search")
     def finance_search(request: Request,
                        kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location",
-                                     "project", "po", "estimate", "due_date"] | None = None,
+                                     "project", "po", "estimate", "equipment", "due_date"] | None = None,
                        q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
                        vendor: str | None = Query(None, max_length=120),
                        contact_id: str | None = Query(None, max_length=80),
@@ -522,14 +553,21 @@ def install(app, store, auth, mutate):
                        aging: Aging | None = None,
                        contact_kind: Literal["vendor", "customer", "both"] | None = None, active: bool | None = None,
                        rule_kind: Literal["gate", "posting"] | None = None,
+                       equipment_kind: Literal["owned", "customer"] | None = None,
+                       customer_id: str | None = Query(None, max_length=80),
+                       location_id: str | None = Query(None, max_length=80),
+                       warranty_ends_by: str | None = Query(None, pattern=DAY),
                        cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
                        view_as: str | None = None):
-        """Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees. With `kind` it
-        pages by `cursor`; without, it returns the first few of each kind."""
+        """Search entries, bank and card rows, bills, invoices, contacts, rules and equipment the caller sees. With
+        `kind` it pages by `cursor`; without, it returns the first few of each kind. Equipment takes equipment_kind,
+        customer_id, location_id and warranty_ends_by (a day)."""
         actor = as_viewer(request, view_as)
         named = {"status": status, "contact_id": contact_id, "account_id": account_id, "vendor": vendor,
                  "money_account_id": money_account_id, "start": start, "end": end, "aging": aging,
-                 "kind": contact_kind if kind == "contact" else rule_kind if kind == "rule" else None,
+                 "kind": contact_kind if kind == "contact" else rule_kind if kind == "rule" else
+                 equipment_kind if kind == "equipment" else None,
+                 "customer_id": customer_id, "location_id": location_id, "warranty_ends_by": warranty_ends_by,
                  "active": None if active is None else ("1" if active else "0")}
         filters = {k: v for k, v in named.items() if v is not None}
         return read(lambda c: finance_reads.search(c, actor, kind=kind, q=q, filters=filters, limit=limit,
