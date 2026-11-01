@@ -118,7 +118,7 @@ async function pmIntake(run) {
   const list = [...(inboxes || [])];
   if (cur && !list.some(i => i.inbox_id === cur)) list.unshift({inbox_id: cur, name: '', address: intake.address || cur});
   if (!settingsIsAdmin()) {
-    host.innerHTML = `${line}<p data-pm-intake-shown>${cur ? esc(intake.address || cur) : 'None'}</p>${cur && senders ? `<p class="muted" data-pm-intake-senders-shown>From ${esc(senders)}</p>` : ''}`;
+    host.innerHTML = `${line}<p data-pm-intake-shown>${intake?.hidden ? 'An inbox you can’t read' : cur ? esc(intake.address || cur) : 'None'}</p>${cur && senders ? `<p class="muted" data-pm-intake-senders-shown>From ${esc(senders)}</p>` : ''}`;
     return;
   }
   if (!list.length) {

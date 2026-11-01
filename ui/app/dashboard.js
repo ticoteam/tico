@@ -123,7 +123,7 @@ async function pageDashboard(place) {
         <button type="button" class="ghost" data-dash-add="page"><span class="dash-plus" aria-hidden="true">+</span>Page</button></span></header>
     <div class="dash-grid" id="dash-grid">${kept ? '' : skelRows(4, {card: true})}</div>
     <dialog class="tmodal tmodal-shell dash-dialog" id="dash-dialog" aria-label="Card"></dialog></div>`;
-  const state = DASH = {place, view: null, choices: null, root: $('#dash-root'), menu: null};
+  const state = DASH = {place, view: null, choices: null, root: $('#dash-root'), menu: null, readAt: Date.now()};
   dashWire(state);
   if (kept) { state.view = kept; dashDraw(state); }
   let view;
@@ -143,6 +143,31 @@ async function pageDashboard(place) {
   state.view = view;
   dashDraw(state);
 }
+// My dashboard follows what its cards show: a task, Needs you or a thread changing reads it again (at most every 15 s,
+// never in a hidden tab), and it is read every 2 minutes while on screen, or every 10 with the live stream up. It is
+// drawn again only when the answer differs, and not while a menu or dialog is open or a card is being moved.
+const DASH_POLL_MS = 120e3, DASH_LIVE_POLL_MS = 600e3;
+function dashFollow() {
+  if (DASH?.place === 'person:me' && DASH.view) liveThrottle('dash', () => void dashReread(DASH));
+}
+async function dashReread(state) {
+  if (!state || DASH !== state || state.place !== 'person:me' || state.reading) return;
+  if (state.menu || state.root.querySelector('#dash-dialog')?.open || state.root.querySelector('.dash-pin.dragging')) return;
+  state.reading = true;
+  try {
+    const view = await get(dashApi(state.place), {fresh: true});
+    if (DASH !== state || !Array.isArray(view?.pins) || sameData(view, state.view)) return;
+    state.view = view;
+    dashDraw(state);
+  } catch (e) { /* the next change or tick reads again */ }
+  finally { state.reading = false; state.readAt = Date.now(); }
+}
+setInterval(() => {
+  const state = DASH;
+  if (!state || document.hidden || !state.view) return;
+  const every = typeof liveConnected === 'function' && liveConnected() ? DASH_LIVE_POLL_MS : DASH_POLL_MS;
+  if (Date.now() - (state.readAt || 0) >= every) void dashReread(state);
+}, 30e3);
 function dashDraw(state) {
   const v = state.view, root = state.root;
   S.lastRead.places[state.place] = v;

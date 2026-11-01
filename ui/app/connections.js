@@ -15,7 +15,8 @@ let CN_VIEW = 0;
 
 function cnRowHTML(r) {
   const [label, tone] = CN_STATUS[r.status] || [r.status, 'idle'];
-  const bots = r.bots.slice(0, 5).map(slug => `<a href="#/bot/${encodeURIComponent(slug)}" title="${esc(botDisplayName(slug))}">${avatar(slug, 20)}</a>`).join('');
+  // Each bot is {slug, name}, only bots the reader may see (backend/connections.py).
+  const bots = r.bots.slice(0, 5).map(({slug, name}) => `<a href="#/bot/${encodeURIComponent(slug)}" title="${esc(name || slug)}">${avatar(slug, 20)}</a>`).join('');
   const more = r.more_bots + Math.max(0, r.bots.length - 5);
   return `<li class="cn-row" data-id="${esc(r.id)}">
     <span class="nav-icon" aria-hidden="true">${CN_ICONS[r.kind] || 'link'}</span>

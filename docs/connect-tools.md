@@ -279,5 +279,6 @@ meetings, incoming webhooks except Finance's, physical mail, and Listening when 
 named are only those you may see.
 
 `GET /api/v2/connections?limit=&cursor=` answers `{connections: [{id, kind, name, detail, status, scope, readers, bots,
-more_bots, configure, can_configure}], next}`, at most 100 rows and 96 KB a page; follow `next` with `cursor`. CLI:
+more_bots, configure, can_configure}], next}`, at most 100 rows and 96 KB a page; follow `next` with `cursor` (an
+opaque place in the list: rows you may not see never fill a page). CLI:
 `hub connections list`; MCP: `hub_connections_list` (BotOps reads it with the rights of the person who asked).

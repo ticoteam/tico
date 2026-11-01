@@ -687,6 +687,19 @@ def place_view(ctx, place):
 
 # ---- writes
 
+def log(ctx, action, target, detail, private=False):
+    """The event a write leaves. A write to someone's My dashboard names nothing: no card, page or place, since the
+    event log is the company's (the owner reads it whole, `hub sql` included) and the dashboard is its person's alone."""
+    if private:
+        H.event(ctx.c, ctx.who.actor, action, "", {})
+    else:
+        H.event(ctx.c, ctx.who.actor, action, target, detail)
+
+
+def on_person_place(places):
+    return any(p.startswith("person:") for p in places)
+
+
 def ensure(ctx, kind, ident):
     """Save a Dashboard or team page's defaults the first time it is changed, so the pins have ids."""
     place = canonical(kind, ident)
@@ -696,11 +709,12 @@ def ensure(ctx, kind, ident):
     ctx.c.execute("INSERT INTO pin_places(place, audience_json, saved, saved_by) VALUES(?,?,?,?)",
                   (place, None, now, ctx.who.actor))
     for pin in default_pins(kind, ident):
-        cid = make_card(ctx, pin["card"]["template"], "", json.loads(pin["card"]["settings_json"]))
+        cid = make_card(ctx, pin["card"]["template"], "", json.loads(pin["card"]["settings_json"]),
+                        private=kind == "person")
         insert_pin(ctx, place, "card:" + cid, pin["size"], pin["position"])
 
 
-def make_card(ctx, template, title, settings):
+def make_card(ctx, template, title, settings, private=False):
     if ctx.c.execute("SELECT count(*) FROM cards").fetchone()[0] >= CARDS_MAX:
         raise Problem("too_many", f"This team keeps {CARDS_MAX} cards: remove some first", 409)
     settings = clean_settings(ctx, template, settings)
@@ -708,7 +722,7 @@ def make_card(ctx, template, title, settings):
     ctx.c.execute("INSERT INTO cards(id,template,settings_json,title,made_by,created,updated,updated_by) "
                   "VALUES(?,?,?,?,?,?,?,?)", (cid, template, json.dumps(settings), (title or "").strip(), ctx.who.actor,
                                               now, now, ctx.who.actor))
-    H.event(ctx.c, ctx.who.actor, "card.added", cid, {"template": template})
+    log(ctx, "card.added", cid, {"template": template}, private)
     return cid
 
 
@@ -761,7 +775,7 @@ def insert_pin(ctx, place, item, size, position=None):
     pid = H.new_id()
     ctx.c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created) VALUES(?,?,?,?,?,?,?)",
                   (pid, place, item, position, size_of(size), ctx.who.actor, H.now()))
-    if item.startswith("page:"):
+    if item.startswith("page:") and not place.startswith("person:"):     # My dashboard is its person's alone
         file_activity(ctx.c, item[5:], ctx.who.actor, "pinned", place)
     return pid
 
@@ -774,7 +788,8 @@ def renumber(c, place):
 def drop_pin(ctx, pin):
     ctx.c.execute("DELETE FROM pins WHERE id=?", (pin["id"],))
     if pin["item"].startswith("page:"):
-        file_activity(ctx.c, pin["item"][5:], ctx.who.actor, "unpinned", pin["place"])
+        if not pin["place"].startswith("person:"):
+            file_activity(ctx.c, pin["item"][5:], ctx.who.actor, "unpinned", pin["place"])
     elif pin["item"].startswith("card:"):
         cid = pin["item"][5:]
         if not ctx.c.execute("SELECT 1 FROM pins WHERE item=?", (pin["item"],)).fetchone():
@@ -795,7 +810,7 @@ def add_pin(ctx, place, item, size="medium", position=None):
         return pin["id"]
     ensure(ctx, kind, ident)
     pid = insert_pin(ctx, place, item, size, position)
-    H.event(ctx.c, ctx.who.actor, "pin.added", place, {"item": item})
+    log(ctx, "pin.added", place, {"item": item}, kind == "person")
     return pid
 
 
@@ -829,7 +844,7 @@ def remove_pin(ctx, pid):
         T.remove_widget(ctx, ident, pin["item"])
     else:
         drop_pin(ctx, pin)
-    H.event(ctx.c, ctx.who.actor, "pin.removed", pin["place"], {"item": pin["item"]})
+    log(ctx, "pin.removed", pin["place"], {"item": pin["item"]}, kind == "person")
     return {"removed": pid}
 
 
@@ -932,7 +947,8 @@ def edit_card(ctx, cid, title=None, settings=None):
     if fields:
         fields.update(updated=H.now(), updated_by=ctx.who.actor)
         ctx.c.execute("UPDATE cards SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), cid))
-        H.event(ctx.c, ctx.who.actor, "card.changed", cid, {"fields": sorted(k for k in fields if k != "updated")})
+        log(ctx, "card.changed", cid, {"fields": sorted(k for k in fields if k != "updated")},
+            on_person_place(card_places(ctx, row)))
     return card_view(ctx, card_row(ctx.c, cid))
 
 
@@ -940,6 +956,7 @@ def remove_card(ctx, cid):
     row = card_or_404(ctx, cid)
     if not may_edit_card(ctx, row):
         raise Problem("forbidden", "Whoever arranges the places it is pinned to removes a card", 403)
+    private = on_person_place(card_places(ctx, row))
     for pin in [dict(r) for r in ctx.c.execute("SELECT * FROM pins WHERE item=?", ("card:" + cid,))]:
         kind, ident = parse(ctx, pin["place"])
         if kind == "bot":
@@ -948,7 +965,7 @@ def remove_card(ctx, cid):
         else:
             drop_pin(ctx, pin)
     ctx.c.execute("DELETE FROM cards WHERE id=?", (cid,))
-    H.event(ctx.c, ctx.who.actor, "card.removed", cid, {"template": row["template"]})
+    log(ctx, "card.removed", cid, {"template": row["template"]}, private)
     return {"removed": cid}
 
 
@@ -1101,7 +1118,8 @@ def install(app, store, auth, mutate, settings, task_view):
                 ensure(ctx, kind, ident)
             elif not ctx.person and ctx.who.role != "bot":
                 raise Problem("forbidden", "A person or a bot makes cards", 403)
-            cid = make_card(ctx, body.template, body.title, body.settings)
+            private = bool(body.place) and parse(ctx, body.place)[0] == "person"
+            cid = make_card(ctx, body.template, body.title, body.settings, private)
             out = {"card": card_view(ctx, card_row(c, cid))}
             if body.place:
                 out["pin"] = add_pin(ctx, body.place, "card:" + cid, body.size)

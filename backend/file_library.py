@@ -86,6 +86,12 @@ def has_fts(c):
     return c.execute("SELECT 1 FROM sqlite_master WHERE name='file_text'").fetchone() is not None
 
 
+def own_place(who):
+    """The reader's My dashboard (backend/cards.py person places), or '' for anyone who has none."""
+    actor = str(who.actor or "")
+    return "person:" + actor[6:] if who.role in ("owner", "human") and actor.startswith("human:") else ""
+
+
 def has_pins(c):
     """Pins are another change's table (docs/pages.md); the filter and the row's places wait for it."""
     return c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pins'").fetchone() is not None
@@ -312,6 +318,8 @@ class Library:
         out = []
         for r in c.execute("SELECT DISTINCT place FROM pins WHERE item=?", ("page:" + fid,)):
             place = str(r["place"])
+            if place.startswith("person:") and place != own_place(who):     # someone's My dashboard is theirs alone
+                continue
             if place.startswith("task:") and not self.files.task_info(c, who, place[5:], cache):
                 continue
             out.append(place)
@@ -366,7 +374,10 @@ class Library:
                 where.append(sql)
                 params += args
             if pinned:
-                where.append("EXISTS (SELECT 1 FROM pins WHERE item='page:' || f.id)" if has_pins(c) else "0")
+                where.append("EXISTS (SELECT 1 FROM pins WHERE item='page:' || f.id AND "
+                             "(place NOT LIKE 'person:%' OR place=?))" if has_pins(c) else "0")
+                if has_pins(c):
+                    params.append(own_place(who))
             cache, caches = {}, {"task": {}, "repo": {}}
             spent = [0]
 
