@@ -26,6 +26,9 @@ const assistantEmptyHTML = () => `<div class="asst-empty"><div class="asst-hints
   ASSISTANT_HINTS.map(t => `<button class="ghost" type="button" data-hint="${esc(t)}">${esc(t)}</button>`).join('')}</div></div>`;
 async function pageAssistant() {
   const slug = myChatBot(), load = ++ASSISTANT_LOAD;
+  // A redraw moves the composer: where the cursor was comes back with it.
+  const typing = ASSISTANT_PILL?.el.contains(document.activeElement) ? document.activeElement : null;
+  const caret = typing && 'selectionStart' in typing ? [typing.selectionStart, typing.selectionEnd] : null;
   $('#main').classList.add('chat-layout', 'bot-chat-layout');
   $('#main').innerHTML = `
   <div class="bot-top asst-top" id="bot-top"><div class="bot-ident">${avatar(slug, 36, stateOf(slug))}
@@ -62,22 +65,32 @@ async function pageAssistant() {
   }
   const P = assistantPill(), thread = $('#conv-thread');
   $('#chat-composer').append(P.el);
+  if (typing && P.el.contains(typing)) { typing.focus({preventScroll: true}); if (caret) typing.setSelectionRange(...caret); }
   chatDropZone($('#pane-chat'), P);
   bindChatSwipe(thread);
-  thread.addEventListener('click', ev => { const b = ev.target.closest('[data-hint]'); if (b) assistantSend(P, b.dataset.hint); });
+  thread.addEventListener('click', ev => { const b = ev.target.closest('[data-hint]'); if (b && !P.sending) assistantSend(P, '', {text: b.dataset.hint, files: []}); });
   void v2ChatLoad(slug, {conv: {id: d.room_id}, messages: d.messages, execution: d.execution, nextBefore: d.next_before,
                          empty: assistantEmptyHTML()});
 }
-async function assistantSend(P, text) {
-  text = String(text || '').trim();
-  const files = P.files.slice();
-  if ((!text && !files.length) || P.sending) return;
+// Each message leaves the box at once and waits in P.outbox until the server has it; a Return while one is out queues
+// behind it. A failed send puts it, and everything queued after it, back in the box ahead of whatever is typed there.
+async function assistantSend(P, text, queued = null) {
+  const out = queued || {text: String(text || '').trim(), files: P.files.slice(), scope: sessionScope(pq(P, '.p-text'))};
+  if (!queued) {
+    if (!out.text && !out.files.length) return;
+    (P.outbox ||= []).push(out);
+    pillClear(P);
+    if (P.sending) return;
+  }
   P.sending = true;
-  const btn = pq(P, '.p-send'), state = V2C, scope = sessionScope(pq(P, '.p-text'));
+  const btn = pq(P, '.p-send'), state = V2C;
   btn.disabled = true; pillBtnSay(btn, 'Sending…');
+  let failed = false;
   try {
-    const r = await cloudCompose('/v2/assistant/messages', {text: text || 'Attached files.'}, files);
-    pillAcknowledge(P, text, files, scope);
+    const r = await cloudCompose('/v2/assistant/messages', {text: out.text || 'Attached files.'}, out.files);
+    // A 200 without the message (a sign-in page from a proxy) did not send.
+    if (!r?.message) throw new Error('Not sent. Try again.');
+    sessionAcknowledge(pq(P, '.p-text'), out.scope);
     if (state && V2C === state) {
       // Your words show at once; a lookup's answer comes with them, a bot turn streams in like any reply.
       for (const m of [r.message, r.reply].filter(Boolean)) { state.messages.push(m); state.mine.push(m); }
@@ -86,8 +99,24 @@ async function assistantSend(P, text) {
       v2ChatRender(state);
       if (!r.fast) v2ChatStream(state);
     }
-  } catch (e) { toast(e.message, true); }
-  finally { P.sending = false; pillBtnSay(btn, ''); pillLabel(P); pillButtons(P); }
+  } catch (e) {
+    failed = true;
+    toast(e.message, true);
+  }
+  finally {
+    P.outbox = (P.outbox || []).filter(x => x !== out);
+    if (failed) { assistantRestore(P, [out, ...P.outbox]); P.outbox = []; }
+    P.sending = false; pillBtnSay(btn, ''); pillLabel(P); pillButtons(P);
+    const next = P.outbox[0];
+    if (next) void assistantSend(P, next.text, next);
+  }
+}
+function assistantRestore(P, outs) {
+  const box = pq(P, '.p-text');
+  box.value = [...outs.map(o => o.text), box.value.trim()].filter(Boolean).join('\n\n');
+  box.dispatchEvent(new Event('input', {bubbles: true}));
+  P.files.unshift(...outs.flatMap(o => o.files));
+  pillChips(P); pillButtons(P); chatDraftSave(P);
 }
 
 // "Earlier chats": the owner's earlier chat with the Strategy Bot, by its name, read-only, newest page first and older

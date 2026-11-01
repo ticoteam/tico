@@ -61,6 +61,7 @@ function route(hash = location.hash) {
   if (!(S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) { if (UPD) { UPD.io?.disconnect(); void updFlush(UPD); UPD = null; } updcStop(); }
   if (!S.route.startsWith('#/bot/')) botStopped();
   if (!S.route.startsWith('#/seat/')) recruitStop();
+  threadsSync();      // the Threads and DMs sidebar sections (ui/app/threads.js)
   askSync();          // Ask's button: away on the Assistant page and in setup (ui/app/ask-panel.js)
   renderTree();
   if (redesignRoute(S.route)) { /* Strategy's tabs, Automations, Connections and the old addresses that moved (ui/app/redesign.js) */ }
@@ -83,6 +84,8 @@ function route(hash = location.hash) {
   else if (S.route === CHAT) { location.hash = TASKS; return; }
   else if (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?')) pageNotes();
   else if (S.route.startsWith('#/bot/')) { const [slug, tab] = S.route.slice(6).split('/'); pageBot(slug, tab); }
+  else if (S.route === THREADS_ROUTE || S.route.startsWith(THREADS_ROUTE + '?')) pageThreads();
+  else if (S.route.startsWith(THREAD_ROUTE)) pageThread(decodeURIComponent(S.route.slice(THREAD_ROUTE.length).split(/[/?]/)[0]));
   else if (S.route.startsWith('#/seat/')) { const [id, template] = S.route.slice(7).split('?')[0].split('/').map(decodeURIComponent); void pageSeat(id, template || ''); }
   else if (S.route === ASSISTANT) pageAssistant();
   else if (S.route === LEARNED) pageLearned();
@@ -152,6 +155,7 @@ function route(hash = location.hash) {
   else if (isAutomationsRoute(S.route)) pageAutomations();
   else location.hash = HOME;            // unknown or empty routes land on My dashboard, home
   redesignAfterRoute();
+  thvSweep();         // a thread view the new page replaced stops following
   // A new page starts at its top; a query change (a filter, an open row) or a redraw keeps the reader's place.
   if (newPath) $('#main').scrollTop = 0;
 }

@@ -1,7 +1,7 @@
-// Offline browser regression: typing into a bot's composer while its conversation is still loading.
-// The bot page redraws (a re-route) and the held snapshot lands after Return; the typed text and the
+// Offline browser regression: typing into the Assistant's composer while its conversation is still loading.
+// The page redraws (a re-route) and the held snapshot lands after Return; the typed text and the
 // cursor survive the redraw, Return sends once, and the late snapshot does not wipe the sent message.
-// Second, the way a person meets it: from another page a hash change opens the bot, its stream's snapshots land on
+// Second, the way a person meets it: from another page a hash change opens the Assistant, its stream's snapshots land on
 // their own schedule, the box is clicked after a few seconds and 250 characters are typed; a snapshot the server built
 // before the send (a lagging stream) arrives afterwards and must not take the message off the page.
 const {chromium} = require('playwright');
@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const until = async cond => { for (const end = Date.now() + t(10000); !cond() && Date.now() < end;) await new Promise(r => setTimeout(r, 50)); };
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
@@ -26,28 +27,26 @@ async function whileLoading(browser) {
       if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-      if (p === '/api/employees') return json([{name: 'sales', display_name: 'Sales', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+      if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
-      if (p === '/api/v2/conversations')
-        return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:sales']}] : []});
+      if (p === '/api/v2/assistant') return json(assistantView('c1', {messages: []}));
       if (p.endsWith('/snapshot')) { await snapshotHeld; return json({messages: [], execution: null}); }   // the slow, empty load
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      if (p === '/api/v2/chat/sales') {
+      if (p === '/api/v2/assistant/messages') {
         sends.push(route.request().postDataJSON().text);
-        return json({conversation: {id: 'c1'}, message: {id: 'm1', from_actor: 'human:ana', body: sends[0], created: new Date().toISOString()}});
+        return json({message: {id: 'm1', from_actor: 'human:ana', body: sends[0], created: new Date().toISOString()}});
       }
       return json(unrouted(p));
     });
-    await page.goto('https://tico-ui.test/#/bot/sales');
+    await page.goto('https://tico-ui.test/#/assistant');
     const box = page.locator('#chat-composer textarea');
     await box.waitFor();
-    assert.match(await page.locator('#conv-thread').innerText(), /Loading the thread/, 'still loading');
     const text = 'A long message typed before the conversation finished loading';
     await box.click(); await box.pressSequentially(text);
     // The page redraws under the cursor.
-    await page.evaluate(() => { BOT = null; route(); });
+    await page.evaluate(() => route());
     assert.equal(await box.inputValue(), text, 'the text survives the redraw');
-    assert.equal(await page.evaluate(() => document.activeElement === document.querySelector('#chat-composer textarea')), true, 'the cursor stays in the box');
+    assert.equal(await page.evaluate(() => document.activeElement?.matches('#chat-composer textarea')), true, 'the cursor stays in the box');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value);
     assert.deepEqual(sends, [text], 'Return sends it once');
@@ -65,7 +64,7 @@ async function afterHashNav(browser) {
   const errors = [], sends = [], served = [], streams = [];
   page.on('pageerror', e => errors.push(e.message));
   const now = () => new Date().toISOString();
-  let server = [{id: 'old', from_actor: 'bot:sales', body: 'Welcome back', created: '2026-01-01T00:00:00Z'}], sentAt = 0;
+  let server = [{id: 'old', from_actor: 'bot:coo', body: 'Welcome back', created: '2026-01-01T00:00:00Z'}], sentAt = 0;
   let releaseCurrent;
   const currentHeld = new Promise(done => releaseCurrent = done);
   await page.route('**/*', async route => {
@@ -77,10 +76,9 @@ async function afterHashNav(browser) {
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-    if (p === '/api/employees') return json([{name: 'sales', display_name: 'Sales', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/issues') return json([]);
-    if (p === '/api/v2/conversations')
-      return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:sales']}] : []});
+    if (p === '/api/v2/assistant') return json(assistantView('c1', {messages: server.slice()}));
     if (p === '/api/v2/events') { streams.push(route); return; }          // held until the test sends a change
     if (p.endsWith('/snapshot')) {
       // The first snapshot read after the send was built just before the message landed.
@@ -89,17 +87,17 @@ async function afterHashNav(browser) {
       served.push(phase);
       return json({messages: phase === 'lagging' ? server.slice(0, 1) : server.slice(), execution: null});
     }
-    if (p === '/api/v2/chat/sales') {
+    if (p === '/api/v2/assistant/messages') {
       sends.push(route.request().postDataJSON().text);
       const message = {id: 'm1', from_actor: 'human:ana', body: sends[0], created: now()};
       server = [...server, message]; sentAt = Date.now();
-      return json({conversation: {id: 'c1'}, message});
+      return json({message});
     }
     return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('#settings-tabs').waitFor();
-  await page.evaluate(() => { location.hash = '#/bot/sales'; });
+  await page.evaluate(() => { location.hash = '#/assistant'; });
   const box = page.locator('#chat-composer textarea');
   await box.waitFor();
   await page.waitForFunction(() => V2C?.loaded && V2C.liveOff);

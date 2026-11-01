@@ -2,7 +2,7 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* swap, not block: text never waits on the icon font. Its ligature names ("dynamic_feed") stay hidden until the font
    is in (html.icons-ready, set by ui/theme.js; see base.css), so they never flash as words. */
-@font-face{font-family:"Material Symbols Outlined";font-style:normal;font-weight:300;font-display:swap;src:url(/vendor/fonts/material-symbols-outlined.woff2?v=887fa52538ae) format("woff2")}
+@font-face{font-family:"Material Symbols Outlined";font-style:normal;font-weight:300;font-display:swap;src:url(/vendor/fonts/material-symbols-outlined.woff2?v=1956ef1492ab) format("woff2")}
 /* Text: Inter, self-hosted (ui/vendor/fonts/inter-variable.woff2, built by scripts/build-text-font.py; OFL, see
    LICENSE-inter.txt). One variable file: weights 400-700, optical sizes 14-32, Latin and Latin Extended.
    optional, not swap: a page that does not have the font within ~100ms (a cold cache) keeps the fallback for its whole

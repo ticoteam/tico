@@ -2951,6 +2951,11 @@ export type MessageResult = {
   message: Message;
 };
 
+export type MessageTask = {
+  owner: string;
+  title: string;
+};
+
 export type ModelSubscription = {
   added_by: string;
   added_by_name: string;
@@ -7788,6 +7793,14 @@ export type MakeStrategyBotDecisionParams = {
 };
 export type MakeStrategyBotDecisionBody = StrategyBotDecision;
 export type MakeStrategyBotDecisionResponse = StrategyBotLogEntry;
+
+/** POST /api/v2/threads/messages/{message_id}/task */
+export type MakeTaskFromMessageParams = {
+  "Idempotency-Key": string;
+  message_id: string;
+};
+export type MakeTaskFromMessageBody = MessageTask;
+export type MakeTaskFromMessageResponse = TaskResult;
 
 /** POST /api/v2/bots/{bot}/onboarded */
 export type MarkBotOnboardedParams = {

@@ -17,6 +17,7 @@ const vm = require('node:vm');
 const {execFileSync} = require('node:child_process');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const ORIGIN = 'http://localhost:8765';
@@ -127,6 +128,7 @@ const edgeServer = http.createServer(async (req, res) => {
     const errors = [], outside = [], appRoute = [];
     edgeAnswers.length = 0;
     page.on('pageerror', e => { if (!/sandboxed|steal/i.test(e.message)) errors.push(e.message); });
+    const threads = threadsFake({bot: 'designer', messages: () => MESSAGES});
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -146,12 +148,12 @@ const edgeServer = http.createServer(async (req, res) => {
       if (p === '/api/issues') return json([]);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/events') return;                                // live events, held open
-      if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c-designer', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:designer']}] : []});
-      if (p === '/api/v2/conversations/c-designer/snapshot') return json({messages: MESSAGES, execution: null});
+      const answer = threads(p, url, req.method());
+      if (answer !== undefined) return json(answer);
       return json(unrouted(p));
     });
 
-    await page.goto(ORIGIN + '/#/bot/designer/chat');
+    await page.goto(ORIGIN + '/#/bot/designer/dm');
     const m1 = page.locator('[data-message="m1"]'), m2 = page.locator('[data-message="m2"]');
     const card = (m, id) => m.locator(`figure.vcard[data-file="${id}"]`);
     await card(m1, 'f-page').locator('.vcard-body.ready').waitFor();
@@ -185,7 +187,7 @@ const edgeServer = http.createServer(async (req, res) => {
     assert.equal(await hostileFrame.evaluate(() => document.title), 'opaque', `${label}: its script ran, in an opaque origin`);
     assert.equal(await hostile.evaluate(c => c.querySelector('iframe').visualHeight), 20000, `${label}: its huge height is clamped to 20000`);
     assert.deepEqual(await plainH(), before, `${label}: a message from another card's frame does not resize this card`);
-    assert.equal(page.url(), ORIGIN + '/#/bot/designer/chat', `${label}: nothing navigated the app`);
+    assert.equal(page.url(), ORIGIN + '/#/bot/designer/dm', `${label}: nothing navigated the app`);
     assert.equal(context.pages().length, 1, `${label}: nothing opened`);
     assert.equal(await page.evaluate(() => document.body.dataset.owned || ''), '', `${label}: the frame cannot reach the app's page`);
     assert.deepEqual(outside, [], `${label}: nothing went to evil.test`);

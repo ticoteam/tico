@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000' + '1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
 const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1, ref: id + '@1', title, kind, name, size: 1000, content_type,
@@ -37,6 +38,7 @@ const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
+  const threads = threadsFake({bot: 'designer', messages: () => messages});
   await context.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -49,8 +51,8 @@ const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1
     if (p === '/api/issues') return json([]);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     if (p === '/api/v2/events') return;                                 // live events, held open
-    if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c-designer', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:designer']}] : []});
-    if (p === '/api/v2/conversations/c-designer/snapshot') return json({messages, execution: null});
+    const answer = threads(p, url, req.method());
+    if (answer !== undefined) return json(answer);
     if (p === '/api/v2/tasks' && req.method() === 'GET') return json({tasks: [task], next_offset: null});
     if (p === '/api/v2/tasks/t1/files') return json({files: taskFiles});
     if (p === '/api/v2/tasks/t1') return json({task, comments: taskComments, events: [], children: [], parent: null, mover: true, messages: [], can_comment: true});
@@ -58,7 +60,7 @@ const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1
   });
 
   // ---- chat: a titled picture is a thumbnail captioned and named by its title; a titled page is a chip with the title
-  await page.goto('https://tico-ui.test/#/bot/designer/chat');
+  await page.goto('https://tico-ui.test/#/bot/designer/dm');
   const m1 = page.locator('[data-message="m1"]');
   await m1.locator('.chat-files .chat-thumb.ready').waitFor();
   assert.equal(await m1.locator('figure.vcard').count(), 0, 'no visual address: no cards');

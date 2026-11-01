@@ -31553,6 +31553,77 @@
         ]
       }
     },
+    "/api/v2/threads/messages/{message_id}/task": {
+      "post": {
+        "summary": "A task from a message I read: the server copies its text and a link back, and the task is private unless the thread is company-wide",
+        "operationId": "makeTaskFromMessage",
+        "parameters": [
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Message Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageTask"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Threads"
+        ]
+      }
+    },
     "/api/v2/threads/search": {
       "get": {
         "summary": "Messages whose text matches every word of `q`, newest first, only in threads and messages the viewer may read",
@@ -51021,6 +51092,28 @@
           "message"
         ],
         "additionalProperties": true
+      },
+      "MessageTask": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "owner": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Owner"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "owner"
+        ],
+        "title": "MessageTask"
       },
       "ModelSubscription": {
         "type": "object",

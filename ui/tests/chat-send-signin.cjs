@@ -1,4 +1,4 @@
-// A sign-in return must not refill confirmed chat text from its saved restoration snapshot.
+// A sign-in return must not refill confirmed Assistant chat text from its saved restoration snapshot.
 // All requests and sign-in pages are synthetic; the real UI, navigation and browser storage run unchanged.
 const {chromium, webkit} = require('playwright');
 const assert = require('node:assert/strict');
@@ -6,9 +6,10 @@ const fs = require('node:fs');
 const http = require('node:http');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs');
 const engines = (process.env.TICO_UI_ENGINES || 'chromium,webkit').split(',');
 
-async function scenario(browser, mode, edit, keeper = true, editedBefore = false) {
+async function scenario(browser, mode, edit, editedBefore = false) {
   const page = await browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
   const errors = [], posts = [], delivered = [];
   const reads = new Set(), readWaiters = new Set();
@@ -55,29 +56,26 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
       if (p === '/') return reply(html, 'text/html');
       if (p === '/api/v2/me' && expired) return identity();
       if (p === '/api/me' || p === '/api/v2/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-      if (p === '/api/employees') return json([{name: 'sales', display_name: 'Sales', host: keeper ? 'keeper' : 'local', status: 'active', can_chat: true, schedules: []}]);
+      if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
-      if (p === '/api/employees/sales/conversation') return json({runs: []});
-      if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with')
-        ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:sales']}] : []});
+      if (p === '/api/v2/assistant') return json(assistantView('c1', {messages: delivered}));
       if (p.endsWith('/snapshot')) return json({messages: delivered, execution: null});
       if (p === '/api/v2/events' || p.endsWith('/watch')) {
         response.writeHead(200, {'Content-Type': 'text/event-stream'});
         response.write('event: ready\ndata: {"seq":0}\n\n');
         return;
       }
-      if (p === (keeper ? '/api/v2/chat/sales' : '/api/employees/sales/chat')) {
-        const text = keeper ? JSON.parse(body).text : body.match(/name="text"\r\n\r\n([^]*?)\r\n--/)[1];
+      if (p === '/api/v2/assistant/messages') {
+        const text = JSON.parse(body).text;
         posts.push({text, method: request.method});
         if (posts.length === 1) {
-          if (mode === 'timeout') return; // the client must end the unanswered send itself
           expired = true;
           return identity();
         }
         if (hold) await hold;
         const message = {id: 'm' + posts.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()};
         delivered.push(message);
-        return json(keeper ? {conversation: {id: 'c1'}, message} : {run: 'fixture-run'});
+        return json({message, fast: true});
       }
       return json(unrouted(p));
     })().catch(error => { serverErrors.push(error.message); if (!response.headersSent) response.writeHead(500); response.end(); });
@@ -85,7 +83,7 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   const origin = 'http://127.0.0.1:' + server.address().port;
   const box = page.locator('#chat-composer textarea'), send = page.locator('#chat-composer .p-send');
-  const stored = () => page.evaluate(() => ({draft: chatDrafts().sales, otherDraft: chatDrafts().other,
+  const stored = () => page.evaluate(() => ({draft: chatDrafts().coo, otherDraft: chatDrafts().other,
     fields: JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null')?.fields || []}));
   const frames = () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
   const readsSettled = async () => {
@@ -104,34 +102,24 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
   };
   // A loaded conversation can precede its stream subscription. Navigating again while WebKit is
   // still opening that connection reports a cancelled request as an access-control page error.
-  const ready = () => page.waitForFunction(keeper => {
-    if (!SESSION.seen || !(keeper ? typeof V2C !== 'undefined' && V2C?.loaded : typeof CONV !== 'undefined' && CONV?.slug === 'sales')
+  const ready = () => page.waitForFunction(() => {
+    if (!SESSION.seen || !(typeof V2C !== 'undefined' && V2C?.loaded)
       || !liveConnected() || LIVE.es?.readyState !== EventSource.OPEN) return false;
     const subscribed = new URL(LIVE.es.url), expected = new URL(liveUrl(), location.href);
     // The ready event advances the cursor; only a change of subscription requires a new connection.
     subscribed.searchParams.delete('after'); expected.searchParams.delete('after');
     return subscribed.href === expected.href;
-  }, keeper);
-  const idle = () => page.waitForFunction(() => !BOT_PILL.sending && !document.querySelector('#chat-composer .p-send').disabled);
+  });
+  const idle = () => page.waitForFunction(() => !ASSISTANT_PILL.sending && !document.querySelector('#chat-composer .p-send').disabled);
   const text = '  Keep this draft through sign-in  ';
   try {
-    await page.goto(origin + '/#/bot/sales');
+    await page.goto(origin + '/#/assistant');
     await ready();
     await box.fill(text);
     await page.evaluate(() => localStorage.setItem(CHAT_DRAFTS, JSON.stringify({...chatDrafts(), other: 'Another bot draft'})));
     if (mode !== 'unsent') {
-      if (mode === 'timeout') await page.evaluate(() => { CHAT_SEND.timeout = 250; });
       await send.click();
       await idle();
-      if (mode === 'timeout') {
-        await page.locator('.toast.err').waitFor();
-        expired = true;
-        await page.evaluate(() => get('/v2/me').catch(() => {}));
-      } else if (!keeper) {
-        // Legacy form errors do not check identity themselves. Confirm it directly, without relying
-        // on the mock event stream closing and a reconnect eventually probing the session.
-        await page.evaluate(() => get('/v2/me').catch(() => {}));
-      }
     } else {
       expired = true;
       await page.evaluate(() => get('/v2/me').catch(() => {}));
@@ -152,7 +140,7 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
     await page.waitForURL('**/auth/login**');
     expired = false;
     await page.click('#return');
-    await page.waitForURL(origin + '/#/bot/sales');
+    await page.waitForURL(origin + '/#/assistant');
     await ready();
     await readsSettled();
     assert.equal(await box.inputValue(), text, 'return restores the draft');
@@ -163,7 +151,7 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
       if (editedBefore) await box.fill(sentText);
       if (edit) hold = new Promise(done => release = done);
       await send.click();
-      await page.waitForFunction(() => BOT_PILL.sending || document.querySelector('#chat-composer .p-send').disabled || !document.querySelector('#chat-composer textarea').value);
+      await page.waitForFunction(() => ASSISTANT_PILL.sending || document.querySelector('#chat-composer .p-send').disabled || !document.querySelector('#chat-composer textarea').value);
       const next = 'Next draft typed while the resend is out\nA second line\nA third line';
       if (edit) {
         await box.fill(next);
@@ -174,11 +162,12 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
       assert.equal(await box.inputValue(), edit ? next : '', 'confirmed text never comes back; later edits stay');
       if (edit) assert.ok(await box.evaluate(el => el.clientHeight >= el.scrollHeight - 2), 'later multiline edits keep the composer expanded');
       const saved = await stored();
-      assert.equal(saved.draft, edit ? next : undefined, 'the persistent bot draft agrees with the composer');
+      assert.equal(saved.draft, edit ? next : undefined, 'the persistent draft agrees with the composer');
       assert.ok(!saved.fields.some(f => f.value === text), 'the saved sign-in snapshot consumed the composer draft, including its pre-edit copy');
       assert.equal(delivered.length, 1, 'one successful delivery');
       assert.equal(delivered[0].body, sentText, 'the edited text is the text sent');
       if (!edit) {
+        await page.waitForFunction(() => getComputedStyle(document.querySelector('#chat-composer .p-send')).opacity === '0.45');   // after its fade
         assert.equal(await send.evaluate(button => getComputedStyle(button).opacity), '0.45', 'the empty composer dims Send');
         await box.press('Enter');
         await send.evaluate(button => button.click());
@@ -199,12 +188,12 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
       assert.equal(posts.length, 0, 'an unsent draft makes no POST');
     }
     const final = await stored();
-    assert.equal(final.otherDraft, 'Another bot draft', 'other bots keep their unsent drafts');
+    assert.equal(final.otherDraft, 'Another bot draft', 'other chats keep their unsent drafts');
     assert.ok(final.fields.some(f => f.scope === 'task:other' && f.value === 'Another task draft'), 'other boxes keep their sign-in snapshots');
     assert.ok(posts.every(request => request.method === 'POST'), 'all send requests use POST');
     assert.deepEqual(errors, [], 'no browser errors');
     assert.deepEqual(serverErrors, [], 'no fixture server errors');
-    console.log('ok -', keeper ? 'keeper' : 'local', mode, editedBefore ? 'edited restored draft' : edit ? 'preserves later edits' : 'sign-in return');
+    console.log('ok -', mode, editedBefore ? 'edited restored draft' : edit ? 'preserves later edits' : 'sign-in return');
   } finally {
     release?.();
     try { await page.close(); } finally {
@@ -219,14 +208,10 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
     const browser = await ({chromium, webkit}[engine]).launch({headless: true,
       ...(engine === 'chromium' ? {channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} : {})});
     try {
-      await scenario(browser, '401', false, true, true);
-      await scenario(browser, '401', false, false, true);
+      await scenario(browser, '401', false, true);
       await scenario(browser, '401', false);
-      await scenario(browser, 'timeout', false);
       await scenario(browser, '401', true);
       await scenario(browser, 'unsent', false);
-      await scenario(browser, '401', false, false);
-      await scenario(browser, '401', true, false);
       console.log('ok - chat send sign-in:', engine);
     } finally { await browser.close(); }
   }

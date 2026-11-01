@@ -14,24 +14,30 @@ async function recentRuns() {
 // ----------------------------------------------------------------- bot page
 // Header (name, alert, goal) stays visible; work and configuration tabs live in the URL
 // as #/bot/<slug>/<tab>, so refresh and Back keep the tab. Panes stay in the DOM once loaded; only
-// the conversation is torn down when you leave Chat, because it polls.
+// the thread stops following when you leave Home or DM.
 // Configuration has its own five tabs (Rules lists what the bot must follow, ui/app/org-rules.js); old More, Docs and Session links retain a destination.
 const BOT_DETAIL_TABS = ['info', 'rules', 'instructions', 'history', 'settings'];
-const BOT_TABS = ['chat', 'tasks', ...BOT_DETAIL_TABS];
-// The assistant is chatted with only on each person's own Assistant page (#/assistant), so its bot page has no Chat.
+// A bot's conversation is two threads: its Home (public, ui/app/thread-view.js) and the viewer's DM with it.
+const BOT_TABS = ['home', 'dm', 'tasks', ...BOT_DETAIL_TABS];
+const BOT_WORK_TABS = ['home', 'dm', 'tasks'];
+const BOT_TAB_LABELS = {home: 'Home', dm: 'DM', tasks: 'Tasks', info: 'Info'};
+// The assistant is talked to only on each person's own Assistant page (#/assistant), and its helpers take their work
+// from it: neither has a DM, and the assistant has no Home.
 const botTabs = slug => {
-  const tabs = slug === assistantBot() ? BOT_TABS.filter(t => t !== 'chat') : BOT_TABS;
-  const mine = S.emps.find(e => e.name === slug)?.my_access;
-  // Seen but not read: no updates or docs, and Chat and Tasks only for someone who may write to it (the
-  // page then holds their own threads and tasks with the bot, and the request box). Every teammate reads its Rules.
-  return mine && !mine.read ? tabs.filter(t => t === 'info' || t === 'rules' || (mine.write && (t === 'chat' || t === 'tasks'))) : tabs;
+  const tabs = BOT_TABS.filter(t => !(t === 'dm' && (slug === assistantBot() || isAssistantHelper(slug))) && !(t === 'home' && slug === assistantBot()));
+  const e = S.emps.find(x => x.name === slug), mine = e?.my_access;
+  const noDm = e && e.can_chat === false ? tabs.filter(t => t !== 'dm') : tabs;
+  // Seen but not read: no Home, updates or docs, and DM and Tasks only for someone who may write to it (the
+  // page then holds their own DM and tasks with the bot). Every teammate reads its Rules.
+  return mine && !mine.read ? noDm.filter(t => t === 'info' || t === 'rules' || (mine.write && (t === 'dm' || t === 'tasks'))) : noDm;
 };
 const botLimited = e => !!e?.my_access && !e.my_access.read;
 const botPersonName = id => (S.people || []).find(p => p.id === id)?.name || settingsPersonName(id);
 let BOT = null;
 function botStopped() {
   BOT?.settingsCleanup?.();
-  BOT_CHAT_TASK_LOAD++; BOT_CHAT_TASKS = new Map(); BOT = null;
+  if (BOT?.thread) threadUnmount(BOT.thread.view);
+  BOT = null;
 }
 // Pause is one row in the bot's Settings, not a strip on the page; the header's Paused badge says it at a glance.
 // The control API remains the sole authority; failed writes never change the shown state.
@@ -347,10 +353,10 @@ async function pageBot(slug, tab) {
   const boss = S.emps.find(x => x.name === e.reports_to);
   const role = String(e.role || e.description || '').trim();
   const limited = botLimited(e);       // seen, not read: no activity anywhere on the page
-  const work = botTabs(slug).filter(t => t === 'chat' || t === 'tasks');
+  const work = botTabs(slug).filter(t => BOT_WORK_TABS.includes(t));
   const base = `#/bot/${encodeURIComponent(slug)}`;
-  const typing = BOT_PILL?.slug === slug && document.activeElement === pq(BOT_PILL, '.p-text');   // the redraw below must not take the cursor
   const tabsShown = [...work, 'info'];
+  const talkTabs = work.filter(t => t === 'home' || t === 'dm');
   // The goal leads the page; chat and tasks sit side by side under it on a
   // desktop. Narrower, the top line holds the bot and Chat · Tasks · Info; configuration has its own tabs.
   // On a phone the goal and the extra controls move into Info (placeBotHead). A status shows
@@ -364,7 +370,7 @@ async function pageBot(slug, tab) {
         <div class="meta" id="bot-branches"></div>
         <div class="meta" id="bot-alert">${limited ? '' : botAlertHTML(slug)}</div></div></div>
     <div class="bot-switch" id="btabs" role="tablist" aria-label="${esc(e.display_name || slug)}">
-      ${tabsShown.map(t => { const label = t[0].toUpperCase() + t.slice(1);
+      ${tabsShown.map(t => { const label = BOT_TAB_LABELS[t];
         return `<button type="button" data-bt="${t}" role="tab" aria-label="${label}" title="${label}"><span class="nav-icon bt-icon" aria-hidden="true">${BOT_TAB_ICONS[t] || 'more_horiz'}</span><span class="bt-label">${label}</span></button>`; }).join('')}
     </div>
     ${limited ? '' : '<section class="bot-goal" id="bot-goal" aria-label="Goal"><span class="muted">Loading the goal…</span></section>'}
@@ -372,20 +378,14 @@ async function pageBot(slug, tab) {
   </div>
   <div id="bot-banners"><div id="bot-limit-host">${limited ? '' : botLimitHTML(slug)}</div>
   <div id="bot-onboard-host">${frBotBannerHTML(e)}</div></div>
-  <a class="bot-back" id="bot-back" href="${base}" hidden>‹ ${work.includes('chat') ? 'Chat and tasks' : 'Tasks'}</a>
+  <a class="bot-back" id="bot-back" href="${base}" hidden>‹ ${BOT_TAB_LABELS[work[0]] || 'Tasks'}</a>
 
   <div class="bot-work" id="bot-work">
   <div id="pane-chat" hidden>
-    <section class="chat-goal" id="chat-goal" aria-label="Goal" hidden></section>
-    <section class="bot-chat-tasks" id="bot-chat-tasks" aria-label="What needs you" hidden></section>
-    <section class="card conv" id="conv"><div class="conv-top"><span class="sub" id="conv-state">Loading…</span><span class="spacer" style="flex:1"></span><span class="sub" id="conv-access"></span></div>
-      <div class="conv-older" id="conv-older"></div>
-      <div id="conv-thread"><div class="empty">Loading the thread…</div></div>
-      <button type="button" class="stick-pill" id="conv-jump" hidden></button>
-    </section>
-    <div id="conv-paused" class="conv-paused" role="status" hidden></div>
-    ${limited ? '<h2 class="bot-request-head">Send a request</h2>' : ''}
-    <div id="chat-composer"></div>
+    ${limited ? '' : `<div class="bot-talk-bar">${talkTabs.length > 1 ? `<div class="bot-talk-switch" role="tablist" aria-label="Home or DM">${talkTabs.map(t =>
+      `<button type="button" role="tab" data-talk="${t}">${BOT_TAB_LABELS[t]}</button>`).join('')}</div>` : ''}<span class="spacer"></span>
+      <a class="bot-threads-link" href="${THREADS_ROUTE}?with=${encodeURIComponent('bot:' + slug)}">Threads with ${esc(e.display_name || slug)}</a></div>`}
+    <div class="bot-thread" id="bot-thread"></div>
   </div>
 
   <aside id="pane-tasks" class="bot-rail" aria-label="Tasks" hidden${keeper && !botSidebarLayout(slug) ? ' data-loading' : ''}>
@@ -488,22 +488,6 @@ async function pageBot(slug, tab) {
   botScreenWire(slug);
   frBotWire(slug);
   orgHistoryVisit('b:' + slug);
-  bindChatSwipe($('#conv-thread'));
-  if (e.can_chat && !isAssistantHelper(slug)) {
-    $('#chat-composer').append(botPill(slug).el);
-    chatDropZone($('#pane-chat'), BOT_PILL);
-    // A restored draft sizes the box once it is on the page.
-    const restored = pq(BOT_PILL, '.p-text');
-    if (restored?.value && restored.scrollHeight > restored.clientHeight) restored.style.height = restored.scrollHeight + 'px';
-  } else {
-    if (BOT_PILL) chatDraftSave(BOT_PILL);
-    if (BOT_PILL?.slug === slug) { PILLS.delete(BOT_PILL); BOT_PILL = null; }
-    // A helper (BotOps, the Strategy Bot, the Librarian): nobody chats with it, the Assistant hands it the work; any
-    // earlier chat here stays readable.
-    $('#chat-composer').innerHTML = isAssistantHelper(slug)
-      ? `<section class="card"><p class="muted">The Assistant hands ${esc(e.display_name || slug)} its work. <button class="linkish" type="button" data-ask-open>Ask</button></p></section>`
-      : `<section class="card"><h2>Chat is not open to you</h2><p class="muted">You can see ${esc(e.display_name || slug)} but not send it requests. Ask its owner for Write access.</p></section>`;
-  }
   window.botTools?.mountStrip($('#bot-tool-strip'), {slug, get, esc, href: `${base}/tools`, skipModel: !!runtimeTag(e)});
   if (!limited) {
     void botBranchesLoad(slug);
@@ -512,7 +496,13 @@ async function pageBot(slug, tab) {
   if (!limited) void botGoalLoad(slug);
   $('#btabs').onclick = ev => {
     const b = ev.target.closest('[data-bt]'); if (!b) return;
-    location.hash = b.dataset.bt === 'chat' ? `#/bot/${slug}` : `#/bot/${slug}/${b.dataset.bt}`;
+    location.hash = b.dataset.bt === work[0] ? `#/bot/${slug}` : `#/bot/${slug}/${b.dataset.bt}`;
+  };
+  // Wide, the top tabs give way to Home and DM beside Tasks; this switch picks which one the left side shows.
+  const talk = $('#pane-chat .bot-talk-switch');
+  if (talk) talk.onclick = ev => {
+    const b = ev.target.closest('[data-talk]'); if (!b) return;
+    location.hash = b.dataset.talk === work[0] ? `#/bot/${slug}` : `#/bot/${slug}/${b.dataset.talk}`;
   };
   // "The back arrow in a bot should always go back to home. Not previous page."
   $('#bot-back-arrow').onclick = () => { location.hash = UPDATES; };   // home
@@ -587,7 +577,6 @@ async function pageBot(slug, tab) {
 
   moreClampWatch();
   showBotTab(tab);
-  if (typing) pq(BOT_PILL, '.p-text')?.focus();   // once the pane is shown; a hidden box cannot take it
 }
 // A desktop is wide enough for both: chat on the left, the bot's tasks on the right, each scrolling
 // on its own (#514). A phone keeps one at a time behind the Chat | Tasks switch.
@@ -596,7 +585,7 @@ const BOT_WIDE = window.matchMedia('(min-width: 1100px)');
 // card first, then an alert, Learnings and branches (moved here from beside the name,
 // and back on a wider screen), then the cards in groups.
 const BOT_PHONE = window.matchMedia('(max-width: 760px)');
-const BOT_TAB_ICONS = {chat: 'chat_bubble', tasks: 'task_alt', info: 'menu'};
+const BOT_TAB_ICONS = {home: 'forum', dm: 'chat_bubble', tasks: 'task_alt', info: 'menu'};
 function placeBotHead() {
   const host = $('#bot-more-top'), top = $('#bot-top');
   if (!host || !top) return;
@@ -641,13 +630,14 @@ BOT_PHONE.addEventListener('change', placeBotHead);
 function showBotTab(tab) {
   if (!BOT || !$('#btabs')) return;
   const wantTools = tab === 'tools';
-  const aliases = {more: 'info', docs: 'instructions', session: 'history', tools: 'info'};
+  const aliases = {more: 'info', docs: 'instructions', session: 'history', tools: 'info', chat: 'dm'};
   const tabs = botTabs(BOT.slug);
   const view = tabs.includes(aliases[tab] || tab) ? aliases[tab] || tab : tabs[0];
   BOT.tab = view;
-  const work = view === 'chat' || view === 'tasks';
-  const split = work && BOT_WIDE.matches && tabs.includes('chat');
-  const chat = split || view === 'chat';
+  const work = BOT_WORK_TABS.includes(view);
+  const talk = tabs.filter(t => t === 'home' || t === 'dm');
+  const split = work && BOT_WIDE.matches && talk.length > 0;
+  const chat = split || view === 'home' || view === 'dm';
   BOT.split = split;
   $('#main').classList.toggle('chat-layout', chat);
   $('#main').classList.toggle('bot-chat-layout', chat);
@@ -674,17 +664,10 @@ function showBotTab(tab) {
   if (view === 'rules') void botRulesLoad(BOT.slug);   // read each time: rules change on the Rules page
   placeBotHead();
   if (!work) { botScreenRefresh(BOT.slug); botInfoRefresh(BOT.slug); }
-  if (chat && BOT_PILL?.focusOnOpen) {
-    delete BOT_PILL.focusOnOpen;
-    const box = pq(BOT_PILL, '.p-text');
-    box.focus(); box.setSelectionRange(box.value.length, box.value.length);
-  }
-  if (!chat) convStop(); // the thread and microphone stop off-screen
-  else if (isKeeper(BOT.slug)) {
-    if (!V2C || V2C.slug !== BOT.slug) v2ChatLoad(BOT.slug);
-  }
-  else if (!CONV || CONV.slug !== BOT.slug) loadConversation(BOT.slug);
-  if (chat && !split) void loadBotChatTasks(BOT.slug);            // side by side, the tasks column says it
+  // Home or DM on the left: the one asked for, else (Tasks beside it) the last one shown, else the first.
+  if (chat) botThreadShow(view === 'home' || view === 'dm' ? view : talk.includes(BOT.thread?.kind) ? BOT.thread.kind : talk[0]);
+  else botThreadStop();
+  $('#pane-chat').querySelectorAll('[data-talk]').forEach(b => { const on = b.dataset.talk === BOT.thread?.kind; b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
   const once = (key, fn) => { if (!BOT.loaded.has(key)) { BOT.loaded.add(key); fn(BOT.slug); } };
   if (split || view === 'tasks') {
     once('tasks', isKeeper(BOT.slug) ? loadBotTasksV2 : loadBotIssues);
@@ -709,6 +692,22 @@ function showBotTab(tab) {
 
 }
 BOT_WIDE.addEventListener('change', () => { if (BOT && $('#btabs')) showBotTab(BOT.tab); });
+// The thread on the bot page: its Home, or the viewer's DM with it (made on the first message). It stops following
+// when another tab, page or bot takes its place.
+function botThreadShow(kind) {
+  if (!BOT || !kind) return;
+  const host = $('#bot-thread');
+  if (BOT.thread?.kind === kind && BOT.thread.view.host === host && !BOT.thread.view.gone) return;
+  botThreadStop();
+  const actor = 'bot:' + BOT.slug;
+  const view = threadMount(host, kind === 'home' ? {home: actor, header: 'compact'} : {dm: actor, header: 'compact'});
+  BOT.thread = {kind, view};
+}
+function botThreadStop() {
+  if (!BOT?.thread) return;
+  threadUnmount(BOT.thread.view);
+  BOT.thread = null;
+}
 
 // ----------------------------------------------------------------- slash commands
 // A message starting with "/" is a command to the hub, never a task for a bot: a typed /clear
