@@ -261,3 +261,37 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
   #main.rd-goals .rd-strat-head h1{flex:1 1 0}
   #main.rd-goals .rd-strat-head .strat-actions{order:1;flex:none}
 }
+
+/* KPI views: Tree · Loops · Journey */
+.gkv{display:flex;flex-direction:column;gap:12px;margin-top:16px}
+.gkv[hidden]{display:none}
+.gkv-h{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.gkv-h .strat-k{margin:0}
+.gkv-h .spacer{flex:1}
+.gkv-body{display:flex;flex-direction:column;gap:12px;min-width:0}
+.gkv-k{display:flex;align-items:baseline;gap:10px;width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;min-width:0}
+button.gkv-k{cursor:pointer}
+button.gkv-k:hover{border-color:var(--muted)}
+.gkv-n{flex:1;min-width:0}
+.gkv-v{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.gkv-v .muted{font-weight:400}
+.gkv-ns{border-color:var(--ink);font-weight:600}
+.gkv-guard{box-shadow:inset 3px 0 0 var(--wait)}
+.gkv-tree,.gkv-grp{display:flex;flex-direction:column;gap:6px}
+.gkv-in{padding-left:calc((var(--d,0) + 1) * 18px)}
+.gkv-loop{display:flex;flex-direction:column;gap:6px}
+.gkv-steps{list-style:none;display:flex;flex-wrap:wrap;gap:6px 24px;margin:0;padding:0}
+.gkv-steps>li{position:relative;flex:0 1 220px;min-width:0}
+.gkv-steps>li::after{content:"→";position:absolute;left:100%;top:50%;width:24px;transform:translateY(-50%);text-align:center;color:var(--muted)}
+.gkv-steps>li:last-child::after{content:"↺"}
+.gkv-journey{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
+.gkv-col{display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:8px;background:var(--surface2);min-width:0}
+.gkv-col .gkv-k{flex-wrap:wrap;gap:2px 8px}
+.gkv-none{margin:0}
+@media (max-width:760px){
+  .gkv-journey{grid-template-columns:minmax(0,1fr)}
+  .gkv-col:not(:has(.gkv-k)){display:none}
+  .gkv-steps{flex-direction:column;gap:18px}
+  .gkv-steps>li{flex:none}
+  .gkv-steps>li::after{left:0;top:100%;width:100%;transform:none;line-height:18px}
+}

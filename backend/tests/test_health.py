@@ -643,6 +643,55 @@ def test_a_read_only_reviewer_given_every_repository_keeps_its_denies(environmen
     assert "reviewer may write to acme/product" in summary and "gh pr create, gh pr comment" in summary
 
 
+def test_harness_denies_answers_each_bot_as_a_bot_by_bot_pass_does(environment, monkeypatch):
+    """The shared reads behind harness_denies give each bot the answer its own listing gives, for bots in each state."""
+    from backend import bot_tools
+    from backend.health import harness_denies
+    api = environment()
+    settings = api.app.state.store.settings
+    monkeypatch.setattr(settings, "github_owner", "acme")
+    runner = enrolled(api)
+    deny = "Claude Code settings deny: gh pr create, git push"
+    write = {"service": "github", "identity": "acme/app", "can": ["read", "write", "pull_requests"], "scope": {"repo": "acme/app"}}
+    states = {                                  # bot: (its bot_config row's settings, or None for no row, its bot.yaml tools)
+        "chosen": ('{"repo_access_mode": "chosen"}', [write]),
+        "reader": ('{"repo_access_mode": "own"}', [dict(write, can=["read"])]),
+        "owner": ('{"repo_access_mode": "own"}', [dict(write, identity="acme/bot-owner", scope={"repo": "acme/bot-owner"})]),
+        "everywhere": ('{"repo_access_mode": "all"}', [dict(write, identity="acme/other", scope={"repo": "acme/other"})]),
+        "unconfigured": (None, [write]),
+    }
+    readiness = {}
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO repositories(full_name,enabled,bot_repo) VALUES('acme/shared',1,0)")
+    for slug, (config, tools) in states.items():
+        add_bot(api, slug)
+        readiness[slug] = {"ready": True, "runtime": "claude", "warnings": [deny], "tools": tools}
+        with api.app.state.store.transaction() as c:
+            if config:
+                c.execute("INSERT INTO bot_config(bot,config_json,repo,operator) VALUES(?,?,?,'ana')", (slug, config, "bot-" + slug))
+            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')", (slug, runner, H.now()))
+            if slug == "chosen":
+                c.execute("INSERT INTO bot_repo_access VALUES('chosen','acme/app','write')")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET label='Team box', last_seen=?, readiness_json=? WHERE id=?",
+                  (H.now(), json.dumps({"schema_version": 1, "runtimes": SIGNED_IN, "bots": readiness}), runner))
+    with api.app.state.store.read_transaction() as c:
+        batched = harness_denies(c, settings)
+        # The bot-by-bot pass: each bot's listing reads its own rows, with nothing primed and no shared reads.
+        listing = bot_tools.listing
+        monkeypatch.setattr(bot_tools, "prime_state", lambda c, bots: None)
+        monkeypatch.setattr(bot_tools, "listing", lambda c, settings, bot, reads=None: listing(c, settings, bot))
+        bot_by_bot = harness_denies(c, settings)
+    assert batched == bot_by_bot
+    assert {bot for bot, _, _ in batched} == {"chosen", "everywhere", "unconfigured"}
+    # A failure in the shared read falls back to the bot-by-bot pass instead of ending the health response.
+    def unreadable(c, bots):
+        raise RuntimeError("unreadable")
+    with api.app.state.store.read_transaction() as c:
+        monkeypatch.setattr(bot_tools, "prime_state", unreadable)
+        assert harness_denies(c, settings) == batched
+
+
 def _listened(api, *, routed_days_ago, saved_days_ago, judged=None):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO listen_items(id,source,native_id,url,content,content_hash,first_seen_at) "
