@@ -33,12 +33,13 @@ def _shape(build: Callable[[], dict[str, object]]) -> dict[str, object]:
         raise invalid(str(exc)) from exc
 
 
-def _account(ctx: Ctx, value: str | None, types: tuple[str, ...], what: str) -> str | None:
-    """An account an item names: an active account of the right type in this book, or none."""
+def _account(ctx: Ctx, who: str, value: str | None, types: tuple[str, ...], what: str) -> str | None:
+    """An account an item names: an active account of the right type in this book that the asker's view covers, or none.
+    An account the asker cannot see is refused as a missing one, so the refusal does not reveal it exists."""
     if not value:
         return None
     account = ctx.accounts.get(value)
-    if account is None or not account.active or account.type not in types:
+    if account is None or not account.active or account.type not in types or not ctx.view(who).sees_account(account):
         raise FinanceError(NOT_FOUND, f"no such {what} account")
     return value
 
@@ -50,7 +51,7 @@ def _archive_flag(ctx: Ctx, p: V.Payload) -> dict[str, object]:
     return {"archived_at": None if V.flag(p, "active", True) else ctx.at}
 
 
-def _item_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
+def _item_fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str, object]:
     out: dict[str, object] = {}
     if create or "name" in p:
         out["name"] = RC.name(V.text(p, "name", RC.MAX_NAME))
@@ -68,7 +69,7 @@ def _item_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
                              ("expense_account_id", ("expense",), "expense"),
                              ("asset_account_id", ("asset",), "asset")):
         if create or key in p:
-            out[key] = _account(ctx, V.opt_text(p, key, 80), types, what)
+            out[key] = _account(ctx, who, V.opt_text(p, key, 80), types, what)
     if not create:
         out.update(_archive_flag(ctx, p))
     return out
@@ -141,7 +142,7 @@ def _update(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, f
 
 def item_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ITEM_FIELDS)
-    f = _shape(lambda: _item_fields(ctx, p, create=True))
+    f = _shape(lambda: _item_fields(ctx, who, p, create=True))
     if _mirrored(ctx) and f["price"] is None:
         raise invalid("an item the provider holds needs a price")
     item_id = SL.new_id()
@@ -165,7 +166,7 @@ def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if old is None:
         raise FinanceError(NOT_FOUND, "no such item")
     item_id = str(old["id"])
-    f = _shape(lambda: _item_fields(ctx, p, create=False))
+    f = _shape(lambda: _item_fields(ctx, who, p, create=False))
     if _mirrored(ctx) and "price" in f and f["price"] is None and old["price"] is not None:
         raise invalid("an item the provider holds keeps a price: set a new one")
     if _mirrored(ctx) and "kind" in f and f["kind"] != old["kind"]:

@@ -614,3 +614,63 @@ def test_a_bill_line_naming_an_item_by_an_alias_stores_the_item_and_posts_its_ac
         row = c.execute("SELECT item_id, account_id FROM fin_bill_lines WHERE bill_id=?",
                         (billed.result["bill_id"],)).fetchone()
         assert (row[0], row[1]) == (item, account(c, "6100"))
+
+
+def test_a_draft_bill_that_takes_an_order_line_moves_its_hold_once(books):
+    with books.transaction() as c:
+        _software(c, 200_000)
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 100_000)])
+        assert _state(c) == (0, 100_000, 100_000)
+        bill = _bill(c, vendor, [_line(c, 40_000)])
+        assert bill.status == "committed", bill
+        bid = str(bill.result["bill_id"])
+        assert _state(c) == (0, 140_000, 60_000)
+        linked = act(c, OWNER, "bill_update", {"bill_id": bid, "lines": [
+            {"po_line_id": _po_lines(c, po)[0], "amount": 40_000}]})
+        assert linked.status == "committed", linked
+        # The order's 60,000 and the bill's 40,000 are the 100,000 the order held: the room moves once.
+        assert _state(c) == (0, 100_000, 100_000)
+        assert [a for _, a in _holds(c, po)] == [60_000]
+        assert c.execute("SELECT amount FROM fin_holds WHERE source='bill' AND status='held'").fetchone()[0] == 40_000
+
+
+def test_a_teammate_who_cannot_see_an_order_learns_nothing_from_approving_or_closing_it(books):
+    with books.transaction() as c:
+        _software(c)
+        vendor = _vendor(c)
+        approved = _order(c, vendor, [_line(c, 40_000)])
+        closed = _order(c, vendor, [_line(c, 20_000)])
+        assert act(c, OWNER, "po_close", {"po_id": closed}).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": EVE, "right": "finance.ap"}).status == "committed"
+        # Eve holds payables but no view of these lines: neither the order's state nor its number comes back.
+        for kind, po, dry in (("po_approve", approved, False), ("po_approve", approved, True),
+                              ("po_approve", closed, False), ("po_approve", closed, True),
+                              ("po_send", approved, False), ("po_close", closed, False), ("po_void", closed, False)):
+            made = act(c, EVE, kind, {"po_id": po}, dry_run=dry)
+            assert made.status == "denied", (kind, dry, made)
+            assert made.result == {}, (kind, made)
+        assert _status(c, approved) == ("approved", "") and _status(c, closed) == ("closed", "hand")
+
+
+def test_a_teammate_who_cannot_see_an_estimate_learns_nothing_from_its_state(books):
+    with books.transaction() as c:
+        customer = str(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}).result["contact_id"])
+
+        def estimate(amount: int) -> str:
+            made = act(c, OWNER, "estimate_create", {"customer_id": customer, "estimate_date": "2026-10-10", "lines": [
+                {"account_id": account(c, "4000"), "amount": amount}]})
+            assert made.status == "committed", made
+            return str(made.result["estimate_id"])
+
+        draft, sent, declined = estimate(9_000), estimate(8_000), estimate(7_000)
+        assert act(c, OWNER, "estimate_send", {"estimate_id": sent}).status == "committed"
+        assert act(c, OWNER, "estimate_send", {"estimate_id": declined}).status == "committed"
+        assert act(c, OWNER, "estimate_decline", {"estimate_id": declined}).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": EVE, "right": "finance.ar"}).status == "committed"
+        for kind, eid in (("estimate_send", sent), ("estimate_accept", draft), ("estimate_convert", sent),
+                          ("estimate_convert", declined), ("estimate_convert", draft)):
+            made = act(c, EVE, kind, {"estimate_id": eid})
+            assert made.status == "denied", (kind, made)
+            assert made.result == {}, (kind, made)
+        assert c.execute("SELECT COUNT(*) FROM fin_invoices").fetchone()[0] == 0

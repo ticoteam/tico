@@ -2020,6 +2020,21 @@ def _confirm(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any],
         _confirm_record(c, cid, op, local, sent, now)
 
 
+def _link_order(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], provider: Mapping[str, Any],
+                sent: Sent, now: str) -> str:
+    """Confirms an order the provider took: its row and binding come in together or not at all. "" when linked, else why
+    the books could not take it (whatever partial rows it wrote are rolled back)."""
+    c.execute("SAVEPOINT mirror_link")
+    try:
+        _confirm(c, cid, str(o["op"]), local, provider, sent, now)
+    except (FinanceError, sqlite3.IntegrityError) as e:
+        c.execute("ROLLBACK TO mirror_link")
+        c.execute("RELEASE mirror_link")
+        return e.message if isinstance(e, FinanceError) else str(e)
+    c.execute("RELEASE mirror_link")
+    return ""
+
+
 def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], provider: Mapping[str, Any],
             sent: Sent, now: str, confirm: bool = True) -> None:
     """A write's answer recorded: sent (confirmed here unless the provider's record is taken in as it is), refused for
@@ -2029,7 +2044,16 @@ def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], p
     if sent.ok:
         SK.update(c, "fin_outbox", oid, {"status": "sent", "attempts": attempts, "claimed_at": None,
                                          "last_error": None, "updated_at": now})
-        if confirm:
+        if confirm and str(o["op"]) in ORDER_TABLES:
+            why = _link_order(c, cid, o, local, provider, sent, now)
+            if why:
+                # The provider holds the order but the books cannot take it in: it stays failed and visible, not sent.
+                SK.update(c, "fin_outbox", oid, {
+                    "status": "failed", "updated_at": now,
+                    "last_error": f"the provider took it, but it could not be linked here: {why}"[:300]})
+                tico.needs_you(c, SX.connection_owner(c, cid), "QuickBooks took an order Tico could not link here",
+                               why[:300])
+        elif confirm:
             _confirm(c, cid, str(o["op"]), local, provider, sent, now)
     elif sent.final:
         SK.update(c, "fin_outbox", oid, {"status": "failed", "attempts": attempts, "claimed_at": None,
@@ -2104,11 +2128,13 @@ def outbox(store: Any, books: Books, cid: str, now: str) -> list[str]:
                 _revised(c, cid, op, local, M.Ext(sent.kind, sent.external_id, sent.revision), sent.record)
             document = op in ("bill.create", "invoice.create")
             record_create = op in ("item.create", "location.create", "project.create")
-            if revised and (not initial or document or record_create):
+            # An order is confirmed whatever revision the provider answers at: the change feed does not read purchase
+            # orders or estimates, so nothing else would bring the provider's copy in.
+            confirmed = document or record_create or op in ORDER_TABLES
+            if revised and (not initial or confirmed):
                 sent = Sent(ok=True, kind=sent.kind, external_id=sent.external_id, revision=initial,
                             lines=_sent_line_ids(c, cid, op, local, sent.record, True, sent.lines))
-            _record(c, cid, o, local, provider, sent, now,
-                    confirm=not revised or not initial or document or record_create)
+            _record(c, cid, o, local, provider, sent, now, confirm=not revised or not initial or confirmed)
             if revised:
                 SX.set_mirror_state(c, cid, {"cursors": {}, "changed_at": None, "exact": []})
         if not sent.ok:

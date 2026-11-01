@@ -12,6 +12,7 @@ from backend.finance import qbo as QC
 from backend.finance.core import mirror as M
 from backend.finance.core import qbo as Q
 from backend.finance.core import xero as X
+from backend.finance.core.errors import CONFLICT, FinanceError
 from backend.finance.store import banking as SK
 from backend.finance.store import mirror as SX
 from backend.finance.store import purchasing as SP
@@ -1366,3 +1367,80 @@ def test_a_write_queued_under_an_id_is_repointed_to_the_row_kept_when_the_feed_b
         assert payload["local_id"] == held
     assert _sent(fake, "location.update")["ext"] == "Department:3"
 
+
+
+def test_a_purchase_order_found_edited_on_retry_is_linked_here_and_confirmed(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "po_create", {"vendor_id": _local(c, "Vendor:9", "fin_contacts"), "po_date": "2026-10-05",
+                                           "number": "PO-79", "lines": [{"account_id": _local(
+                                               c, "Account:2", "fin_accounts"), "amount": 1500, "description": "seats"}]})
+        assert made.status == "committed", made
+        key = str(c.execute("SELECT idempotency_key FROM fin_outbox WHERE op='purchaseorder.create'").fetchone()[0])
+    # The first call was cut off after QuickBooks took the order, and someone edited it there before the retry.
+    fake.replies = [mirror.Sent(False, error="QuickBooks did not answer")]
+    _drain(books, fake, cid, now=LATER)
+    fake.found[key] = mirror.Sent(True, kind="PurchaseOrder", external_id="80", revision="1")
+    assert _drain(books, fake, cid, now=LATER2) == []
+    assert [op for op, _, _ in fake.sent if op == "purchaseorder.create"] == ["purchaseorder.create"]
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_outbox WHERE idempotency_key=?", (key,)).fetchone()[0] == "sent"
+        assert tuple(c.execute("SELECT number, status, total FROM fin_purchase_orders").fetchone()) == \
+            ("PO-79", "draft", 1500)
+        assert c.execute("SELECT external_id FROM fin_external_refs WHERE local_table='fin_purchase_orders'"
+                         ).fetchone()[0] == "PurchaseOrder:80"
+
+
+def test_an_estimate_found_edited_on_retry_is_linked_here_and_confirmed(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "estimate_create", {
+            "customer_id": _local(c, "Customer:4", "fin_contacts"), "estimate_date": "2026-10-05", "number": "EST-7",
+            "lines": [{"item_id": _local(c, "Item:5", "items"), "amount": 1500, "description": "seats"}]})
+        assert made.status == "committed", made
+        key = str(c.execute("SELECT idempotency_key FROM fin_outbox WHERE op='estimate.create'").fetchone()[0])
+    fake.replies = [mirror.Sent(False, error="QuickBooks did not answer")]
+    _drain(books, fake, cid, now=LATER)
+    fake.found[key] = mirror.Sent(True, kind="Estimate", external_id="81", revision="1")
+    assert _drain(books, fake, cid, now=LATER2) == []
+    assert [op for op, _, _ in fake.sent if op == "estimate.create"] == ["estimate.create"]
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_outbox WHERE idempotency_key=?", (key,)).fetchone()[0] == "sent"
+        assert tuple(c.execute("SELECT number, status, total FROM fin_estimates").fetchone()) == ("EST-7", "draft", 1500)
+        assert c.execute("SELECT external_id FROM fin_external_refs WHERE local_table='fin_estimates'"
+                         ).fetchone()[0] == "Estimate:81"
+
+
+def test_an_order_the_provider_holds_that_cannot_be_linked_here_stays_failed_and_visible(books, monkeypatch):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "po_create", {"vendor_id": _local(c, "Vendor:9", "fin_contacts"), "po_date": "2026-10-05",
+                                           "number": "PO-80", "lines": [{"account_id": _local(
+                                               c, "Account:2", "fin_accounts"), "amount": 1500, "description": "pens"}]})
+        assert made.status == "committed", made
+        key = str(c.execute("SELECT idempotency_key FROM fin_outbox WHERE op='purchaseorder.create'").fetchone()[0])
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise FinanceError(CONFLICT, "the order's vendor is not in the books")
+    monkeypatch.setattr(mirror, "_confirm_order", refuse)
+    fake.replies = [mirror.Sent(False, error="QuickBooks did not answer")]
+    _drain(books, fake, cid, now=LATER)
+    fake.found[key] = mirror.Sent(True, kind="PurchaseOrder", external_id="82", revision="1")
+    _drain(books, fake, cid, now=LATER2)
+    with books.read() as c:
+        status, last_error = c.execute("SELECT status, last_error FROM fin_outbox WHERE idempotency_key=?",
+                                       (key,)).fetchone()
+        assert status == "failed" and "could not be linked here" in last_error, (status, last_error)
+        assert c.execute("SELECT COUNT(*) FROM fin_purchase_orders").fetchone()[0] == 0

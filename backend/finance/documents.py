@@ -458,8 +458,10 @@ def bill_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if "lines" in p or "vendor_id" in p:
             _unhold(ctx, str(bill["id"]), len(old_lines))
             SAP.replace_lines(ctx.c, "bill", str(bill["id"]), _line_rows(lines, who, ctx.at))
-            PU.sync_orders(ctx, who, orders)
+            # The bill's holds come before the order's billing, as in bill_create: a line's
+            # hold moves from the order here, and the order's holds then follow its billing.
             refused = _hold(ctx, str(bill["id"]), str(vendor["id"]), lines, who)
+            PU.sync_orders(ctx, who, orders)
             if refused:
                 out["not_held"] = refused
         if files:

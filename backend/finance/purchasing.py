@@ -170,18 +170,18 @@ def link_bill_lines(ctx: Ctx, who: str, vendor_id: str,
         row = SP.po_line(ctx.c, x.po_line_id)
         if row is None or str(row["book_id"]) != ctx.book.id:
             raise FinanceError(NOT_FOUND, "no such purchase order line")
+        account = str(row["account_id"] or "")
+        tags = cast(dict[str, str], SK.loads(row["tags_json"]))
+        if not may_write(ctx, who, account, tags):
+            raise denied("the purchase order's line is outside your view")
         if str(row["vendor_id"]) != vendor_id:
             raise invalid("a bill bills only purchase orders from its own vendor")
         if str(row["status"]) not in OPEN_ORDER:
             raise FinanceError(CONFLICT, "that purchase order takes no more bills")
-        account = str(row["account_id"] or "")
-        tags = cast(dict[str, str], SK.loads(row["tags_json"]))
         if x.account_id and x.account_id != account:
             raise invalid("a bill line on a purchase order line posts to that line's account")
         if x.tags and dict(x.tags) != tags:
             raise invalid("a bill line on a purchase order line takes that line's tags")
-        if not may_write(ctx, who, account, tags):
-            raise denied("the purchase order's line is outside your view")
         # A bill written and not yet sent takes its share of the line as well: two bills cannot each take the same room.
         room = (int(row["amount"]) - SP.billed(ctx.c, x.po_line_id) - SP.queued_for_line(ctx.c, x.po_line_id)
                 - taken.get(x.po_line_id, 0))
@@ -226,9 +226,9 @@ def po_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("po_id",))
     po_id = V.text(p, "po_id", 80)
     po = _row(ctx, "fin_purchase_orders", po_id, "purchase order")
+    _visible(ctx, who, _lines_of(ctx, "po", po_id))
     if str(po["status"]) != "draft":
         raise FinanceError(CONFLICT, "only a draft order is marked sent")
-    _visible(ctx, who, _lines_of(ctx, "po", po_id))
 
     def apply(aid: str) -> Result:
         if SP.update(ctx.c, "fin_purchase_orders", po_id, {"status": "sent", "sent_at": ctx.at, "updated_at": ctx.at},
@@ -275,6 +275,8 @@ def po_approve(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     po_id = V.text(p, "po_id", 80)
     po = _row(ctx, "fin_purchase_orders", po_id, "purchase order")
     status = str(po["status"])
+    lines = _lines_of(ctx, "po", po_id)
+    _visible(ctx, who, lines)
     if status in OPEN_ORDER or status == "closed":
         shown = SP.shown_po(status, SP.billed_total(ctx.c, po_id), int(po["total"]))
 
@@ -283,8 +285,6 @@ def po_approve(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         return Plan(K.ALLOW, f"Purchase order {po['number']} is approved already", already)
     if status not in ("draft", "sent"):
         raise FinanceError(CONFLICT, f"a {status} order cannot be approved")
-    lines = _lines_of(ctx, "po", po_id)
-    _visible(ctx, who, lines)
     total = int(po["total"])
     vendor = SAP.get(ctx.c, "fin_contacts", str(po["vendor_id"]))
     gate = _budget_gate(ctx, po, SP.lines(ctx.c, "po", po_id))
@@ -311,9 +311,9 @@ def po_close(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("po_id",))
     po_id = V.text(p, "po_id", 80)
     po = _row(ctx, "fin_purchase_orders", po_id, "purchase order")
+    _visible(ctx, who, _lines_of(ctx, "po", po_id))
     if str(po["status"]) not in OPEN_ORDER:
         raise FinanceError(CONFLICT, "only an approved order closes")
-    _visible(ctx, who, _lines_of(ctx, "po", po_id))
 
     def apply(aid: str) -> Result:
         if SP.update(ctx.c, "fin_purchase_orders", po_id,
@@ -331,12 +331,12 @@ def po_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("po_id",))
     po_id = V.text(p, "po_id", 80)
     po = _row(ctx, "fin_purchase_orders", po_id, "purchase order")
+    _visible(ctx, who, _lines_of(ctx, "po", po_id))
     status = SP.shown_po(str(po["status"]), SP.billed_total(ctx.c, po_id), int(po["total"]))
     if status == "partial":
         raise FinanceError(CONFLICT, "a partly billed order is closed, not voided")
     if status not in ("draft", "sent", "approved"):
         raise FinanceError(CONFLICT, f"a {status} order cannot be voided")
-    _visible(ctx, who, _lines_of(ctx, "po", po_id))
 
     def apply(aid: str) -> Result:
         if SP.update(ctx.c, "fin_purchase_orders", po_id,
@@ -377,9 +377,9 @@ def estimate_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("estimate_id",))
     eid = V.text(p, "estimate_id", 80)
     est = _row(ctx, "fin_estimates", eid, "estimate")
+    _visible(ctx, who, _lines_of(ctx, "estimate", eid))
     if str(est["status"]) != "draft":
         raise FinanceError(CONFLICT, "only a draft estimate is marked sent")
-    _visible(ctx, who, _lines_of(ctx, "estimate", eid))
 
     def apply(aid: str) -> Result:
         if SP.update(ctx.c, "fin_estimates", eid, {"status": "sent", "sent_at": ctx.at, "updated_at": ctx.at},
@@ -394,9 +394,9 @@ def _decide(ctx: Ctx, who: str, p: V.Payload, kind: str, to: str) -> Plan:
     V.only(p, ("estimate_id",))
     eid = V.text(p, "estimate_id", 80)
     est = _row(ctx, "fin_estimates", eid, "estimate")
+    _visible(ctx, who, _lines_of(ctx, "estimate", eid))
     if str(est["status"]) != "sent":
         raise FinanceError(CONFLICT, f"only a sent estimate can be {to}")
-    _visible(ctx, who, _lines_of(ctx, "estimate", eid))
 
     def apply(aid: str) -> Result:
         if SP.update(ctx.c, "fin_estimates", eid, {"status": to, "decided_at": ctx.at, "updated_at": ctx.at},
@@ -420,6 +420,8 @@ def estimate_convert(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("estimate_id",))
     eid = V.text(p, "estimate_id", 80)
     est = _row(ctx, "fin_estimates", eid, "estimate")
+    lines = _lines_of(ctx, "estimate", eid)
+    _visible(ctx, who, lines)
     status = str(est["status"])
     if est["invoice_id"]:
         raise FinanceError(CONFLICT, "that estimate is invoiced already")
@@ -427,7 +429,6 @@ def estimate_convert(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(CONFLICT, "a declined estimate cannot be invoiced")
     if status != "accepted":
         raise FinanceError(CONFLICT, "only an accepted estimate can be invoiced")
-    lines = _lines_of(ctx, "estimate", eid)
     inner = DOC.invoice_create(ctx, who, {
         "customer_id": str(est["customer_id"]), "invoice_date": ctx.today, "memo": str(est["memo"] or ""),
         "lines": [{"account_id": x.account_id, "item_id": x.item_id, "amount": x.amount,

@@ -127,3 +127,23 @@ def test_an_item_takes_a_raw_material_or_assembly_kind_and_refuses_an_unlisted_o
     with pytest.raises(sqlite3.IntegrityError):
         with books.transaction() as c:
             RS.insert(c, "items", {"name": "Bolt", "kind": "gizmo", "created_at": AT, "created_by_id": OWNER})
+
+
+def test_an_item_sets_only_accounts_its_setter_can_see(books):
+    with books.transaction() as c:
+        hidden = account(c, "4000")
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
+        item = str(act(c, OWNER, "item_create", {"name": "Desk", "kind": "service", "price": 1_000}).result["item_id"])
+        refused = act(c, "human:dan", "item_create", {"name": "Lamp", "kind": "service", "income_account_id": hidden})
+        missing = act(c, "human:dan", "item_create", {"name": "Lamp", "kind": "service",
+                                                      "income_account_id": "no-such-account"})
+        changed = act(c, "human:dan", "item_update", {"item_id": item, "income_account_id": hidden})
+        # A hidden account is refused the same way a missing one is, so the refusal does not say it exists.
+        assert refused.code == missing.code == "not_found" and refused.reason == missing.reason, (refused, missing)
+        assert changed.code == "not_found", changed
+        assert c.execute("SELECT COUNT(*) FROM items WHERE name='Lamp'").fetchone()[0] == 0
+        assert c.execute("SELECT income_account_id FROM items WHERE id=?", (item,)).fetchone()[0] is None
+        assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything",
+                                            "whose": "company"}).status == "committed"
+        assert act(c, "human:dan", "item_update", {"item_id": item, "income_account_id": hidden}).status == "committed"
+        assert c.execute("SELECT income_account_id FROM items WHERE id=?", (item,)).fetchone()[0] == hidden
