@@ -1870,7 +1870,8 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
                 continue
             return "", choice["runtime"]
         signed = (ready.get("runtimes") or {}).get(choice["runtime"]) or {}
-        if signed.get("installed") is not True or signed.get("authenticated") != "ready":
+        subscribed = model_subscriptions.in_effect(c, runner_id, choice["runtime"])
+        if signed.get("installed") is not True or (not subscribed and signed.get("authenticated") != "ready"):
             continue
         login = login_holds.canonical(c, runner_id, "", choice["runtime"])
         why = login_wait(c, runner_id, login, choice["runtime"], bot, job_id)

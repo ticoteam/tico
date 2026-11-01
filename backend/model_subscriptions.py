@@ -246,10 +246,9 @@ def in_effect(c, runner_id, runtime):
     return sub if runner_takes(runner) else None
 
 
-def turn_runtimes(config):
-    """The subscription runtimes a turn on `config` (runtime and model filled in) may use: its own and its named
-    fallback's, for the CLI harness of that runtime only. Not a Tico model (the Gateway signs that in) and not a bot
-    delivered through a desktop app."""
+def turn_runtimes(config, record=None):
+    """Subscription runtimes this turn may use, including the company's automatic fallbacks when `record` is given.
+    Gateway models and desktop delivery never use these credentials."""
     from .gateway_connection import is_tico
     from .harnesses import runtime_of
     config = config if isinstance(config, dict) else {}
@@ -259,6 +258,16 @@ def turn_runtimes(config):
     fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
     if fallback.get("harness") and not fallback.get("off") and not is_tico(fallback.get("model")):
         out.append(runtime_of(fallback["harness"]))
+    if record is not None and not fallback.get("off"):
+        from . import providers
+        from .harnesses import harness_caps
+        # Like the runner's limited_config, ignore a named model on the same spent login.
+        same_login = (runtime_of(fallback.get("harness") or "") == config.get("runtime")
+                      and harness_caps(config.get("harness"), config.get("runtime")).get("api_keys") != "bot"
+                      and harness_caps(fallback.get("harness")).get("api_keys") != "bot")
+        if not fallback.get("harness") or same_login:
+            out.extend(r["runtime"] for r in providers.default_fallbacks(record)
+                       if not is_tico(r["model"]))
     return [r for r in dict.fromkeys(out) if r in RUNTIMES]
 
 
@@ -268,7 +277,8 @@ def covered_runtimes(c, runner, config):
     if not runner or not _given(c):
         return {}
     out = {}
-    for runtime in turn_runtimes(config):
+    from . import providers
+    for runtime in turn_runtimes(config, providers.load(c)):
         sub = in_effect(c, runner["id"], runtime)
         if sub:
             out[runtime] = sub["kind"]
@@ -389,7 +399,7 @@ def _bots(c, settings, runner_id, runtime):
     for r in c.execute("SELECT a.bot,b.config_json FROM assignments a JOIN bot_config b ON b.bot=a.bot "
                        "WHERE a.runner_id=? ORDER BY a.bot", (runner_id,)).fetchall():
         config = providers.fill(record, follow(c, r["bot"], json.loads(r["config_json"] or "{}")))
-        if runtime in turn_runtimes(config):
+        if runtime in turn_runtimes(config, record):
             out.append(r["bot"])
     return out
 
@@ -587,7 +597,8 @@ def for_claim(c, runner, config):
     if not runner or not _given(c):
         return []
     out = []
-    for runtime in turn_runtimes(config):
+    from . import providers
+    for runtime in turn_runtimes(config, providers.load(c)):
         sub = in_effect(c, runner["id"], runtime)
         if sub:
             out.append({"runtime": runtime, "subscription": sub})

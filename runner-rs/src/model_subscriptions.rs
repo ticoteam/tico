@@ -495,6 +495,15 @@ mod tests {
         assert_eq!(env["CLAUDE_CODE_OAUTH_TOKEN"], token);
         assert_eq!(env["CODEX_HOME"], "/computer/.codex", "Claude's process was pointed at the fallback's home");
         assert!(!file.exists(), "the fallback's login was in place while only Claude ran");
+        // No local login and no named fallback: the handed subscription wins before Gateway.
+        let config = json!({"runtime": "claude", "harness": "claude", "model": "claude-sonnet-5-5"});
+        let choices = vec![json!({"runtime": "codex", "model": "gpt-6.1-sol"}),
+                           json!({"runtime": "pi", "model": "tico-mid-1.0"})];
+        let ready = |rt: &str| for_runtime(&got, rt).is_some();
+        let chosen = crate::fallback::default_choice(&config, &choices, &env, ready).unwrap();
+        assert_eq!(chosen.runtime, "codex");
+        assert!(chosen.default);
+        assert!(crate::fallback::default_choice(&config, &choices, &env, |_| false).is_none());
         // The hop: its environment is copied from the turn's; it gets the Codex home and loses Claude's token.
         let mut hop = env.clone();
         start(&mut got, "codex", &mut hop);
