@@ -60,6 +60,8 @@ sub-thread under it.
 
 - A bot keeps **one progress message per task**. It posts it once and edits it as the work moves
   (`hub thread edit <message> "..."`), instead of a line per step. A run's output is already in its run view.
+- A bot woken in a thread answers there, in the sub-thread it was asked in, addressed to whoever asked. If it was
+  removed from the thread during the run, the reply is not posted.
 - A bot acknowledges a request with a one-word `✅` in its thread.
 - A bot's open asks to people go in its Home.
 - A bot's messages into a thread, including a reply in a sub-thread and the first message of a new thread, pass the

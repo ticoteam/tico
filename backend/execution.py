@@ -3988,14 +3988,22 @@ class Execution:
         thread = threads.thread_row(c, source["conversation_id"]) or conv
         to = target if ((H.is_human(target) or source["kind"] == "ask")
                         and threads.audience_has(c, thread, target)) else None
+        # A refusal undoes whatever the post began (a sub-thread, a mention), and leaves the finished run standing.
+        c.execute("SAVEPOINT carried_reply")
         try:
             sent = threads.post(c, threads.viewer(self.auth, Identity(actor, "bot", attempt_id=aid)), thread["id"],
                                 text, refs=refs, to_actor=to)
         except Problem as refusal:
+            c.execute("ROLLBACK TO carried_reply")
+            c.execute("RELEASE carried_reply")
             if refusal.status not in (403, 404):
                 raise
             H.event(c, H.KEEPER, "reply.withheld", aid, {"bot": row["bot"], "to": target, "reason": refusal.code})
             return None
+        except BaseException:
+            c.execute("RELEASE carried_reply")
+            raise
+        c.execute("RELEASE carried_reply")
         if sent and sent.get("id"):
             # What it answers, as for any reply Tico posts for a run: a retried completion finds it and posts nothing.
             c.execute("UPDATE messages SET in_reply_to=? WHERE id=?", (source["id"], sent["id"]))
