@@ -7,7 +7,12 @@ a fixed file can be imported again to finish what failed.
 A row's idempotency key is its content: a file imported again creates nothing and says "already there". A row that
 matches a record already held by a natural key (the same normalized address, SKU or serial) or an earlier line of the
 same file is a possible duplicate. A person decides, so it is skipped unless its line is named to import anyway. An
-import creates records; it never changes one that exists."""
+import creates records; it never changes one that exists.
+
+A customer a location or equipment row names and the books lack is added by the import, through contact_create, once
+per file. A name close to a contact, or to a customer an earlier line adds, is a possible duplicate and is never linked
+on its own: a person decides. In a mirrored book a provider holds the customers, so such a row names the provider."""
+import difflib
 import json
 import sqlite3
 from collections import Counter
@@ -20,6 +25,7 @@ from ..records import csvimport as CI
 from ..records import due_dates as RDD
 from ..records import reads as RR
 from . import actions as finance
+from .books_link import LABEL
 from .context import Ctx, load
 from .core import kinds as K
 from .core import rights as R
@@ -31,6 +37,7 @@ ASSIGNABLE = ("location_id", "customer_id")
 SUBJECTS = ("location", "equipment", "contact")
 WHAT = {"location": "location", "customer": "customer", "contact": "contact", "equipment": "equipment"}
 REPORT_HEADER = ("line", "name", "status", "reason", "matches")
+NEAR = 0.8                      # how close two names' match keys must be to count as a likely duplicate (difflib ratio)
 
 
 @dataclass(frozen=True)
@@ -47,14 +54,13 @@ Cells = Mapping[str, str]
 
 
 def _location(cells: Cells, names: "Names") -> dict[str, object]:
+    """The customer a row names is resolved by `_line`, since it may be added by this import."""
     address = {part: cells[part] for part in ("street", "city", "state", "postal_code") if cells[part]}
     payload: dict[str, object] = {"name": cells["name"], "address": address}
     if cells["kind"]:
         payload["kind"] = cells["kind"]
     if cells["in_books"]:
         payload["in_books"] = CI.flag(cells["in_books"], "in_books")
-    if cells["customer"]:
-        payload["customer_id"] = names.find("customer", cells["customer"])
     return payload
 
 
@@ -74,8 +80,6 @@ def _equipment(cells: Cells, names: "Names") -> dict[str, object]:
     payload: dict[str, object] = {"name": cells["name"], "kind": cells["kind"]}
     if cells["location"]:
         payload["location_id"] = names.find("location", cells["location"])
-    if cells["customer"]:
-        payload["customer_id"] = names.find("customer", cells["customer"])
     for column in ("make", "model", "serial"):
         if cells[column]:
             payload[column] = cells[column]
@@ -117,6 +121,16 @@ CONVERT: dict[str, Callable[[Cells, "Names"], dict[str, object]]] = {
     "locations": _location, "items": _item, "equipment": _equipment, "due_dates": _due_date}
 
 
+@dataclass(frozen=True)
+class Customer:
+    """What a row's customer text is: a customer on the books (`record_id`), a customer this import adds (`name`), or a
+    name close to one already here or added earlier in the file (`near`, for a person to decide)."""
+    name: str
+    record_id: str = ""
+    near: dict[str, str] | None = None
+    near_name: str = ""
+
+
 class Names:
     """What a row may name: a location, a customer, a contact or a piece of equipment, by its name, and a due date's
     assignee by its teammate's name. A name that two records hold is refused, since the row would not say which one it
@@ -125,6 +139,8 @@ class Names:
     def __init__(self, c: sqlite3.Connection, book_id: str) -> None:
         self.c, self.book_id = c, book_id
         self._by_name: dict[str, dict[str, list[str]]] = {}
+        self._labels: dict[str, str] = {}                  # record id -> its name, for the names a row is close to
+        self._added: dict[str, tuple[int, str]] = {}       # match key -> (line, name) of a customer this file adds
 
     def _table(self, what: str) -> dict[str, list[str]]:
         if what not in self._by_name:
@@ -137,6 +153,7 @@ class Names:
                 pairs = [(str(r[0]), str(r[1])) for r in SAP.active_contacts(self.c, self.book_id, kinds)]
             table: dict[str, list[str]] = {}
             for record_id, name in pairs:
+                self._labels[record_id] = name
                 table.setdefault(CI.match_key(name), []).append(record_id)
             self._by_name[what] = table
         return self._by_name[what]
@@ -151,6 +168,39 @@ class Names:
 
     def has(self, what: str, record_id: str) -> bool:
         return any(record_id in ids for ids in self._table(what).values())
+
+    def customer(self, text: str) -> Customer:
+        """The customer a row names: one on the books, one this import adds, or a name close to a contact or to a
+        customer an earlier line adds. A close name is never linked on its own."""
+        key = CI.match_key(text)
+        if not key:
+            raise CI.RowError("customer is blank")
+        hits = self._table("customer").get(key, [])
+        if len(hits) > 1:
+            raise CI.RowError(f"more than one customer is named {text}: rename one of them first")
+        if hits:
+            return Customer(text, record_id=hits[0])
+        if key in self._added:
+            return Customer(text)
+        near = self._near(key)
+        if near is None:
+            return Customer(text)
+        return Customer(text, near=near[0], near_name=near[1])
+
+    def added(self, text: str, line: int) -> None:
+        """Remembers a customer this file adds, so a later line that names it again adds the same one."""
+        self._added.setdefault(CI.match_key(text), (line, text))
+
+    def _near(self, key: str) -> tuple[dict[str, str], str] | None:
+        """The contact, or the customer an earlier line adds, whose match key is close to `key`: its matches entry and
+        its name."""
+        known: dict[str, tuple[dict[str, str], str]] = {}
+        for other, ids in self._table("contact").items():
+            known.setdefault(other, ({"record_id": ids[0]}, self._labels[ids[0]]))
+        for other, (line, name) in self._added.items():
+            known.setdefault(other, ({"line": str(line)}, name))
+        best = difflib.get_close_matches(key, list(known), n=1, cutoff=NEAR)
+        return known[best[0]] if best else None
 
     def assignee(self, text: str) -> str:
         """The actor a due date's assignee names: a teammate who can take work, the same check the planner makes."""
@@ -219,10 +269,12 @@ class Line:
     approval_id: str = ""
     payload: dict[str, object] | None = None
     key: str = ""
+    new_customer: str = ""          # the customer this row adds with it, as the row spells it
 
     def out(self) -> dict[str, object]:
         return {"line": self.line, "name": self.name, "status": self.status, "reason": self.reason,
-                "record_id": self.record_id, "matches": self.matches, "approval_id": self.approval_id}
+                "record_id": self.record_id, "matches": self.matches, "approval_id": self.approval_id,
+                "new_customer": self.new_customer}
 
 
 def _id_in(result: Mapping[str, Any]) -> str:
@@ -270,7 +322,31 @@ def _stored(number: int, name: str, prior: Any, key: str) -> Line:
     return Line(number, name, "error", str(prior["reason"] or "refused before"), key=key)
 
 
-def _line(c: sqlite3.Connection, actor: str, record_type: str, spec: RecordType, row: CI.Row, names: Names,
+def _keyed(payload: Mapping[str, object], customer_text: str) -> Mapping[str, object]:
+    """The payload a row's key is made of. A customer the row names counts by its name, so the row keys the same before
+    and after that customer is added to the books."""
+    if not customer_text:
+        return payload
+    return {**{k: v for k, v in payload.items() if k != "customer_id"}, "customer": CI.match_key(customer_text)}
+
+
+def _customer_key(name: str) -> str:
+    """The key of the contact a file adds for a customer name: the same name, whatever its case or punctuation."""
+    return CI.content_key("customer", {"name": CI.match_key(name)})
+
+
+def _customer_waits(name: str) -> str:
+    """Why a customer the row adds did not add: its add needs an approval first, which this import cannot wait for."""
+    return f"adding customer {name} needs an approval first"
+
+
+def _books_name(c: sqlite3.Connection, ctx: Ctx) -> str:
+    """The provider a mirrored book's customers live in, by its name (QuickBooks, Xero)."""
+    row = c.execute("SELECT provider FROM fin_connections WHERE id=?", (ctx.book.mirror_connection_id,)).fetchone()
+    return LABEL.get(str(row[0]), "your books") if row else "your books"
+
+
+def _line(c: sqlite3.Connection, ctx: Ctx, actor: str, record_type: str, spec: RecordType, row: CI.Row, names: Names,
           keys: Keys, fill: Mapping[str, str]) -> Line:
     name = row.cells.get("name", "")
     if row.problems:
@@ -280,13 +356,27 @@ def _line(c: sqlite3.Connection, actor: str, record_type: str, spec: RecordType,
             if not row.cells.get(column):
                 raise CI.RowError(f"{column} is blank")
         payload = CONVERT[record_type](row.cells, names)
+        customer = names.customer(row.cells["customer"]) if row.cells.get("customer") else None
     except CI.RowError as exc:
         return Line(row.line, name, "error", str(exc))
     payload.update({field_name: value for field_name, value in fill.items() if not payload.get(field_name)})
-    key = CI.content_key(record_type, payload)
+    if customer is not None:       # a customer the row names wins over a bulk-assigned one
+        if customer.record_id:
+            payload["customer_id"] = customer.record_id
+        else:
+            payload.pop("customer_id", None)
+    adds = customer.name if customer is not None and not customer.record_id else ""
+    key = CI.content_key(record_type, _keyed(payload, row.cells.get("customer", "")))
     prior = SX.by_key(c, key)
     if prior is not None:
         return _stored(row.line, name, prior, key)
+    if adds and ctx.book.mode == "mirror":
+        return Line(row.line, name, "error", f"Add this customer in {_books_name(c, ctx)} first", key=key)
+    if adds:
+        made = finance.act(c, actor, "contact_create", {"name": adds, "kind": "customer"}, _customer_key(adds),
+                           dry_run=True)
+        if made.status != "committed":
+            return Line(row.line, name, "error", made.reason or _customer_waits(adds), key=key)
     checked = finance.act(c, actor, spec.kind, payload, key, dry_run=True)
     if checked.status in ("denied", "failed"):
         return Line(row.line, name, "denied" if checked.status == "denied" else "error", checked.reason)
@@ -295,8 +385,15 @@ def _line(c: sqlite3.Connection, actor: str, record_type: str, spec: RecordType,
     if matches is not None:
         return Line(row.line, name, "possible_duplicate",
                     "it matches a record already here or an earlier line: a person decides", matches=matches,
-                    payload=payload, key=key)
+                    payload=payload, key=key, new_customer=adds)
+    if customer is not None and customer.near is not None:
+        return Line(row.line, name, "possible_duplicate",
+                    f"customer {customer.name} is close to {customer.near_name}: a person decides",
+                    matches=customer.near, payload=payload, key=key, new_customer=adds)
     keys.take(natural, row.line)
+    if adds:
+        names.added(adds, row.line)
+        return Line(row.line, name, "new", reason=f"adds customer {adds}", payload=payload, key=key, new_customer=adds)
     return Line(row.line, name, "new", payload=payload, key=key)
 
 
@@ -312,13 +409,16 @@ def _classify(c: sqlite3.Connection, actor: str, record_type: str, text: str,
     fill = _assignment(record_type, spec, names, assign)
     rows, ignored = CI.read(text, spec.columns, spec.required)
     keys = Keys(c, record_type)
-    lines = [_line(c, actor, record_type, spec, row, names, keys, fill) for row in rows]
+    lines = [_line(c, ctx, actor, record_type, spec, row, names, keys, fill) for row in rows]
     return spec, lines, ignored
 
 
 def _answer(record_type: str, kind: str, lines: list[Line], ignored: list[str]) -> dict[str, Any]:
+    """The counts cover every line; `new_customers` counts the customers the new (or created) lines add."""
+    added = {CI.match_key(line.new_customer) for line in lines
+             if line.new_customer and line.status in ("new", "created")}
     return {"record_type": record_type, "kind": kind, "rows": len(lines),
-            "summary": dict(Counter(line.status for line in lines)),
+            "summary": dict(Counter(line.status for line in lines)), "new_customers": len(added),
             "lines": [line.out() for line in lines[:CI.REPORT_LINES]], "truncated": len(lines) > CI.REPORT_LINES,
             "ignored_columns": ignored}
 
@@ -337,15 +437,40 @@ def commit(c: sqlite3.Connection, actor: str, record_type: str, text: str, assig
            include: frozenset[int]) -> dict[str, Any]:
     """Import the file. Each new line, and each possible duplicate named in `include`, becomes one Finance action."""
     spec, lines, ignored = _classify(c, actor, record_type, text, assign)
+    made: dict[str, str] = {}                       # match key -> the customer id this file added for it
     for line in lines:
         if line.status == "new" or (line.status == "possible_duplicate" and line.line in include):
-            _commit(c, actor, spec, line)
+            _commit(c, actor, spec, line, made)
     return _answer(record_type, spec.kind, lines, ignored)
 
 
-def _commit(c: sqlite3.Connection, actor: str, spec: RecordType, line: Line) -> None:
-    """Runs one row for real. A key stored by an earlier run answers with that run's record, not a second one."""
-    done = finance.act(c, actor, spec.kind, line.payload or {}, line.key)
+def _customer(c: sqlite3.Connection, actor: str, name: str, made: dict[str, str]) -> tuple[str, str]:
+    """The id of the customer a row adds, adding it once: a second row that names it gets the same contact. Returns
+    (id, "") or ("", why contact_create refused it)."""
+    key = CI.match_key(name)
+    if key in made:
+        return made[key], ""
+    done = finance.act(c, actor, "contact_create", {"name": name, "kind": "customer"}, _customer_key(name))
+    if done.status != "committed":
+        return "", done.reason or _customer_waits(name)
+    stored = done.result
+    if done.replayed:
+        stored = json.loads(str(SX.by_key(c, _customer_key(name))["result_json"] or "{}"))
+    made[key] = _id_in(stored)
+    return made[key], ""
+
+
+def _commit(c: sqlite3.Connection, actor: str, spec: RecordType, line: Line, made: dict[str, str]) -> None:
+    """Runs one row for real, adding the customer it names first. A key stored by an earlier run answers with that run's
+    record, not a second one."""
+    payload = dict(line.payload or {})
+    if line.new_customer:
+        customer_id, why = _customer(c, actor, line.new_customer, made)
+        if not customer_id:
+            line.status, line.reason = "error", why
+            return
+        payload["customer_id"] = customer_id
+    done = finance.act(c, actor, spec.kind, payload, line.key)
     if done.status == "committed" and done.replayed:
         line.status = "already_there"
         line.record_id = _id_in(json.loads(str(SX.by_key(c, line.key)["result_json"] or "{}")))

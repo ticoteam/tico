@@ -2606,12 +2606,12 @@ SCHEMAS["Seat"]["required"] = sorted(set(SCHEMAS["Seat"]["required"]) | {"agent"
 # CSV imports of shared records: the preview and the commit answer the same shape, one line per row.
 TAGS["Imports"] = "CSV files of shared records (locations, items, equipment, due dates), checked before they import."
 SCHEMAS["RecordsImport"] = obj({
-    "record_type": "s", "kind": "s", "rows": "i", "summary": "o", "truncated": "b",
+    "record_type": "s", "kind": "s", "rows": "i", "summary": "o", "new_customers": "i", "truncated": "b",
     "ignored_columns": items(_t("s")), "report_csv": "s",
     "lines": items(obj({"line": "i", "name": "s", "status": "s", "reason": "s", "record_id": "s",
-                        "matches": {"type": ["object", "null"]}, "approval_id": "s"},
+                        "matches": {"type": ["object", "null"]}, "approval_id": "s", "new_customer": "s"},
                        required=["line", "name", "status"]))},
-    required=["record_type", "kind", "rows", "summary", "truncated", "ignored_columns", "lines"])
+    required=["record_type", "kind", "rows", "summary", "new_customers", "truncated", "ignored_columns", "lines"])
 STABLE.extend([
     ("/api/v2/imports/preview", "post", "Imports", "previewRecordsImport",
      "Check a CSV file of records row by row and write nothing: what each row would create, what is already here, and "

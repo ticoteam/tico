@@ -51790,6 +51790,9 @@
           "summary": {
             "type": "object"
           },
+          "new_customers": {
+            "type": "integer"
+          },
           "truncated": {
             "type": "boolean"
           },
@@ -51830,6 +51833,9 @@
                 },
                 "approval_id": {
                   "type": "string"
+                },
+                "new_customer": {
+                  "type": "string"
                 }
               },
               "required": [
@@ -51845,6 +51851,7 @@
           "ignored_columns",
           "kind",
           "lines",
+          "new_customers",
           "record_type",
           "rows",
           "summary",

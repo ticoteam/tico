@@ -54,8 +54,22 @@ roll up there. Stores, offices, warehouses, plants and other default to on. Cust
 ## CSV import
 
 Locations, products and services, equipment and due dates can be imported from a CSV file. The import shows a preview
-first: errors per row, and likely duplicates (same address, serial or SKU) for a person to decide. An import adds rows.
-It does not overwrite fields on records already in Tico.
+first: errors per row, and likely duplicates (same address, serial or SKU, or a customer name close to one already here)
+for a person to decide. An import adds rows. It does not overwrite fields on records already in Tico. The first line
+names the columns; a column not listed here is ignored.
+
+- **Locations:** `name` (required), `kind`, `street`, `city`, `state`, `postal_code`, `in_books`, `customer`.
+- **Products and services:** `name` and `kind` (required), `sku`, `unit`, `price`, `description`, `taxable` (yes or no).
+- **Equipment:** `name` and `kind` (required), `location`, `customer`, `make`, `model`, `serial`, `installed_on`,
+  `warranty_ends_on`.
+- **Due dates:** `name`, `subject_type` (location, equipment or contact), `subject`, `repeats` (once, weekly, monthly,
+  quarterly, yearly, every_days or every_months), `every_count`, `starts_on`, `lead_days` and `assignee` (a teammate's or
+  a bot's name), all required except `every_count` and `lead_days`.
+
+A `customer` names a customer on the books. A name the books lack is added as a customer by the import, once per file; the
+preview counts those new customers. A name close to a customer or contact already here is a likely duplicate: it is not
+linked to that one, and its line imports only when a person names it. In a book that QuickBooks or Xero mirrors, add the
+customer there first.
 
 ## Due dates
 
