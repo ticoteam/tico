@@ -782,6 +782,10 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     else:
         under = org.members(led) | org.reports(viewer)
         shown = sorted({viewer} | {m for m in under if m in org.humans or m in org.bots})
+    # The teams the viewer sees: the ones they manage, and the teams of the teammates shown. A default names a team only
+    # from this set, so a teammate's row never gives away a team the viewer can't see.
+    shown_teams = {org.team_of.get(m, "") for m in shown}
+    visible = {t.id for t in org.teams.values() if admin or t.id in led or t.id in shown_teams}
     defaults = SA.defaults(c)
     grants = SA.grants(c, "active") + SA.grants(c, "suspended")
     teammates: list[Row] = []
@@ -790,15 +794,15 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
         # Rights are admin-only, except a teammate's own.
         rights = sorted(ctx.rights(m)) if admin or m == viewer else None
         default = _default_of(org.manages(m), defaults, bool(org.owner) and m == org.owner)
+        team = default_team(org, m) if default == "team_expenses" else None
         teammates.append({"teammate": m, "kind": "bot" if m in org.bots else "person",
                           "team": org.team_of.get(m) or None, "reports_to": org.reports_to.get(m) or None,
                           "default": default,
-                          "default_team": default_team(org, m) if default == "team_expenses" else None,
+                          "default_team": team if team in visible else None,
                           "grants": [_grant_row(g, ctx) for g in mine], "rights": rights,
                           "may_grant": _may_grant(ctx, viewer, m, defaults)})
     teams = [{"id": t.id, "name": t.name, "parent": t.parent or None, "lead": t.lead or None}
-             for t in sorted(org.teams.values(), key=lambda x: x.name)
-             if admin or t.id in led or t.id in {org.team_of.get(m, "") for m in shown}]
+             for t in sorted(org.teams.values(), key=lambda x: x.name) if t.id in visible]
     private = [{"account_id": a, "name": ctx.accounts[a].name if a in ctx.accounts else a,
                 "others_see": p.others_see, "full_detail": sorted(p.full_detail) if owner else None}
                for a, p in sorted(ctx.private().items())] if admin else []

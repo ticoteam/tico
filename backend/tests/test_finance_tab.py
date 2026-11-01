@@ -1,6 +1,8 @@
 """The Finance tab's reads cut to the viewer: the balance sheet and sources are the owner's unless granted, transactions
 and cards follow the lines a manager, a plain bot or a granted bot sees, the transactions cursor pages without gaps or
 repeats, the P&L serves day columns and the expenses view by team or teammate, and only the owner views as others."""
+import json
+
 import pytest
 
 from backend.finance.actions import FinanceError
@@ -11,7 +13,7 @@ from backend.finance.core.org import Org, Team
 from backend.finance.store import banking as SK
 from backend.tests.test_api import api, get  # noqa: F401
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, OWNER, _seed, account, act, books, finance_template, spend, store)
+    AT, GROUPS, OWNER, PEOPLE, _seed, account, act, books, finance_template, spend, store)
 
 
 def _bank(c, at=AT):
@@ -212,6 +214,24 @@ def test_a_managers_default_names_the_one_top_team_it_covers(books):
     assert TB.default_team(org, "human:wide") is None         # reports in Engineering and QA
     assert TB.default_team(org, "human:loose") is None        # a reporting line on no team
     assert TB.default_team(org, "human:lea") is None          # leads Sales, but a report sits on no team
+
+
+def test_a_teammates_default_team_is_left_out_when_the_viewer_cannot_see_it(books):
+    """Access names a teammate's default team only when the viewer sees that team. Eve sits in Web under Engineering and
+    manages all of Sales (Dan and, through him, Gus and the seller bot report up to her), and she reports to no one. Ben
+    sees her row but not Sales, so her default team stays generic for him; the owner still sees the team id."""
+    reports = {"dan": "eve", "eve": ""}             # both lines in one roster write, as test_finance_view does
+    people = [{**p, "reports_to": reports.get(p["id"], p.get("reports_to", ""))} for p in PEOPLE]
+    with books.transaction() as c:
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
+                  (json.dumps({"people": people, "org_groups": GROUPS, "default_user": "ana"}),))
+        ben = FR.access(c, "human:ben", at=AT)
+        owner = FR.access(c, OWNER, at=AT)
+    assert "sales" not in {t["id"] for t in ben["teams"]}
+    mates = {m["teammate"]: m for m in ben["teammates"]}
+    assert mates["human:eve"]["default"] == "team_expenses" and mates["human:eve"]["default_team"] is None
+    assert mates["human:ben"]["default_team"] == "eng"          # Engineering is his, so the id shows
+    assert {m["teammate"]: m for m in owner["teammates"]}["human:eve"]["default_team"] == "sales"
 
 
 def test_tab_routes_answer_in_the_callers_view(api):
