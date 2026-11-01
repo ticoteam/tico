@@ -21,10 +21,10 @@ Posting is gated in code, not in prompts:
   - text over 4000 characters is refused
   - every accepted post is appended to <projects>/runtime/slack-audit.jsonl
 
-Channel reads are scoped when an employee's Slack access entry declares `channels:`; a channel whose list entry
-names the bot as a reader is in that scope too. `history` uses `--as <slug>`, or `HUB_BOT` (older: `HUB_EMPLOYEE`)
-inside a hosted run, and refuses any channel outside the scope before calling Slack. Manifests without
-`channels:` retain their existing broad read access; new narrowly-scoped monitors should always declare it.
+Channel reads are scoped to the channels whose list entry names the bot as a reader, plus any the employee's Slack
+access entry declares under `channels:`. Without `channels:` a bot reads only the channels that name it as a reader.
+`history` uses `--as <slug>`, or `HUB_BOT` (older: `HUB_EMPLOYEE`) inside a hosted run, and refuses any channel outside
+the scope before calling Slack.
 
 The channel list lives in Tico's database. In a hosted run (`HUB_API_URL` and `HUB_TOKEN`) this script reads it from
 the hub; the old registry/slack-channels.yaml is read too, until an owner or admin imports it in Settings.
@@ -494,11 +494,11 @@ def check_not_onboarding(slug):
 
 
 def check_history_scope(manifest, slug, refs, channels=None):
-    """Refuse a history read outside an employee's declared channel scope.
+    """Refuse a history read outside the bot's channel scope.
 
-    `channels:` is opt-in for backwards compatibility with existing employees. Once present, even
-    as an empty list, it is an allow-list. Both channel names and ids are accepted. A channel whose
-    entry on the company's list names this bot as a reader is in the scope as well.
+    The scope is the channels whose entry on the company's list names this bot as a reader, plus any the
+    employee's Slack entry declares under `channels:` (an allow-list, added to those). Both channel names and
+    ids are accepted.
     """
     entry = slack_access(manifest, slug)
     can = [str(c).lower() for c in (entry.get("can") or [])]
@@ -506,8 +506,6 @@ def check_history_scope(manifest, slug, refs, channels=None):
         raise Refused(f"{slug} may {', '.join(can) or 'do nothing'} on Slack, not read history.",
                       "Add `read` to the Slack entry's `can:` in bot.yaml; that is the owner's call.")
     declared = entry.get("channels")
-    if declared is None:
-        return entry
     registry = channels if channels is not None else load_channels()
     allowed = set()
     for ref in declared or []:
@@ -549,8 +547,6 @@ def check_file_scope(manifest, slug, info, channels=None):
                       "Add `read` to the Slack entry's `can:` in bot.yaml; that is the owner's call.")
     shared, ims = file_conversations(info)
     if ims and entry.get("dms") is not False:
-        return entry
-    if shared and entry.get("channels") is None:
         return entry
     registry = None
     for cid in shared:

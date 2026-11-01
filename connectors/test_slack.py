@@ -268,6 +268,16 @@ class ChannelList(FakeSlack):
         stale = {"tools": [{"service": "slack", "can": ["read"], "channels": ["gone", "agents"]}]}
         slack.check_history_scope(stale, "reader", ["#agents"], rows)
 
+    def test_without_channels_a_bot_reads_only_the_channels_that_name_it_as_a_reader(self):
+        manifest = {"tools": [{"service": "slack", "can": ["read"]}]}
+        rows = slack.load_channels(self.file)
+        slack.check_history_scope(manifest, "reader", ["#customer_success", "C0000000010"], rows)
+        for refs in (["#agents"], ["#release_notes"], ["#general"]):   # no reader, or not on the list at all
+            with self.assertRaises(slack.Refused, msg=refs):
+                slack.check_history_scope(manifest, "reader", refs, rows)
+        with self.assertRaises(slack.Refused):                       # listed, but its reader is someone else
+            slack.check_history_scope(manifest, "other-bot", ["#customer_success"], rows)
+
     def test_a_post_follows_the_list_and_externally_shared_channels_stay_refused(self):
         listing = (200, {}, {"ok": True, "channels": [{"id": "C0000000020", "name": "agents"}]})
         rc, out, calls = self.run_cli(["post", "--as", self.slug, "--channel", "#agents", "--text", "hi", "--json"],
@@ -443,6 +453,16 @@ class FileDownload(FakeSlack):
                 slack.check_file_scope(manifest, "qa-bot", elsewhere, rows)
         with self.assertRaises(slack.Refused):
             slack.check_file_scope({"tools": [{"service": "slack", "can": ["post"]}]}, "poster", SHOT, rows)
+
+    def test_without_channels_a_file_is_readable_only_in_a_channel_the_bot_reads(self):
+        manifest = {"tools": [{"service": "slack", "can": ["read"]}]}
+        rows = [{"id": "C0000000010", "name": "qa", "readers": ["reader"]},
+                {"id": "C0000000011", "name": "hr", "readers": []}]
+        slack.check_file_scope(manifest, "reader", {**SHOT, "ims": [], "channels": ["C0000000010"]}, rows)
+        for elsewhere in ({**SHOT, "ims": [], "channels": ["C0000000011"]},     # listed, no reader named
+                          {**SHOT, "ims": [], "channels": ["C0000000099"]}):    # not on the list
+            with self.assertRaises(slack.Refused):
+                slack.check_file_scope(manifest, "reader", elsewhere, rows)
 
     def test_history_and_inbox_name_each_file_by_id(self):
         row = slack.shape({"ts": "1756742400.000100", "user": "U9", "text": "see this", "files": [SHOT]},
