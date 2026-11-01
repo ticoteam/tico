@@ -251,9 +251,10 @@ async function shot(page, name) {
     assert.ok(!seen.reads.includes('t-lb'), 'a collapsed part with news stays unread: ' + seen.readSeqs);
     assert.equal(await page.locator('.th-msg[data-mid="n1"].th-new').count(), 1, 'the mark is its own thread\'s, not the parent\'s');
     assert.equal(await page.locator('.th-msg[data-mid="r1"].th-new').count(), 0);
+    await page.evaluate(() => document.querySelector('.th-msg[data-mid="p1"]').scrollIntoView());
     await shot(page, 'subthreads-desktop');
     await page.locator('.th-more').click();
-    await page.getByText('Long one.').waitFor();
+    await page.getByText('Long one.', {exact: true}).waitFor();
     assert.deepEqual((await mids()).slice(2, 7), ['p2', 'b1', 'b2', 'b3', 'b4'], 'the older part takes the row\'s place');
     await page.waitForTimeout(150);
     assert.ok(seen.readSeqs.includes('t-lb:22'), 'opened, it reads to the last message: ' + seen.readSeqs);
