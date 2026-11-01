@@ -194,6 +194,15 @@ def _approver(ctx: Ctx, gate: K.Gate, who: str) -> str:
     return "" if approver == who else approver
 
 
+def _decider(ctx: Ctx, row: Mapping[str, object], gate: K.Gate, who: str) -> str:
+    """Who decides an approved action now (_approver). A request asked of the requester's manager (default:budget-request)
+    keeps that route here: while deciding, figure_route is "" (the true figures), so the planned gate may no longer name
+    the manager. The manager must still be the person the request was sent to, or it is asked again (spec 6.3)."""
+    if str(row["rule_id"] or "") == handlers.REQUEST_GATE.rule:
+        gate = gating.combine(handlers.REQUEST_GATE, gate, who)
+    return _approver(ctx, gate, who)
+
+
 def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
           action_id: str) -> tuple[K.Gate, handlers.Plan]:
     """The right check first (a missing right is a denial, or for budgets a request to the asker's manager), then the
@@ -429,7 +438,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
     try:
         ctx.deciding = True
         gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
-        now_to = _approver(ctx, gate, p.who)
+        now_to = _decider(ctx, row, gate, p.who)
         if now_to and (now_to != row["approval_to"] or _drifted(body, plan)):
             # The person who decides this changed since it was asked (a new manager, a finance approver named), or the
             # planner would now fix a value differently from the approved one (a parent raise that moved). When nobody
@@ -468,7 +477,7 @@ def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body:
     ctx.deciding = True                       # the recheck runs on the true figures (figure_route)
     try:
         gate, plan = _plan(ctx, p, kind, body, action_id)
-        approver = _approver(ctx, gate, p.who)
+        approver = _decider(ctx, row, gate, p.who)
     except FinanceError as e:
         return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message, e.named)
     if not approver:

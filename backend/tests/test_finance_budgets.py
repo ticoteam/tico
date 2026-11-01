@@ -624,3 +624,73 @@ def test_one_expense_draws_one_allocation_when_a_child_is_replaced(books):
                                                  "target_id": "human:eve", "amount": 5_000}).status == "committed"
         spend(c, "6100", 5_000, team="web", teammate="human:eve")
         assert FA.budget_state(c, pid, AT).remaining == 0
+
+
+def _child(c, pid, name, amount, team="", vendor=""):
+    """A child of `pid` on account 6100, optionally scoped to a team or a vendor; its id."""
+    body = {"name": name, "account_id": account(c, "6100"), "amount": amount, "parent_id": pid, "at_limit": "decline"}
+    made = act(c, OWNER, "budget_create", {**body, **({"team": team} if team else {}), **({"vendor": vendor} if vendor else {})})
+    assert made.status == "committed", made
+    return str(made.result["budget_id"])
+
+
+def _allot(c, budget_id, amount):
+    """Set Eve's allocation on a budget."""
+    made = act(c, OWNER, "allocation_set", {"budget_id": budget_id, "target_kind": "teammate",
+                                             "target_id": "human:eve", "amount": amount})
+    assert made.status == "committed", made
+
+
+def test_a_line_one_teammate_posts_is_drawn_once_across_three_generations(books):
+    """The reviewer's chain under Software (20,000): Eve's 10,000 on an ended Engineering child, 5,000 on an ended Web child
+    and 5,000 on that Web child's active replacement. Her Web line (5,000) is drawn by the replacement, which takes precedence
+    over the ended Web child; her Engineering line (5,000) by Engineering, the only child whose scope takes it. Software:
+    actual 10,000, held 10,000 (Engineering keeps 5,000 unused, the ended Web child 5,000), remaining 0. Subtracting each
+    rival's whole actual drew the Web line twice (held 15,000, remaining -5,000)."""
+    with books.transaction() as c:
+        pid, _ = _tree(c, 20_000, ())
+        eng = _child(c, pid, "Engineering", 10_000, team="eng")
+        _allot(c, eng, 10_000)
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": False}).status == "committed"
+        old = _child(c, pid, "Web old", 5_000, team="web")
+        _allot(c, old, 5_000)
+        assert act(c, OWNER, "budget_update", {"budget_id": old, "active": False}).status == "committed"
+        new = _child(c, pid, "Web new", 5_000, team="web")
+        _allot(c, new, 5_000)
+        spend(c, "6100", 5_000, team="web", teammate="human:eve")
+        spend(c, "6100", 5_000, team="eng", teammate="human:eve")
+        state = FA.budget_state(c, pid, AT)
+        assert (state.actual, state.held, state.remaining) == (10_000, 10_000, 0), state
+
+
+def test_a_line_an_ended_budget_shares_goes_to_the_active_one_on_the_same_account(books):
+    """Codex's case under Opex (20,000): Eve's 5,000 on an ended Software child (account 6100, any vendor) and 5,000 on an
+    active Slack child (the same account, vendor Slack). Her GitHub line is Software's alone; her Slack line is the active
+    Slack child's, which takes precedence. Software has nothing left to reserve, so Opex has 10,000 left and a 7,500 spend
+    fits. Subtracting Slack's whole actual from Software left a phantom 5,000 reserve (remaining 5,000)."""
+    with books.transaction() as c:
+        pid, _ = _tree(c, 20_000, ())
+        soft = _child(c, pid, "Software", 5_000)
+        _allot(c, soft, 5_000)
+        assert act(c, OWNER, "budget_update", {"budget_id": soft, "active": False}).status == "committed"
+        slack = _child(c, pid, "Slack", 5_000, vendor="Slack")
+        _allot(c, slack, 5_000)
+        spend(c, "6100", 5_000, teammate="human:eve", vendor="GitHub")
+        spend(c, "6100", 5_000, teammate="human:eve", vendor="Slack")
+        state = FA.budget_state(c, pid, AT)
+        assert (state.actual, state.remaining) == (10_000, 10_000), state
+
+
+def test_lowering_a_parent_below_an_ended_childs_retained_allocation_is_refused(books):
+    """A 10,000 parent with a 10,000 Web child that holds Eve's 8,000 and has spent 5,000 for her. Ending Web keeps the whole
+    8,000 against the parent (its unused 3,000 and the 5,000 spent), so lowering the parent to 3,000 is refused ("reserve
+    80.00"); lowering it to 8,000 commits. Only the unused 3,000 used to count, so 3,000 was allowed."""
+    with books.transaction() as c:
+        pid, kids = _tree(c, 10_000, (("web", 10_000),))
+        _allot(c, kids["web"], 8_000)
+        spend(c, "6100", 5_000, team="web", teammate="human:eve")
+        assert act(c, OWNER, "budget_update", {"budget_id": kids["web"], "active": False}).status == "committed"
+        lowered = act(c, OWNER, "budget_update", {"budget_id": pid, "amount": 3_000})
+        assert lowered.code == "invalid" and "reserve 80.00" in lowered.reason, lowered
+        assert FA.budget_state(c, pid, AT).amount == 10_000
+        assert act(c, OWNER, "budget_update", {"budget_id": pid, "amount": 8_000}).status == "committed"

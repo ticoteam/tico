@@ -19,7 +19,8 @@ from backend.finance.store import budgets as SB
 from backend.finance.store import schema as FS
 from backend.tests.test_api import api, headers  # noqa: F401
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
+    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, set_manager, spend, store,
+    sync_once)
 from clients import hubtools
 from clients.tico import APIError
 
@@ -1030,3 +1031,26 @@ def test_a_card_limit_request_the_requester_cannot_see_goes_to_their_manager(boo
         asked = act(c, "human:cara", "card_update_limit", {"card_id": str(card.result["card_id"]), "amount": 6_000})
         assert (asked.status, asked.approver, asked.rule) == ("needs_approval", "human:ben", "default:budget-request"), \
             (asked.code, asked.reason, asked.approver, asked.rule)
+
+
+def test_a_manager_routed_card_limit_is_not_committed_by_the_old_manager_after_a_change(books):
+    """Cara's card-limit request is routed to Ben, her manager. Before Ben decides, her manager becomes Dan. Ben's approval
+    must not commit: the request is asked again of Dan, and the card keeps its 5,000 limit. It used to commit, because
+    while an approval is decided the figure route is dropped, so the manager was never checked again."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        line = _budget(c, amount=10_000)
+        web = _budget(c, name="Web tools", amount=10_000, team="web", parent_id=line)
+        card = _bot_card(c, web, "bot:coder", amount=5_000)
+        assert card.status == "committed", card
+        card_id = str(card.result["card_id"])
+        assert act(c, OWNER, "right_grant", {"teammate": "human:cara", "right": "finance.cards"}).status == "committed"
+        asked = act(c, "human:cara", "card_update_limit", {"card_id": card_id, "amount": 6_000})
+        assert (asked.status, asked.approver) == ("needs_approval", "human:ben"), (asked.code, asked.reason)
+        set_manager(c, "cara", "dan")
+        H.approval_decide(c, "human:ben", asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert (done.status, done.approver) == ("needs_approval", "human:dan"), (done.status, done.code, done.reason)
+        limits = {str(r["target_id"]): int(r["amount"]) for r in SB.allocations(c, [web])}
+        assert limits[card_id] == 5_000

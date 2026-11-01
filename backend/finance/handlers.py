@@ -631,13 +631,14 @@ def _owed(ctx: Ctx, kids: dict[str, list[B.Version]], at: date, live: frozenset[
     """What a budget's children hold it to on `at`. Each child counts once, as its amount or as what it already needs if
     that is more: its spend, holds and allocation reserves (budgeting.state), all inside its own envelope. So nothing that
     sits inside a child is counted again on its parent. A child with no stored budget yet needs nothing. An ended child
-    has no envelope any more: it counts only what it still holds (its allocations' reserves and holds). `live` names
+    has no envelope any more, but its allocations keep counting against the parent: each at the larger of its amount and
+    what its target used, the whole allocation (budgeting.retained), as a live child's amount counts. `live` names
     budgets a change is bringing back active: they count as children, whatever their stored flag still says."""
     budgets = ctx.budgets()
     total = 0
     for cid, versions in kids.items():
         if cid in budgets and not budgets[cid].active and cid not in live:
-            total += budgeting.state(ctx, cid, at).held
+            total += _retained(ctx, cid, at)
             continue
         amount = B.amount_at(versions, at) or 0
         need = 0
@@ -648,11 +649,15 @@ def _owed(ctx: Ctx, kids: dict[str, list[B.Version]], at: date, live: frozenset[
     return total
 
 
+def _retained(ctx: Ctx, cid: str, at: date) -> int:
+    """What an ended child keeps against its parent on `at` (budgeting.retained) in its period on that day."""
+    return budgeting.retained(ctx, cid, *budgeting.period_window(ctx, cid, at.isoformat()))
+
+
 def _ended_held(ctx: Ctx, kids: dict[str, list[B.Version]], at: date, live: frozenset[str] = frozenset()) -> int:
-    """What the ended children among `kids` still hold on `at`, as `_owed` counts it."""
+    """What the ended children among `kids` keep against their parent on `at`, as `_owed` counts it."""
     budgets = ctx.budgets()
-    return sum(budgeting.state(ctx, cid, at).held for cid in kids
-               if cid in budgets and not budgets[cid].active and cid not in live)
+    return sum(_retained(ctx, cid, at) for cid in kids if cid in budgets and not budgets[cid].active and cid not in live)
 
 
 def _reserves(ctx: Ctx, b: B.Budget, start: str, end: str, kid_ids: list[str]

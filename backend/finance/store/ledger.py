@@ -330,6 +330,18 @@ def rollup_sum(c: sqlite3.Connection, book_id: str, start: str, end: str, accoun
     return int(c.execute(sql, args).fetchone()[0])
 
 
+def rollup_lines(c: sqlite3.Connection, book_id: str, start: str, end: str, account_ids: Sequence[str],
+                 teammate: str) -> list[Any]:
+    """One teammate's posted total per (account, team, vendor) in the window, on `account_ids`: the grain a budget's
+    allocation takes its lines by (budgeting._owned). Same filters as rollup_sum, so the parts add up to its total."""
+    if not account_ids:
+        return []
+    return c.execute(f"SELECT account_id, team, vendor, COALESCE(SUM(amount), 0) AS amount FROM fin_rollups "
+                     f"WHERE book_id=? AND day>=? AND day<=? AND teammate=? "
+                     f"AND account_id IN ({','.join('?' * len(account_ids))}) GROUP BY account_id, team, vendor",
+                     [book_id, start, end, teammate, *account_ids]).fetchall()
+
+
 def entries_on(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str], start: str, end: str,
                most: int, vendors: Sequence[str] | None = None, offset: int = 0) -> list[Any]:
     """Lines on `account_ids` in the window with their entry, newest first, `most` of them after the first `offset`: a
