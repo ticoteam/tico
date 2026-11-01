@@ -15,7 +15,7 @@
         "created": "<time>",
         "decided_at": null,
         "decided_by": null,
-        "decided_for_json": null,
+        "decided_for": null,
         "decided_via": null,
         "decision": null,
         "decision_owner": "human:ana",
@@ -31,7 +31,6 @@
           "what": "Second test"
         },
         "payload_hash": "<digest>",
-        "payload_json": "{\"account\": \"ads\", \"amount\": 9, \"what\": \"Second test\"}",
         "pressing": false,
         "ready_since": "<time>",
         "requested_by": "bot:ops",

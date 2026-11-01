@@ -19,7 +19,6 @@
         "human:ana",
         "bot:ops"
       ],
-      "participants_json": "[\"human:ana\", \"bot:ops\"]",
       "room_key": "ops",
       "scope": "personal",
       "subject": "Chat with ops",
@@ -47,7 +46,6 @@
         "refs": {
           "rule": "person_message"
         },
-        "refs_json": "{\"rule\": \"person_message\"}",
         "run": {
           "attempt_id": "<id1>",
           "job_id": "<chat_message>",
@@ -78,7 +76,6 @@
         "refs": {
           "rule": "person_message"
         },
-        "refs_json": "{\"rule\": \"person_message\"}",
         "superseded_at": null,
         "to_actor": "bot:ops",
         "to_actor_name": "ops",
@@ -104,7 +101,6 @@
         "refs": {
           "rule": "person_message"
         },
-        "refs_json": "{\"rule\": \"person_message\"}",
         "superseded_at": null,
         "to_actor": "bot:ops",
         "to_actor_name": "ops",
@@ -139,7 +135,6 @@
           "task": "<task>",
           "task_report": "done"
         },
-        "refs_json": "{\"quiet\": true, \"task\": \"<task>\", \"task_report\": \"done\"}",
         "superseded_at": null,
         "to_actor": "human:ana",
         "to_actor_name": "Ana",
@@ -174,7 +169,6 @@
           "task": "<open_task>",
           "task_started": true
         },
-        "refs_json": "{\"quiet\": true, \"task\": \"<open_task>\", \"task_started\": true}",
         "superseded_at": null,
         "to_actor": "human:ana",
         "to_actor_name": "Ana",
@@ -200,7 +194,6 @@
         "refs": {
           "rule": "person_message"
         },
-        "refs_json": "{\"rule\": \"person_message\"}",
         "superseded_at": null,
         "to_actor": "bot:ops",
         "to_actor_name": "ops",
@@ -236,7 +229,6 @@
           },
           "turn_id": "<id1>"
         },
-        "refs_json": "{\"answers\":[\"<chat_message>\"],\"run\":{\"attempt_id\":\"<id1>\",\"job_id\":\"<chat_message>\"},\"turn_id\":\"<id1>\"}",
         "run": {
           "attempt_id": "<id1>",
           "did": [],

@@ -38,7 +38,6 @@
           "public": 0,
           "read_at": null,
           "refs": {},
-          "refs_json": "{}",
           "superseded_at": null,
           "to_actor": "human:ana",
           "wait_s": null
@@ -71,7 +70,6 @@
           "public": 0,
           "read_at": null,
           "refs": {},
-          "refs_json": "{}",
           "superseded_at": null,
           "to_actor": "human:ben",
           "wait_s": null
@@ -106,7 +104,6 @@
           "refs": {
             "rule": "person_message"
           },
-          "refs_json": "{\"rule\": \"person_message\"}",
           "superseded_at": null,
           "to_actor": "bot:ops",
           "wait_s": null
@@ -156,7 +153,6 @@
           "refs": {
             "rule": "person_message"
           },
-          "refs_json": "{\"rule\": \"person_message\"}",
           "superseded_at": null,
           "to_actor": "bot:ops",
           "wait_s": null
@@ -206,7 +202,6 @@
           "refs": {
             "rule": "person_message"
           },
-          "refs_json": "{\"rule\": \"person_message\"}",
           "superseded_at": null,
           "to_actor": "bot:ops",
           "wait_s": null
@@ -258,7 +253,6 @@
             "task": "<task>",
             "trigger": "status_or_relation"
           },
-          "refs_json": "{\"news\": \"assignment\", \"task\": \"<task>\", \"trigger\": \"status_or_relation\"}",
           "superseded_at": null,
           "to_actor": "human:ana",
           "wait_s": null
@@ -297,7 +291,6 @@
             "task": "<task>",
             "trigger": "status_or_relation"
           },
-          "refs_json": "{\"caused_by\": \"human:ana\", \"news\": \"assignment\", \"rule\": \"person_message\", \"task\": \"<task>\", \"trigger\": \"status_or_relation\"}",
           "superseded_at": null,
           "to_actor": "bot:ops",
           "wait_s": null
@@ -351,7 +344,6 @@
             "task": "<task>",
             "trigger": "status_or_relation"
           },
-          "refs_json": "{\"caused_by\": \"human:ana\", \"news\": \"task_done\", \"rule\": \"person_message\", \"task\": \"<task>\", \"trigger\": \"status_or_relation\"}",
           "superseded_at": null,
           "to_actor": "bot:ops",
           "wait_s": null
@@ -403,7 +395,6 @@
             "task": "<task>",
             "task_report": "done"
           },
-          "refs_json": "{\"quiet\": true, \"task\": \"<task>\", \"task_report\": \"done\"}",
           "superseded_at": null,
           "to_actor": "human:ana",
           "wait_s": null
@@ -442,7 +433,6 @@
             "task": "<task>",
             "trigger": "status_or_relation"
           },
-          "refs_json": "{\"caused_by\": \"human:ana\", \"news\": \"task_done\", \"rule\": \"person_message\", \"task\": \"<task>\", \"trigger\": \"status_or_relation\"}",
           "superseded_at": null,
           "to_actor": "bot:ops",
           "wait_s": null
@@ -474,8 +464,8 @@
         "id": "<task>",
         "seq": 57,
         "task": {
+          "acceptance": "[]",
           "acceptance_criteria": [],
-          "acceptance_json": "[]",
           "ask": null,
           "attachments": [],
           "body": "Please draft it.",
@@ -592,7 +582,6 @@
             "task": "<open_task>",
             "task_started": true
           },
-          "refs_json": "{\"quiet\": true, \"task\": \"<open_task>\", \"task_started\": true}",
           "superseded_at": null,
           "to_actor": "human:ana",
           "wait_s": null
@@ -631,7 +620,6 @@
             "task": "<open_task>",
             "trigger": "status_or_relation"
           },
-          "refs_json": "{\"caused_by\": \"human:ana\", \"news\": \"assignment\", \"rule\": \"person_message\", \"task\": \"<open_task>\", \"trigger\": \"status_or_relation\"}",
           "superseded_at": null,
           "to_actor": "bot:ops",
           "wait_s": null
@@ -663,8 +651,8 @@
         "id": "<open_task>",
         "seq": 70,
         "task": {
+          "acceptance": "[]",
           "acceptance_criteria": [],
-          "acceptance_json": "[]",
           "ask": null,
           "attachments": [],
           "body": "Compare the three.",
@@ -778,7 +766,6 @@
           "refs": {
             "rule": "person_message"
           },
-          "refs_json": "{\"rule\": \"person_message\"}",
           "superseded_at": null,
           "to_actor": "bot:ops",
           "wait_s": null
@@ -829,7 +816,6 @@
             "approval": "<approval>",
             "task": "<open_task>"
           },
-          "refs_json": "{\"approval\": \"<approval>\", \"task\": \"<open_task>\"}",
           "superseded_at": null,
           "to_actor": "human:ana",
           "wait_s": null
@@ -866,7 +852,6 @@
             "caused_by": "human:ana",
             "rule": "person_message"
           },
-          "refs_json": "{\"approval\": \"<approval>\", \"caused_by\": \"human:ana\", \"rule\": \"person_message\"}",
           "superseded_at": null,
           "to_actor": "bot:ops",
           "wait_s": null
@@ -904,7 +889,7 @@
             "created": "<time>",
             "decided_at": null,
             "decided_by": null,
-            "decided_for_json": null,
+            "decided_for": null,
             "decided_via": null,
             "decision": null,
             "decision_owner": "human:ana",
@@ -920,7 +905,6 @@
               "what": "Second test"
             },
             "payload_hash": "<digest>",
-            "payload_json": "{\"account\": \"ads\", \"amount\": 9, \"what\": \"Second test\"}",
             "pressing": false,
             "ready_since": "<time>",
             "requested_by": "bot:ops",
@@ -969,7 +953,6 @@
             "approval": "<pending_approval>",
             "task": "<open_task>"
           },
-          "refs_json": "{\"approval\": \"<pending_approval>\", \"task\": \"<open_task>\"}",
           "superseded_at": null,
           "to_actor": "human:ana",
           "wait_s": null
@@ -1011,7 +994,6 @@
             },
             "turn_id": "<id5>"
           },
-          "refs_json": "{\"answers\":[\"<chat_message>\"],\"run\":{\"attempt_id\":\"<id5>\",\"job_id\":\"<chat_message>\"},\"turn_id\":\"<id5>\"}",
           "superseded_at": null,
           "to_actor": "human:ana",
           "wait_s": null

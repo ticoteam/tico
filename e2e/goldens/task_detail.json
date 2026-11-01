@@ -225,7 +225,6 @@
           "task": "<task>",
           "trigger": "status_or_relation"
         },
-        "refs_json": "{\"news\": \"assignment\", \"task\": \"<task>\", \"trigger\": \"status_or_relation\"}",
         "superseded_at": null,
         "to_actor": "human:ana",
         "to_actor_name": "Ana",
@@ -254,7 +253,6 @@
           "task": "<task>",
           "trigger": "status_or_relation"
         },
-        "refs_json": "{\"caused_by\": \"human:ana\", \"news\": \"assignment\", \"rule\": \"person_message\", \"task\": \"<task>\", \"trigger\": \"status_or_relation\"}",
         "superseded_at": null,
         "to_actor": "bot:ops",
         "to_actor_name": "ops",
@@ -283,7 +281,6 @@
           "task": "<task>",
           "trigger": "status_or_relation"
         },
-        "refs_json": "{\"caused_by\": \"human:ana\", \"news\": \"task_done\", \"rule\": \"person_message\", \"task\": \"<task>\", \"trigger\": \"status_or_relation\"}",
         "superseded_at": null,
         "to_actor": "bot:ops",
         "to_actor_name": "ops",
@@ -312,7 +309,6 @@
           "task": "<task>",
           "trigger": "status_or_relation"
         },
-        "refs_json": "{\"caused_by\": \"human:ana\", \"news\": \"task_done\", \"rule\": \"person_message\", \"task\": \"<task>\", \"trigger\": \"status_or_relation\"}",
         "superseded_at": null,
         "to_actor": "bot:ops",
         "to_actor_name": "ops",
@@ -324,8 +320,8 @@
     "run_model": null,
     "runs": [],
     "task": {
+      "acceptance": "[]",
       "acceptance_criteria": [],
-      "acceptance_json": "[]",
       "ask": null,
       "attachments": [],
       "body": "Please draft it.",

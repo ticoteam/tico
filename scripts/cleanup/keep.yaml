@@ -15,10 +15,13 @@ files:
   - contracts/runner/**
   - runner-rs/*                   # the Rust runner reads and sends the wire names (contracts/runner)
   - runner-rs/**
+  - runner/worktrees.py           # reads runners/me/worktrees rows, which keep the wire's detail_json
+  - backend/runner_wire.py        # puts the runner wire's old names back on runner bodies
   - backend/migrations/0*         # applied migration files are history: they ran on the shape of their day
   - CHANGELOG.md
 names:
   clients/*.py: [body_json]       # hub_goal_save's exact method/path/body_json step, not a column
   clients/tests/*.py: [body_json]
 keys:
+  runner/tests/test_worktree*.py: [detail_json]   # fake runners/me/worktrees rows (the wire); their hub SQL is renamed
   backend/finance/core/feeds.py: [created]   # a Stripe balance transaction's own `created` (epoch seconds)

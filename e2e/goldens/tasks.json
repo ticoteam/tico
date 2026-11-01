@@ -8,8 +8,8 @@
     "next_offset": null,
     "tasks": [
       {
+        "acceptance": "[]",
         "acceptance_criteria": [],
-        "acceptance_json": "[]",
         "ask": null,
         "attachments": [],
         "body": "Please draft it.",
@@ -98,8 +98,8 @@
         "waiting_on": null
       },
       {
+        "acceptance": "[]",
         "acceptance_criteria": [],
-        "acceptance_json": "[]",
         "ask": null,
         "attachments": [],
         "body": "Compare the three.",

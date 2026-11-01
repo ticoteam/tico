@@ -57,7 +57,7 @@ def test_legacy_heartbeat_does_not_report_pending_setup_present(trees):
     path = workspace / row['path']
     path.parent.mkdir(parents=True)
     git(base, 'worktree', 'add', '--no-track', '-b', row['branch'], str(path), 'origin/main')
-    row.update(state='present', detail=json.dumps({
+    row.update(state='present', detail_json=json.dumps({
         'checkout_state': 'legacy_present', 'setup_pending': True,
     }))
     report = W.inspect(workspace, row)
@@ -95,6 +95,7 @@ def test_previously_demoted_legacy_link_recovers_only_after_runner_verification(
                   (json.dumps(legacy_history), link['link_id']))
     with api.app_state.store.read() as c:
         row = dict(c.execute('SELECT * FROM task_links WHERE id=?', (link['link_id'],)).fetchone())
+    row['detail_json'] = row.pop('detail')       # the row as runners/me/worktrees hands it out (backend/runner_wire.py)
 
     report = W.inspect(workspace, row)
     if setup_pending or missing_tracked:

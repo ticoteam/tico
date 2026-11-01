@@ -22,7 +22,6 @@
           "human:ana",
           "bot:ops"
         ],
-        "participants_json": "[\"human:ana\", \"bot:ops\"]",
         "room_key": "ops",
         "scope": "personal",
         "subject": "Chat with ops",
@@ -43,7 +42,6 @@
           "bot:ops",
           "human:ana"
         ],
-        "participants_json": "[\"bot:ops\", \"human:ana\"]",
         "room_key": null,
         "scope": "direct",
         "subject": "",
@@ -64,7 +62,6 @@
           "human:ana",
           "bot:ops"
         ],
-        "participants_json": "[\"human:ana\", \"bot:ops\"]",
         "room_key": null,
         "scope": "task",
         "subject": "Check the vendor list",
@@ -83,7 +80,6 @@
         "participants": [
           "human:ana"
         ],
-        "participants_json": "[\"human:ana\"]",
         "room_key": null,
         "scope": "task",
         "subject": "Draft the launch plan",
@@ -104,7 +100,6 @@
           "keeper",
           "human:ana"
         ],
-        "participants_json": "[\"keeper\", \"human:ana\"]",
         "room_key": null,
         "scope": "direct",
         "subject": "",

@@ -12,7 +12,7 @@ from fastapi import Request
 from pydantic import Field
 from clients import git_repository, sessions
 
-from . import hubdb as H, repositories as R, task_relations as TR, worktree_waits as waits
+from . import hubdb as H, repositories as R, runner_wire, task_relations as TR, worktree_waits as waits
 from .auth import validate_identity
 from .live_privacy import ROOM_PREFIX
 from .models import Contract
@@ -908,7 +908,8 @@ def install(app, store, auth, mutate):
             # A worktree set up, failed or removed may be what a waiting task needs, or the place it waits for.
             owner = detail.get('owner') or H.task(c, task_id)['owner']
             waits.serve(c, [owner], store.settings.github_owner)
-            return dict(c.execute('SELECT * FROM task_links WHERE id=?', (link_id,)).fetchone())
+            # Only a computer or its bot changes a link here: the answer keeps the runner wire's names (backend/runner_wire.py).
+            return runner_wire.worktree(dict(c.execute('SELECT * FROM task_links WHERE id=?', (link_id,)).fetchone()))
         return mutate(request, body, work)
 
     @app.post('/api/v2/runners/me/worktrees/{link_id}/token')
@@ -980,4 +981,4 @@ def install(app, store, auth, mutate):
             validate_identity(c, who)
             if who.role != 'runner':
                 raise Problem('forbidden', 'A registered computer is required', 403)
-            return {'worktrees': inventory(c, who.runner_id)}
+            return {'worktrees': [runner_wire.worktree(row) for row in inventory(c, who.runner_id)]}

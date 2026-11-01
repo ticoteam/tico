@@ -14,7 +14,7 @@ from clients import gateway, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
-from . import browser_exit, claim_holds, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, turn_budgets
+from . import browser_exit, claim_holds, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, runner_wire, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
@@ -2619,8 +2619,9 @@ class Execution:
                 continue
             config = app_delivery.job_config(providers.fill(company, follow(
                 c, row['bot'], json.loads(row['config']), configs.get)))
-            result.append({**dict(row), 'computer_label': runner['label'], 'computer_logins_v1': True,
-                           'config': config,
+            # Runner wire (backend/runner_wire.py): the stored text under its old name, beside the decoded `config`.
+            result.append({**dict(row), **runner_wire.assignment(row), 'computer_label': runner['label'],
+                           'computer_logins_v1': True, 'config': config,
                            'repository': bot_repository(c, self.store.settings, row['bot'], configs.get, app),
                            'mail_agent': bool(P.inbox_person(row['bot'], people)),
                            # The runtimes its own or its team's subscription signs in: no sign-in needed here for them.
@@ -3695,6 +3696,11 @@ class Execution:
         if chat_goal and chat_goal["bot"] != row["bot"]:
             # Another bot's turn in the room (the requester answering) works without the owner's goal.
             chat_goal = None
+        # Runner wire names (backend/runner_wire.py): the stored text beside the decoded values, as runners read them.
+        runner_wire.message(c, msg)
+        runner_wire.messages(c, history)
+        runner_wire.conversation(c, conv)
+        wire_task = runner_wire.task(task)
         return {"attempt": {"chat_goal": chat_goal, "routine": routine, "id": aid, "deferred": deferred,
                             # Which waiting turn takes a shared one-turn login first (runner-rs/src/login_turns.rs).
                             "login_class": login_class(c, task, msg, routine),
@@ -3722,7 +3728,7 @@ class Execution:
                             "generation": row["generation"], "lease_until": until,
                             **({"start_reservation_seconds": start_places.START_SECONDS} if body.start_places else {}),
                             "lease_seconds": self.store.settings.lease_seconds, "token": token,
-                            "message": msg, "conversation": conv, "task": task,
+                            "message": msg, "conversation": conv, "task": wire_task,
                             **({"continue_thread": continue_thread} if continue_thread else {}),
                             **({"source_continuation": source} if source else {}),
                             # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
@@ -4253,8 +4259,9 @@ class Execution:
         aid = attempt["id"]
         rows = c.execute("SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
                          "WHERE i.attempt_id=? AND i.acked_at IS NULL AND m.deleted_at IS NULL", (aid,)).fetchall()
-        return {"attempt_id": aid, "messages": [H.message_view(c, row) for row in rows
-                if privacy.message_readable(c, "bot:" + attempt["bot"], row, current=True)]}
+        return {"attempt_id": aid, "messages": runner_wire.messages(c, [
+            H.message_view(c, row) for row in rows
+            if privacy.message_readable(c, "bot:" + attempt["bot"], row, current=True)])}
 
     def idle_inputs(self, c, who, aid):
         """A poll with no eligible queued input, without restoring or changing an attempt."""
@@ -5223,7 +5230,7 @@ class Execution:
                              counts=not (stopped or limited or busy or yielded or outage))
         if not stopped and timeout_cut:
             self.auto_reconcile(c, attempt_id=aid)
-        return {"attempt_id": aid, "outcome": body.outcome, "message": reply}
+        return {"attempt_id": aid, "outcome": body.outcome, "message": runner_wire.message(c, reply, as_read=True)}
 
     def account_failure(self, c, row, body, aid, conv, failure, counts):
         """What a finished run means for the bot's next ones (backend/run_backoff.py): a run that completed starts the
