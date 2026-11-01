@@ -1612,6 +1612,7 @@ SCHEMAS.update({
         "teammates": items(obj({"teammate": "s", "kind": "s", "team": "n", "reports_to": "n",
                                 "default": {"type": "string", "enum": ["everything", "team_expenses", "own_expenses",
                                                                        "none"]},
+                                "default_team": "n",
                                 "grants": items({"type": "object", "additionalProperties": True}),
                                 "rights": {"type": ["array", "null"], "items": {"type": "string"}},
                                 "may_grant": "b"})),

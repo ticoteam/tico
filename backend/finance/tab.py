@@ -15,6 +15,7 @@ from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, Account, Book, descendants
+from .core.org import Org
 from .store import access as SA
 from .store import ap as SAP
 from .store import banking as SK
@@ -739,6 +740,20 @@ def _default_of(org_led: bool, defaults: VW.Defaults, owner: bool) -> str:
     return "own_expenses" if org_led or defaults.member == "own_expenses" else "none"
 
 
+def default_team(org: Org, manager: str) -> str | None:
+    """The one top team a manager's default covers, which the page names ("Engineering expenses"): the team they lead
+    (with the teams under it) or the single team their reports sit in. None when it spans several teams or reaches a
+    report on no team."""
+    covered = set(org.led_by(manager))
+    for mate in org.reports(manager):
+        team = org.team_of.get(mate, "")
+        if team not in org.teams:
+            return None
+        covered.add(team)
+    tops = {t for t in covered if not covered.intersection(org.chain(t)[1:])}
+    return next(iter(tops)) if len(tops) == 1 else None
+
+
 def _grant_row(g: VW.Grant, ctx: Ctx) -> Row:
     return {"id": g.id, "subject_kind": g.subject_kind, "subject": g.subject, "what": g.what, "whose": g.whose,
             "whose_team": g.whose_team or None, "account_ids": sorted(g.account_ids), "new_members": g.new_members,
@@ -768,9 +783,11 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
         mine = [g for g in grants if VW.applies(org, g, m)]
         # Rights are admin-only, except a teammate's own.
         rights = sorted(ctx.rights(m)) if admin or m == viewer else None
+        default = _default_of(org.manages(m), defaults, bool(org.owner) and m == org.owner)
         teammates.append({"teammate": m, "kind": "bot" if m in org.bots else "person",
                           "team": org.team_of.get(m) or None, "reports_to": org.reports_to.get(m) or None,
-                          "default": _default_of(org.manages(m), defaults, bool(org.owner) and m == org.owner),
+                          "default": default,
+                          "default_team": default_team(org, m) if default == "team_expenses" else None,
                           "grants": [_grant_row(g, ctx) for g in mine], "rights": rights,
                           "may_grant": _may_grant(ctx, viewer, m, defaults)})
     teams = [{"id": t.id, "name": t.name, "parent": t.parent or None, "lead": t.lead or None}
