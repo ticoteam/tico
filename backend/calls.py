@@ -150,8 +150,8 @@ def cancel_bot_turns(c, meeting_id, slug, reason):
 
 
 def speak(c, call_id, text):
-    """A bot's reply read aloud in the call. Not built yet (docs/meet.md): the flag is kept on the call, and the reply
-    goes to the thread as text only."""
+    """A bot's reply read aloud in the call. Not built: `start` refuses speak_replies until the Gateway offers voice
+    (docs/meet.md), so no call has the flag and the reply goes to the thread as text only."""
     return None
 
 
@@ -185,7 +185,7 @@ class Empty(Contract):
 
 class StartCall(Contract):
     title: str = Field(default="Call", min_length=1, max_length=200)
-    speak_replies: bool = False      # a bot's reply is read aloud in the call: not built yet (docs/meet.md)
+    speak_replies: bool = False      # a bot's reply read aloud: refused until the Gateway has text-to-speech
 
 
 class CallBots(Contract):
@@ -307,6 +307,11 @@ class Calls:
     def start(self, c, who, thread_id, title, speak_replies=False):
         human_only(who)
         self.auth.domain(who)
+        if speak_replies:
+            # The Gateway offers no text-to-speech yet (docs/ai-gateway.md lists voice as coming soon), so the flag is
+            # refused rather than kept and ignored.
+            raise Problem("unavailable", "Spoken replies are not available yet: the Gateway has no text-to-speech. "
+                          "Start the call without speak_replies.", 422)
         threads.require(c, threads.viewer(self.auth, who), thread_id, write=True)
         if self.media is None:
             raise Problem("meet_unavailable", "Tico Meet is not set up on this server", 503)

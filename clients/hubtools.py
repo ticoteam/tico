@@ -7353,7 +7353,7 @@ def call_show(api, args):
       "Refused while another call runs in the thread, and while Tico Meet is not set up on this server.",
       {"thread_id": _s("The thread's id"), "title": _s("What the call is called, up to 200 characters"),
        "speak_replies": {"type": "boolean", "description": "Bots speak their replies on this call. Off unless asked; "
-                         "spoken replies are not sent yet, so bots reply in text either way"}},
+                         "spoken replies are refused until the Gateway has text-to-speech, so leave it out"}},
       required=("thread_id",), writes=True)
 def call_start(api, args):
     body = {"title": str(args["title"])} if args.get("title") else {}

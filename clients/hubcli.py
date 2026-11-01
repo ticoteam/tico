@@ -2797,7 +2797,7 @@ def parser():
     s.add_argument("thread_id")
     s.add_argument("--title", default="")
     s.add_argument("--speak", dest="speak_replies", action="store_true",
-                   help="bots speak their replies on this call (off by default; spoken replies are not sent yet)")
+                   help="bots speak their replies on this call (refused until the Gateway has text-to-speech)")
     s.set_defaults(fn="call start")
     for action, help_text in (("show", "a call: its state, people, bots and how it ended"),
                               ("join", "join a call: the URL and a token good for 5 minutes"),

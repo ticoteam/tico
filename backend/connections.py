@@ -27,7 +27,8 @@ LIMIT_MAX = 100
 BYTES_MAX = 96 * 1024
 BOTS_MAX = 20            # bots named on one row; `more_bots` counts the rest
 SCAN_MAX = 500           # bots read for one row (GitHub repository access)
-KINDS = ("slack", "github", "mailbox", "inbox", "meetings", "trigger", "webhook", "postal", "listening")
+KINDS = ("slack", "github", "mailbox", "inbox", "meetings", "trigger", "webhook", "postal", "listening", "slack_link",
+         "peer")
 
 
 def table(c, name):
@@ -281,7 +282,63 @@ def listening_rows(v):
                 can=v.who.role == "owner")]
 
 
-SOURCES = (slack, github, mailboxes, inboxes, meetings, triggers, webhooks, postal, listening)
+def thread_links(v, after, n):
+    return keyed(thread_link_rows(v), after, n)
+
+
+def thread_link_rows(v):
+    """Slack channels linked to threads (backend/slack_threads.py): a read-only row for each link whose thread the reader
+    can read. Only admins may change a link, so only they get Configure. Nothing here asks Slack."""
+    from . import threads as TH
+    if not table(v.c, "slack_thread_links"):
+        return []
+    reader = TH.viewer(v.auth, v.who)
+    out = []
+    for r in v.c.execute("SELECT * FROM slack_thread_links WHERE state IN ('active','suspended') ORDER BY id LIMIT ?",
+                         (SCAN_MAX,)):
+        if not TH.readable(v.c, reader, r["thread_id"]):
+            continue
+        company = r["audience"] == "company"
+        out.append(row("slack_link", r["id"], "#" + str(r["channel_name"] or r["channel_ref"]).lstrip("#"),
+                       "on" if r["state"] == "active" else "paused", "company" if company else "team",
+                       "Everyone" if company else "Thread members", f"#/thread/{r['thread_id']}",
+                       detail="Slack channel", can=v.admin))
+    return out
+
+
+def peers(v, after, n):
+    return keyed(peer_rows(v), after, n)
+
+
+def peer_rows(v):
+    """Other companies' Tico installs this one peers with. The owner sees every peering; anyone else sees the peers
+    that carry a thread they can read, and no Configure."""
+    from . import threads as TH
+    if not table(v.c, "federation_peerings"):
+        return []
+    found = {r["peer_install"]: dict(r) for r in v.c.execute(
+        "SELECT * FROM federation_peerings WHERE status<>'revoked' ORDER BY peer_install LIMIT ?", (SCAN_MAX,))}
+    if v.who.role != "owner":
+        reader = TH.viewer(v.auth, v.who)
+        carried = set()
+        for t in v.c.execute("SELECT thread_id, home_install FROM federation_threads ORDER BY thread_id LIMIT ?",
+                             (SCAN_MAX,)):
+            if not TH.readable(v.c, reader, t["thread_id"]):
+                continue
+            carried.add(t["home_install"])
+            carried.update(m["install"] for m in v.c.execute(
+                "SELECT install FROM federation_members WHERE thread_id=? AND status='active'", (t["thread_id"],)))
+        found = {install: p for install, p in found.items() if install in carried}
+    out = []
+    for install, p in sorted(found.items()):
+        status = ("waiting" if p["status"] == "pending" else "paused" if p["paused_at"] else
+                  "on" if p["status"] == "active" else "error")
+        out.append(row("peer", install, p["peer_company"] or install, status, "company", "Shared threads",
+                       "#/library/connections", detail=install, can=v.who.role == "owner"))
+    return out
+
+
+SOURCES = (slack, github, mailboxes, inboxes, meetings, triggers, webhooks, postal, listening, thread_links, peers)
 
 
 def view(c, auth, who, settings):
