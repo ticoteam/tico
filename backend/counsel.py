@@ -402,7 +402,9 @@ def read(c, auth, who, files, blobs, body, found):
     if verdict["action"] == "warn":
         lines = [screening.warning_line(verdict), "", *lines]
     labels = [*(["truncated"] if cut else []), *(["held"] if verdict["action"] == "hold" else [])]
-    task = _task(c, who, f"Read document (file {file_id} v{number})", "\n".join(lines), labels=labels)
+    # Task creation also deduplicates by title, so keep its identity source-specific.
+    task = _task(c, who, f"Read document (file {file_id} v{number}; source {source['id']})",
+                 "\n".join(lines), labels=labels)
     if plan:
         _store_link(c, blobs, files, plan, task["id"], text, title)
     H.event(c, who.actor, "rules.read_requested", file_id, {"source": source["id"], "version": number,

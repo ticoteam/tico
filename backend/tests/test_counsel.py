@@ -962,7 +962,7 @@ def test_a_hostile_page_title_is_fenced_and_the_task_title_is_fixed(api, monkeyp
     monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(CONTRACT, title=hostile))
     r = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     row = task_row(api, r["task_id"])
-    assert row["title"] == f"Read document (file {r['file']['id']} v1)"
+    assert row["title"] == f"Read document (file {r['file']['id']} v1; source {r['source']['id']})"
     assert hostile not in row["title"]
     assert hostile in row["body"] and hostile not in outside_fence(row["body"])
 
@@ -1066,9 +1066,10 @@ def test_read_identity_includes_source_and_receipts_match_persisted_reads(api, m
         for receipt in (read, again):
             with api.app.state.store.read() as c:
                 persisted = c.execute("SELECT * FROM rule_reads WHERE task_id=?", (receipt["task_id"],)).fetchone()
-                task = c.execute("SELECT body, closed_at, status FROM tasks WHERE id=?", (receipt["task_id"],)).fetchone()
+                task = c.execute("SELECT title, body, closed_at, status FROM tasks WHERE id=?", (receipt["task_id"],)).fetchone()
                 source_row = c.execute("SELECT name, kind FROM rule_sources WHERE id=?", (sid,)).fetchone()
             assert receipt["source"]["id"] == persisted["source_id"] == sid
+            assert f"source {sid})" in task["title"]
             assert receipt["file"]["id"] == persisted["file_id"]
             assert receipt["file"]["version"] == persisted["version"]
             assert f"From: {source_row['name']} ({source_row['kind']})" in task["body"]
