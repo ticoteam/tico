@@ -348,6 +348,11 @@ columns:
   meetings.recorded_by: recorded_by_id
   meetings.updated: updated_at
   meetings.uploaded_by: uploaded_by_id
+  memory_tidy_cards.created: created_at
+  memory_tidy_cards.decided: decided_at
+  memory_tidy_cards.edits_json: edits
+  memory_tidy_cards.expires: expires_at
+  memory_tidy_cards.started: started_at
   messages.answered_by: answered_by_id
   messages.created: created_at
   messages.from_actor: sender_id
@@ -578,7 +583,7 @@ api_fields:
 waves:
   "1":
     rule: "M2: every *_json column drops the suffix (stored encoding unchanged)"
-    count: 176
+    count: 177
     global:
       acceptance_json: acceptance  # 1 table
       access_json: access  # 1 table
@@ -617,6 +622,7 @@ waves:
       destinations_json: destinations  # 1 table
       detail_json: detail  # 10 tables
       diff_json: diff  # 1 table
+      edits_json: edits  # 1 table
       emails_json: emails  # 1 table
       end_json: at_end  # 1 table
       entry_json: entry  # 1 table
@@ -701,12 +707,12 @@ waves:
     scoped: {}
   "2":
     rule: "M1 created/updated -> created_at/updated_at; M3 uniform bare time columns -> <verb>_at"
-    count: 255
+    count: 258
     global:
       code_expires: code_expires_at  # 1 table
-      created: created_at  # 128 tables
+      created: created_at  # 129 tables
       definition_updated: definition_updated_at  # 1 table
-      expires: expires_at  # 3 tables
+      expires: expires_at  # 4 tables
       finished: finished_at  # 12 tables
       first_seen: first_seen_at  # 1 table
       first_started: first_started_at  # 1 table
@@ -725,13 +731,13 @@ waves:
       next_try: next_try_at  # 3 tables
       refresh_expires: refresh_expires_at  # 1 table
       restart_requested: restart_requested_at  # 1 table
-      started: started_at  # 13 tables
+      started: started_at  # 14 tables
       stop_requested: stop_requested_at  # 1 table
       updated: updated_at  # 71 tables
     scoped: {}
   "2s":
     rule: "M3 per table, common words (queued, checked, deleted...) -> <verb>_at (needs review, not applied: most sites cannot be told apart from counters, statuses and flags)"
-    count: 43
+    count: 44
     global: {}
     scoped:
       archives.imported: imported_at
@@ -754,6 +760,7 @@ waves:
       file_text_state.indexed: indexed_at
       market_watches.changed: changed_at
       market_watches.checked: checked_at
+      memory_tidy_cards.decided: decided_at
       model_subscriptions.sealed: sealed_at
       perf_overloads.ended: ended_at
       pin_places.saved: saved_at

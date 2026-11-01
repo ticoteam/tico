@@ -1983,6 +1983,16 @@ CREATE TABLE webhooks (
   notified_at TEXT, notify_task TEXT, window_start TEXT, window_count INTEGER NOT NULL DEFAULT 0,
   revision INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL, updated TEXT NOT NULL, deleted_at TEXT, filter_json TEXT NOT NULL DEFAULT '{}', headers_json TEXT NOT NULL DEFAULT '[]', disabled_at TEXT, disabled_reason TEXT NOT NULL DEFAULT '', failing_since TEXT);
 CREATE TABLE worktree_waits(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, owner TEXT NOT NULL, repo TEXT NOT NULL, generation INTEGER NOT NULL, attempt_id TEXT, state TEXT NOT NULL, link_id TEXT, reason TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL, finished TEXT);
+CREATE TABLE memory_tidy_cards (
+ id TEXT PRIMARY KEY, bot TEXT NOT NULL, reviewer TEXT NOT NULL, pass_id TEXT NOT NULL UNIQUE,
+ memory_commit TEXT NOT NULL, model TEXT NOT NULL, cost_usd REAL NOT NULL,
+ diff TEXT NOT NULL, diary TEXT NOT NULL, edits_json TEXT NOT NULL,
+ parent_task_id TEXT, check_task_id TEXT, started TEXT NOT NULL, created TEXT NOT NULL,
+ expires TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', reason TEXT NOT NULL DEFAULT '',
+ decided TEXT, decided_by TEXT);
+CREATE UNIQUE INDEX memory_tidy_cards_one_open ON memory_tidy_cards(bot) WHERE status='open';
+CREATE INDEX memory_tidy_cards_reviewer ON memory_tidy_cards(reviewer,status,expires);
+CREATE INDEX memory_tidy_cards_started ON memory_tidy_cards(bot,started);
 CREATE INDEX messages_to_delivered ON messages(to_actor, delivered_at);
 CREATE INDEX messages_conversation ON messages(conversation_id, created);
 CREATE INDEX events_ts ON events(ts);
