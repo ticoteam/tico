@@ -415,6 +415,13 @@ def test_channels_ideas_and_cohorts_name_segments_and_economics_splits_by_one(ap
     assert [c["segment_id"] for c in get(api, f"growth/cohorts?segment={pms['id']}")["cohorts"]] == [pms["id"]]
     one = get(api, f"growth/economics?segment={homes['id']}")
     assert one["segment"] == homes["id"] and one["rows"][0]["cac"] == 40.0 and one["total"]["new_customers"] == 50
+    # A segment's own channels without its numbers, and Unknown, stay on its table, blank.
+    add_channel(api, slug="referrals", name="Referrals", segments=[homes["id"]])
+    add_channel(api, slug="flyers", name="Flyers")                                     # not this segment's
+    one = get(api, f"growth/economics?segment={homes['id']}")
+    assert [r["channel"] for r in one["rows"]] == ["google-search", "referrals", "unknown"]
+    assert one["rows"][1]["new_customers"] is None and one["rows"][2]["cac"] is None
+    assert one["total"]["new_customers"] == 50
     every = get(api, "growth/economics")
     assert [r["channel"] for r in every["rows"]] == ["google-search"]
     assert every["rows"][0]["spend"] == 3000 and every["rows"][0]["new_customers"] == 60 and every["rows"][0]["cac"] == 50.0

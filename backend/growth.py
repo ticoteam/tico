@@ -367,8 +367,9 @@ def idea(c, auth, who, task_id):
 
 def _cohort_view(row, slugs):
     return {"id": row["id"], "channel": slugs.get(row["channel_id"]) if row["channel_id"] else None,
-            "segment_id": row.get("segment_id"), "month": row["month"], **{k: row[k] for k in ("spend", "bot_cost", "new_customers", "kept_d30", "kept_d90",
-                                                          "kept_d180", "revenue_month", "margin_pct", "quality")},
+            "segment_id": row.get("segment_id"), "month": row["month"],
+            **{k: row[k] for k in ("spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "kept_d180",
+                                   "revenue_month", "margin_pct", "quality")},
             "sources": json.loads(row["sources_json"] or "{}"), "updated_by": row["updated_by"],
             "updated_at": row["updated_at"]}
 
@@ -494,10 +495,19 @@ def economics(c, month=None, hidden=(), segment=None):
             cohort = group[0]
         rows.append({"channel": slug or UNKNOWN, "name": ch["name"] if ch else "Unknown",
                      "track": ch["track"] if ch else None, **economics_row(cohort, conf)})
-    if not rows:
+    blank = {k: None for k in ("spend", "bot_cost", "new_customers", "cac", "kept_d30", "kept_d90", "kept_d180",
+                               "expected_months", "ltv", "ltv_cac", "payback_months", "quality")}
+    if seg:
+        # One segment's view keeps its own channels and Unknown, each blank until it has numbers for the month.
+        linked = {r[0] for r in c.execute("SELECT channel_id FROM growth_channel_segments WHERE segment_row_id=?",
+                                          (seg["id"],))}
+        shown = {r["channel"] for r in rows}
+        rows += [{"channel": ch["slug"], "name": ch["name"], "track": ch["track"], **blank, "sources": {}}
+                 for ch in by_slug.values() if ch["id"] in linked and not ch.get("retired_at") and ch["slug"] not in shown]
+        if UNKNOWN not in shown:
+            rows.append({"channel": UNKNOWN, "name": "Unknown", "track": None, **blank, "sources": {}})
+    elif not rows:
         # A month with no numbers yet still lists every active channel and Unknown, each blank, for the first entry.
-        blank = {k: None for k in ("spend", "bot_cost", "new_customers", "cac", "kept_d30", "kept_d90", "kept_d180",
-                                   "expected_months", "ltv", "ltv_cac", "payback_months", "quality")}
         rows = [{"channel": ch["slug"], "name": ch["name"], "track": ch["track"], **blank, "sources": {}}
                 for ch in by_slug.values() if not ch.get("retired_at")]
         rows.append({"channel": UNKNOWN, "name": "Unknown", "track": None, **blank, "sources": {}})
