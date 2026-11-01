@@ -1,0 +1,150 @@
+"""Nightly memory tidy admission and durable ledger. No model calls or repository writes.
+
+Filing is atomic with the switch, membership, spend and model checks. Runtime protection
+must be installed before a child is queued. Result checking/card delivery has its own
+trusted handoff; an unfinished child is withdrawn at 05:00 Pacific even with the switch off.
+"""
+import json
+from datetime import datetime, time, timezone
+
+from . import check_models, memory_tidy_controls as controls, providers, system_routines as SR, usage_limits
+from .store import H, Problem
+from .updates import ZONE
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS memory_tidy_passes(
+ id TEXT PRIMARY KEY, night TEXT NOT NULL, bot TEXT NOT NULL, model TEXT NOT NULL,
+ started TEXT NOT NULL, deadline TEXT NOT NULL, status TEXT NOT NULL,
+ reason TEXT NOT NULL DEFAULT '', parent_task_id TEXT, check_task_id TEXT,
+ baseline TEXT NOT NULL DEFAULT '', cost_usd REAL NOT NULL DEFAULT 0,
+ UNIQUE(night,bot));
+CREATE INDEX IF NOT EXISTS memory_tidy_passes_bot ON memory_tidy_passes(bot,started);
+"""
+STOP = 50.0
+
+
+def stamp(at):
+    return at.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+
+
+def changed(c, bot, since):
+    # Only pushed memory/ counts. A knowledge-only change does not buy a model call.
+    excluded = {r[0] for r in c.execute(
+        "SELECT t.id FROM turns t JOIN memory_tidy_passes p "
+        "ON t.task_id=p.parent_task_id OR t.task_id=p.check_task_id WHERE p.bot=?", (bot,))}
+    for row in c.execute("SELECT subject,files_json,attempt_id FROM bot_memory_updates "
+                         "WHERE bot=? AND shared=1 AND committed>?", (bot, since)):
+        if row['subject'].startswith('Dreamed ') or row['attempt_id'] in excluded:
+            continue
+        if any(p.startswith('memory/') for p in json.loads(row['files_json'])):
+            return True
+    return False
+
+
+def refresh_costs(c):
+    # Usage has already been priced from providers.PRICES. Never filter subscription
+    # segments or replace an existing estimate with zero cash billing.
+    from .usage_records import RUNS
+    for p in c.execute("SELECT id,check_task_id,cost_usd FROM memory_tidy_passes WHERE check_task_id IS NOT NULL").fetchall():
+        rows = c.execute("SELECT est_cost_usd,model,input_tokens,cached_tokens,output_tokens FROM " + RUNS +
+                         " u WHERE task_id=?", (p['check_task_id'],)).fetchall()
+        total = 0.0
+        for r in rows:
+            estimate = providers.estimate_cost(r['model'], r['input_tokens'], r['cached_tokens'], r['output_tokens'])
+            total += max(float(r['est_cost_usd'] or 0), float(estimate or 0))
+        c.execute("UPDATE memory_tidy_passes SET cost_usd=max(cost_usd,?) WHERE id=?", (total, p['id']))
+    return c.execute("SELECT coalesce(sum(cost_usd),0) FROM memory_tidy_passes").fetchone()[0]
+
+
+def log(c, bot, reason):
+    run = SR.Run(controls.KEY)
+    run.did(bot + ': ' + reason)
+    SR.save(c, run)
+
+
+def report_stop(c, total):
+    # One durable report, not a new Product turn on every scheduler tick.
+    key = 'memory_tidy:spend_stop_report'
+    if c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (key,)).fetchone():
+        return
+    report = H.task_create(c, H.KEEPER, 'Nightly memory tidy: pilot spend stop',
+        f'Pilot estimated usage has reached ${total:.2f}, including subscription usage. '
+        'No further passes may start. This is a stop report, not approval for more spend.',
+        'bot:product-lead', private=True, lint=False, deduplicate=False)
+    c.execute("INSERT INTO registry_metadata VALUES(?,?)", (key, json.dumps({'task': report['id'], 'total': total})))
+
+
+def close_pass(c, row, reason):
+    # Closing the last child wakes an open parent even with quiet=True. Retire
+    # the container first so deadline cancellation never starts an ordinary turn.
+    for key in ('parent_task_id', 'check_task_id'):
+        if row[key]:
+            H.task_close(c, H.KEEPER, row[key], note=reason, quiet=True)
+    c.execute("UPDATE memory_tidy_passes SET status='skipped',reason=? WHERE id=?", (reason, row['id']))
+    log(c, row['bot'], reason)
+
+
+def sweep(c, at):
+    for row in c.execute("SELECT * FROM memory_tidy_passes WHERE status='filed' AND deadline<=?", (stamp(at),)).fetchall():
+        close_pass(c, row, 'skipped: not finished')
+
+
+def admit(c, settings, at):
+    """One nightly admission transaction; all skips precede task creation/model dispatch."""
+    sweep(c, at)
+    if not SR.config_of(c, controls.KEY)['on']:
+        return []
+    local = at.astimezone(ZONE)
+    night = local.date().isoformat()
+    deadline = datetime.combine(local.date(), time(5), ZONE)
+    total = refresh_costs(c)
+    stopped = total >= STOP
+    if stopped:
+        report_stop(c, total)
+    rows = []
+    for entry in controls.pilots(c):
+        bot, model = entry['bot'], entry['model']
+        if c.execute("SELECT 1 FROM memory_tidy_passes WHERE night=? AND bot=?", (night, bot)).fetchone():
+            continue
+        prior = c.execute("SELECT baseline FROM memory_tidy_passes WHERE bot=? AND status IN ('kept','discarded') "
+                           "ORDER BY started DESC LIMIT 1", (bot,)).fetchone()
+        since = prior['baseline'] if prior else ''
+        reason = ('skipped: pilot spend stop' if stopped else
+                  'skipped: no change' if not changed(c, bot, since) else
+                  'skipped: model floor' if 'haiku' in model.lower() else
+                  'skipped: spend limit' if usage_limits.blocked(c, bot, at) else
+                  'skipped: not finished' if at >= deadline else '')
+        if not reason and controls.eligible(c, settings, bot) is None:
+            reason = 'skipped: model unavailable'
+        if not reason:
+            # No approximate substitute for pass-only runtime protection.
+            if not hasattr(check_models, 'file_pass'):
+                raise Problem('conflict', controls.UNAVAILABLE, 409)
+            try:
+                check_models.choose(c, settings, bot, model, 'check', memory_pass=True)
+            except check_models.CheckModelError:
+                reason = 'skipped: model unavailable'
+        ident = H.new_id()
+        c.execute("INSERT INTO memory_tidy_passes(id,night,bot,model,started,deadline,status,reason,baseline) "
+                  "VALUES(?,?,?,?,?,?,?,?,?)", (ident, night, bot, model, stamp(at), stamp(deadline),
+                                               'skipped' if reason else 'filed', reason, stamp(at)))
+        if reason:
+            log(c, bot, reason)
+        else:
+            parent = H.task_create(c, H.KEEPER, 'Nightly memory tidy: ' + night,
+                'Private result container. Code checks the child attachment and files the reviewer card; '
+                'no ordinary bot turn is needed.', 'bot:' + bot, private=True, quiet_notice=True,
+                lint=False, deduplicate=False)
+            child = H.task_create(c, H.KEEPER, 'Nightly memory tidy pass: ' + night,
+                'Read only the pushed memory/ and knowledge/ checkout: working rules, log entries added '
+                'since ' + (since or 'the first pass') + ', and cited original entries. No transcripts or '
+                'evidence dumps. Return numbered edits as a JSON attachment using the Nightly memory tidy '
+                'contract. Write no repository files. Do not mark this child Done or Declined: code reads '
+                'the attachment, runs checks, files the card, then closes it. Deadline 05:00 Pacific.',
+                'bot:' + bot, parent_id=parent['id'], private=True, lint=False, deduplicate=False)
+            check_models.file_pass(c, settings, child['id'], model)
+            c.execute("UPDATE memory_tidy_passes SET parent_task_id=?,check_task_id=? WHERE id=?",
+                      (parent['id'], child['id'], ident))
+            log(c, bot, 'filed: ' + model)
+        rows.append(ident)
+    return rows
