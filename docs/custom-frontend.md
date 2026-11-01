@@ -22,7 +22,7 @@ In ten minutes you can have the example talking to your server:
    on a laptop; drop it from a production server once the frontend is live.
 2. In `examples/custom-frontend/config.js`, put your server's address: `window.TICO_URL = "https://tico.example.com";`
 3. In that directory run `python3 -m http.server 5173` and open <http://localhost:5173>. Sign in with your work
-   account. You see the team chart, chat with a bot, tasks and what needs you.
+   account. You see the team chart, a DM with a bot, tasks and what needs you.
 
 The rest of this page is what the example does, and what you decide when you build your own.
 
@@ -200,13 +200,13 @@ routes. Every `POST` also needs an `Idempotency-Key` header. Answers below are t
 | Groups | `GET /api/v2/groups`; `POST /api/v2/groups` `{"name", "parent", "add": {"people": [], "bots": []}}`; `PATCH /api/v2/groups/{id}` `{"name", "parent", "add", "remove"}`; `DELETE /api/v2/groups/{id}` | `[{"id", "name", "parent", "people": ["cara"], "bots": ["seo"], "order"}]`; a write answers with the group. Owners and admins write; everyone reads (the bots they may see). A teammate is in one group: adding it to another takes it out of the first. `"parent": ""` moves a group to the top; a delete moves what is in it up to its parent. |
 | Bots and status | `GET /api/v2/bots` | `[{"slug", "display_name", "state", "online": true, "queued": 0, "status": {"state", "focus"}, "owners": [...], "onboarding_state": "", "access": {"see": true, "read": true, "write": true}}]`. `state` is `active`, `paused`...; `onboarding_state` is `needs_setup` for a starter bot that Finish setup created and that has not yet been set up (it does nothing on its own until then), `onboarded` once it has, and empty for every other bot (draw a "Needs setup" mark on the first); `online` says whether its computer is connected. Only the bots the caller can see are listed, each with the caller's own `access`; a bot they may see but not read has no `status`, `online` or `queued`. `?can=read` or `?can=write` keeps the bots they hold that level on. Archived bots are left out (add `?include_archived=1` for an admin view that needs them). |
 | One bot | `GET /api/v2/bots/{bot}` | `{"slug", "display_name", "description", "state", "reports_to", "reports_to_name", "operator", "operator_name", "team", "owners": [...], "onboarding_state", "template", "template_version", "access": {"see", "read", "write"}}` for anyone who can see it (`template` and `template_version` are set for a bot built from a template; the version is the release whose templates it came from); for anyone who can also read it: `"online"`, `"queued"`, `"status": {"state", "focus"}`, `"assignment"` and `"goals"` (the text set on its page). `404` for a bot the caller cannot see. This replaces the web app's own `GET /api/employees`, which is internal: build on this route and `GET /api/v2/bots`. |
-| Mark a starter bot as set up | `POST /api/v2/bots/{bot}/onboarded` `{}` | `{"bot", "onboarding_state": "onboarded", "changed": true}`. The bot's own call (`hub bot setup-done`, MCP `hub_bot_setup_done`) once its setup is done, or its manager's; repeating it answers `"changed": false`. The bot stops being parked: its routines may run and its work is claimed. `409 bot_limit` for a human's bot when they already hold their limit of active bots (a parked bot does not count until now). To start a parked bot's setup, send it a message as the human: `POST /api/v2/chat/{bot}` `{"text": "Let's set you up."}`; while it is `needs_setup` only a human's chat message wakes it. A message from someone who manages the bot also switches its first routine on. |
+| Mark a starter bot as set up | `POST /api/v2/bots/{bot}/onboarded` `{}` | `{"bot", "onboarding_state": "onboarded", "changed": true}`. The bot's own call (`hub bot setup-done`, MCP `hub_bot_setup_done`) once its setup is done, or its manager's; repeating it answers `"changed": false`. The bot stops being parked: its routines may run and its work is claimed. `409 bot_limit` for a human's bot when they already hold their limit of active bots (a parked bot does not count until now). To start a parked bot's setup, send it a message as the human: `POST /api/v2/chat/{bot}` `{"text": "Let's set you up."}`; while it is `needs_setup` only a human's message wakes it. A message from someone who manages the bot also switches its first routine on. |
 | A bot's routines | `GET /api/v2/bots/{bot}/routines` | `{"routines": [{"id", "bot", "key", "title", "cron", "on", "kind": "cron"\|"event", "timezone", "enabled", "active", "text", "last_fired", "next_due", "deleted_at"}]}`. Needs Read on the bot (`403 forbidden` otherwise, `404` if the caller cannot see it); `?include_deleted=true` adds removed ones. |
 | Who can use a bot | `GET /api/v2/bots/{bot}/access` / `PUT` | `{"bot", "see": {"everyone": true, "people": [], "teams": [], "bots": []}, "read": {...}, "write": {...}, "revision", "you": {"see", "read", "write"}, "teams": [{"id", "name"}]}`. For the owner, bot administrators and the humans the bot reports up to; anyone else gets `403`. `PUT` takes `see`, `read`, `write` (each `{"everyone": true}` or lists of `people` ids, `teams` and `bots` slugs) and the `revision` you read; `409 version_conflict` if it moved. See [permissions.md](permissions.md). |
-| My chats | `GET /api/v2/conversations?chat_with=ops` | `{"conversations": [{"id", "participants", "last_message_at"}]}`: my open chat with that bot (none yet is an empty list). |
+| My DMs | `GET /api/v2/conversations?chat_with=ops` | `{"conversations": [{"id", "participants", "last_message_at"}]}`: my open DM with that bot (none yet is an empty list). |
 | Messages | `GET /api/v2/conversations/{id}/messages` | `{"messages": [{"id", "from_actor": "human:ana", "from_name": "Ana", "to_actor": "bot:ops", "to_name": "Ops", "body", "created", "refs", "run": {"job_id", "attempt_id", "state": "started_run"\|"added_to_run"}}], "actors": {...}, "has_more", "next_before"}`. Oldest first, up to 200; `?before=<next_before>` pages back. `run` says which run took a message and is absent until one has; a bot's reply carries `run` and `answers` too ([below](#which-run-took-a-message)). |
-| Send to a bot | `POST /api/v2/chat/ops` `{"text": "Hello"}` | `{"conversation": {"id"}, "message": {"id", "body"}}`. Opens the chat if needed; the reply arrives [live](#live-events). |
-| Send in a chat | `POST /api/v2/conversations/{id}/messages` `{"text": "Again"}` | `{"message": {...}}` |
+| Send to a bot | `POST /api/v2/chat/ops` `{"text": "Hello"}` | `{"conversation": {"id"}, "message": {"id", "body"}}`. Opens the DM if needed; the reply arrives [live](#live-events). |
+| Send in a thread | `POST /api/v2/conversations/{id}/messages` `{"text": "Again"}` | `{"message": {...}}` |
 | Tasks | `GET /api/v2/tasks?status=open,doing&owner=human:ana&limit=100` | `{"tasks": [{"id", "title", "body", "owner", "owner_name", "requester", "requester_name", "status", "due", "version", "labels", "number", "step_rank"}], "actors": {...}, "next_offset": null}`. Statuses: `open doing waiting review ready done declined`. `?offset=` pages. `?type=` and `?step=` (ids or names) and `?number=` filter, and `?sort=step` lists a type's board in order ([tasks.md](tasks.md)). To poll, keep the largest `updated` you have seen and ask `?updated_since=<it, ISO 8601 with a timezone>`: only tasks changed after it come back, closed ones included. Closing, reopening, commenting, a question asked or answered on it, a link or an attachment added or removed, a linked pull request's state and any change to its fields all change `updated`. `?brief=true` leaves out each task's `body` and `acceptance_criteria`; read one task for them. |
 | One task | `GET /api/v2/tasks/{id}` | `{"task": {...}, "events": [...], "comments": [...], "children": [...]}` |
 | Create task | `POST /api/v2/tasks` `{"title": "Draft the launch plan", "body": "Two pages.", "owner": "bot:ops"}` | `{"task": {...}}`. Titles start with a verb (`422 lint` otherwise), except on a custom `type`, whose tasks are tickets ([tasks.md](tasks.md)). `owner` is `bot:<slug>` or `human:<id>`. `POST /api/v2/tasks/dry-run` runs the checks without writing. |
@@ -218,7 +218,7 @@ routes. Every `POST` also needs an `Idempotency-Key` header. Answers below are t
 | Register a tool | `POST /api/v2/bots/{bot}/tools` `{"service": "posthog", "identity": "PostHog project 340585 (US)", "can": ["read"], "scope": {"project": "340585"}, "env": "POSTHOG_KEY", "note": "funnels only"}` | `{"tool": {..., "status": "pending"}, "task_id", "yaml", "credentials"}`. For the bot's managers (the owner, a bot administrator who owns it, or someone above it on the team chart). The server holds no bot repository, so it validates the entry against the `bot.yaml` schema, keeps it as a pending request and opens a task for BotOps with the exact `access:` entry (external profiles receive their own configuration task and report their tools through `POST /api/v2/agents/heartbeat`); the tool shows as `pending` until the bot's computer reports it, then `ready` or `problem`. `env` is a variable's name: a value, or anything that looks like a key or a token, is refused (`422 secret`), and the owner installs the credential on the bot's computer ([install.md](install.md), [creating-bots.md](creating-bots.md#6-access-and-credentials)). `409 botops` while BotOps is not running; `409 duplicate` for a tool already there or requested. |
 | Remove a tool | `DELETE /api/v2/bots/{bot}/tools/{id}` | `{"removal": true, "task_id"}`: a BotOps task to take a declared tool out of `bot.yaml` (the id is from the list; `model` and `repo` cannot be removed). A `pending-…` id withdraws a request instead: `{"cancelled": true}`. `POST /api/v2/bots/{bot}/tools/{id}/delete` does the same for clients that only send GET and POST (the `hub` CLI and MCP tools use it). |
 | Files | `GET /api/v2/bots/{bot}/files?limit=3&cursor=...` | `{"bot", "files": [{"id", "title", "kind", "locator", "scope", "version", "state", "synced", "open": {"type": "tico"\|"external", "url"}, "note", "task_title", "working", "github_url", "actor", "actor_name", "last_activity_at"}], "total", "next_cursor", "has_more", "can_manage"}`. Newest activity first; only what the caller may see, the total included. A stored file's `open.url` is a Tico route that needs the bearer; an `external` one opens at its provider. `PATCH /api/v2/files/{id}` with `{"promote": true}` or `{"archived": true}` (owner and bot administrators). See [files.md](files.md). |
-| Assistant | `GET /api/v2/assistant` | `{"available", "name", "can_turn_on", "room_id", "messages": [...], "execution", "actions": {...}, "pending": [...]}`: the caller's own private Assistant chat ([assistant.md](assistant.md)). `POST /api/v2/assistant/messages` `{"text"}` answers a lookup at once (`{"fast": true, "reply": {...}}`) or starts a bot run: poll `GET /api/v2/assistant` while `execution` is set (show "thinking"). A message with `refs.action` is a Confirm / Cancel card: `POST /api/v2/assistant/actions/{id}/confirm` or `/cancel` (the human's own session only). `POST /api/v2/assistant/turn-on` (owner) turns it on when `available` is false. Links in a reply are `[title](#/task/<id>)`-style in-app routes or `https:` links: map the `#/` ones to your own routes. |
+| Assistant | `GET /api/v2/assistant` | `{"available", "name", "can_turn_on", "room_id", "messages": [...], "execution", "actions": {...}, "pending": [...]}`: the caller's own private Assistant DM ([assistant.md](assistant.md)). `POST /api/v2/assistant/messages` `{"text"}` answers a lookup at once (`{"fast": true, "reply": {...}}`) or starts a bot run: poll `GET /api/v2/assistant` while `execution` is set (show "thinking"). A message with `refs.action` is a Confirm / Cancel card: `POST /api/v2/assistant/actions/{id}/confirm` or `/cancel` (the human's own session only). `POST /api/v2/assistant/turn-on` (owner) turns it on when `available` is false. Links in a reply are `[title](#/task/<id>)`-style in-app routes or `https:` links: map the `#/` ones to your own routes. |
 | Needs you | `GET /api/v2/needs-you` | `{"actor", "items": [{"id", "kind": "task"\|"question"\|"declined"\|"approval"\|"ask", "title", "first_line", "requester", ...}]}`. An `ask` is a question a bot asked outside any task: its `id` is the message, answered with `POST /api/v2/messages/{id}/answer` `{"text"}`. A `send` approval also has `attachment_files`: for each of its payload's `attachments`, `{"file_id", "version"}` of a stored version with the approved sha256 and size that you may open (`/api/v2/files/{file_id}?v={version}`), or `null`. `?count=true` gives `{"actor", "count"}` for a badge. `?limit=50` sends a page of the same list, in the same order, with `count` (the whole list), `next` (pass it as `?cursor=` for the next page; `null` on the last) and `bots` (each bot's count over the whole list); a cursor from an older `version` starts again from the top, with `"restart": true`. Without `limit` or `cursor`, the whole list. |
 | Answer a question | `POST /api/v2/messages/{message_id}/answer` `{"text": "Yes"}` | The question's `ask.id` on a `question` item is that message id. `{"text": "", "unknown": true}` says you do not know. |
 | Decide an approval | `POST /api/v2/approvals/{id}` `{"decision": "approved", "note": ""}` | `decision` is `approved` or `declined`. The item's `id` is the approval id. |
@@ -244,12 +244,12 @@ the id. An id with no name (the owner, a removed human) has no `_name` field: sh
 What a human may see or do is decided by the server, not the frontend: a bot they may not see is missing from the
 list and answers `404`, a bot they may see but not read or write to answers `403 forbidden` with what is missing, a task
 they may not read is left out of lists and refused by id, and an edit they may not make is a `403`. Use the `access` on each
-bot to decide what to show (a chat box needs `write`, its activity needs `read`), and build for those answers. A human who
-may write to a bot but not read it still sees their own conversations with it and the tasks they requested or own.
+bot to decide what to show (a message box needs `write`, its activity needs `read`), and build for those answers. A human who
+may write to a bot but not read it still sees their own threads with it and the tasks they requested or own.
 
 ## Live events
 
-One stream carries everything a page shows changing: tasks, the messages and runs of a conversation, bots' status
+One stream carries everything a page shows changing: tasks, the messages and runs of a thread, bots' status
 lines, and the person's own Needs you. Open one per page, not one per thing, and nothing needs polling.
 
 ```
@@ -280,13 +280,13 @@ data: {"seq": 4121, "attempt_id": "a1", "conversation_id": "c1", "bot": "ops", "
 | `bots` | `bot` and `status`, as `GET /api/v2/status` lists it |
 | `needs` | your own Needs-you `count` and `items`, as `GET /api/v2/needs-you`, whenever anything on it may have moved |
 
-- **Only what you may read is sent.** A private task, a conversation you are not in, or a bot whose activity you may
+- **Only what you may read is sent.** A private task, a thread you are not in, or a bot whose activity you may
   not read never shows up, not even as a number. Bots cannot open the stream (`403`).
 - **Narrow it.** `topics` defaults to all five. `conversation=<id>` (up to 20, comma-separated) limits messages and runs to
-  those conversations; `bot=<slug>` limits runs and bots; `task=<id>` and `party=<actor>` limit tasks to those tasks
-  and to the ones that actor owns or asked for (a bot's or person's page). A chat page opens
+  those threads; `bot=<slug>` limits runs and bots; `task=<id>` and `party=<actor>` limit tasks to those tasks
+  and to the ones that actor owns or asked for (a bot's or person's page). A thread page opens
   `topics=messages,runs&conversation=<id>`.
-- **A live reply.** On a `messages` or `runs` event for the open chat, read `GET /api/v2/conversations/{id}/snapshot`
+- **A live reply.** On a `messages` or `runs` event for the open thread, read `GET /api/v2/conversations/{id}/snapshot`
   again (one read at a time; fold a burst into one). Its `execution.text` is **the reply so far** while
   `execution.state` is `leased` or `running`; when the run completes, the final message is in `messages`. `execution.parts`
   is the same run as a list of `{"kind", "text", "at"}`: `reply` (what the bot wrote), `progress` (what it wrote just
@@ -323,7 +323,7 @@ GET /api/v2/tasks?lane=company&changed_after=<cursor>
   never read is never named.
 - `reset: true` means the cursor cannot be caught up (older than the day the log keeps, from before your access changed,
   more changes than a page, or one change to more than 100 tasks): read in full. Treat the cursor as opaque.
-- A task's open `ask` can lag: a change to who may read its conversation alone does not move the cursor or the ETag,
+- A task's open `ask` can lag: a change to who may read its thread alone does not move the cursor or the ETag,
   so it shows on the task's next change or full read.
 - A full read of `/api/v2/tasks` or `/api/v2/tasks/labels` has an `ETag`. Send it back as
   `If-None-Match` and an unchanged answer is `304` with no body. For `/api/v2/tasks` "unchanged" means the rows it
@@ -349,7 +349,7 @@ added"). The messages say so themselves, on the routes that return them (`/messa
   has `added_to_run`. Either way `job_id` and `attempt_id` name that run, so `m2` above belongs to the run of `m1`.
 - A message no run has taken yet (it is still queued) has no `run`. A reply written before this existed has `run` only when it was answering a run, and no `answers`.
 - The reply the run wrote carries `run` (the same `job_id` and `attempt_id`, with a summary of what it did) and `answers`,
-  the ids of every message in that conversation the run handled: the one that started it first, then the ones folded in.
+  the ids of every message in that thread the run handled: the one that started it first, then the ones folded in.
   Use it to show one reply under both messages, and to tell "answered" from "waiting for the next run".
 - These are stored with the run, so they are the same after a restart or a reconnect. If a run fails and its
   messages are queued again, they get a new `run` when the next run takes them.
@@ -399,7 +399,7 @@ Tico applies **no request-rate limit** to the API: it will answer as fast as it 
   `detail` says which.
 - Live events: an open `/api/v2/events` costs nothing while nothing changes, and one read per burst of changes; keep
   to one per page.
-- Be a good client: follow `/api/v2/events` instead of polling a chat, a task list or a badge, and [catch a list
+- Be a good client: follow `/api/v2/events` instead of polling a thread, a task list or a badge, and [catch a list
   up](#catching-a-task-list-up) rather than reading it again; do not refetch `/api/v2/org` or `/api/v2/bots` on every render (cache them for a
   minute). Answers are marked `no-store`, so cache in your own code.
 - If you expose your frontend to many humans, set a limit at the reverse proxy (Caddy, Cloudflare) in front of Tico.
@@ -442,7 +442,7 @@ are described loosely on purpose (`additionalProperties` is open), so treat the 
 
 [`examples/custom-frontend/`](../examples/custom-frontend/) is `index.html`, `app.js`, `style.css` and `config.js`: about
 280 lines of script, no build, no dependencies, and it is what this page describes. It signs in with the flow above, then shows
-the team chart (humans and bots nested by `reports_to`), a chat with any bot with the reply streaming in through
+the team chart (humans and bots nested by `reports_to`), a DM with any bot with the reply streaming in through
 `/api/v2/events`, the open tasks, and Needs you. It sets no cookies and puts everything on the page as text.
 
 `ui/tests/custom-frontend.cjs` runs it in a real browser against a real server on another origin, once with a local

@@ -3,20 +3,20 @@
 > **Beta**: chat goals work today and may still change. See [Beta features](support.md#beta-features). Steering is no
 > longer Beta: a message you send while the bot is answering goes into that turn ([harnesses](harnesses.md)).
 
-Pin a goal in a bot conversation to let its native harness keep working toward an outcome.
+Pin a goal in a bot thread to let its native harness keep working toward an outcome.
 Claude Code and Codex support chat goals when the assigned computer reports that capability.
 Older computers and other harnesses report `supported: false`. Goals belong to their own
-conversation, including a branch; the Assistant is outside this first version. A bot can also
+thread, including a branch; the Assistant is outside this first version. A bot can also
 work each of its tasks as a goal (`task_goal: on`, see [Sessions](sessions.md#task-goals)).
 
 Use `/goal <objective>` to set a goal, or `/goal edit <objective>`, `/goal pause`,
 `/goal resume` and `/goal clear`. An objective is 1–4,000 characters. Pause retains its text;
-resume starts it again. Anyone who can chat in the conversation may change its goal, except in a
-task's own room, where only someone on the task or a mover may ([Tasks](tasks.md)). Shared
-room members see the same goal, and personal rooms retain their usual privacy.
+resume starts it again. Anyone who can message in the thread may change its goal, except in a
+task's own thread, where only someone on the task or a mover may ([Tasks](tasks.md)). Shared
+thread members see the same goal, and DMs retain their usual privacy.
 
 The harness reports Working, Paused, Met or Stopped, with its reason. Met and Stopped add a
-line to the conversation. They create no Updates item or Slack message. Native continuation
+line to the thread. They create no Updates item or Slack message. Native continuation
 rules, the bot's maximum run duration and Tico's existing spend limits still apply. A running
 turn finishes under the existing spend-limit policy; bots over their limit take no new job.
 
@@ -37,10 +37,10 @@ supports them. Unknown commands remain ordinary messages. Bot skills are not inc
 A task's comment can set the goal of the task's session as well. **Set as goal** in the task's composer,
 `hub task comment <task-id> "<objective>" --goal`, `hub_task_comment` with `delivery: "goal"`, and
 `POST /v2/tasks/{id}/comments` with `"delivery": "goal"` all set it the way `/goal <objective>` does in that
-conversation. The comment is kept on the task quietly, and the goal line wakes the bot. The same access and harness
+thread. The comment is kept on the task quietly, and the goal line wakes the bot. The same access and harness
 checks apply: 403 without write access, 403 for someone not on the task (a mover may set it), `goal_unsupported` (409)
-for a harness that cannot take goals. A task still in a chat room (one filed into a chat before task rooms) has no goal
-of its own, so a goal comment on it is a 409 and the chat's goal stays as it is. A goal comment
+for a harness that cannot take goals. A task still in a thread (one filed into a thread before task threads) has no goal
+of its own, so a goal comment on it is a 409 and the thread's goal stays as it is. A goal comment
 takes no files and cannot be public (422), and its response carries the `goal` it set. See [Tasks](tasks.md).
 
 The CLI and MCP use the same API and access checks:
@@ -65,9 +65,9 @@ return HTTP 409 with `goal_unsupported`. Goal fields are `id`, `conversation_id`
 `objective`, `status` (`active`, `paused`, `met`, `stopped`, `cleared`), `note`, `set_by`,
 `set_at`, `updated_at`, `ended_at`.
 
-The conversation snapshot includes `goal`. Its existing watch stream also sends an SSE
+The thread snapshot includes `goal`. Its existing watch stream also sends an SSE
 `goal` event whose data is `{type: "goal", goal}`. Bot lists expose `goal_active` only for
-active goals in conversations the viewer can read. The message endpoints accept
+active goals in threads the viewer can read. The message endpoints accept
 `command: true`; the runner bypasses its normal prompt wrapper for that message.
 
 Codex uses `thread/goal/set` and `thread/goal/clear`, with native paused/active status when

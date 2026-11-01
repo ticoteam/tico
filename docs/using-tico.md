@@ -13,12 +13,12 @@ On **Tasks**, press **New task** and pick who it is for — any human or bot. On
 it through Tico's MCP. Each task shows who added it: you, another human, or a bot.
 
 **Where are the built-in bots?**
-**Assistant** and **BotOps** are in the main left rail; **Assistant** opens your private chat with it. The Strategy Bot proposes **Strategy** and is at the top of **Goals**: its routines, its last
+**Assistant** and **BotOps** are in the main left rail; **Assistant** opens your private DM with it. The Strategy Bot proposes **Strategy** and is at the top of **Goals**: its routines, its last
 run and a box to ask it to change a goal. **Docs** and **Strategy**'s Market tab have **Ask the Librarian** on the right (a button on a
 phone). All four are managed in **Settings > Bots**; they stay out of the team chart and the goal owner list.
 
 **What is on a bot's page?**
-Its name, the mark for the harness it runs on, up to three tool icons and its goal across the top, the chat below,
+Its name, the mark for the harness it runs on, up to three tool icons and its goal across the top, the Home below,
 and a rail down the right. By default the rail shows **Tasks**, **Updates**, **Files** and **Routines**, in that order.
 **Tasks** has four default tabs, each with a count:
 **Needs You** (what the bot needs from you; it opens first while it has rows), **Doing** (tasks assigned to this bot with Status Open or Doing, newest first),
@@ -49,9 +49,9 @@ Everyone opening the bot sees its saved layout. Your **Assistant** is the except
 Tabs scroll sideways when they do not fit, with no limit on the number of tabs. A hidden section is not shown outside edit mode.
 
 **How do I ask a bot a question?**
-Open the bot's page and use its **Chat** tab; the reply comes back into the same conversation.
-Work on a task happens in that task's own thread: tap the task's row in the chat to follow it or write to it.
-The chat itself gets one line when the task starts, is blocked, done, declined or stuck ([Sessions](sessions.md)).
+Open the bot's page and use its **Chat** tab; the reply comes back into the same thread.
+Work on a task happens in that task's own thread: tap the task's row in the Home to follow it or write to it.
+The Home itself gets one line when the task starts, is blocked, done, declined or stuck ([Sessions](sessions.md)).
 For anything across the team, ask your own external agent: **Connect an external agent** (the plug button beside
 your email) gives it a token and Tico's MCP ([Connect an external agent](connect-an-agent.md)).
 
@@ -81,7 +81,7 @@ Retrying does not restart that window.
 After that window expires, Tico keeps the draft, disables **Send**, and offers no **Retry** action.
 Pressing Enter or reconnecting does not send it either.
 The warning says **This message may already have sent. Check the chat before resending; edit or clear the draft to send a new message.**
-Check the chat before deciding whether to send it again.
+Check the Home before deciding whether to send it again.
 
 After the send finishes or reports an error, deliberately editing or clearing the text, or changing attachments, forgets the pending request ID.
 Tico also forgets it when the server confirms the send, including in a message box restored after switching bots and returning.
@@ -96,7 +96,7 @@ Other server refusals, including sign-in and access errors, leave delivery uncer
 Tico says **Not confirmed**, includes the server's reason, and warns **This message may already have sent.** and **Check the chat before resending.**
 This warning also appears alongside the sign-in banner.
 Your draft keeps its original request ID and first-attempt time.
-Check the chat before resending.
+Check the Home before resending.
 After signing in again or regaining access, press **Send** with the draft unchanged to reuse the same ID within the original 48-hour window.
 The expiry guard and deliberate draft changes described above still apply.
 
@@ -106,7 +106,7 @@ The slow-send line says **Still sending… uploading the file.** or gives the fi
 If Tico retries the upload, the line adds **trying again**.
 
 **How do I know my bot ran?**
-The conversation goes *Saved — queued* → *Starting* → *Working* → the reply. When the bot marks
+The thread goes *Saved — queued* → *Starting* → *Working* → the reply. When the bot marks
 a task done, the task shows under **Tasks → Done** with the bot's note.
 Every run is under **Settings → History → Runs** (the owner also sees **Changes**, the bot settings history), and
 on the bot’s **History** tab.
@@ -116,7 +116,7 @@ on the bot’s **History** tab.
 *Doing*: being worked on (*Doing · starting* until a computer picks it up). *Needs you*, or *Needs <Name>* for someone else: a
 human must act — a question, an approval, a blocked or declined item. The all-owners list groups these as **Needs a human**.
 A comment on a task answers that task's question, so the bot can ask its next question; it does not answer a different
-task in the same room. *Done*: finished, awaiting close.
+task in the same thread. *Done*: finished, awaiting close.
 
 **How do I answer a bot's question?**
 Open **Decide** from **Tasks**, or open the task's **Needs you** box. Both show the same question card.
@@ -202,7 +202,7 @@ Assistant**. Tico writes the draft with one call to your company's own model, an
 in the company can already see: your tasks that are not private and your goals; the status changes you made and the
 comments you left and the questions you answered on those tasks; the meetings you were in that are not
 private (a short part of each); and your reports' updates. It leaves out approvals, and anything involving a private
-task or a bot not everyone may read. The draft is not written in an Assistant chat, so your private chats
+task or a bot not everyone may read. The draft is not written in an Assistant DM, so your private DMs
 with the Assistant never reach it. With no model provider key on the server, there are no drafts. Choose **Edit** on your card to change
 the draft (the label then says edited); tick **These are my own words** in the editor to drop the label. Once you have posted
 words of your own that day, a daily or a week in review, the Assistant does not draft for you that day. **Friday** is
@@ -221,7 +221,7 @@ open to everyone on the team (not to external agents); a bot's are open to anyon
 
 ## Steer, queue or defer
 
-Anything you send a bot (a chat message, a task comment, a new task) reaches it one of three ways:
+Anything you send a bot (a message, a task comment, a new task) reaches it one of three ways:
 
 | Way | When the bot gets it | Wakes it |
 | --- | --- | --- |
@@ -229,7 +229,7 @@ Anything you send a bot (a chat message, a task comment, a new task) reaches it 
 | **Queue** | Right after its current turn there, or now when it is idle | Yes |
 | **Defer** | With its next turn there, at the latest after a deadline (`30m`, `4h`, `2d`, ... or `never`) | Only at the deadline |
 
-"There" is the session the item lands in: a task's own room for its comments, the chat for a chat message. A deferred
+"There" is the session the item lands in: a task's own thread for its comments, the Home for a message. A deferred
 task or message for the bot's next run of any kind (below) is tied to no session. A defer sent while the bot has a turn
 going in the same session goes in right after that turn, as a queue; a turn on another task does not count. A
 deadline wakes the bot, so only someone who may steer it can set one: anyone else's defer waits with no deadline.
@@ -242,13 +242,13 @@ hosted server asleep when idle wakes for it. Each deadline fires once, across re
 deferred to it ("Deferred since your last turn: 2 comments, 1 task") and lists the deferred comments and messages
 themselves, up to 20 a turn; the rest wait for the next turn.
 
-Defaults: plain Send is Steer for a chat message and a comment on a task a bot owns, as before (when the bot is idle
+Defaults: plain Send is Steer for a message and a comment on a task a bot owns, as before (when the bot is idle
 that is the same as Queue). A comment on a task a bot filed for a
 person is a Defer with a 24-hour deadline unless it @mentions a bot on the task (then a Queue). A deferred comment or
-task has a 24-hour deadline unless you pick one; a deferred chat message or deferred message has none. Steer does not
+task has a 24-hour deadline unless you pick one; a deferred thread message or deferred message has none. Steer does not
 apply to a new task (it has no turn yet). **Set as goal** is a separate action, apart in the send menu.
 
-The web send menu (the caret beside Send, in a bot's chat and a task's conversation) offers **Steer now**, **Queue**
+The web send menu (the caret beside Send, in a bot's Home and a task's thread) offers **Steer now**, **Queue**
 and **Defer** with its durations, then **Set as goal**. The CLI and API take the same words:
 
 ```bash
@@ -281,7 +281,7 @@ hub task create --owner content --title "Draft the weekly post" \
 body. Deferred messages (still `note` in the CLI and API) are only for other bots, never a human or the sender itself. You need Write access to
 leave one, and the normal task/contact permissions apply to deferred work. Never put a secret in either.
 
-The next run started by chat, a Routine, another task or a deadline carries waiting deferred messages and tasks.
+The next run started by a message, a Routine, another task or a deadline carries waiting deferred messages and tasks.
 For a deferred message, the API reports `waiting`, `carried` and `cancelled_at`. `carried` means a run received
 it, not that the bot completed work. A failed run makes it waiting again. A sender or a human who
 can see it can cancel a waiting note; once a live or completed run carries it, it cannot be taken
@@ -336,8 +336,8 @@ POST /api/v2/tasks                    {"owner":"bot:content","title":"Draft the 
 ```
 
 **Where do files go?**
-Files you attach to a task or a chat are stored privately by your team's Tico server and the bot downloads them
-for that conversation (up to ten files of 10 MB). A file a bot produces for you is attached to the
+Files you attach to a task or a message are stored privately by your team's Tico server and the bot downloads them
+for that thread (up to ten files of 10 MB). A file a bot produces for you is attached to the
 task the same way (`hub task attach`) and linked from its note; open it from the task or the link
 while signed in. Other files a bot publishes are listed on its page under Files ([Files](files.md)); a bot's own
 record stays in its repo's `reports/`. Meeting transcripts come from the tools that made them ([Meetings](meetings.md)).
@@ -355,7 +355,7 @@ channel history is owner-only in this view.
 A human: **Settings → People → Add manually** (an owner or admin), or sync them from the team's
 directory there; behind Cloudflare Access, also allow the address in its policy ([People](people.md)). A
 bot: **Settings > Bots > Add from template**, or ask BotOps to build it. Open the bot and press **Set up** to finish its
-first conversation. See [Creating bots](creating-bots.md) for custom Instructions and manual setup.
+first thread. See [Creating bots](creating-bots.md) for custom Instructions and manual setup.
 
 **How do I use my own branch of a bot?**
 Its owner enables **Allow branches**. Choose **Make my branch** on its page and your computer.
@@ -363,7 +363,7 @@ If all your computers already run the original or a branch of it, choose **Creat
 It starts when you add another computer in **Settings → Computers**. Without a GitHub App, the
 computer clones the original repository using your own git access; a local checkout can be reused.
 Health names the repository and clone command if that fails. You can also ask BotOps to fix it.
-The branch picker opens the original or a person's branch. New tasks and chats to the original go to your active branch.
+The branch picker opens the original or a person's branch. New tasks and messages to the original go to your active branch.
 Branches share instructions and repository lessons; `hub bot copy` creates an independent bot. See [Branches](creating-bots.md#branches).
 
 ## Tags and release checklists

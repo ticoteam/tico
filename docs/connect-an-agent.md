@@ -43,19 +43,19 @@ either `text` or `base64`, with `bytes` and `truncated`; at most 1 MiB is return
 any task they can edit with `hub_task_close`; `wake: false` closes without waking a bot. BotOps uses
 the requester's rights for that tool. `hub_bot_model` accepts a `harness` from the model's list.
 For a correction to your active BotOps request, send `hub_message_send` with `in_reply_to` set to
-the original message id, or `steer: true` in the same conversation. The message stays queued until
-the Computer delivers it into the active run; conversation status shows when the follow-up is added.
+the original message id, or `steer: true` in the same thread. The message stays queued until
+the Computer delivers it into the active run; thread status shows when the follow-up is added.
 
 The token cannot create or revoke tokens, make other credentials (a bot's agent credential, a pairing approval) or click
 Confirm cards. Those need the human signed in to Tico.
-Ask BotOps to collect Credential values through your chat card. The API pass-through retains the
+Ask BotOps to collect Credential values through your thread card. The API pass-through retains the
 human's existing Credential permissions, including storing or revealing values when authorized. A Credential administrator can import a bot's existing Credential with
 `hub_credential_import`, grant or revoke access, and delete it with `hub_credential_delete`; values never pass through the
 agent during import. Bot deletion, outside-domain invites by an owner or admin, Team rule changes by the Owner, and Tico
 updates run directly when requested.
 
-Use `hub_assistant_read` and `hub_assistant_send` for your private Assistant chat. `assistant` is also a friendly recipient
-for `hub_message_send`. These always use your own room; another human's Assistant room stays private.
+Use `hub_assistant_read` and `hub_assistant_send` for your private Assistant DM. `assistant` is also a friendly recipient
+for `hub_message_send`. These always use your own DM; another human's Assistant DM stays private.
 
 Tools that need a local repository or make a local network call are available only on a Computer: `hub_bot_copy`,
 `hub_bot_update_from_original`, `hub_bot_suggest_to_original`, `hub_skill_copy` and `hub_doc_fetch`. Run them on the Computer
@@ -139,7 +139,7 @@ runner hostname that passes only `/api/v2` needs nothing more; `/oauth/authorize
 
 ## An agent that is a bot, not you
 
-An agent that should be a bot on the team, with its own chat, credential and heartbeat, instead of acting as
+An agent that should be a bot on the team, with its own thread, credential and heartbeat, instead of acting as
 you, pairs with a code: [Hermes agents](hermes-agents.md) and [OpenClaw agents](openclaw-agents.md). Both install
 a "Tico sync" skill and one scheduled job on the agent, so it looks at its messages and tasks on its own schedule
 (`--sync 15m|1h|daily|off`). Tico never starts it.
