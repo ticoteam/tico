@@ -81,6 +81,11 @@ def rows(api, sql, args=()):
         return [dict(row) for row in c.execute(sql, args)]
 
 
+def bot_ids(api):
+    """Bot slug to bot id: a bot the sample makes has a generated id, and the tables name bots by it."""
+    return {row["slug"]: row["id"] for row in rows(api, "SELECT id,slug FROM bots")}
+
+
 # ---------------------------------------------------------------------------------------------- the file
 def test_the_sample_is_a_company_file_of_five_bots_each_with_a_goal_and_short_starter_tasks():
     draft, extra = sample_company.team()
@@ -122,21 +127,22 @@ def test_the_owner_starts_the_sample_company_and_every_bot_has_its_model_goal_an
     assert bots["builder"]["display_name"] == "Builder"
     setup = {row["bot"]: row for row in rows(api, "SELECT bot,onboarding_state,reports_to FROM bot_config")}
     # Set up by the sample's own answers: not parked, so their work is claimed once a computer runs them.
-    assert all(setup[slug]["onboarding_state"] == O.ONBOARDED for slug in ROLE_BOTS)
-    assert setup["builder"]["reports_to"] == "head-of-product"
+    ids = bot_ids(api)
+    assert all(setup[ids[slug]]["onboarding_state"] == O.ONBOARDED for slug in ROLE_BOTS)
+    assert setup[ids["builder"]]["reports_to"] == ids["head-of-product"]
     # Their first routines stay off: only the starter tasks run on day one.
     routines = rows(api, "SELECT s.bot,coalesce(sc.enabled,1) AS enabled FROM schedules s "
                          "LEFT JOIN schedule_config sc ON sc.schedule_id=s.id WHERE s.bot IN (%s)"
-                    % ",".join("?" * len(ROLE_BOTS)), tuple(ROLE_BOTS))
+                    % ",".join("?" * len(ROLE_BOTS)), tuple(ids[slug] for slug in ROLE_BOTS))
     assert routines and not any(r["enabled"] for r in routines)
     # No "Finish onboarding" reminder in Needs you for a sample bot.
     assert not rows(api, "SELECT id FROM tasks WHERE title LIKE 'Finish onboarding%' AND status NOT IN ('done','closed')")
 
     goals = {row["owner"]: row for row in rows(api, "SELECT id,owner,title FROM goals WHERE owner LIKE 'bot:%'")}
-    assert {"bot:coo", *("bot:" + slug for slug in ROLE_BOTS)} <= set(goals)
+    assert {"bot:" + ids[slug] for slug in ("coo", *ROLE_BOTS)} <= set(goals)
     tasks = rows(api, "SELECT id,owner,requester,title,body,goal_id,status FROM tasks WHERE id IN (%s)"
                  % ",".join("?" * len(record["sample"]["tasks"])), tuple(record["sample"]["tasks"]))
-    assert sorted(t["owner"] for t in tasks) == sorted(["bot:coo", *("bot:" + slug for slug in ROLE_BOTS)])
+    assert sorted(t["owner"] for t in tasks) == sorted("bot:" + ids[slug] for slug in ("coo", *ROLE_BOTS))
     for task in tasks:
         assert task["requester"] == "human:owner" and task["status"] == "open"
         assert task["goal_id"] == goals[task["owner"]]["id"]
@@ -154,7 +160,8 @@ def test_the_sample_company_is_only_for_a_new_company_and_only_the_owner_starts_
     again = start(api)
     assert again.status_code == 409, again.text
     assert again.json()["error"]["code"] == "sample_company" and "already set up" in again.json()["error"]["detail"]
-    assert len(rows(api, "SELECT id FROM tasks WHERE owner='bot:builder'")) == 1        # nothing made twice
+    builder = bot_ids(api)["builder"]
+    assert len(rows(api, "SELECT id FROM tasks WHERE owner=?", ("bot:" + builder,))) == 1        # nothing made twice
 
 
 def test_a_company_with_its_own_provider_keeps_it(environment):
@@ -175,10 +182,11 @@ def test_the_bots_start_once_a_computer_runs_them(environment):
     assert all(states[slug] == "active" for slug in ("coo", *ROLE_BOTS))
     placed = {row["bot"] for row in rows(api, "SELECT bot FROM assignments WHERE runner_id=?",
                                          (computer["runner_id"],))}
-    assert {"coo", *ROLE_BOTS} <= placed
+    ids = bot_ids(api)
+    assert {ids[slug] for slug in ("coo", *ROLE_BOTS)} <= placed
     # Each starter task woke its bot: a job waits for the computer to claim it.
     queued = {row["bot"] for row in rows(api, "SELECT bot FROM jobs WHERE state='queued'")}
-    assert {"coo", *ROLE_BOTS} <= queued
+    assert {ids[slug] for slug in ("coo", *ROLE_BOTS)} <= queued
 
 
 def test_each_role_bot_is_made_already_set_up_so_it_does_its_starter_task(environment, tmp_path):
@@ -198,7 +206,8 @@ def test_each_role_bot_is_made_already_set_up_so_it_does_its_starter_task(enviro
     projects = tmp_path / "projects"
     projects.mkdir()
     configs = {row["bot"]: json.loads(row["config_json"]) for row in rows(api, "SELECT bot,config_json FROM bot_config")}
-    request = {"bots": [{"bot": slug, "entry": {"bot": slug, "state": "active", "config": configs[slug]},
+    ids = bot_ids(api)
+    request = {"bots": [{"bot": slug, "entry": {"bot": slug, "state": "active", "config": configs[ids[slug]]},
                          "path": str(projects / ("bot-" + slug)), "action": "bootstrap"} for slug in ROLE_BOTS]}
     out = io.StringIO()
     catalog_job.main({"projects_dir": str(projects)}, Server(), io.StringIO(json.dumps(request)), out)

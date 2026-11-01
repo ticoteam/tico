@@ -22,7 +22,7 @@ def wakes(c, task_id):
 def test_a_task_nothing_will_move_wakes_its_bot_within_minutes_and_botops_takes_the_stubborn_ones(api):
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
         stuck = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:finance")
         waiting = H.task_create(c, H.human_actor("ana"), "Wait for the bank", "Reply due Monday.", "bot:finance")
         later = H.task_create(c, H.human_actor("ana"), "Next time you run", "No hurry.", "bot:finance", next_run=True)
@@ -70,7 +70,7 @@ def capped(c, task):
 
 def test_no_diagnostic_is_filed_about_a_diagnostic_or_for_a_person_and_the_stuck_task_says_why(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
         own = H.task_create(c, 'bot:finance', 'Repair the mail registry', '', 'bot:botops')
         stuck = H.task_create(c, 'human:ben', 'Check the bank balance', '', 'bot:finance')
         for task in (own, stuck):
@@ -137,7 +137,7 @@ def test_a_chat_task_gets_its_own_room_reports_once_and_a_quiet_session_is_check
     from backend.tests.test_api import headers, post
     room = post(api, "chat/finance", {"text": "Can you look at cash?"})["conversation_id"]
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
         lines = lambda: [(r[0], json.loads(r[1])) for r in c.execute(
             "SELECT body,refs_json FROM messages WHERE conversation_id=? AND from_actor=? ORDER BY created", (room, H.KEEPER))]
         task = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:finance",
@@ -444,7 +444,7 @@ def test_between_the_retry_and_the_stuck_report_no_stall_wake_and_the_report_cou
     from backend.tests.test_api import post
     room = post(api, "chat/finance", {"text": "Can you look at cash?"})["conversation_id"]
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
         task = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:finance",
                              conversation_id=room)
         c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES('r1','r','ana','h','t')")
@@ -516,7 +516,7 @@ def test_stall_checks_back_off_while_a_task_stands_unchanged_and_start_over_when
 def test_a_task_unchanged_through_three_spread_out_checks_still_goes_to_botops(api):
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
         stuck = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:finance")
         tid = stuck["id"]
         c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")

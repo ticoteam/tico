@@ -5,7 +5,7 @@
     write  send it messages, ask it, give it tasks or notes, comment on its tasks
 
 Each level names an audience: everyone, or lists of people (roster ids), groups (stored under `teams`, the
-name they had first) and bots (slugs). `bot_config.access_json` holds the three; NULL means Open
+name they had first) and bots (ids). `bot_config.access_json` holds the three; NULL means Open
 (everyone for all three), which is what every new bot starts with. Whoever may read or write can
 see, whatever the See list says. The rules that decide a caller live in `Auth.bot_access`
 (backend/auth.py); this module is the pure part: the stored shape and who an audience names.

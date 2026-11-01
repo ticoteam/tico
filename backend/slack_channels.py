@@ -197,17 +197,19 @@ def _dump(value):
 
 
 def _check_readers(c, readers):
-    unknown = [slug for slug in readers if not H.bot(c, slug)]
+    """The bot ids for `readers` (each a bot's slug or id); refuses any that is no bot."""
+    ids = [(H.resolve_bot(c, slug) or {}).get("id") for slug in readers]
+    unknown = [slug for slug, bot_id in zip(readers, ids) if not bot_id]
     if unknown:
         raise Problem("slack_reader", "No bot named " + ", ".join(unknown) + ". Readers are bots' slugs (Settings > Bots).", 422)
+    return ids
 
 
 def add(c, settings, who, ref, readers=None, post=None, note=None, digest_hours=None, name=""):
     """Add a channel, or change the one already listed: readers are added to the ones it has, `post`, `note` and
     `digest_hours` replace theirs when given. A channel that only the old file lists is stored now."""
     cid, label = parse_ref(ref, name)
-    readers = _readers(readers)
-    _check_readers(c, readers)
+    readers = _check_readers(c, _readers(readers))
     rows = listing(c, settings)
     have = _find(rows, cid, label)
     if have is None:
@@ -248,11 +250,12 @@ def remove(c, settings, who, ref, reader=""):
                       "(Settings > Tools > Slack, or `hub slack channel import`), then change it here.", 409)
     if reader:
         slug = _readers([reader])[0]
-        if slug not in have["readers"]:
+        bot_id = (H.resolve_bot(c, slug) or {}).get("id", slug)
+        if bot_id not in have["readers"]:
             return {**have, "removed": False}
-        have["readers"] = [r for r in have["readers"] if r != slug]
+        have["readers"] = [r for r in have["readers"] if r != bot_id]
         _save(c, who, {**have}, False)
-        H.event(c, who.actor, "slack.channel_reader_removed", have["key"], {"reader": slug})
+        H.event(c, who.actor, "slack.channel_reader_removed", have["key"], {"reader": bot_id})
         return {**next(r for r in listing(c, settings) if _same(have, r)), "removed": True}
     c.execute("DELETE FROM slack_channels WHERE key=?", (have["key"],))
     H.event(c, who.actor, "slack.channel_removed", have["key"], {})
@@ -321,7 +324,7 @@ def install(app, settings, store, auth):
             done = imported(c)
             return {"channels": listing(c, settings), "can_manage": auth.bot_admin(who),
                     "registry_file": {"present": bool(present), "channels": len(present), "imported": done},
-                    "bots": [{"id": b["slug"], "name": b.get("name") or b["slug"]} for b in H.bots(c) if b.get("state") != "archived"]
+                    "bots": [{"id": b["id"], "name": b.get("name") or b["slug"]} for b in H.bots(c) if b.get("state") != "archived"]
                     if auth.bot_admin(who) else []}
 
     @app.post("/api/v2/slack/channels")

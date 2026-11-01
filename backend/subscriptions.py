@@ -296,7 +296,7 @@ def connections(c, runner_id, settings, ctx=None):
     read bot_subscription, so they name a connection alike."""
     ctx = ctx if ctx is not None else context(c, settings)
     rows = []
-    for row in c.execute("SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
+    for row in c.execute("SELECT a.bot FROM assignments a JOIN bots b ON b.id=a.bot "
                          "WHERE a.runner_id=? AND b.state<>'archived' ORDER BY a.bot", (runner_id,)):
         line = bot_subscription(c, row['bot'], settings, ctx)
         if line['profile'] and line['computer']:
@@ -317,7 +317,7 @@ def connections_by_runner(c, settings, ctx=None):
     ctx = ctx if ctx is not None else context(c, settings)
     placed, runners = {}, {}
     for row in c.execute("SELECT a.runner_id, a.bot, r.id, r.label, r.readiness_json, r.capabilities_json, "
-                         "r.revoked_at FROM assignments a JOIN bots b ON b.slug=a.bot "
+                         "r.revoked_at FROM assignments a JOIN bots b ON b.id=a.bot "
                          "JOIN runners r ON r.id=a.runner_id "
                          "WHERE b.state<>'archived' ORDER BY a.bot"):
         placed.setdefault(row["runner_id"], []).append(row["bot"])
@@ -427,6 +427,7 @@ def install(app, store, auth, mutate, settings, computer_rows):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get('id', bot)
             if not H.bot(c, bot):
                 raise Problem('not_found', 'Bot not found', 404)
             auth.require_see(c, who, bot)

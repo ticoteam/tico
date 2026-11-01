@@ -270,7 +270,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
                'draining': 'bot paused', 'run_hold': 'stopped runs', 'backoff': 'a failed run', 'budget': 'run budget',
                'bot_limit': 'at its turn limit'}
     for row in c.execute("SELECT a.runner_id,j.bot,count(*) n,min(j.created) oldest,bc.config_json,b.state bot_state "
-                         "FROM jobs j JOIN assignments a ON a.bot=j.bot JOIN bots b ON b.slug=j.bot "
+                         "FROM jobs j JOIN assignments a ON a.bot=j.bot JOIN bots b ON b.id=j.bot "
                          "JOIN bot_config bc ON bc.bot=j.bot WHERE a.runner_id IN (" + marks + ") AND j.state='queued' "
                          "GROUP BY a.runner_id,j.bot", runner_ids):
         rid = row['runner_id']

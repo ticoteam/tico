@@ -3,7 +3,7 @@ the one rule is that you may edit yourself and whatever reports up to you (backe
 `manages`, Ana 2026-09-18)."""
 import json
 
-from backend.store import encode
+from backend.store import H, encode
 from backend.tests.test_api import api, get, post  # noqa: F401
 
 
@@ -14,6 +14,7 @@ def roster(api, people):
 
 def revision(api, bot):
     with api.app.state.store.read() as c:
+        bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         return c.execute("SELECT revision FROM bot_config WHERE bot=?", (bot,)).fetchone()[0]
 
 
@@ -61,7 +62,7 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
                  {"id": "ben", "email": "ben@acme.example", "name": "Ben", "reports_to": "ana"},
                  {"id": "cara", "email": "cara@acme.example", "name": "Cara", "reports_to": "ana"}])
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
         c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('botops',?, 'ana')",
                   (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
     _, _, botops = setup_attempt(api, "botops")

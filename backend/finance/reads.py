@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
+from .. import hubdb as H
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
 from . import closing as CL
 from . import context as _context
@@ -234,7 +235,11 @@ class _Filter:
 
 def _org_filter(s: _Seen, teams: Iterable[str], teammates: Iterable[str], who: str, unattributed: bool) -> _Filter:
     picked_teams = tuple(dict.fromkeys(t for t in teams if t))
-    picked_mates = tuple(dict.fromkeys(m for m in teammates if m))
+    mates: list[str] = []
+    for m in teammates:
+        bot = H.resolve_bot(s.ctx.c, m) if m and m.startswith("bot:") else None
+        mates.append(H.bot_actor(bot["id"]) if bot else m)
+    picked_mates = tuple(dict.fromkeys(m for m in mates if m))
     if who not in WHO:
         raise invalid(f"who is {'|'.join(WHO)}")
     for t in picked_teams:
@@ -514,6 +519,8 @@ def _grouped(s: _Seen, a: date, z: date, by: str, account_id: str | None, team: 
     if below is not None:
         cells = [x for x in cells if x.team in below]
     if teammate:
+        bot = H.resolve_bot(s.ctx.c, teammate) if teammate.startswith("bot:") else None
+        teammate = H.bot_actor(bot["id"]) if bot else teammate
         cells = [x for x in cells if x.teammate == teammate]
     department_wide = not teammate and (not team or s.ctx.org.department(team) == team)
     narrow = by not in ("department", "account") or not department_wide

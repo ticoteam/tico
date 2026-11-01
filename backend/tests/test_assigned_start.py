@@ -644,8 +644,8 @@ def fleet(store, bots, tasks, attempts, *, days=30):
         c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen,readiness_json) "
                   "VALUES('fleet-runner','fleet','ana','fleet-token',?,?,'{}')", (now, now))
         for slug in slugs:
-            c.execute("INSERT INTO bots(slug,display_name,runtime,state,created) VALUES(?,?,'fake','active',?)",
-                      (slug, slug, now))
+            c.execute("INSERT INTO bots(id,slug,display_name,runtime,state,created) VALUES(?,?,?,'fake','active',?)",
+                      (slug, slug, slug, now))
             c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,'{}','ana')", (slug,))
         for k in range(tasks):
             c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,rank,created,updated,conversation_id) "

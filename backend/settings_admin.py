@@ -119,7 +119,7 @@ class SettingsAdmin:
     def counted_bots(c, actor, excluding=""):
         """The bots that count toward a member's limit: theirs that are not archived. A starter bot
         that is still `needs_setup` is parked, so it does not count until it is onboarded."""
-        return c.execute("SELECT count(*) FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+        return c.execute("SELECT count(*) FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                          "WHERE bc.created_by=? AND b.state<>'archived' AND bc.bot<>? "
                          "AND COALESCE(bc.onboarding_state,'') NOT IN " + PARKED_SQL, (actor, excluding)).fetchone()[0]
 
@@ -236,8 +236,8 @@ class SettingsAdmin:
     def definition(self, c, bot):
         config, row = self._config(c, bot), H.bot(c, bot)
         effective = shared_bots.follow(c, bot, _json(config["config_json"], {}) or {})
-        repo = effective.get("repo") or config["repo"] or ("emp-" + bot)
-        return {"slug": bot, "display_name": row["display_name"],
+        repo = effective.get("repo") or config["repo"] or ("emp-" + row["slug"])
+        return {"slug": row["slug"], "display_name": row["display_name"],
                 "template": (_json(config["config_json"], {}) or {}).get("template") or "",
                 "description": config["description"] or "", "reports_to": config["reports_to"],
                 "bot_contact": (_json(config["config_json"], {}) or {}).get("bot_contact") or "open",
@@ -324,12 +324,12 @@ class SettingsAdmin:
             return
         effort = self._effort(choice, None, config.get("reasoning_effort"))
         config.update(model=model, reasoning_effort=effort)
-        c.execute("UPDATE bots SET model=?,effort=? WHERE slug=?", (model, effort, slug))
+        c.execute("UPDATE bots SET model=?,effort=? WHERE id=?", (model, effort, slug))
         c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(config), slug))
 
     def pick_slug(self, c, name, fallback="bot"):
         """A free slug from the bot's name: never one in use, archived or reserved for the company's own bots."""
-        return free_slug(name, lambda slug: bool(H.bot(c, slug)) or self.auth.system_bot(slug) or slug == "coo",
+        return free_slug(name, lambda slug: bool(H.resolve_bot(c, slug)) or self.auth.system_bot(slug) or slug == "coo",
                          fallback)
 
     def template_name(self, template):
@@ -341,10 +341,12 @@ class SettingsAdmin:
         member's bot under the person above the manager, so the same rules hold as for a member: that person's limit,
         the computers that take members' bots, and their credentials. It reports to the manager and nothing else."""
         manager = H.actor_id(who.actor)
+        label = (H.bot(c, manager) or {}).get("slug", manager)
         if body.template:
             raise Problem("template", "A manager bot's new report starts without a template; ask BotOps for one", 422)
-        if body.reports_to not in (None, "", manager, "bot:" + manager):
-            raise Problem("forbidden", f"{manager} makes only its own reports: this one must report to {manager}", 403)
+        reports_to = (H.resolve_bot(c, body.reports_to) or {}).get("id", body.reports_to)
+        if reports_to not in (None, "", manager):
+            raise Problem("forbidden", f"{label} makes only its own reports: this one must report to {label}", 403)
         if not body.slug:
             body = body.model_copy(update={"slug": self.pick_slug(c, body.display_name)})
         if not self.auth.report_lifecycle(c, who, body.slug, "create", parent=manager):
@@ -353,7 +355,7 @@ class SettingsAdmin:
         self._report_cap(c, who, "create", f"add a report, {body.display_name},")
         person = report_managers.person_above(c, manager)
         if not person:
-            raise Problem("forbidden", f"No person manages {manager}, so no one can add a report under it", 403)
+            raise Problem("forbidden", f"No person manages {label}, so no one can add a report under it", 403)
         created = self._report_act(c, who, body.slug, "create", lambda: self.create_bot(
             c, self.auth.identity_for_actor(c, person), body.model_copy(update={"reports_to": manager})))
         return created
@@ -365,7 +367,8 @@ class SettingsAdmin:
         used, limit = report_managers.cap_used(c, manager, op, H.now()), report_managers.cap_limit(c, op)
         if used < limit:
             return
-        name = (H.bot(c, manager) or {}).get("display_name") or manager
+        row = H.bot(c, manager) or {}
+        name = row.get("display_name") or row.get("slug") or manager
         person = report_managers.person_above(c, manager)
         title = f"{name} is at its weekly limit: asked to {what}"
         # The first paragraph is the ask itself (one or two plain sentences, under 40 words): the task lint reads only that.
@@ -386,6 +389,7 @@ class SettingsAdmin:
         token = H.VIA.set(report_managers.VIA)
         try:
             result = do()
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)     # a create passes the slug: its id exists only now
             self.record(c, who.actor, bot, report_managers.LIFECYCLE, before, _lifecycle_state(c, bot))
         finally:
             H.VIA.reset(token)
@@ -404,12 +408,13 @@ class SettingsAdmin:
         self._creator(c, who)
         privileged = who.role == "owner" or self.auth.bot_admin(who)
         pid = H.actor_id(who.actor)
-        existing = H.bot(c, body.slug)
+        existing = H.resolve_bot(c, body.slug)
         if existing and existing["state"] == "archived" and body.slug == self.settings.assistant_bot:
             # First run set the assistant aside; adding it later brings the same bot back.
             return self._restore(c, who, body)
         if existing:
             raise Problem("duplicate", "That bot slug already exists", 409)
+        bot_id = H.new_bot_id(body.slug)
         if not privileged and (self.auth.system_bot(body.slug) or body.slug == "coo"):
             # The company's own bots (the Assistant, BotOps, the Librarian, the COO) are added by an owner or an Admin.
             raise Problem("forbidden", "That name is reserved for the company's own bots; ask an owner or an admin", 403)
@@ -418,6 +423,7 @@ class SettingsAdmin:
             manager = "human:" + pid           # a member's bot hangs under them until they say otherwise
         if manager:
             body = body.model_copy(update={"reports_to": manager})
+        body = body.model_copy(update={"reports_to": (H.resolve_bot(c, body.reports_to) or {}).get("id", body.reports_to)})
         default = providers.load(c, self.settings) if not body.model else {}
         # No model named and no Team default: the Gateway's default (General, Medium), so a bot is never refused for it.
         choice = self.models.get(body.model or default.get("model") or gateway_tiers.default_model())
@@ -429,7 +435,7 @@ class SettingsAdmin:
             self.refuse_retired(choice)
         effort = self._effort(choice, body.effort or default.get("effort") or None)
         harness = self._harness(choice, getattr(body, "harness", None))
-        self._parent(c, body.slug, body.reports_to)
+        self._parent(c, bot_id, body.reports_to)
         runner = None
         if body.runner_id and harness in EXTERNAL_HARNESSES:
             raise Problem("harness", "A bot run by an external agent has no computer; leave the "
@@ -479,42 +485,42 @@ class SettingsAdmin:
             config.update(self.template_gateway(body.template))
             if privileged:
                 config.update(self.template_repo_defaults(body.template))
-        team = self._team(c, body.slug, config)
+        team = self._team(c, bot_id, config)
         now = H.now()
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES(?,?,?,?,?,'','keeper',?,?)",
-                  (body.slug, body.display_name, runtime_of(harness) or choice["runtime"],
+        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
+                  "VALUES(?,?,?,?,?,?,'','keeper',?,?)",
+                  (bot_id, body.slug, body.display_name, runtime_of(harness) or choice["runtime"],
                    choice["id"], effort, body.status, now))
         c.execute(
             "INSERT INTO bot_config(bot,config_json,team,operator,owner_ids_json,description,reports_to,"
             "repo,thread_mode,definition_updated,definition_updated_by,bot_owners_json,created_by) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (body.slug, encode(config), team, operator, encode(owners), body.description,
+            (bot_id, encode(config), team, operator, encode(owners), body.description,
              body.reports_to, repo, body.thread_mode, now, who.actor, encode([pid]), who.actor))
         if not body.model and config.get("gateway"):
-            self._template_gateway_model(c, body.slug, config)
+            self._template_gateway_model(c, bot_id, config)
         from .report_order import arrive
-        arrive(c, "bot:" + body.slug, body.reports_to)     # a new bot goes last among its manager's reports
+        arrive(c, "bot:" + bot_id, body.reports_to)     # a new bot goes last among its manager's reports
         assignment = None
         if runner:
-            assignment = self.execution.assign(c, who, body.slug, SimpleNamespace(
+            assignment = self.execution.assign(c, who, bot_id, SimpleNamespace(
                 runner_id=runner["id"], expected_generation=0))
         elif body.status == "active" and harness not in EXTERNAL_HARNESSES:
-            if placement.auto_place(c, self.execution, body.slug, who.actor):
-                assignment = dict(c.execute("SELECT * FROM assignments WHERE bot=?", (body.slug,)).fetchone())
+            if placement.auto_place(c, self.execution, bot_id, who.actor):
+                assignment = dict(c.execute("SELECT * FROM assignments WHERE bot=?", (bot_id,)).fetchone())
             elif not note:
                 note = ("No computer takes " + body.display_name + " yet, so it is on but not running. Add a computer, or ask an "
                         "admin to open one to members' bots (Settings > Computers); it starts on its own when one can take it")
-        H.event(c, who.actor, "bot.definition_created", body.slug,
+        H.event(c, who.actor, "bot.definition_created", bot_id,
                 {"operator": operator, "owners": owners, "runner": body.runner_id})
         if body.slug == "librarian":
             from . import listening
             listening.seed_market(c, self.settings)      # once: its market posts (Settings > Listening)
         visible = self.auth.bot_accesses(c, who)
         same_name = [r["slug"] for r in c.execute(
-            "SELECT slug FROM bots WHERE display_name=? COLLATE NOCASE AND slug<>? AND state<>'archived' ORDER BY slug",
-            (body.display_name, body.slug)) if (visible.get(r["slug"]) or {}).get("see")]
-        return {**self.definition(c, body.slug), "owners": owners, "assignment": assignment,
+            "SELECT id,slug FROM bots WHERE display_name=? COLLATE NOCASE AND id<>? AND state<>'archived' ORDER BY slug",
+            (body.display_name, bot_id)) if (visible.get(r["id"]) or {}).get("see")]
+        return {**self.definition(c, bot_id), "owners": owners, "assignment": assignment,
                 "bot_owners": [pid], **({"note": note} if note else {}),
                 **({"name_hint": "Also named " + body.display_name + ": " + ", ".join(same_name),
                     "matching_slugs": same_name} if same_name else {})}
@@ -532,11 +538,11 @@ class SettingsAdmin:
             # A name with no Latin letters falls back to the template's name before plain "bot".
             fallback = (slug_from_name(self.template_name(body.template)) if body.template else "") or "bot"
             body = body.model_copy(update={"slug": self.pick_slug(c, name, fallback), "display_name": name})
-        existing = H.bot(c, body.slug)
+        existing = H.resolve_bot(c, body.slug)
         if existing:
-            if existing["state"] != "archived" and self.auth.bot_manager(c, who, body.slug):
-                return {**self.definition(c, body.slug), "created": False,
-                        "bot_owners": BA.owner_ids(self._config(c, body.slug)["bot_owners_json"])}
+            if existing["state"] != "archived" and self.auth.bot_manager(c, who, existing["id"]):
+                return {**self.definition(c, existing["id"]), "created": False,
+                        "bot_owners": BA.owner_ids(self._config(c, existing["id"])["bot_owners_json"])}
             raise Problem("duplicate", "That bot slug already exists" + (
                 " and is archived; choose a fresh slug for a new bot. Restore only when asked"
                 if existing["state"] == "archived" else ""), 409)
@@ -555,8 +561,9 @@ class SettingsAdmin:
             description=body.description, reports_to=body.reports_to or who.actor, status="planned", repo="",
             model=choice["id"], effort=self._effort(choice, None), harness=None, owners=[], template=body.template)
         result = self.create_bot(c, who, payload)
+        bot_id = H.resolve_bot(c, body.slug)["id"]
         if body.template:
-            row = self._config(c, body.slug)
+            row = self._config(c, bot_id)
             declared = _json(row["config_json"], {}) or {}
             declared["template"] = body.template
             from .onboarding import read_cards
@@ -564,9 +571,9 @@ class SettingsAdmin:
             declared["shared"] = bool(card.get("shared"))
             if card.get("session"):
                 declared["session"] = card["session"]
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(declared), body.slug))
-            MessageBots.link(c, who.actor, body.slug, who.actor)      # BotOps built it for them: it is their message bot
-        return {**result, **self.definition(c, body.slug), "created": True}
+            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(declared), bot_id))
+            MessageBots.link(c, who.actor, bot_id, who.actor)      # BotOps built it for them: it is their message bot
+        return {**result, **self.definition(c, bot_id), "created": True}
 
     def co_owners(self, c, who, bot, add=(), remove=()):
         """Add or remove co-owners of a bot. Any of its owners may; whoever it reports up to and the Admins
@@ -605,13 +612,14 @@ class SettingsAdmin:
     def _restore(self, c, who, body):
         """An archived assistant, planned again under the name and description just given. It
         keeps its history; its computer is assigned the way any planned bot's is."""
-        self.update_bot(c, who, body.slug, M.BotDefinitionUpdate(
+        bot = (H.resolve_bot(c, body.slug) or {}).get("id", body.slug)
+        self.update_bot(c, who, bot, M.BotDefinitionUpdate(
             display_name=body.display_name, description=body.description, status="planned",
-            expected_revision=self._config(c, body.slug)["revision"]))
-        return {**self.definition(c, body.slug), "owners": self._people(c, body.owners)[0], "assignment": None}
+            expected_revision=self._config(c, bot)["revision"]))
+        return {**self.definition(c, bot), "owners": self._people(c, body.owners)[0], "assignment": None}
 
     def archive(self, c, who, bot, body):
-        CA.gate(c, who.actor, "bots", f"remove {bot}")
+        CA.gate(c, who.actor, "bots", f"remove {(H.bot(c, bot) or {}).get('slug', bot)}")
         # The assistant, BotOps, the Librarian, the Strategy Bot and the Task Manager are built in: nobody archives
         # them, the owner included.
         if bot in (self.settings.assistant_bot, "botops", "librarian", "goal-manager", "task-manager", "bookkeeper"):
@@ -629,18 +637,19 @@ class SettingsAdmin:
         if lifecycle:
             if body.successor:
                 raise Problem("forbidden", "A manager bot archives its report without a successor", 403)
-            self._report_cap(c, who, "archive", f"archive {bot}")
+            self._report_cap(c, who, "archive", f"archive {(H.bot(c, bot) or {}).get('slug', bot)}")
             return self._report_act(c, who, bot, "archive", lambda: archive_bot(c, who.actor, bot, "", revoke_agent=True))
-        if body.successor:
-            self._manager(c, who, body.successor)
-        return archive_bot(c, who.actor, bot, body.successor or "", revoke_agent=getattr(body, "revoke_agent", True))
+        successor = (H.resolve_bot(c, body.successor) or {}).get("id", body.successor) or ""
+        if successor:
+            self._manager(c, who, successor)
+        return archive_bot(c, who.actor, bot, successor, revoke_agent=getattr(body, "revoke_agent", True))
 
     def restore(self, c, who, bot):
         """Bring an archived bot back: to the status it had when it was archived (active, paused or planned),
         else planned. Its routines and computer are not restored; an active bot is placed the way any is."""
         lifecycle = self.auth.report_lifecycle(c, who, bot, "restore")
         if not lifecycle:
-            CA.gate(c, who.actor, "bots", f"bring back {bot}")
+            CA.gate(c, who.actor, "bots", f"bring back {(H.bot(c, bot) or {}).get('slug', bot)}")
         row = H.bot(c, bot)
         if not row:
             raise Problem("not_found", "Bot not found", 404)
@@ -654,7 +663,7 @@ class SettingsAdmin:
         status = status if status in ("active", "paused", "planned") else "planned"
         if lifecycle:
             # The person above the manager brings it back, as their own change: BotOps' ask only chose the report.
-            self._report_cap(c, who, "archive", f"restore {bot}")
+            self._report_cap(c, who, "archive", f"restore {(H.bot(c, bot) or {}).get('slug', bot)}")
             person = report_managers.person_above(c, H.actor_id(who.actor))
             if not person:
                 raise Problem("forbidden", "No person manages this manager bot, so no one can bring a report back", 403)
@@ -683,11 +692,11 @@ class SettingsAdmin:
 
     def ensure_activation(self, c, who, bot):
         previous = H.bot(c, bot)["state"]
-        c.execute("UPDATE bots SET state='active' WHERE slug=?", (bot,))
+        c.execute("UPDATE bots SET state='active' WHERE id=?", (bot,))
         try:
             placement.auto_place(c, self.execution, bot, who.actor)
         finally:
-            c.execute("UPDATE bots SET state=? WHERE slug=?", (previous, bot))
+            c.execute("UPDATE bots SET state=? WHERE id=?", (previous, bot))
         # Branches clone an existing original repository; they never build a separate one.
         branch = shared_bots.source_of(shared_bots.declared(c, bot))
         if not branch and not repository_present(c, bot) and not self.computer_builds_repository(c, bot):
@@ -700,7 +709,7 @@ class SettingsAdmin:
 
     def update_bot(self, c, who, bot, body):
         asked = body.model_dump(exclude_unset=True, exclude={"expected_revision", "on_behalf_of"})
-        CA.gate(c, who.actor, "instructions", f"change {bot}'s instructions or settings: "
+        CA.gate(c, who.actor, "instructions", f"change {(H.bot(c, bot) or {}).get('slug', bot)}'s instructions or settings: "
                 + "; ".join(f"{k} to \"{v}\"" for k, v in asked.items()))
         changed = body.model_fields_set - {"expected_revision", "on_behalf_of"}
         report = self.report_change(c, who, bot, changed)
@@ -727,6 +736,7 @@ class SettingsAdmin:
         for field in body.model_fields_set - {"expected_revision", "on_behalf_of"}:
             values[field] = getattr(body, field)
         values["description"] = values.get("description") or ""
+        values["reports_to"] = (H.resolve_bot(c, values.get("reports_to")) or {}).get("id", values.get("reports_to"))
         # Lifting a quarantine has its own route and rules (status_set, quarantine/clear).
         if before.get("status") == "quarantined" and values.get("status") != "quarantined":
             raise Problem("quarantined", "This bot is quarantined; clear the quarantine first", 409)
@@ -790,7 +800,7 @@ class SettingsAdmin:
             declared["shared"] = bool(body.shared)
         if "template" in body.model_fields_set:
             declared["template"] = body.template or ""
-        declared.update({"name": bot, "display_name": values["display_name"],
+        declared.update({"name": (H.bot(c, bot) or {}).get("slug", bot), "display_name": values["display_name"],
                          "description": values["description"], "reports_to": values.get("reports_to"),
                          "bot_contact": values.get("bot_contact") or "open",
                          "private_tasks_default": values.get("private_tasks_default") is True,
@@ -799,7 +809,7 @@ class SettingsAdmin:
         if (values.get("reports_to") or "") != (before.get("reports_to") or ""):
             from .report_order import arrive
             arrive(c, "bot:" + bot, values.get("reports_to"))   # a new manager's report goes last there
-        c.execute("UPDATE bots SET display_name=?,state=? WHERE slug=?",
+        c.execute("UPDATE bots SET display_name=?,state=? WHERE id=?",
                   (values["display_name"], values["status"], bot))
         if before.get("status") == "paused" and values["status"] == "active":
             # Settings must lift the control API's pause too. An edit to an already-active
@@ -963,7 +973,7 @@ class SettingsAdmin:
         return {"runner_id": runner["id"], "label": runner["label"], "operator": runner["operator"]}
 
     def begin(self, c, who, bot, body, undo_change_id=None):
-        CA.gate(c, who.actor, "cost", f"change {bot}'s model or harness")
+        CA.gate(c, who.actor, "cost", f"change {(H.bot(c, bot) or {}).get('slug', bot)}'s model or harness")
         self._manager(c, who, bot, report="model" if body.kind == "model" else None)
         if body.kind == "model":
             shared_bots.refuse_copy(c, bot)
@@ -1026,7 +1036,7 @@ class SettingsAdmin:
                                  "reasoning_effort": target["effort"],
                                  "model_managed_by": "cloud"})
                 c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
-                c.execute("UPDATE bots SET model=?,runtime=?,effort=? WHERE slug=?",
+                c.execute("UPDATE bots SET model=?,runtime=?,effort=? WHERE id=?",
                           (target["model"], target["runtime"], target["effort"], bot))
                 from .model_login import hold_removals
                 hold_removals(c, self.settings)
@@ -1134,6 +1144,7 @@ class SettingsAdmin:
         if who.role not in ("owner", "human"):
             raise Problem("forbidden", "Only the owner, or a person who manages the bot, sees its settings changes",
                           403)
+        bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         owner = who.role == "owner"
         limit = max(1, min(int(limit), 200))
         # The bots first: a caller who manages none reads no change at all, and anyone else reads only theirs.
@@ -1373,8 +1384,11 @@ class SettingsAdmin:
             raise Problem("version_conflict", "Bot configuration changed; refresh before saving access", 409)
         roster = self._roster(c)
         people = {p["id"] for p in roster.get("people") or []} | {h["id"] for h in H.humans(c)}
-        doc = BA.parse(body.model_dump(exclude={"revision"}), people, set(self.team_names(c)),
-                       {row["slug"] for row in H.bots(c)})
+        asked = body.model_dump(exclude={"revision"})
+        for level in BA.LEVELS:       # a bot named by slug or by id; the access document keeps ids
+            if isinstance(asked.get(level), dict):
+                asked[level]["bots"] = [(H.resolve_bot(c, ref) or {}).get("id", ref) for ref in asked[level].get("bots") or []]
+        doc = BA.parse(asked, people, set(self.team_names(c)), {row["id"] for row in H.bots(c)})
         before = self.snapshot(c, bot, "access")
         if before == doc:
             raise Problem("unchanged", "That is already who has access", 409)
@@ -1412,7 +1426,7 @@ class SettingsAdmin:
         return "model" if transition["kind"] == "model" else None
 
     def set_fallback(self, c, who, bot, body, undo_change_id=None):
-        CA.gate(c, who.actor, "cost", f"change {bot}'s fallback model")
+        CA.gate(c, who.actor, "cost", f"change {(H.bot(c, bot) or {}).get('slug', bot)}'s fallback model")
         self._manager(c, who, bot)
         shared_bots.refuse_copy(c, bot)
         config = self._config(c, bot)
@@ -1462,7 +1476,7 @@ class SettingsAdmin:
         effort is checked against the bot's own model then. Null clears all of it. Only this key changes: the bot's own
         model, and so its sessions, stay as they are. A model the bot's computer cannot run is saved all the same, and
         its tasks run on the bot's model until it can: the answer's `readiness` says so now."""
-        CA.gate(c, who.actor, "cost", f"change the model {bot}'s tasks run on")
+        CA.gate(c, who.actor, "cost", f"change the model {(H.bot(c, bot) or {}).get('slug', bot)}'s tasks run on")
         self._manager(c, who, bot, report="task_model")
         shared_bots.refuse_copy(c, bot)
         config = self._config(c, bot)
@@ -1556,7 +1570,7 @@ class SettingsAdmin:
     def set_compact_at(self, c, who, bot, body):
         """Where the bot's conversation compacts. The runner passes it every turn, so unlike a model change the
         session is kept: the next turn simply compacts at the new size."""
-        CA.gate(c, who.actor, "cost", f"change where {bot}'s conversation compacts")
+        CA.gate(c, who.actor, "cost", f"change where {(H.bot(c, bot) or {}).get('slug', bot)}'s conversation compacts")
         self._manager(c, who, bot)
         shared_bots.refuse_copy(c, bot)
         config = self._config(c, bot)
@@ -1608,7 +1622,7 @@ class SettingsAdmin:
         """How soon the bot's nonblocking notices and enabled sweeps start a turn (backend/wake_presets.py). Only the
         one key changes: no routine, hook, subscription, permission or compaction setting moves with it. A branch
         picks its own, since the queue it holds is its own. Jobs already held are planned again on the new values."""
-        CA.gate(c, who.actor, "cost", f"change how soon {bot} wakes")
+        CA.gate(c, who.actor, "cost", f"change how soon {(H.bot(c, bot) or {}).get('slug', bot)} wakes")
         self._manager(c, who, bot)
         config = self._config(c, bot)
         if config["revision"] != body.expected_revision:
@@ -1632,7 +1646,7 @@ class SettingsAdmin:
 def archive_bot(c, actor, bot, successor="", revoke_agent=True):
     """Take a bot off the org chart and out of work (#535). Its routines are deleted, queued
     turns cancelled and its computer released; open tasks it owns or requested go to `successor`
-    (a bot slug) or else its operator; bots reporting to it move up to its own parent. A bot that
+    (a bot id) or else its operator; bots reporting to it move up to its own parent. A bot that
     roots a team hands the team to `successor`, which then reports to nobody. Nothing is
     deleted: the rows, tasks and history stay, and the repository is untouched."""
     config = c.execute("SELECT * FROM bot_config WHERE bot=?", (bot,)).fetchone()
@@ -1647,7 +1661,7 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
     declared = _json(config["config_json"], {}) or {}
     declared.pop("branch_previous_status", None)
     declared["status"] = "archived"
-    c.execute("UPDATE bots SET state='archived' WHERE slug=?", (bot,))
+    c.execute("UPDATE bots SET state='archived' WHERE id=?", (bot,))
     c.execute("UPDATE bot_config SET config_json=?,revision=revision+1,definition_updated=?,"
               "definition_updated_by=? WHERE bot=?", (encode(declared), ts, actor, bot))
     c.execute("DELETE FROM assignments WHERE bot=?", (bot,))
@@ -1711,7 +1725,8 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
         revoked = bool(live and revoke_agent)
         if revoked:
             revoke_credential(c, SimpleNamespace(actor=actor), bot)
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        named = H.bot(c, bot) or {}
+        name = named.get("display_name") or named.get("slug") or bot
         label = {"hermes": "Hermes", "openclaw": "OpenClaw"}.get(harness, harness)
         result["agent"] = {
             "harness": harness, "stopped": True, "credential_revoked": revoked,

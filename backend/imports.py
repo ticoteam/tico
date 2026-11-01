@@ -425,9 +425,10 @@ def install_imports(app, store, auth, execution, mutate):
             else:
                 meta.pop("granola_mcp_notes_hash", None)
         if body.send_to:
-            auth.target(c, who, body.send_to, need="write")
+            send_to = (H.resolve_bot(c, body.send_to) or {}).get("id", body.send_to)
+            auth.target(c, who, send_to, need="write")
             if meta.get("review_state") == "pending":
-                meta["review_send_to"] = body.send_to
+                meta["review_send_to"] = send_to
         transcript = raw_transcript(turns)
         if live_client is not None:
             meta["client"] = live_client

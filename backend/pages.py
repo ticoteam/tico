@@ -176,8 +176,10 @@ class Pages:
         where = ["f.state<>'deleted'", "(p.archived=1 OR f.archived=1)" if archived else "p.archived=0 AND f.archived=0"]
         params = []
         if bot:
+            with self.store.read() as c:
+                bot = (H.resolve_bot(c, H.actor_id(bot)) or {}).get("id", H.actor_id(bot))
             where.append("f.bot=?")
-            params.append(H.actor_id(bot))
+            params.append(bot)
         if task:
             where.append("f.task_id=?")
             params.append(task)

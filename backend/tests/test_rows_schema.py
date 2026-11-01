@@ -17,6 +17,7 @@ TABLES = {
     rows.RunnerRow: "runners",
     rows.ApprovalRow: "approvals",
     rows.AttemptEventRow: "attempt_events",
+    rows.PrincipalRow: "principals",
 }
 
 

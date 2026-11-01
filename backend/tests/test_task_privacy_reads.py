@@ -558,7 +558,7 @@ def test_bot_list_reads_a_fixed_number_of_statements_and_seeks_each_bots_last_ru
         source = dict(c.execute("SELECT * FROM bots WHERE slug='ops'").fetchone())
         config = dict(c.execute("SELECT * FROM bot_config WHERE bot='ops'").fetchone())
         for n in range(40):
-            for table, row in (("bots", {**source, "slug": f"crew{n}"}), ("bot_config", {**config, "bot": f"crew{n}"})):
+            for table, row in (("bots", {**source, "id": f"crew{n}", "slug": f"crew{n}"}), ("bot_config", {**config, "bot": f"crew{n}"})):
                 c.execute(f"INSERT INTO {table}({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
             H.task_create(c, "human:ana", f"Step {n}", "Do it.", f"bot:crew{n}", lint=False)
             for turn, finished in (("a", "2026-01-02"), ("b", "2026-01-03"), ("c", "2026-01-03"), ("d", None)):
@@ -569,7 +569,7 @@ def test_bot_list_reads_a_fixed_number_of_statements_and_seeks_each_bots_last_ru
         _, before[token] = traced(api, lambda: api.get("/api/employees", headers=headers(token)))
     with store.transaction() as c:
         for n in range(40, 80):
-            for table, row in (("bots", {**source, "slug": f"crew{n}"}), ("bot_config", {**config, "bot": f"crew{n}"})):
+            for table, row in (("bots", {**source, "id": f"crew{n}", "slug": f"crew{n}"}), ("bot_config", {**config, "bot": f"crew{n}"})):
                 c.execute(f"INSERT INTO {table}({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
     for token in ("ana-test", "ben-test"):
         response, statements = traced(api, lambda: api.get("/api/employees", headers=headers(token)))

@@ -161,13 +161,13 @@ def watched(c, bot):
 
 
 def watched_bots(c):
-    """The slugs of the bots `watched` is true for, read once: for a reader that filters many runs together (SQL)."""
+    """The ids of the bots `watched` is true for, read once: for a reader that filters many runs together (SQL)."""
     try:
         if not R.any_active(c) or not on(c):
             return []
         rules, ctx = R._active(c), R._ctx(c)
-        return [row["slug"] for row in H.bots(c)
-                if any(R._hits(rule["who"], R.who_key(c, "bot:" + row["slug"], ctx)) for rule in rules)]
+        return [row["id"] for row in H.bots(c)
+                if any(R._hits(rule["who"], R.who_key(c, "bot:" + row["id"], ctx)) for rule in rules)]
     except sqlite3.OperationalError:    # no tables yet (an old copy): nothing to hide
         return []
 
@@ -1220,6 +1220,8 @@ def install(app, store, auth, mutate):
         author = author_of(who, store.settings.assistant_bot)
         if not author:
             return {"recorded": 0, "known": []}
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         if author != "bot:" + bot:
             raise Problem("forbidden", "A bot reports only its own mail", 403)
         ids = list(dict.fromkeys(body.ids))
@@ -1238,8 +1240,11 @@ def install(app, store, auth, mutate):
         if not author:
             return {"outcome": "not_checked"}
         check_id = check_id_of(request)
+        with store.read() as c:
+            named = H.resolve_bot(c, bot) or {}
+        bot = named.get("id", bot)
         if author != "bot:" + bot:
-            LOG.warning("A mail check for %s came with another bot's token", bot)
+            LOG.warning("A mail check for %s came with another bot's token", named.get("slug", bot))
             mail_unchecked(author, bot, body, "forbidden", check_id)
             raise Problem("forbidden", "A bot checks only its own mail", 403)
         try:

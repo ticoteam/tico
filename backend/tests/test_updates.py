@@ -19,6 +19,16 @@ def out(c):
     return [dict(r) for r in c.execute("SELECT bot, state, kind FROM update_queue WHERE state='sent'")]
 
 
+def bot_id(c, slug):
+    """A bot's id by its slug: updates are written and read by the bot's id."""
+    return H.resolve_bot(c, slug)["id"]
+
+
+def bid(api, slug):
+    with api.app.state.store.read() as c:
+        return bot_id(c, slug)
+
+
 def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):
     store = api.app.state.store
     with store.transaction() as c:
@@ -116,8 +126,9 @@ def test_people_post_their_own_update_and_alerts_come_only_from_direct_reports(a
     bot(api, "analyst", "Analyst", reports_to="boss")
     store = api.app.state.store
     with store.transaction() as c:
-        updates.post(c, "boss", "- Planned the launch", day="2026-09-29")
-        updates.post(c, "analyst", "- Sized the market", day="2026-09-29")
+        boss, analyst = bot_id(c, "boss"), bot_id(c, "analyst")
+        updates.post(c, boss, "- Planned the launch", day="2026-09-29")
+        updates.post(c, analyst, "- Sized the market", day="2026-09-29")
         updates.post(c, "human:ben", "- Met two customers", day="2026-09-29", drafted_by="coo")
 
     def redraft():
@@ -134,18 +145,18 @@ def test_people_post_their_own_update_and_alerts_come_only_from_direct_reports(a
     assert own["drafted_by"] is None and own["edited_by"] is None
     redraft()                                   # over their own words
     seen = {u["bot"] for u in get(api, "updates")["updates"]}
-    assert {"boss", "analyst", "human:ben"} <= seen, "a person's update is for the whole company"
+    assert {boss, analyst, "human:ben"} <= seen, "a person's update is for the whole company"
     post(api, f"updates/{own['id']}/reply", {"text": "Nice"}, expected=422)
     direct = {u["bot"] for u in get(api, "updates?scope=direct")["updates"]}
-    assert "boss" in direct and "analyst" not in direct, "only one level down alerts"
+    assert boss in direct and analyst not in direct, "only one level down alerts"
     assert get(api, "updates/unread?scope=direct")["unread"] == len(direct)
     get(api, "updates?scope=everyone", expected=422)
     # An external agent is outside the company: it sees its own bot's update, no person's.
     with store.transaction() as c:
         c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by,last_seen) VALUES(?,?,?,?,?,?)",
-                  ("analyst", "hermes", digest("agent-test"), H.now(), "human:ana", H.now()))
+                  (analyst, "hermes", digest("agent-test"), H.now(), "human:ana", H.now()))
     outside = {u["bot"] for u in get(api, "updates", token="agent-test")["updates"]}
-    assert "analyst" in outside and not any(updates.is_person(a) for a in outside)
+    assert analyst in outside and not any(updates.is_person(a) for a in outside)
     # The Assistant acting for ben in his chat posts no update for him: his update is his own.
     from backend.tests.test_assistant import asked, assistant_turn
     _, attempt = assistant_turn(api, "ben-test", "Post my update")
@@ -164,18 +175,18 @@ def test_updates_roll_up_the_org_chart_with_reports_updates_in_the_managers_requ
     bot(api, "writer", "Writer", reports_to="boss")
     store = api.app.state.store
     with store.transaction() as c:
+        analyst, writer, boss = bot_id(c, "analyst"), bot_id(c, "writer"), bot_id(c, "boss")
         first = updates.dispatch(c, MORNING)
         ranks = {r["bot"]: r["rank"] for r in c.execute("SELECT bot, rank FROM update_queue")}
-        assert first in ("analyst", "writer") and ranks["boss"] > max(ranks["analyst"], ranks["writer"])
+        assert first in (analyst, writer) and ranks[boss] > max(ranks[analyst], ranks[writer])
         updates.post(c, first, "- Sized the market", day="2026-09-29")
-        boss = c.execute("SELECT * FROM update_queue WHERE bot='boss'").fetchone()
-        other = "writer" if first == "analyst" else "analyst"
-        text = updates.request_text(c, "boss", "daily", "2026-09-29")
-        assert "Sized the market" in text and "No update from: " + other.capitalize() in text
-        posted = updates.post(c, "boss", "- The team sized the market", day="2026-09-29")
+        other_name = "Writer" if first == analyst else "Analyst"
+        text = updates.request_text(c, boss, "daily", "2026-09-29")
+        assert "Sized the market" in text and "No update from: " + other_name in text
+        posted = updates.post(c, boss, "- The team sized the market", day="2026-09-29")
         mine = c.execute("SELECT id FROM updates WHERE bot=?", (first,)).fetchone()["id"]
         assert posted["inputs"] == [{"id": mine, "author": first}], "the manager's update links the reports' updates it was written from"
-        assert updates.redo(c, "daily", "2026-09-29", ["analyst"], managers=True) == ["analyst", "boss"], \
+        assert updates.redo(c, "daily", "2026-09-29", ["analyst"], managers=True) == [analyst, boss], \
             "a redo with managers rewrites the roll-up above, deepest first"
 
 
@@ -385,12 +396,13 @@ def test_the_tree_leaves_out_the_helpers_behind_the_assistant(api, monkeypatch):
         bot(api, slug, name, reports_to="human:ana")
     bot(api, "scout", "Scout", reports_to="librarian")
     with api.app.state.store.transaction() as c:
-        posted = updates.post(c, "librarian", "- Mapped the market", day="2026-09-29")
+        posted = updates.post(c, bot_id(c, "librarian"), "- Mapped the market", day="2026-09-29")
     keys = lambda nodes: [k for n in nodes for k in (n["key"], *keys(n["children"]))]
+    node = lambda slug: "b:" + bid(api, slug)
     for path in ("updates/tree", "updates/tree?scope=all", "updates/tree?kind=weekly&scope=all"):
         tree = get(api, path)
-        assert not {"b:botops", "b:goal-manager", "b:librarian", "b:task-manager"} & set(keys(tree["roots"])), path
-        assert "b:scout" in [n["key"] for r in tree["roots"] for n in r["children"]], path + ": under the owner"
+        assert not {node("botops"), node("goal-manager"), node("librarian"), node("task-manager")} & set(keys(tree["roots"])), path
+        assert node("scout") in [n["key"] for r in tree["roots"] for n in r["children"]], path + ": under the owner"
         assert "Mapped the market" not in json.dumps(tree), path
     assert posted["id"] in [u["id"] for u in get(api, "updates")["updates"]], "its own update stays in the feed"
 
@@ -402,31 +414,33 @@ def test_the_tree_nests_a_days_updates_by_the_org_chart_and_only_direct_reports_
     bot(api, "analyst", "Analyst", reports_to="boss")
     bot(api, "writer", "Writer", reports_to="boss")
     with api.app.state.store.transaction() as c:
-        updates.post(c, "analyst", "- Sized the market", day="2026-09-29")
-        updates.post(c, "writer", "- Wrote the launch post", day="2026-09-29")
-        updates.post(c, "boss", "- Planned the launch", day="2026-09-29")
+        updates.post(c, bot_id(c, "analyst"), "- Sized the market", day="2026-09-29")
+        updates.post(c, bot_id(c, "writer"), "- Wrote the launch post", day="2026-09-29")
+        updates.post(c, bot_id(c, "boss"), "- Planned the launch", day="2026-09-29")
     t = get(api, "updates/tree")
     assert t["scope"] == "below" and [r["key"] for r in t["roots"]] == ["p:ana"], "below you, by default"
     find = lambda nodes, key: next((n for n in nodes if n["key"] == key), None) or next(
         (hit for n in nodes if (hit := find(n["children"], key))), None)
-    boss, analyst = find(t["roots"], "b:boss"), find(t["roots"], "b:analyst")
+    boss, analyst = find(t["roots"], "b:" + bid(api, "boss")), find(t["roots"], "b:" + bid(api, "analyst"))
     assert boss["direct"] and boss["update"]["body"] == "- Planned the launch"
     assert analyst in boss["children"] and not analyst["direct"], "a report's report nests under it and never alerts"
     assert t["unread"] == 1
     assert get(api, "updates/tree?scope=all")["scope"] == "all"
     get(api, "updates/tree?scope=mine", expected=422)
     # The manager's card links the reports' updates it was written from, only those the reader may read.
+    analyst_id, writer_id = bid(api, "analyst"), bid(api, "writer")
     links = {i["author"]: i["id"] for i in boss["update"]["inputs"]}
-    assert set(links) == {"analyst", "writer"} and links["analyst"] == analyst["update"]["id"]
+    assert set(links) == {analyst_id, writer_id} and links[analyst_id] == analyst["update"]["id"]
     from backend.tests.test_api import restrict
     with api.app.state.store.transaction() as c:
         restrict(c, "writer", people=["ana"])
     uid = boss["update"]["id"]
     for path in ("updates/tree?scope=all", "updates", f"updates/{uid}"):
         seen = get(api, path, token="cara-test")
-        assert links["analyst"] in json.dumps(seen) and links["writer"] not in json.dumps(seen), path
-        assert '"writer"' not in json.dumps(seen), path + ": no hidden author either"
-    assert get(api, f"updates/{uid}", token="cara-test")["update"]["inputs"] == [{"id": links["analyst"], "author": "analyst"}]
+        assert links[analyst_id] in json.dumps(seen) and links[writer_id] not in json.dumps(seen), path
+        assert f'"{writer_id}"' not in json.dumps(seen), path + ": no hidden author either"
+    assert get(api, f"updates/{uid}", token="cara-test")["update"]["inputs"] == \
+        [{"id": links[analyst_id], "author": analyst_id}]
     assert len(get(api, f"updates/{uid}")["update"]["inputs"]) == 2, "the owner still sees both"
     direct = next(u for u in get(api, "updates?scope=direct")["updates"] if u["id"] == uid)
     assert len(direct["inputs"]) == 2, "showing only direct reports narrows the cards, not a card's links"
@@ -434,5 +448,5 @@ def test_the_tree_nests_a_days_updates_by_the_org_chart_and_only_direct_reports_
     with api.app.state.store.transaction() as c:
         restrict(c, "boss", people=["ana"])
     hers = get(api, "updates/tree?scope=all", token="cara-test")
-    assert find(hers["roots"], "b:boss") is None and "Planned the launch" not in str(hers)
-    assert find(hers["roots"], "b:analyst")["update"]["body"] == "- Sized the market"
+    assert find(hers["roots"], "b:" + bid(api, "boss")) is None and "Planned the launch" not in str(hers)
+    assert find(hers["roots"], "b:" + bid(api, "analyst"))["update"]["body"] == "- Sized the market"

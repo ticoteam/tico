@@ -46,7 +46,7 @@ def ident(slug, key):
 
 
 def parse(kpi_id):
-    """(bot slug, metric key) of an auto KPI id, or None."""
+    """(bot id, metric key) of an auto KPI id, or None."""
     rest = str(kpi_id or "")[len(AUTO):] if str(kpi_id or "").startswith(AUTO) else ""
     slug, _, key = rest.rpartition(":")
     return (slug, key) if slug and key in METRICS else None
@@ -115,11 +115,12 @@ def value(conn, slug, key, at=None, *, _privacy_checked=False):
 def kpi(conn, kpi_id):
     """The virtual KPI as a row shaped like a stored one, or None for a bot or metric that does not exist."""
     parsed = parse(kpi_id)
-    if not parsed or not H.bot(conn, parsed[0]):
+    bot = H.bot(conn, parsed[0]) if parsed else None
+    if not bot:
         return None
     slug, key = parsed
     spec = METRICS[key]
-    return {"id": kpi_id, "slug": f"{slug}-{key}", "goal_id": "", "name": spec["name"], "unit": spec["unit"],
+    return {"id": kpi_id, "slug": f"{bot['slug']}-{key}", "goal_id": "", "name": spec["name"], "unit": spec["unit"],
             "direction": spec["direction"], "cadence": "daily", "owner": H.bot_actor(slug),
             "definition": spec["definition"], "source_note": "Computed from Tico's own data", "definition_version": 1,
             "created": None, "created_by": "keeper", "updated": None, "target": None}

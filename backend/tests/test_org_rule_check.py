@@ -155,7 +155,7 @@ def test_an_all_bots_rule_covers_a_bot_made_later(ruled):
     api, judge = ruled
     rule(api, {"kind": "internal", "text": COLOR, "who": {"all_bots": True}})
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug, display_name, state) VALUES('late-bot', 'Late', 'active')")
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('late-bot', 'late-bot', 'Late', 'active')")
         c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('late-bot','{}','', 'ana')")
     as_bot(api, "late-bot", "late-test")
     assert say(api, "Our favorite color is teal", token="late-test")["held"]
@@ -854,7 +854,7 @@ def test_botops_mail_for_a_person_finds_its_own_hold_and_spends_its_approval_onc
     api, _ = ruled
     rule(api, {"kind": "internal", "text": COLOR, "who": {"all_bots": True}, "if_broken": "escalate", "reviewer": "ben"})
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug, display_name, state) VALUES('botops', 'BotOps', 'active')")
+        c.execute("INSERT OR IGNORE INTO bots(id, slug, display_name, state) VALUES('botops', 'botops', 'BotOps', 'active')")
     as_bot(api, "botops", "botops-test")
     api.app.state.auth.settings.test_identities["ana-botops"] = Identity(
         "human:ana", "owner", "ana@acme.example", via="botops", task_actor="bot:botops", agent="test")

@@ -12,7 +12,7 @@ Whoever may put a report under a manager may order that manager's reports: the o
 reports up to, and the person who runs a bot manager (the `reports_to` rules in `app.person_update` and
 `SettingsAdmin.update_bot`). A bot orders its own reports. Who reports to whom is never changed here.
 
-  manager_key(c, auth, who, name)  `bot:<slug>` or `human:<id>` for a name, refused in plain words when nobody has it
+  manager_key(c, auth, who, name)  `bot:<id>` or `human:<id>` for a name, refused in plain words when nobody has it
   view(c, auth, who, manager) the manager's reports the caller may see, in the chart's order
   save(c, auth, who, manager, names)  put those reports in that order; the ones left out keep their places
   positions(c)                {report key: place} for every place that still counts (the UI's `report_position`)
@@ -47,12 +47,12 @@ def _store(c, doc):
 
 def _chart(c):
     from . import views
-    archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
+    archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
     return views.roster(c), views.entries(c), archived
 
 
 def boss_key(kind, reports_to):
-    """A `reports_to` value as a manager key: a human's is a person id, a bot's a slug or `human:<id>`; '' at the top."""
+    """A `reports_to` value as a manager key: a human's is a person id, a bot's a bot id or `human:<id>`; '' at the top."""
     boss = str(reports_to or "").strip()
     if not boss:
         return ""
@@ -101,10 +101,10 @@ def fallback(kind, ident, name, config=None):
 
 def rank(c):
     """key(report, manager) sorts any list of a manager's reports in the chart's order: the placed ones by place, then
-    the rest by `fallback`. Keys are `bot:<slug>` or `human:<id>`."""
+    the rest by `fallback`. Keys are `bot:<id>` or `human:<id>`."""
     places = placed(c)
     roster, configs, _ = _chart(c)
-    names = {r["slug"]: r["display_name"] or r["slug"] for r in H.bots(c)}
+    names = {r["id"]: r["display_name"] or r["slug"] for r in H.bots(c)}
 
     def key(report, manager):
         at = places.get(report)
@@ -140,7 +140,7 @@ def positions(c):
 def arrive(c, report, reports_to):
     """A report joins a manager (`reports_to` as stored for it; '' at the top): its old place is dropped and, when
     someone ordered that manager's reports, it goes last there. Under a manager nobody ordered it keeps no place, so
-    the chart's own order holds. `report` is `bot:<slug>` or `human:<id>`."""
+    the chart's own order holds. `report` is `bot:<id>` or `human:<id>`."""
     doc = _load(c)
     if not doc:
         return
@@ -169,16 +169,17 @@ def roster_saved(c, roster):
 
 
 def manager_key(c, auth, who, name):
-    """`bot:<slug>` or `human:<id>` for a bot's slug or a human's id (`bot:` or `human:` in front picks one). A bot the
+    """`bot:<id>` or `human:<id>` for a bot's slug or id or a human's id (`bot:` or `human:` in front picks one). A bot the
     caller may not see is nobody they can name."""
     name = str(name or "").strip()
     roster, _, archived = _chart(c)
     kind, _, ident = name.partition(":")
     if kind not in ("bot", "human"):
         kind, ident = "", name
-    if (kind in ("", "bot") and ident and H.bot(c, ident) and ident not in archived
-            and auth.bot_accesses(c, who).get(ident, auth.FULL)["see"]):
-        return "bot:" + ident
+    bot = H.resolve_bot(c, ident) if kind in ("", "bot") and ident else None
+    if (bot and bot["id"] not in archived
+            and auth.bot_accesses(c, who).get(bot["id"], auth.FULL)["see"]):
+        return "bot:" + bot["id"]
     person = P.person(ident, roster) if kind in ("", "human") and ident else None
     if person and not person.get("hidden"):
         return "human:" + person["id"]
@@ -204,12 +205,12 @@ def _reports(c, auth, who, manager):
     access = auth.bot_accesses(c, who)
     target = manager if kind == "human" else ident
     for bot in H.bots(c):
-        slug = bot["slug"]
-        if (slug in archived or auth.system_bot(slug)
-                or str((configs.get(slug) or {}).get("reports_to") or "").strip() != target):
+        bot_id = bot["id"]
+        if (bot_id in archived or auth.system_bot(bot_id)
+                or str((configs.get(bot_id) or {}).get("reports_to") or "").strip() != target):
             continue
-        rows.append({"key": "bot:" + slug, "id": slug, "kind": "bot", "name": bot.get("display_name") or slug,
-                     "seen": access.get(slug, auth.FULL)["see"]})
+        rows.append({"key": "bot:" + bot_id, "id": bot_id, "kind": "bot", "name": bot.get("display_name") or bot["slug"],
+                     "seen": access.get(bot_id, auth.FULL)["see"]})
 
     def rank(row):
         placed = doc.get(row["key"])
@@ -256,10 +257,11 @@ def save(c, auth, who, manager, names):
         by_name.setdefault(row["id"], row)
     picked, seen = [], set()
     for name in names:
-        row = by_name.get(str(name).strip())
+        ref = str(name).strip()
+        row = by_name.get(ref) or by_name.get((H.resolve_bot(c, ref) or {}).get("id"))
         if not row:
             raise Problem("not_report", f"{name} is not a direct report of {_name(c, manager, roster)}. Its reports are: "
-                          + (", ".join(r["id"] for r in rows if r["seen"]) or "none"), 422)
+                          + (", ".join(r["name"] for r in rows if r["seen"]) or "none"), 422)
         if row["key"] in seen:
             raise Problem("duplicate", f"{name} is named twice", 422)
         seen.add(row["key"])

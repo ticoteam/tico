@@ -362,7 +362,7 @@ def org_group_under(team, lead_id, roster):
 
 
 def org_parent(kind, ident, roster, employees, archived=(), bare_people=False):
-    """Parent key for the mixed org tree: `p:<id>`, `b:<slug>`, `g:<group>`, or '' for a root.
+    """Parent key for the mixed org tree: `p:<id>`, `b:<id>`, `g:<group>`, or '' for a root.
 
     People follow `reports_to`, except a named department under that boss becomes `g:<team>`.
     A bot follows its `reports_to` bot when that bot is still on the tree; otherwise it hangs
@@ -446,7 +446,7 @@ def profile(person_row):
 def org_view(roster, employees, archived=(), person_id="", team="", bare_people=False):
     """The mixed org chart for bots and the hub: visible people (with contact and goals),
     live bots, and the groups, each with an `org_parent` key
-    (`p:<id>` / `b:<slug>` / `g:<group>` / ''). A person or bot carries its group as `team`; a group carries
+    (`p:<id>` / `b:<id>` / `g:<group>` / ''). A person or bot carries its group as `team`; a group carries
     its `parent` group. `team` keeps one group and the groups under it."""
     archived = set(archived or ())
     employees = employees or {}
@@ -571,7 +571,7 @@ def mailboxes_below(pid, roster):
 
 
 def inbox_person(slug, roster):
-    """The person whose `inbox_bot` is this employee slug, or None."""
+    """The person whose `inbox_bot` is this employee's bot id, or None."""
     slug = _clean(slug)
     if not slug:
         return None

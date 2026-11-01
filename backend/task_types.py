@@ -35,7 +35,8 @@ def install_task_types(app, store, auth, mutate, mover):
         with store.read() as c:
             access = auth.bot_accesses(c, who)
             slugs = list(dict.fromkeys(s.strip() for s in request.query_params.get("bots", "").split(",") if s.strip()))[:40]
-            visible = [slug for slug in slugs if access.get(slug, auth.FULL)["read"]]
+            ids = [(H.resolve_bot(c, slug) or {}).get("id", slug) for slug in slugs]
+            visible = [bot for bot in ids if access.get(bot, auth.FULL)["read"]]
             from . import check_pools
             return {"candidates": check_pools.candidate_details(c, visible)}
 

@@ -700,6 +700,8 @@ class GitHubApp:
         row = self.row()
         if not row:
             raise Problem("github_not_connected", "GitHub is not connected. Connect it in Tools first.", 409)
+        with self.store.read() as c:      # the repository is named for the bot's slug (a label), whether an id or a slug came in
+            slug = (H.resolve_bot(c, slug) or {}).get("slug", slug)
         name = "bot-" + slug.removeprefix("emp-")
         if not self.can_create_repos(refresh=True):
             from .repo_waits import fixes
@@ -985,7 +987,7 @@ def install_github_app(app, settings, store):
         run = {"attempt": attempt_id, "rights": acting.actor if acting else None}
         if acting is None:
             return set(), run
-        bots = [r[0] for r in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+        bots = [r[0] for r in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                                         "WHERE b.state<>'archived' AND bc.bot<>?", (BOTOPS,))]
         if acting.actor == "bot:" + BOTOPS:
             run["own_run"] = bool(team_rules.load(c)["botops_manages_bots"] and botops_act.own_run(c, auth, attempt_id))
@@ -1138,6 +1140,7 @@ def install_github_app(app, settings, store):
         who = request.state.identity
         with store.read_transaction() as c:
             validate_identity(c, who)
+            body.bot = (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)
             # A turn may ask only for its own bot; a runner only for a bot assigned to it.
             if who.role == "bot":
                 allowed = H.actor_id(who.actor) == body.bot
@@ -1363,6 +1366,8 @@ def install_github_app(app, settings, store):
 
     @app.get("/api/v2/bots/{bot}/github-repos")
     def extra_get(request: Request, bot: str):
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         manager(request, bot)
         with store.read() as c:
             row, own = bot_repos(c, bot)
@@ -1371,6 +1376,8 @@ def install_github_app(app, settings, store):
 
     @app.put("/api/v2/bots/{bot}/github-repos")
     def extra_put(request: Request, bot: str, body: ExtraRepos):
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         who = manager(request, bot)
         with store.transaction() as c:
             row, own = bot_repos(c, bot)
@@ -1407,7 +1414,7 @@ def install_github_app(app, settings, store):
                     raise Problem("forbidden", "Only the owner, BotOps or a bot granted repository creation may "
                                   "create bot repositories. Ask BotOps, or ask an Owner or admin to enable "
                                   "Create bot repositories in this bot's settings.", 403)
-                row, bot = service.row(c), H.bot(c, slug)
+                row, bot = service.row(c), H.resolve_bot(c, slug)
             if not row:
                 raise Problem("github_not_connected", "GitHub is not connected. Connect it in Tools first.", 409)
             if not bot or bot.get("state") == "archived":
@@ -1434,18 +1441,18 @@ def install_github_app(app, settings, store):
             # local build and finishes on its own once the repository or the permission appears (repo_waits).
             from .repo_waits import raise_item
             with store.transaction() as c:
-                bot = H.bot(c, slug)
+                bot = H.resolve_bot(c, slug)
                 if builder:
-                    built_on.remember(c, slug, builder)
+                    built_on.remember(c, (bot or {}).get("id", slug), builder)
                 if bot and bot.get("state") != "archived" and service.row(c):
-                    found = raise_item(c, slug, service.row(c), fixer(c), "" if body.empty else template)
+                    found = raise_item(c, bot["id"], service.row(c), fixer(c), "" if body.empty else template)
                     problem.extra = {**problem.extra, "needs_you_task": found["task_id"]}
                     problem.detail += (" The owner has a Needs-you task with both fixes; the bot keeps its local "
                                        "build and finishes on its own once either is done.")
             raise
         with store.transaction() as c:
             if builder:
-                built_on.remember(c, slug, builder)
+                built_on.remember(c, (H.resolve_bot(c, slug) or {}).get("id", slug), builder)
             H.event(c, who.actor, "github.repo_created", result["repository"],
                     {"empty": True} if body.empty else {"template": template})
         return result
@@ -1456,7 +1463,8 @@ def install_github_app(app, settings, store):
         from . import repositories as R
         bot, repository = H.actor_id(who.actor), result["repository"]
         org = repository.split("/")[0]
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        bot_row = H.bot(c, bot) or {}
+        name = bot_row.get("display_name") or bot_row.get("slug") or bot
         moved = None
         c.execute("SAVEPOINT product_repo_grant")
         try:
@@ -1490,10 +1498,10 @@ def install_github_app(app, settings, store):
             access, moved = "none", None
         others = []
         if access != "none":
-            for r in c.execute("SELECT bc.bot,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+            for r in c.execute("SELECT bc.bot,bc.config_json,b.slug FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                                "WHERE b.state<>'archived' AND bc.bot<>? ORDER BY bc.bot", (bot,)).fetchall():
                 if json.loads(r["config_json"] or "{}").get("repo_access_mode") == "all":
-                    others.append((H.bot(c, r["bot"]) or {}).get("display_name") or r["bot"])
+                    others.append((H.bot(c, r["bot"]) or {}).get("display_name") or r["slug"])
         said = {"write": f"{name} has write access to it.",
                 "none": f"{name} could not be given access to it; an Owner or admin can give it in Settings > "
                         "Repositories."}[access]

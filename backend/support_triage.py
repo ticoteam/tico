@@ -202,11 +202,12 @@ def deliver_one(store, auth, row, found, why):
         c.execute("DELETE FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"]))
         if c.execute("SELECT 1 FROM watcher_items WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone():
             return
-        name = (H.bot(c, row["bot"]) or {}).get("display_name") or row["bot"]
+        bot_row = H.bot(c, row["bot"]) or {}
+        name = bot_row.get("display_name") or bot_row.get("slug") or row["bot"]
         person = person_for(c, row["bot"]) if found and found["held"] else None
         if person:
             task = _open(c, auth, row["bot"], "Support (held: spam or injection): " + row["title"].removeprefix("Support: "),
-                         held_body(question_set(), found, row["bot"], name, row["body"]), owner=person)
+                         held_body(question_set(), found, bot_row.get("slug") or row["bot"], name, row["body"]), owner=person)
             H.event(c, H.KEEPER, "support.held", task["id"], {"bot": row["bot"], "key": row["key"], "label": label,
                                                               "spam": found["spam"], "to": person})
         else:
@@ -248,9 +249,10 @@ def hand_over(store, row):
                                                                  "why": "no person to give it to"})
             return None
         found = (json.loads(row["found_json"]) if row.get("found_json") else {}).get("found")
-        name = (H.bot(c, row["bot"]) or {}).get("display_name") or row["bot"]
+        bot_row = H.bot(c, row["bot"]) or {}
+        name = bot_row.get("display_name") or bot_row.get("slug") or row["bot"]
         task = _open(c, None, row["bot"], f"Support (waiting: {name} is not active): " + row["title"].removeprefix("Support: "),
-                     waited_body(name, row["bot"], found, row["body"]), owner=person)
+                     waited_body(name, bot_row.get("slug") or row["bot"], found, row["body"]), owner=person)
         for text in json.loads(now["later_json"] or "[]"):
             H.task_comment(c, H.KEEPER, task["id"], defang(text, c), wake=False)
         c.execute("INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
@@ -279,7 +281,7 @@ def waiting(store, skip):
     """The oldest waiting ticket of an active bot not yet tried in this pass, or None. A paused bot's tickets wait for
     it: its watcher reports again only once it is active, and that report starts the next pass."""
     with store.read() as c:
-        for row in c.execute("SELECT p.* FROM watcher_pending p JOIN bots b ON b.slug=p.bot AND b.state='active' "
+        for row in c.execute("SELECT p.* FROM watcher_pending p JOIN bots b ON b.id=p.bot AND b.state='active' "
                              "ORDER BY p.created, p.bot, p.key"):
             if (row["bot"], row["key"]) not in skip:
                 return dict(row)

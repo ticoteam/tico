@@ -7,8 +7,14 @@ its link."""
 import json
 
 from backend import updates
+from backend.store import H
 from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
 from backend.tests.test_strategy_bot_chat import strategy_bot
+
+
+def bot_id(c, slug):
+    """A bot's id by its slug: updates are written and read by the bot's id."""
+    return H.resolve_bot(c, slug)["id"]
 
 
 def ask(api, text, token, place="updates"):
@@ -34,10 +40,10 @@ def test_a_question_from_updates_is_handed_only_the_updates_the_person_may_read_
     hidden = post(api, "tasks", {"title": "Quietly let the agency go", "body": "See notes", "owner": "fixer", "private": True})
     with api.app.state.store.transaction() as c:
         restrict(c, "finance", people=["ana"], bots=["coo"])
-        updates.post(c, "sales", "- Closed the Acme renewal", day="2026-09-29")
-        updates.post(c, "finance", "- Runway is nine months", day="2026-09-29")
-        updates.post(c, "fixer", f"- Sorted out [the agency](#/task/{hidden['id']})", day="2026-09-29")
-        updates.post(c, "fixer", f"- Went through {hidden['id']} with the team", day="2026-09-28")
+        updates.post(c, bot_id(c, "sales"), "- Closed the Acme renewal", day="2026-09-29")
+        updates.post(c, bot_id(c, "finance"), "- Runway is nine months", day="2026-09-29")
+        updates.post(c, bot_id(c, "fixer"), f"- Sorted out [the agency](#/task/{hidden['id']})", day="2026-09-29")
+        updates.post(c, bot_id(c, "fixer"), f"- Went through {hidden['id']} with the team", day="2026-09-28")
     r = runner(api)
     assign(api, r, "coo")
     ready(api, r, ["coo"])
@@ -68,10 +74,10 @@ def test_the_default_order_is_a_goal_then_waits_on_you_then_newest(api, monkeypa
     post(api, "goals", {"owner": "boss", "title": "Launch in October"})
     post(api, "tasks", {"title": "Approve the market sizing", "body": "See notes", "owner": "human:cara"}, token=token(api, "analyst"))
     with api.app.state.store.transaction() as c:
-        updates.post(c, "boss", "- Planned the launch", day="2026-09-28")
-        updates.post(c, "analyst", "- Sized the market", day="2026-09-29")
-        updates.post(c, "crier", "- Cara, the press list needs a look", day="2026-09-29")
-        updates.post(c, "writer", "- Wrote the launch post", day="2026-09-29")
+        updates.post(c, bot_id(c, "boss"), "- Planned the launch", day="2026-09-28")
+        updates.post(c, bot_id(c, "analyst"), "- Sized the market", day="2026-09-29")
+        updates.post(c, bot_id(c, "crier"), "- Cara, the press list needs a look", day="2026-09-29")
+        updates.post(c, bot_id(c, "writer"), "- Wrote the launch post", day="2026-09-29")
     r = runner(api)
     assign(api, r, "coo")
     ready(api, r, ["coo"])
@@ -121,9 +127,9 @@ def test_private_references_in_links_and_prose_never_reach_an_updates_chat_turn(
         for slug, body in rows:
             source = "source-" + slug.replace("_", "-")
             updates.post(c, source, "- Reviewed " + body, day="2026-09-29")
-        updates.post(c, "source-public", "- Published the public launch note", day="2026-09-29")
-        updates.post(c, "privatebot", "- Private Bot report visible only to Cara", day="2026-09-29")
-        updates.post(c, "secretbot", "- Secret Bot report visible only to Ana", day="2026-09-29")
+        updates.post(c, bot_id(c, "source-public"), "- Published the public launch note", day="2026-09-29")
+        updates.post(c, bot_id(c, "privatebot"), "- Private Bot report visible only to Cara", day="2026-09-29")
+        updates.post(c, bot_id(c, "secretbot"), "- Secret Bot report visible only to Ana", day="2026-09-29")
     r = runner(api)
     assign(api, r, "coo")
     ready(api, r, ["coo"])

@@ -33,6 +33,12 @@ def bot(api, slug, reports_to=None):
                               "operator": "ana", "owners": ["ana"], "runner_id": None})
 
 
+def bot_id(api, slug):
+    """The id a bot is stored under: tables, updates and actors use it; the slug is only its label."""
+    with api.app.state.store.read() as c:
+        return H.resolve_bot(c, slug)["id"]
+
+
 @pytest.fixture
 def world(api):
     """The base fixture's company plus Dee, a Legal team, the Legal bot under Ben, and two bots."""
@@ -53,8 +59,8 @@ def world(api):
     task = post(api, "tasks", {"owner": "counsel", "title": "Review the NDA", "body": "Redline it."})
     with store.transaction() as c:
         c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created,updated) VALUES(?,?,?,?,?,?,?,?)",
-                  ("u1", "counsel", "daily", "2026-09-29", "Two contracts reviewed", "- Two contracts reviewed",
-                   H.now(), H.now()))
+                  ("u1", H.resolve_bot(c, "counsel")["id"], "daily", "2026-09-29", "Two contracts reviewed",
+                   "- Two contracts reviewed", H.now(), H.now()))
     made = api.post("/api/v2/files/uploads", json={"name": "memo.md", "text": "# Memo", "scope": "bot"},
                     headers=headers(post(api, "bots/counsel/agent-credential", {})["token"]))
     assert made.status_code == 200, made.text
@@ -82,12 +88,14 @@ def test_visible_requests_only_lets_everyone_ask_and_only_readers_look(world):
     set_access(api, see=EVERYONE, read={"teams": ["legal"], "bots": ["analyst"]}, write=EVERYONE)
     readers = {"ana", "ben", "cara", "analyst"}
     expect = lambda ok, no: {who: (ok if who in readers else no) for who in ALL}   # noqa: E731
+    counsel = bot_id(api, "counsel")
 
     for path in ("bots", "org"):
         for who in ALL:
             data = get(api, path, tokens[who])
+            # A bot a caller may only see carries no id on /bots, so it is matched by its slug there.
             row = next(b for b in (data["bots"] if path == "org" else data)
-                       if (b.get("id") or b.get("slug")) == "counsel")
+                       if b.get("slug") == "counsel" or b.get("id") == counsel)
             assert row["access"] == {"see": True, "read": who in readers, "write": True}, (path, who)
     # A caller who may only see it is told its name and who runs it, and nothing of its work.
     dee = next(b for b in get(api, "bots", "dee-test") if b["slug"] == "counsel")
@@ -139,11 +147,13 @@ def test_private_hides_the_bot_from_everyone_but_its_audience_and_managers(world
     api, tokens, task = world
     set_access(api, see={"people": ["cara"]}, read={"people": ["cara"]}, write={"people": ["cara"]})
     inside = {"ana", "ben", "cara"}
+    counsel = bot_id(api, "counsel")
     for path in ("bots", "org"):
         for who in ALL:
             data = get(api, path, tokens[who])
-            slugs = [(b.get("id") or b.get("slug")) for b in (data["bots"] if path == "org" else data)]
-            assert ("counsel" in slugs) == (who in inside), (path, who)
+            listed = [b for b in (data["bots"] if path == "org" else data)
+                      if b.get("slug") == "counsel" or b.get("id") == counsel]
+            assert bool(listed) == (who in inside), (path, who)
     gone = {who: 200 if who in inside else 404 for who in ALL}
     assert outcomes(api, tokens, "get", "status?bot=counsel") == gone
     assert outcomes(api, tokens, "get", "bots/counsel/history") == gone
@@ -205,12 +215,13 @@ def test_the_owner_the_manager_and_the_bot_itself_always_have_full_access(world)
     for who in ("ana", "ben"):
         row = next(b for b in get(api, "bots", tokens[who]) if b["slug"] == "counsel")
         assert row["access"] == {"see": True, "read": True, "write": True}
-    counsel = post(api, "bots/counsel/agent-credential", {})["token"]
-    assert call(api, "get", "status?bot=counsel", counsel).status_code == 200
+    counsel_token = post(api, "bots/counsel/agent-credential", {})["token"]
+    assert call(api, "get", "status?bot=counsel", counsel_token).status_code == 200
     # A bot administrator has it for the bots run under their own name.
+    counsel = bot_id(api, "counsel")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='ben' WHERE bot='counsel'")
-        c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot='counsel'")
+        c.execute("UPDATE bot_config SET operator='ben' WHERE bot=?", (counsel,))
+        c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot=?", (counsel,))
     row = next(b for b in get(api, "bots", "ben-test") if b["slug"] == "counsel")
     assert row["access"] == {"see": True, "read": True, "write": True}
     # Someone who may read or write can see it, whatever the See list says.
@@ -242,7 +253,7 @@ def test_write_without_read_shows_only_your_own_threads_and_tasks(world):
     get(api, "status?bot=counsel", "dee-test", expected=403)
     assert get(api, "bots/counsel/files", "dee-test")["total"] == 0
     # The counts through SQL are hers too.
-    r = call(api, "post", "sql", "dee-test", {"sql": "SELECT count(*) FROM tasks WHERE owner='bot:counsel'"})
+    r = call(api, "post", "sql", "dee-test", {"sql": f"SELECT count(*) FROM tasks WHERE owner='{H.bot_actor(bot_id(api, 'counsel'))}'"})
     assert r.json()["rows"] == [[1]]
 
     # A subtask filed for her under a task she may not read says nothing of whose that task is.
@@ -284,8 +295,9 @@ def test_access_is_edited_by_managers_with_revisions_and_undo(world):
     revision = get(api, "bots/counsel/access", "ana-test")["revision"]
     post(api, f"settings/history/{change['id']}/undo", {"expected_revision": revision}, token="ana-test")
     assert get(api, "bots/counsel/access", "ana-test")["read"]["everyone"] is True
+    counsel = bot_id(api, "counsel")
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT access_json FROM bot_config WHERE bot='counsel'").fetchone()[0] is None
+        assert c.execute("SELECT access_json FROM bot_config WHERE bot=?", (counsel,)).fetchone()[0] is None
         assert c.execute("SELECT count(*) FROM events WHERE action='bot.access_changed'").fetchone()[0] == 1
 
 

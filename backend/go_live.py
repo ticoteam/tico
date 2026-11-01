@@ -42,7 +42,8 @@ def fail(c, key, bot, record, code, notice):
     actor = str(record.get("actor") or "")
     if H.is_human(actor):
         try:
-            H.say(c, H.KEEPER, actor, notice + f" Run `hub bot go-live {bot}` again once that is fixed.", kind="notice")
+            label = (H.bot(c, bot) or {}).get("slug", bot)
+            H.say(c, H.KEEPER, actor, notice + f" Run `hub bot go-live {label}` again once that is fixed.", kind="notice")
         except H.Refused as exc:
             H.event(c, H.KEEPER, "bot.go_live_notice_refused", bot, {"reason": str(exc)[:300]})
 
@@ -60,7 +61,7 @@ def expire(c, now):
     ended = []
     for key, bot, record in rows(c):
         if not record.get("failed") and expired(record, now):
-            fail(c, key, bot, record, "expired", expire_notice(bot, record))
+            fail(c, key, bot, record, "expired", expire_notice((H.bot(c, bot) or {}).get("slug", bot), record))
             ended.append(bot)
     return ended
 

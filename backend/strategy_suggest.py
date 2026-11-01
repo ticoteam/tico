@@ -126,7 +126,7 @@ def _action_error(c, action):
 # ----------------------------------------------------------------------------- what the person reads
 def _name(c, actor):
     found = H.bot(c, H.actor_id(actor)) if H.is_bot(actor) else None
-    return (found or {}).get("display_name") or H.actor_id(actor or "")
+    return (found or {}).get("display_name") or (found or {}).get("slug") or H.actor_id(actor or "")
 
 
 def _title(c, task_id):

@@ -1152,7 +1152,8 @@ def sweep(conn, actor, unverified, *, today=None, owner_email=None):
         title = "Verify " + row["name"]
         body = f"Check {row['id']}.\n\nLook for: {look}\n"
         try:
-            task = H.task_create(conn, actor, title, body, "bot:listening", deduplicate=True)
+            listener = (H.resolve_bot(conn, "listening") or {}).get("id", "listening")
+            task = H.task_create(conn, actor, title, body, "bot:" + listener, deduplicate=True)
         except H.Refused:
             # A refusal here must not roll back the owner task already inserted in this sweep.
             continue
@@ -1642,13 +1643,13 @@ def ensure_curator(conn):
     librarian = H.bot(conn, CURATOR.split(":", 1)[1])
     if librarian and librarian.get("state") != "archived":
         for key, fields in CURATOR_ROUTINES:
-            if not conn.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (librarian["slug"], key)).fetchone():
-                routines.create(conn, H.KEEPER, librarian["slug"], dict(fields), key=key)
+            if not conn.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (librarian["id"], key)).fetchone():
+                routines.create(conn, H.KEEPER, librarian["id"], dict(fields), key=key)
     old = H.bot(conn, RETIRED_CURATOR)
     if old and old.get("state") != "archived" \
             and conn.execute("SELECT 1 FROM bot_config WHERE bot=?", (RETIRED_CURATOR,)).fetchone():
         from . import settings_admin
-        successor = librarian["slug"] if librarian and librarian.get("state") != "archived" else ""
+        successor = librarian["id"] if librarian and librarian.get("state") != "archived" else ""
         settings_admin.archive_bot(conn, H.KEEPER, RETIRED_CURATOR, successor=successor)
         H.event(conn, H.KEEPER, "market.curator_retired", RETIRED_CURATOR, {"successor": successor})
     return librarian

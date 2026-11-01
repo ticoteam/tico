@@ -133,7 +133,7 @@ def test_a_late_private_ticket_the_manager_cannot_read_is_not_recorded(api):
 def test_a_person_owned_ticket_gets_no_status_wake(api):
     # A bot row with the person's id keeps every other guard passing; only the bot-owner check blocks.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,state) VALUES('ana','active')")
+        c.execute("INSERT INTO bots(id,slug,state) VALUES('ana','ana','active')")
         row = ticket(c, "Fix the person connection", owner="human:ana")
         assert SA.sweep(c, later(2.5))["asked"] == []
         assert wakes(c, row["id"], "human:ana", "step_status") == []

@@ -16,7 +16,7 @@ KEY = "inbox-only-runners"
 
 
 def _bots_by_runner(c):
-    rows = c.execute("SELECT a.runner_id,a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
+    rows = c.execute("SELECT a.runner_id,a.bot FROM assignments a JOIN bots b ON b.id=a.bot "
                      "WHERE b.state<>'archived' ORDER BY a.bot").fetchall()
     result = {}
     for row in rows:

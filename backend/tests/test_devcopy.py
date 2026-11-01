@@ -23,7 +23,7 @@ def source_db(tmp_path):
     now = H.now()
     with store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email) VALUES('morgan','Morgan','morgan@acme.example')")
-        c.execute("INSERT INTO bots(slug,token_hash,state) VALUES('sales','botsecret','active')")
+        c.execute("INSERT INTO bots(id,slug,token_hash,state) VALUES('sales','sales','botsecret','active')")
         c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES('r1','mac','morgan','rh',?)", (now,))
         c.execute("INSERT INTO enrollments(code_hash,operator,expires) VALUES('ch','morgan',?)", (now,))
         c.execute("INSERT INTO conversations(id) VALUES('cv')")

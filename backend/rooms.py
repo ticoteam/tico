@@ -50,10 +50,11 @@ def entries(c, shared=False):
 
 def _entries(c):
     result = {}
+    slugs = {row["id"]: row["slug"] for row in c.execute("SELECT id,slug FROM bots")}
     for row in read_cache.configs(c):
         config = json.loads(row["config_json"] or "{}")
         config.update({"description": row["description"] or "", "reports_to": row["reports_to"],
-                       "repo": row["repo"] or ("emp-" + row["bot"])})
+                       "repo": row["repo"] or ("emp-" + slugs.get(row["bot"], row["bot"]))})
         if row["thread_mode"]:
             config["thread_mode"] = row["thread_mode"]
         if row["owner_ids_json"] is not None:

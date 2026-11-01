@@ -154,3 +154,11 @@ class AttemptEventRow(TypedDict):
     kind: str
     payload_json: str
     created: str
+
+
+class PrincipalRow(TypedDict):
+    """One `principals` row (SELECT *): an actor string's identity (`human:<id>`, `bot:<bot id>`, a system actor).
+    A deleted human or bot keeps its row with `deleted_at` set (backend/migrations/0012_bot_ids.py)."""
+    id: str
+    kind: str
+    deleted_at: str | None

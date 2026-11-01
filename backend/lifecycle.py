@@ -96,7 +96,8 @@ def _bot_slug(actor):
 
 
 def _name(c, slug):
-    return (H.bot(c, slug) or {}).get("display_name") or slug
+    row = H.bot(c, slug) or {}
+    return row.get("display_name") or row.get("slug") or slug
 
 
 def may_talk_to(c, slug, to, conversation=None):
@@ -136,7 +137,7 @@ def _manager_actor(c, slug):
 
 def _person_above(c, pid, slug):
     from . import people as P, views
-    archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
+    archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
     return P.manages(pid, "bot", slug, views.roster(c), views.entries(c), archived, True)
 
 
@@ -203,10 +204,10 @@ def _reports_to(c, value, seat_id=""):
             raise Problem("not_found", "Reports-to person was not found", 404)
         return value
     slug = _bot_slug(value) or value
-    bot = H.bot(c, slug) if slug else None
+    bot = H.resolve_bot(c, slug) if slug else None
     if not bot or bot.get("state") == "archived":
         raise Problem("not_found", "Reports-to bot was not found", 404)
-    return slug
+    return bot["id"]
 
 
 def placement(auth, c, who, reports_to, seat_id=""):

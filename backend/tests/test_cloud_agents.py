@@ -318,6 +318,7 @@ def onboarding_artifacts(api, bot):
     """What Onboarding leaves on a bot a seat is filled with: its state, its template, whether its computer builds its
     repository, and the BotOps setup task that builds it when the template is not a starter."""
     with api.app.state.store.read() as c:
+        bot = H.resolve_bot(c, bot)["id"]                # the bot's id or its slug: config is keyed by the id
         state, config_json = c.execute("SELECT onboarding_state, config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
         config = json.loads(config_json)
         task = H.task(c, config["setup_task_id"]) if config.get("setup_task_id") else None

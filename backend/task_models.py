@@ -203,7 +203,7 @@ def stakes(c, settings, bot):
     from . import bot_tools
     from .github_app import repo_of
     row = c.execute("SELECT repo FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    stored = (row and row[0]) or "emp-" + bot
+    stored = (row and row[0]) or "emp-" + (H.bot(c, bot) or {}).get("slug", bot)
     own = (repo_of(stored, settings.github_owner) or stored).lower()
 
     def own_repo(tool):

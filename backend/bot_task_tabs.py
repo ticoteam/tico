@@ -167,6 +167,8 @@ def condition(c, row):
         if not isinstance(value, str) or not value:
             raise bad("Pick whom for " + field.replace("_", " "))
         if value not in mine:
+            found = H.resolve_bot(c, value) if H.is_bot(value) else None
+            value = H.bot_actor(found["id"]) if found else value
             actor = value if H.actor_kind(value) in ("bot", "human") else None
             if not actor or H.resolve_actor(c, actor) != actor:
                 raise bad("Unknown person or bot: " + value)
@@ -380,6 +382,7 @@ def install(app, store, auth, mutate, settings, task_views=None):
         layout), and whether the caller may change them. The Assistant's are the caller's own."""
         who = request.state.identity
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_see(c, who, bot)
@@ -399,6 +402,7 @@ def install(app, store, auth, mutate, settings, task_views=None):
         if after is not None and (not tab or len(after) != 2):
             raise bad("before needs its tab and is a tab's next")
         with store.read_transaction() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_see(c, who, bot)
@@ -439,6 +443,8 @@ def install(app, store, auth, mutate, settings, task_views=None):
     def task_tabs_save(request: Request, bot: str, body: M.BotTaskTabs):
         """Save the bot's sidebar: the whole tab list in order and, when sent, the widgets in order. `tabs: null` goes
         back to the defaults, widgets and all; leaving `widgets` out keeps the saved ones."""
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         def work(c):
             who = request.state.identity
             if not H.bot(c, bot):

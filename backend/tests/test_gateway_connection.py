@@ -276,7 +276,7 @@ def test_the_old_lineup_is_retired_but_a_default_or_bot_already_on_it_keeps_it(a
         assert get(api, "providers")["default"] == {"runtime": "pi", "model": "tico-cheap-1.0"}
         new_bot(api, "scout")
         with api.app.state.store.read() as c:
-            assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='scout'").fetchone()[0])[
+            assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (H.resolve_bot(c, "scout")["id"],)).fetchone()[0])[
                 "model"] == "tico-cheap-1.0"
         # Choosing it fresh is refused: for a new bot, and as a default once the company has moved off it.
         new_bot(api, "scribe", expected=422, model="tico-cheap-1.0", harness="pi", effort="low")
@@ -1072,6 +1072,6 @@ def test_a_new_bot_on_the_gateway_default_takes_its_templates_level(api, monkeyp
         own = new_bot(api, "chosen", template="inbox", model="tico-general-high-1.0", harness="pi", effort="high")
         with api.app.state.store.read() as c:
             models = dict(c.execute("SELECT slug, model FROM bots WHERE slug IN ('mailwatch','plain','chosen')").fetchall())
-            stored = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='mailwatch'").fetchone()[0])
+            stored = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (H.resolve_bot(c, "mailwatch")["id"],)).fetchone()[0])
         assert models == {"mailwatch": "tico-general-low-1.0", "plain": "tico-general-medium-1.0", "chosen": "tico-general-high-1.0"}, (made, plain, own)
         assert stored["model"] == "tico-general-low-1.0" and stored["gateway"] == {"level": "low"}

@@ -268,7 +268,8 @@ def install(app, store, auth, mutate, execution, sessions):
             if not runner:
                 raise Problem("not_found", "Computer not found", 404)
             now = policy(c, rid)
-            bots = now["bots"] if body.bots is None else list(dict.fromkeys(body.bots))
+            bots = now["bots"] if body.bots is None else list(dict.fromkeys(
+                (H.resolve_bot(c, b) or {}).get("id", b) for b in body.bots))
             cap = now["daily_cap_bytes"] if body.daily_cap_bytes is None else body.daily_cap_bytes
             if not is_owner(who, runner):
                 stopping = not body.sharing and bots == now["bots"] and cap == now["daily_cap_bytes"]
@@ -276,7 +277,7 @@ def install(app, store, auth, mutate, execution, sessions):
                     raise Problem("forbidden", "Only the person whose computer it is shares its internet", 403)
             if bots:
                 known = {r[0] for r in c.execute(
-                    f"SELECT slug FROM bots WHERE slug IN ({','.join('?' * len(bots))})", bots)}
+                    f"SELECT id FROM bots WHERE id IN ({','.join('?' * len(bots))})", bots)}
                 if unknown := [b for b in bots if b not in known]:
                     raise Problem("not_found", "No such bot: " + ", ".join(unknown), 404)
             c.execute("INSERT INTO browser_exits(runner_id,sharing,bots_json,daily_cap_bytes,changed_by,changed_at) "
@@ -329,6 +330,7 @@ def install(app, store, auth, mutate, execution, sessions):
         those whose owners share their internet with it."""
         who = request.state.identity
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             auth.require_read(c, who, bot)
             return {"browser_exit": for_turn(c, bot), "choices": choices(c, bot),
                     "may_change": auth.bot_manager(c, who, bot)}
@@ -338,6 +340,8 @@ def install(app, store, auth, mutate, execution, sessions):
         """Browse through another computer's internet, or null for the bot's own. Only a computer whose owner shares
         its internet with this bot; a person who manages the bot."""
         who = request.state.identity
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         before = []
 
         def work(c):
@@ -383,21 +387,22 @@ def install(app, store, auth, mutate, execution, sessions):
         for _ in range(2):      # once more when a policy change or a new relay lease fenced the first read
             epoch = sessions.exit_epoch()     # before the read: a grant read under an older lease is never sent
             with store.read() as c:
+                bot = (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)
                 runner = execution.runner(c, who) if who.role == "runner" else None
                 if not runner:
                     raise Problem("forbidden", "This computer is no longer registered", 403)
                 if not c.execute("SELECT 1 FROM assignments WHERE bot=? AND runner_id=?",
-                                 (body.bot, runner["id"])).fetchone():
+                                 (bot, runner["id"])).fetchone():
                     raise Problem("forbidden", "This bot is not on this computer", 403)
-                exit_rid = bot_exit(c, body.bot)
+                exit_rid = bot_exit(c, bot)
                 if not exit_rid:
                     refuse("none", "This bot has no browser exit", 409)
                 exit_row = c.execute("SELECT label,revoked_at FROM runners WHERE id=?", (exit_rid,)).fetchone()
                 name = (exit_row["label"] if exit_row else "") or "The exit computer"
                 if not exit_row or exit_row["revoked_at"]:
                     refuse("removed", f"{name} was removed from Tico", 409)
-                p, bot_gen = policy(c, exit_rid), bot_generation(c, body.bot)
-                if not (p["sharing"] and body.bot in p["bots"]):
+                p, bot_gen = policy(c, exit_rid), bot_generation(c, bot)
+                if not (p["sharing"] and bot in p["bots"]):
                     refuse("not_shared", f"{name} doesn't share its internet with this bot", 403)
                 day = today()
                 spent = used(c, exit_rid, day)
@@ -405,7 +410,7 @@ def install(app, store, auth, mutate, execution, sessions):
                 refuse("over_cap", f"{name} reached its daily limit", 429)
             tunnel = H.new_id()
             code = sessions.exit_grant({
-                "id": tunnel, "runner_id": runner["id"], "exit": exit_rid, "bot": body.bot, "host": body.host.lower(),
+                "id": tunnel, "runner_id": runner["id"], "exit": exit_rid, "bot": bot, "host": body.host.lower(),
                 "port": body.port, "day": day, "used": spent, "bot_generation": bot_gen,
                 "policy": {"generation": p["generation"], "sharing": p["sharing"], "bots": p["bots"],
                            "cap": p["daily_cap_bytes"]}}, epoch)

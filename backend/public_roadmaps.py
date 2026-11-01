@@ -34,7 +34,7 @@ class RoadmapSettings(Contract):
     action_limit: int | None = Field(default=None, ge=1, le=10000)
     suggestion_limit: int | None = Field(default=None, ge=1, le=1000)
     bot_public_approval: bool | None = None
-    # A bot slug, or null for Automatic (R.suggestions_receiver).
+    # A bot id (a slug is accepted and stored as its id), or null for Automatic (R.suggestions_receiver).
     suggestions_bot: str | None = Field(default=None, max_length=200)
 
 
@@ -271,8 +271,9 @@ def install(app, store, auth, mutate):
                 raise Problem('settings', 'Provide explicit roadmap settings', 422)
             chosen = updates.get('suggestions_bot')
             if chosen is not None:
-                chosen = updates['suggestions_bot'] = chosen.removeprefix('bot:')
-                if not H._one(c, "SELECT 1 FROM bots WHERE slug=? AND state='active'", (chosen,)):
+                chosen = chosen.removeprefix('bot:')
+                chosen = updates['suggestions_bot'] = (H.resolve_bot(c, chosen) or {}).get('id', chosen)
+                if not H._one(c, "SELECT 1 FROM bots WHERE id=? AND state='active'", (chosen,)):
                     raise Problem('suggestions_bot', f'No active bot {chosen!r}: choose an active bot, or null for Automatic', 422)
             value = {**R.settings(c), **updates}
             for label in value['labels']:

@@ -26,7 +26,7 @@ def close_computer(api, machine):
 @pytest.fixture
 def botops(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
         c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('botops',?, 'ana')",
                   (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
     machine = runner(api)
@@ -58,11 +58,12 @@ def test_a_member_registers_a_bot_through_botops_and_owns_it(api, botops):
     bot = made.json()
     assert bot["created"] is True and bot["status"] == "planned" and bot["bot_owners"] == ["cara"]
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT created_by,operator,reports_to FROM bot_config WHERE bot='jira-manager'").fetchone()
+        jira_id = H.resolve_bot(c, "jira-manager")["id"]
+        row = c.execute("SELECT created_by,operator,reports_to FROM bot_config WHERE bot=?", (jira_id,)).fetchone()
         assert (row["created_by"], row["operator"], row["reports_to"]) == ("human:cara", "cara", "human:cara")
         # Recorded as hers, via BotOps.
         event = c.execute("SELECT actor,detail_json FROM events WHERE action='bot.definition_created' "
-                          "AND target='jira-manager'").fetchone()
+                          "AND target=?", (jira_id,)).fetchone()
         assert event["actor"] == "human:cara" and '"via": "botops"' in event["detail_json"]
     # Idempotent for its own owner; the same slug held by someone else is a conflict.
     assert register(api, attempt, "jira-manager").json()["created"] is False
@@ -114,7 +115,8 @@ def test_a_member_cannot_change_a_bot_that_is_not_hers_even_through_botops(api, 
     assert call(api, "put", "bots/jira-manager/access", attempt["token"],
                 {**private, "revision": current["revision"], "on_behalf_of": "turn"}).status_code == 200
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT via FROM settings_changes WHERE bot='jira-manager' AND field='access'").fetchone()[0] == "botops"
+        jira_id = H.resolve_bot(c, "jira-manager")["id"]
+        assert c.execute("SELECT via FROM settings_changes WHERE bot=? AND field='access'", (jira_id,)).fetchone()[0] == "botops"
 
 
 def test_a_member_may_not_add_someone_outside_the_company_domain(api, botops):
@@ -206,7 +208,8 @@ def test_a_members_bot_goes_only_on_a_computer_that_accepts_members_bots(api, bo
     assert proposed.status_code == 200 and proposed.json()["needs_confirm"]
     def placed():
         with api.app.state.store.read() as c:
-            return c.execute("SELECT runner_id FROM assignments WHERE bot='jira-manager'").fetchone()[0]
+            jira_id = H.resolve_bot(c, "jira-manager")["id"]
+            return c.execute("SELECT runner_id FROM assignments WHERE bot=?", (jira_id,)).fetchone()[0]
     assert placed() != other["runner_id"]
     post(api, f"assistant/actions/{proposed.json()['action']['id']}/confirm", {}, token="ben-test")
     assert placed() == other["runner_id"]
@@ -300,7 +303,8 @@ def test_botops_changes_a_bots_tools_as_the_requester_who_owns_it_and_never_for_
     with_header = api.post("/api/v2/bots/cara-mail/tools", json=GMAIL_SEND, headers=delegated)
     assert with_header.status_code == 200, with_header.text
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT requested_by FROM bot_tool_requests WHERE bot='cara-mail'").fetchone()[0] == "human:cara"
+        mail_id = H.resolve_bot(c, "cara-mail")["id"]
+        assert c.execute("SELECT requested_by FROM bot_tool_requests WHERE bot=?", (mail_id,)).fetchone()[0] == "human:cara"
     api_no_header = api.post("/api/v2/bots/cara-mail/tools", json={**GMAIL_SEND, "identity": "cara@other.example"},
                              headers=headers(attempt["token"]))
     assert api_no_header.status_code == 200, api_no_header.text

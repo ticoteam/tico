@@ -81,8 +81,10 @@ def restrict(c, bot, **audience):
     """Set a bot's access straight in the database: see, read and write all go to `audience`
     (people, teams, bots), or per level with see=, read=, write= each an audience dict."""
     from backend import bot_access as BA
+    from backend.store import H
     levels = {level: audience.pop(level) for level in BA.LEVELS if level in audience}
     every = {level: levels.get(level, audience) for level in BA.LEVELS}
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)              # a bot by its id or its slug
     c.execute("UPDATE bot_config SET access_json=? WHERE bot=?",
               (BA.stored(BA.document({level: BA.audience(value) for level, value in every.items()})), bot))
 
@@ -187,8 +189,11 @@ def assign(api, r, bot, generation=0, operator="ana-test"):
 
 
 def ready(api, r, bots):
+    # A runner reports readiness per bot id (the assignment's bot), so a slug given here is named by its id.
+    with api.app.state.store.read() as c:
+        ids = {bot: (H.resolve_bot(c, bot) or {}).get("id", bot) for bot in bots}
     return post(api, "runners/heartbeat", {"version": "test", "platform": "test",
-                "readiness": {bot: True for bot in bots}}, token=r["token"])
+                "readiness": {ids[bot]: True for bot in bots}}, token=r["token"])
 
 
 def claim(api, r, bot=None, key=None):

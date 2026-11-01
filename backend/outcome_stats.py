@@ -60,6 +60,7 @@ def install(app, store, auth):
         auth.domain(who)
         require_owner(who)
         with store.transaction() as c:
+            slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
             if not H.bot(c, slug):
                 raise Problem("not_found", "No bot " + slug, 404)
             grants = metadata(c, GRANTS)

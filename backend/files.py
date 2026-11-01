@@ -48,7 +48,7 @@ def raw_media(request, imported=False):
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_files(
- id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(slug), scope TEXT NOT NULL,
+ id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(id), scope TEXT NOT NULL,
  identity TEXT NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL, mime TEXT NOT NULL DEFAULT '',
  locator TEXT NOT NULL, url TEXT, provider TEXT, current_version INTEGER NOT NULL DEFAULT 0,
  state TEXT NOT NULL DEFAULT 'ready', task_id TEXT, conversation_id TEXT,
@@ -215,6 +215,7 @@ class Files:
         if who.role == "bot":
             return H.actor_id(who.actor)
         if who.role == "runner":
+            given = (H.resolve_bot(c, given) or {}).get("id", given)
             if not given or not H.bot(c, given):
                 raise Problem("not_found", "Bot not found", 404)
             return H.actor_id(given)
@@ -571,7 +572,7 @@ class Files:
         def work(c):
             managing = who.role in ("owner", "human")
             if managing:
-                bot = H.actor_id(body.bot)
+                bot = (H.resolve_bot(c, body.bot) or {}).get("id", H.actor_id(body.bot))
                 if not H.bot(c, bot) or not self.auth.visible_bot(c, who, bot):
                     raise Problem("not_found", "Bot not found", 404)
                 self.require_manager(who)
@@ -778,6 +779,7 @@ class Files:
 
     def listing(self, who, bot, limit, cursor):
         with self.store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             self.bot_row(c, who, bot)
             cache, caches = {}, {"task": {}, "repo": {}}
             rows = c.execute("SELECT * FROM bot_files WHERE bot=? AND archived=0 "

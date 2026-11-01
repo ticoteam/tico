@@ -279,7 +279,7 @@ def test_a_temporary_assignment_retired_with_its_task_takes_the_model_off_it(api
     ops_on_sonnet(api)
     mine = filed(api, "Tidy the changelog")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,state,created) VALUES('ops-a1','Ops A1','active',?)", (H.now(),))
+        c.execute("INSERT INTO bots(id,slug,display_name,state,created) VALUES('ops-a1','ops-a1','Ops A1','active',?)", (H.now(),))
         c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('ops-a1',?,'ana')",
                   (json.dumps({"assignment_branch": True, "shared_from": "ops"}),))
         c.execute("UPDATE tasks SET owner='bot:ops-a1',status='doing' WHERE id=?", (mine["id"],))
@@ -351,6 +351,12 @@ def test_a_routine_step_changed_to_a_retired_model_is_still_refused(api, monkeyp
     assert get(api, f"automations/{aid}")["steps"][0]["model"] == "claude-haiku-5-5"
 
 
+def branch_id(api, slug):
+    """A branch's id: its actor (`bot:<id>`), its readiness report and its claims use the id, not the slug."""
+    with api.app.state.store.read() as c:
+        return H.resolve_bot(c, slug)["id"]
+
+
 def branch_computer_ready(api, computer, bot):
     """A computer of a branch's person, signed in to Claude, with the branch's bot ready on it."""
     post(api, "runners/heartbeat", {
@@ -371,19 +377,19 @@ def test_a_branch_task_takes_its_own_model_from_whoever_may_change_the_originals
     post(api, "bots/ops/copies", {"runner_id": hers["runner_id"]}, token="ben-test")
     post(api, "bots/ops/copies", {"runner_id": runner(api, "cara", "Cara's Mac")["runner_id"]}, token="cara-test")
     mine = post(api, "tasks", {"owner": "ops", "title": "Tidy the changelog", "body": "Sort the entries."}, "ben-test")
-    assert mine["owner"] == "bot:ops-ben"
+    assert mine["owner"] == H.bot_actor(branch_id(api, "ops-ben"))
     # Ben manages ops, so his branch's task takes the model; the branch itself keeps following ops.
     own_model(api, mine["id"], HAIKU, token="ben-test")
     assert get(api, "tasks/" + mine["id"], "ben-test")["run_model"]["model"] == "claude-haiku-5-5"
     assert get(api, "bots/ops-ben", "ben-test")["task_model"] is None
     # Cara's branch is not ops' manager's: her task's model is refused, and it stays unset.
     theirs = post(api, "tasks", {"owner": "ops", "title": "Tidy the README", "body": "Sort it."}, "cara-test")
-    assert theirs["owner"] == "bot:ops-cara"
+    assert theirs["owner"] == H.bot_actor(branch_id(api, "ops-cara"))
     own_model(api, theirs["id"], HAIKU, token="cara-test", expected=403)
     assert get(api, "tasks/" + theirs["id"], "cara-test")["run_model"] is None
     # The branch's computer runs the task on the task's model.
-    branch_computer_ready(api, hers, "ops-ben")
-    turn = claim(api, hers, "ops-ben")
+    branch_computer_ready(api, hers, branch_id(api, "ops-ben"))
+    turn = claim(api, hers, branch_id(api, "ops-ben"))
     assert turn["task"]["id"] == mine["id"]
     assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-haiku-5-5", "low")
     finish(api, hers, turn, HAIKU_RAN)
@@ -398,7 +404,7 @@ def test_a_task_says_whether_its_reader_may_set_its_model_as_the_post_decides(ap
     post(api, "bots/ops/copies", {"runner_id": runner(api, "ben", "Ben's Mac")["runner_id"]}, token="ben-test")
     post(api, "bots/ops/copies", {"runner_id": runner(api, "cara", "Cara's Mac")["runner_id"]}, token="cara-test")
     theirs = post(api, "tasks", {"owner": "ops", "title": "Tidy the README", "body": "Sort it."}, "cara-test")
-    assert theirs["owner"] == "bot:ops-cara"
+    assert theirs["owner"] == H.bot_actor(branch_id(api, "ops-cara"))
     # Cara operates her branch but manages neither it nor ops, whose model it follows: no form, and no save.
     assert get(api, "tasks/" + theirs["id"], "cara-test")["can_set_run_model"] is False
     own_model(api, theirs["id"], HAIKU, token="cara-test", expected=403)

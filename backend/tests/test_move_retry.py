@@ -102,7 +102,7 @@ def unreadable(api, monkeypatch, mode, response=None):
     from backend.store import Problem
     state = {'down': True}
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug, display_name, runtime, state) VALUES('devops-engineer','DevOps','fake','active')")
+        c.execute("INSERT INTO bots(id, slug, display_name, runtime, state) VALUES('devops-engineer','devops-engineer','DevOps','fake','active')")
     service = api.app.state.github_app
     # A configured app row: truthy for the gate's snapshot, mapping-shaped for link refreshes.
     monkeypatch.setattr(service, 'row', lambda c=None: {"org": "ticoteam"})

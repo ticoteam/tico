@@ -491,7 +491,7 @@ class Rule8Counting(HubCase):
     def setUp(self):
         super().setUp()
         # Rule 8's review tasks go to BotOps; without it every review is refused and none is ever counted.
-        self.conn.execute("INSERT INTO bots(slug, display_name, state) VALUES(?,?, 'active')", (H.FLEET_MAINTAINER, "BotOps"))
+        self.conn.execute("INSERT INTO bots(id, slug, display_name, state) VALUES(?,?,?, 'active')", (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER, "BotOps"))
 
     def refuse_reach(self, n, actor=CMO):
         """`n` refusals that count: the same refused write made n + 1 times (the first is recorded, not counted)."""
@@ -623,8 +623,8 @@ class Rule8Counting(HubCase):
     def test_botops_lifts_a_refusal_quarantine_but_an_escape_waits_for_a_person(self):
         botops = H.bot_actor(H.FLEET_MAINTAINER)
         if not H.bot(self.conn, H.FLEET_MAINTAINER):
-            self.conn.execute("INSERT INTO bots(slug, display_name, state) VALUES(?,?, 'active')",
-                              (H.FLEET_MAINTAINER, "BotOps"))
+            self.conn.execute("INSERT INTO bots(id, slug, display_name, state) VALUES(?,?,?, 'active')",
+                              (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER, "BotOps"))
         self.refuse_reach(10)
         H.status_set(self.conn, botops, "cmo", state="active", reason="reviewed")
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")

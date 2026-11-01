@@ -16,8 +16,8 @@ from backend.tests.test_assistant import asked, say, turn_message
 def strategy_bot(api):
     """The Strategy Bot every set-up install has."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
+        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
+                  "VALUES('goal-manager','goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
         c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
 
 
@@ -42,8 +42,8 @@ def turn(api, bot, person, text):
 def helper(api, slug, name):
     """Another built-in helper bot (the Librarian), active."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES(?,?,'fake','','','','keeper','active',?)", (slug, name, H.now()))
+        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
+                  "VALUES(?,?,?,'fake','','','','keeper','active',?)", (slug, slug, name, H.now()))
         c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,'{}',NULL,'ana')", (slug,))
 
 

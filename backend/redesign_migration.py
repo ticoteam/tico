@@ -1315,7 +1315,7 @@ def pending(c):
         add("wake_rule", sum(not tico_notices.is_builtin_rule(r[0]) and ("wake_rule", r[0]) not in done
                              for r in c.execute("SELECT id FROM rules")))
     people = _json(_meta(c, "people"), {}).get("people") or []
-    bots = ({r[0]: r[1] for r in c.execute("SELECT slug, state FROM bots")} if _table(c, "bots") else {})
+    bots = ({r[0]: r[1] for r in c.execute("SELECT id, state FROM bots")} if _table(c, "bots") else {})
     add("inbox", sum(bool(p.get("inbox_bot")) and not p.get("hidden") and bots.get(p["inbox_bot"]) not in (None, "archived")
                      for p in people if isinstance(p, dict)))
     for table, key in (("usage_limits", "bot"), ("usage_pools", "scope")):
@@ -1335,7 +1335,7 @@ def pending(c):
     row = bots.get(strategy_bot.SLUG)
     if row and row != "archived" and ("bot", "bot:" + strategy_bot.SLUG) not in done:
         name = (c.execute("SELECT "
-                          "display_name FROM bots WHERE slug=?", (strategy_bot.SLUG,)).fetchone()[0] or "").strip() \
+                          "display_name FROM bots WHERE id=?", (strategy_bot.SLUG,)).fetchone()[0] or "").strip() \
             if "display_name" in _columns(c, "bots") else ""
         add("bot", int(name in ("", strategy_bot.NAME, STRATEGY_NAME, *strategy_bot.OLD_NAMES)))
     return found

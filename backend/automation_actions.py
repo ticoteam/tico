@@ -132,6 +132,7 @@ def _slack(c, auto, run_id, do, args, message):
         if not text:
             return _fail("send_reply needs a body")
         bot = R._slug(args.get("bot")) or _owner_bot(c, auto)
+        bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         if not bot:
             return _fail("send_reply in Slack needs a bot to post as")
         conv = R._bot_room(c, bot)
@@ -201,7 +202,8 @@ def _create_task(c, auto, run_id, args, values, step=None):
         return _fail("create_task needs a title")
     actor = _actor(c, auto)
     owner = str(args.get("owner") or "")
-    owner = owner if ":" in owner else (("bot:" + owner) if owner and H.bot(c, owner) else
+    found = H.resolve_bot(c, owner) if owner and ":" not in owner else None
+    owner = owner if ":" in owner else (("bot:" + found["id"]) if found else
                                         ("human:" + owner) if owner else actor)
     if owner.startswith("person:"):
         owner = "human:" + owner[7:]
@@ -248,7 +250,8 @@ def _on_task(name):
             owner = str(args.get("owner") or "").replace("person:", "human:")
             if not owner:
                 return _fail("assign needs an owner")
-            owner = owner if ":" in owner else ("bot:" + owner if H.bot(c, owner) else "human:" + owner)
+            found = H.resolve_bot(c, owner) if ":" not in owner else None
+            owner = owner if ":" in owner else ("bot:" + found["id"] if found else "human:" + owner)
             if H.task_private(c, task) and not H.task_private_readable(c, owner, task):
                 return _fail("the new owner cannot read this private task")
             H.task_update(c, actor, task["id"], owner=owner, note=said)
@@ -288,6 +291,7 @@ def _note(c, auto, run_id, args, values):
     """On the run's task, else to `bot`; with neither (a sample task with no id, a mail, a schedule) the note is kept
     in the run log only, as its step's `note`."""
     bot = R._slug(args.get("bot"))
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     if task_of(c, auto, values):
         return _on_task("note")(c, auto, run_id, args, values)
     if not bot:
@@ -301,6 +305,7 @@ def _note(c, auto, run_id, args, values):
 
 def _wake_bot(c, auto, run_id, args, values):
     bot = R._slug(args.get("bot")) or _owner_bot(c, auto)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     text = _text(args, "text", "prompt") or f"Automation {auto['flow'].get('name')}: take a look."
     task = task_of(c, auto, values)
     room = _told(c, auto, bot)
@@ -431,10 +436,10 @@ def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", la
         bot = assistant_bot
         assistant.ensure_room(c, "human:" + ident, assistant_bot)
     else:
-        bot = ident
-        found = H.bot(c, bot)
+        found = H.resolve_bot(c, ident) or {}
         if not found or found["state"] not in R.BOT_STATES_OK:
-            raise ValueError(f"No bot {bot}" if not found else f"{bot} is {found['state']}")
+            raise ValueError(f"No bot {ident}" if not found else f"{ident} is {found['state']}")
+        bot = found["id"]
     name = str(auto["flow"].get("name") or auto["id"])
     title = f"{name} · {label}"[:300] if label else name[:300]
     # A due-date run's turn is that occurrence's task, due and marked the same way as a create_task's (`_occurrence`).

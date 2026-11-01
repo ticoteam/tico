@@ -30,7 +30,7 @@ ENGINEERING, PRODUCT = "engineering", "product"
 
 def engineering_bot(c):
     """The active Head of Engineering, or None."""
-    row = c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+    row = c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                     "WHERE json_extract(bc.config_json,'$.template')='engineering-lead' AND b.state='active' "
                     "ORDER BY bc.bot LIMIT 1").fetchone()
     return row[0] if row else None

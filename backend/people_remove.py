@@ -19,9 +19,10 @@ from . import hubdb as H
 from .store import Problem
 
 KEEPS = "Has history; stays as left"
-# Where a row naming them is not history: the rows `remove` deletes and the request cache. Events about them
-# (person.added, person.updated) name their bare id as the target, so `history` reads a target only as `human:<id>`.
-SKIP_TABLES = ("humans", "idempotency")
+# Where a row naming them is not history: the rows `remove` deletes, the request cache, and their principal (the
+# `human:<id>` identity that the humans trigger tombstones on delete). Events about them (person.added,
+# person.updated) name their bare id as the target, so `history` reads a target only as `human:<id>`.
+SKIP_TABLES = ("humans", "idempotency", "principals")
 OWN_COLUMNS = {("invite_sends", "person"), ("human_tokens", "human")}
 # Settings that name them and are rewritten by `remove`.
 OWN_SETTINGS = (Access.ACCESS, "people", "invites")

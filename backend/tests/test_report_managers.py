@@ -32,13 +32,20 @@ def revision(api, slug, token="ana-test"):
     return get(api, f"bots/{slug}", token=token)["revision"]
 
 
+def bot_id(api, slug):
+    """The id the store keys a bot by. A test names a bot by its slug, which is only its label."""
+    with api.app.state.store.read() as c:
+        return H.resolve_bot(c, slug)["id"]
+
+
 def task_model(api, token, slug="counsel", expected=200):
     return post(api, f"bots/{slug}/task-model", {"task_model": HAIKU, "expected_revision": revision(api, slug)},
                 token=token, expected=expected)
 
 
 def changes_to(api, bot_slug, field):
-    return [row for row in get(api, "settings/history")["changes"] if row["bot"] == bot_slug and row["field"] == field]
+    bid = bot_id(api, bot_slug)
+    return [row for row in get(api, "settings/history")["changes"] if row["bot"] == bid and row["field"] == field]
 
 
 def test_a_manager_bot_changes_its_reports_task_model_as_itself(api):
@@ -46,7 +53,7 @@ def test_a_manager_bot_changes_its_reports_task_model_as_itself(api):
     bot(api, "counsel", reports_to="lead")
     task_model(api, lead)
     [row] = changes_to(api, "counsel", "task_model")
-    assert row["via"] == "report_manager" and row["actor"] == "bot:lead"
+    assert row["via"] == "report_manager" and row["actor"] == "bot:" + bot_id(api, "lead")
     assert row["after"]["model"] == "claude-haiku-5-5"
 
 
@@ -107,7 +114,8 @@ def test_a_person_who_manages_the_report_sees_and_undoes_the_managers_change(api
     lead = bot(api, "lead", reports_to="human:ben")
     bot(api, "counsel", reports_to="lead")
     task_model(api, lead)
-    [row] = [c for c in get(api, "settings/history", token="ben-test")["changes"] if c["bot"] == "counsel"]
+    counsel = bot_id(api, "counsel")
+    [row] = [c for c in get(api, "settings/history", token="ben-test")["changes"] if c["bot"] == counsel]
     assert row["via"] == "report_manager" and row["can_undo"] is True
     assert get(api, "settings/history", token="ben-test")["transitions"] == []
     assert get(api, "settings/history", token="cara-test")["changes"] == []
@@ -122,7 +130,7 @@ def test_a_routine_a_manager_bot_reaches_follows_both_switches(api):
     lead = bot(api, "lead")
     bot(api, "counsel", reports_to="lead")
     store = api.app.state.store
-    flow, who = {"owner": "bot:counsel"}, Identity("bot:lead", "bot")
+    flow, who = {"owner": "bot:" + bot_id(api, "counsel")}, Identity("bot:" + bot_id(api, "lead"), "bot")
     with store.read() as c:
         assert automations.may_change(c, who, flow)
     post(api, "bots/lead/manages-reports", {"manages_reports": False, "expected_revision": revision(api, "lead")})
@@ -171,11 +179,12 @@ def test_a_manager_bot_follows_its_reports_model_change_without_reading_its_chec
     bot(api, "counsel", reports_to="lead")
     task = post(api, "tasks", {"owner": "counsel", "title": "Review the lease", "body": "Check the break clause."})
     store = api.app.state.store
+    counsel = bot_id(api, "counsel")
     with store.transaction() as c:
         room = H.task(c, task["id"])["conversation_id"]
         message = c.execute("SELECT id FROM messages WHERE conversation_id=? LIMIT 1", (room,)).fetchone()[0]
         c.execute("INSERT INTO bot_transitions(id,bot,kind,target_json,requested_by,expected_revision,state,created,"
-                  "updated) VALUES('tr-1','counsel','model','{}','human:ana',1,'checkpointing',?,?)", (H.now(), H.now()))
+                  "updated) VALUES('tr-1',?,'model','{}','human:ana',1,'checkpointing',?,?)", (counsel, H.now(), H.now()))
         c.execute("INSERT INTO bot_transition_checkpoints(transition_id,conversation_id,message_id,state,checkpoint_json)"
                   " VALUES('tr-1',?,?,'prepared',?)", (room, message, encode({"decisions": ["Drop the break clause"]})))
     [seen] = get(api, "settings/transitions/tr-1", token=lead)["checkpoints"]
@@ -186,10 +195,11 @@ def test_a_manager_bot_follows_its_reports_model_change_without_reading_its_chec
 
 def newer_changes(api, bot_slug, n, created):
     """`n` task-model changes a manager bot made to `bot_slug`, written as the app writes them; `created(i)` is when."""
+    bid = bot_id(api, bot_slug)
     with api.app.state.store.transaction() as c:
         c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
                       "via) VALUES(?,?,?,?,?,?,?,?,?)",
-                      [(H.new_id(), bot_slug, "task_model", encode(None), encode(HAIKU), "bot:lead", None, created(i),
+                      [(H.new_id(), bid, "task_model", encode(None), encode(HAIKU), "bot:lead", None, created(i),
                         report_managers.VIA) for i in range(n)])
 
 
@@ -205,7 +215,7 @@ def test_a_bots_history_keeps_its_change_when_other_bots_fill_the_newest_page(ap
         listed = get(api, "settings/history?bot=counsel", token=token)["changes"]
         found = [row for row in listed if row["id"] == mine["id"]]
         assert found and found[0]["can_undo"] is True, token
-        assert {row["bot"] for row in listed} == {"counsel"}, token
+        assert {row["bot"] for row in listed} == {mine["bot"]}, token
 
 
 def test_a_history_page_is_bounded_and_the_next_page_neither_skips_nor_repeats(api):
@@ -214,9 +224,10 @@ def test_a_history_page_is_bounded_and_the_next_page_neither_skips_nor_repeats(a
     task_model(api, lead)
     stamp = H.now()
     newer_changes(api, "counsel", 250, lambda i: stamp)     # one time for all: the cursor must not skip a tie
+    counsel = bot_id(api, "counsel")
     with api.app.state.store.read() as c:
-        total = c.execute("SELECT count(*) FROM settings_changes WHERE bot='counsel' AND via=?",
-                          (report_managers.VIA,)).fetchone()[0]
+        total = c.execute("SELECT count(*) FROM settings_changes WHERE bot=? AND via=?",
+                          (counsel, report_managers.VIA)).fetchone()[0]
     seen, before = [], ""
     for _ in range(10):
         page = get(api, f"settings/history?bot=counsel&limit=100&before={before}", token="ben-test")
@@ -257,7 +268,8 @@ def test_a_person_sees_only_the_manager_changes_to_the_bots_they_manage(api):
     newer_changes(api, "counsel", 300, lambda i: H.shift(H.now(), seconds=i))
     newer_changes(api, "helper", 2, lambda i: H.shift(H.now(), seconds=i))
     listed = get(api, "settings/history", token="cara-test")["changes"]
-    assert [row["bot"] for row in listed] == ["helper", "helper"]
+    helper = bot_id(api, "helper")
+    assert [row["bot"] for row in listed] == [helper, helper]
 
 
 def settings_reads(api, monkeypatch, path, token):
@@ -286,10 +298,11 @@ def test_a_persons_view_of_a_bots_changes_is_an_index_seek_whatever_the_bots_his
     bot(api, "lead", reports_to="human:ben")
     bot(api, "counsel", reports_to="lead")
     # Counsel's history is 3,000 people's changes and no manager's: Ben's reads of it find nothing, and seek past it.
+    counsel = bot_id(api, "counsel")
     with api.app.state.store.transaction() as c:
         c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
                       "via) VALUES(?,?,?,?,?,?,?,?,?)",
-                      [(H.new_id(), "counsel", "owners", encode([]), encode(["human:ana"]), "human:ana", None,
+                      [(H.new_id(), counsel, "owners", encode([]), encode(["human:ana"]), "human:ana", None,
                         H.shift(H.now(), seconds=-i), None) for i in range(3000)])
     for path in ("settings/history?bot=counsel", "settings/history"):
         answer, plans = settings_reads(api, monkeypatch, path, "ben-test")
@@ -307,10 +320,11 @@ def test_a_tie_of_changes_at_one_time_pages_in_id_order_and_no_read_sorts_it(api
     a sort would read every change at one time before its first page, and a `before` page would sort them again."""
     bot(api, "lead", reports_to="human:ben")
     bot(api, "counsel", reports_to="lead")
+    cid = bot_id(api, "counsel")
     with api.app.state.store.transaction() as c:
         c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
                       "via) VALUES(?,?,?,?,?,?,?,?,?)",
-                      [(H.new_id(), "counsel", "task_model", encode(None), encode(HAIKU), "bot:lead", None,
+                      [(H.new_id(), cid, "task_model", encode(None), encode(HAIKU), "bot:lead", None,
                         "2026-10-28T12:00:00.000000Z", report_managers.VIA if i % 2 else None) for i in range(600)])
     store = api.app.state.store
     real, statements = store.read, []
@@ -342,9 +356,9 @@ def test_a_tie_of_changes_at_one_time_pages_in_id_order_and_no_read_sorts_it(api
         return [row[0] for row in sorted(rows, key=lambda row: (row[1], row[0]), reverse=True) if keep(row)]
 
     cases = [("settings/history?bot=counsel&limit=100", "ana-test",
-              newest_first(lambda row: row[2] == "counsel")),
+              newest_first(lambda row: row[2] == cid)),
              ("settings/history?bot=counsel&limit=100", "ben-test",
-              newest_first(lambda row: row[2] == "counsel" and row[3] == report_managers.VIA)),
+              newest_first(lambda row: row[2] == cid and row[3] == report_managers.VIA)),
              ("settings/history?limit=100", "ana-test", newest_first(lambda row: True))]
     for path, token, expected in cases:
         seen, before = [], ""
@@ -374,7 +388,8 @@ def ask_botops(api, botops, manager, text=None):
 
 
 def lifecycle_changes(api, bot_slug):
-    return [row for row in get(api, "settings/history")["changes"] if row["bot"] == bot_slug and row["field"] == "lifecycle"]
+    bid = bot_id(api, bot_slug)
+    return [row for row in get(api, "settings/history")["changes"] if row["bot"] == bid and row["field"] == "lifecycle"]
 
 
 def test_a_manager_bot_with_its_own_token_cannot_add_or_archive_a_report(api):
@@ -391,15 +406,16 @@ def test_botops_adds_a_report_for_the_manager_as_a_members_bot_under_the_person_
     made = act(api, attempt, "POST", "bots", {**NEW_BOT, "slug": "junior", "reports_to": "lead"})
     assert made.status_code == 200, made.text
     finish(api, botops, attempt)
+    jid, lid = bot_id(api, "junior"), bot_id(api, "lead")
     row = get(api, "bots/junior")
-    assert row["reports_to"] == "lead"
+    assert row["reports_to"] == lid
     with api.app.state.store.read() as c:
-        config = c.execute("SELECT created_by,operator FROM bot_config WHERE bot='junior'").fetchone()
+        config = c.execute("SELECT created_by,operator FROM bot_config WHERE bot=?", (jid,)).fetchone()
         assert (config["created_by"], config["operator"]) == ("human:cara", "cara")    # a member's bot, made by the person above
-        events = c.execute("SELECT actor,detail_json FROM events WHERE action='bot.report_lifecycle' AND target='junior'").fetchall()
-    assert [(e["actor"], '"op": "create"' in e["detail_json"]) for e in events] == [("bot:lead", True)]
+        events = c.execute("SELECT actor,detail_json FROM events WHERE action='bot.report_lifecycle' AND target=?", (jid,)).fetchall()
+    assert [(e["actor"], '"op": "create"' in e["detail_json"]) for e in events] == [("bot:" + lid, True)]
     [change] = lifecycle_changes(api, "junior")
-    assert change["via"] == "report_manager" and change["actor"] == "bot:lead" and change["before"] is None
+    assert change["via"] == "report_manager" and change["actor"] == "bot:" + lid and change["before"] is None
     assert change["after"] == {"state": "planned"}
 
 
@@ -449,7 +465,7 @@ def test_the_weekly_cap_refuses_and_asks_the_person_above_the_manager(api, botop
     finish(api, botops, attempt)
     with api.app.state.store.read() as c:
         asks = c.execute("SELECT owner,requester FROM tasks WHERE title LIKE 'lead is at its weekly limit%'").fetchall()
-    assert [(a["owner"], a["requester"]) for a in asks] == [("human:cara", "bot:lead")]
+    assert [(a["owner"], a["requester"]) for a in asks] == [("human:cara", "bot:" + bot_id(api, "lead"))]
 
 
 def test_botops_archives_a_report_and_the_change_is_recorded_and_restorable(api, botops):
@@ -487,7 +503,7 @@ def test_a_manager_bot_files_an_instruction_change_as_a_next_run_task_for_its_re
                                 "body": "Update your AGENT.md: ask for the counterparty's name first.", "next_run": True},
                  token=lead)
     row = get(api, f"tasks/{filed['id']}")["task"]
-    assert row["owner"] == "bot:counsel" and row["next_run"] is True
+    assert row["owner"] == "bot:" + bot_id(api, "counsel") and row["next_run"] is True
     post(api, "tasks", {"owner": "stranger", "title": "Change the steps", "body": "Do it.", "next_run": True},
          token=lead, expected=403)
 

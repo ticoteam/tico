@@ -349,8 +349,10 @@ class Library:
                 where.append("p.file_id IS NULL AND f.kind IN (%s)" % ",".join("?" * len(STORED[kind])))
                 params += list(STORED[kind])
         if bot:
+            with self.store.read() as c:
+                bot = (H.resolve_bot(c, bot) or {}).get("id", H.actor_id(bot))
             where.append("f.bot=?")
-            params.append(H.actor_id(bot))
+            params.append(bot)
         if task:
             where.append("f.task_id=?")
             params.append(task)

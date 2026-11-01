@@ -329,7 +329,7 @@ class Support:
                 from .views import roster
                 people = roster(c).get("people") or []
                 redactor = diagnostics.Redactor(diagnostics._domains(self.settings, {"people": people}),
-                    [(b["slug"], [b.get("display_name")]) for b in H.bots(c)],
+                    [(b["slug"], [b.get("display_name"), b["id"]]) for b in H.bots(c)],
                     [(p.get("id", ""), [p.get("name"), p.get("email")]) for p in people])
             value = redactor.clean(diagnostics.allowed(value))
             value.setdefault("capture", {})["edited"] = True

@@ -470,7 +470,8 @@ def preview_change(c, settings, actor, bot, body):
         return None
     row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
     org = row['org'] if row else getattr(settings, 'github_owner', '')
-    name = (H.bot(c, bot) or {}).get('display_name') or bot
+    found = H.bot(c, bot) or {}
+    name = found.get('display_name') or found.get('slug') or bot
     try:
         return tried(c, bot, update, org, actor, name)
     except Problem:
@@ -518,7 +519,8 @@ def card_words(c, settings, auth, who, bot, body):
         raise Problem('validation', 'Bot repositories takes {"mode": "own|all|chosen", ...}: ' + str(exc)[:200], 422)
     row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
     org = row['org'] if row else getattr(settings, 'github_owner', '')
-    name = (H.bot(c, bot) or {}).get('display_name') or bot
+    found = H.bot(c, bot) or {}
+    name = found.get('display_name') or found.get('slug') or bot
     before, result = trial(c, bot, update, org, who.actor, owner=who.role == 'owner')
     return needs_card(result), plain_change(name, before, result)
 
@@ -805,7 +807,7 @@ def daily(service):
 def runner_repos(c, runner_id, org):
     result = {}
     sizes = metadata(c, 'repositories-sizes')
-    hosted = c.execute("SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot WHERE a.runner_id=? AND b.state='active'",
+    hosted = c.execute("SELECT a.bot FROM assignments a JOIN bots b ON b.id=a.bot WHERE a.runner_id=? AND b.state='active'",
                        (runner_id,)).fetchall()
     reads = Reads(c, [row[0] for row in hosted])
     for row in hosted:
@@ -939,6 +941,8 @@ def install(app, store, service):
 
     @app.get('/api/v2/bots/{bot}/repositories')
     def bot_get(request: Request, bot: str):
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get('id', bot)
         who = botops(request, bot) or human(request)
         with store.read() as c:
             if who.role != 'bot' and not app.state.auth.bot_access(c, who, bot)['see']:
@@ -948,6 +952,8 @@ def install(app, store, service):
 
     @app.put('/api/v2/bots/{bot}/repositories')
     def bot_set(request: Request, bot: str, body: RepoAccessUpdate):
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get('id', bot)
         who = botops(request, bot) or human(request, True)
         if app.state.auth.system_bot(bot) and who.role != 'owner':
             raise Problem('forbidden', 'Only the Owner changes Built-in bots', 403)
@@ -980,7 +986,8 @@ def install(app, store, service):
                 return result
             c.execute('ROLLBACK TO repo_narrowing')
             c.execute('RELEASE repo_narrowing')
-            name = (H.bot(c, bot) or {}).get('display_name') or bot
+            found = H.bot(c, bot) or {}
+            name = found.get('display_name') or found.get('slug') or bot
             propose = getattr(app.state, 'botops_propose', None)
             if who.via == 'botops' and propose:
                 plain = plain_change(name, before, result)

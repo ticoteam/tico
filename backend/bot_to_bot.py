@@ -47,14 +47,17 @@ def can_wait(conn, actor, target, kind, refs, body, in_reply_to=None):
         return False
 
 
-def held_reason(msg):
+def held_reason(msg, conn=None):
     """What the sender reads when its message was held for the recipient's next run (Dev 328), else None. On
-    Oct 21 Support's escalations to DevOps were held like this and read as delivered: say it plainly."""
+    Oct 21 Support's escalations to DevOps were held like this and read as delivered: say it plainly. With `conn`
+    the recipient is named by its slug, else by its id."""
     refs = msg.get("refs") if isinstance(msg.get("refs"), dict) else {}
     if refs.get(MARK) != RULE:
         return None
     from . import hubdb as H
     bot = H.actor_id(msg.get("to_actor") or "")
+    if conn is not None:
+        bot = (H.bot(conn, bot) or {}).get("slug", bot)
     return (f"held for {bot}'s next run; nothing runs it now. Add --needs-action (needs_action: true) to wake "
             f"{bot} now, or ask with `hub question ask`.")
 
@@ -66,7 +69,10 @@ def hold(conn, msg, task_row=None):
     text = str(msg["body"] or "")
     if len(text) > H.NOTE_MAX - 400:
         text = text[:H.NOTE_MAX - 400] + "... (the rest is in the message)"
-    body = (f"Message from {H.actor_id(msg['from_actor'])} {where}, which could wait for this run "
+    sender = H.actor_id(msg["from_actor"])
+    if H.is_bot(msg["from_actor"]):
+        sender = (H.bot(conn, sender) or {}).get("slug", sender)
+    body = (f"Message from {sender} {where}, which could wait for this run "
             f"(message {msg['id']}). Act on it if it asks for something.\n\n{text}")
     row = {"id": H.new_id(), "from_actor": msg["from_actor"], "to_actor": msg["to_actor"], "body": body,
            "created": msg["created"], "message_id": msg["id"]}

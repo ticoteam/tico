@@ -290,6 +290,7 @@ def install(app, store, auth, mutate, settings_admin):
         manage it."""
         who = request.state.identity
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             seeing(c, who, bot)
             settings_admin._manager(c, who, bot, botops=True)
             return view(c, bot, settings_admin._config(c, bot))
@@ -301,6 +302,8 @@ def install(app, store, auth, mutate, settings_admin):
         who = request.state.identity
 
         def work(c):
+            nonlocal bot
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             seeing(c, who, bot)
             return set_bot(settings_admin, c, who, bot, body)
         return mutate(request, body, work)
@@ -311,6 +314,8 @@ def install(app, store, auth, mutate, settings_admin):
         who = request.state.identity
 
         def work(c):
+            nonlocal bot
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             seeing(c, who, bot)
             settings_admin._manager(c, who, bot, botops=True)
             from . import bot_stops

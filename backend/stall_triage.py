@@ -143,7 +143,8 @@ def _who(c, row, actor):
         return "the bot that owns it"
     if H.is_human(actor):
         return "person: " + H.person_name(c, actor)
-    return "another bot: " + ((H.bot(c, H.actor_id(actor)) or {}).get("display_name") or H.actor_id(actor))
+    found = H.bot(c, H.actor_id(actor)) or {}
+    return "another bot: " + (found.get("display_name") or found.get("slug") or H.actor_id(actor))
 
 
 def _messages(c, row):
@@ -208,8 +209,10 @@ def _last_speaker(c, row):
         if actor and actor != H.KEEPER:
             if H.is_human(actor):
                 return H.person_name(c, actor)
-            return (H.bot(c, H.actor_id(actor)) or {}).get("display_name") or H.actor_id(actor)
-    return (H.bot(c, H.actor_id(row["owner"])) or {}).get("display_name") or H.actor_id(row["owner"])
+            found = H.bot(c, H.actor_id(actor)) or {}
+            return found.get("display_name") or found.get("slug") or H.actor_id(actor)
+    found = H.bot(c, H.actor_id(row["owner"])) or {}
+    return found.get("display_name") or found.get("slug") or H.actor_id(row["owner"])
 
 
 def _set_wait(c, row, kind, ref):

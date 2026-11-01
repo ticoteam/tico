@@ -244,7 +244,7 @@ def view(conn, row, history=True):
 
 # ------------------------------------------------------------------------------------------------ the carrier ends
 def worked(conn, row, bot, since, until=None):
-    """Whether bot `bot` (a slug) worked task `row` between `since` and `until`: a comment or message in its room, a
+    """Whether bot `bot` (its id) worked task `row` between `since` and `until`: a comment or message in its room, a
     change to its fields (step, status, note, ...), a link it added, or a pull request on the task opened or pushed
     to. A link refreshed from GitHub (checks, mergeable, review) is not work."""
     actor = "bot:" + bot
@@ -407,7 +407,7 @@ def stale(conn, at=None, hours=STALE_HOURS):
     out = []
     try:
         rows = H._rows(conn.execute(
-            "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug WHERE b.state='active' AND t.next_run=1 "
+            "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.id WHERE b.state='active' AND t.next_run=1 "
             "AND t.status='open' AND t.resume_json IS NULL AND t.snoozed_until IS NULL "
             "AND (t.carried_by IS NOT NULL OR EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id "
             "AND e.field=? AND e.new=?))", (FIELD, RETURNED)))

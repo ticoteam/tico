@@ -318,8 +318,8 @@ def destination_list(conn, settings):
                       if q.get("type") == "noul"]
     except J.JudgeError:
         categories = []
-    bots = [{"actor": "bot:" + r["slug"], "name": r["display_name"] or r["slug"]} for r in H._rows(conn.execute(
-        "SELECT slug, display_name FROM bots WHERE state<>'archived' ORDER BY display_name, slug"))]
+    bots = [{"actor": "bot:" + r["id"], "name": r["display_name"] or r["slug"]} for r in H._rows(conn.execute(
+        "SELECT id, slug, display_name FROM bots WHERE state<>'archived' ORDER BY display_name, slug"))]
     return {"destinations": rows, "categories": categories, "receivers": bots}
 
 

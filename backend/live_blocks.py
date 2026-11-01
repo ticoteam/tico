@@ -57,8 +57,9 @@ def _tasks(c, auth, who, attrs, base):
     clauses, args = ["status='waiting'", "waiting_on=?", "(snoozed_until IS NULL OR snoozed_until<=?)",
                      "(" + auth.task_sql(c, who) + ")"], [who.actor, H.now()]
     if attrs.get("bot"):
+        bot = (H.resolve_bot(c, attrs["bot"]) or {}).get("id", attrs["bot"])
         clauses.append("owner=?")
-        args.append("bot:" + attrs["bot"])
+        args.append("bot:" + bot)
     if attrs.get("parent"):
         clauses.append("parent_id=?")
         args.append(attrs["parent"])

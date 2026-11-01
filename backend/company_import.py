@@ -426,7 +426,7 @@ def apply(onboarding, c, who, text, fingerprint):
         clear_failure(c)        # this file is the one already applied, so nothing from setup is left unimported
         return onboarding.view(c, who)
     builtins = set(summary["builtins"])
-    existing = [r[0] for r in c.execute("SELECT slug FROM bots") if r[0] not in builtins]
+    existing = [r[0] for r in c.execute("SELECT id FROM bots") if r[0] not in builtins]
     laid = c.execute("SELECT 1 FROM seats WHERE closed_at IS NULL LIMIT 1").fetchone()
     if record["completed"] or existing or laid:
         raise Problem("company_already_setup", "This company is already set up; import cannot replace its team", 409)

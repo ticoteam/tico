@@ -437,12 +437,13 @@ def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
         slug=slug, display_name=name, description=description[:2000], status="planned", repo="bot-" + slug,
         thread_mode="personal", reports_to=lifecycle.bot_parent(c, placed) or None, shared=bool(card.get("shared")),
         template=card["template"], model=model["id"], harness=agent["connect_id"], owners=[H.actor_id(who.actor)]))
-    setup_task = recruiting.onboard(c, who, onboarding, row, card, slug, name=name, description=description,
+    bot_id = H.resolve_bot(c, slug)["id"]
+    setup_task = recruiting.onboard(c, who, onboarding, row, card, bot_id, name=name, description=description,
                                     instructions=instructions, rendered=rendered, answers=record["answers"],
                                     model=model["id"])
     if team:
-        Groups._set_bot(c, slug, team)              # the team's group is the bot's own, as a team build's hire sets it
-    return {"bot": slug, "harness": agent["connect_id"], "model": model["id"], "seat": seat_id,
+        Groups._set_bot(c, bot_id, team)            # the team's group is the bot's own, as a team build's hire sets it
+    return {"bot": bot_id, "slug": slug, "harness": agent["connect_id"], "model": model["id"], "seat": seat_id,
             "template": card["template"], "setup_task_id": setup_task}
 
 

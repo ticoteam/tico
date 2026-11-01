@@ -191,8 +191,9 @@ def owner_of(c, detail):
     owner = str(detail.get("owner") or "").strip()
     if owner.startswith("human:") and c.execute("SELECT 1 FROM humans WHERE id=?", (owner[6:],)).fetchone():
         return owner
-    if owner.startswith("bot:") and c.execute("SELECT 1 FROM bots WHERE slug=?", (owner[4:],)).fetchone():
-        return owner
+    named = H.resolve_bot(c, owner[4:]) if owner.startswith("bot:") else None
+    if named:
+        return "bot:" + named["id"]
     raise Problem("owner", "Choose an owner for this task: human:<id> or bot:<slug>", 422)
 
 

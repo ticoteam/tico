@@ -81,7 +81,7 @@ def _offer(c):
 def _rename(c, actor, display_name):
     """The name in both places `SettingsAdmin.update_bot` keeps it, with a new revision so a form opened before
     cannot save the old name back over it."""
-    c.execute("UPDATE bots SET display_name=? WHERE slug=?", (display_name, SLUG))
+    c.execute("UPDATE bots SET display_name=? WHERE id=?", (display_name, SLUG))
     row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (SLUG,)).fetchone()
     if not row:
         return

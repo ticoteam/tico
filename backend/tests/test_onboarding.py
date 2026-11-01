@@ -195,10 +195,12 @@ def test_the_inbox_manager_turned_on_in_setup_is_a_message_bot_linked_to_the_own
     assert sorted(row["slug"] for row in done.json()["bots"]) == ["botops", "coo", "inbox"]
     assert set(done.json()["seats"]) == {"support"}
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT reports_to FROM bot_config WHERE bot='inbox'").fetchone()[0] == "human:morgan"
+        assert c.execute("SELECT c.reports_to FROM bot_config c JOIN bots b ON b.id=c.bot WHERE b.slug='inbox'"
+                         ).fetchone()[0] == "human:morgan"
         owner = next(p for p in views.roster(c)["people"] if p["id"] == "morgan")
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='inbox'").fetchone()[0])
-    assert owner["inbox_bot"] == "inbox" and routines.declared_mailbox(config) == OWNER_EMAIL
+        config = json.loads(c.execute("SELECT config_json FROM bot_config c JOIN bots b ON b.id=c.bot WHERE b.slug='inbox'").fetchone()[0])
+        inbox_id = c.execute("SELECT id FROM bots WHERE slug='inbox'").fetchone()[0]
+    assert owner["inbox_bot"] == inbox_id and routines.declared_mailbox(config) == OWNER_EMAIL
 
 
 def test_direct_signup_with_no_chosen_chart_is_the_built_ins_and_an_empty_chart(environment):

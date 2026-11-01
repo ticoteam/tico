@@ -79,6 +79,9 @@ def _teammate(c, value):
     """The actor a request names, which must be a bot or a person that exists."""
     found = actor(value) or (H.resolve_actor(c, str(value)) if value else None)
     kind, _, ident = (found or "").partition(":")
+    if kind == "bot":
+        ident = (H.resolve_bot(c, ident) or {}).get("id", ident)
+        found = "bot:" + ident
     exists = (kind == "bot" and H.bot(c, ident)) or (kind == "human" and _person(c, ident))
     if not exists:
         raise Problem("not_found", f"Unknown teammate: {value}", 404)

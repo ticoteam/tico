@@ -309,7 +309,7 @@ def inventory(c, computer):
             "coalesce(b.state,'active') AS bot_state FROM task_links l JOIN tasks t ON t.id=l.task_id "
             # 'bot:'||slug = owner exactly when owner starts with 'bot:' and slug = its rest. Written that way the
             # join seeks bots' slug key; the expression form scanned every bot for each worktree link kept.
-            f"LEFT JOIN bots b ON b.slug=substr({owner},5) AND substr({owner},1,4)='bot:' "
+            f"LEFT JOIN bots b ON b.id=substr({owner},5) AND substr({owner},1,4)='bot:' "
             "WHERE l.kind='worktree' AND l.computer_id=? AND (coalesce(l.state,'unknown')<>'removed' "
             "OR (t.status NOT IN ('done','closed','declined') AND b.state='active'))", (computer,))]
 

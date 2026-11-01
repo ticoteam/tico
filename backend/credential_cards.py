@@ -181,7 +181,7 @@ def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", usern
     existing = own or unused
     label = (name or "").strip() or env
     if not existing and c.execute("SELECT 1 FROM credentials WHERE name=?", (label,)).fetchone():
-        label = f"{env} ({row['display_name'] or bot})"
+        label = f"{env} ({row['display_name'] or row['slug']})"
     write = CredentialWrite(name=existing["name"] if existing else label, username=username or (existing["username"] if existing else ""),
                             kind=kind, env=env, secret=SecretStr(value), source="",
                             expected_revision=existing["revision"] if existing else None)
@@ -242,7 +242,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
     `manager(c, person, bot)` the rule for who may manage a bot."""
     def view(c, row, viewer):
         bot = H.bot(c, row["bot"]) or {}
-        name = bot.get("display_name") or row["bot"]
+        name = bot.get("display_name") or bot.get("slug") or row["bot"]
         allowed = administrator(c, viewer, vault.admins) or vault.member_stores(c, viewer, row["bot"])
         note = None
         if row["status"] == "pending" and not allowed:
@@ -329,7 +329,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             validate_identity(c, who)
             person, msg, task = requester(c, who, body.on_behalf_of or "turn")
             asker = botops if who.via == "botops" and who.role in ("owner", "human") else H.actor_id(who.actor)
-            target = body.for_bot or asker
+            target = (H.resolve_bot(c, body.for_bot) or {}).get("id", body.for_bot) if body.for_bot else asker
             if target != asker and asker != botops:
                 raise Problem("forbidden", "A bot asks for its own credential", 403)
             if not H.bot(c, target):
@@ -425,9 +425,10 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         with store.transaction() as c:
             validate_identity(c, caller)
             person = acting(c, caller, body.on_behalf_of)
-            manager(c, person, body.for_bot)
+            bot = (H.resolve_bot(c, body.for_bot) or {}).get("id", body.for_bot)
+            manager(c, person, bot)
             value = check_format("", body.value.get_secret_value())
-            stored = store_for_bot(c, vault, person, body.env, body.for_bot, value, body.name, body.kind, body.username)
+            stored = store_for_bot(c, vault, person, body.env, bot, value, body.name, body.kind, body.username)
             if (body.on_behalf_of and caller.role == "bot") or (caller.via == "botops" and caller.attempt_id):
                 turn = turn_of(c, caller)
                 stored["redacted"] = redact_value(c, person, value, body.env, (turn or {}).get("conversation_id", ""),
@@ -479,26 +480,27 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             person = acting(c, caller, body.on_behalf_of, metadata_only=True)
             if not administrator(c, person, vault.admins):
                 raise Problem("forbidden", ask_admin_detail(c, vault.admins, "move a bot's secret into Credentials"), 403)
-            manager(c, person, body.bot)
+            bot = (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)
+            manager(c, person, bot)
             if body.env in RESERVED_ENV or body.env.startswith(RESERVED_ENV_PREFIXES):
                 raise Problem("env", f"{body.env} is a setting of the computer or of Tico, not a credential a bot can be given", 422)
-            if not H.bot(c, body.bot):
+            if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             place = c.execute("SELECT r.last_seen,r.label FROM assignments a JOIN runners r ON r.id=a.runner_id "
-                              "WHERE a.bot=? AND r.revoked_at IS NULL", (body.bot,)).fetchone()
+                              "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
             if not place:
                 raise Problem("no_computer", "That bot is not on a computer, so there is no secrets file to read", 409)
             if not place["last_seen"] or place["last_seen"] < H.shift(H.now(), seconds=-ONLINE_S):
                 raise Problem("offline", f"{place['label']}, where that bot runs, is offline; try again when it is back", 409)
             sweep_imports(c)
             same = c.execute("SELECT * FROM credential_imports WHERE bot=? AND env=? AND state='requested'",
-                             (body.bot, body.env)).fetchone()
+                             (bot, body.env)).fetchone()
             if same:
                 return import_view(same)
             iid, now = H.new_id(), H.now()
             c.execute("INSERT INTO credential_imports(id,requester,bot,env,name,kind,state,created,updated) VALUES(?,?,?,?,?,?,?,?,?)",
-                      (iid, person.actor, body.bot, body.env, body.name.strip(), body.kind, "requested", now, now))
-            H.event(c, person.actor, "credential.import_requested", iid, {"env": body.env, "bot": body.bot})
+                      (iid, person.actor, bot, body.env, body.name.strip(), body.kind, "requested", now, now))
+            H.event(c, person.actor, "credential.import_requested", iid, {"env": body.env, "bot": bot})
             return import_view(c.execute("SELECT * FROM credential_imports WHERE id=?", (iid,)).fetchone())
 
     @app.get("/api/v2/credential-imports/{iid}")

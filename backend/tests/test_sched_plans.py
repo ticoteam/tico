@@ -104,7 +104,7 @@ def test_worktree_inventory_bot_state_matches_each_owner(api):
     c = sqlite3.connect(db, isolation_level=None)
     c.row_factory = sqlite3.Row
     now = '2026-10-29T00:00:00Z'
-    c.execute("INSERT INTO bots(slug,state,created) VALUES('wt-archived','archived',?),('wt-active','active',?)", (now, now))
+    c.execute("INSERT INTO bots(id,slug,state,created) VALUES('wt-archived','wt-archived','archived',?),('wt-active','wt-active','active',?)", (now, now))
     c.execute("INSERT INTO tasks(id,title,owner,requester,status,created,updated) VALUES('wt-task','t','bot:wt-active','human:ana','open',?,?)", (now, now))
     cases = {
         'detail': ('wt-a', json.dumps({'owner': 'bot:wt-archived'}), 'human:ana'),

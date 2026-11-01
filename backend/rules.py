@@ -1002,7 +1002,8 @@ def _bot_room(conn, slug):
             return H.conversation(conn, found["id"])
     stored = conn.execute("SELECT operator FROM bot_config WHERE bot=?", (slug,)).fetchone()
     if stored and stored["operator"] and H.human(conn, stored["operator"]):
-        name = (H.bot(conn, slug) or {}).get("display_name") or slug
+        bot = H.bot(conn, slug) or {}
+        name = bot.get("display_name") or bot.get("slug") or slug
         return rooms.personal_room(conn, H.human_actor(stored["operator"]), slug, "Chat with " + name)
     return H._pair_conversation(conn, H.KEEPER, H.bot_actor(slug), "notice", allow_held=True)
 
@@ -1015,11 +1016,11 @@ def _tell_bot(conn, rule_id, slug, text, refs, *, wake, task=None, room=None):
     if not found:
         return False, f"No bot {slug}" if slug else "The rule names no bot"
     if found["state"] not in BOT_STATES_OK:
-        return False, f"{slug} is {found['state']}"
+        return False, f"{found['slug']} is {found['state']}"
     target = H.bot_actor(slug)
     if task:
         if not H.task_private_readable(conn, target, task):
-            return False, f"{slug} may not read this task"
+            return False, f"{found['slug']} may not read this task"
         conv = H.conversation(conn, task["conversation_id"])
         refs = {**refs, "task": task["id"]}
     else:
@@ -1056,6 +1057,7 @@ def _wake_text(params, values, ctx, default):
 def _run_wake_bot(conn, rule_id, by, params, values, *, event, subject, revision, task=None, ctx=None):
     ctx = ctx or {}
     slug = _slug(params.get("bot"))
+    slug = (H.resolve_bot(conn, slug) or {}).get("id", slug)
     ok, detail = _tell_bot(conn, rule_id, slug, _wake_text(params, values, ctx, _default_text(event, values)),
                            _wake_refs(event, rule_id, ctx), wake=True, task=task)
     return {"outcome": "wake_bot", "target": slug, "ok": ok, "detail": detail}
@@ -1099,13 +1101,14 @@ def _run_create_task(conn, rule_id, by, params, values, *, event, subject, revis
     carries the call's content and the line that says how to read all of it, as a wake does."""
     ctx = ctx or {}
     slug = _slug(params.get("owner"))
+    slug = (H.resolve_bot(conn, slug) or {}).get("id", slug)
     result = {"outcome": "create_task", "target": slug, "ok": False, "detail": ""}
     found = H.bot(conn, slug) if slug else None
     if not found:
         result["detail"] = f"No bot {slug}" if slug else "The rule names no bot"
         return result
     if found["state"] not in BOT_STATES_OK:
-        result["detail"] = f"{slug} is {found['state']}"
+        result["detail"] = f"{found['slug']} is {found['state']}"
         return result
     title = " ".join(templating.render(str(params.get("title") or ""), values, cap=300).split()) \
         or _default_text(event, values)
@@ -1265,6 +1268,8 @@ def _judge_event(conn, event, ctx, actor):
             continue
         params = H._json(row["params_json"], {}) or {}
         key = _event_target(row, params)
+        if key[0] == "bot":
+            key = ("bot", (H.resolve_bot(conn, key[1]) or {}).get("id", key[1]))
         if key in seen:
             continue
         seen.add(key)

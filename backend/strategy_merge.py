@@ -25,7 +25,8 @@ MIN_ORIGINALS, MAX_ORIGINALS = 2, 10
 
 def _name(c, actor):
     if H.is_bot(actor):
-        return (H.bot(c, H.actor_id(actor)) or {}).get("display_name") or H.actor_id(actor)
+        found = H.bot(c, H.actor_id(actor)) or {}
+        return found.get("display_name") or found.get("slug") or H.actor_id(actor)
     return (H.human(c, H.actor_id(actor)) or {}).get("name") or H.actor_id(actor or "")
 
 

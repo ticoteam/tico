@@ -41,15 +41,18 @@ def builtin(api, key="triage", owner="bot:ops"):
 
 
 def as_bot(api, slug):
-    """A test token that signs in as bot:<slug>."""
+    """A test token that signs in as the bot named by slug (its id, or its slug if it is new), as bot:<id>."""
     from backend.auth import Identity
     from backend.store import H
-    api.app.state.auth.settings.test_identities[slug + "-test"] = Identity("bot:" + slug, "bot", agent="test")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,runtime,created) VALUES(?,?,'fake',?)",
-                  (slug, slug, H.now()))
+        found = H.resolve_bot(c, slug)
+        bot_id = found["id"] if found else slug
+        if not found:
+            c.execute("INSERT INTO bots(id,slug,display_name,runtime,created) VALUES(?,?,?,'fake',?)",
+                      (bot_id, slug, slug, H.now()))
         c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
-                  (slug, "test", "x-" + slug, H.now(), "human:ana"))
+                  (bot_id, "test", "x-" + bot_id, H.now(), "human:ana"))
+    api.app.state.auth.settings.test_identities[slug + "-test"] = Identity(H.bot_actor(bot_id), "bot", agent="test")
     return slug + "-test"
 
 

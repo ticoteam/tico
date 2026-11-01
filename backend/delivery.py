@@ -79,7 +79,7 @@ def sent_as(way, due=None):
 
 
 def running_in_session(conn, bot, conversation_ids, task_id=None):
-    """Whether `bot` (a slug) has a turn handed out or going in one of these conversations, or on this task."""
+    """Whether `bot` (its id) has a turn handed out or going in one of these conversations, or on this task."""
     ids = [c for c in dict.fromkeys(conversation_ids) if c]
     lane = "task:" + task_id if task_id else None
     try:
@@ -92,7 +92,7 @@ def running_in_session(conn, bot, conversation_ids, task_id=None):
 
 
 def defer(conn, bot, kind, item, *, conversation_id="", task_id=None, defer_for=None):
-    """Record a deferred item for `bot` (a slug): a comment or chat message in its session (`conversation_id`), or a
+    """Record a deferred item for `bot` (its id): a comment or chat message in its session (`conversation_id`), or a
     task or note for the bot's next turn of any kind (no conversation). Returns its deadline (None: none)."""
     H = _H()
     if kind not in KINDS:
@@ -213,7 +213,7 @@ def due(conn, at, failures=None):
                  "NOT EXISTS(SELECT 1 FROM jobs j WHERE j.id=deferrals.fired_job "
                  "AND j.state IN ('queued','leased','running','input'))", (at,))
     groups = conn.execute(
-        "SELECT d.bot,d.conversation_id FROM deferrals d JOIN bots b ON b.slug=d.bot WHERE d.settled IS NULL "
+        "SELECT d.bot,d.conversation_id FROM deferrals d JOIN bots b ON b.id=d.bot WHERE d.settled IS NULL "
         "AND d.fired_job IS NULL AND d.due IS NOT NULL AND d.due<=? AND b.state='active' "
         "GROUP BY d.bot,d.conversation_id ORDER BY min(d.due) LIMIT 200", (at,)).fetchall()
     for bot, conversation_id in groups:
@@ -292,7 +292,7 @@ def holds_task(conn, task_id):
 def next_due(conn):
     """The earliest deadline still to fire for an active bot, or None (sleep_idle.routine_times)."""
     try:
-        row = conn.execute("SELECT min(d.due) FROM deferrals d JOIN bots b ON b.slug=d.bot WHERE d.settled IS NULL "
+        row = conn.execute("SELECT min(d.due) FROM deferrals d JOIN bots b ON b.id=d.bot WHERE d.settled IS NULL "
                            "AND d.fired_job IS NULL AND d.due IS NOT NULL AND b.state='active'").fetchone()
     except Exception:  # noqa: BLE001 - an older database has no deferrals yet
         return None

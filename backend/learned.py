@@ -126,7 +126,8 @@ def growth_facing(c, bot):
     growth or partnerships."""
     try:
         from . import people, views
-        if any(word in str(bot or "").lower() for word in GROWTH_TEAMS):
+        label = (H.bot(c, bot) or {}).get("slug") or str(bot or "")
+        if any(word in label.lower() for word in GROWTH_TEAMS):
             return True
         roster = views.roster(c)
         groups = (roster or {}).get("org_groups") or {}

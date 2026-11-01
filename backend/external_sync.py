@@ -147,7 +147,7 @@ def check(provider, body):
 def slug_for(c, name, fallback):
     base = "-".join("".join(ch if ch.isalnum() else " " for ch in name.lower()).split())[:60] or fallback
     slug, n = base, 2
-    while H.bot(c, slug):
+    while c.execute("SELECT 1 FROM bots WHERE slug=?", (slug,)).fetchone():
         slug, n = f"{base}-{n}", n + 1
     return slug
 
@@ -428,6 +428,7 @@ def sync(c, auth, settings_admin, who, body, images=None):
                 reports_to="human:" + person, status="active", thread_mode="personal",
                 model=model_for(provider), effort="as-configured", harness=provider.id, operator=person,
                 owners=[person]))
+            slug = (H.resolve_bot(c, slug) or {}).get("id", slug)      # the new bot's id (a UUID, not its slug)
         row = c.execute("SELECT config_json,description FROM bot_config WHERE bot=?", (slug,)).fetchone()
         config = H._json(row["config_json"], {}) or {}
         before = dict(config.get(provider.key) or {})
@@ -447,7 +448,7 @@ def sync(c, auth, settings_admin, who, body, images=None):
             c.execute("UPDATE bot_config SET team=? WHERE bot=?", (group, slug))
         c.execute("UPDATE bot_config SET config_json=?,description=? WHERE bot=?",
                   (encode(config), item.description if "description" in item.model_fields_set else row["description"], slug))
-        c.execute("UPDATE bots SET display_name=? WHERE slug=?", (name, slug))
+        c.execute("UPDATE bots SET display_name=? WHERE id=?", (name, slug))
         added, known = import_messages(c, provider, person, slug, ext_id, item.messages, images, who)
         H.event(c, who.actor, provider.id + ".synced", slug, {"id": ext_id, "created": created, "messages": added})
         out.append({"id": ext_id, "grok_id": ext_id, "bot": slug, "created": created,

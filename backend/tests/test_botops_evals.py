@@ -13,7 +13,7 @@ import pytest
 from backend.mcp import ApiProblem
 from clients import hubtools
 from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import vault
+from backend.tests.test_botops_parity import bot_id, vault
 from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
 
 EVALS = Path(__file__).resolve().parents[2] / "evals" / "botops"
@@ -101,8 +101,8 @@ def replay(api, botops_machine, scenario):
             if step["tool"] == "hub_bot_go_live":
                 # Local repository construction is outside the remote tool script; report its result.
                 post(api, f"bots/{args['bot']}/place", {"computer": computer["runner_id"]}, person)
-                post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"bots": {
-                    args["bot"]: {"ready": True, "repository_present": True}}}}, computer["token"])
+                readiness = {"schema_version": 1, "bots": {bot_id(api, args["bot"]): {"ready": True, "repository_present": True}}}
+                post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": readiness}, computer["token"])
             fn = hubtools.BY_NAME[step["tool"]]["fn"]
             try:
                 result = fn(ToolApi(api, attempt["token"]), args)

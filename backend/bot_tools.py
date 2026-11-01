@@ -29,7 +29,7 @@ from .store import H, Problem, encode, readiness_document, repo_url
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_tool_requests(
- id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(slug), kind TEXT NOT NULL,
+ id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(id), kind TEXT NOT NULL,
  service TEXT NOT NULL, identity TEXT NOT NULL DEFAULT '', entry_json TEXT NOT NULL,
  task_id TEXT, requested_by TEXT NOT NULL, created TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending');
 CREATE INDEX IF NOT EXISTS bot_tool_requests_bot ON bot_tool_requests(bot, state, kind);
@@ -292,6 +292,7 @@ def _pending_tool(request):
 
 def listing(c, settings, bot):
     """Everything the row shows for one bot, from records this server already holds."""
+    slug = (H.bot(c, bot) or {}).get("slug") or bot
     state = _state(c, settings, bot)
     runner, report, label = state["runner"], state["report"], state["label"]
     online = bool(runner and not runner["revoked_at"] and runner["last_seen"]
@@ -323,16 +324,16 @@ def listing(c, settings, bot):
         for tool, entry in zip(declared, state["raw"]):
             if google(entry):
                 tool.update(status="problem", held=True, detail="", problem=(
-                    f"{label} holds the Google key, but {bot} is nobody's message bot on the server, so its runs get no mail "
+                    f"{label} holds the Google key, but {slug} is nobody's message bot on the server, so its runs get no mail "
                     "token. An owner or admin names it: POST /api/v2/access/people/<person> "
-                    '{"inbox_bot": "' + bot + '", "mailbox": "<address>"}'))
+                    '{"inbox_bot": "' + slug + '", "mailbox": "<address>"}'))
     adding = [_pending_tool(r) for r in requests if r["kind"] == "add"
               and not any(_same(entry, r["entry"]) for entry in state["raw"])]
     if external:
         for tool in adding:
             tool["detail"] = "Waiting for this external profile to configure and report the tool"
     tools = [_model_tool(c, settings, bot, state["config"], state["readiness"], label)]
-    repo = _repo_tool(settings, bot, state["row"] and state["row"]["repo"], report)
+    repo = _repo_tool(settings, slug, state["row"] and state["row"]["repo"], report)
     if repo:
         matching = next((tool for tool in declared if tool["service"].lower() in ("github", "github-app")
                          and str(tool["scope"].get("repo") or tool["identity"]).lower() == repo["identity"].lower()), None)
@@ -406,7 +407,8 @@ def _request_task(c, auth, who, verb, bot, name, entry, computer, taken, repo=No
     external = resolve_harness(H._json(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0], {})) in EXTERNAL_HARNESSES
     if not external:
         G._botops(c)
-    title = f"{VERBS[verb][0]} {name} access {VERBS[verb][1]} {bot}"
+    slug = (H.bot(c, bot) or {}).get("slug") or bot
+    title = f"{VERBS[verb][0]} {name} access {VERBS[verb][1]} {slug}"
     if title_prefix:
         title = title_prefix.strip() + " " + title
     if taken:
@@ -419,11 +421,12 @@ def _request_task(c, auth, who, verb, bot, name, entry, computer, taken, repo=No
                 "hub_tool_report (or python3 hermes_agent.py call --profile <name> hub_tool_report '{\"tools\": [...]}'). "
                 "Use an empty list when the last tool was removed. Then finish this task.")
         return G._task(c, auth, who, bot, title, text)
-    return G._task(c, auth, who, G.BOTOPS, title, _task_text(verb, bot, name, entry, computer, repo))
+    return G._task(c, auth, who, G.BOTOPS, title, _task_text(verb, slug, name, entry, computer, repo))
 
 
 def register(c, auth, settings_admin, settings, who, bot, body):
     auth.domain(who)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     settings_admin._manager(c, who, bot, botops=True)      # Auth.bot_manager, or BotOps' own run
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
@@ -455,6 +458,7 @@ def register(c, auth, settings_admin, settings, who, bot, body):
 
 def unregister(c, auth, settings_admin, settings, who, bot, tool_id):
     auth.domain(who)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     settings_admin._manager(c, who, bot, botops=True)      # Auth.bot_manager, or BotOps' own run
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
@@ -525,6 +529,7 @@ def update(c, auth, settings_admin, settings, who, bot, tool_id, body):
     """Change a declared tool in place: only `can`, `scope`, `note` and an MCP server's `mcp` block. The server holds no bot repository, so this is
     the add path's way: a pending request and one task for BotOps with the whole changed entry. Nothing is removed."""
     auth.domain(who)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     settings_admin._manager(c, who, bot, botops=True)      # Auth.bot_manager, or BotOps' own run
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
@@ -600,6 +605,7 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             auth.require_read(c, who, bot)      # a 404 for someone who cannot even see the bot
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)

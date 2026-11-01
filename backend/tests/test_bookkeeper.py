@@ -150,7 +150,7 @@ def test_the_retired_bookkeeping_template_is_offered_nowhere_but_a_bot_built_fro
         assert "bookkeeping" not in {card["template"] for card in onboarding.catalog(c)}
     assert "bookkeeping" not in {card["template"] for card in recruit.catalog(settings)["cards"]}
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,state) VALUES('bookkeeping','Acme Books','active')")
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('bookkeeping','bookkeeping','Acme Books','active')")
         assert "bookkeeping" in {card["template"] for card in onboarding.catalog(c)}
 
 

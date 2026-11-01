@@ -240,7 +240,7 @@ def install(app, store, auth):
         sources.append(items)
 
         # Each Read bot's status rows, with what `task_privacy.status` hides from this viewer.
-        slugs = sorted(row["slug"] for row in H.bots(c) if readable_bot(row["slug"]) and within("bot:" + row["slug"]))
+        slugs = sorted(row["id"] for row in H.bots(c) if readable_bot(row["id"]) and within("bot:" + row["id"]))
         inputs = privacy.status_inputs(c, slugs) if slugs else {}
         items, start_states = [], {}
         for slug in slugs:
@@ -311,13 +311,13 @@ def install(app, store, auth):
         shown = {item.get("who") for item in merged} | {item.get("to") for item in merged} \
             | {item.get("owner") for item in merged} | {t["owner"] for t in board} \
             | {"bot:" + slug for slug in start_states}
-        bots = {row["slug"]: row for row in H.bots(c)}
+        bots = {row["id"]: row for row in H.bots(c)}
         people = {p["id"]: p for p in views.roster(c).get("people") or []}
         names = {}
         for actor in sorted(a for a in shown if a):
             ident = H.actor_id(actor)
             if actor.startswith("bot:") and ident in bots:
-                names[actor] = bots[ident].get("display_name") or ident
+                names[actor] = bots[ident].get("display_name") or bots[ident]["slug"]
             elif actor.startswith("human:"):
                 names[actor] = (people.get(ident) or H.human(c, ident) or {}).get("name") or ident
         return {"from": first, "to": last, "scope": f"{kind}:{ident}" if kind else "", "items": merged,
@@ -333,4 +333,6 @@ def install(app, store, auth):
         with store.read_transaction() as c:
             first, last = window(request.query_params.get("from"), request.query_params.get("to"))
             kind, ident = scope_of(bot, person, team)
+            if kind == "bot":
+                ident = (H.resolve_bot(c, ident) or {}).get("id", ident)
             return build(c, who, first, last, kind, ident)

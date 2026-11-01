@@ -231,9 +231,9 @@ def inventory(c, settings, auth, who, aliases=None):
     found = {}
     for bot in H.bots(c):
         slug = bot["slug"]
-        if bot["state"] == "archived" or not auth.bot_access(c, who, slug)["read"]:
+        if bot["state"] == "archived" or not auth.bot_access(c, who, bot["id"])["read"]:
             continue
-        for tool in bot_tools.listing(c, settings, slug)["tools"]:
+        for tool in bot_tools.listing(c, settings, bot["id"])["tools"]:
             service = tool["service"]
             service = (aliases or {}).get(str(service).lower(), service)
             item = found.setdefault(service, {"service": service, "title": tool["name"], "bots": [], "connections": []})
