@@ -211,11 +211,23 @@ def _best_card(cards, title, team=""):
     return best[1] if best else None
 
 
+# What a card's bullet says for the bot's own files and limits, not for the person reading the job: "(knowledge/labels.md)",
+# ", in knowledge/company.md" and "within the requested work and Tools" go.
+_FILE = r"(?:knowledge|reports|docs|_[\w-]+)/[\w./-]*|[\w./-]*\.(?:md|json|ya?ml|csv)\b"
+_PLAIN = re.compile(rf"\s*\((?:[^()]*?(?:{_FILE})[^()]*?)\)|,?\s+in\s+(?:{_FILE})\s*$"
+                    r"|,?\s*(?:prepared\s+)?(?:to apply\s+)?within the requested work(?:\s+and\s+tools)?", re.I)
+
+
+def _plain(item, limit=160):
+    """One bullet of what a card owns, as a job description says it (see _PLAIN), cut to `limit`."""
+    return R._text(_PLAIN.sub("", str(item or "")).strip(" ,"), limit)
+
+
 def compose(card):
     """One line from the card's summary, what it owns as "What you'll do", and the tools it works in."""
     raw = card["raw"]
     lines = [R._first_sentence(raw["summary"] or card["summary"], 200)]
-    owns = [R._text(item, 160) for item in raw["owns"][:DRAFT_OWNS] if R._text(item, 160)]
+    owns = [_plain(item) for item in raw["owns"][:DRAFT_OWNS] if _plain(item)]
     if owns:
         lines += ["", "What you'll do", *("- " + item for item in owns)]
     tools = list(dict.fromkeys(_tool(row["tool"]) for row in raw["prerequisites"]))
@@ -447,7 +459,7 @@ def candidates(auth, onboarding, c, who, seat_id):
         out.append({"template": card["template"], "name": card["name"], "icon": card["icon"],
                     "department": departments.get(card["department"], ""), "department_id": card["department"],
                     "line": R._first_sentence(card["summary"], 90), "summary": R._text(raw["summary"], 1000),
-                    "tags": card["tags"][:6], "owns": raw["owns"][:6], "never": raw["never"][:6],
+                    "tags": card["tags"][:6], "owns": [_plain(item, 400) for item in raw["owns"][:6] if _plain(item, 400)], "never": raw["never"][:6],
                     "onboarding": [item["ask"] for item in raw["onboarding"] if item["ask"]][:6],
                     "prerequisites": _needs(raw), "match": match, "source": "template", "starter": bool(raw["starter"]),
                     **_suggested(c, onboarding, raw)})
