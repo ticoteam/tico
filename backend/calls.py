@@ -171,7 +171,7 @@ class Calls:
 
     def token_payload(self, row, actor):
         room = row["room_name"]
-        return {"url": self.media.url, "room": room, "expires_in": call_media.TOKEN_TTL_SECONDS,
+        return {"url": self.media.url, "expires_in": call_media.TOKEN_TTL_SECONDS,
                 "token": self.media.person_token(room, actor, H.actor_id(actor))}
 
     # --- writes

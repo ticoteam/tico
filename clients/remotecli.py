@@ -230,6 +230,8 @@ def run(args, who=None):
         return via_tool(client, args, **({"operation_id": args.operation_id} if getattr(args, "operation_id", None) else {}))
     if args.cmd == "settings":
         return via_tool(client, args)
+    if args.cmd == "call":
+        return via_tool(client, args)
     if args.cmd in ("card", "pin"):
         return via_tool(client, args)
     if fn.startswith(("trigger relay ", "relay ", "sleep ")):

@@ -136,6 +136,15 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub meeting approve <id>|--all         share your meetings
     hub meeting dismiss <id>               keep a meeting out of the queue
     hub meeting import <file> [--title T] [--date D] [--participant P ...]
+    hub call list <thread> [--limit N] [--before T]  the calls in a thread, newest first
+    hub call start <thread> [--title T]    start a call there; you are its connector
+    hub call show <call>                   a call: its state, people, bots, how it ended
+    hub call join <call>                   join: the URL and a token good for 5 minutes
+    hub call token <call>                  a fresh token while you are joined
+    hub call leave <call>                  leave a call you joined
+    hub call end <call>                    end a call you started; its transcript goes to the thread
+    hub call bot add <call> <bot>...       bots listen to a call and reply in its thread
+    hub call bot remove <call> <bot>       take a bot out of a call
     hub assistant propose --summary "..." --path /api/v2/... [--method POST] [--body '{...}']
                                            Assistant only: ask the person to confirm a side effect (an
                                            approval, anything outside the company, spend, settings,
@@ -2569,6 +2578,34 @@ def parser():
     s = wake_url.add_parser("set", help="set the address; the signing secret is shown once")
     s.add_argument("url", help="an https address you run")
     s.set_defaults(fn="relay wake-url set")
+    call = sub.add_parser("call", help="Tico Meet: audio and screen share in a thread, with a transcript posted to it"
+                          ).add_subparsers(dest="sub")
+    s = call.add_parser("list", help="the calls in a thread, newest first")
+    s.add_argument("thread_id")
+    s.add_argument("--limit", type=int, default=25)
+    s.add_argument("--before", help="the started_at to read older calls from (next_before)")
+    s.set_defaults(fn="call list")
+    s = call.add_parser("start", help="start a call in a thread you can write to; you become its connector")
+    s.add_argument("thread_id")
+    s.add_argument("--title", default="")
+    s.set_defaults(fn="call start")
+    for action, help_text in (("show", "a call: its state, people, bots and how it ended"),
+                              ("join", "join a call: the URL and a token good for 5 minutes"),
+                              ("token", "a fresh token while you are joined"),
+                              ("leave", "leave a call you joined"),
+                              ("end", "end a call you started; its transcript is posted to the thread")):
+        s = call.add_parser(action, help=help_text)
+        s.add_argument("call_id")
+        s.set_defaults(fn="call " + action)
+    bot = call.add_parser("bot", help="bots that listen to a call and reply in its thread").add_subparsers(dest="subsub")
+    s = bot.add_parser("add", help="let bots listen to a call you joined (up to 10)")
+    s.add_argument("call_id")
+    s.add_argument("bots", nargs="+")
+    s.set_defaults(fn="call bot add")
+    s = bot.add_parser("remove", help="take a bot out of a call")
+    s.add_argument("call_id")
+    s.add_argument("bot")
+    s.set_defaults(fn="call bot remove")
     sleep = sub.add_parser("sleep", help="Sleep when idle: a hosted server stops after quiet hours").add_subparsers(dest="sub")
     s = sleep.add_parser("status", help="hosted or not, the hours, what keeps the server up and Tico's last answer")
     s.set_defaults(fn="sleep status")

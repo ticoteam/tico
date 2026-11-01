@@ -191,3 +191,75 @@ def test_calls_are_off_without_the_media_server(meet):
 def _changes(api):
     with api.app.state.store.read() as c:
         return [dict(row) for row in c.execute("SELECT kind,subject_id FROM changes WHERE topic='threads'")]
+
+
+class HubClient:
+    """The `api` the hub tools run against (clients/hubtools.py), over the test server as one person."""
+
+    def __init__(self, api, token):
+        self.api, self.token = api, token
+
+    def _send(self, method, path, body=None, query=None, key=None):
+        response = self.api.request(method, "/api/v2/" + path, params=query or None, json=body,
+                                    headers=headers(self.token, key))
+        assert response.status_code < 300, response.text
+        return response.json()
+
+    def get(self, path, **query):
+        return self._send("GET", path, query=query)
+
+    def post(self, path, body=None, key=None):
+        return self._send("POST", path, body=body, key=key)
+
+    def call(self, method, path, body=None, key=None, query=None, delegate=False):
+        return self._send(method, path, body=body, key=key, query=query)
+
+
+def test_the_call_tools_run_the_same_routes_the_rest_api_has(meet):
+    from clients import hubtools
+
+    ana = HubClient(meet, "ana-test")
+
+    def tool(name, args):
+        return hubtools.BY_NAME[name]["fn"](ana, args)
+
+    cid = thread(meet)
+    call_id = tool("hub_call_start", {"thread_id": cid, "title": "Acme standup", "operation_id": "op-start"})["id"]
+    with pytest.raises(AssertionError):                  # one live call per thread: the second start is refused
+        tool("hub_call_start", {"thread_id": cid, "operation_id": "op-start-again"})
+    assert [row["id"] for row in tool("hub_call_list", {"thread_id": cid})["calls"]] == [call_id]
+    assert tool("hub_call_show", {"call_id": call_id})["state"] == "live"
+    joined = tool("hub_call_join", {"call_id": call_id, "operation_id": "op-join"})
+    assert joined["url"] == meet.app.state.call_media.url and joined["token"] and "room" not in joined
+    assert tool("hub_call_token", {"call_id": call_id})["token"]
+    tool("hub_call_bot_add", {"call_id": call_id, "bots": ["ops"], "operation_id": "op-bot-add"})
+    assert tool("hub_call_show", {"call_id": call_id})["bots"] == ["ops"]
+    tool("hub_call_bot_remove", {"call_id": call_id, "bot": "ops", "operation_id": "op-bot-remove"})
+    assert tool("hub_call_show", {"call_id": call_id})["bots"] == []
+    tool("hub_call_leave", {"call_id": call_id, "operation_id": "op-leave"})
+    assert tool("hub_call_end", {"call_id": call_id, "operation_id": "op-end"})["state"] == "ended"
+
+
+def test_the_declared_call_answers_match_the_live_ones(meet):
+    from backend.tests.test_openapi_v2 import conforms
+
+    document = meet.get("/api/v2/openapi.json", headers=headers("ana-test")).json()
+    by_id = {op["operationId"]: op for ops in document["paths"].values() for op in ops.values()}
+
+    def send(method, path, operation, body=None):
+        response = meet.request(method, path, json=body, headers=headers("ana-test"))
+        assert response.status_code == 200, (path, response.text)
+        schema = by_id[operation]["responses"]["200"]["content"]["application/json"]["schema"]
+        assert conforms(response.json(), schema, document) is None, (operation, response.text[:300])
+        return response.json()
+
+    cid = thread(meet)
+    call_id = send("POST", f"/api/v2/threads/{cid}/calls", "startCall", {"title": "Acme standup"})["id"]
+    assert send("GET", f"/api/v2/threads/{cid}/calls", "listCalls")["calls"]
+    send("GET", f"/api/v2/calls/{call_id}", "getCall")
+    send("POST", f"/api/v2/calls/{call_id}/join", "joinCall", {})
+    send("POST", f"/api/v2/calls/{call_id}/token", "refreshCallToken")
+    send("POST", f"/api/v2/calls/{call_id}/bots", "attachCallBots", {"bots": ["ops"]})
+    send("DELETE", f"/api/v2/calls/{call_id}/bots/ops", "detachCallBot", {})
+    send("POST", f"/api/v2/calls/{call_id}/leave", "leaveCall", {})
+    send("POST", f"/api/v2/calls/{call_id}/end", "endCall", {})
