@@ -1276,8 +1276,11 @@ def install(app, store, auth, mutate, settings):
             if not may_edit_kpi(c, who, record):
                 raise Problem("forbidden", "The KPI's owner or someone above them changes it", 403)
             owner = goal_owner(c, who, body.owner) if body.owner else None
-            fields = body.model_dump(exclude={"owner"})
+            from . import growth
+            fields = body.model_dump(exclude={"owner", *growth.KPI_FIELDS})
             G.kpi_edit(c, who.actor, kid, fields, owner)
+            growth.kpi_fields(c, who.actor, kid, {k: getattr(body, k) for k in growth.KPI_FIELDS
+                                                  if k in body.model_fields_set})
             return kpi_detail(c, who, K.kpi(c, kid))
         return mutate(request, body, work)
 

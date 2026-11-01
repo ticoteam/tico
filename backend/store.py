@@ -1809,6 +1809,9 @@ class Store:
                 # Unversioned the same way; the first run makes the draft from the company profile.
                 from .strategy import ensure as ensure_strategy
                 ensure_strategy(c)
+                # The built-in Idea task type growth ideas are filed as (backend/growth.py).
+                from .growth import ensure as ensure_growth
+                ensure_growth(c)
                 # Org rules and their due dates (backend/org_rules.py, backend/rule_due.py): sources, rules, holds, due
                 # dates and their status rows. Unversioned the same way: an older release never reads the tables.
                 from .org_rules import ensure as ensure_org_rules
