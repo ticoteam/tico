@@ -1104,7 +1104,9 @@ container restarts, and the new generation starts from the database. The copy it
 fields of `environment.json` are kept. To ask for a new generation by hand, create `/data/.tico-backup-heal` in the
 server's data volume and run `docker compose restart server`. A new generation is started at most once every 6 hours. A
 request inside that window is dropped and the server log says so; a copy that is still stuck when the window ends asks
-again. A request waits only while the backup location cannot be read.
+again. A request waits only while the backup location cannot be read. If a switch to a new generation was interrupted, the
+server keeps running and Litestream waits, retrying the backup location every 30 seconds, then every 5 minutes, until it
+can be read; then the switch finishes. A stop of the container ends the wait.
 
 The data volume also holds `/data/.tico-backup-generation`, the generation the database is in. A start reads that file
 and not the backup location, so an unreachable bucket cannot hold it up. Before Litestream starts, the server reads

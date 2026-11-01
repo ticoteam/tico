@@ -96,6 +96,11 @@ HEAL_LAG = 30 * 60
 HEAL_AFTER = 20 * 60
 HEAL_INTERVAL = 6 * 3600
 HEAL_FLAG = ".tico-backup-heal"
+# An unfinished generation switch waits for the backup location to be readable. The pause starts at SWITCH_RETRY_FIRST
+# seconds, doubles, and never exceeds SWITCH_RETRY_MAX. The server runs meanwhile; Litestream does not start on the old
+# local state.
+SWITCH_RETRY_FIRST = 30
+SWITCH_RETRY_MAX = 300
 
 
 def key_copy(name):
@@ -1040,7 +1045,7 @@ def _follow_config_with_cache(config, db):
                                      "start reads environment.json again") from None
 
 
-def reset_stale_litestream(config, db, binary="litestream", env=None, now=None):
+def reset_stale_litestream(config, db, binary="litestream", env=None, now=None, sleep=time.sleep):
     """Removes Litestream's local state for `db` when the replica holds no files at all (a new or moved backup location
     while the state is from an earlier run): Litestream then starts the replica from the database itself, not from a
     local copy the replica no longer matches. Nothing else is touched. Litestream's auto-recover is not used: after it,
@@ -1050,17 +1055,45 @@ def reset_stale_litestream(config, db, binary="litestream", env=None, now=None):
     heal, gets a new backup generation instead (start_generation). The copy it had stays where it is, and there is at most
     one such heal per HEAL_INTERVAL. Returns the line to print, or None when there is nothing to say. Raises
     GenerationSwitchFailed when a generation switch broke off after it began. First, the config is made to name the generation
-    environment.json names (sync_generation): GenerationUnknown propagates when nothing says which generation that is."""
+    environment.json names (sync_generation): GenerationUnknown propagates when nothing says which generation that is.
+
+    An unfinished switch (the config names a folder the cache does not, because an earlier run broke off after its
+    commit) is finished here, not left to Litestream: while its listing cannot be read, this waits and retries
+    (_listing_for_switch), so the cache and the local state stay as they were. The server keeps running meanwhile, and a
+    stop ends the wait."""
     env = os.environ if env is None else env
     outcome = sync_generation(config, db, env, write_cache=False)
-    message = _reset_local_state(config, db, binary, env, now)
-    if outcome == "read":
+    # The cache names the folder the local state belongs to. It differs from the config only when a switch broke off
+    # after its commit, and then the local state is still the old folder's, so Litestream must not start on it.
+    pending = outcome == "read" and (read_generation_cache(Path(db).parent) or "") != config_generation(config)
+    message, rotated = _reset_local_state(config, db, binary, env, now, pending, sleep)
+    if outcome == "read" or rotated:    # a rotation names its folder in the cache too, even after a failed first read
         _follow_config_with_cache(config, db)    # last, once the local state is dealt with
     return message
 
 
-def _reset_local_state(config, db, binary, env, now):
-    """reset_stale_litestream's work, once the config names the generation environment.json names."""
+def _listing_for_switch(config, db, binary, sleep):
+    """The replica's listing for an unfinished generation switch, which must not start Litestream on its old local
+    state. It retries with a growing pause (SWITCH_RETRY_FIRST, doubling, up to SWITCH_RETRY_MAX) until the listing can
+    be read, and prints one line per attempt."""
+    attempt, pause = 1, SWITCH_RETRY_FIRST
+    listing = replica_listing(config, db, binary)
+    while listing is None:
+        print("tico: could not read the backup location while a backup generation switch is unfinished (attempt "
+              + str(attempt) + "); trying again in " + str(pause) + " s", flush=True)
+        sleep(pause)
+        pause = min(2 * pause, SWITCH_RETRY_MAX)
+        attempt += 1
+        listing = replica_listing(config, db, binary)
+    print("tico: read the backup location (attempt " + str(attempt) + "); finishing the backup generation switch",
+          flush=True)
+    return listing
+
+
+def _reset_local_state(config, db, binary, env, now, pending=False, sleep=time.sleep):
+    """reset_stale_litestream's work, once the config names the generation environment.json names. Returns the line
+    to print (or None) and whether a new backup generation was started, so the caller can follow it with the cache.
+    pending: the switch is unfinished, so its listing is waited for when it cannot be read."""
     state = litestream_state_dir(db)
     flag_path = heal_flag_path(db)
     flag = read_heal_flag(flag_path)
@@ -1068,35 +1101,38 @@ def _reset_local_state(config, db, binary, env, now):
     if not state.is_dir() or state.is_symlink():
         if asked:    # with no local state there is nothing to heal, so the request is dropped rather than kept for later
             _settle_heal_flag(flag_path, flag.get("last_heal_at"))
-        return None
-    listing = replica_listing(config, db, binary)
+        return None, False
+    listing = _listing_for_switch(config, db, binary, sleep) if pending else replica_listing(config, db, binary)
     if listing is None:
-        return "tico: could not read the backup location; skipped the check for stale Litestream state"
+        return "tico: could not read the backup location; skipped the check for stale Litestream state", False
     if not listing:
         if asked:
             _settle_heal_flag(flag_path, flag.get("last_heal_at"))
         try:
             shutil.rmtree(state)
         except OSError as exc:
-            return "tico: the backup location is empty but Litestream's stale local state could not be removed: " + str(exc)[:200]
-        return "tico: the backup location is empty; removed Litestream's stale local state (" + state.name + ")"
+            return ("tico: the backup location is empty but Litestream's stale local state could not be removed: "
+                    + str(exc)[:200]), False
+        return "tico: the backup location is empty; removed Litestream's stale local state (" + state.name + ")", False
     if no_mirror(env) or not (asked or stuck_by_local_state(state, listing, env)):
-        return None
+        return None, False
     now = time.time() if now is None else now
     if not heal_allowed(flag, now):
         if asked:
             _settle_heal_flag(flag_path, flag.get("last_heal_at"))
         return ("tico: the local Litestream state looks stuck, but a new backup generation was started less than "
-                + str(HEAL_INTERVAL // 3600) + " hours ago; not starting another")
+                + str(HEAL_INTERVAL // 3600) + " hours ago; not starting another"), False
+    rotated = False
     try:
         message = start_generation(config, db, env, now)
+        rotated = True
     except GenerationRefused as exc:
         message = "tico: could not start a new backup generation (" + str(exc) + "); Litestream keeps the copy it has"
     except GenerationSwitchFailed:
         _settle_heal_flag(flag_path, _utc_text(now))
         raise
     _settle_heal_flag(flag_path, _utc_text(now))    # an attempt counts toward the limit, whatever it did
-    return message
+    return message, rotated
 
 
 def replica_newest(mirror, generation=""):

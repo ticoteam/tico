@@ -41,6 +41,7 @@ if [ "$1 $2" = "-m backend.server" ]; then
 fi
 if [ "$1 $2 $3" = "-m backend.replication loop" ]; then exec sleep 600; fi
 if [ "$1 $2 $3" = "-m backend.replication reset-stale-litestream" ] && [ -n "$STUB_RESET_EXIT" ]; then exit "$STUB_RESET_EXIT"; fi
+if [ "$1 $2 $3" = "-m backend.replication reset-stale-litestream" ] && [ -n "$STUB_RESET_WAIT" ]; then echo "reset waiting" >> "$STUB_LOG"; exec sleep 600; fi
 exec %s "$@"
 """
 
@@ -142,6 +143,24 @@ def test_a_generation_switch_that_broke_off_keeps_litestream_from_starting_on_it
     out = finish(p, tmp_path)
     assert p.returncode != 0, out
     assert "litestream up" not in lines(log), lines(log)
+
+
+def test_a_reset_job_waiting_for_the_backup_location_leaves_the_server_up_and_ends_on_a_stop(tmp_path):
+    # An unfinished generation switch waits in the reset job while the backup location cannot be read. The server keeps
+    # running meanwhile, and a stop ends the wait (the job is a shell subshell, which a TERM ends at once).
+    p, log = start(tmp_path, STUB_RESET_WAIT="1", TICO_STOP_GRACE="0.2")
+    try:
+        until(lambda: {"server up", "reset waiting"} <= set(lines(log)))
+        assert p.poll() is None, (tmp_path / "out.txt").read_text()
+        began = time.monotonic()
+        p.send_signal(signal.SIGTERM)
+        p.wait(20)
+        took = time.monotonic() - began
+    finally:
+        out = finish(p, tmp_path)
+    assert p.returncode == 0, out
+    assert "litestream up" not in lines(log) and "server TERM" in lines(log)
+    assert took < 3, took
 
 
 def test_backups_off_stops_the_server_the_same_way(tmp_path):

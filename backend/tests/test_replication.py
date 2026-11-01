@@ -1258,6 +1258,92 @@ def test_a_switch_a_crash_left_unfinished_is_finished_with_the_cache_written_las
     assert replication.read_generation_cache(db.parent) == GENERATION and not state.exists()
 
 
+class Recovering:
+    """Stands in for `litestream ltx` on a backup location that cannot be read for its first `failures` calls, then prints
+    `stdout`."""
+    def __init__(self, failures, stdout="[]"):
+        self.failures, self.stdout, self.calls = failures, stdout, 0
+
+    def __call__(self, args, **kwargs):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise subprocess.TimeoutExpired("litestream", 60)
+        return subprocess.CompletedProcess(args, 0, self.stdout, "")
+
+
+def no_wait(seconds):
+    raise AssertionError("nothing should wait here, but it slept " + str(seconds) + " s")
+
+
+def test_an_unfinished_switch_waits_for_the_backup_location_and_changes_nothing_until_it_reads(
+        tmp_path, monkeypatch, capsys):
+    old = "gen-20261031T000000Z"
+    config, db, state, backup, env = backup_setup(tmp_path, copies=replication.LOCAL_STUCK_FILES + 1,
+                                                  environment='{"generation": "%s"}' % GENERATION)
+    replication.write_generation_cache(db.parent, old)     # the commit landed; the cache and the local state did not
+    listing = Recovering(failures=2)
+    monkeypatch.setattr(replication.subprocess, "run", listing)
+    paused = []
+
+    def sleep(seconds):    # what the cache and the local state are at each pause
+        paused.append((seconds, replication.read_generation_cache(db.parent), state.is_dir()))
+    message = replication.reset_stale_litestream(str(config), str(db), env=env, now=NOW, sleep=sleep)
+    assert paused == [(30, old, True), (60, old, True)]
+    assert listing.calls == 3
+    assert message == "tico: the backup location is empty; removed Litestream's stale local state (.hub.sqlite-litestream)"
+    assert not state.exists() and replication.read_generation_cache(db.parent) == GENERATION
+    assert replica_url(config) == "file://" + str(backup) + "/" + GENERATION
+    assert len(capsys.readouterr().out.splitlines()) == 3      # one line per attempt: two failures, then the read
+    assert_database_untouched(db)
+
+
+def test_an_unfinished_switch_whose_local_state_is_gone_finishes_without_asking_the_backup_location(tmp_path, monkeypatch):
+    old = "gen-20261031T000000Z"
+    config, db, state, backup, env = backup_setup(tmp_path, copies=0, environment='{"generation": "%s"}' % GENERATION)
+    replication.shutil.rmtree(state)                       # the switch got as far as removing the local state
+    replication.write_generation_cache(db.parent, old)
+    listing = Recovering(failures=10)
+    monkeypatch.setattr(replication.subprocess, "run", listing)
+    assert replication.reset_stale_litestream(str(config), str(db), env=env, now=NOW, sleep=no_wait) is None
+    assert listing.calls == 0 and replication.read_generation_cache(db.parent) == GENERATION
+    assert_database_untouched(db)
+
+
+def test_a_failed_listing_with_no_unfinished_switch_is_not_waited_for(tmp_path, monkeypatch):
+    config, db, state, backup, env = backup_setup(tmp_path, copies=replication.LOCAL_STUCK_FILES + 1,
+                                                  environment='{"generation": "%s"}' % GENERATION)
+    replication.write_generation_cache(db.parent, GENERATION)
+    monkeypatch.setattr(replication.subprocess, "run", Listing(error=subprocess.TimeoutExpired("litestream", 60)))
+    message = replication.reset_stale_litestream(str(config), str(db), env=env, now=NOW, sleep=no_wait)
+    assert message == "tico: could not read the backup location; skipped the check for stale Litestream state"
+    assert state.is_dir() and replication.read_generation_cache(db.parent) == GENERATION
+    assert_database_untouched(db)
+
+
+@pytest.mark.parametrize("cache", ["", None], ids=["kept", "root"])
+def test_a_rotation_after_an_unreadable_marker_moves_the_cache_to_the_new_folder(tmp_path, monkeypatch, cache):
+    # The first read of environment.json fails, so the start keeps the cache's folder (or the root). The bucket then answers,
+    # the stuck copy rotates to a new folder, and the cache must follow the config rather than keep the old folder.
+    config, db, state, backup, env = backup_setup(tmp_path, copies=replication.LOCAL_STUCK_FILES + 1,
+                                                  environment='{"environment_id": "acme1"}')
+    if cache is not None:
+        replication.write_generation_cache(db.parent, cache)
+    real, reads = replication.read_marker, []
+
+    def unreachable_once(mirror):
+        reads.append(mirror)
+        if len(reads) == 1:
+            raise OSError("the backup location is unreachable")
+        return real(mirror)
+    monkeypatch.setattr(replication, "read_marker", unreachable_once)
+    monkeypatch.setattr(replication.subprocess, "run", Listing(listing_at(REPLICA_STAMP)))
+    message = replication.reset_stale_litestream(str(config), str(db), env=env, now=NOW)
+    assert message.startswith("tico: the local Litestream state was stuck; started backup generation " + GENERATION)
+    assert replication.read_generation_cache(db.parent) == GENERATION
+    assert replica_url(config) == "file://" + str(backup) + "/" + GENERATION
+    assert not state.exists() and len(reads) == 2
+
+
 # -- the heal limits grow with the sync interval ------------------------------------------------------------------------
 
 @pytest.mark.parametrize("copies", [4000, 6000])

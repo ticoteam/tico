@@ -461,7 +461,8 @@ supervise() {
   if [ "$backups" = 1 ]; then
     # The reset first makes the config name the backup generation that environment.json names. Then stale Litestream state
     # beside the database is cleared when the backup location is empty, and a new backup generation is started when the copy
-    # is stuck. It runs here, in the job that starts Litestream, so the server does not wait for it. exec makes the job
+    # is stuck. It runs here, in the job that starts Litestream, so the server does not wait for it. An unfinished switch
+    # waits here, with the server running, until the backup location can be read; a stop ends the wait. exec makes the job
     # Litestream itself: $! is its pid. Exit 3 means a generation switch broke off after it began, and exit 4 that nothing
     # says which generation the data is in; Litestream does not start on either, since its config may not match.
     ( rc=0; python -m backend.replication reset-stale-litestream "$LITESTREAM_CONFIG" "$TICO_DB" || rc=$?
