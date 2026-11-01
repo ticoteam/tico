@@ -169,11 +169,41 @@ def load_status(c, runner_id, now=None):
 
     A missing minute, a calm reading, a stale sample or diagnostics being off clears the current flag.
     """
-    if not on(c, runner_id):
-        return {"latest_sample": None, "overloaded": False}
+    return load_statuses(c, [runner_id], now)[runner_id]
+
+
+def load_statuses(c, runner_ids, now=None):
+    """`load_status` for many computers: one read of their modes, one of their newest readings."""
     now = int(time.time() if now is None else now)
-    points = c.execute("SELECT * FROM runner_load_samples WHERE runner_id=? AND ts>=? ORDER BY ts DESC LIMIT 6",
-                       (runner_id, now - 48 * 3600)).fetchall()
+    ids = sorted(set(runner_ids))
+    out = {rid: {"latest_sample": None, "overloaded": False} for rid in ids}
+    if not ids:
+        return out
+    marks = ",".join("?" * len(ids))
+    modes = {r["id"]: r["performance"] for r in c.execute(
+        f"SELECT id,performance FROM runners WHERE id IN ({marks}) AND revoked_at IS NULL", ids)}
+    on_ids = [rid for rid in ids if modes.get(rid) == "on"]
+    if on_ids:
+        points = _newest_samples(c, on_ids, now - 48 * 3600)
+        for rid in on_ids:
+            out[rid] = _load_from(points[rid], now)
+    return out
+
+
+def _newest_samples(c, runner_ids, since):
+    """The six newest readings of each computer since `since`, newest first. One statement per 200 computers, each
+    part a seek to its own (runner_id, ts) key: a computer's 48 hours of minutes are never read to find its six."""
+    out = {rid: [] for rid in runner_ids}
+    for start in range(0, len(runner_ids), 200):
+        part = runner_ids[start:start + 200]
+        sql = " UNION ALL ".join("SELECT * FROM (SELECT * FROM runner_load_samples WHERE runner_id=? AND ts>=? "
+                                 "ORDER BY ts DESC LIMIT 6)" for _ in part)
+        for row in c.execute(sql, [v for rid in part for v in (rid, since)]):
+            out[row["runner_id"]].append(row)
+    return out
+
+
+def _load_from(points, now):
     if not points:
         return {"latest_sample": None, "overloaded": False}
     p = points[0]
@@ -328,10 +358,22 @@ def overload_view(row):
 
 def recent_overload(c, runner_id, within=RECENT_S, now=None):
     """The newest overload still open, or ended within `within` seconds; None otherwise."""
+    return recent_overloads(c, [runner_id], within, now)[runner_id]
+
+
+def recent_overloads(c, runner_ids, within=RECENT_S, now=None):
+    """`recent_overload` for many computers, in one statement."""
     now = int(now or time.time())
-    row = c.execute("SELECT * FROM perf_overloads WHERE runner_id=? AND (ended IS NULL OR ended>=?) ORDER BY id DESC "
-                    "LIMIT 1", (runner_id, now - within)).fetchone()
-    return overload_view(row) if row else None
+    ids = sorted(set(runner_ids))
+    out = {rid: None for rid in ids}
+    if not ids:
+        return out
+    marks = ",".join("?" * len(ids))
+    for row in c.execute(f"SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY runner_id ORDER BY id DESC) AS n "
+                         f"FROM perf_overloads WHERE runner_id IN ({marks}) AND (ended IS NULL OR ended>=?)) WHERE n=1",
+                         (*ids, now - within)):
+        out[row["runner_id"]] = overload_view(row)
+    return out
 
 
 def _who_ran(bots, label=lambda b: b):

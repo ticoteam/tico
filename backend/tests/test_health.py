@@ -1212,3 +1212,41 @@ def test_a_pile_up_is_judged_against_two_sync_intervals_of_local_files(monkeypat
     assert check(3600)["status"] == "ok" and check(7200)["status"] == "ok"
     stuck = check(7201)
     assert stuck["status"] == "warn" and "7,201 unsent files" in stuck["summary"]
+
+
+def test_batched_computer_load_and_overload_reads_answer_what_each_computer_read_would(environment):
+    """Health and the computers list read every computer's load and overload in one pass (performance.py); each
+    answer must be the one that computer's own read gives: off, revoked, calm, overloaded and recently overloaded."""
+    from backend import performance
+    api = environment()
+    now = 1_800_000_000
+    busy, off, calm, revoked = enrolled(api), "r-off", "r-calm", "r-gone"
+    with api.app.state.store.transaction() as c:
+        for rid in (off, calm, revoked):
+            c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen) "
+                      "SELECT ?,?,operator,?,created,last_seen FROM runners WHERE id=?", (rid, rid, "h" + rid, busy))
+        c.execute("UPDATE runners SET performance='off' WHERE id=?", (off,))
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), revoked))
+        for rid, cpu in ((busy, 95), (off, 95), (calm, 10), (revoked, 95)):
+            for k in range(6):                       # six readings a minute apart, the newest just now
+                ts = now - 60 * k
+                c.execute("INSERT INTO runner_load_samples VALUES(?,?,?,?,?,?,?,?,?)",
+                          (rid, ts, ts, cpu, 90, 100, 0, 0, 1))
+        c.execute("INSERT INTO perf_overloads(runner_id,started,last,ended,reasons,cpu_max,mem_max,runs_max) "
+                  "VALUES(?,?,?,?,'[]',99,99,1)", (busy, now - 7200, now - 3600, now - 3500))      # ended long ago
+        c.execute("INSERT INTO perf_overloads(runner_id,started,last,ended,reasons,cpu_max,mem_max,runs_max) "
+                  "VALUES(?,?,?,?,'[]',99,99,1)", (busy, now - 900, now - 100, now - 50))         # ended just now
+        c.execute("INSERT INTO perf_overloads(runner_id,started,last,ended,reasons,cpu_max,mem_max,runs_max) "
+                  "VALUES(?,?,?,NULL,'[]',99,99,1)", (calm, now - 900, now - 100))                # still open
+    ids = [busy, off, calm, revoked]
+    with api.app.state.store.read() as c:
+        loads = performance.load_statuses(c, ids, now=now)
+        overloads = performance.recent_overloads(c, ids, now=now)
+        for rid in ids:
+            assert loads[rid] == performance.load_status(c, rid, now=now)
+            assert overloads[rid] == performance.recent_overload(c, rid, now=now)
+    assert loads[busy]["overloaded"] and not loads[off]["overloaded"] and loads[off]["latest_sample"] is None
+    assert not loads[calm]["overloaded"] and loads[calm]["latest_sample"]["cpu_pct"] == 10
+    assert not loads[revoked]["overloaded"]
+    assert overloads[busy]["ended"] == now - 50 and overloads[calm]["ended"] is None
+    assert overloads[off] is None and overloads[revoked] is None
