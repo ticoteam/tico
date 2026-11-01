@@ -65,8 +65,16 @@ async function open(browser, hub, who, {phone = false, hash = '', timezone = ''}
   const context = await browser.newContext({
     ...(phone ? PHONE : DESKTOP),
     ...(timezone ? {timezoneId: timezone} : {}),
-    serviceWorkers: 'block',
     extraHTTPHeaders: {Authorization: 'Bearer ' + token},
+  });
+  // Playwright's serviceWorkers: 'block' puts its own registration stub in every frame, and reading navigator.serviceWorker
+  // throws in a sandboxed frame (a page's preview), which the journey then reports as an uncaught error. The same stub is
+  // added here with the read guarded, so a sandboxed frame has nothing to refuse.
+  await context.addInitScript(() => {
+    try {
+      const sw = navigator.serviceWorker;
+      if (sw) sw.register = async () => { console.warn('Service Worker registration blocked by the test harness'); };
+    } catch {}
   });
   await context.addInitScript(() => {
     try { localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 864e5})); } catch {}
