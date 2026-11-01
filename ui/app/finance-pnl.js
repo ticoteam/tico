@@ -52,6 +52,8 @@ function finCompareOptions() {
 // ----------------------------------------------------------------- the page
 function finPnlPage() {
   const caps = finCaps(), p = FIN_PNL;
+  const linked = FIN.q.get('split');   // #/finance/pnl?split=location
+  if (FIN_SPLITS.some(([v]) => v && v === linked)) p.split = linked;
   const view = FIN.q.get('view') === 'expenses' || !caps.company ? 'expenses' : 'company';
   if (!p.start || p.rangeOf !== p.period) { [p.start, p.end] = finPnlRange(p.period); p.rangeOf = p.period; }
   FIN.pnl = {view, data: null, budgets: [], load: 0}; p.view = view;
@@ -87,7 +89,15 @@ function finPnlPage() {
     p.start = a; p.end = z; p.sel = null; p.budgetCol = -1;
     finPnlPage();
   };
-  body.querySelector('[data-fin-split]')?.addEventListener('change', ev => { p.split = ev.target.value; finPnlPage(); });
+  body.querySelector('[data-fin-split]')?.addEventListener('change', ev => {
+    p.split = ev.target.value;
+    // The address follows, so the page can be shared and a redraw does not bring back the split it was opened with.
+    if (p.split) FIN.q.set('split', p.split); else FIN.q.delete('split');
+    const qs = FIN.q.toString();
+    S.route = FIN_ROUTE + '/pnl' + (qs ? '?' + qs : '');
+    history.replaceState(null, '', S.route);
+    finPnlPage();
+  });
   body.querySelector('[data-fin-compare]')?.addEventListener('change', ev => {
     p.compare = ev.target.value;
     const shown = ev.target.parentElement.querySelector('.fin-sel-v'); if (shown) shown.textContent = ev.target.selectedOptions[0]?.textContent || '';

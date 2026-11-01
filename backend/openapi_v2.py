@@ -658,6 +658,12 @@ ref = lambda name: {"$ref": "#/components/schemas/" + name}   # noqa: E731
 ACTORS = {"type": "object", "additionalProperties": {"type": "string"},
           "description": "On reads: display names for every actor id in the answer, {\"human:ana\": \"Ana Alvarez\"}"}
 
+_FINANCE_CONTACT = obj({
+        "id": "s", "name": "s", "kind": {"type": "string", "enum": ["vendor", "customer", "both"]},
+        "emails": items({"type": "string"}), "default_account": {"type": ["object", "null"], "additionalProperties": True},
+        "is_1099": "b", "has_tax_id": "b", "tax_id_last4": "n", "recipient_id": "n", "active": "b",
+        "owed": obj({"bills": "i", "invoices": "i"}, required=[]), "created_at": "s"},
+        required=["id", "name", "kind", "active"])
 SCHEMAS = {
     "SubscriptionList": obj({"profiles_by_computer": items(obj({"runner_id": "s", "label": "s", "profiles": items(
         obj({"name": "s", "id": "s", "display_name": "s", "runtimes": "o"}))}))}),
@@ -1502,6 +1508,8 @@ STABLE.extend([
     ("/api/v2/finance/contacts", "get", "Finance", "listFinanceContacts",
      "Vendors (to whoever sees payables) and customers (receivables) by name, with what their open documents owe; a "
      "tax id's last 4 only for a finance admin", "FinanceContacts"),
+    ("/api/v2/finance/contacts/{contact_id}", "get", "Finance", "getFinanceContact",
+     "One vendor or customer, active or not, to whoever sees its side", "FinanceContact"),
     ("/api/v2/finance/chart", "get", "Finance", "getFinanceChart",
      "The lines the caller may post to (id, number, name, type), for the bill, invoice and journal forms; for= bill "
      "keeps expense and asset lines, invoice income lines; for teammates who write to the books", "FinanceChart"),
@@ -1775,12 +1783,8 @@ SCHEMAS.update({
         "settlement_count": "i", "settlements_more": "b", "attachment_count": "i", "attachments_more": "b",
         "terms_days": {"type": ["integer", "null"]}, "schedule": {"type": ["object", "null"]}, "view_version": "i"},
         required=["lines", "settlements", "attachments", "actions"])]},
-    "FinanceContacts": obj({"contacts": items(obj({
-        "id": "s", "name": "s", "kind": {"type": "string", "enum": ["vendor", "customer", "both"]},
-        "emails": items({"type": "string"}), "default_account": {"type": ["object", "null"], "additionalProperties": True},
-        "is_1099": "b", "has_tax_id": "b", "tax_id_last4": "n", "recipient_id": "n", "active": "b",
-        "owed": obj({"bills": "i", "invoices": "i"}, required=[]), "created_at": "s"},
-        required=["id", "name", "kind", "active"])), "next_cursor": "n", "view_version": "i"}),
+    "FinanceContacts": obj({"contacts": items(_FINANCE_CONTACT), "next_cursor": "n", "view_version": "i"}),
+    "FinanceContact": obj({"contact": _FINANCE_CONTACT, "view_version": "i"}),
     "FinanceInbox": obj({"items": items(obj({"kind": {"type": "string", "enum": [
         "uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
         "budget_near_limit", "sync_failed", "period_ready"]}, "id": "s", "label": "s"})),

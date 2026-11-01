@@ -32,6 +32,14 @@ def names(c: sqlite3.Connection, table: str) -> dict[str, str]:
     return {str(r[0]): str(r[1]) for r in c.execute(f"SELECT id, name FROM {table}")}
 
 
+def ids_of(c: sqlite3.Connection, table: str, row_id: str) -> tuple[str, ...]:
+    """Every id that names this row: its own and the ids merged into it. A line keeps the id it was tagged with."""
+    assert table in ROW_TABLES
+    row = resolve(c, table, row_id)
+    aliases = c.execute("SELECT alias_id FROM record_aliases WHERE table_name=? AND record_id=?", (table, row))
+    return tuple(sorted({row_id, row, *(str(r[0]) for r in aliases)}))
+
+
 def search(c: sqlite3.Connection, table: str, text: str = "", *, active: bool | None = True,
            after: tuple[str, str] | None = None, most: int = 200) -> list[Any]:
     """Rows whose name (or sku, for items) contains the text, by name then id, past the cursor `after`. `active` None

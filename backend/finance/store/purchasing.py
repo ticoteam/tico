@@ -4,6 +4,7 @@ and states; this module writes rows and reads sums. A stored status is what was 
 reader sees can be derived: an approved order billed in part is partial, and an estimate with an invoice is invoiced."""
 import json
 import sqlite3
+from collections.abc import Sequence
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -212,11 +213,13 @@ def _status_clause(kind: str, status: str) -> tuple[str, list[object]]:
 
 
 def listing(c: sqlite3.Connection, kind: str, *, book_id: str, status: str = "", contact_id: str = "", q: str = "",
-            before: tuple[str, str] | None = None, most: int = 200) -> list[sqlite3.Row]:
+            before: tuple[str, str] | None = None, most: int = 200,
+            tagged: Sequence[tuple[str, Sequence[str]]] = ()) -> list[sqlite3.Row]:
     """A book's orders or estimates, newest first by date (then id), with the contact's name and what each order has
-    billed. A status (as shown), a contact, a search over number, memo and contact name, and a cursor (the date and id
-    of the last row before) narrow them."""
+    billed. A status (as shown), a contact, a search over number, memo and contact name, a line's tags (tag name, any
+    of these values) and a cursor (the date and id of the last row before) narrow them."""
     table, contact, dated = HEAD[kind], CONTACT[kind], DATED[kind]
+    lines_table, parent = LINES[kind]
     sql = (f"SELECT d.*, k.name AS contact_name, {_billed_expr(kind)} AS billed FROM {table} d "
            f"JOIN fin_contacts k ON k.id = d.{contact} WHERE d.book_id=?")
     args: list[object] = [book_id]
@@ -227,6 +230,11 @@ def listing(c: sqlite3.Connection, kind: str, *, book_id: str, status: str = "",
     if contact_id:
         sql += f" AND d.{contact}=?"
         args.append(contact_id)
+    for tag, values in tagged:
+        marks = ",".join("?" * len(values))
+        sql += (f" AND EXISTS (SELECT 1 FROM {lines_table} x WHERE x.{parent}=d.id "
+                f"AND json_extract(x.tags_json, '$.' || ?) IN ({marks}))")
+        args += [tag, *values]
     if q:
         sql += " AND (d.number LIKE ? ESCAPE '\\' OR d.memo LIKE ? ESCAPE '\\' OR k.name LIKE ? ESCAPE '\\')"
         args += [like(q)] * 3

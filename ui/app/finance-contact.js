@@ -1,10 +1,9 @@
 /* ui/app/finance-contact.js — a vendor's or customer's panel in the Payables and Receivables rail. A customer's: their sites
    and equipment, open estimates and invoices, and due dates, "everything we service" for a person or a bot. A vendor's: payment
    terms, owner, renewal date and notice period, and linked contract docs; who can pay stays a Finance right.
-   Opens from a document's title or from an address with ?contact=<id>. Every part is its own read, so one that is missing or
-   not in the viewer's view just leaves its heading out.
-   Reads: GET /api/v2/finance/contacts/{id}, or the contact's list row; /api/v2/locations, /api/v2/equipment, /api/v2/due-dates,
-   /api/v2/estimates, /api/v2/finance/invoices. Write: contact_update through POST /api/v2/finance/actions.
+   Opens from a document's title or from an address with ?contact=<id>. A part that is missing or not in the viewer's view
+   just leaves its heading out.
+   Reads: GET /api/v2/customers/{id}, /api/v2/finance/contacts/{id}. Write: contact_update through POST /api/v2/finance/actions.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -33,32 +32,24 @@ async function finContactShow({id, name, kind}) {
   const me = FIN_CONTACT = {id, name, kind}, page = FIN;
   finContactDraw(me, null);
   $('#fin-rail')?.scrollIntoView?.({block: 'nearest'});
-  const parts = await finContactRead(me);
+  let parts;
+  try { parts = await finContactRead(me); }
+  catch (e) { if (FIN_CONTACT === me && FIN === page) { finContactDraw(me, null); $('#fin-rail')?.insertAdjacentHTML('beforeend', finFail(e)); } return; }
   if (FIN_CONTACT !== me || FIN !== page) return;
   finContactDraw(me, parts);
 }
-// A read that may not exist yet, or not be in the viewer's view: its rows, or nothing.
-const finTry = (path, key) => get(path, {fresh: true}).then(d => key ? d?.[key] || [] : d, () => key ? [] : null);
-const finOnly = (rows, test) => (rows || []).filter(test);
+// A customer's panel is one read; a vendor's is the contact. A contact opened from an address may be the other kind.
 async function finContactRead(me) {
-  const id = encodeURIComponent(me.id), as = finAs();
-  const one = await finTry(`/v2/finance/contacts/${id}${finAs('?')}`);
-  const contact = one?.contact || one || (await finTry(`/v2/finance/contacts?limit=50&q=${encodeURIComponent(me.name.slice(0, 100))}${as}`, 'contacts')).find(c => c.id === me.id) || {id: me.id, name: me.name};
-  if (contact.name) me.name = contact.name;
-  if (contact.kind) me.kind = contact.kind === 'both' ? me.kind : contact.kind;
-  if (me.kind === 'vendor') return {contact};
-  // The reads filter on the server where they can; the checks here keep a read that does not yet take the filter from
-  // putting another customer's rows on this panel.
-  const [sites, gear, dates, estimates, invoices] = await Promise.all([
-    one?.locations || finTry(`/v2/locations?customer_id=${id}&limit=200${as}`, 'locations').then(r => finOnly(r, l => l.customer_id === me.id)),
-    one?.equipment || finTry(`/v2/equipment?customer_id=${id}&limit=200${as}`, 'equipment').then(r => finOnly(r, e => e.customer_id === me.id)),
-    one?.due_dates || finTry(`/v2/due-dates?limit=200${as}`, 'due_dates'),
-    one?.estimates || (finHolds('finance.ar') ? finTry(`/v2/estimates?customer_id=${id}&limit=50${as}`, 'estimates').then(r => finOnly(r, e => ['draft', 'sent', 'accepted'].includes(e.status))) : []),
-    one?.invoices || (finCaps()?.receivables ? finTry(`/v2/finance/invoices?customer_id=${id}&status=draft,unpaid&limit=50${as}`, 'invoices') : []),
-  ]);
-  const where = new Set([...sites.map(s => 'location:' + s.id), ...gear.map(e => 'equipment:' + e.id), 'contact:' + me.id]);
-  const due = one?.due_dates ? dates : finOnly(dates, d => where.has(`${d.subject_type}:${d.subject_id}`));
-  return {contact, sites, gear, due, estimates, invoices};
+  const id = encodeURIComponent(me.id), as = finAs('?');
+  if (me.kind !== 'customer') {
+    const {contact} = await get(`/v2/finance/contacts/${id}${as}`, {fresh: true});
+    me.name = contact.name;
+    if (contact.kind !== 'customer') return {contact};
+    me.kind = 'customer';
+  }
+  const d = await get(`/v2/customers/${id}${as}`, {fresh: true});
+  me.name = d.contact?.name || me.name;
+  return {contact: d.contact, sites: d.locations, gear: d.equipment, due: d.due_dates, estimates: d.estimates, invoices: d.invoices?.invoices};
 }
 function finContactDraw(me, parts) {
   const head = `<button type="button" class="ghost fin-rail-back" data-fin-contact-back>‹ Back</button><div class="fin-rail-title"><h2>${esc(me.name || '—')}</h2></div>`;
@@ -94,8 +85,10 @@ function finContactWire(me, c) {
 }
 // Payment terms, owner, renewal and notice: only what changed goes to contact_update.
 function finVendorEdit(me, c) {
-  const mates = (FIN?.acc || FIN_ACCESS)?.teammates || [];
-  const owners = mates.map(m => ({id: m.teammate, name: finWho(m.teammate)}));
+  // Anyone can own a vendor, Finance access or not, so the whole team (the access read shows a non-admin only their reports).
+  const owners = [...(S.people || []).map(p => ({id: `human:${p.id}`, name: p.name || p.id})),
+    ...(S.emps || []).map(e => ({id: `bot:${e.name}`, name: e.display_name || e.name}))];
+  if (c.owner_id && !owners.some(o => o.id === c.owner_id)) owners.push({id: c.owner_id, name: finWho(c.owner_id)});
   finDecideDialog('Vendor', `<label>Payment terms (days)<input name="terms" type="number" min="0" max="365" inputmode="numeric" value="${esc(c.payment_terms_days ?? '')}"></label>
     <label>Owner<select name="owner"><option value=""></option>${finOpts(owners, c.owner_id || '')}</select></label>
     <div class="fin-pair"><label>Renews<input type="date" name="renews" value="${esc(c.renewal_on || '')}"></label>

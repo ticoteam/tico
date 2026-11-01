@@ -231,6 +231,7 @@ def test_the_finance_record_and_order_answers_match_the_live_ones(api):
     call("getEstimate", "/api/v2/estimates/" + estimate)
     call("listCustomers", "/api/v2/customers", {"q": "acme"})
     call("getCustomer", "/api/v2/customers/" + customer)
+    call("getFinanceContact", "/api/v2/finance/contacts/" + customer)
     call("getFinanceReport", "/api/v2/finance/reports/revenue_by_item", {"start": "2026-10-01", "end": "2026-10-31"})
 
 

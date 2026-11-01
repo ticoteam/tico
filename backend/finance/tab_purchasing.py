@@ -83,13 +83,15 @@ def _line(ctx: Ctx, kind: str, x: sqlite3.Row, names: dict[str, dict[str, str]])
 
 
 def _list(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | None, contact_id: str | None, q: str,
-          cursor: str | None, limit: int, at: str | None) -> tuple[list[Row], str | None]:
+          cursor: str | None, limit: int, location_id: str | None, project_id: str | None,
+          at: str | None) -> tuple[list[Row], str | None]:
     ctx = load(c, at)
     _check(ctx, viewer, kind)
     if status and status not in STATUS[kind]:
         raise invalid(f"status is {'|'.join(STATUS[kind])}")
     cut = set(private_cut(ctx, ctx.view(viewer)))
-    names = tab_ap.record_names(c)
+    names = tab_ap.list_names(c)
+    tagged = tab_ap.tag_filter(c, location_id, project_id)
     most = page_size(limit)
     marks = decode_cursor(cursor)
     before = (marks[0], marks[1]) if len(marks) == 2 else None
@@ -98,7 +100,7 @@ def _list(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | None, 
     nxt: str | None = None
     while len(out) < most and scanned < SCAN:
         batch = SP.listing(c, kind, book_id=ctx.book.id, status=status or "", contact_id=contact_id or "",
-                           q=(q or "").strip()[:100], before=before, most=BATCH)
+                           q=(q or "").strip()[:100], before=before, most=BATCH, tagged=tagged)
         if not batch:
             break
         scanned += len(batch)
@@ -138,10 +140,12 @@ def _one(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str | N
 
 
 def orders(c: sqlite3.Connection, viewer: str, *, status: str | None = None, vendor_id: str | None = None,
-           q: str = "", cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
+           q: str = "", cursor: str | None = None, limit: int = 50, location_id: str | None = None,
+           project_id: str | None = None, at: str | None = None) -> Row:
     """Purchase orders the viewer sees, newest first. A search over number, memo and vendor name, a status (as
-    shown) and a vendor narrow them. `next_cursor` pages."""
-    rows, nxt = _list(c, viewer, "po", status=status, contact_id=vendor_id, q=q, cursor=cursor, limit=limit, at=at)
+    shown), a vendor and a line's location or project narrow them. `next_cursor` pages."""
+    rows, nxt = _list(c, viewer, "po", status=status, contact_id=vendor_id, q=q, cursor=cursor, limit=limit,
+                      location_id=location_id, project_id=project_id, at=at)
     return {"orders": rows, "next_cursor": nxt}
 
 
@@ -151,11 +155,12 @@ def order(c: sqlite3.Connection, viewer: str, po_id: str, at: str | None = None)
 
 
 def estimates(c: sqlite3.Connection, viewer: str, *, status: str | None = None, customer_id: str | None = None,
-              q: str = "", cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
-    """Estimates the viewer sees, newest first. A search over number, memo and customer name, a status (as shown) and
-    a customer narrow them. `next_cursor` pages."""
+              q: str = "", cursor: str | None = None, limit: int = 50, location_id: str | None = None,
+              project_id: str | None = None, at: str | None = None) -> Row:
+    """Estimates the viewer sees, newest first. A search over number, memo and customer name, a status (as shown), a
+    customer and a line's location or project narrow them. `next_cursor` pages."""
     rows, nxt = _list(c, viewer, "estimate", status=status, contact_id=customer_id, q=q, cursor=cursor, limit=limit,
-                      at=at)
+                      location_id=location_id, project_id=project_id, at=at)
     return {"estimates": rows, "next_cursor": nxt}
 
 

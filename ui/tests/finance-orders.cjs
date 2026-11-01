@@ -120,6 +120,15 @@ const DAY = '2026-10-20';       // the scenario world's frozen day; the pages' c
     }
     await page.locator('[data-fin-split]').selectOption('');
     await page.locator('[data-fin-seg="period"]').waitFor({timeout: t(5000)});
+    assert.ok(!page.url().includes('split='), 'clearing the split clears the address');
+    // A link from elsewhere opens on its split, and survives a change of the select.
+    await go(page, '#/finance/pnl?split=location');
+    await until(async () => (await cells()).some(c => c[0] === 'North shop'), 'the address picks the split');
+    assert.equal(await page.locator('[data-fin-split]').inputValue(), 'location');
+    await page.locator('[data-fin-split]').selectOption('class');
+    await until(async () => (await cells()).some(c => c[0] === 'Commercial'), 'the select overrides the link');
+    assert.ok(page.url().includes('split=class'), page.url());
+    await page.locator('[data-fin-split]').selectOption('');
 
     // ---- Line forms: an item fills the line and the price; categories and archived records are not offered.
     await go(page, '#/finance/receivables/estimates');
@@ -311,17 +320,49 @@ const DAY = '2026-10-20';       // the scenario world's frozen day; the pages' c
     assert.equal((await read('dana', '/v2/finance/invoices/' + sold.id)).lines[0].tags.project, job, 'C1: an invoice on the job');
     assert.equal((await po(id)).lines[0].tags.project, job, 'C1: a PO on the job');
 
+    // ---- The filters Operations calls: a line's location or project, paging right.
+    const numbers = async (route, key) => {
+      const out = [];
+      let cursor = '';
+      do {
+        const d = await read('dana', `${route}&limit=1${cursor ? '&cursor=' + encodeURIComponent(cursor) : ''}`);
+        out.push(...d[key].map(r => r.number));
+        cursor = d.next_cursor || '';
+      } while (cursor);
+      return out.sort();
+    };
+    assert.deepEqual(await numbers(`/v2/purchase-orders?project_id=${job}`, 'orders'), ['PO-1']);
+    assert.deepEqual(await numbers(`/v2/purchase-orders?location_id=${north}`, 'orders'), ['PO-1']);
+    assert.deepEqual(await numbers(`/v2/purchase-orders?location_id=${south}`, 'orders'), []);
+    assert.deepEqual(await numbers(`/v2/estimates?project_id=${job}`, 'estimates'), ['E-100', 'E-102']);
+    assert.deepEqual(await numbers(`/v2/estimates?project_id=${job}&location_id=${north}`, 'estimates'), ['E-100']);
+    assert.ok((await numbers(`/v2/finance/invoices?project_id=${job}`, 'invoices')).includes('C-2'));
+    assert.deepEqual(await numbers(`/v2/finance/invoices?project_id=${big}`, 'invoices'), []);
+
     // ---- The panels. A customer's: open estimates and invoices, another customer's left out; a vendor's: its fields.
+    await act('dana', 'invoice_send', {invoice_id: sold.id});
+    const site = (await act('dana', 'location_create', {name: 'Acme Homes site', kind: 'customer_site', customer_id: customer})).location_id;
+    await act('dana', 'location_create', {name: 'Other Homes site', kind: 'customer_site', customer_id: rival});
+    assert.ok(site);
     await go(page, `#/finance/receivables/estimates?contact=${customer}`);
     await rail(page).getByRole('heading', {name: 'Estimates'}).waitFor({timeout: t(10000)});
     const panel = await rail(page).innerText();
     assert.ok(panel.includes('E-102') && !panel.includes('E-100') && !panel.includes('E-101'), 'only open estimates: ' + panel);
     assert.ok(panel.includes('C-2') && panel.includes('$600'), 'open invoices: ' + panel);
+    assert.ok(panel.includes('Acme Homes site') && !panel.includes('Other Homes site'), 'its own sites: ' + panel);
+    await rail(page).getByRole('heading', {name: 'Acme Homes'}).waitFor({timeout: t(5000)});
     await shot(page, 'customer-panel-desktop');
     await go(page, `#/finance/payables/orders?contact=${supplier}`);
     await rail(page).getByText('Payment terms').waitFor({timeout: t(10000)});
     for (const label of ['Payment terms', 'Owner', 'Renews', 'Notice']) assert.ok((await rail(page).innerText()).includes(label), label);
+    await rail(page).getByRole('heading', {name: 'Acme Supplies'}).waitFor({timeout: t(5000)});   // named from the address alone
     await shot(page, 'vendor-panel-desktop');
+    // A vendor's owner can be anyone, as seen by a teammate who isn't a finance admin.
+    await go(omar, `#/finance/payables/orders?contact=${supplier}`);
+    await rail(omar).getByRole('button', {name: 'Edit'}).click();
+    const owners = await dlg(omar).locator('[name=owner] option').evaluateAll(o => o.map(x => x.value));
+    assert.ok(owners.includes('human:priya') && owners.includes('bot:engineering-lead'), 'no Finance access still an owner: ' + owners);
+    await dlg(omar).getByRole('button', {name: 'Cancel'}).click();
     // The panel's Edit goes through the one write path; only what changed is sent.
     await rail(page).getByRole('button', {name: 'Edit'}).click();
     await dlg(page).locator('[name=renews]').fill('2027-03-01');
