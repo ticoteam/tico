@@ -300,6 +300,59 @@ def test_strict_lease_recovery_preserves_unknown_effects_and_late_final_answers(
 
 
 
+@pytest.mark.parametrize('kind', ['message', 'delta'])
+@pytest.mark.parametrize('outcome', ['failed', 'interrupted'])
+def test_text_only_quota_stop_retries_without_a_required_thread(api, monkeypatch, kind, outcome):
+    at(monkeypatch, '2026-10-27T01:00:00.000000Z')
+    machine = runner(api)
+    assign(api, machine, 'ops')
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                  'capabilities': ['capacity_continue_v1']}, machine['token'])
+    message = post(api, 'chat/ops', {'text': 'Read the startup rules.'})
+    first = claim(api, machine)
+    post(api, f"attempts/{first['id']}/started", {'thread_id': 'not-saved-on-computer'}, machine['token'])
+    seq = events(api, machine, first, [(kind, 'I will read the rules.'),
+                 ('error', 'Usage limit; resets at 2026-10-27T07:00:00Z')])
+    post(api, f"attempts/{first['id']}/complete", {'outcome': outcome, 'limited': True,
+                 'last_seq': seq, 'text': 'I will read the rules.'}, machine['token'])
+    with api.app.state.store.read() as c:
+        result = json.loads(c.execute('SELECT result_json FROM attempts WHERE id=?', (first['id'],)).fetchone()[0])
+        assert result['source_pause'] == 'quota' and result['retryable']
+        assert not result.get('quota_continue')
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (first['job_id'],)).fetchone()[0] == 'queued'
+        assert not c.execute("SELECT 1 FROM messages WHERE in_reply_to=? AND from_actor='bot:ops'",
+                             (message['id'],)).fetchone()
+    at(monkeypatch, '2026-10-27T07:01:00.000000Z', api)
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                  'capabilities': ['capacity_continue_v1']}, machine['token'])
+    again = claim(api, machine)
+    assert again and again['job_id'] == first['job_id']
+    assert not again.get('continue_thread')
+    done(api, machine, again)
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (first['job_id'],)).fetchone()[0] == 'completed'
+
+
+def test_quota_after_a_consumed_approval_without_tool_events_stays_held(api, monkeypatch):
+    from backend.tests.test_api import setup_attempt
+    machine, message, first = setup_attempt(api)
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                  'capabilities': ['capacity_continue_v1']}, machine['token'])
+    post(api, f"attempts/{first['id']}/started", {'thread_id': 'approval-session'}, machine['token'])
+    with api.app.state.store.transaction() as c:
+        started = c.execute('SELECT started FROM attempts WHERE id=?', (first['id'],)).fetchone()[0]
+        c.execute('INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)',
+                  (H.new_id(), 'spend', message['id'], 'bot:ops', started, started))
+    seq = events(api, machine, first, [('error', 'Usage limit; resets at 2026-10-27T07:00:00Z')])
+    post(api, f"attempts/{first['id']}/complete", {'outcome': 'failed', 'limited': True,
+                 'last_seq': seq}, machine['token'])
+    with api.app.state.store.read() as c:
+        result = json.loads(c.execute('SELECT result_json FROM attempts WHERE id=?', (first['id'],)).fetchone()[0])
+        assert not result.get('source_pause') and not result.get('quota_continue')
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (first['job_id'],)).fetchone()[0] == 'uncertain'
+    assert claim(api, machine) is None
+
+
 def test_mid_turn_primary_quota_uses_strict_saved_session_even_with_a_ready_fallback(api, monkeypatch):
     from backend.tests.test_login_holds import two_bots
     machine = two_bots(api, monkeypatch)

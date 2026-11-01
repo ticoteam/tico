@@ -4714,7 +4714,8 @@ class Execution:
                 quota_acted = bool(facts['consumed'] or outside_actions(c, job, row['started'], H.now()))
                 source_pause = not quota_acted
                 if source_pause:
-                    worked = c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind IN ('tool','message','delta') LIMIT 1", (aid,)).fetchone()
+                    # Streamed text from a stopped run is never posted, so only tool activity needs its thread.
+                    worked = c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind='tool' LIMIT 1", (aid,)).fetchone()
                     body = body.model_copy(update={'outcome': 'interrupted' if worked else body.outcome, 'retryable': True})
         c.execute("UPDATE attempts SET state=?,finished=?,final_text=?,result_json=? WHERE id=?",
                   (body.outcome, H.now(), body.text,

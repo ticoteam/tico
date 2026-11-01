@@ -5100,6 +5100,32 @@ else:
     }
 
     #[tokio::test]
+    async fn a_fresh_quota_retry_without_a_saved_thread_runs_instead_of_holding() {
+        let _controls = RunControls;
+        CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+        let (url, seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "quota-fresh");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        capacity_host(&dir);
+        assert!(runner.state.session("ops", "bot", "codex").unwrap().is_none());
+        // The server omits continue_thread after a text-only quota stop. Even without a saved session,
+        // execute must reach the model; the synthetic host then reports its own capacity refusal.
+        tokio::time::timeout(Duration::from_secs(12), runner.clone().execute(capacity_attempt("a-fresh", None))).await.expect("the turn ends").unwrap();
+        let done = completion(&seen, "a-fresh");
+        assert_eq!(done["outcome"], "failed", "{done:?}");
+        assert_eq!(done["continues"], true, "the host actually ran and hit capacity: {done:?}");
+        let args: Vec<Value> = std::fs::read_to_string(dir.join("argv.jsonl")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(args.len(), 1, "{args:?}");
+        assert!(!args[0].as_array().unwrap().iter().any(|arg| arg == "--resume"), "{args:?}");
+        assert!(dir.join("prompts.jsonl").exists(), "a fresh thread received the request");
+        let events = seen.lock().unwrap().iter().filter(|(_, p, _)| p.ends_with("/attempts/a-fresh/events"))
+            .flat_map(|(_, _, b)| b["events"].as_array().cloned().unwrap_or_default()).collect::<Vec<_>>();
+        assert!(!events.iter().any(|e| e.to_string().contains(CONTINUE_LOST)), "{events:?}");
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
     async fn a_continuation_whose_thread_is_gone_is_held_for_review_without_running() {
         let _controls = RunControls;
         CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
