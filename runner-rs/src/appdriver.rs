@@ -635,14 +635,16 @@ mod tests {
         crate::util::write_script(&driver, &format!("#!/bin/sh\ncat > '{}'\n{body}exit 0\n", dir.join("request.json").display()));
         let bot = json!({"id": "b-1", "name": "Acme Helper"});
         // An app of its own: the host tests beside it hold Grok's gate, and a held gate skips the read.
-        let (url, seen) = hub(json!({"bots": [{"slug": "helper", "app": "acme-chat", "bot": bot, "after": "k0"}]})).await;
+        // A row names the Tico bot by its id (a UUID for a bot made now) beside its slug; the report goes to the id.
+        let id = "01a19806-0460-77a7-860b-b797cea3f270";
+        let (url, seen) = hub(json!({"bots": [{"id": id, "slug": "helper", "app": "acme-chat", "bot": bot, "after": "k0"}]})).await;
         let client = Client::new(&url, "runner-token", 5, 0).unwrap();
         assert_eq!(watch_pass(&client, &driver).await, Pass::Done(true));
         let request: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("request.json")).unwrap()).unwrap();
         assert_eq!(request, json!({"op": "read", "app": "acme-chat", "bot": bot, "after": "k0", "limit": 50}));
         let seen = seen.lock().unwrap();
         assert!(seen[0].starts_with("GET /api/v2/runners/me/app-delivery "));
-        assert!(seen[1].starts_with("POST /api/v2/runners/me/app-delivery/helper "));
+        assert!(seen[1].starts_with(&format!("POST /api/v2/runners/me/app-delivery/{id} ")));
         let posted: Value = serde_json::from_str(&seen[1][seen[1].find("\r\n\r\n").unwrap() + 4..]).unwrap();
         assert_eq!(posted["error"], Value::Null);
         assert_eq!(posted["messages"][1], json!({"key": "k2", "role": "bot", "text": "Thursday.", "at": "2026-10-01T10:00:05Z", "needs_human": false}));

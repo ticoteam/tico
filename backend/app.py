@@ -2280,9 +2280,13 @@ def create_app(settings=None):
     def me(request: Request):
         from .mcp import caller_kind
         who = request.state.identity
+        slug = None
+        if who.role == "bot":       # the bot's label beside its id (the actor), for a client that shows it
+            with store.read() as c:
+                slug = (H.bot(c, H.actor_id(who.actor)) or {}).get("slug")
         return {"actor": who.actor, "role": who.role, "email": who.email,
                 "runner_id": who.runner_id, "attempt_id": who.attempt_id, "agent": who.agent,
-                "kind": caller_kind(auth, who)}
+                "kind": caller_kind(auth, who), **({"slug": slug} if slug else {})}
 
     # A person's own API tokens (backend/personal_tokens.py). Managed only from a browser
     # sign-in: a token is that person everywhere else, but it cannot mint or revoke tokens.

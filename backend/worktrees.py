@@ -674,7 +674,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     if existing and not attaching and existing['task_id'] == task['id']:
         owner = json.loads(existing['detail_json'] or '{}').get('owner', task['owner'])
         if owner != task['owner'] and existing['state'] != 'removed':
-            suffix = '-' + bot
+            suffix = '-' + ((H.bot(c, bot) or {}).get('slug') or bot)   # a folder name people read: the slug now
             path = relative(path + suffix)
             canonical = unicodedata.normalize('NFC', path).casefold()
             existing = next((r for r in candidates if unicodedata.normalize('NFC', r['path'] or '').casefold() == canonical), None)

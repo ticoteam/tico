@@ -479,6 +479,10 @@ class SettingsAdmin:
                   "private_tasks_default": (body.private_tasks_default if "private_tasks_default" in body.model_fields_set
                                             else body.template == "general-counsel"),
                   "model_managed_by": "cloud"}
+        if bot_id != body.slug:
+            # Its folder on a computer is named once, from the slug it was made with: a rename keeps the folder
+            # (the id is a UUID, not a name a person reads in a file list).
+            config["folder"] = "bot-" + body.slug
         profiles.apply(config, profiles.DOER, {})
         if body.template:
             config["template"] = body.template

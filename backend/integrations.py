@@ -237,11 +237,11 @@ def inventory(c, settings, auth, who, aliases=None):
             service = tool["service"]
             service = (aliases or {}).get(str(service).lower(), service)
             item = found.setdefault(service, {"service": service, "title": tool["name"], "bots": [], "connections": []})
-            if slug not in item["bots"]:
-                item["bots"].append(slug)
+            if bot["id"] not in item["bots"]:
+                item["bots"].append(bot["id"])
             # The problem a computer or the hub found (a missing credential, an MCP server that refused it) and the
             # variable it is read from: Library › Tools lists them as the tool's issues. Names only, never a value.
-            item["connections"].append({"bot": slug, "status": tool["status"], "identity": tool["identity"], "can": tool["can"],
+            item["connections"].append({"bot": bot["id"], "slug": slug, "status": tool["status"], "identity": tool["identity"], "can": tool["can"],
                                         **({"problem": tool["problem"]} if tool.get("problem") else {}),
                                         **({"env": tool["env"]} if tool.get("env") else {}),
                                         **({"mcp": tool["mcp"]} if tool.get("mcp") else {})})

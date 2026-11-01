@@ -128,7 +128,18 @@ pub fn repo_dir(root: &Path, slug: &str) -> PathBuf {
 
 static SHARED: Mutex<Option<HashMap<String, PathBuf>>> = Mutex::new(None);
 
-/// The checkout a shared bot last resolved to (service.py `shared_checkouts`), for callers without its config.
+/// The folder a bot made after bots got stable ids is named (its config's `folder`, `bot-<slug it was made with>`):
+/// its key is a UUID nobody reads, and a rename keeps the folder. None for an older bot (its folder is `bot-<id>`)
+/// or a value that is not one plain folder name.
+pub fn named_folder(bot_config: &Value) -> Option<String> {
+    let folder = text_of(&bot_config["folder"]);
+    let plain = !folder.is_empty() && folder != "." && folder != ".."
+        && folder.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'));
+    plain.then_some(folder)
+}
+
+/// The checkout a shared bot, or a bot with a named folder, last resolved to (service.py `shared_checkouts`), for
+/// callers without its config.
 pub fn shared_path(bot: &str) -> Option<PathBuf> {
     SHARED.lock().unwrap().as_ref().and_then(|m| m.get(bot).cloned())
 }
@@ -158,7 +169,7 @@ pub fn local_path(config: &crate::config::Config, bot: &str, bot_config: &Value)
     } else if !source.is_empty() {
         Some(explicit.clone().unwrap_or_else(|| repo_dir(&projects, &source)))
     } else {
-        None
+        named_folder(bot_config).map(|folder| explicit.clone().unwrap_or_else(|| projects.join(folder)))
     };
     if let Some(p) = found {
         SHARED.lock().unwrap().get_or_insert_with(HashMap::new).insert(bot.into(), p.clone());
@@ -1295,6 +1306,22 @@ mod tests {
         assert_eq!(*order.lock().unwrap(), vec!["person", "routine"]);
         assert!(!lanes.person_waiting("coo"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bot_made_with_a_uuid_id_works_in_the_folder_named_from_its_first_slug() {
+        let mut data = serde_json::Map::new();
+        data.insert("projects_dir".into(), json!("/w/projects"));
+        let config = crate::config::Config { path: PathBuf::from("/w/runner.json"), data };
+        let id = "01a19806-0460-77a7-860b-b797cea3f270";
+        let named = json!({"name": "revenue-helper", "folder": "bot-sales-helper", "repo": "acme/bot-sales-helper"});
+        assert_eq!(local_path(&config, id, &named), PathBuf::from("/w/projects/bot-sales-helper"));
+        // readiness and watchers, which have no config, find the same folder once it has resolved
+        assert_eq!(crate::readiness::local_path(&config, id), PathBuf::from("/w/projects/bot-sales-helper"));
+        // an older bot (id = slug) keeps bot-<id>; a folder value that is not one plain name is ignored
+        assert_eq!(local_path(&config, "ops", &json!({"name": "ops"})), PathBuf::from("/w/projects/bot-ops"));
+        assert_eq!(named_folder(&json!({"folder": "../etc"})), None);
+        assert_eq!(named_folder(&json!({"folder": "a/b"})), None);
     }
 
     #[test]

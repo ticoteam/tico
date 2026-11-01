@@ -758,9 +758,12 @@ def perform_install(harness, profile, directory, url, bot, token, no_timer=False
     key = ident(harness, profile)
     previous = previous or {}
     me = request(url, token, "GET", "/api/v2/me")
-    if me.get("role") != "bot" or me.get("actor") != "bot:" + bot or not me.get("agent"):
+    # `bot` may be the bot's id or its slug; the saved configuration keeps the id (stable across renames) and the
+    # slug only to show.
+    if me.get("role") != "bot" or bot not in (str(me.get("actor") or "")[4:], me.get("slug")) or not me.get("agent"):
         raise Failure(f"This token is not the agent credential for bot {bot!r}: Tico says "
                       f"{me.get('actor')!r} ({me.get('role')!r})")
+    bot, slug = str(me["actor"])[4:], me.get("slug") or bot
     if harness == "hermes":
         upsert_env(directory, {ENV_TOKEN: token, ENV_URL: url})
         mcp = upsert_mcp(directory, url)
@@ -770,7 +773,7 @@ def perform_install(harness, profile, directory, url, bot, token, no_timer=False
         upsert_env(directory, {ENV_TOKEN: token, ENV_URL: url}, ENV_FILE)
         mcp = "none"
     python = sys.executable
-    config = {"url": url, "bot": bot, "token": token, "profile": profile,
+    config = {"url": url, "bot": bot, "slug": slug, "token": token, "profile": profile,
               "profile_dir": str(directory), "python": python, "harness": me.get("agent")}
     for kept in ("sync", "sync_job", "updated_at"):
         if kept in previous:
@@ -801,7 +804,7 @@ def perform_install(harness, profile, directory, url, bot, token, no_timer=False
         save_config(key, config)
     removed = remove_old_timers(key) if not timer_problem else []
     label = "Paired, finish connecting tools:" if mcp == "manual" else "Registered"
-    print(f"{label} {harness_name(harness)} profile {profile!r} as bot {bot!r} at {url}")
+    print(f"{label} {harness_name(harness)} profile {profile!r} as bot {slug!r} at {url}")
     if mcp == "manual":
         command = shlex.join([python, "-m", "pip", "install", "PyYAML"]) + " && " + shlex.join(
             [python, str(installed_copy()), "reinstall", *flags(harness, profile)])
@@ -895,7 +898,7 @@ def cmd_heartbeat(args):
         reply = request(config["url"], config["token"], "POST", "/api/v2/agents/heartbeat",
                         heartbeat_body(args.harness, args.profile, directory))
     except Failure as exc:
-        message = blocked_message(exc, config.get("bot", args.profile))
+        message = blocked_message(exc, config.get("slug") or config.get("bot", args.profile))
         if not message:
             raise
         config["backoff"] = {"until": time.time() + BACKOFF_SECONDS, "since": hold.get("since") or time.time(),
@@ -906,7 +909,7 @@ def cmd_heartbeat(args):
     config["last_reply"] = reply
     config["last_ok"] = time.time()
     if config.pop("backoff", None):
-        print(f"Bot {config.get('bot', '')} answers again: heartbeat back to every {EVERY_SECONDS} s")
+        print(f"Bot {config.get('slug') or config.get('bot', '')} answers again: heartbeat back to every {EVERY_SECONDS} s")
     save_config(args.key, config)
     waiting = reply.get("waiting", {})
     print(f"{reply.get('server_time', '')} {reply.get('bot', '')}: {waiting.get('messages', 0)} message(s), "
@@ -927,7 +930,7 @@ def cmd_check(args):
     when that is older than five minutes, so a stopped timer cannot hide work. With `--gate` a last line of
     {"wakeAgent": false} tells Hermes not to start the agent when there is nothing to do."""
     config = load_config(args.key)
-    bot = config.get("bot", args.profile)
+    bot = config.get("slug") or config.get("bot", args.profile)
     reply, last_ok = config.get("last_reply"), config.get("last_ok") or 0
     hold = config.get("backoff") or {}
     problem = ""
@@ -1044,7 +1047,7 @@ def cmd_pair(args):
     bot, token = answer.get("bot"), answer.get("token")
     if not bot or not token:
         raise Failure("Tico approved the pairing without a bot or credential; run pair again")
-    print(f"Approved for bot {bot!r}.")
+    print(f"Approved for bot {answer.get('slug') or bot!r}.")
     return perform_install(args.harness, args.profile, directory, answer.get("url") or url, bot, token, args.no_timer, args.sync)
 
 
@@ -1383,7 +1386,7 @@ def cmd_doctor(args):
             else:
                 say("problem", f"GET /api/v2/me answers {me.get('actor')!r}, not bot:{config.get('bot')}")
         except Failure as exc:
-            message = blocked_message(exc, config.get("bot", args.profile)) or str(exc)
+            message = blocked_message(exc, config.get("slug") or config.get("bot", args.profile)) or str(exc)
             say("problem", "GET /api/v2/me failed: " + message)
 
     doctor_sync(say, harness, args.profile, directory, config)
@@ -1465,7 +1468,7 @@ def parser():
     s = sub.add_parser("install", help="wire the profile to Tico, start the heartbeat timer and the sync job")
     common(s)
     s.add_argument("--url", required=True, help="Tico's origin, for example https://tico.example.com")
-    s.add_argument("--bot", required=True, help="the bot slug this profile is")
+    s.add_argument("--bot", required=True, help="the bot (its slug or id) this profile is")
     s.add_argument("--token", required=True, help="the agent credential from Settings → Bots")
     s.add_argument("--profile-dir", help="the profile directory when it is not under ~/.hermes (or ~/.openclaw)")
     s.add_argument("--no-timer", action="store_true", help="do not install a launchd/systemd timer")

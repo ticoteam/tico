@@ -6,6 +6,7 @@ runner's claim, the MCP tool table and the `hub` CLI (clients/hubtools.py, clien
 must hold the id; reads give both the id and the slug.
 """
 import json
+import re
 import uuid
 
 import pytest
@@ -88,6 +89,22 @@ def test_every_read_names_a_new_bot_by_its_id_and_its_slug(api, sales):
     assert (employee["slug"], employee["name"]) == ("sales-helper", "sales-helper")
     org = next(b for b in get(api, "org")["bots"] if b["id"] == sales)
     assert (org["slug"], org["name"]) == ("sales-helper", "sales-helper")
+
+
+def test_every_bot_route_answers_the_same_by_slug_and_by_id(api, sales):
+    """A read route that names a bot in its path finds it by either (a route that forgot resolve_bot answers 404
+    for the slug of a bot whose id is not its slug)."""
+    differ, checked = [], 0
+    for route in api.app.routes:
+        path = getattr(route, "path", "")
+        if "{bot}" not in path or "GET" not in (getattr(route, "methods", None) or ()):
+            continue
+        codes = [api.get(re.sub(r"\{[^}]+\}", "x", path.replace("{bot}", ref)), headers=headers()).status_code
+                 for ref in ("sales-helper", sales)]
+        checked += 1
+        if codes[0] != codes[1]:
+            differ.append((path, codes))
+    assert checked > 20 and not differ, differ
 
 
 # ----------------------------------------------------------------------------- chat and the runner
@@ -245,3 +262,14 @@ def test_no_bot_takes_a_slug_that_is_another_bots_id(api, sales):
 def test_a_built_in_bot_keeps_its_slug(api):
     rename(api, "coo", "chief-ops", expected=422)
     assert get(api, "bots/coo")["slug"] == "coo"
+
+
+def test_mcp_and_the_hub_cli_rename_a_bot_by_id_or_slug(api, sales, monkeypatch):
+    tool(api, "ana-test", "hub_bot_update", {"slug": sales, "new_slug": "revenue-helper"})
+    assert get(api, "bots/" + sales)["slug"] == "revenue-helper"
+    monkeypatch.setenv("HUB_API_URL", "http://test")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **k: Client(api, "ana-test"))
+    remotecli.run(hubcli.parser().parse_args(["bot", "update", "revenue-helper", "--new-slug", "pipeline-helper"]))
+    assert get(api, "bots/" + sales)["slug"] == "pipeline-helper"
+    config = json.loads(column(api, "SELECT config_json FROM bot_config WHERE bot=?", sales)[0])
+    assert config["folder"] == "bot-sales-helper"                  # its folder keeps the name it was made with

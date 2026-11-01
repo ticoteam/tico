@@ -3903,8 +3903,10 @@ PRODUCT_BOT_SLUGS = frozenset({FLEET_MAINTAINER, COUNSEL, "librarian", "goal-man
 
 
 def new_bot_id(slug):
-    """The id a new bot is created with: its slug for a product bot (PRODUCT_BOT_SLUGS), else a UUIDv7."""
-    return slug if slug in PRODUCT_BOT_SLUGS else uuid7()
+    """The id a new bot is created with: its slug for a product bot (PRODUCT_BOT_SLUGS, or the Assistant an install
+    names with TICO_ASSISTANT_BOT), else a UUIDv7."""
+    assistant = os.environ.get("TICO_ASSISTANT_BOT", "").strip()
+    return slug if slug in PRODUCT_BOT_SLUGS or (assistant and slug == assistant) else uuid7()
 
 
 
@@ -4663,8 +4665,10 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, appr
 
 
 def type_manager(conn, row):
-    """The slug of the bot that manages this task's type (task_types.manager), or None."""
-    return (_one(conn, "SELECT manager FROM task_types WHERE id=?", (row.get("type_id") or "",)) or {}).get("manager")
+    """The id of the bot that manages this task's type (task_types.manager, which a seeded type names by a legacy
+    slug such as `engineering-lead`), or None."""
+    manager = (_one(conn, "SELECT manager FROM task_types WHERE id=?", (row.get("type_id") or "",)) or {}).get("manager")
+    return (resolve_bot(conn, manager) or {}).get("id", manager) if manager else None
 
 
 def _label_writer(conn, actor, row, labels, approval_id=None):
@@ -9039,7 +9043,9 @@ def recount(conn, actors):
 def schedule_sync(conn, actor, entries):
     """The hosted bots' crons, from their `bot.yaml`. Replaces the rows for the bots named."""
     _writer(conn, actor)
-    entries = [e for e in (entries or []) if (e or {}).get("bot")]
+    # A schedule names its bot by id; a computer may still send the slug.
+    entries = [{**e, "bot": (resolve_bot(conn, str(e["bot"])) or {}).get("id", actor_id(str(e["bot"])))}
+               for e in (entries or []) if (e or {}).get("bot")]
     touched = sorted({str(e["bot"]) for e in entries})
     for slug in touched:
         conn.execute("DELETE FROM schedules WHERE bot=?", (slug,))
@@ -9065,8 +9071,9 @@ def schedule_fired(conn, actor, schedule_id, next_due=None):
 
 def schedules(conn, bot_slug=None):
     if bot_slug:
+        found = resolve_bot(conn, bot_slug)
         return _rows(conn.execute("SELECT * FROM schedules WHERE bot=? ORDER BY title",
-                                  (actor_id(bot_slug),)))
+                                  ((found or {}).get("id") or actor_id(bot_slug),)))
     return _rows(conn.execute("SELECT * FROM schedules ORDER BY bot, title"))
 
 

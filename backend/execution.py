@@ -3563,6 +3563,10 @@ class Execution:
                               'WHERE o.task_id=?', (task['id'],)).fetchone()
             if saved:
                 routine = dict(saved)
+                from .routines import _moved
+                moved = _moved(c, saved["id"])[1]
+                if moved:          # moved to an automation: that is what a change to its text goes to
+                    routine["automation"] = moved["id"]
             # Its related tasks the bot may open (kind, direction, title, status); one it may not
             # open is left out without a trace.
             def readable(other):

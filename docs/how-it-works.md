@@ -192,6 +192,17 @@ state (`backend/judge.py`); the decisions themselves are versioned files in `que
 (`questions/README.md`), which the meeting brain and the mail CLI read the same way a bot does.
 `skills/decisions/SKILL.md` says when to reach for it.
 
+**Bot ids** — a bot has a stable id and a renameable slug. A bot made before ids keeps its slug as its id; a bot made now
+gets a UUIDv7 id. Everything that names a bot stores the id (`bot:<id>` actors, task owners, automations, the org
+chart, assignments, runner readiness), and every API path, MCP tool and `hub` command that names a bot takes the id
+or the slug. A rename (`slug` on `POST /api/v2/bots/<bot>/definition`, `hub bot update <bot> --new-slug S`, the Slug
+field in the bot's settings) changes only the label: the old slug stops naming a UUID bot and may be taken by
+another, and no slug may equal another bot's id. Built-in bots keep their slug. **Folders**: a bot made now gets
+`folder: bot-<slug it was made with>` in its configuration, and the runner uses that folder name
+(`runner-rs/src/sessions.rs` `named_folder`); a rename keeps both the folder and the repository name, so nothing
+moves on disk. An older bot's folder stays `bot-<id>` (`emp-<id>` where that exists). `bot.yaml` `name` may hold the
+bot's id, its current slug or the slug its folder was named from.
+
 **The bot's repository** — `acme/bot-<slug>`, checked out at `<projects>/bot-<slug>` on the
 Mac that runs it (`~/tico-work` on Ana's Mac). The contract (`templates/employee-repo/`):
 
