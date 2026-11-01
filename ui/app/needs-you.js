@@ -84,6 +84,8 @@ function needRowHTML(it, ctx = {}) {
   const face = stale ? personCircle('Tico', 18) : actorFace(from, 18);
   const open = thread && it.conversation_id
     ? `<a class="tl-open" href="#/thread/${encodeURIComponent(it.conversation_id)}" tabindex="-1"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></a>`
+    : it.kind === 'thread_held'
+      ? `<button type="button" class="tl-open" data-hold-review="${esc(it.id)}" tabindex="-1"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></button>`
     : `<button type="button" class="tl-open" data-open-task="n${esc(key)}" tabindex="-1" aria-haspopup="dialog"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></button>`;
   return tasksSigned(`<div class="tl-row tl-need" data-task-key="n${esc(key)}" data-need-card="${esc(key)}" role="listitem" aria-level="1" style="--depth:0">
     <span class="tl-check-pad${ctx.select ? ' tl-check-room' : ''}"></span><span class="tl-chev-pad"></span>
@@ -439,24 +441,32 @@ document.addEventListener('click', ev => {
 });
 
 // Browser notifications for new thread items, while the page is in the background, when the person turned them on
-// (their Notifications card, person-page.js). The ids already notified are kept per person in localStorage, so a reload
-// does not repeat them; the first read after a fresh start records what is listed without notifying.
-const NOTIFIED_KEY = () => 'tico.notified.' + (S.me?.actor || 'me');
-async function notifyNewThreadNeeds(items) {
+// (their Notifications card, person-page.js). The ids already notified are kept per person (their id, from /api/me) in
+// localStorage, so a reload does not repeat them; the first read after a fresh start records what is listed without
+// notifying. Both reads of the list call this (hub-v2.js after a refresh, refresh.js after a live change), and the calls
+// run one after another, so they share one memory and an item is notified once.
+let notifyQueue = Promise.resolve();
+function notifyNewThreadNeeds(items) {
+  notifyQueue = notifyQueue.then(() => notifyThreadNeedsOnce(items)).catch(() => {});
+  return notifyQueue;
+}
+async function notifyThreadNeedsOnce(items) {
+  const id = S.me?.id;
+  if (!id) return;                  // the identity has not loaded: there is no person to keep a memory for yet
   if (S.notifyBrowser === undefined) {
-    const id = (S.me?.actor || '').replace(/^human:/, '');
-    try { S.notifyBrowser = !!id && (await v2Get('/v2/humans/' + encodeURIComponent(id)))?.notify_browser === true; }
+    try { S.notifyBrowser = (await v2Get('/v2/humans/' + encodeURIComponent(id)))?.notify_browser === true; }
     catch { S.notifyBrowser = false; }
   }
+  const key = 'tico.notified.' + id;
   const thread = items.filter(it => THREAD_NEED_KINDS[it.kind]);
   let seen = null;
-  try { seen = JSON.parse(localStorage.getItem(NOTIFIED_KEY()) || 'null'); } catch { seen = null; }
+  try { seen = JSON.parse(localStorage.getItem(key) || 'null'); } catch { seen = null; }
   const first = !Array.isArray(seen);
   const known = new Set(first ? [] : seen);
   const fresh = thread.filter(it => !known.has(String(it.id)));
   if (fresh.length) {
     const ids = [...known, ...fresh.map(it => String(it.id))].slice(-200);
-    try { localStorage.setItem(NOTIFIED_KEY(), JSON.stringify(ids)); } catch { /* private window: notify without memory */ }
+    try { localStorage.setItem(key, JSON.stringify(ids)); } catch { /* private window: notify without memory */ }
   }
   if (first || !fresh.length || !S.notifyBrowser || !document.hidden || !('Notification' in window)
       || Notification.permission !== 'granted') return;
@@ -465,3 +475,26 @@ async function notifyNewThreadNeeds(items) {
     catch { /* a browser that refuses a notification shows nothing; the list still has it */ }
   }
 }
+// A write held for review (org_rule_holds) has no thread to open: its hold card opens under the row, the card the task
+// page shows, with Send anyway and Keep blocked for its reviewer. The card is read from the hold, so its text reaches
+// only the reviewer, who is the one who may read it.
+document.addEventListener('click', async ev => {
+  const review = ev.target.closest('[data-hold-review]');
+  if (!review) return;
+  const holdId = review.dataset.holdReview, row = review.closest('[data-need-card]');
+  if (!row) return;
+  const open = row.parentElement?.querySelector(`[data-hold-slot="${CSS.escape(holdId)}"]`);
+  if (open) { open.remove(); return; }
+  const slot = document.createElement('div');
+  slot.className = 'needs-hold';
+  slot.dataset.holdSlot = holdId;
+  slot.dataset.task = holdId;       // ruleHoldRedraw checks a card's slot by this id, as a task page does
+  row.after(slot);
+  try {
+    const hold = await get('/v2/rule-holds/' + encodeURIComponent(holdId), {fresh: true});
+    slot.innerHTML = ruleHoldHTML(hold);
+    ruleHoldsWire(slot, holdId);
+  } catch (e) {
+    slot.textContent = e.message;
+  }
+});
