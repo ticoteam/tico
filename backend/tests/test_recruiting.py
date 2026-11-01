@@ -151,6 +151,22 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
     assert first["template"] == "issue-triage" and first["match"] == "strong"
 
 
+def test_a_job_description_never_shows_the_bot_s_own_files_or_limits(api):
+    """What a card owns says where the bot keeps things and that it stays in its lane; a job description says the work.
+    No draft, and no applicant's day one, shows a file path or "within the requested work"."""
+    _, cards = recruiting._recruitable(api.app.state.onboarding)
+    assert recruiting._plain("The label scheme it works from (knowledge/labels.md, knowledge/repro-checklist.md)") == (
+        "The label scheme it works from")
+    assert recruiting._plain("Every issue it handles, within the requested work and Tools") == "Every issue it handles"
+    assert recruiting._plain("What the team does, in knowledge/company.md") == "What the team does"
+    assert recruiting._plain("Specs in Given/When/Then (red/amber/green)") == "Specs in Given/When/Then (red/amber/green)"
+    for card in cards:
+        text = recruiting.compose(card).split("Works in:")[0]
+        day_one = [recruiting._plain(item, 400) for item in card["raw"]["owns"][:6]]
+        for words in [text, *day_one]:
+            assert "knowledge/" not in words and ".md" not in words and "requested work" not in words, (card["name"], words)
+
+
 def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch):
     import io
     import threading
