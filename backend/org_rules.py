@@ -158,7 +158,9 @@ def _where_hits(terms, place):
         elif term == "kind:dm":
             hit = place.get("kind") == "dm"
         elif term.startswith("thread:"):
-            hit = bool(place.get("thread")) and term[len("thread:"):] == place["thread"]
+            # A sub-thread's write is in its root's thread too: a rule on the root names its sub-threads.
+            wanted = term[len("thread:"):]
+            hit = bool(wanted) and wanted in (place.get("thread"), place.get("root"))
         elif term.startswith("team:"):
             hit = term[len("team:"):] in (place.get("teams") or ())
         else:

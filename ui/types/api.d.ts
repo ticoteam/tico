@@ -8524,7 +8524,6 @@ export type StreamEventsParams = {
   needs?: string | null;
   party?: string | null;
   task?: string | null;
-  thread?: string | null;
   topics?: string | null;
 };
 export type StreamEventsBody = never;

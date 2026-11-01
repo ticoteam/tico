@@ -122,6 +122,17 @@ function ruleChatHeld(state, hold) {
   state.holds = [hold, ...(state.holds || []).filter(h => h.id !== hold.id)];
   if (V2C === state) v2ChatRender(state);
 }
+// A held task comment: its card in the task's hold list, with its actions. Nothing was written, so the box keeps the text.
+function ruleTaskHeld(state, hold) {
+  const slot = $('[data-rule-holds]', state.host);
+  if (!slot) return;
+  const id = String(state.id);
+  slot.dataset.task = id;
+  slot.querySelectorAll('[data-hold]').forEach(card => { if (card.dataset.hold === hold.id) card.remove(); });
+  slot.hidden = false;
+  slot.insertAdjacentHTML('afterbegin', ruleHoldHTML(hold));
+  ruleHoldsWire(slot, id);
+}
 // A chat's cards: an action takes its card out of the thread; Edit and resend also puts the text back in this bot's box.
 function ruleChatWire(state, thread) {
   ruleHoldsWire(thread, state.conv?.id, (card, hid, path) => {

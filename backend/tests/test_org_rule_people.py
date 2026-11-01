@@ -15,6 +15,7 @@ from backend.store import H
 from backend.tests.test_api import get, headers, post  # noqa: F401
 from backend.tests.test_org_rule_check import COLOR, bodies, chat, color_rule, events, hold_row, ruled  # noqa: F401
 from backend.tests.test_org_rules import api, as_bot, org, rule  # noqa: F401
+from backend.tests.test_thread_api import new_thread, say  # noqa: F401
 
 EVERYONE = {"everyone": True}
 
@@ -189,8 +190,9 @@ def test_where_kind_dm_holds_direct_chats_and_not_a_group_conversation(ruled):
     block_everyone(api, where=["kind:dm"])
     assert write(api, "cara-test", "Our favorite color is gold.")["held"]["outcome"] == "blocked"
     group = post(api, "conversations", {"participants": ["ben", "ana"], "subject": "Palette"}, token="cara-test")
+    # A group conversation's audience is its participants, not a DM, though its legacy scope says direct: no call.
     assert "held" not in write(api, "cara-test", "Our favorite shade is gold.", conversation_id=group["id"])
-    assert len(judge.calls) == 2
+    assert len(judge.calls) == 1
 
 
 def test_where_team_holds_the_writes_of_that_group_and_not_anyone_else(ruled):
@@ -280,7 +282,8 @@ def test_send_anyway_posts_a_held_thread_message_once_as_the_person(ruled):
     block_everyone(api)
     store, text = api.app.state.store, "Our favorite color is gold."
     with store.transaction() as c:
-        thread = H.open_conversation(c, "human:cara", ["human:cara", "human:ben"], kind="chat", subject="Colors")
+        thread = T.create(c, Identity("human:cara", "human"), title="Colors", audience="members",
+                          members=["human:ben"])
 
     def place(c, author, recipients):
         return K.place_for(c, author, recipients, thread["id"])
@@ -327,3 +330,97 @@ def test_a_held_first_message_makes_no_dm_until_its_send_anyway_posts_it(ruled):
         row = c.execute("SELECT from_actor, conversation_id FROM messages WHERE body=?", (text,)).fetchone()
     assert (row[0], row[1] is not None) == ("human:cara", True)           # one message, as the person, in the new DM
     assert len(bodies(api, "Kickoff:")) == 1
+
+
+def test_a_non_member_gets_404_for_a_held_message_and_no_hold_names_the_participants(ruled):
+    api, judge = ruled
+    block_everyone(api)
+    add_fay(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        conv = H.open_conversation(c, "human:cara", ["human:cara", "human:ben"], kind="chat", subject="Pay talk")
+    text = "Pay talk: our favorite color is gold."
+    r = api.post("/api/v2/messages", json={"to": "ben", "text": text, "conversation_id": conv["id"]},
+                 headers=headers("fay-test"))
+    assert r.status_code == 404, r.text
+    assert sql(api, "SELECT COUNT(*) AS n FROM org_rule_holds")[0]["n"] == 0
+    assert judge.calls == [] and bodies(api, "Pay talk") == []
+
+
+def test_a_hold_is_made_only_for_the_audience_the_check_named(ruled):
+    api, judge = ruled
+    block_everyone(api)
+    store, text = api.app.state.store, "Our favorite color is gold."
+    cara = Identity("human:cara", "human")
+    verdict = K.preflight(store, judge, cara, "threads", text, ["human:ben"])
+    with store.transaction() as c:
+        assert K.apply(c, verdict, text, {}, audience_now=["human:ben", "human:fay"]) == {"moved": True}
+        assert c.execute("SELECT COUNT(*) FROM org_rule_holds").fetchone()[0] == 0
+        held = K.apply(c, verdict, text, {}, audience_now=["human:ben", "human:cara"])
+    assert held["held"]["id"]
+
+
+def test_a_held_chat_upload_keeps_its_file_and_is_written_with_it_once_when_sent_anyway(ruled):
+    api, judge = ruled
+    block_everyone(api)                                         # Ana wrote the rule
+    text = "Our favorite color is gold."
+    response = api.post("/api/v2/uploads/chat/ops", data={"text": text},
+                        files={"files": ("notes.txt", b"gold notes", "text/plain")}, headers=headers("cara-test"))
+    assert response.status_code == 200, response.text
+    held = response.json()["held"]
+    assert held["outcome"] == "blocked" and held["can_withdraw"] and "nonce" not in held
+    assert bodies(api, "favorite color is gold") == [] and len(judge.calls) == 1
+    assert hold_row(api, held["id"])["operation"] == "chat_upload"
+    view = get(api, f"rule-holds/{held['id']}", token="ana-test")
+    assert post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]}, token="ana-test")["hold"]["state"] == "sent"
+    rows = sql(api, "SELECT from_actor, refs_json FROM messages WHERE body=?", (text,))
+    assert len(rows) == 1 and rows[0]["from_actor"] == "human:cara"
+    assert [a["name"] for a in json.loads(rows[0]["refs_json"])["attachments"]] == ["notes.txt"]
+    assert len(judge.calls) == 1                                # no second check
+
+
+def test_a_message_to_the_assistant_is_held_as_its_person_and_posted_only_when_sent_anyway(ruled):
+    api, judge = ruled
+    block_everyone(api)
+    settings = api.app.state.auth.settings
+    as_bot(api, settings.assistant_bot, "coo-test")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug=?", (settings.assistant_bot,))
+    text = "Our favorite color is gold."
+    held = post(api, "assistant/messages", {"text": text}, token="cara-test")["held"]
+    assert held["outcome"] == "blocked" and len(judge.calls) == 1
+    assert bodies(api, "favorite color is gold") == []
+    hold = hold_row(api, held["id"])
+    assert hold["author"] == "human:cara" and hold["operation"] == "assistant_message"
+    view = get(api, f"rule-holds/{held['id']}", token="ana-test")
+    assert post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]}, token="ana-test")["hold"]["state"] == "sent"
+    [row] = sql(api, "SELECT from_actor, to_actor FROM messages WHERE body=?", (text,))
+    assert (row["from_actor"], row["to_actor"]) == ("human:cara", "bot:" + settings.assistant_bot)
+
+
+def test_a_held_answer_is_the_hold_its_sender_can_act_on_and_the_rule_author_can_send_her_own(ruled):
+    api, _ = ruled
+    block_everyone(api)                                         # Ana wrote the rule
+    held = write(api, "cara-test", "Our favorite color is gold.")["held"]
+    assert held["can_withdraw"] and not held["can_send"] and "nonce" not in held
+    assert held["text"] == "Our favorite color is gold." and held["reason"]
+    own = write(api, "ana-test", "Our favorite color is gold.")["held"]
+    assert own["can_send"] and own["can_withdraw"] and own["nonce"]
+    assert post(api, f"rule-holds/{own['id']}/send", {"nonce": own["nonce"]}, token="ana-test")["hold"]["state"] == "sent"
+
+
+def test_a_where_thread_rule_holds_a_post_to_that_thread_and_a_root_rule_holds_its_sub_threads(ruled):
+    api, _ = ruled
+    root = new_thread(api, title="Colors", members=("human:ben",))
+    rule(api, {"kind": "internal", "text": COLOR, "who": EVERYONE, "where": [f"thread:{root['id']}"]})
+    posted = api.post(f"/api/v2/threads/{root['id']}/messages", json={"text": "Our favorite color is gold."},
+                      headers=headers("ben-test"))
+    assert posted.status_code == 200, posted.text
+    assert posted.json()["held"]["outcome"] == "blocked"
+    assert bodies(api, "favorite color is gold") == []
+    parent = say(api, root["id"], "Hello team.", token="ben-test")
+    sub = new_thread(api, title="Sub", members=("human:ben",), parent_message_id=parent["id"])
+    under = api.post(f"/api/v2/threads/{sub['id']}/messages", json={"text": "Our favorite color is gold."},
+                     headers=headers("ben-test"))
+    assert under.status_code == 200 and "held" in under.json(), under.text
+    assert bodies(api, "favorite color is gold") == []
