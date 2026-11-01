@@ -149,7 +149,8 @@
       .catch(() => toast('Could not copy; select the text and copy it', true));
   }
 
-  window.connectAgent = function connectAgent() {
+  // `preselect` is an agent's id (`claude`, `codex`): the dialog opens on that agent's steps, not the picker.
+  window.connectAgent = function connectAgent(preselect = '') {
     if (!document.getElementById('connect-agent-style')) {
       const style = document.createElement('style');
       style.id = 'connect-agent-style'; style.textContent = CSS;
@@ -310,7 +311,9 @@
       if (typeof renderSettingsTokens === 'function' && document.getElementById('set-tokens')) void renderSettingsTokens();
     };
     document.body.appendChild(dialog); dialog.showModal();
-    void showPicker();
+    const chosen = byId(preselect);
+    if (chosen) void showAgent(chosen);
+    else void showPicker();
   };
 
 })();

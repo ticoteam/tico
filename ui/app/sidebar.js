@@ -768,12 +768,14 @@ function renderTree() {
       // A role still being recruited: its title, marked Recruiting, with the job description on hover. Not a drop
       // target or dragged here (data-seat, not data-org): it is opened and moved from its own page.
       const key = 's:' + node.id, kids = !flat && byParent[key], isCol = kids && collapsed.has(key);
-      const tip = node.title + ' (Recruiting)' + (node.description ? '\n\n' + node.description : '');
+      const cloud = !!node.agent;                    // its cloud agent is requested: Connecting (ui/app/cloud-agents.js)
+      const tip = node.title + (cloud ? ' (Connecting)' : ' (Recruiting)') + (node.description ? '\n\n' + node.description : '');
       const applicants = recruitSeatCount(node.id);    // known once its Applicants page listed them
       return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
         ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(node.title)}">›</button>` : ''}
         <a class="node seat" href="${esc(recruitAddress(node.id))}" data-seat="${esc(node.id)}" data-seat-open="${esc(node.id)}" title="${esc(tip)}">
-          <span class="nav-icon seat-icon" aria-hidden="true">person_search</span><span class="nm">${esc(node.title)}</span>${applicants === undefined
+          <span class="nav-icon seat-icon" aria-hidden="true">person_search</span><span class="nm">${esc(node.title)}</span>${cloud
+            ? '<span class="pill waiting seat-pill connecting">Connecting</span>' : applicants === undefined
             ? '<span class="pill waiting seat-pill">Recruiting</span>' : `<span class="cnt" title="Applicants">${applicants}</span>`}</a></div>
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }

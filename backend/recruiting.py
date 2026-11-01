@@ -339,16 +339,68 @@ def _may_hire(auth, c, who, row):
     lifecycle._may_place(auth, c, who, row["reports_to"])
 
 
+def top_card(auth, onboarding, c, who, row):
+    """The raw card of the template Recruit ranks first for the seat, or None when none fits it (no Strong or Good match). A cloud agent's
+    add to a seat builds its bot from this card, since a bot's repository is built from a template."""
+    ranked = candidates(auth, onboarding, c, who, row["id"])["candidates"]
+    _, cards = _recruitable(onboarding)
+    template = ranked[0]["template"] if ranked and ranked[0]["match"] else ""   # a template that does not fit is not one
+    return next((card["raw"] for card in cards if card["template"] == template), None)
+
+
+def brief(c, onboarding, card, row):
+    """The reviewed instructions a seat's bot starts with: the template rendered for this company, then the seat's job
+    description. Returns the company's record, the rendered template, the description and the instructions."""
+    from .onboarding import display_names, load, render
+    record = load(c)
+    rendered = render(card, display_names(onboarding.settings, record), row["title"])
+    description = str(row["description"] or "").strip()
+    instructions = rendered["instructions"].rstrip() + ("\n\n## Job description\n" + description + "\n" if description else "")
+    return record, rendered, description, instructions
+
+
+def onboard(c, who, onboarding, row, card, slug, *, name, description, instructions, rendered, answers, model):
+    """Put the bot that fills a seat into Onboarding, in the seat's place, and only then give it its repository: a starter's
+    computer builds it from this definition (`materialize`), any other template's BotOps does on its "Set up" task. A hire
+    and a cloud agent's add to a seat both land here, so they land the same way. Returns the setup task's id, if any."""
+    from . import message_bots
+    if card.get("session") == "task":
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.session','task') WHERE bot=?", (slug,))
+    if row["team"]:
+        c.execute("UPDATE bot_config SET team=? WHERE bot=?", (row["team"], slug))
+    declared = onboarding._declared(c, slug)
+    declared.update(template=card["template"], instructions=instructions, template_version=releases.version(),
+                    recruited_from=row["id"])
+    onboarding._write_config(c, slug, declared)
+    # Onboarding from the start: it learns, takes no work, and a person above it marks it complete (lifecycle.py).
+    c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot=?", (lifecycle.statuses.NEEDS_SETUP, slug))
+    message_bots.link(c, who.actor, slug, who.actor)
+    now = H.now()
+    c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated=?,updated_by=? WHERE id=?",
+              (now, who.actor, slug, now, who.actor, row["id"]))
+    # Seats that reported to this one move under the bot that fills it, rather than under a closed seat.
+    c.execute("UPDATE seats SET reports_to=?,updated=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
+              (slug, now, who.actor, "seat:" + row["id"]))
+    end_draft(c, row, "The seat was filled")
+    H.event(c, who.actor, "seat.filled", row["id"], {"bot": slug, "template": card["template"], "model": model})
+    if card["starter"]:
+        onboarding._make_starter(c, who, slug, card["template"])
+        return None
+    choice = {"template": card["template"], "display_name": name, "instructions": instructions,
+              "description": description}
+    return onboarding._setup_task(c, who, slug, choice, rendered, answers)
+
+
 def hire(auth, onboarding, c, who, seat_id, body):
     """Fill the seat with the picked candidate: the bot in Onboarding, in the seat's place, and only then its repo."""
-    from . import message_bots
-    from .onboarding import BOTOPS, display_names, load, render
+    from .onboarding import BOTOPS
     row = c.execute("SELECT * FROM seats WHERE id=?", (seat_id,)).fetchone()
     if row and row["filled_by"]:
         name = (H.bot(c, row["filled_by"]) or {}).get("display_name") or row["filled_by"]
         raise Problem("filled", f"This seat is already filled by {name}", 409)
     row = lifecycle.seat(c, seat_id)
     _may_hire(auth, c, who, row)
+    row = lifecycle.refuse_if_requested(row, c)
     _, cards = _recruitable(onboarding)
     card = next((card["raw"] for card in cards if card["template"] == body.template), None)
     if not card:
@@ -367,10 +419,7 @@ def hire(auth, onboarding, c, who, seat_id, body):
         # No provider yet: a stand-in satisfies the definition, then the bot follows the company default (as setup does).
         model, effort = next((m["id"], m.get("default_effort") or "") for m in onboarding.models.values()
                              if m.get("provider") and not m.get("deprecated"))
-    record = load(c)
-    rendered = render(card, display_names(onboarding.settings, record), row["title"])
-    description = str(row["description"] or "").strip()
-    instructions = rendered["instructions"].rstrip() + ("\n\n## Job description\n" + description + "\n" if description else "")
+    record, rendered, description, instructions = brief(c, onboarding, card, row)
     name = (body.name or row["title"]).strip()[:100] or row["title"][:100]
     slug = onboarding.admin.pick_slug(c, name)
     # The bot first, under the rules for any bot this person adds: who may create one, under whom, on which model and
@@ -383,33 +432,8 @@ def hire(auth, onboarding, c, who, seat_id, body):
     if stand_in:
         onboarding._follow_default(c, slug)
         model = ""
-    if card.get("session") == "task":
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.session','task') WHERE bot=?", (slug,))
-    if row["team"]:
-        c.execute("UPDATE bot_config SET team=? WHERE bot=?", (row["team"], slug))
-    declared = onboarding._declared(c, slug)
-    declared.update(template=card["template"], instructions=instructions, template_version=releases.version(), recruited_from=seat_id)
-    onboarding._write_config(c, slug, declared)
-    # Onboarding from the start: it learns, takes no work, and a person above it marks it complete (lifecycle.py).
-    c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot=?", (lifecycle.statuses.NEEDS_SETUP, slug))
-    message_bots.link(c, who.actor, slug, who.actor)
-    now = H.now()
-    c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated=?,updated_by=? WHERE id=?",
-              (now, who.actor, slug, now, who.actor, seat_id))
-    # Seats that reported to this one move under the bot that fills it, rather than under a closed seat.
-    c.execute("UPDATE seats SET reports_to=?,updated=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
-              (slug, now, who.actor, "seat:" + seat_id))
-    end_draft(c, row, "The seat was filled")
-    H.event(c, who.actor, "seat.filled", seat_id, {"bot": slug, "template": card["template"], "model": model})
-    # Only now its repository: a starter's computer builds it from this definition (`materialize`), any other
-    # template's BotOps on its "Set up" task.
-    setup_task = None
-    if card["starter"]:
-        onboarding._make_starter(c, who, slug, card["template"])
-    else:
-        choice = {"template": card["template"], "display_name": name, "instructions": instructions,
-                  "description": description}
-        setup_task = onboarding._setup_task(c, who, slug, choice, rendered, record["answers"])
+    setup_task = onboard(c, who, onboarding, row, card, slug, name=name, description=description,
+                         instructions=instructions, rendered=rendered, answers=record["answers"], model=model)
     return {"slug": slug, "name": name, "seat": seat_id, "stage": lifecycle.ONBOARDING, "reports_to": row["reports_to"],
             "template": card["template"], "model": model, "setup_task_id": setup_task,
             "note": (created or {}).get("note") if isinstance(created, dict) else None}

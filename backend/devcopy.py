@@ -39,7 +39,7 @@ EMPTY = (
     # queued work
     "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "calendar_actions",
     "meeting_deliveries", "worktree_waits", "check_waits", "check_head_provenance", "idempotency",
-    "idempotency_messages", "blob_media_retries",
+    "idempotency_messages", "blob_media_retries", "seat_requests",   # a cloud agent request's key: a replay re-files
     "github_product_repo_operations", "github_review_operations", "invite_sends",
     # milestone waits: each pending row is a wake the copy could send; the milestones seen only settle those
     "task_milestone_waits", "milestones",
