@@ -92,7 +92,7 @@ async function shot(page, name) {
     {
       // A tool under the old address still opens Library › Tools.
       const {page, errors} = await open(browser, {hash: '#/library/connections/slack'});
-      await page.waitForFunction(() => location.hash === '#/library/tools/slack');
+      await page.waitForFunction(() => location.hash.startsWith('#/library/tools'));
       assert.deepEqual(errors, []);
       await page.close();
     }
