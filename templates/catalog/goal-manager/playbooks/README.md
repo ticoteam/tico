@@ -16,7 +16,7 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
 - `new-kpi.md`: what to build the first time a KPI needs computing, and how to change one that is wrong.
 - `status-pass.md`: `hub goal refresh` after the readings, and how to report what it did.
 - `check-ins.md`: when a KPI slips, ask the goal's owner and record the answer.
-- `goals-make-sense.md`: flag vague, duplicate and unmeasured goals; suggest a measure or clearer words.
+- `goals-make-sense.md`: flag vague or duplicate goals; suggest a measure once or clearer words. Missing optional measures are not a problem.
 - `weekly-goals-review.md`: the short review for the owner.
 - `recoveries.md`: where the Strategy Bot is on at level 2, recoveries for red or stalled goals and merged asks.
 - `acts-on-its-own.md`: at level 3, decisions on bot tasks for red or stalled goals and clashes between Heads,
@@ -30,7 +30,7 @@ to a file, then `hub proposal create --kind <kind> [--goal ID] [--kpi ID] --payl
 
 | kind | needs | payload |
 |---|---|---|
-| `flag` | `--goal` | `{"issue": "vague" \| "duplicate" \| "unmeasured", "note": "one sentence"}` |
+| `flag` | `--goal` | `{"issue": "vague" \| "duplicate", "note": "one sentence"}` |
 | `goal_wording` | `--goal` | `{"title": "...", "body": "...", "bet_id": "..."}` (any of them; `bet_id` links the goal to a bet) |
 | `goal_kpi` | `--goal` | `{"kpi_id": "..."}` to link an existing KPI, or `{"kpi": {"name", "definition", "unit", "direction", "cadence", "source_note"}, "owner": "...", "target": {...}}` for a new one |
 | `kpi_definition` | `--kpi` | any of `{"name", "definition", "unit", "direction", "cadence", "source_note"}` |

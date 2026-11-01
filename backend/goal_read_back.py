@@ -128,8 +128,13 @@ def stored(c, message_id):
                     (EVENT, message_id)).fetchone()
     if not row:
         return None
+    changes = (H._json(row["detail_json"], {}) or {}).get("changes") or []
+    # Old drafts cannot prove whose words they named after a parent/owner move.
+    # Require a fresh draft rather than show or save an unverifiable read-back.
+    if any("read_owners" not in change for change in changes):
+        raise not_agreed("This read-back predates its access checks")
     return {"id": row["id"], "created": row["created"], "conversation_id": row["conversation_id"],
-            "changes": (H._json(row["detail_json"], {}) or {}).get("changes") or []}
+            "changes": changes}
 
 
 def saves(c, back_id):
@@ -218,6 +223,12 @@ def step_path(step, change, done):
     return step["path"].replace(NEW, created) if NEW in step["path"] and created else step["path"]
 
 
+def editor_words(actor):
+    # A visible goal may have been edited by a bot the helper cannot read.
+    # Naming the editor is unnecessary to explain the conflicting change.
+    return "someone" if H.is_bot(actor or "") else H.actor_id(actor or "") or "someone"
+
+
 def changed_since(c, back, change, done):
     """What someone changed on this change's goals since the read-back, other than its own saves, in words."""
     mine = {m for d in done.values() for m in d.get("marks") or []}
@@ -230,7 +241,7 @@ def changed_since(c, back, change, done):
         p = m and G.proposal(c, m.group(1))
         if p and p["status"] != "pending":
             did = {"confirmed": "accepted", "rejected": "turned down"}.get(p["status"])
-            said.append(f"{H.actor_id(p['decided_by'] or '') or 'someone'} {did} the suggestion" if did
+            said.append(f"{editor_words(p['decided_by'])} {did} the suggestion" if did
                         else f"the suggestion was {p['status']}")
     for gid in dict.fromkeys(goals):
         for r in c.execute("SELECT id, actor, field, old, new, status_source FROM goal_events WHERE goal_id=? AND ts>? "
@@ -238,7 +249,7 @@ def changed_since(c, back, change, done):
             if r["id"] in mine or r["field"] in ("rank", "checkin", "status_source") or (
                     r["field"] == "status" and r["status_source"] == "auto") or r["field"] == "proposal":
                 continue
-            who = H.actor_id(r["actor"])
+            who = editor_words(r["actor"])
             if r["field"] in ("title", "why", "owner", "status", "kpi_target"):
                 said.append(f"{who} changed the {r['field'].replace('kpi_', '')} from “{r['old'] or 'none'}” to "
                             f"“{r['new'] or 'none'}”")
@@ -247,11 +258,79 @@ def changed_since(c, back, change, done):
     return said[:3]
 
 
-def agreement(c, who, cited, method, path, body):
+def read_back_access(c, auth, raw):
+    """The owner's rights do not widen the Strategy Bot's read access in a read-back."""
+    owners = []
+
+    def goal(gid):
+        row = G.goal(c, gid) if gid else None
+        if row:
+            owners.append(row["owner"])
+        return row
+
+    def measure(kid):
+        row = K.kpi(c, kid) if kid else None
+        if row:
+            owners.append(row["owner"])
+
+    def fields(body):
+        if not isinstance(body, dict):
+            return
+        if body.get("owner"):
+            owners.append(owner_actor(c, body["owner"], G.AUTO_ACTOR))
+        measure(body.get("kpi_id"))
+        goal(body.get("parent_id"))
+
+    row = goal(raw.get("goal_id"))
+    if row and "parent_id" in raw:
+        goal(row.get("parent_id"))       # the old parent's words are read back too
+    fields(raw)
+    fields(raw.get("measure"))
+    p = G.proposal(c, raw["proposal_id"]) if raw.get("proposal_id") else None
+    if p:
+        goal(p.get("goal_id"))
+        measure(p.get("kpi_id"))
+        fields(p.get("payload"))
+    read_back_owners(c, auth, owners)
+    return sorted(set(owners))
+
+
+def read_back_owners(c, auth, owners):
+    from .auth import Identity
+    reader = Identity(G.AUTO_ACTOR, "bot")
+    for owner in set(owners):
+        if H.is_bot(owner) and not auth.bot_access(c, reader, H.actor_id(owner))["read"]:
+            raise Problem("forbidden", "The Strategy Bot can't see that bot's goals.", 403)
+
+
+def read_back_access_stored(c, auth, changes, done):
+    """Recheck stored steps on read and save: access may have changed since the read-back."""
+    for saved in done.values():
+        if saved.get("goal_id"):
+            read_back_access(c, auth, {"goal_id": saved["goal_id"]})
+    for ch in changes:
+        read_back_owners(c, auth, ch.get("read_owners") or [])
+        for st in ch["steps"]:
+            raw = dict(st["body"])
+            path = st["path"]
+            if m := re.fullmatch(r"/api/v2/goals/([^/]+)(?:/.*)?", path):
+                if m.group(1) != NEW:
+                    raw["goal_id"] = m.group(1)
+                if "/kpis/" in path:
+                    raw["kpi_id"] = path.split("/kpis/")[1].split("/")[0]
+            elif path.endswith("/decide"):
+                raw["proposal_id"] = path.split("/")[-2]
+            read_back_access(c, auth, raw)
+
+
+def agreement(c, who, cited, method, path, body, *, auth):
     """What this save is, once checked against the read-back the owner said yes to: the delegation record's
     `goal_read_back` part. Raises `not_agreed` (403), or 409 when the goal changed since or it was saved already."""
     back, yes, words = answered(c, who, cited)
+    # Authorize before inspecting history: conflict details contain current private values.
+    # Both middleware and the writer call this gate with their own connection.
     done = saves(c, back["id"])
+    read_back_access_stored(c, auth, back["changes"], done)
     sent = canonical(c, path, body, who.actor)
     found = None
     for change in back["changes"]:

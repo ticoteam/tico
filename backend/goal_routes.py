@@ -617,7 +617,7 @@ def install(app, store, auth, mutate, settings):
         """The read-back save the middleware let through (backend/app.py), checked again in this write."""
         who, record = request.state.identity, GR.active()
         claim = GR.agreement(c, who, record["cited"], request.method, request.url.path,
-                             getattr(request, "_body", b"") or b"{}")
+                             getattr(request, "_body", b"") or b"{}", auth=auth)
         if claim["goal_read_back"] != record["goal_read_back"] or claim["change"] != record["change"] \
                 or claim["step"] != record["step"]:
             raise GR.not_agreed("The read-back changed while this was saved")
@@ -716,6 +716,7 @@ def install(app, store, auth, mutate, settings):
             raise Problem("validation", f"Change {n} is not an object", 422)
         if why := GR.click_reason(raw):
             raise Problem("stays_a_click", why, 403)
+        read_owners = GR.read_back_access(c, auth, raw)
         kind = raw.get("kind")
         if kind not in GR.KINDS:
             raise Problem("validation", f"Change {n}: kind is one of {', '.join(GR.KINDS)}", 422)
@@ -846,7 +847,8 @@ def install(app, store, auth, mutate, settings):
             about = bold(row["title"]) if row else q((K.kpi(c, p["kpi_id"]) or {}).get("name") or "")
             text = (("Accept" if raw["decision"] == "confirm" else "Turn down") + f" the suggestion on {about}: "
                     + suggestion_words(c, p))
-        return {"n": n, "kind": kind, "text": text, "steps": steps, "watch": watch}
+        return {"n": n, "kind": kind, "text": text, "steps": steps, "watch": watch,
+                "read_owners": read_owners}
 
     def read_back_trial(c, who, changes):
         """Every change made as the owner's own click would make it, in order, then rolled back: what could not be
@@ -937,6 +939,7 @@ def install(app, store, auth, mutate, settings):
             if not back or (H.conversation(c, back["conversation_id"]) or {}).get("owner_actor") != who.actor:
                 raise Problem("not_found", "No such read-back", 404)
             done = GR.saves(c, mid)
+            GR.read_back_access_stored(c, auth, back["changes"], done)
             yes, why_not = None, ""
             if GR.strategy_turn(who):
                 turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
@@ -1384,7 +1387,7 @@ def install(app, store, auth, mutate, settings):
     @app.post("/api/v2/goal-proposals")
     def proposal_create(request: Request, body: M.GoalProposal):
         """Propose a change the caller may not make: clearer wording, a KPI for a goal, a new definition,
-        a target, or a flag (vague, duplicate, unmeasured). The owner confirms or rejects."""
+        a target, or a flag (vague or duplicate). The owner confirms or rejects."""
         who = request.state.identity
         def work(c):
             auth.domain(who)
