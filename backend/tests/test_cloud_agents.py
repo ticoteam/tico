@@ -683,3 +683,14 @@ def test_a_refused_retry_of_a_stale_seatless_request_still_releases_it(environme
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM seat_requests WHERE request_key='k-retry'").fetchone()[0] == 0
     assert actor and filed(hq) == []
+
+
+def test_a_refused_seat_action_still_keeps_the_recovery_it_made(environment, hq):
+    """A dead request's own seat (made by it) is recovered, which closes it: the hire on it is then refused, and the
+    recovery holds rather than rolling back with the refusal."""
+    api = environment()
+    seat = ask(api, "seats", {"title": "Devin"})
+    plant_stale_filing(api, seat["id"], made=1)
+    ask(api, f"seats/{seat['id']}/hire", {"template": "anything"}, expected=404)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM seat_requests WHERE seat_id=?", (seat["id"],)).fetchone()[0] == 0

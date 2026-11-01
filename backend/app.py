@@ -5467,10 +5467,17 @@ def create_app(settings=None):
         auth.domain(who)
         return mutate(request, body, lambda c: lifecycle.create_seats(auth, c, who, body.seats))
 
+    def _recover_seat(seat_id):
+        """A cloud agent request a dead process left in flight on this seat is recovered in its own transaction first, so
+        the action below goes ahead and a refusal of it cannot roll the recovery back (backend/cloud_agents.py)."""
+        from . import cloud_agents
+        cloud_agents.recover(store, seat_id)
+
     @app.patch("/api/v2/seats/{seat_id}")
     def seat_update(request: Request, seat_id: str, body: M.SeatUpdate):
         who = request.state.identity
         auth.domain(who)
+        _recover_seat(seat_id)
         return mutate(request, body, lambda c: lifecycle.update_seat(auth, c, who, seat_id,
                                                                      body.model_dump(exclude_unset=True)))
 
@@ -5511,6 +5518,7 @@ def create_app(settings=None):
         then its repository (by its computer for a starter, else BotOps)."""
         who = request.state.identity
         auth.domain(who)
+        _recover_seat(seat_id)
         return mutate(request, body, lambda c: recruiting.hire(auth, onboarding, c, who, seat_id, body))
 
     @app.post("/api/v2/seats/{seat_id}/close")
@@ -5518,6 +5526,7 @@ def create_app(settings=None):
         """Take a seat off the chart; its row stays for the record."""
         who = request.state.identity
         auth.domain(who)
+        _recover_seat(seat_id)
         return mutate(request, body, lambda c: lifecycle.close_seat(auth, c, who, seat_id))
 
     @app.post("/api/v2/bots/{bot}/archive")
