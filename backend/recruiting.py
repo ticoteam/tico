@@ -76,9 +76,28 @@ def _name_words(text):
     return [(_name_stem(word), word) for word in words if len(word) > 1 and word not in NAME_STOP]
 
 
+# The words a department head's title may use for the department's field beyond its id ("Head of Human Resources").
+FIELDS = {"hr": "hr human resources people", "support": "support customer service",
+          "operations": "operations ops", "product": "product", "legal": "legal", "finance": "finance accounting",
+          "marketing": "marketing growth", "sales": "sales revenue", "engineering": "engineering technology"}
+
+
+def _kind(title):
+    """The kind of job the title's last word names ("engineer" in "Rust engineer"), as a stem, or "" when it names none
+    ("Developer relations", "Head of Sales")."""
+    words = [word for stem, word in _name_words(title) if stem not in RANKS]
+    if not words or words[-1] not in ROLE_WORDS:
+        return ""
+    return "representative" if words[-1] in ("rep", "reps") else _name_stem(words[-1])
+
+
 def _work(title):
-    """The stems of the title's words of work: not of rank, not a kind of job."""
-    return {stem for stem, word in _name_words(title) if word not in ROLE_WORDS} - RANKS
+    """The stems of the title's words of work: not of rank, and not the kind of job its last word names ("Rust
+    engineer" is "Rust"; "Developer relations" keeps "Developer")."""
+    words = [(stem, word) for stem, word in _name_words(title) if stem not in RANKS]
+    if _kind(title):
+        words = words[:-1]
+    return {stem for stem, _ in words}
 
 
 # ------------------------------------------------------------------ the seat as the recruiting page shows it
@@ -127,20 +146,23 @@ def _best_card(cards, title, team=""):
     group = str(team or "").strip().lower()
     best = None
     stems = {stem for stem, _ in _name_words(title)} - RANKS
-    heads = bool({word for _, word in _name_words(title)} & HEAD_WORDS)
+    heads, kind = bool({word for _, word in _name_words(title)} & HEAD_WORDS), _kind(title)
     for card in cards:
         name = {stem for stem, _ in _name_words(card["name"])}
+        if kind and kind not in name:
+            continue                        # a designer is not the UX Writer, an engineer not a specialist
+        if heads and card.get("lead"):
+            # A head's title names the field it heads, which the head's card may not: "Head of HR" is the Head of
+            # People, the head of the HR department.
+            name |= {stem for stem, _ in _name_words(FIELDS.get(card["department"], card["department"]))}
         shared = len(name & work)
-        # A head's title names the field it heads, which the head's card may not: "Head of HR" is the Head of People,
-        # whose department and tags say HR.
-        field = heads and card.get("lead") and bool(work & {stem for text in [card["department"], *card["tags"]]
-                                                            for stem, _ in _name_words(text)})
-        if not shared and not field:
+        if not shared:
             continue
         score, _ = R._match(card, words, common)
-        # A head's title wants the head's card, then more of the title in the name wins: "Security Engineer", not
-        # "Security and Compliance Analyst".
-        score = (heads and bool(card.get("lead")), shared, len(name & stems), score)
+        # More of the work in the name wins ("Legal Operations Manager" for "Head of Legal Operations", not the head of
+        # Legal), then a head's card for a head's title, then more of the title: "Security Engineer", not "Security and
+        # Compliance Analyst".
+        score = (shared, heads and bool(card.get("lead")), len(name & stems), score)
         key = (score, card["department"] == group, -len(card["name"]), card["template"])
         if best is None or key > best[0]:
             best = (key, card)

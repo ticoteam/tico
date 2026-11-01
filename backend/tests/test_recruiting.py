@@ -103,8 +103,16 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
                             ("Marketing manager", "marketing-lead"), ("Customer support lead", "support-lead"),
                             ("Head of People", "people-lead"), ("Developer Advocates", "developer-advocate"),
                             ("Head of HR", "people-lead"), ("HR generalist", "people-hr"),
-                            ("Head of engineering", "engineering-lead"), ("Director of marketing", "marketing-lead")):
-        assert recruiting._best_card(cards, title)["template"] == template
+                            ("Head of engineering", "engineering-lead"), ("Director of marketing", "marketing-lead"),
+                            ("Head of Human Resources", "people-lead"), ("Head of Legal Operations", "legal-ops"),
+                            ("Developer relations", "developer-advocate"), ("PR manager", "pr"),
+                            ("VP Engineering", "engineering-lead"), ("Head of Compliance", "compliance"),
+                            ("Head of Customer Success", "customer-success")):
+        assert recruiting._best_card(cards, title)["template"] == template, title
+    # A title ending in a kind of job wants that kind: a designer is not the UX Writer, an assistant not the Account
+    # Executive, a machine learning engineer not the Learning and Development Specialist.
+    for title in ("UX designer", "Executive assistant", "Machine learning engineer", "Product designer"):
+        assert recruiting._best_card(cards, title) is None, title
     # Every template's own name, and its plural, is that template's job.
     misses = [card["name"] for card in cards for title in (card["name"], card["name"] + "s")
               if (recruiting._best_card(cards, title) or {}).get("template") != card["template"]]

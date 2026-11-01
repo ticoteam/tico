@@ -470,7 +470,8 @@ Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a
 
 - **The job description.** Leaving the title asks `POST /api/v2/seats/draft` (`{title, team, reports_to}`), which answers
   and stores nothing: the catalog template that is the job the title names (its name shares a word of the work with
-  the title, never only a word of rank or a kind of job such as "Engineer" or "Analyst"), composed at once into one line
+  the title, never only a word of rank or a kind of job such as "Engineer" or "Analyst"; a title ending in a kind of job wants
+  that kind, and a head's title the department's head), composed at once into one line
   of summary, "What you'll do" from what it owns and "Works in" from its tools (`source: "catalog"`). For a title no
   template is, such as "Rust engineer", the team's model writes one from the title within five seconds (`source:
   "model"`), or nothing comes back without a model (`source: "none"`). **Redraft** (`redraft: true`) also asks the team's model for one rewrite, given five seconds; if
