@@ -266,11 +266,14 @@ Click a row to open its pop-up. Its sections, top to bottom:
    **Add key**, **Replace key** and **Clear key** for a key. **Add connection** at the end opens its own pop-up to sign
    in an installed tool or add a key.
 2. **Screen**: an on/off switch, then **View** or **Control** when enabled (Beta). Enabling a screen that needs setup reveals the runner command, as described in [Install](install.md#screen).
-3. **Bots on this computer**: each bot, read-only, with a red pill when its connection has a problem. **Assign on the
+3. **Internet**: **Share internet with bots**, then the bots that may use it and the **Daily cap (GB)**, and today's
+   total, which opens to the sites that went through. Only on your own computer; an admin sees only the switch, to turn
+   it off. See [Share internet with bots](#share-internet-with-bots).
+4. **Bots on this computer**: each bot, read-only, with a red pill when its connection has a problem. **Assign on the
    Bots page** opens Settings → Bots, where a bot's computer is chosen.
-4. **Versions and updates**: Tico, the OS and runner, each AI tool's version with **Installed** and **Enabled**, and
+5. **Versions and updates**: Tico, the OS and runner, each AI tool's version with **Installed** and **Enabled**, and
    **Installation and updates**.
-5. **Settings**: **Keep for inbox bots only**, **Accepts members' bots** (admins), **Turns at once** (owners and admins:
+6. **Settings**: **Keep for inbox bots only**, **Accepts members' bots** (admins), **Turns at once** (owners and admins:
    empty is the computer's own capacity, 1 to 256 otherwise), **Performance diagnostics** and
    **Performance**, and **Revoke computer** at the bottom.
 
@@ -286,6 +289,68 @@ computer's own login and key previews (others see which kind of key it is, not t
 gets the change controls: sign in and out, Add connection, screen, tools, performance,
 inbox-only and Revoke computer. The API refuses anyone else ([Permissions](permissions.md)). BotOps cannot sign a login
 out, because that stops bots.
+
+## Share internet with bots
+
+A bot's browser can reach the web from another computer's internet connection: your laptop's home IP instead of a
+cloud machine's. Sites that block data-center addresses then see an ordinary home connection. No proxy service is
+involved.
+
+1. On your own computer's pop-up, turn on **Share internet with bots**, tick the bots that may use it, and set the
+   **Daily cap (GB)** (5 GB by default). Only the computer's operator can turn it on or pick bots; it is off until they
+   do.
+2. In the bot's settings, set **Browse through** to that computer (owners, admins and the bot's managers). Only
+   computers that share with that bot are offered.
+
+The bot's browser then goes out through that computer for every site. Both runners connect out to Tico's relay, as for
+the computer screen; neither needs an open port. The browser's encrypted traffic passes through unread: Tico sees the
+site name and how many bytes, never the pages.
+
+What each side guards against: the sharing computer protects its owner from any bot, so its rules below (home
+network, router, its own addresses, ports, the cap, the owner's choice of bots) hold whatever the bot does. The bot's
+side (its proxy, the browser wrapper, failing closed) keeps a bot from browsing directly by accident. It is no wall
+against a bot set on going around it, which could only reach the web from its own computer's address anyway.
+
+What the sharing computer allows:
+
+- Ports 80 and 443 only.
+- Public internet addresses only. The sharing computer looks the name up itself and refuses its own addresses
+  (including its home's public address, as Tico's relay sees it), its home network (`10.*`, `172.16-31.*`,
+  `192.168.*`), loopback, link-local, `100.64.0.0/10`, multicast, private IPv6 and the other special-purpose ranges
+  IANA lists, and checks the address it actually connects to. It also refuses every device on the networks its
+  interfaces are on (on IPv4 a `/16` or narrower; on IPv6 the `/64` of each of its addresses, where home devices
+  have public addresses), the far end of a point-to-point link, and its router.
+  It asks the relay for its public address over IPv4 and over IPv6 when it connects and every 5 minutes; while the
+  IPv4 answer is missing, it refuses IPv4 sites, so an IPv6-only computer reaches no IPv4 site, NAT64 included.
+- Up to the daily cap. Crossing it closes that day's connections through it until midnight UTC. Bytes count on the UTC
+  day they pass, so a connection open across midnight counts on both days.
+
+When the computer is offline, stops sharing with the bot, was removed or reached its cap, the bot's browser connection
+fails, and the proxy's answer says why ("Ana's MacBook is offline"; also at the `TICO_BROWSER_PROXY` address in a
+browser). It never falls back to going out directly. On a computer whose runner is too old for this, the bot's work waits
+("Update Office server to use Browse through"). Changing a bot's
+**Browse through**, or turning sharing off, closes the connections already open.
+
+The day's total on the pop-up opens to a table of what went through: day, bot, site and bytes, kept 30 days. The
+computer's operator and admins see it.
+
+In turns of a bot with **Browse through** set, the runner sets `TICO_BROWSER_PROXY` (a proxy on `127.0.0.1` for that
+bot), adds `--proxy-server` to `CHROMIUM_FLAGS`, and puts `google-chrome`, `chromium` and their usual names first on
+`PATH` so a browser started by name goes through it. A browser started another way takes the proxy itself, for example
+Playwright's `chromium.launch({proxy: {server: process.env.TICO_BROWSER_PROXY}})`. A browser started by name gets
+the bot's own profile (`~/.tico/browser-exit/<bot>`; any other `--user-data-dir` is refused), and refuses to start
+when a browser it didn't start through the proxy is open on that profile, or when a flag would skip the proxy (with
+one dash or two, spaces around it, or a bare `--`). `localhost` stays local: the browser reaches the bot's own computer directly, never
+through the exit.
+
+The proxy asks for no password, because a browser can't send one for every connection. Under turn isolation (Linux
+runners with `TICO_RUNNER_BOT_UID`), it takes connections only from the OS users that bot's turns run as. Without
+isolation, as on a Mac or a cloud machine, bots on one computer share one OS user and are one trust group: any of them
+can use another's proxy.
+
+API: `GET/POST /api/v2/computers/{id}/browser-exit`, `GET /api/v2/computers/{id}/browser-exit/usage`,
+`GET/POST /api/v2/bots/{bot}/browser-exit` ([OpenAPI](openapi/v2.json)). Hub: `hub computer browser-exit` and
+`hub bot browser-exit`.
 
 ## Add a connection
 

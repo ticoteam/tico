@@ -18,6 +18,8 @@ pub const CAPABILITIES: &[&str] = &[
     // Private live meetings run in their own lane and checkout (sessions.rs); the server hands them to no other runner.
     "private_lanes_v1",
     "model_subscriptions_v1", "model_subscription_activation_v1",
+    // Turns of a bot with a browser exit go through it (browser_exit.rs); the server hands them to no other runner.
+    "browser_exit_v1",
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
@@ -117,7 +119,7 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
                 if CAPABILITIES.contains(&name.as_str()) { return Some(name.clone()); }
             }
         }
-        for name in ["model_subscription_activation_v1", "model_subscriptions_v1", "private_lanes_v1", "turns_at_once_v1", "capacity_continue_v1", "source_continue_v1",
+        for name in ["model_subscription_activation_v1", "browser_exit_v1", "model_subscriptions_v1", "private_lanes_v1", "turns_at_once_v1", "capacity_continue_v1", "source_continue_v1",
                      crate::login::SWITCH_TO_KEY_CAPABILITY, crate::login::REMOVE_CAPABILITY,
                      crate::login::SWITCH_TYPE_CAPABILITY, crate::login::KEYS_CAPABILITY,
                      crate::login::SIGN_OUT_CAPABILITY, crate::screen::CAPABILITY, "task_goals_v1",

@@ -6647,6 +6647,13 @@ def create_app(settings=None):
             return {"revoked": True}
         result = mutate(request, body, work)
         screen_sessions.set_mode(rid, "off", "computer removed")
+        # A removed computer is no one's browser exit, and its bots' connections through others close.
+        screen_sessions.push_exit_policy(rid)
+        screen_sessions.exit_close(exit=rid, reason="computer removed")
+        with store.read() as c:
+            removed_bots = [r[0] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (rid,))]
+        for bot in removed_bots:
+            screen_sessions.push_bot_generation(bot, "computer removed")
         return result
 
     def closed_computer(c, who, bot, runner_id):
@@ -7997,6 +8004,9 @@ def create_app(settings=None):
     screen_sessions = install_screen(app, store, auth, mutate, execution, settings)
     from .performance import install as install_performance
     install_performance(app, store, auth, mutate, execution)
+    # A bot's browser through another computer's internet (backend/browser_exit.py); the same relay as the screen.
+    from .browser_exit import install as install_browser_exit
+    install_browser_exit(app, store, auth, mutate, execution, screen_sessions)
     from .route_renames import install as install_route_renames
     install_route_renames(app)           # after every route: the new spellings canonical, the old ones deprecated
 

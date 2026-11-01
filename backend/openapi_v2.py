@@ -83,6 +83,17 @@ STABLE = [
      "Whether the bot's manager bot may change its direct reports: true is on (the default), false is off; the owner's team rule overrides it", None),
     ("/api/v2/computers/{rid}/turns-at-once", "post", "Computers", "setComputerTurnsAtOnce",
      "Set the most turns a computer runs at once: null is automatic (its own capacity)", None),
+    ("/api/v2/computers/{rid}/browser-exit", "get", "Computers", "getComputerBrowserExit",
+     "Whether this computer shares its internet with bots, which bots, and its daily cap in bytes", "BrowserExit"),
+    ("/api/v2/computers/{rid}/browser-exit", "post", "Computers", "setComputerBrowserExit",
+     "Share this computer's internet with chosen bots, or stop: its owner only; an admin may turn it off", None),
+    ("/api/v2/computers/{rid}/browser-exit/usage", "get", "Computers", "listComputerBrowserExitUsage",
+     "Bytes and connections through this computer per day, bot and hostname (30 days); its owner or an admin",
+     "BrowserExitUsage"),
+    ("/api/v2/bots/{bot}/browser-exit", "get", "Bots", "getBotBrowserExit",
+     "The computer the bot's browser reaches the web through (null: its own) and the ones it may pick", "BotBrowserExitView"),
+    ("/api/v2/bots/{bot}/browser-exit", "post", "Bots", "setBotBrowserExit",
+     "Browse through a computer that shares its internet with this bot, or null for its own", "BotBrowserExitView"),
     ("/api/v2/bots/{bot}/subscription", "get", "Subscriptions", "getBotSubscription", "The Computer login a bot runs on", "BotSubscription"),
     ("/api/v2/repositories", "get", "Repositories", "listRepositories", "Team repositories", "RepositoryList"),
     ("/api/v2/repositories/refresh", "post", "Repositories", "refreshRepositories", "Refresh from GitHub", "RepositoryList"),
@@ -1309,6 +1320,18 @@ def _merge(*schemas, **more):
 
 
 # A goal with what the page adds to it, a link with what says how it is doing: one object each, so a client sees every field.
+SCHEMAS.update({
+    "BrowserExit": obj({"sharing": "b", "bots": items(_t("s")), "daily_cap_bytes": "i",
+                        "computer": obj({"id": "s", "label": "s"}),
+                        "used_today_bytes": {"type": ["integer", "null"]}, "may_change": "b", "may_turn_off": "b"}),
+    "BrowserExitUsage": obj({"rows": items(obj({"day": "s", "bot": "s", "host": "s", "bytes": "i", "tunnels": "i"})),
+                             "days": items(obj({"day": "s", "bytes": "i"})),
+                             "next": {"type": ["integer", "null"]}}),
+    "BotBrowserExitView": obj({"browser_exit": {"type": ["object", "null"], "properties": {
+                               "runner_id": {"type": "string"}, "name": {"type": "string"}}}},
+                          choices=items(obj({"runner_id": "s", "label": "s", "operator": "s"})),
+                          may_change=_t("b"), required=["browser_exit"]),
+})
 SCHEMAS["GoalResult"]["properties"]["goal"] = _merge(SCHEMAS["Goal"], SCHEMAS["GoalView"])
 SCHEMAS["GoalTree"]["properties"]["goals"] = items(_merge(SCHEMAS["Goal"], SCHEMAS["GoalTreeRow"]))
 SCHEMAS["KpiDetail"]["properties"]["links"] = items(_merge(SCHEMAS["KpiLink"], obj({

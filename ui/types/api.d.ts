@@ -362,6 +362,23 @@ export type BotAccessView = {
   you?: Access;
 };
 
+export type BotBrowserExit = {
+  runner_id: string | null;
+};
+
+export type BotBrowserExitView = {
+  browser_exit: {
+  name?: string;
+  runner_id?: string;
+} | null;
+  choices?: Array<{
+  label: string;
+  operator: string;
+  runner_id: string;
+}>;
+  may_change?: boolean;
+};
+
 export type BotBudget = {
   expected_revision: number;
   turns_per_day?: number | null;
@@ -595,6 +612,40 @@ export type BotTurnsAtOnce = {
 export type BotUsageLimit = {
   bot: string;
   limit: UsageLimitView;
+};
+
+export type BrowserExit = {
+  bots: Array<string>;
+  computer: {
+  id: string;
+  label: string;
+};
+  daily_cap_bytes: number;
+  may_change: boolean;
+  may_turn_off: boolean;
+  sharing: boolean;
+  used_today_bytes: number | null;
+};
+
+export type BrowserExitPolicy = {
+  bots?: Array<string> | null;
+  daily_cap_bytes?: number | null;
+  sharing: boolean;
+};
+
+export type BrowserExitUsage = {
+  days: Array<{
+  bytes: number;
+  day: string;
+}>;
+  next: number | null;
+  rows: Array<{
+  bot: string;
+  bytes: number;
+  day: string;
+  host: string;
+  tunnels: number;
+}>;
 };
 
 export type Card = {
@@ -5599,6 +5650,13 @@ export type GetBotAccessParams = {
 export type GetBotAccessBody = never;
 export type GetBotAccessResponse = BotAccessView;
 
+/** GET /api/v2/bots/{bot}/browser-exit */
+export type GetBotBrowserExitParams = {
+  bot: string;
+};
+export type GetBotBrowserExitBody = never;
+export type GetBotBrowserExitResponse = BotBrowserExitView;
+
 /** GET /api/v2/bots/{bot}/budget */
 export type GetBotBudgetParams = {
   bot: string;
@@ -5681,6 +5739,13 @@ export type GetCompanyResponse = CompanyResult;
 export type GetCompanyHistoryParams = Record<string, never>;
 export type GetCompanyHistoryBody = never;
 export type GetCompanyHistoryResponse = CompanyHistory;
+
+/** GET /api/v2/computers/{rid}/browser-exit */
+export type GetComputerBrowserExitParams = {
+  rid: string;
+};
+export type GetComputerBrowserExitBody = never;
+export type GetComputerBrowserExitResponse = BrowserExit;
 
 /** GET /api/v2/config */
 export type GetConfigParams = Record<string, never>;
@@ -6467,6 +6532,16 @@ export type ListChangelogResponse = ChangelogList;
 export type ListCloudAgentsParams = Record<string, never>;
 export type ListCloudAgentsBody = never;
 export type ListCloudAgentsResponse = CloudAgentList;
+
+/** GET /api/v2/computers/{rid}/browser-exit/usage */
+export type ListComputerBrowserExitUsageParams = {
+  days?: number;
+  limit?: number;
+  offset?: number;
+  rid: string;
+};
+export type ListComputerBrowserExitUsageBody = never;
+export type ListComputerBrowserExitUsageResponse = BrowserExitUsage;
 
 /** GET /api/v2/computer-subscriptions */
 export type ListComputerSubscriptionsParams = Record<string, never>;
@@ -7871,6 +7946,14 @@ export type SetBotAccessParams = {
 export type SetBotAccessBody = BotAccess;
 export type SetBotAccessResponse = BotAccessView;
 
+/** POST /api/v2/bots/{bot}/browser-exit */
+export type SetBotBrowserExitParams = {
+  "Idempotency-Key": string;
+  bot: string;
+};
+export type SetBotBrowserExitBody = BotBrowserExit;
+export type SetBotBrowserExitResponse = BotBrowserExitView;
+
 /** POST /api/v2/bots/{bot}/budget */
 export type SetBotBudgetParams = {
   "Idempotency-Key": string;
@@ -7924,6 +8007,14 @@ export type SetChatGoalParams = {
 };
 export type SetChatGoalBody = GoalAction;
 export type SetChatGoalResponse = ChatGoalResult;
+
+/** POST /api/v2/computers/{rid}/browser-exit */
+export type SetComputerBrowserExitParams = {
+  "Idempotency-Key": string;
+  rid: string;
+};
+export type SetComputerBrowserExitBody = BrowserExitPolicy;
+export type SetComputerBrowserExitResponse = unknown;
 
 /** PUT /api/v2/computer-subscriptions */
 export type SetComputerSubscriptionParams = Record<string, never>;

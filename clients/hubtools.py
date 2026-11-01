@@ -4262,6 +4262,42 @@ def computer_turns_at_once(api, args):
     return who.post(f"computers/{args['computer']}/turns-at-once", {"turns_at_once": args['limit']}, key=_key(args))
 
 
+@tool("hub_computer_browser_exit", "Read or set whether a computer shares its internet with bots, so their browsers "
+      "reach the web from it (docs/computers.md). Only the person whose computer it is turns it on or picks the bots "
+      "and daily cap; an admin may turn it off. With usage, also what went through it per day, bot and hostname.",
+      {"computer": _s("Computer id"), "sharing": {"type": "boolean", "description": "Omit to read"},
+       "bots": {"type": "array", "items": {"type": "string"}, "description": "Bot slugs it shares with; omit to keep"},
+       "daily_cap_gb": {"type": "number", "minimum": 0.1, "maximum": 10000, "description": "Omit to keep (default 5)"},
+       "usage": {"type": "boolean", "description": "Also read the last 7 days of what went through it"}},
+      ("computer",), writes=True)
+def computer_browser_exit(api, args):
+    who = api.on_behalf_of_requester()
+    path = f"computers/{quote(str(args['computer']), safe='')}/browser-exit"
+    if "sharing" in args:
+        body = {"sharing": bool(args["sharing"])}
+        if args.get("bots") is not None:
+            body["bots"] = list(args["bots"])
+        if args.get("daily_cap_gb") is not None:
+            body["daily_cap_bytes"] = int(float(args["daily_cap_gb"]) * 1_000_000_000)
+        who.post(path, body, key=_key(args))
+    seen = who.get(path)
+    if args.get("usage"):
+        seen["usage"] = who.get(path + "/usage?days=7&limit=100")
+    return seen
+
+
+@tool("hub_bot_browser_exit", "Read or set the computer a bot you manage browses the web through: one whose owner "
+      "shares its internet with that bot, or null for the bot's own. A computer that is offline or stops sharing "
+      "makes the bot's browser fail with its name, never go direct.",
+      {"bot": _s("Bot slug"), "computer": {"type": ["string", "null"], "description": "Omit to read, a computer id "
+       "from `choices`, or null for the bot's own internet"}}, ("bot",), writes=True)
+def bot_browser_exit(api, args):
+    who = api.on_behalf_of_requester()
+    if "computer" in args:
+        who.post(f"bots/{args['bot']}/browser-exit", {"runner_id": args["computer"]}, key=_key(args))
+    return who.get(f"bots/{args['bot']}/browser-exit")
+
+
 @tool("hub_bot_keep_tasks_going", "Read or set automatic assigned-task starts for a bot you manage. "
       "Default unlimited; 0 turns it off, N caps active work. Waiting work frees a place; review subtasks have no cap.",
       {"bot": _s("Bot slug"), "limit": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000,

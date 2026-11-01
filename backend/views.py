@@ -2022,6 +2022,8 @@ def install_views(app, store, auth, mutate, task_view):
         bots = H.bots(c)
         archived = {row["slug"] for row in bots if row.get("state") == "archived"}
         registries = {r["bot"]: r for r in read_cache.configs(c)}
+        from .browser_exit import bot_exits
+        exits = bot_exits(c)               # the computer each bot browses through, when one is set
         goals = {}
         for bot, conversation in c.execute("SELECT bot,conversation_id FROM chat_goals WHERE status='active'"):
             goals.setdefault(bot, []).append(conversation)
@@ -2161,6 +2163,7 @@ def install_views(app, store, auth, mutate, task_view):
                          "goals": (registry["goals"] if registry else "") or "",
                          "goal_active": readable_active(c, auth, who, slug, goals.get(slug, [])),
                          **location,
+                         "browser_exit": exits.get(slug),
                          "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
                          "icon": icon_of(config), "helper": helper(config),
                          # What Settings and the branch editor show and pick from (backend/wake_presets.py).
@@ -2341,6 +2344,9 @@ def install_views(app, store, auth, mutate, task_view):
                                          "shared": r["bot"] == cloud_machines.SHARED,
                                          "size": r["machine_size"] or r["size"], "state": r["state"]}
                         for r in cloud_machines.rows(c).values() if r["runner_id"]}
+            from . import browser_exit
+            # One pass each for every computer's internet sharing and today's bytes through it.
+            exit_policies, exit_used = browser_exit.policies(c), browser_exit.used_today_all(c)
             runners = list(c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                       "accepts_member_bots,turns_at_once,screen,performance,capabilities_json,"
                                       "restart_since,"
@@ -2423,6 +2429,10 @@ def install_views(app, store, auth, mutate, task_view):
                                  "signed_out": signed_out.get(row["id"]) or {},
                                  "key_cleared": key_cleared.get(row["id"]) or [],
                                  "inbox_only": row["id"] in kept_for_inbox,
+                                 # Its internet shared with bots (backend/browser_exit.py): the owner alone changes it.
+                                 "browser_exit": browser_exit.listing(
+                                     exit_policies.get(row["id"]), manage, browser_exit.is_owner(who, row), hidden,
+                                     exit_used.get(row["id"], 0)),
                                  # {runtime: {env, preview}}: its own keys stored from here, and the company's shared
                                  # ones, for the rows a key signs in (backend/computer_keys.py). Never a value, and a
                                  # preview only for whoever may change the computer.

@@ -98,7 +98,8 @@ class Failed(Exception):
 
     def __init__(self, code: str, status: int = 0, body: object = None) -> None:
         super().__init__(code)
-        self.code, self.status, self.body = code, status, body or {}
+        self.code, self.status = code, status
+        self.body: object = body or {}
 
 
 # ----------------------------------------------------------------------------- state
