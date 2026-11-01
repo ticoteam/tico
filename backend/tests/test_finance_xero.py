@@ -2243,3 +2243,20 @@ def test_an_invoice_line_xero_names_by_item_code_is_held_on_the_local_item_with_
         item = _local(c, "Item:item-1", "items")
         assert c.execute("SELECT l.item_id FROM fin_invoice_lines l JOIN fin_invoices v ON v.id=l.invoice_id "
                          "WHERE v.number='INV-inv-1'").fetchone()[0] == item
+
+
+def test_an_invoice_line_named_by_a_code_the_books_also_hold_on_a_tico_item_takes_the_provider_item(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    line = {**_line("acct-4000", "100.00"), "ItemCode": "CONSULT"}
+    xbooks.rows["Invoices"] = [{**_invoice("inv-1"), "LineItems": [line]}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    with books.transaction() as c:
+        c.execute("INSERT INTO items(id, name, sku, kind, created_at, created_by_id) VALUES (?, ?, ?, ?, ?, ?)",
+                  ("tico-consult", "Consulting copy", "CONSULT", "service", AT, OWNER))
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        item = _local(c, "Item:item-1", "items")
+        assert c.execute("SELECT l.item_id FROM fin_invoice_lines l JOIN fin_invoices v ON v.id=l.invoice_id "
+                         "WHERE v.number='INV-inv-1'").fetchone()[0] == item
