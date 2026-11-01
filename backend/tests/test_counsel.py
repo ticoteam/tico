@@ -1255,7 +1255,9 @@ def test_a_stateless_bots_task_keeps_its_own_session_lane_and_checkpoint_even_on
         task = H.task_create(c, "human:ana", "Read the synthetic contract", "Use only fixture text.",
                              "bot:tico-counsel", lint=False)["id"]
     r = runner(api)
-    assign(api, r, "tico-counsel")
+    with api.app.state.store.read() as c:       # the assignment may already exist (a transfer names its generation)
+        found = c.execute("SELECT generation FROM assignments WHERE bot='tico-counsel'").fetchone()
+    assign(api, r, "tico-counsel", generation=found[0] if found else 0)
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"tico-counsel": True},
                                     "capabilities": ["task_lanes_v2", "session_roots_v1"]}, token=r["token"])
     turn = claim(api, r, "tico-counsel")
