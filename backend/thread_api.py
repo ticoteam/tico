@@ -3,9 +3,9 @@ create, post, title and audience, members, follow, and edit or delete of one's o
 
 Each route is the HTTP face of one service function in backend/threads.py, which decides what the viewer reads (C1).
 A thread the viewer may not read answers 404, never 403, so its existence does not show. A post by a person or a bot
-passes the org-rule check (operation `threads`, backend/org_rule_check.py) outside the write, as a message does; a held
-one writes nothing but its hold, and Send anyway replays it under the same operation. Every list is paged and
-byte-capped by the service function that makes it.
+passes the org-rule check (backend/org_rule_check.py) outside the write, as a message does: a post or a first message is
+checked as operation `threads` (a held one writes nothing but its hold, and Send anyway replays it under the same
+operation), an edit as `threads_edit`. Every list is paged and byte-capped by the service function that makes it.
 """
 
 import asyncio
@@ -87,30 +87,6 @@ def _thread_message(message):
     return {**message, "thread_id": message.get("conversation_id")} if message and message.get("conversation_id") else message
 
 
-def _recipients(c, thread_id, to):
-    """Who a thread post reaches, as the org-rule check reads it: the named recipient, the root's members and, for a
-    company or team thread, everyone that audience names."""
-    from . import teammate_access
-    out = {to} if to else set()
-    row = threads.thread_row(c, thread_id)
-    if row:
-        root = threads.thread_row(c, row.get("root_id") or row["id"]) or row
-        out |= {r[0] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (root["id"],))}
-        audience = threads.audience_of(root)
-        if audience == "company":
-            out |= set(org_rule_check.company(c))
-        elif audience == "team" and root.get("audience_group_id"):
-            out |= set(teammate_access.group_member_actors(c, root["audience_group_id"]))
-    return sorted(a for a in out if a)
-
-
-def _create_recipients(c, body):
-    """Who a new thread reaches before it exists: its members, or the whole company for a company thread."""
-    if body.audience == "company":
-        return org_rule_check.company(c)
-    return sorted({m for m in body.members if m})
-
-
 def _read_or_404(c, v, target):
     """Read on a teammate, or the same 404 whether they are missing or the viewer may not read them. A missing teammate
     passes this check and fails in threads.home with the same 404, so the two never differ."""
@@ -168,11 +144,48 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
 
 def install(app, store, auth, mutate, rule_check):
     from .media import upload_contract
+
+    def recipients(c, who, thread_id, to):
+        """Who a thread write is for, as the org-rule check reads it (`org_rule_check.thread_people`). The recipient and
+        the thread are authorized first (`auth`: 404 for a caller who may not read them), so no check reads members the
+        caller cannot see and no hold names them."""
+        target = auth.target(c, who, to) if to else None
+        auth.conversation(c, who, thread_id)
+        return org_rule_check.thread_people(c, {"thread_id": thread_id, "to_actor": target})
+
+    def thread_place(who, thread_id):
+        """A thread write's place, as `where:` reads it (its thread, root, audience and teams). The thread is authorized
+        first, as `recipients` does."""
+        def place(c, author, people):
+            auth.conversation(c, who, thread_id)
+            return org_rule_check.place_for(c, author, people, thread_id)
+        return place
+
+    def start_place(who, start, parent_message_id=None):
+        """A first message's place: its sub-thread's (its parent's thread), or the new thread's own (`place_for_start`).
+        Nothing is made before the check, so the place reads what the create would make."""
+        def place(c, author, people):
+            if parent_message_id:
+                message = H.message(c, parent_message_id) or {}
+                if not message.get("conversation_id"):
+                    raise Problem("not_found", "Message not found", 404)
+                auth.conversation(c, who, message["conversation_id"])
+                return org_rule_check.place_for(c, author, people, message["conversation_id"])
+            return org_rule_check.place_for_start(c, author, people, audience=start["audience"],
+                                                  audience_group_id=start["audience_group_id"],
+                                                  members=start["members"])
+        return place
+
     def check(who, thread_id, body):
         """The org-rule check of one message, for a person or a bot alike (operation `threads`), outside the write."""
-        return rule_check(who, "threads", body.text, lambda c: _recipients(c, thread_id, body.to), "",
-                          {"thread_id": thread_id},
-                          place=lambda c, author, recipients: org_rule_check.place_for(c, author, recipients, thread_id))
+        return rule_check(who, "threads", body.text, lambda c: recipients(c, who, thread_id, body.to), "",
+                          {"thread_id": thread_id}, place=thread_place(who, thread_id))
+
+    @org_rule_check.replayer("threads_edit", audience=lambda c, bot, replay: org_rule_check.edit_people(c, replay))
+    def replay_edit(c, bot, hold, replay, ingest, gate=None):
+        """Send anyway's replay of a held edit: the edit as the person who made it, the check skipped (the hold's nonce
+        and the reviewer's send are the check)."""
+        return _thread_message(threads.edit_message(c, threads.viewer(auth, bot), replay["message_id"], replay["text"]))
 
     @app.get("/api/v2/threads")
     def sidebar(request: Request, cursor: str | None = None, limit: int | None = None,
@@ -239,10 +252,21 @@ def install(app, store, auth, mutate, rule_check):
     @app.post("/api/v2/threads")
     def create_thread(request: Request, body: ThreadCreate):
         """A root thread (audience `members` unless asked otherwise) or, with `parent_message_id`, a sub-thread. With
-        `body`, its first message is posted with it."""
+        `body`, its first message is posted with it, and a held first message makes neither (core's post checks before
+        it creates, and answers with the hold)."""
         who = request.state.identity
-        rc = (rule_check(who, "threads", body.body, lambda c: _create_recipients(c, body), "", {})
-              if body.body else None)
+        start = {"title": body.title, "audience": body.audience, "audience_group_id": body.audience_group_id,
+                 "members": body.members, "task_id": body.task_id, "kind": body.kind}
+        def audience(c):
+            if body.parent_message_id:
+                thread_id = (H.message(c, body.parent_message_id) or {}).get("conversation_id")
+                if not thread_id:
+                    raise Problem("not_found", "Message not found", 404)
+                auth.conversation(c, who, thread_id)
+                return org_rule_check.thread_people(c, {"thread_id": thread_id})
+            return org_rule_check.thread_people(c, {"start": start})
+        rc = rule_check(who, "threads", body.body, audience, "", {},
+                        place=start_place(who, start, body.parent_message_id)) if body.body else None
 
         def work(c):
             v = threads.viewer(auth, who)
@@ -260,9 +284,7 @@ def install(app, store, auth, mutate, rule_check):
             else:
                 # A new thread's first message: post makes the thread only once the message goes through, so a held
                 # first message leaves no thread behind.
-                posted = threads.post(c, v, None, body.body, checked=rc, start={
-                    "title": body.title, "audience": body.audience, "audience_group_id": body.audience_group_id,
-                    "members": body.members, "task_id": body.task_id, "kind": body.kind})
+                posted = threads.post(c, v, None, body.body, checked=rc, start=start)
             if "id" not in posted:          # held: no thread is made, its first message is the hold
                 return posted
             return {**threads.get(c, v, posted["conversation_id"]), "message": _thread_message(posted)}
@@ -298,9 +320,25 @@ def install(app, store, auth, mutate, rule_check):
 
     @app.patch("/api/v2/messages/{message_id}")
     def edit_message(request: Request, message_id: str, body: MessagePatch):
+        """An edit of one's own message. Its new text is checked as `threads_edit` in the message's thread; a held edit
+        changes nothing and Send anyway makes it."""
         who = request.state.identity
-        return mutate(request, body, lambda c: _thread_message(
-            threads.edit_message(c, threads.viewer(auth, who), message_id, body.text)))
+        with store.read() as c:
+            thread_id = (H.message(c, message_id) or {}).get("conversation_id") or ""
+        rc = rule_check(who, "threads_edit", body.text, lambda c: recipients(c, who, thread_id, None), "",
+                        {"message_id": message_id}, place=thread_place(who, thread_id)) if thread_id else None
+
+        def work(c):
+            gate = org_rule_check.apply(c, rc, body.text, {"message_id": message_id, "text": body.text},
+                                        audience_now=recipients(c, who, thread_id, None) if rc else None)
+            if gate and gate.get("moved"):
+                raise Problem("moved", "The thread changed while the edit was checked; send it again", 409,
+                              retryable=True)
+            if gate and gate.get("held"):
+                return org_rule_check.held_answer(c, who, gate, auth=auth)
+            edited = threads.edit_message(c, threads.viewer(auth, who), message_id, body.text)
+            return {**_thread_message(edited), **org_rule_check.answer(gate)}
+        return mutate(request, body, work)
 
     @app.delete("/api/v2/messages/{message_id}")
     def delete_message(request: Request, message_id: str):
@@ -353,7 +391,10 @@ def install(app, store, auth, mutate, rule_check):
         """A DM with these teammates: the open one with exactly these people, or a new one, with the first message when
         `body` is given. Needs Write on each of them (the reply-back rule applies), as adding them to a thread does."""
         who = request.state.identity
-        rc = rule_check(who, "threads", body.body, lambda c: sorted(set(body.members)), "", {}) if body.body else None
+        start = {"dm": body.members, "title": body.title}
+        rc = rule_check(who, "threads", body.body, lambda c: org_rule_check.thread_people(c, {"start": start}), "", {},
+                        place=lambda c, author, people: org_rule_check.place_for_start(
+                            c, author, people, audience="personal", members=body.members)) if body.body else None
 
         def work(c):
             v = threads.viewer(auth, who)
@@ -362,8 +403,7 @@ def install(app, store, auth, mutate, rule_check):
             if not body.body:
                 return threads.dm(c, v, body.members, title=body.title)
             # The open DM with these people gets the message, or a new one is made with it: a held message makes none.
-            posted = threads.post(c, v, None, body.body, checked=rc,
-                                  start={"dm": body.members, "title": body.title})
+            posted = threads.post(c, v, None, body.body, checked=rc, start=start)
             if "id" not in posted:          # held: no DM is made, its first message is the hold
                 return posted
             return {**threads.get(c, v, posted["conversation_id"]), "message": _thread_message(posted)}

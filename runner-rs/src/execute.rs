@@ -261,6 +261,11 @@ pub fn adopted_key(key: &str) -> Option<String> {
     }
 }
 
+/// A key that replaced the old shared thread for chat: its first turn is given the conversation's latest messages.
+pub fn first_turn_key(key: &str) -> bool {
+    key == "public" || key.starts_with("root:")
+}
+
 pub fn clear_epoch(attempt: &Value, key: &str) -> Option<(String, i64)> {
     if key == "bot" || key == "public" {
         if let Some(epoch) = attempt.get("bot_session_epoch").and_then(Value::as_i64) {
@@ -1528,11 +1533,13 @@ impl Runner {
             if redactor.is_some() {
                 started_at = memory_before.clone();
             }
+            let mut cleared = false;
             if let Some((conversation_id, epoch)) = clear_epoch(&attempt, &key) {
-                // A person cleared a chat (or a settings change reset the bot's sessions): a new provider thread,
-                // started from the Hub's recovery pack. A Hub that sends no epoch keeps today's resume.
+                // A person cleared a chat (or a settings change reset the bot's sessions): a new provider thread, told
+                // only what came after the clear. A Hub that sends no epoch keeps today's resume.
                 if self.state.epoch_moved(&bot, &conversation_id, &conv, epoch)? {
                     log(&format!("Tico runner: {bot}: session cleared in Tico; starting a new {session_runtime} thread"));
+                    cleared = true;
                 }
             }
             // Task-model turns on another runtime are absent from the bot runtime's older thread. A server-marked
@@ -1753,10 +1760,15 @@ impl Runner {
             // What the standing lines tell the bot to read, and who reads them: a change to either sends them again.
             let agent = std::fs::read(execution_path.join("AGENT.md")).map(|b| crate::gitrun::sha256_hex(&b)).unwrap_or_default();
             let context = format!("{runtime} {} {agent}", text_of(&config["model"]));
-            let mut built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, "", &seen, &context);
+            // The first turn under a native-threads key (none saved, nothing to adopt, not a Clear): the old `bot` thread
+            // is not carried into it, so it is given the conversation's latest messages instead.
+            let first_turn = previous.is_none() && !cleared && !binding_changed && !side_run && !fresh_chat && continuing.is_empty()
+                && first_turn_key(&key);
+            let replay = if first_turn { crate::fallback::first_turn_pack(&attempt, crate::fallback::REPLAY_TOKENS) } else { String::new() };
+            let mut built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, &replay, &seen, &context);
             if built.text != built.full && !crate::continuity::headroom(last_context, built.full.len(), config.get("compact_at").unwrap_or(&Value::Null)) {
                 // Sized by the whole prompt: a compaction during the turn gives it the rest too.
-                built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, "", &crate::prompt::Seen::default(), &context);
+                built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, &replay, &crate::prompt::Seen::default(), &context);
             }
             let mut tail = String::new();
             if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])), stateless)) {

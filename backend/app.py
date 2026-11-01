@@ -2874,15 +2874,29 @@ def create_app(settings=None):
         people = H.mentioned_people(c, text, row, author) if text else []
         return [a for a in (row["owner"], row["requester"], *people, *extra) if a]
 
+    def rule_message_to(c, who, body):
+        """The actor a message goes to, as `send` writes it: `to: assistant` is the person's Assistant bot."""
+        if str(body.to).lower() == "assistant" and who.role in ("human", "owner") and not who.via:
+            return assistant_mod.availability(c, settings, who)["bot"]
+        return body.to
+
     def rule_message_audience(c, who, body):
-        out = {rule_target(c, who, body.to)}
-        if body.conversation_id and (conv := H.conversation(c, body.conversation_id)):
-            out |= set(conv.get("participants") or [])
+        """A message's audience as the check reads it: its target and its conversation's participants. Both are
+        authorized first, as the write authorizes them: a caller who cannot name the target or read the conversation
+        gets 404 here, so no check reads the participants and no hold names them."""
+        out = {auth.target(c, who, rule_message_to(c, who, body))}
+        if body.conversation_id:
+            out |= set(auth.conversation(c, who, body.conversation_id).get("participants") or [])
         return sorted(out)
 
-    def rule_message_place(body):
-        """A message's place, as `where:` reads it: its conversation (none for a direct chat, which is a DM)."""
-        return lambda c, author, recipients: org_rule_check.place_for(c, author, recipients, body.conversation_id or "")
+    def rule_message_place(who, body):
+        """A message's place, as `where:` reads it: its conversation (none for a direct chat, which is a DM). The
+        conversation is authorized first, as `rule_message_audience` does."""
+        def place(c, author, recipients):
+            if body.conversation_id:
+                auth.conversation(c, who, body.conversation_id)
+            return org_rule_check.place_for(c, author, recipients, body.conversation_id or "")
+        return place
 
     def chat_place(who, bot):
         """A person's chat with a bot is the direct chat it lands in: its conversation id is the thread `where:` names.
@@ -3032,14 +3046,21 @@ def create_app(settings=None):
         return ask_ingest.preflight(store, app.state.judge, who, body.to, title, body.text,
                                     kind="question" if tref else "loose")
 
-    def message_write(c, who, body, rc=None, ingest=None):
+    def message_write(c, who, body, rc=None, ingest=None, files=None):
         """One message, as every route that sends one writes it (`/messages`, a conversation's `/messages`) and Send
-        anyway replays it: the org rule check's verdict, then ask ingest's, then the send."""
-        rule = org_rule_check.apply(c, rc, body.text, {"body": body.model_dump(mode="json", by_alias=True)})
+        anyway replays it: the org rule check's verdict, then ask ingest's, then the send. A hold names the audience the
+        check read, so the audience is read again here, inside the write: a caller who lost access gets 404, and an
+        audience that moved since the check is checked again (409)."""
+        audience = rule_message_audience(c, who, body) if rc is not None else None
+        replay = {"body": body.model_dump(mode="json", by_alias=True), **({"files": files} if files else {})}
+        rule = org_rule_check.apply(c, rc, body.text, replay, audience_now=audience)
+        if rule and rule.get("moved"):
+            raise Problem("moved", "The conversation changed while the message was checked; send it again", 409,
+                          retryable=True)
         if rule and rule.get("held"):
             if ingest:
                 ask_ingest.skipped(c, ingest, "held")
-            return org_rule_check.answer(rule)
+            return org_rule_check.held_answer(c, who, rule, auth=auth)
         sent = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
         # Judged against the plate before the question is on it.
         gate = ask_ingest.apply(c, ingest) if ingest else None
@@ -3055,12 +3076,12 @@ def create_app(settings=None):
             ask_ingest.withdraw_loose(c, who.actor, message["id"], ingest["person"])
         return {**message, **ask_ingest.reply(gate), **org_rule_check.answer(rule)}
 
-    def message_checks(who, body, retry=False, place=None):
+    def message_checks(who, body, retry=False, place=None, operation="message"):
         """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
         does a saved retry, `retry`: `mutate` replays its answer without the write). `place`: the message's place when
         the route does not name a conversation (`rule_message_place`)."""
-        rc = rule_check(who, "message", body.text, lambda c: rule_message_audience(c, who, body),
-                        place=place or rule_message_place(body))
+        rc = rule_check(who, operation, body.text, lambda c: rule_message_audience(c, who, body),
+                        place=place or rule_message_place(who, body))
         return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
 
     @app.post("/api/v2/messages")
@@ -3078,6 +3099,36 @@ def create_app(settings=None):
         # `send` checks the destination as the bot and its run (task_privacy.require_destination).
         return message_write(c, bot, M.MessageCreate.model_validate(replay["body"]), org_rule_check.decided(gate),
                              ingest)
+
+    def chat_upload_checks(request, who, bot, sent):
+        """The checks of a person's chat message with files, outside the write: `message_checks` under its own operation,
+        so Send anyway replays the files with the message (`chat_upload_write`)."""
+        return message_checks(who, sent, retry=saved_retry(request, who), place=chat_place(who, bot),
+                              operation="chat_upload")
+
+    def chat_upload_write(c, who, bot, sent, rc, ingest, uploads, titles):
+        """One chat message with files, as the route and Send anyway write it: the message (`message_write`: the verdict,
+        ask ingest, the send), then its files on it. Held, the message and its files wait in the hold; `uploads` are the
+        files' digests, sizes and names, whose bytes were kept before the check."""
+        message = message_write(c, who, sent, rc, ingest, {"uploads": uploads, "titles": list(titles or [])})
+        if "id" not in message:
+            return message
+        extra = {k: message.pop(k) for k in ("rule_warning", "ingest") if k in message}
+        return {"conversation": H.conversation(c, message["conversation_id"]),
+                "message": app.state.uploads.attach(c, who, bot, message, uploads, titles), **extra}
+
+    def rule_prepare_chat_upload(store_, who, replay):
+        return message_ingest(who, M.MessageCreate.model_validate(replay["body"]))
+
+    def rule_chat_upload_audience(c, who, replay):
+        return rule_message_audience(c, who, M.MessageCreate.model_validate(replay["body"]))
+
+    @org_rule_check.replayer("chat_upload", prepare=rule_prepare_chat_upload, audience=rule_chat_upload_audience)
+    def rule_replay_chat_upload(c, who, hold, replay, ingest, gate=None):
+        sent = M.MessageCreate.model_validate(replay["body"])
+        files = replay.get("files") or {}
+        return chat_upload_write(c, who, sent.to.removeprefix("bot:"), sent, org_rule_check.decided(gate), ingest,
+                                 files.get("uploads") or [], files.get("titles") or [])
 
     def checked_write(request, body, who, operation, output, audience, write, replay, obj="", context=None):
         """A bot's write through the org rule check (backend/org_rule_check.py), for routes with no checks of their
@@ -4917,7 +4968,7 @@ def create_app(settings=None):
         if rule and rule.get("held"):
             if ingest:
                 ask_ingest.skipped(c, ingest, "held")
-            return org_rule_check.answer(rule)
+            return org_rule_check.held_answer(c, who, rule, auth=auth)
         text = org_rule_check.warned_text(rule, body.text)
         attached, report = visuals.attach(c, who, app.state.files, app.state.blobs, body.attachments, task_id=task_id)
         moves = mover(c, who)
@@ -5170,7 +5221,7 @@ def create_app(settings=None):
         rule = org_rule_check.apply(c, rc, body.text, {"task": row["id"], "message": mid,
                                                        "body": body.model_dump(mode="json", by_alias=True)})
         if rule and rule.get("held"):
-            return org_rule_check.answer(rule)
+            return org_rule_check.held_answer(c, who, rule, auth=auth)
         msg = H.task_comment_edit(c, who.actor, row["id"], mid, org_rule_check.warned_text(rule, body.text),
                                   approval_id=body.approval_id)
         return {"comment": visual_view(c, who, [msg])[0],
@@ -7961,7 +8012,8 @@ def create_app(settings=None):
     from .archive import install_archives
     install_archives(app, store)
     from .media import install_media
-    install_media(app, store, auth, mutate, send, task_create, review_preflight, rule_check)
+    install_media(app, store, auth, mutate, send, task_create, review_preflight, rule_check,
+                  chat_upload_checks, chat_upload_write)
     from .downloads import install_downloads
     install_downloads(app, store)
     from .team_icon import install_team_icon

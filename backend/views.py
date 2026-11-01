@@ -349,11 +349,10 @@ def chat_running(c, conversation_id):
 def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
     """Clear a direct chat's session: a person's Clear (POST /api/employees/{bot}/session/clear) and a topic change
     (backend/topic_change.py) alike. The conversation's epoch moves, so its history starts after the clear; the next
-    turn starts a fresh provider thread and loads the recovery pack. The caller checks no turn is running."""
+    turn starts a fresh provider thread. The caller checks no turn is running."""
     c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
               "epoch=epoch+1,updated=excluded.updated", (conversation_id, H.now()))
-    # Drop the provider pointer so the next turn tries a fresh thread and loads the
-    # recovery pack from Hub history instead of resuming the cleared session.
+    # Drop the provider pointer so the next turn tries a fresh thread instead of resuming the cleared session.
     config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     cfg = json.loads(config[0] or "{}") if config else {}
     if config:

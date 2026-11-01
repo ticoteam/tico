@@ -956,6 +956,12 @@ async function taskCommentSend(state) {
     const picked = split ? taskDeliveryPicked(state) : null;
     const body = {text, public: !!$('[data-comment-public]', form)?.checked, ...deliveryBody(picked)};
     const data = await post(`/v2/tasks/${encodeURIComponent(state.id)}/comments`, body);
+    if (data.held) {
+      // Held by an org rule: nothing was written, so the text stays in the box and the hold shows here with its actions.
+      if (taskChatCurrent(state)) ruleTaskHeld(state, data.held);
+      status.textContent = '';
+      return;
+    }
     if (!taskChatCurrent(state)) return;
     box.value = ''; box.style.height = ''; TASK_DRAFTS.delete(String(state.id)); state.sending = false;
     const thread = $('.task-comments', state.host);

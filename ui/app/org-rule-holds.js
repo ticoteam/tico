@@ -17,8 +17,8 @@ function ruleHoldsAdopt(d, task) {
   const slot = $('[data-rule-holds]', d);
   if (!slot) return;
   const id = String(task.id);
-  if (!(task.labels || []).includes(RH_LABEL)) { slot.hidden = true; return; }
   if (d.rhEl && d.rhEl.dataset.task === id) { slot.replaceWith(d.rhEl); return; }
+  if (!(task.labels || []).includes(RH_LABEL)) { slot.hidden = true; return; }
   d.rhEl = slot; slot.dataset.task = id;
   void ruleHoldsLoad(slot, id);
 }
@@ -124,6 +124,18 @@ async function ruleChatHoldsLoad(state) {
 function ruleChatHeld(state, hold) {
   state.holds = [hold, ...(state.holds || []).filter(h => h.id !== hold.id)];
   if (V2C === state) v2ChatRender(state);
+}
+// A held task comment: its card in the task's hold list, with its actions. Nothing was written, so the box keeps the text.
+function ruleTaskHeld(state, hold) {
+  const slot = $('[data-rule-holds]', state.dialog);   // beside the chat, not in it
+  if (!slot) return;
+  const id = String(state.id);
+  slot.dataset.task = id;
+  state.dialog.rhEl = slot;   // a redraw of the task keeps the card (ruleHoldsAdopt)
+  slot.querySelectorAll('[data-hold]').forEach(card => { if (card.dataset.hold === hold.id) card.remove(); });
+  slot.hidden = false;
+  slot.insertAdjacentHTML('afterbegin', ruleHoldHTML(hold));
+  ruleHoldsWire(slot, id);
 }
 // A chat's cards: an action takes its card out of the thread; Edit and resend also puts the text back in this bot's box.
 function ruleChatWire(state, thread) {

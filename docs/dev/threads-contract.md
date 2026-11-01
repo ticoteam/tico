@@ -266,6 +266,8 @@ threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_mes
   `replay = {"thread_id", "body", "kind", "refs", "parent_message_id", "to_actor", "via", "origin", "attachments",
   "start"}` from its own arguments: what Send anyway runs (the rules-people track's `threads` replayer: `threads.post`
   again as the person it was held for, the check skipped, passing `start` through too).
+- A rule that starts matching only because the audience widened after `preflight` is not caught: with no verdict,
+  `apply` has nothing to compare, and someone added just after the write gets the same exposure anyway.
 - **A held message makes nothing.** A post that would make its thread is checked before anything is written, and
   only a message that goes makes the thread: `parent_message_id` naming a message with no sub-thread yet (the
   sub-thread is made after the verdict), or `start` with `thread_id=None`: either the new thread's `create`
@@ -475,6 +477,10 @@ audience `members|personal|participants|meeting`, a private task's thread, or a 
 - Existing mappings: a `conversation:<id>` session is adopted as `root:<id>:<class>` on first use (the runner
   copies it); `task:<id>` stays. The old shared `bot` thread mixed private and public context, so it is **not**
   carried into `public` (a deviation recorded in the report).
+- So chat turns start fresh once at rollout: the first turn under `public` or a `root:` key, with nothing to adopt and
+  no Clear, is given its conversation's latest messages (`fallback::first_turn_pack`, the fallback's replay and size
+  limit). On a public turn the server flags what some reader of the thread may not read (`audience_limited`:
+  `threads.mark_narrower`), and the runner never gives a public session those. Task turns on `bot` keep their session.
 - Lanes: `task:` keys run in their own lane; `root:` and `public` share the main lane. A private task on
   `session: bot` keeps the main lane (the bot's one checkout); only its session is its own.
 

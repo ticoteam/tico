@@ -103,7 +103,8 @@ OPERATIONS = {
     "reply": "a reply in a conversation", "automation": "an automation's write", "slack": "a Slack reply",
     "mail": "an email", "update": "an update", "task_question": "a question put to a person",
     "slack_message": "a Slack message", "federated_message": "a message from another Tico",
-    "threads": "a thread message",
+    "threads": "a thread message", "threads_edit": "an edit to a thread message",
+    "chat_upload": "a chat message with files", "assistant_message": "a message to the Assistant",
 }
 DRAFT_AS = {"message": "message", "comment": "comment", "task": "task_create", "assign": "task_owner"}
 
@@ -360,18 +361,35 @@ def place_for(c, author, recipients=(), conversation_id=""):
     if conv is not None:
         members += list((conv or {}).get("participants") or [])
         members += [r["actor"] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (root_id,))]
-    roster = {p.get("id") for p in (G._roster(c).get("people") or []) if p.get("id")}
     teams = set()
     for actor in (author, (conv or {}).get("owner_actor")):
         if actor:
             teams |= set(R.who_key(c, actor)["chain"])
     if root is not None and root.get("audience_group_id"):
         teams.add(root["audience_group_id"])
-    outside = any((H.is_human(a) and H.actor_id(a) not in roster) or (a and not H.is_human(a) and not H.is_bot(a))
-                  for a in members)
-    dm = conv is None or conv.get("scope") == "direct" or audience == "personal"
+    # The native audience decides whether it is a DM; the legacy scope only where no audience is stored.
+    dm = conv is None or (audience == "personal" if audience else conv.get("scope") == "direct")
     return {"thread": str(conversation_id or ""), "root": root_id if conv is not None else "", "audience": audience,
-            "kind": "dm" if dm else "thread", "teams": sorted(teams), "outside": bool(outside)}
+            "kind": "dm" if dm else "thread", "teams": sorted(teams), "outside": _outside(c, members)}
+
+
+def _outside(c, people):
+    """Whether someone in `people` is outside the roster, or a Slack or federated actor."""
+    roster = {p.get("id") for p in (G._roster(c).get("people") or []) if p.get("id")}
+    return any((H.is_human(a) and H.actor_id(a) not in roster) or (a and not H.is_human(a) and not H.is_bot(a))
+               for a in people)
+
+
+def place_for_start(c, author, recipients=(), *, audience="members", audience_group_id=None, members=()):
+    """The place of a write that makes its thread (core's `post` with `start`). The thread is not there yet, so `thread`
+    and `root` are empty and no `thread:` rule can name it; its audience, teams and outside members are the ones it
+    will have. `members` are the names the caller gave."""
+    named = [H.resolve_actor(c, m) or str(m) for m in members or () if m]
+    teams = set(R.who_key(c, author)["chain"]) if author else set()
+    if audience_group_id:
+        teams.add(audience_group_id)
+    return {"thread": "", "root": "", "audience": audience, "kind": "dm" if audience == "personal" else "thread",
+            "teams": sorted(teams), "outside": _outside(c, list(recipients or ()) + named)}
 
 
 def _place_now(c, place, author, recipients):
@@ -634,13 +652,20 @@ def changed(c, verdict, author=None, operation="", recipients=(), place=None):
             "origin": None, "attempt_id": "", "context": {}, "obj": ""}
 
 
-def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None):
+def _people(recipients, author):
+    """The recipients as a check names them: sorted, without blanks and without the author."""
+    return sorted({r for r in recipients or () if r and r != author})
+
+
+def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audience_now=None):
     """The verdict inside the write. Returns None to deliver as is; {"warn": line, ...} to deliver with the warning
     line on the recipient's copy; {"held": view} to write nothing and answer with the hold. `payload` is the text the
     reviewer reads, `replay` what Send anyway needs to run the normal write. `tell` also leaves the bot a note (a
     write the bot does not see answered: a completion reply, an automation). `obj_now`: the object as the write reads
     it (`current_obj`). Moved since the check, a verdict that holds still holds (a version bump never releases a
-    Block); any other comes back as {"moved": True}, and the caller does not write: its next try checks again."""
+    Block); any other comes back as {"moved": True}, and the caller does not write: its next try checks again.
+    `audience_now`: the recipients the write reads now (the route's audience, read inside the write). A hold is only made
+    for the audience the check named, so a different one comes back as {"moved": True} as well."""
     if verdict and "applied" in verdict:
         return verdict["applied"]
     if not verdict or verdict.get("draft"):
@@ -649,6 +674,8 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None):
         return {"moved": True}
     author, operation = verdict["author"], verdict["operation"]
     if verdict["outcome"] in ("broken", "too_large"):
+        if audience_now is not None and _people(audience_now, author) != list(verdict["recipients"]):
+            return {"moved": True}
         # The rules in force now must be the ones checked: a rule edited, retired or added since is a new check, which
         # cannot run here (no engine under the write lock), so the output goes through unchecked.
         now = {(r["id"], r["version"])
@@ -837,38 +864,57 @@ def represented(c, author):
     return above if above and _present(c, above) else None
 
 
-def _reader(who, hold, c=None, auth=None):
-    """Who reads a hold: "author", "reviewer", "represented", or None. A bot reads its own holds by its token. A person reads the holds
-    they wrote, whatever token or Assistant carried them. A bot's hold is read by its reviewer, and by an Admin when the
-    reviewer is missing or gone (with `c` and `auth`); a person's hold by the reviewer it names and the editors and
-    Admins of its rules (`_person_reviewer`). The person a bot reports up to reads its holds as `represented`: they may
-    withdraw one but not release it. An Assistant or BotOps acting for a person releases nothing."""
+def _is_author(who, hold):
+    """Whether `who` wrote the hold: the bot itself by its token, or the person, whatever token or Assistant carried
+    them."""
     actor = who.actor
     if who.role == "bot" and actor == hold["author"] and not who.via:
-        return "author"
-    if not H.is_human(actor):
-        return None
-    if actor == hold["author"]:
-        return "author"
-    if who.via in ("botops", "assistant"):
-        return None
+        return True
+    return H.is_human(actor) and actor == hold["author"]
+
+
+def _is_reviewer(who, hold, c=None, auth=None):
+    """Whether `who` reviews the hold: may send it or keep it. Not exclusive of authorship: a rule's author or editor,
+    or an Admin, reviews their own hold too. A bot's hold is reviewed by its reviewer, and by an Admin when the reviewer
+    is missing or gone (with `c` and `auth`); a person's hold by the reviewer it names and the editors and Admins of its
+    rules (`_person_reviewer`). An Assistant or BotOps acting for a person releases nothing."""
+    actor = who.actor
+    if not H.is_human(actor) or who.via in ("botops", "assistant"):
+        return False
     if H.is_human(hold["author"]):
-        return "reviewer" if c is not None and auth is not None and _person_reviewer(c, who, hold, auth) else None
+        return c is not None and auth is not None and _person_reviewer(c, who, hold, auth)
     if actor == hold["reviewer"]:
+        return True
+    return c is not None and auth is not None and auth.bot_admin(who) and \
+        not (hold["reviewer"] and _present(c, hold["reviewer"]))
+
+
+def _is_represented(who, hold, c=None):
+    """Whether `who` is the person a bot's hold is held for (`represented`): they read it and may withdraw it, not
+    release it. An Assistant or BotOps acting for them does neither."""
+    return (c is not None and H.is_human(who.actor) and who.via not in ("botops", "assistant")
+            and not H.is_human(hold["author"]) and who.actor == represented(c, hold["author"]))
+
+
+def _reader(who, hold, c=None, auth=None):
+    """Who reads a hold first: "author", else "reviewer", else "represented", else None. A hold's author and its
+    reviewer can be the same person, so callers that need one capability ask `_is_author`, `_is_reviewer` or
+    `_is_represented`."""
+    if _is_author(who, hold):
+        return "author"
+    if _is_reviewer(who, hold, c, auth):
         return "reviewer"
-    if c is not None and actor == represented(c, hold["author"]):
-        return "represented"
-    if c is not None and auth is not None and auth.bot_admin(who) and \
-            not (hold["reviewer"] and _present(c, hold["reviewer"])):
-        return "reviewer"
-    return None
+    return "represented" if _is_represented(who, hold, c) else None
 
 
 def view_hold(c, who, hold, role=None, summary=False, auth=None):
     """One hold as its reader sees it. `summary` leaves out the held text, the appeal and the nonce (a list's row:
     the reader opens each hold for those)."""
-    role = role or _reader(who, hold, c, auth)
-    if not role:
+    if role:
+        author, reviewer, stands_in = role == "author", role == "reviewer", role == "represented"
+    else:
+        author, reviewer, stands_in = _is_author(who, hold), _is_reviewer(who, hold, c, auth), _is_represented(who, hold, c)
+    if not (author or reviewer or stands_in):
         raise Problem("not_found", "There is no hold " + hold["id"], 404)
     stored = {} if summary else json.loads(hold["payload_json"] or "{}")
     verdict = json.loads(hold["verdict_json"] or "{}")
@@ -890,8 +936,8 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
            "to": [cut(n) for n in _names(c, destinations)],
            "reviewer": hold["reviewer"], "reviewer_name": cut(reviewer_name), "task_id": hold["task_id"],
            "created": hold["created"], "decided_at": hold["decided_at"], "decided_by": hold["decided_by"],
-           "can_send": role == "reviewer" and hold["state"] == "held" and hold["operation"] in REPLAY,
-           "can_withdraw": role in WITHDRAW_ROLES and hold["state"] == "held"}
+           "can_send": reviewer and hold["state"] == "held" and hold["operation"] in REPLAY,
+           "can_withdraw": (author or stands_in) and hold["state"] == "held"}
     if summary:
         out["appealed"] = bool(hold["why"])
         out["rules_count"] = len(json.loads(hold["rule_ids_json"] or "[]"))
@@ -901,11 +947,26 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
     out["text"] = text[:HOLD_TEXT_CHARS]
     if len(text) > HOLD_TEXT_CHARS:
         out["text_cut"] = len(text)
-    if role == "reviewer":
+    if reviewer:
         out["why"] = hold["why"]
         if hold["state"] == "held":
             out["nonce"] = hold["nonce"]
     return out
+
+
+def hold_view(c, who, hold_id, auth=None):
+    """A held write's hold as `who` reads it: its text and its actions (Edit and resend, Send anyway with its nonce when
+    `who` may send it too). The answer of a held write carries this, not apply's bare view of the reason."""
+    return view_hold(c, who, _hold(c, hold_id), auth=auth)
+
+
+def held_answer(c, who, gate, auth=None):
+    """A held write's answer as its sender reads it: the hold as `who` reads it (`hold_view`: its text, its actions, the
+    nonce when `who` may send it), the reason the sender was told (`reason`), and `too_large` when the check could not
+    read the whole text."""
+    told = gate["held"]
+    return {"held": {**hold_view(c, who, gate["hold_id"], auth=auth), "reason": told["text"],
+                     **({"too_large": True} if told.get("too_large") else {})}}
 
 
 def _reader_sql(who):
@@ -956,8 +1017,9 @@ def _page(c, who, where, args, cursor, limit, auth, fallback):
     # The whole answer counts: its envelope and the longest cursor it can carry, then each row as serialized.
     used = len(json.dumps({"holds": [], "next_cursor": "x" * 120}))
     out = []
-    for row, role in rows[:limit]:
-        item = view_hold(c, who, row, role=role, summary=True, auth=auth)
+    for row, _ in rows[:limit]:
+        # Each row says what its reader may do (send and withdraw are separate capabilities), so no role is passed.
+        item = view_hold(c, who, row, summary=True, auth=auth)
         size = len(json.dumps(item, default=str)) + 1
         if used + size > HOLD_LIST_BYTES:
             break
@@ -1015,10 +1077,9 @@ def keep(c, who, hold_id, auth=None):
     """Keep a hold blocked: the reviewer's call. Its author, or the person a bot's hold is held for, keeping it is a
     withdraw."""
     hold = _hold(c, hold_id)
-    role = _reader(who, hold, c, auth)
-    if role in WITHDRAW_ROLES:
-        return withdraw(c, who, hold_id, auth)
-    if role != "reviewer":
+    if not _is_reviewer(who, hold, c, auth):
+        if _reader(who, hold, c, auth) in WITHDRAW_ROLES:
+            return withdraw(c, who, hold_id, auth)
         raise Problem("not_found", "There is no hold " + hold_id, 404)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
@@ -1032,16 +1093,16 @@ def withdraw(c, who, hold_id, auth=None):
     """The author takes back a held write to send it again (Edit and resend, which is a new check), or the person a
     bot's hold is held for withdraws the bot's post: the hold is kept, decided by them, and nothing is delivered."""
     hold = _hold(c, hold_id)
-    role = _reader(who, hold, c, auth)
-    if role not in WITHDRAW_ROLES:
+    author = _is_author(who, hold)
+    if not (author or _is_represented(who, hold, c)):
         raise Problem("not_found", "There is no hold " + hold_id, 404)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
     _decide(c, who, hold, "kept", "org_rule_hold.withdrawn")
-    if role == "represented":
+    if not author:
         _tell_bot(c, hold["author"], f"Your held {OPERATIONS.get(hold['operation'], hold['operation'])} was withdrawn "
                   f"and stays blocked (hold {hold_id}).")
-    return view_hold(c, who, _hold(c, hold_id), role, auth=auth)
+    return view_hold(c, who, _hold(c, hold_id), auth=auth)
 
 
 def hold_provenance(hold):
@@ -1069,11 +1130,38 @@ def hold_matched(hold):
     return {(rid, v) for rid, v in (verdict.get("versions") or {}).items()}
 
 
-def current_matched(c, hold):
-    """The (rule id, version) pairs that match the held write now, on the destinations and place it was held for."""
-    recipients = json.loads(hold["destinations_json"] or "[]")
-    place = hold_provenance(hold).get("place")
-    return {(r["id"], r["version"]) for r in R.matching(c, hold["author"], recipients, place)}
+def _replay(hold):
+    return json.loads(hold["payload_json"] or "{}").get("replay") or {}
+
+
+def current_people(c, hold, audience=None, auth=None):
+    """Who the held write reaches now: its audience as the route counts it, or the destinations it was held for when its
+    operation names no way to count them."""
+    now = current_audience(c, hold, audience, auth)
+    return now if now is not None else json.loads(hold["destinations_json"] or "[]")
+
+
+def place_now(c, hold, people, replay=None):
+    """The place the held write has now, read again on the people it reaches now (teams, outside members, the thread's
+    participants). A write that starts its thread (`start`, with no thread yet) has the place it would start."""
+    stored = hold_provenance(hold).get("place")
+    if not stored:
+        return None
+    replay = replay if replay is not None else _replay(hold)
+    if replay.get("start") is not None and not stored.get("thread"):
+        start = replay["start"]
+        audience = "personal" if "dm" in start else (start.get("audience") or "members")
+        return place_for_start(c, hold["author"], people, audience=audience,
+                               audience_group_id=start.get("audience_group_id"),
+                               members=start.get("dm") or start.get("members") or ())
+    return place_for(c, hold["author"], people, stored.get("thread") or "")
+
+
+def current_matched(c, hold, audience=None, auth=None):
+    """The (rule id, version) pairs that match the held write now: its people and place as they are now."""
+    people = current_people(c, hold, audience, auth)
+    place = place_now(c, hold, people)
+    return {(r["id"], r["version"]) for r in R.matching(c, hold["author"], people, place)}
 
 
 def hold_input(hold):
@@ -1107,11 +1195,16 @@ def current_audience(c, hold, audience=None, auth=None):
 
 def _same_audience(c, hold, audience=None, auth=None):
     """Refuse Send anyway once the held write would reach someone else than its check was for (a task handed to a
-    new owner since): a rule's With is matched on the actual recipients, so that is a new check."""
+    new owner since), or would be somewhere else (a team or an outside member since): a rule's With and Where are
+    matched on the actual recipients and place, so that is a new check. Read inside Send anyway's transaction."""
     now = current_audience(c, hold, audience, auth)
     if now is not None and now != sorted(json.loads(hold["destinations_json"] or "[]")):
         raise Problem("changed", "Who this goes to changed since it was held; it stays held. Write it again to "
                       "check it.", 409)
+    stored = hold_provenance(hold).get("place")
+    if stored and place_now(c, hold, current_people(c, hold, audience, auth)) != stored:
+        raise Problem("changed", "Where this goes changed since it was held; it stays held. Write it again to check "
+                      "it.", 409)
 
 
 def recheck(store, primary, hold, audience=None, auth=None):
@@ -1121,27 +1214,28 @@ def recheck(store, primary, hold, audience=None, auth=None):
     checks the pairs again and refuses on a change in between. A changed audience refuses first (`_same_audience`)."""
     with store.read() as c:
         _same_audience(c, hold, audience, auth)
-        now = current_matched(c, hold)
+        people = current_people(c, hold, audience, auth)
+        place = place_now(c, hold, people)
+        now = {(r["id"], r["version"]) for r in R.matching(c, hold["author"], people, place)}
     if now <= hold_matched(hold):
         return sorted(now), None
     stored = json.loads(hold["payload_json"] or "{}")
     shown, prov = hold_input(hold), hold_provenance(hold)
     verdict = check_as(store, primary, hold["author"], prov.get("authenticated") or hold["author"],
-                       prov.get("via") or "", hold["operation"], stored.get("text") or "",
-                       json.loads(hold["destinations_json"] or "[]"), context=shown.get("context") or None,
-                       obj=shown.get("obj") or "", skip=hold_matched(hold), place=prov.get("place"),
-                       attempt_id=prov.get("attempt_id") or "", origin=prov.get("origin"))
+                       prov.get("via") or "", hold["operation"], stored.get("text") or "", people,
+                       context=shown.get("context") or None, obj=shown.get("obj") or "", skip=hold_matched(hold),
+                       place=place, attempt_id=prov.get("attempt_id") or "", origin=prov.get("origin"))
     return sorted(now), verdict
 
 
-def _rechecked(c, hold, check):
+def _rechecked(c, hold, check, audience=None, auth=None):
     """Inside the write: the rules matching now are those `recheck` saw, and a new check it made does not hold the
     output. A warn or an unchecked result is recorded and the send goes on (the reviewer chose to send it); the warn's
     gate comes back, for the replayed write to put its line on the recipient's copy."""
     if check is None:
         return None
     expected, verdict = check
-    if current_matched(c, hold) != {tuple(x) for x in expected}:
+    if current_matched(c, hold, audience, auth) != {tuple(x) for x in expected}:
         raise Problem("conflict", "The rules changed while this was being sent; open it again", 409)
     if not verdict:
         return None
@@ -1159,7 +1253,7 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
     checks: a refusal keeps the hold, its nonce unspent. A hold that kept no route (written before holds kept one)
     cannot be guarded that way, so it is refused: the bot writes it again."""
     hold = _hold(c, hold_id)
-    if _reader(who, hold, c, auth) != "reviewer":
+    if not _is_reviewer(who, hold, c, auth):
         raise Problem("not_found", "There is no hold " + hold_id, 404)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
@@ -1174,7 +1268,7 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
                       "Write it again to check it.", 409)
     _unchanged(c, hold)
     _same_audience(c, hold, audience, auth)
-    gate = _rechecked(c, hold, check)
+    gate = _rechecked(c, hold, check, audience, auth)
     bot = replay_identity(c, hold, auth)
     path = stored["provenance"]["path"] or ""
     if auth is not None and path:
@@ -1188,7 +1282,7 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
 def appeal(c, who, hold_id, why):
     """The author bot sends its hold to the reviewer as a review task. `why` stays on the hold, for the reviewer."""
     hold = _hold(c, hold_id)
-    if _reader(who, hold) != "author":
+    if not _is_author(who, hold):
         raise Problem("not_found", "There is no hold " + hold_id, 404)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
@@ -1325,7 +1419,43 @@ def _replay_mail(c, bot, hold, replay, ingest, gate=None):
 THREAD_REPLAY = ("kind", "refs", "parent_message_id", "to_actor", "via", "origin", "attachments", "in_reply_to", "start")
 
 
-@replayer("threads")
+def _audience_people(c, audience, group_id):
+    """Everyone a company or team audience names (a thread's members are its own rows)."""
+    if audience == "company":
+        return set(company(c))
+    if audience == "team" and group_id:
+        from . import teammate_access
+        return set(teammate_access.group_member_actors(c, group_id))
+    return set()
+
+
+def thread_people(c, replay):
+    """The people a thread write reaches, as its check counts them: the named recipient, the members of the root of its
+    thread and, for a company or team thread, everyone that audience names; or, for a write that starts its thread
+    (`start`), the members and the audience it names. The route's preflight and the write inside `threads.post` both read
+    this, so `apply` can tell the audience moved between them."""
+    to = replay.get("to_actor")
+    out = {H.resolve_actor(c, to) or str(to)} if to else set()
+    start = replay.get("start")
+    if start is not None:
+        out |= {H.resolve_actor(c, m) or str(m) for m in (start.get("dm") or start.get("members") or ()) if m}
+        out |= _audience_people(c, start.get("audience"), start.get("audience_group_id"))
+    elif replay.get("thread_id"):
+        row = T.thread_row(c, replay["thread_id"])
+        if row:
+            root = T.thread_row(c, row.get("root_id") or row["id"]) or row
+            out |= {r[0] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (root["id"],))}
+            out |= _audience_people(c, T.audience_of(root), root.get("audience_group_id"))
+    return sorted(a for a in out if a)
+
+
+def edit_people(c, replay):
+    """The people a held edit of a thread message reaches: its thread's, as the check counted them."""
+    message = H.message(c, replay.get("message_id") or "") or {}
+    return thread_people(c, {"thread_id": message.get("conversation_id")})
+
+
+@replayer("threads", audience=lambda c, bot, replay: thread_people(c, replay))
 def _replay_thread(c, bot, hold, replay, ingest, gate=None):
     """A message held in a thread: Send anyway posts it again through `threads.post`, as the person it was held for
     (`bot` is their replay identity), with the check skipped; the hold's nonce and the reviewer's send are the check.
@@ -1629,7 +1759,7 @@ def install(app, store, auth, mutate):
         ingest, check, ident = None, None, None
         with store.read() as c:
             hold = _hold(c, hold_id)
-            ready = _reader(who, hold, c, auth) == "reviewer" and hold["state"] == "held" and \
+            ready = _is_reviewer(who, hold, c, auth) and hold["state"] == "held" and \
                 not store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
             if ready and hold["operation"] in prepare:
                 ident = replay_identity(c, hold, auth)

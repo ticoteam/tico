@@ -452,7 +452,8 @@ def blob_for(c, auth, who, bid):
     return row
 
 
-def install_media(app, store, auth, mutate, send_message, task_create, review_preflight, rule_check=None):
+def install_media(app, store, auth, mutate, send_message, task_create, review_preflight, rule_check=None,
+                  chat_checks=None, chat_write=None):
     from . import task_privacy as privacy
     blobs = Blobs(store.settings)
     app.state.blobs = blobs
@@ -494,15 +495,19 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
 
     @app.post("/api/v2/uploads/chat/{bot}", openapi_extra=upload_contract(M.ChatCreate))
     async def chat_upload(request: Request, bot: str):
+        from . import ask_ingest
         who = request.state.identity
         human_only(who)
         body, uploads = await form(request, M.ChatCreate, blobs, store)
-        def work(c):
-            message = send_message(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs,
-                                                           delivery=body.delivery, defer_for=body.defer_for))
-            return {"conversation": H.conversation(c, message["conversation_id"]),
-                    "message": chat_uploads(c, who, bot, message, uploads, body.titles)}
-        return await asyncio.to_thread(write, request, body, uploads, work)
+        # The message is checked as `chat` checks one (the org rule check, then ask ingest), and written with its files.
+        sent = M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs, delivery=body.delivery,
+                               defer_for=body.defer_for)
+
+        def checked():
+            rc, ingest = chat_checks(request, who, bot, sent)
+            return ask_ingest.judged(store, ingest, lambda: write(request, body, uploads, lambda c: chat_write(
+                c, who, bot, sent, rc, ingest, uploads, body.titles)))
+        return await asyncio.to_thread(checked)
 
     @app.post("/api/v2/uploads/tasks", openapi_extra=upload_contract(M.TaskCreate))
     async def task_upload(request: Request):

@@ -3582,6 +3582,10 @@ class Execution:
                                since=epoch["updated"] if epoch else None)["messages"]
         if lanes:
             history = lane_history(c, row["bot"], followed, history, conv, lane, roots)[-HISTORY_PAGE:]
+        conversation = thread_payload(c, conv, msg)
+        if conversation and conversation.get("audience_class") == "public":
+            from . import threads
+            threads.mark_narrower(c, history)
         principal = (conv.get("owner_actor") if conv.get("scope") == "personal"
                      else msg["from_actor"] if str(msg["from_actor"]).startswith("human:") else None)
         routine = None
@@ -3744,7 +3748,7 @@ class Execution:
                             # with the completion, and the reply lands in that sub-thread (Execution._say_reply).
                             "message": ({**msg, "parent_message_id": (conv or {}).get("parent_message_id")}
                                         if msg else msg),
-                            "conversation": thread_payload(c, conv, msg), "task": task,
+                            "conversation": conversation, "task": task,
                             **({"continue_thread": continue_thread} if continue_thread else {}),
                             **({"source_continuation": source} if source else {}),
                             # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).

@@ -1543,6 +1543,13 @@ def _actor_of(principal):
     return (v.actor if v else str(principal or "")), v
 
 
+def _held_answer(c, v, gate):
+    """A held post's answer as its sender reads it: the authorized hold view (text, can_withdraw, the nonce for a
+    reviewer). A caller with no viewer gets the check's own view."""
+    from . import org_rule_check
+    return org_rule_check.held_answer(c, v.who, gate, auth=v.auth) if v else org_rule_check.answer(gate)
+
+
 def _post_making(c, principal, thread_id, body, start, parent_message_id, checked, args):
     """The part of a post that makes its thread: everything is checked, then the org-rule verdict is applied, and only
     a message that goes makes the thread (or the sub-thread). Returns {"held": answer} or the thread to post in."""
@@ -1582,13 +1589,13 @@ def _post_making(c, principal, thread_id, body, start, parent_message_id, checke
                   "refs": args.get("refs") or None, "parent_message_id": parent_message_id,
                   "to_actor": args.get("to_actor"), "via": args.get("via"), "origin": args.get("origin"),
                   "attachments": args.get("attachments"), "start": start}
-        gate = org_rule_check.apply(c, checked, text, replay)
+        gate = org_rule_check.apply(c, checked, text, replay, audience_now=org_rule_check.thread_people(c, replay))
         if gate and gate.get("moved"):
             raise Problem("moved", "The thread changed while the message was checked; send it again", 409,
                           retryable=True)
         if gate and gate.get("held"):
             _emit_message_held(c, thread_row(c, thread_id) if thread_id else None, actor, gate)
-            return {"held": org_rule_check.answer(gate)}
+            return {"held": _held_answer(c, v, gate)}
         if gate and gate.get("warn"):
             text = org_rule_check.warned_text(gate, text)
     if plan is not None:
@@ -1708,13 +1715,13 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
         replay = {"thread_id": thread_id, "body": text, "kind": kind, "refs": given_refs or None,
                   "parent_message_id": parent_message_id, "to_actor": to_actor, "via": via, "origin": origin,
                   "attachments": attachments, "in_reply_to": in_reply_to}
-        gate = org_rule_check.apply(c, checked, text, replay)
+        gate = org_rule_check.apply(c, checked, text, replay, audience_now=org_rule_check.thread_people(c, replay))
         if gate and gate.get("moved"):
             raise Problem("moved", "The thread changed while the message was checked; send it again", 409,
                           retryable=True)
         if gate and gate.get("held"):
             _emit_message_held(c, thread, actor, gate)
-            return org_rule_check.answer(gate)
+            return _held_answer(c, v, gate)
         if gate and gate.get("warn"):
             text = org_rule_check.warned_text(gate, text)
     token = POSTING.set({"origin": origin or {}, "attachments": bool(attachments), "via": via})
@@ -2777,6 +2784,40 @@ def audience_class(conv, message=None):
     if message and message.get("legacy_audience"):
         return "private"
     return "public"
+
+
+# A reader with no standing of its own: what it may read, every reader of the thread may.
+_NO_STANDING = "bot:~audience"
+
+
+def _narrower_than_thread(c, message):
+    if message.get("legacy_audience"):
+        return True
+    if not message.get("restricted"):
+        return False
+    from . import task_privacy
+    refs = H._json(message.get("refs_json"), {}) or {}
+    if isinstance(refs, dict) and refs.get("carries"):
+        source = c.execute("SELECT * FROM messages WHERE id=?", (refs["carries"],)).fetchone()
+        if source and source["legacy_audience"]:
+            return True
+    return not task_privacy.message_readable(c, _NO_STANDING, message, current=True)
+
+
+def mark_narrower(c, history):
+    """Flag the messages of a public turn's page that some reader of the thread may not read (`audience_limited`): history
+    kept for its old readers, or a message tied to a private task or a meeting. A public session is read back into a
+    thread everyone there reads, so the runner never gives it these (contract section 8). The page itself stays whole:
+    the runner's cursor is a message id on it."""
+    if not history:
+        return history
+    marks = ",".join("?" * len(history))
+    rows = {r["id"]: dict(r) for r in c.execute(f"SELECT * FROM messages WHERE id IN ({marks})", [m["id"] for m in history])}
+    for message in history:
+        stored = rows.get(message["id"])
+        if stored and _narrower_than_thread(c, stored):
+            message["audience_limited"] = True
+    return history
 
 
 def private_task_thread(c, conv):

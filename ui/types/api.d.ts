@@ -4714,7 +4714,7 @@ export type ThreadMessage = {
   refs?: Record<string, unknown>;
   revision?: number;
   root_id?: string | null;
-  seq?: number;
+  seq: number;
   sub_thread?: Record<string, unknown> | null;
   thread_id: string;
   to_actor?: string | null;
