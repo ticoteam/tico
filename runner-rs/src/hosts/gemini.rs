@@ -112,9 +112,19 @@ pub fn set_credential_names(bots: &Value) {
     *credential_names().lock().unwrap() = bots.as_object().cloned().unwrap_or_default();
 }
 
+/// The credential names each bot was granted, as the last `set_credential_names` read them: one snapshot per check.
+pub fn grant_names() -> Map<String, Value> {
+    credential_names().lock().unwrap().clone()
+}
+
 /// Whether `bot` was granted a credential named `key` (Pi's OPENROUTER_API_KEY, the Gemini CLI's GEMINI_API_KEY).
 pub fn has_grant(bot: &str, key: &str) -> bool {
-    credential_names().lock().unwrap().get(bot).and_then(|n| n.as_array()).is_some_and(|n| n.iter().any(|k| k == key))
+    has_grant_in(&credential_names().lock().unwrap(), bot, key)
+}
+
+/// `has_grant` over a snapshot from `grant_names`.
+pub fn has_grant_in(names: &Map<String, Value>, bot: &str, key: &str) -> bool {
+    names.get(bot).and_then(|n| n.as_array()).is_some_and(|n| n.iter().any(|k| k == key))
 }
 
 /// The gemini runtime's sign-in: a GEMINI_API_KEY grant for every bot that runs the Gemini CLI.
