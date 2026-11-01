@@ -1300,6 +1300,22 @@ impl Recorder {
         self.report(result);
         self.reload();
     }
+    pub fn control_live(&mut self, action: &str) {
+        let Ok(record) = self.open_record() else {
+            return;
+        };
+        let at_ms = self
+            .active
+            .as_ref()
+            .filter(|(id, _)| id == &record.id)
+            .map(|(_, handle)| handle.status().elapsed_ms)
+            .unwrap_or_else(|| tico_recorder_native::live::capture_time(&record));
+        let action = action.to_owned();
+        self.network_job("control", move |tico, store, id| {
+            tico.control_live(&store, &id, &action, at_ms)?;
+            Ok(json!({}))
+        });
+    }
     pub fn finish_live(&mut self) {
         if self.context.live_id.is_empty() {
             return;
@@ -1684,6 +1700,9 @@ impl Recorder {
     /// Send does every step in one go: it stops this recording, waits for its last words,
     /// finishes a live meeting in Tico, then files it. Only what no step can fix stops it here.
     pub fn send_meeting(&mut self, id: &str, destination: &str) {
+        self.send_meeting_confirmed(id, destination, false);
+    }
+    pub fn send_meeting_confirmed(&mut self, id: &str, destination: &str, paused_confirmed: bool) {
         if self.updating {
             self.error = UPDATING.into();
             return;
@@ -1691,6 +1710,17 @@ impl Recorder {
         let Ok(record) = self.store.get(id) else {
             return;
         };
+        if let Ok(context) = self.store.context(id) {
+            if context.live_discarded {
+                self.error =
+                    "This meeting was discarded; its recording stays on this computer".into();
+                return;
+            }
+            if !paused_confirmed && tico_recorder_native::live::paused_quotes(&record, &context) {
+                self.error = "A kept action item quotes paused speech. Review it and confirm Send in the Send menu.".into();
+                return;
+            }
+        }
         let recording_here = self.active.as_ref().is_some_and(|(active, _)| active == id);
         if !recording_here && let Some(error) = self.send_blocked(&record) {
             self.error = error;
@@ -1749,7 +1779,10 @@ impl Recorder {
                 say(label);
                 std::thread::sleep(Duration::from_millis(250));
             }
-            network::ready(&store.get(&id)?)?;
+            let record = store.get(&id)?;
+            network::ready(&record)?;
+            anyhow::ensure!(paused_confirmed || !tico_recorder_native::live::paused_quotes(&record, &store.context(&id)?),
+                "A kept action item quotes paused speech. Review it and confirm Send in the Send menu.");
             let tico = Tico::saved(&config, &destination)?;
             if !store.context(&id)?.live_id.is_empty() {
                 say("Finishing…");
@@ -2083,6 +2116,7 @@ impl Recorder {
                     "started_at": record.started_at,
                     "duration_ms": record.duration_ms,
                     "recording": recording,
+                    "paused_warning": self.store.context(&record.id).is_ok_and(|c| !c.paused_windows.is_empty()),
                     "status": status.map(|(label, tone)| json!({"label":label,"tone":tone})),
                     "sync_error": sync_error,
                     "sent": sent,
@@ -2235,7 +2269,12 @@ impl Recorder {
                 (false, true) => "Team can join",
                 (false, false) => "Private in Tico",
             }) } else { None },
-            "can_finish": live && record.state != "recording" && record.deliveries.is_empty()
+            "paused_warning": !self.context.paused_windows.is_empty(),
+            "live_state": self.context.live_state,
+            "can_control": live && !ended && !self.context.live_discarded,
+            "can_discard": live && !ended && record.state != "recording" && record.deliveries.is_empty(),
+            "discarded": self.context.live_discarded,
+            "can_finish": live && !self.context.live_discarded && record.state != "recording" && record.deliveries.is_empty()
                 && (!ended || has_text),
             "place": if live { format!("Shared live · {org}") } else { "Private · on this Mac".into() },
             "sync_error": if sync_error.is_empty() { String::new() } else {

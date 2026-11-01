@@ -232,7 +232,8 @@ impl Tico {
     }
     /// Shares what is new, then reads the meeting back (and notes if it was paused or resumed).
     pub fn sync_live(&self, store: &Store, id: &str) -> Result<Value> {
-        self.push_live(store, id)?;
+        let _guard = store.live_lock();
+        self.push_live_inner(store, id)?;
         let context = store.context(id)?;
         let view = self.call(
             &format!("/api/v2/live-meetings/{}", context.live_id),
@@ -245,6 +246,10 @@ impl Tico {
     /// Shares streamed turns and finished chunks as new transcript text while the meeting is
     /// live, and corrections of streamed turns while it is live or paused.
     pub fn push_live(&self, store: &Store, id: &str) -> Result<()> {
+        let _guard = store.live_lock();
+        self.push_live_inner(store, id)
+    }
+    fn push_live_inner(&self, store: &Store, id: &str) -> Result<()> {
         let record = store.get(id)?;
         let context = store.context(id)?;
         ensure!(
@@ -252,11 +257,18 @@ impl Tico {
             "Connect this meeting to Tico first"
         );
         let prefix = format!("/api/v2/live-meetings/{}", context.live_id);
+        if context.live_discarded {
+            return Ok(());
+        }
+        let record = shareable(&record, &context.paused_windows);
         let live = context.live_state == "live";
         if !live && context.live_state != "paused" {
             return Ok(());
         }
-        let streamed = store.live_words(id)?;
+        let mut streamed = store.live_words(id)?;
+        for words in streamed.values_mut() {
+            words.retain(|word| !excluded(&context.paused_windows, word.start_ms, word.end_ms));
+        }
         let mut db = store.db()?;
         let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let mut queue = Queue::read(&transaction, id, &self.destination.id)?;
@@ -346,7 +358,82 @@ impl Tico {
         }
         Ok(())
     }
+    /// Pause is committed locally before touching the network. A failed or uncertain request
+    /// leaves sharing paused until the person explicitly resumes it.
+    pub fn control_live(&self, store: &Store, id: &str, action: &str, at_ms: u64) -> Result<()> {
+        ensure!(
+            ["pause", "resume", "discard"].contains(&action),
+            "Unknown live control"
+        );
+        let _guard = store.live_lock();
+        let context = store.context(id)?;
+        ensure!(
+            context.live_destination == self.destination.id && !context.live_id.is_empty(),
+            "Connect this meeting first"
+        );
+        ensure!(
+            context.live_state != "ended" || action == "discard",
+            "The meeting has ended"
+        );
+        ensure!(
+            !context.live_discarded || action == "discard",
+            "This meeting was discarded"
+        );
+        if action == "discard" {
+            let record = store.get(id)?;
+            ensure!(
+                record.state != "recording",
+                "Stop recording before discarding"
+            );
+            ensure!(
+                record.deliveries.is_empty(),
+                "This meeting was already filed"
+            );
+            store.update_context(id, |c| {
+                c.live_discarded = true;
+                Ok(())
+            })?;
+        } else if action == "pause" {
+            store.update_context(id, |c| {
+                pause_window(c, at_ms);
+                c.locally_paused = true;
+                Ok(())
+            })?;
+        }
+        let reply = self.call(
+            &format!("/api/v2/live-meetings/{}/control", context.live_id),
+            Some(&json!({"action": if action == "discard" { "end" } else { action }})),
+            &format!("recorder:{id}:control:{}", uuid::Uuid::new_v4()),
+        )?;
+        let state = if action == "discard" {
+            "ended"
+        } else if action == "pause" {
+            "paused"
+        } else {
+            "live"
+        };
+        ensure!(
+            reply["state"] == state,
+            "Tico did not confirm the meeting control"
+        );
+        store.update_context(id, |c| {
+            if action == "resume" {
+                c.locally_paused = false;
+                if let Some((start, end)) =
+                    c.paused_windows.last_mut().filter(|(_, end)| end.is_none())
+                {
+                    *end = Some(at_ms.max(*start));
+                }
+            }
+            c.live_state = state.into();
+            Ok(())
+        })
+    }
     pub fn finish_live(&self, store: &Store, id: &str) -> Result<()> {
+        ensure!(
+            !store.context(id)?.live_discarded,
+            "This meeting was discarded; its recording stays local"
+        );
         let record = store.get(id)?;
         ensure!(record.state != "recording", "Stop recording first");
         ensure!(
@@ -420,17 +507,127 @@ impl Tico {
 /// starts again once it is resumed there. An ended meeting stays ended.
 fn note_state(store: &Store, id: &str, view: &Value) -> Result<()> {
     let state = match view["state"].as_str() {
-        Some(state @ ("live" | "paused")) => state,
+        Some(state @ ("live" | "paused" | "ended")) => state,
         _ => return Ok(()),
     };
     let current = store.context(id)?.live_state;
     if current == state || current == "ended" {
         return Ok(());
     }
+    let at_ms = capture_time(&store.get(id)?);
     store.update_context(id, |context| {
+        if context.live_discarded || (context.locally_paused && state == "live") {
+            return Ok(());
+        }
+        if state == "paused" {
+            pause_window(context, at_ms);
+        }
+        if state == "live" {
+            if let Some((start, end)) = context
+                .paused_windows
+                .last_mut()
+                .filter(|(_, end)| end.is_none())
+            {
+                *end = Some(at_ms.max(*start));
+            }
+        }
         context.live_state = state.into();
         Ok(())
     })
+}
+
+/// Capture timestamps, rather than transcription arrival time, define off-the-record speech.
+pub fn capture_time(record: &Recording) -> u64 {
+    let saved = record.chunks.iter().map(|c| c.end_ms).max().unwrap_or(0);
+    if record.state != "recording" {
+        return saved;
+    }
+    chrono::DateTime::parse_from_rfc3339(&record.started_at)
+        .ok()
+        .map(|start| (chrono::Utc::now() - start).num_milliseconds().max(0) as u64)
+        .unwrap_or(saved)
+        .max(saved)
+}
+fn pause_window(c: &mut crate::workspace::Context, at: u64) {
+    if c.paused_windows.last().is_none_or(|(_, end)| end.is_some()) {
+        c.paused_windows.push((at, None));
+    }
+    c.live_state = "paused".into();
+}
+fn excluded(windows: &[(u64, Option<u64>)], start: u64, end: u64) -> bool {
+    windows.iter().any(|(from, to)| {
+        start < to.unwrap_or(u64::MAX) && end.max(start.saturating_add(1)) > *from
+    })
+}
+/// Make a network-only copy. Without word timings, omit an overlapping chunk in full: guessing
+/// a partial text boundary could disclose private speech. The stored recording is never edited.
+fn shareable(record: &Recording, windows: &[(u64, Option<u64>)]) -> Recording {
+    let mut shared = record.clone();
+    for chunk in &mut shared.chunks {
+        if chunk.words.is_empty() {
+            if excluded(windows, chunk.start_ms, chunk.end_ms) {
+                chunk.text.clear();
+            }
+        } else {
+            chunk
+                .words
+                .retain(|w| !excluded(windows, w.start_ms, w.end_ms));
+            chunk.text = chunk
+                .words
+                .iter()
+                .map(|w| w.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+    }
+    shared
+}
+/// Kept draft items can disclose paused speech even though the transcript cannot.
+pub fn paused_quotes(record: &Recording, context: &crate::workspace::Context) -> bool {
+    let normalize = |s: &str| {
+        s.split_whitespace()
+            .map(|w| {
+                w.chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .flat_map(char::to_lowercase)
+                    .collect::<String>()
+            })
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    context
+        .items
+        .iter()
+        .filter(|i| i.task_id.is_empty() && !i.quote.trim().is_empty())
+        .any(|item| {
+            if excluded(
+                &context.paused_windows,
+                item.at_ms,
+                item.at_ms.saturating_add(1),
+            ) {
+                return true;
+            }
+            let quote = normalize(&item.quote);
+            !quote.is_empty()
+                && record.chunks.iter().any(|chunk| {
+                    if !excluded(&context.paused_windows, chunk.start_ms, chunk.end_ms) {
+                        return false;
+                    }
+                    let text = if chunk.words.is_empty() {
+                        chunk.text.clone()
+                    } else {
+                        chunk
+                            .words
+                            .iter()
+                            .filter(|w| excluded(&context.paused_windows, w.start_ms, w.end_ms))
+                            .map(|w| w.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    };
+                    normalize(&text).contains(&quote)
+                })
+        })
 }
 
 /// A pause this long ends a streamed turn, so the meeting sees who spoke when.

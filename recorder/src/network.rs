@@ -523,6 +523,10 @@ impl Tico {
         let context = store.context(id)?;
         ready(&record)?;
         ensure!(
+            !context.live_discarded,
+            "This meeting was discarded; its recording stays local"
+        );
+        ensure!(
             context.live_id.is_empty() || context.live_state == "ended",
             "Finish the connected live meeting first"
         );

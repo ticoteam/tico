@@ -65,6 +65,7 @@ commands! {
     stop_recording() => |app| app.stop();
     rename(title: String) => |app| app.rename(&title);
     finish_live() => |app| app.finish_live();
+    control_live(action: String) => |app| app.control_live(&action);
     retry(id: String) => |app| app.retry(&id);
     set_notes(notes: String) => |app| app.set_notes(&notes);
     add_item(title: String) => |app| app.add_item(&title);
@@ -84,7 +85,7 @@ commands! {
     ask(question: String) => |app| app.ask(&question);
     chat_send(text: String) => |app| app.chat_send(&text);
     set_chat_private(private: bool) => |app| app.set_chat_private(private);
-    send_meeting(id: String, destination: String) => |app| app.send_meeting(&id, &destination);
+    send_meeting(id: String, destination: String, paused_confirmed: Option<bool>) => |app| app.send_meeting_confirmed(&id, &destination, paused_confirmed.unwrap_or(false));
     delete_recording(id: String) => |app| app.delete(&id);
     save_settings(form: SettingsForm) => |app| app.save_settings(form);
     set_audio(microphone: String, meeting: bool) => |app| app.set_audio(&microphone, meeting);
@@ -234,6 +235,7 @@ fn main() {
             stop_recording,
             rename,
             finish_live,
+            control_live,
             retry,
             set_notes,
             add_item,

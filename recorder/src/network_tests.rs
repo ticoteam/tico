@@ -1154,7 +1154,14 @@ fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_noth
     let (tico, _, worker) = server(vec![]);
     worker.join().unwrap();
     tico.push_live(&store, id).unwrap();
-    // Resumed in Tico: the waiting turn goes again, then the streamed one.
+    // The synthetic capture clock has advanced beyond the words spoken while paused.
+    store
+        .mutate(id, |r| {
+            r.started_at = (chrono::Utc::now() - chrono::Duration::seconds(7)).to_rfc3339();
+            Ok(())
+        })
+        .unwrap();
+    // Resumed in Tico: only the pre-pause waiting turn goes again.
     let (tico, seen, worker) = server(vec![Some(json!({"id":"live-fixture","state":"live"}))]);
     // A paused meeting is only read back.
     tico.sync_live(&store, id).unwrap();
@@ -1173,7 +1180,7 @@ fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_noth
         requests[0].1["chunks"],
         json!([
             {"seq":1,"speaker":"Me","start_ms":0,"end_ms":5000,"text":"Morning all"},
-            {"seq":2,"speaker":"Me","start_ms":5500,"end_ms":6050,"text":"still talking"},
+
         ])
     );
 }
@@ -1207,4 +1214,132 @@ fn meeting_notices_are_read_from_new_events_only() {
     let (tico, _, worker) = server(vec![]);
     worker.join().unwrap();
     tico.read_notices("live-events", 42).unwrap();
+}
+
+#[test]
+fn paused_capture_stays_local_through_resume_retry_recovery_and_final_corrections() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Off the record");
+    let id = &record.id;
+    streamed(&store, id, "me", 1000, "public opening", "");
+    let (tico, _, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let (tico, _, worker) = server(vec![Some(json!({"state":"paused"}))]);
+    tico.control_live(&store, id, "pause", 5000).unwrap();
+    worker.join().unwrap();
+    streamed(&store, id, "me", 6000, "secret launch", "");
+    let store = Store::open(dir.path()).unwrap();
+    let (tico, _, worker) = server(vec![Some(json!({"state":"live"}))]);
+    tico.control_live(&store, id, "resume", 10000).unwrap();
+    worker.join().unwrap();
+    streamed(&store, id, "me", 11000, "public closing", "");
+    // A transport failure leaves only public text in the durable outbox.
+    let (tico, _, worker) = server(vec![None]);
+    assert!(tico.push_live(&store, id).is_err());
+    worker.join().unwrap();
+    let queued: String = store
+        .db()
+        .unwrap()
+        .query_row(
+            "SELECT group_concat(payload_json) FROM live_outbox WHERE recording_id=?",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(!queued.contains("secret"));
+    let store = Store::open(dir.path()).unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[2]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert!(!seen.lock().unwrap()[0].1.to_string().contains("secret"));
+    finished_chunk(
+        &store,
+        id,
+        0,
+        15000,
+        vec![
+            word(1000, 1300, "Public opening.", ""),
+            word(6000, 6300, "Secret launch.", ""),
+            word(11000, 11300, "Public closing.", ""),
+        ],
+    );
+    store.state(id, "stopped").unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({})),
+        Some(json!({})), // final corrections
+        Some(json!({"state":"live"})),
+        Some(json!({"state":"ended"})),
+        Some(json!({"meeting_id":"filed-fixture"})),
+    ]);
+    tico.finish_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert!(
+        requests
+            .iter()
+            .all(|(_, payload, _)| !payload.to_string().to_lowercase().contains("secret"))
+    );
+    assert_eq!(
+        store.get(id).unwrap().chunks[0].text,
+        "Public opening. Secret launch. Public closing."
+    );
+    let mut context = store.context(id).unwrap();
+    context.items.push(crate::workspace::Item {
+        quote: "Secret launch.".into(),
+        at_ms: 6000,
+        ..Default::default()
+    });
+    assert!(crate::live::paused_quotes(
+        &store.get(id).unwrap(),
+        &context
+    ));
+    context.items[0].quote = "Public opening.".into();
+    context.items[0].at_ms = 1000;
+    assert!(!crate::live::paused_quotes(
+        &store.get(id).unwrap(),
+        &context
+    ));
+}
+
+#[test]
+fn uncertain_pause_stays_local_and_discard_never_finalizes_or_sends() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Discard locally kept recording");
+    let id = &record.id;
+    let (tico, _, worker) = server(vec![None]);
+    assert!(tico.control_live(&store, id, "pause", 5000).is_err());
+    worker.join().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (tico, _, worker) = server(vec![Some(json!({"state":"live"}))]);
+    tico.sync_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert_eq!(store.context(id).unwrap().live_state, "paused");
+    assert_eq!(
+        store.context(id).unwrap().paused_windows,
+        vec![(5000, None)]
+    );
+    finished_chunk(
+        &store,
+        id,
+        0,
+        10000,
+        vec![word(6000, 6300, "Private words", "")],
+    );
+    store.state(id, "stopped").unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"state":"ended"}))]);
+    tico.control_live(&store, id, "discard", 10000).unwrap();
+    worker.join().unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert_eq!(seen.lock().unwrap()[0].1, json!({"action":"end"}));
+    assert!(tico.finish_live(&store, id).is_err());
+    let kept = store.get(id).unwrap();
+    assert!(kept.deliveries.is_empty());
+    assert_eq!(kept.chunks[0].text, "Private words");
+    assert!(
+        std::path::Path::new(&kept.chunks[0].file).exists()
+            || dir.path().join(&kept.chunks[0].file).exists()
+    );
 }
