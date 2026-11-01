@@ -15,7 +15,7 @@ const OWNER = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'o
 const row = (kind, ident, name, status, scope, readers, configure, extra = {}) => ({id: ident ? kind + ':' + ident : kind, kind, name,
   detail: '', status, scope, readers, bots: [], more_bots: 0, configure, can_configure: true, ...extra});
 const ROWS = [
-  row('slack', '', 'Slack', 'on', 'company', 'Everyone', '#/library/tools/slack', {bots: ['eng-lead', 'builder']}),
+  row('slack', '', 'Slack', 'on', 'company', 'Everyone', '#/library/tools/slack', {bots: [{slug: 'eng-lead', name: 'Engineering Lead'}, {slug: 'builder', name: 'Builder'}]}),
   row('github', '', 'GitHub', 'waiting', 'company', 'Bots with repository access', '#/library/tools/github'),
   row('mailbox', 'ops@acme.example', 'ops@acme.example', 'error', 'person', 'Ana Silva', '#/settings/inbox', {detail: 'Sign-in expired'}),
   row('inbox', 'ibx_a', 'Account logins', 'on', 'team', 'Engineering', '#/settings/inbound', {can_configure: false}),

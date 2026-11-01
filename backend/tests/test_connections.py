@@ -61,16 +61,56 @@ def test_bots_and_agents_see_only_company_rows_they_may_read(api):
     assert not rows & {"inbox:ibx_b", "inbox:ibx_c", "webhook:wh-ben", "webhook:wh-cara"}
 
 
+def walk(api, token, limit):
+    pages, cursor = [], ""
+    while True:
+        got = get(api, f"connections?limit={limit}" + (f"&cursor={cursor}" if cursor else ""), token)
+        pages.append([r["id"] for r in got["connections"]])
+        if not got["next"]:
+            return pages
+        cursor = got["next"]
+
+
 def test_the_list_is_paged_and_byte_capped(api, monkeypatch):
     seed(api)
-    first = get(api, "connections?limit=2")
-    assert len(first["connections"]) == 2 and first["next"] == "2"
-    second = get(api, "connections?limit=2&cursor=" + first["next"])
-    assert not {r["id"] for r in first["connections"]} & {r["id"] for r in second["connections"]}
+    now = H.now()
+    with api.app.state.store.transaction() as c:          # more webhooks than one page, and Cara's among them
+        for i in range(7):
+            c.execute("INSERT INTO webhooks(id,name,url,host,created_by,created,updated) VALUES(?,?,?,?,?,?,?)",
+                      (f"wh-{i:02d}", f"Hook {i}", "https://hooks.acme.example/x", "hooks.acme.example",
+                       "human:cara" if i % 3 == 0 else "human:ben", now, now))
+    for token in ("ana-test", "cara-test"):
+        whole = ids(api, token)
+        for limit in (1, 2, 3):
+            pages = walk(api, token, limit)
+            flat = [i for p in pages for i in p]
+            assert len(flat) == len(set(flat)) and set(flat) == whole, (token, limit)
+            assert all(len(p) == limit for p in pages[:-1]) and pages[-1], "no short or empty page while more follow"
+    assert {"webhook:wh-00", "webhook:wh-03", "webhook:wh-06"} <= ids(api, "cara-test")
+    assert not {"webhook:wh-01", "inbox:ibx_c"} & ids(api, "cara-test")
+    every = ids(api, "ana-test")
     monkeypatch.setattr(connections, "BYTES_MAX", 1)
-    capped = get(api, "connections?limit=100")
-    assert len(capped["connections"]) == 1 and capped["next"] == "1"
-    get(api, "connections?cursor=abc", expected=422)
+    capped = walk(api, "ana-test", 100)
+    assert all(len(p) == 1 for p in capped) and {p[0] for p in capped} == every
+    for bad in ("abc", "99", "x:1"):
+        get(api, "connections?cursor=" + bad, expected=422)
+
+
+def test_a_narrowed_intake_inbox_names_nothing_outside_its_group(api):
+    """Physical mail's email-in inbox follows the inbox's audience: Connections and GET /postal/intake."""
+    seed(api)                                              # ibx_c is Operations'; Cara is not in it
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO mail_intake(singleton,inbox_id,set_by,set_at,senders_json) VALUES(1,?,?,?,?)",
+                  ("ibx_c", "human:ana", H.now(), '["scans@provider.acme.example"]'))
+    address = get(api, "inbound/inboxes")["inboxes"]
+    address = next(i["address"] for i in address if i["inbox_id"] == "ibx_c")
+    postal = {r["id"]: r for r in get(api, "connections?limit=100", "cara-test")["connections"]}["postal"]
+    assert address not in str(postal)
+    assert {r["id"]: r for r in get(api, "connections?limit=100")["connections"]}["postal"]["detail"] == address
+    intake = get(api, "postal/intake", "cara-test")["intake"]
+    assert intake["hidden"] is True and intake["inbox_id"] is None and not intake["senders"]
+    assert address not in str(intake) and "provider" not in str(intake)
+    assert get(api, "postal/intake")["intake"]["inbox_id"] == "ibx_c"
 
 
 def test_mcp_and_cli_read_the_same_list_and_set_an_inbox_audience(api, monkeypatch):

@@ -217,12 +217,15 @@ class Inbound:
     def list_inboxes(self, who, after="", limit=100):
         with self.store.read_transaction() as c:
             permit(c,who)
-            clause,values = without('inbox_id',hidden_inboxes(c,who,self.auth))
+            hidden = hidden_inboxes(c,who,self.auth)
+            clause,values = without('inbox_id',hidden)
             rows = [dict(r) for r in c.execute('SELECT * FROM inbound_inboxes WHERE inbox_id>? AND '+clause+
                                                ' ORDER BY inbox_id LIMIT ?',(after,*values,limit+1))]
             sync = dict(c.execute('SELECT * FROM inbound_sync WHERE singleton=1').fetchone())
+        # A gap names its inbox: only the inboxes this reader may read.
+        gaps = [g for g in json.loads(sync['gaps_json']) if g.get('inbox_id') not in hidden]
         return {'inboxes':rows[:limit],'next':rows[limit-1]['inbox_id'] if len(rows)>limit else None,'configured':not self.off,'last_sync':sync['last_sync'],'error':sync['error'],
-                'gaps':json.loads(sync['gaps_json'])}
+                'gaps':gaps}
 
     def connection_actor(self, who, what='Inbox', code='inbox_connection'):
         # Delegated human identities may manage other Inbox operations, never company linking. Also the rule for

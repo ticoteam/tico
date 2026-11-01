@@ -167,7 +167,7 @@ async function inboundMount() {
     if (!pick) return;
     pick.disabled = true;
     try {
-      await put('/v2/inbound/inboxes/' + encodeURIComponent(pick.dataset.inboundAudience) + '/audience',
+      await put(`/v2/inbound/inboxes/${encodeURIComponent(pick.dataset.inboundAudience)}/audience`,
         pick.value ? {audience: 'team', group_id: pick.value} : {audience: 'company'});
       await refreshInboxes();
     } catch (error) { failure(error); await refreshInboxes().catch(() => {}); }

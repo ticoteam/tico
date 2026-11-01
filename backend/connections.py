@@ -14,7 +14,9 @@ Who sees which rows: the owner and admins see every row; anyone else sees their 
 made) and the company's rows they may read: Slack and GitHub once connected, an Email & Phone inbox in their audience
 (backend/inbound.py), meeting importers for whoever reads meetings, incoming webhooks except Finance's, the
 physical-mail intake, and Listening when they receive or read a destination. Bots listed are only ones the reader may
-see. The list is paged (`limit`, `cursor`) and byte-capped like every list.
+see. The list is paged (`limit`, `cursor`) and byte-capped like every list. Each source reads its rows in a stable
+order with the reader's visibility already applied, from where the cursor left off (`<source>` or `<source>:<key>`), so
+no row is lost past a page and no page is empty while more follow.
 """
 
 from fastapi import Query, Request
@@ -24,7 +26,7 @@ from .store import H, Problem, encode
 LIMIT_MAX = 100
 BYTES_MAX = 96 * 1024
 BOTS_MAX = 20            # bots named on one row; `more_bots` counts the rest
-SCAN_MAX = 500           # rows read from one source (triggers, webhooks)
+SCAN_MAX = 500           # bots read for one row (GitHub repository access)
 KINDS = ("slack", "github", "mailbox", "inbox", "meetings", "trigger", "webhook", "postal", "listening")
 
 
@@ -45,6 +47,16 @@ class View:
         self.admin = who.role == "owner" or (who.role == "human" and bool(auth.bot_admin(who)))
         self._seen = None
         self._names = {}
+        self._hidden = None
+
+    @property
+    def hidden(self):
+        """The Email & Phone inboxes narrowed to a group the reader is not in (backend/inbound.py)."""
+        if self._hidden is None:
+            from . import inbound
+            self._hidden = inbound.hidden_inboxes(self.c, self.who, self.auth) if table(self.c, "inbound_inboxes") \
+                else set()
+        return self._hidden
 
     def bots(self, slugs):
         """The bots among `slugs` the reader may see, named, at most BOTS_MAX; and how many more there are."""
@@ -73,9 +85,19 @@ def row(kind, ident, name, status, scope, readers, configure, *, detail="", bots
             "can_configure": bool(can)}
 
 
-# ---- each source
+def keyed(rows, after, n):
+    """At most `n` of a small source's rows past `after`, as (key, row) by key: its key is the row id's ident."""
+    pairs = sorted((r["id"].partition(":")[2], r) for r in rows)
+    return [(k, r) for k, r in pairs if after is None or k > after][:n]
 
-def slack(v):
+
+# ---- each source: (v, after, n) -> up to n (key, row) pairs past `after`, by key, only rows the reader may see
+
+def slack(v, after, n):
+    return keyed(slack_rows(v), after, n)
+
+
+def slack_rows(v):
     from . import slack_app
     state = slack_app.status(v.c)
     if not state["configured"] and not v.admin:
@@ -90,7 +112,11 @@ def slack(v):
                 detail=state["message"] if status == "error" else "", bots=bots, more=more, can=v.who.role == "owner")]
 
 
-def github(v):
+def github(v, after, n):
+    return keyed(github_rows(v), after, n)
+
+
+def github_rows(v):
     app_row = v.c.execute("SELECT org, installation_id FROM github_app WHERE id='app'").fetchone() \
         if table(v.c, "github_app") else None
     if not app_row and not v.admin:
@@ -103,8 +129,12 @@ def github(v):
                 detail=app_row["org"] if app_row else "", bots=bots, more=more, can=v.who.role == "owner")]
 
 
-def mailboxes(v):
-    """The mail bots' mailboxes: each person's inbox bot and the mailbox it keeps."""
+def mailboxes(v, after, n):
+    return keyed(mailbox_rows(v), after, n)
+
+
+def mailbox_rows(v):
+    """The mail bots' mailboxes: each person's inbox bot and the mailbox it keeps (one per person at most)."""
     from . import mail, routines
     boxes = routines.message_bot_mailboxes(v.c)
     if not boxes:
@@ -125,28 +155,30 @@ def mailboxes(v):
     return out
 
 
-def inboxes(v):
+def inboxes(v, after, n):
     """Email & Phone inboxes the reader is in the audience of."""
     from . import groups as G
     from . import inbound
     if not table(v.c, "inbound_inboxes"):
         return []
-    hidden = inbound.hidden_inboxes(v.c, v.who, v.auth)
+    clause, values = inbound.without("inbox_id", v.hidden)
     groups = G._roster(v.c).get("org_groups") or {}
     out = []
-    for r in v.c.execute("SELECT * FROM inbound_inboxes WHERE state<>'released' ORDER BY name, inbox_id LIMIT ?",
-                         (SCAN_MAX,)):
-        if r["inbox_id"] in hidden:
-            continue
+    for r in v.c.execute("SELECT * FROM inbound_inboxes WHERE state<>'released' AND inbox_id>? AND " + clause +
+                         " ORDER BY inbox_id LIMIT ?", (after or "", *values, n)):
         team = r["audience"] == "team" and r["group_id"]
         readers = (groups.get(team) or {}).get("name") or team if team else "Everyone"
         status = "on" if r["state"] == "active" else r["state"] if r["state"] in ("off", "error", "paused") else "waiting"
-        out.append(row("inbox", r["inbox_id"], r["name"], status, "team" if team else "company", readers,
-                       "#/settings/inbound", detail=r["address"], can=v.admin))
+        out.append((r["inbox_id"], row("inbox", r["inbox_id"], r["name"], status, "team" if team else "company",
+                                       readers, "#/settings/inbound", detail=r["address"], can=v.admin)))
     return out
 
 
-def meetings(v):
+def meetings(v, after, n):
+    return keyed(meeting_rows(v), after, n)
+
+
+def meeting_rows(v):
     from .meeting_importers import IMPORTERS, status_of
     from .updates import meeting_reader
     if not (v.admin or meeting_reader(v.who)):
@@ -166,48 +198,51 @@ def meetings(v):
     return out
 
 
-def triggers(v):
+def triggers(v, after, n):
     """Incoming webhooks (backend/triggers.py): everyone may read them, Finance's only a finance admin."""
     from . import triggers as T
     if not table(v.c, "triggers") or not (v.person or v.who.role == "bot"):
         return []
-    have = columns(v.c, "triggers")
-    finance = None
+    sql = "SELECT * FROM triggers WHERE deleted_at IS NULL AND id>?"
+    if "consumer" in columns(v.c, "triggers") and not T._finance_admin(v.c, v.who):
+        sql += " AND coalesce(consumer,'')<>'finance'"
     out = []
-    for r in v.c.execute("SELECT * FROM triggers WHERE deleted_at IS NULL ORDER BY name, id LIMIT ?", (SCAN_MAX,)):
-        if "consumer" in have and r["consumer"] == "finance":
-            if finance is None:
-                finance = T._finance_admin(v.c, v.who)
-            if not finance:
-                continue
-        out.append(row("trigger", r["id"], r["name"], "on", "company", "Everyone", "#/settings/webhooks",
-                       detail="Incoming webhook", can=v.person and (v.admin or r["created_by"] == v.who.actor)))
+    for r in v.c.execute(sql + " ORDER BY id LIMIT ?", (after or "", n)):
+        out.append((r["id"], row("trigger", r["id"], r["name"], "on", "company", "Everyone", "#/settings/webhooks",
+                                 detail="Incoming webhook",
+                                 can=v.person and (v.admin or r["created_by"] == v.who.actor))))
     return out
 
 
-def webhooks(v):
+def webhooks(v, after, n):
     """Outgoing webhooks (backend/webhooks.py): an admin sees every endpoint, anyone else their own."""
     if not table(v.c, "webhooks"):
         return []
-    sql, args = "SELECT * FROM webhooks WHERE deleted_at IS NULL", []
+    sql, args = "SELECT * FROM webhooks WHERE deleted_at IS NULL AND id>?", [after or ""]
     if not v.admin:
         sql += " AND (created_by=? OR requested_by=?)"
         args += [v.who.actor, v.who.actor]
     out = []
-    for r in v.c.execute(sql + " ORDER BY name, id LIMIT ?", (*args, SCAN_MAX)):
+    for r in v.c.execute(sql + " ORDER BY id LIMIT ?", (*args, n)):
         status = "paused" if r["paused_reason"] else "on" if r["enabled"] else "off"
-        out.append(row("webhook", r["id"], r["name"], status, "person", v.name(r["created_by"]),
-                       "#/settings/webhooks/outgoing", detail=r["host"],
-                       can=v.person and (v.admin or r["created_by"] == v.who.actor)))
+        out.append((r["id"], row("webhook", r["id"], r["name"], status, "person", v.name(r["created_by"]),
+                                 "#/settings/webhooks/outgoing", detail=r["host"],
+                                 can=v.person and (v.admin or r["created_by"] == v.who.actor))))
     return out
 
 
-def postal(v):
+def postal(v, after, n):
+    return keyed(postal_rows(v), after, n)
+
+
+def postal_rows(v):
     """Physical mail, when this company takes it: letters go to whoever may read the task each is filed on."""
     if not table(v.c, "mail_intake") or not v.person:
         return []
     intake = v.c.execute("SELECT m.inbox_id, i.address FROM mail_intake m LEFT JOIN inbound_inboxes i "
                          "ON i.inbox_id=m.inbox_id WHERE m.singleton=1").fetchone()
+    if intake and intake["inbox_id"] in v.hidden:          # its inbox is narrowed to a group the reader is not in
+        intake = {"inbox_id": intake["inbox_id"], "address": ""}
     letters = table(v.c, "mail_items") and v.c.execute("SELECT 1 FROM mail_items LIMIT 1").fetchone()
     if not intake and not letters:
         return []
@@ -215,7 +250,11 @@ def postal(v):
                 detail=(intake["address"] or "") if intake else "", can=v.admin)]
 
 
-def listening(v):
+def listening(v, after, n):
+    return keyed(listening_rows(v), after, n)
+
+
+def listening_rows(v):
     """Listening: one row while any destination is set, for the owner, admins and whoever receives or reads one."""
     from . import listening as L
     try:
@@ -245,43 +284,60 @@ def listening(v):
 SOURCES = (slack, github, mailboxes, inboxes, meetings, triggers, webhooks, postal, listening)
 
 
-def gather(c, auth, who, settings):
+def view(c, auth, who, settings):
     if who.support or who.role not in ("owner", "human", "bot"):
         raise Problem("forbidden", "Company members and agents only", 403)
-    v = View(c, auth, who, settings)
-    out = []
-    for source in SOURCES:
-        out += source(v)
-    return out
+    return View(c, auth, who, settings)
 
 
-def page(rows, limit, cursor):
-    """One page of rows from `cursor` (an offset), stopping early at BYTES_MAX."""
+def gather(c, auth, who, settings):
+    """Every row the reader may see, in list order (tests and tools; the endpoint pages)."""
+    out, cursor = [], ""
+    while True:
+        got = page(view(c, auth, who, settings), LIMIT_MAX, cursor)
+        out += got["connections"]
+        if not got["next"]:
+            return out
+        cursor = got["next"]
+
+
+def mark(index, key):
+    return str(index) if key is None else f"{index}:{key}"
+
+
+def page(v, limit, cursor):
+    """One page from `cursor`: the sources in order, each from where the last page stopped in it, until `limit` rows
+    or BYTES_MAX. `next` names the source and the last key shown in it."""
+    head, colon, after = str(cursor or "").partition(":")
     try:
-        start = max(0, int(cursor or 0))
+        start = int(head or 0)
     except ValueError:
         raise Problem("invalid_request", "cursor is the `next` of the page before", 422) from None
+    if not 0 <= start < len(SOURCES):
+        raise Problem("invalid_request", "cursor is the `next` of the page before", 422)
     limit = max(1, min(limit, LIMIT_MAX))
     shown, used = [], 0
-    for item in rows[start:start + limit]:
-        size = len(encode(item).encode())
-        if shown and used + size > BYTES_MAX:
-            break
-        shown.append(item)
-        used += size
-    end = start + len(shown)
-    return {"connections": shown, "next": str(end) if end < len(rows) else None}
+    for index in range(start, len(SOURCES)):
+        last = (after if colon else None) if index == start else None
+        for key, item in SOURCES[index](v, last, limit - len(shown) + 1):
+            size = len(encode(item).encode())
+            if len(shown) == limit or (shown and used + size > BYTES_MAX):
+                return {"connections": shown, "next": mark(index, last)}
+            shown.append(item)
+            used += size
+            last = key
+    return {"connections": shown, "next": None}
 
 
 def install(app, store, auth, settings):
     @app.get("/api/v2/connections")
     def connections_list(request: Request, limit: int = Query(default=50, ge=1, le=LIMIT_MAX),
-                         cursor: str = Query(default="", max_length=12)):
+                         cursor: str = Query(default="", max_length=400)):
         """Every connection the caller may see: Slack, GitHub, mail bots' mailboxes, Email & Phone inboxes, meeting
         importers, incoming and outgoing webhooks, physical mail and Listening. Each row: name, status, scope, who reads
         it, its bots and where to configure it. The owner and admins see every row; anyone else their own and the
         company's they may read. Follow `next` with `cursor`."""
         who = request.state.identity
         with store.read_transaction() as c:
-            return page(gather(c, auth, who, settings), limit, cursor)
+            return page(view(c, auth, who, settings), limit, cursor)
 

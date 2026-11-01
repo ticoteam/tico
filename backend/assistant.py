@@ -481,6 +481,8 @@ _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("POST", r"/api/v2/access/owner"), ("POST", r"/api/v2/enrollments"), ("POST", r"/api/v2/seats/[^/]+/hire"),
     # A webhook moved to another destination while it holds secret headers (app.py `destination_card`).
     ("POST", r"/api/v2/webhooks/[^/]+/update"),
+    # Who reads an inbox (backend/inbound.py `set_audience`): owner and admins, on their own click.
+    ("PUT", r"/api/v2/inbound/inboxes/[^/]+/audience"),
 )]
 # An inbox is an email address in its path (`inboxes/ana@acme.example`): the one `@` a route may carry.
 _SHAPE = re.compile(r"/api/v2/(?:inboxes/[A-Za-z0-9_.+\-]+@[A-Za-z0-9.\-]+|[A-Za-z0-9_.:\-/]+)")
