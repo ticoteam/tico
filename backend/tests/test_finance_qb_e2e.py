@@ -284,13 +284,13 @@ def test_quantity_on_hand_comes_in_from_quickbooks_and_is_never_written_back(boo
     with books.transaction() as c:
         item = str(c.execute("SELECT id FROM items WHERE name='Resin'").fetchone()[0])
         assert tuple(c.execute("SELECT quantity_on_hand, quantity_synced_at IS NOT NULL FROM items WHERE id=?",
-                               (item,)).fetchone()) == ("12", 1)
+                               (item,)).fetchone()) == (12.0, 1)
         assert act(c, OWNER, "item_update", {"item_id": item, "name": "Resin pellets"}).status == "committed"
     assert _drain(books, client, cid, now=LATER) == []
     stored = _read(fake_quickbooks, "SELECT * FROM Item STARTPOSITION 1 MAXRESULTS 100")["QueryResponse"]["Item"]
     assert [row["QtyOnHand"] for row in stored if row["Id"] == "41"] == [12]
     assert [row["Name"] for row in stored if row["Id"] == "41"] == ["Resin pellets"]
     with books.read() as c:
-        assert c.execute("SELECT quantity_on_hand FROM items WHERE id=?", (item,)).fetchone()[0] == "12"
+        assert c.execute("SELECT quantity_on_hand FROM items WHERE id=?", (item,)).fetchone()[0] == 12.0
     body = Q.item_write({"name": "Resin pellets", "ext": "Item:41", "revision": "1", "active": True}, update=True)
     assert "QtyOnHand" not in body

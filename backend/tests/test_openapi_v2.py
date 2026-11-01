@@ -200,6 +200,9 @@ def test_the_finance_record_and_order_answers_match_the_live_ones(api):
         assert problem is None, (operation, problem, response.text[:400])
         return response.json()
 
+    def ids(body, key):
+        return [row["id"] for row in body[key]]
+
     store = api.app.state.store
     with store.transaction() as c:
         assert FA.ensure_setup(c, store.settings.owner_email)
@@ -221,9 +224,15 @@ def test_the_finance_record_and_order_answers_match_the_live_ones(api):
             {"account_id": account(c, "4000"), "amount": 90_000, "description": "Design"}]})["estimate_id"]
     call("listLocations", "/api/v2/locations")
     call("getLocation", "/api/v2/locations/" + location)
+    assert location in ids(call("listLocations", "/api/v2/locations", {"kind": "other"}), "locations")
+    assert location not in ids(call("listLocations", "/api/v2/locations", {"kind": "store"}), "locations")
+    assert ids(call("listLocations", "/api/v2/locations", {"customer_id": customer}), "locations") == []
     call("listItems", "/api/v2/items", {"q": "consult"})
+    assert item in ids(call("listItems", "/api/v2/items", {"kind": "service"}), "items")
     call("getItem", "/api/v2/items/" + item)
     call("listProjects", "/api/v2/projects")
+    assert project in ids(call("listProjects", "/api/v2/projects", {"status": "open"}), "projects")
+    assert project not in ids(call("listProjects", "/api/v2/projects", {"status": "closed"}), "projects")
     call("getProject", "/api/v2/projects/" + project)
     call("listPurchaseOrders", "/api/v2/purchase-orders")
     call("getPurchaseOrder", "/api/v2/purchase-orders/" + po)
