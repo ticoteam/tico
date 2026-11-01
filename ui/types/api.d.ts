@@ -2787,6 +2787,12 @@ export type MemoryTidyDecision = {
   decision: "keep" | "discard";
 };
 
+export type MemoryTidyPilot = {
+  bot: string;
+  effort?: "low";
+  model: string;
+};
+
 export type Message = {
   answer?: ReviewAnswer;
   answers?: Array<string | ReviewAnswer>;
@@ -3944,6 +3950,7 @@ export type Suggestion = {
 export type SystemRoutineUpdate = {
   at?: string | null;
   on?: boolean | null;
+  pilots?: Array<MemoryTidyPilot> | null;
   preset?: "15m" | "hourly" | "4h" | "daily" | "business" | null;
 };
 
