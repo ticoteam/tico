@@ -53,6 +53,7 @@ SENT = re.compile(r"sent=([0-9.]+)")
 TOKENS = ["ana-test", "ben-test", "cara-test"]          # the fixture's people; members of both threads
 DM_TOKENS = ["ana-test", "ben-test"]                    # the two people of the baseline's direct conversation
 # What the server times when BENCH_PROFILE=1: the write path, its fan-out and the stream's reads.
+SLOW_READ_SECONDS = 30     # how long the slow consumer may take over its backlog once it reads
 PROFILED = (("backend.threads", ("post", "deliver", "mentions", "audience_has", "_followers", "_insert_delivery",
                                  "_follow", "wake_mode", "thread_row", "can_post", "denial", "_outside", "view",
                                  "message_readable", "readable_ids")),
@@ -224,7 +225,8 @@ def stream(port, token, query, state, started=None):
 
 
 def slow_consumer(port, token, query, state, stop):
-    """Opens a stream with a small receive buffer and reads nothing until the run ends, then reads what came."""
+    """Opens a stream with a small receive buffer and reads nothing until the run ends, then reads what came, with an
+    ordinary buffer so its backlog arrives in seconds, until `reset` or until it is hung up on (SLOW_READ_SECONDS)."""
     state.update({"status": None, "events_after_wait": 0, "reset": False, "closed": False, "error": None})
     try:
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=300)
@@ -235,11 +237,14 @@ def slow_consumer(port, token, query, state, stop):
         response = conn.getresponse()
         state["status"] = response.status
         stop.wait()
+        conn.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
         for raw in response:
             line = raw.decode().rstrip("\n")
             if line.startswith("event: "):
                 state["events_after_wait"] += 1
-                state["reset"] = state["reset"] or line == "event: reset"
+                if line == "event: reset":
+                    state["reset"] = True
+                    break
         state["closed"] = True
     except (OSError, ValueError, http.client.HTTPException) as error:
         state["error"] = repr(error)
@@ -352,8 +357,12 @@ def scenario(args, port, db):
     latencies = [x for v in viewers for x in v.get("latencies", [])]
     per_viewer = [len(v.get("ids", ())) for v in viewers]
     ready = [b["ready"] for b in burst if b.get("ready") is not None]
-    for state in viewers + burst + [slow]:
+    for state in viewers + burst:
         hang_up(state)
+    deadline = time.time() + SLOW_READ_SECONDS
+    while time.time() < deadline and not slow.get("closed") and not slow.get("error"):
+        time.sleep(0.05)
+    hang_up(slow)
     return {
         "path": args.path,
         "room_writes": {"posted_ok": posted_ok, "achieved_per_second": round(posted_ok / args.seconds, 2),
