@@ -13,7 +13,9 @@
    subscription stays signed in and in use, and only once it is in place is the subscription signed out.
    On a hosted Tico (config `hosted`, TICO_HOSTED) the person has no terminal on the computer, so the sign-in shows only
    the provider's link and code (never what else the CLI printed; a failure gives its message), never points to a
-   terminal, and closes by itself once it has signed in or its cancel is confirmed. */
+   terminal, and closes by itself once it has signed in or its cancel is confirmed.
+   Connect (`connect`, Settings > Models, ui/app/subscriptions.js) follows a sign-in the server started for a company
+   subscription on a computer it chose. It ends when the server has saved the result, which this page never sees. */
 'use strict';
 (function () {
   const RUNTIME_NAMES = {codex: 'Codex (ChatGPT)', claude: 'Claude Code'};
@@ -57,15 +59,17 @@
   // `switchAccount` signs in to another account in place of the one signed in now. `toSubscription` does the same for
   // the computer's login running on an API key: the key stays in use until the subscription works, then goes.
   // `into` is a pop-up already open (Add connection, ui/app/computer-detail.js): the sign-in carries on inside it.
-  function open({runnerId, runtime, machine, profile = '', switchAccount = false, toSubscription = false, into = null}) {
-    const base = `/v2/computers/${encodeURIComponent(runnerId)}/logins`;
+  // `connect` {title, first, start, done}: `first` is the sign-in already started, `start` starts another for Try again,
+  // `done` is what the toast says once the server has saved the result.
+  function open({runnerId, runtime, machine, profile = '', switchAccount = false, toSubscription = false, into = null, connect = null}) {
+    const base = () => `/v2/computers/${encodeURIComponent(runnerId)}/logins`;
     const name = (RUNTIME_NAMES[runtime] || runtime) + (profile ? ` · ${profile}` : '');
     const kept = toSubscription ? ' The API key is still in use.' : switchAccount ? ' The account signed in before still works.' : '';
     const where = machine || 'the computer';
     const dialog = into || document.createElement('dialog');
     dialog.className = 'tmodal tmodal-shell model-login';
     dialog.setAttribute('aria-labelledby', 'model-login-title');
-    const title = toSubscription ? `Switch ${text(name)}${machine ? ` on ${text(machine)}` : ''} to a subscription`
+    const title = connect ? text(connect.title) : toSubscription ? `Switch ${text(name)}${machine ? ` on ${text(machine)}` : ''} to a subscription`
       : `${switchAccount ? 'Switch account for' : 'Sign in to'} ${text(name)}${machine ? ` on ${text(machine)}` : ''}`;
     dialog.innerHTML = `<header><h2 id="model-login-title">${title}</h2>
         <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
@@ -76,13 +80,13 @@
     const body = dialog.querySelector('[data-body]'), status = dialog.querySelector('[data-status]'),
           actions = dialog.querySelector('[data-actions]');
     // `note`: why a cancel did not go through, kept on screen while the sign-in it left running goes on.
-    let login = null, timer = null, closed = false, sending = false, note = '';
+    let login = null, timer = null, closed = false, sending = false, note = '', first = connect?.first || null;
 
     const stop = () => { closed = true; clearTimeout(timer); };
     const close = async () => {
       stop();
       if (login && active(login.state)) {
-        try { await post(`${base}/${encodeURIComponent(login.id)}/cancel`, {}); } catch { /* it expires on its own */ }
+        try { await post(`${base()}/${encodeURIComponent(login.id)}/cancel`, {}); } catch { /* it expires on its own */ }
       }
       if (dialog.open) dialog.close();
     };
@@ -98,12 +102,14 @@
       let head = '', label = '';
       if (state === 'requested' || state === 'starting') {
         label = seconds <= STALLED_S ? `Starting the sign-in on ${machine || 'the computer'}…`
-          : hosted() ? 'Still waiting for the computer to start the sign-in. Check that it shows as online in Settings > Computers.'
+          : hosted() || connect ? 'Still waiting for the computer to start the sign-in. Check that it shows as online in Settings > Computers.'
           : 'Still waiting for the computer to start the sign-in. It may need a newer Tico runner; you can also sign in from its terminal.';
       } else if (state === 'waiting') {
         label = 'Waiting for you to finish signing in…';
       } else if (state === 'finishing') {
         label = `Putting the new account in place on ${machine || 'the computer'}…`;
+      } else if (state === 'done') {
+        label = connect?.done || 'Done.';
       } else if (state === 'signed_in') {
         label = toSubscription ? `Switched. ${name} on ${where} now runs on the subscription; its bots keep it, and the API key is off.`
           : switchAccount ? `Switched. ${name} on ${where} now uses the new account; its bots keep it.`
@@ -117,8 +123,8 @@
       }
       if (state === 'waiting') {
         head = `<ol class="model-login-steps">
-          <li>${login.url ? `Open <a href="${text(login.url)}" target="_blank" rel="noopener noreferrer" data-link>${text(login.url.replace(/^https:\/\//, '').slice(0, 60))}</a> and sign in with the team's account.`
-                          : hosted() ? 'Waiting for the sign-in link from the computer…'
+          <li>${login.url ? `Open <a href="${text(login.url)}" target="_blank" rel="noopener noreferrer" data-link>${text(login.url.replace(/^https:\/\//, '').slice(0, 60))}</a> and sign in with ${connect ? 'the account that has the plan' : "the team's account"}.`
+                          : hosted() || connect ? 'Waiting for the sign-in link from the computer…'
                           : 'Open the sign-in page the computer printed (see below) and sign in with the team\'s account.'}</li>
           ${login.code ? `<li>Enter this one-time code:<div class="model-login-code"><code data-code>${text(login.code)}</code>
               <button class="ghost" type="button" data-copy>Copy</button></div></li>` : ''}
@@ -127,7 +133,7 @@
               <button class="primary" type="submit">Send code</button></form>`}</li>` : ''}
         </ol>`;
       }
-      const lines = (login.lines || []).length && !hosted() && (state === 'waiting' && !login.url && !login.code || state === 'failed')
+      const lines = (login.lines || []).length && !hosted() && !connect && (state === 'waiting' && !login.url && !login.code || state === 'failed')
         ? `<details open><summary>What the computer printed</summary><pre data-lines>${text(login.lines.join('\n'))}</pre></details>` : '';
       // Keep what the person is typing when a poll redraws around it.
       const typed = body.querySelector('[name=code]')?.value || '';
@@ -152,7 +158,7 @@
       if (sending || !field.value.trim()) return;
       sending = true;
       try {
-        login = await post(`${base}/${encodeURIComponent(login.id)}/code`, {code: field.value.trim()});
+        login = await post(`${base()}/${encodeURIComponent(login.id)}/code`, {code: field.value.trim()});
         field.value = '';
         draw();
       } catch (error) { status.textContent = error.message; }
@@ -163,7 +169,7 @@
         // On a hosted Tico the pane closes once the computer's sign-in is cancelled. A refused cancel (a switch
         // already putting the new account in place) or a failed one leaves it open, saying why and following it on.
         try {
-          login = await post(`${base}/${encodeURIComponent(login.id)}/cancel`, {});
+          login = await post(`${base()}/${encodeURIComponent(login.id)}/cancel`, {});
           note = '';
           draw();
           if (hosted() && login.state === 'cancelled') { toast(status.textContent); stop(); if (dialog.open) dialog.close(); }
@@ -176,10 +182,11 @@
     const tick = async () => {
       if (closed) return;
       try {
-        const next = await get(`${base}/${encodeURIComponent(login.id)}`);
+        const next = await get(`${base()}/${encodeURIComponent(login.id)}`);
         const changed = next.state !== login.state;
         login = next;
         if (!closed) draw();
+        if (changed && connect && next.state === 'done') { toast(connect.done); stop(); if (dialog.open) dialog.close(); }
         if (changed && next.state === 'signed_in') {
           refreshUntil(runnerId, runtime, profile, 'ready', next.updated);
           if (hosted()) { toast(status.textContent); stop(); if (dialog.open) dialog.close(); }
@@ -192,8 +199,14 @@
       closed = false;
       note = '';
       status.textContent = 'Starting…';
-      try { login = await post(base, {runtime, ...(profile ? {profile} : {}), ...(toSubscription ? {to: 'subscription'} : switchAccount ? {switch: true} : {})}); }
-      catch (error) { status.textContent = error.message; actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; return; }
+      try {
+        if (connect) {
+          // Try again may run on another computer: the server chooses.
+          login = first || await connect.start();
+          first = null;
+          runnerId = login.runner_id; machine = login.computer || machine;
+        } else login = await post(base(), {runtime, ...(profile ? {profile} : {}), ...(toSubscription ? {to: 'subscription'} : switchAccount ? {switch: true} : {})});
+      } catch (error) { status.textContent = error.message; actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; return; }
       draw();
       if (active(login.state)) timer = setTimeout(tick, POLL_MS);
     };

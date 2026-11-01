@@ -19,7 +19,7 @@ function subsSettle(form) {
 // ---- what the server holds
 // `listed`: the server has the routes (an older one answers neither). `capable`: the computers whose Tico can take a
 // subscription; null when the server does not say.
-const SUBS = {rows: [], kinds: [], assignments: [], capable: null, listed: false, error: '', loaded: false, pending: null};
+const SUBS = {rows: [], kinds: [], connect: null, assignments: [], capable: null, listed: false, error: '', loaded: false, pending: null};
 // The kinds, in the server's order, when it sends none.
 const SUBS_KINDS = [
   {kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Token from claude setup-token'},
@@ -56,6 +56,7 @@ async function subsLoad() {
     SUBS.error = list?.error instanceof Error ? list.error.message : '';
     SUBS.rows = SUBS.listed ? list.subscriptions : [];
     SUBS.kinds = Array.isArray(list?.kinds) && list.kinds.length ? list.kinds : SUBS_KINDS;
+    SUBS.connect = Array.isArray(list?.connect) ? list.connect : null;
     SUBS.assignments = Array.isArray(view?.assignments) ? view.assignments : [];
     SUBS.capable = Array.isArray(view?.capable) ? view.capable : null;
     SUBS.loaded = true;
@@ -154,6 +155,15 @@ function subsMenu(anchor, sub) {
   pop.querySelector('.tl-mi')?.focus();
 }
 // The secret field for a kind: Codex's auth.json is a few lines of JSON, everything else one token or key.
+// Connect: a computer runs the plan's sign-in and Tico saves the result, so there is nothing to paste
+// (backend/model_subscriptions.py `connect`). A plan whose sign-in has no computer to run on says so; a server that
+// does not say which can (`SUBS.connect`) has no such route, so no button.
+function subsConnectHTML(kind) {
+  if (!subsKind(kind).connect || !SUBS.connect) return '';
+  const ready = SUBS.connect.includes(kind);
+  return `<div class="subs-connect"><button class="primary" type="button" data-subs-connect${ready ? '' : ' disabled'}>Connect ${esc(subsKind(kind).label)}</button>
+    ${ready ? '<span class="subs-connect-or">or paste</span>' : '<span class="subs-connect-or">Needs a computer online. Or paste:</span>'}</div>`;
+}
 function subsSecretHTML(kind) {
   const row = subsKind(kind), example = SUBS_EXAMPLE[kind] || {};
   const label = row.secret_label || SUBS_KINDS.find(k => k.kind === kind)?.secret_label || 'Token or key';
@@ -161,7 +171,7 @@ function subsSecretHTML(kind) {
   const field = kind === 'codex_login'
     ? `<textarea name="secret" rows="4" spellcheck="false" autocomplete="off" required placeholder="${esc(example.secret || '')}"></textarea>`
     : `<input name="secret" type="password" spellcheck="false" autocomplete="off" required placeholder="${esc(example.secret || '')}">`;
-  return `<div class="subs-field" data-subs-secret><span class="k"><label for="subs-secret">${esc(label)}</label>${help ? ` ${helpBubble(help)}` : ''}</span>${field.replace('name="secret"', 'name="secret" id="subs-secret"')}</div>`;
+  return `${subsConnectHTML(kind)}<div class="subs-field" data-subs-secret><span class="k"><label for="subs-secret">${esc(label)}</label>${help ? ` ${helpBubble(help)}` : ''}</span>${field.replace('name="secret"', 'name="secret" id="subs-secret"')}</div>`;
 }
 // The kind: a search box over the kinds, Claude plan first. Typing filters; arrows move; Enter or a click picks.
 function subsKindComboHTML(kind) {
@@ -237,12 +247,40 @@ function subsDialog(mode, sub = null) {
     <div class="tmodal-foot onb-actions"><button class="ghost" type="button" data-close>Cancel</button><span class="spacer"></span><button class="primary" type="submit">Save</button></div></form>`;
   const form = dialog.querySelector('form');
   dialog.querySelectorAll('[data-close]').forEach(button => { button.onclick = () => dialog.close(); });
+  // One primary button: Connect, until there is a value to Save.
+  const saveLook = () => {
+    const paste = !form.querySelector('[data-subs-connect]:not([disabled])') || !!form.elements.secret?.value.trim();
+    form.querySelector('button[type=submit]').className = paste ? 'primary' : 'ghost';
+  };
   if (mode === 'add') subsKindComboWire(form, next => {
     form.querySelector('[data-subs-secret-slot]').innerHTML = subsSecretHTML(next);
     form.elements.name.placeholder = SUBS_EXAMPLE[next]?.name || '';
+    saveLook();
   });
   // A red line goes once the person types in that field again.
-  form.oninput = event => { if (event.target.name) settingsFieldClear(event.target); };
+  form.oninput = event => { if (event.target.name) settingsFieldClear(event.target); saveLook(); };
+  saveLook();
+  form.onclick = async event => {
+    const button = event.target.closest('[data-subs-connect]');
+    if (!button || button.disabled) return;
+    form.querySelectorAll('[data-field-err]').forEach(line => line.remove());
+    const name = form.elements.name?.value.trim();
+    if (form.elements.name && !name) { settingsFieldError(form.elements.name, 'Enter a name'); form.elements.name.focus(); return; }
+    const chosen = mode === 'add' ? form.querySelector('#subs-kind').dataset.kind : sub.kind;
+    const start = confirm => post('/v2/model-subscriptions/connect', mode === 'add' ? {kind: chosen, name} : confirm ? {subscription: sub.id, confirm} : {subscription: sub.id});
+    button.disabled = true;
+    try {
+      // A new value restarts the runs on each computer given it: with runs going, the page asks before the sign-in.
+      const first = await subsConfirmed(start, running => ({title: `Reconnect ${sub?.name}?`, text: `${subsStopWords(running)}, and their sessions start fresh.`, ok: 'Reconnect', danger: false}));
+      if (!first) { button.disabled = false; return; }
+      TicoModelLogin.open({into: dialog, runnerId: first.runner_id, runtime: first.runtime, machine: first.computer || '', connect: {
+        title: mode === 'add' ? `Connect ${name}` : `Reconnect ${sub.name}`, first, start: () => start(true),
+        done: mode === 'add' ? `${name} added` : `${sub.name} reconnected`}});
+    } catch (error) {
+      button.disabled = false;
+      if (subsProblem(error).code === 'name') { settingsFieldError(form.elements.name, error.message); form.elements.name.focus(); } else toast(error.message, true);
+    }
+  };
   form.onsubmit = async event => {
     event.preventDefault();
     form.querySelectorAll('[data-field-err]').forEach(line => line.remove());
