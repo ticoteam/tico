@@ -50,6 +50,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                     "harness": resolve_harness(declared, bot.get("runtime")),
                     "reports_to": config["reports_to"], "repo": repo,
                     "repo_url": repo_url(repo, settings.github_owner),
+                    "folder": H.bot_folder(bot["slug"], declared),
                     "bot_contact": declared.get("bot_contact") or "open",
                     "private_tasks_default": H.private_tasks_default(c, "bot:" + bot["slug"]),
                     "template": declared.get("template") or "",

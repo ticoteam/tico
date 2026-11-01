@@ -2378,6 +2378,8 @@ def create_app(settings=None):
                         "harness": resolve_harness(declared, bot.get("runtime")),
                         "reports_to": config["reports_to"], "repo": repo,
                         "repo_url": repo_url(repo, settings.github_owner),
+                        # Its checkout's folder on a computer: clients find its files by this, never by its slug.
+                        "folder": H.bot_folder(bot["id"], declared),
                         "bot_contact": declared.get("bot_contact") or "open",
                         "private_tasks_default": H.private_tasks_default(c, "bot:" + bot["id"], rows.declared),
                         "template": declared.get("template") or "",
@@ -5251,6 +5253,11 @@ def create_app(settings=None):
             report = restore_tasks(c, [row["task_id"]], actor=who.actor)
             if report.get("conflict"):
                 raise Problem("conflict", "This task cannot go back: something newer has taken its place", 409)
+            if report.get("unplaced"):
+                fields = ", ".join(f"{table}.{key}" for table, keys in report["unplaced"][row["task_id"]].items()
+                                   for key in keys)
+                raise Problem("unplaced", "This task was deleted before an upgrade and holds data this version has no "
+                              f"place for ({fields}). It stays in Deleted tasks", 409)
             return {"restored": row["task_id"], "unlinked": report["unlinked"].get(row["task_id"], []),
                     "skipped": report["skipped"]}
         return mutate(request, body, work)

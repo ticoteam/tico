@@ -554,7 +554,7 @@ pub async fn preflight(config: &Config, sign: &SignIn, assignments: &[Value], ru
                     // A bot made after bots got stable ids keeps its slug in bot.yaml (its id is a UUID): the slug it
                     // has now, or the one its folder was named from before a rename.
                     let slug = text_of(&expected["name"]);
-                    let named = crate::sessions::named_folder(expected).is_some_and(|f| f == format!("bot-{name}"));
+                    let named = crate::sessions::named_folder(expected).is_some_and(|f| crate::sessions::folder_named_from(&f, &name));
                     let known_name = name == bot || (!slug.is_empty() && name == slug) || named;
                     (known_name || (!shared.is_empty() && name == shared)) && same("runtime") && same("model")
                 }

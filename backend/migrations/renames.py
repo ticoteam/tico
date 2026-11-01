@@ -80,3 +80,48 @@ def apply_now(conn, waves=None):
         conn.execute("ROLLBACK")
         raise
     return done
+
+
+def _wave_order(wave):
+    return (0, int(wave), "") if str(wave).isdigit() else (1, 0, str(wave))
+
+
+def _column_renames():
+    """{table: [(old, new)]} in wave order, so a chain across waves (a -> b in one, b -> c in a later one) is followed."""
+    out = {}
+    for table, old, new, _wave in sorted(COLUMNS, key=lambda entry: _wave_order(entry[3])):
+        out.setdefault(table, []).append((old, new))
+    return out
+
+
+def current_table(table):
+    """A table's name in this code, for a name a stored row was saved under before a rename."""
+    for old, new in TABLES:
+        if table == old:
+            table = new
+    return table
+
+
+def current_row(table, row):
+    """A copy of a stored row (a dict keyed by column names, saved before one or more renames) keyed by this code's
+    column names: every rename of its table, all waves, in wave order. A key whose new name the row also has is left
+    as it is, for the caller to refuse rather than guess which holds the data. The table is this code's name."""
+    out = dict(row)
+    for old, new in _column_renames().get(table, ()):
+        if old in out and new not in out:
+            out[new] = out.pop(old)
+    return out
+
+
+def current_rows(rows):
+    """{table: [row]} as stored (a snapshot keyed by table, then column) under this code's table and column names."""
+    out = {}
+    for table, found in rows.items():
+        name = current_table(table)
+        out.setdefault(name, []).extend(current_row(name, row) if isinstance(row, dict) else row for row in found)
+    return out
+
+
+def current_column(table, column):
+    """One column's name in this code, for a table (this code's name) and a column name saved before a rename."""
+    return current_row(table, {column: None}).popitem()[0]

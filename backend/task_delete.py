@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 from .store import H
 from . import task_relations as TR
+from .migrations import renames
 
 
 TRASH = """CREATE TABLE IF NOT EXISTS task_trash(
@@ -66,6 +67,10 @@ LINKS = ("conversation_id",)
 # Trash rows written before task_relations kept a task's parent and blocker on the task row itself.
 LEGACY_LINKS = {"parent_id": ("parent", False), "blocked_by": ("blocks", True)}
 CORE = ("tasks", "conversations", "messages")
+# Keys a trashed row holds that are not columns: the rowid the snapshot read it with, and the task links kept on the
+# task row before task_relations (LEGACY_LINKS, restored as relations).
+NOT_COLUMNS = {"_rowid"}
+HANDLED = {"tasks": set(LEGACY_LINKS)}
 
 
 def ensure(c):
@@ -350,10 +355,38 @@ def _try_insert(c, table, row, skipped):
         skipped[table] = skipped.get(table, 0) + 1
 
 
+def _current(snap):
+    """A trash row's snapshot under this code's table and column names. It was saved with the names its rows had when
+    the task was deleted, and a release since may have renamed them (backend/migrations/renames_data.py, every wave)."""
+    pointers = {}
+    for spec, keys in (snap.get("pointers") or {}).items():
+        table, key, column = spec.split(".")
+        table = renames.current_table(table)
+        pointers[f"{table}.{renames.current_column(table, key)}.{renames.current_column(table, column)}"] = keys
+    return {**snap, "rows": renames.current_rows(snap.get("rows") or {}), "pointers": pointers}
+
+
+def _unplaced(c, snap):
+    """{table: [keys]} a snapshot holds, after the renames, that this database has no column for. Restoring it would
+    drop them, and the snapshot goes once the task is back, so a restore with any is refused and the trash row kept.
+    The relations are left out: they go back through task_relations.restore_row, which reads each by name."""
+    out = {}
+    for table, found in snap["rows"].items():
+        if table == "task_relations" or not found:
+            continue
+        present = set(_columns(c, table))
+        keys = {k for row in found for k in row} - present - NOT_COLUMNS - HANDLED.get(table, set())
+        if keys:
+            out[table] = sorted(keys)
+    return out
+
+
 def restore_tasks(c, ids, actor=None):
     """Put trashed tasks back with every row they took. A task, conversation or message that cannot go
     back (its id in use again) refuses the whole restore with `conflict`; links to a task or room that
-    is gone come back unset, and the report says which."""
+    is gone come back unset, and the report says which. A snapshot saved before a column was renamed is read under
+    the new names; one holding a value this database has no column for refuses the whole restore with `unplaced`
+    and stays in the trash, since restoring would lose that value for good."""
     ensure(c)
     actor = actor or H.KEEPER
     entries = []
@@ -364,7 +397,10 @@ def restore_tasks(c, ids, actor=None):
         entries.append(dict(row))
     restoring = {e["task_id"] for e in entries}
     unlinked, skipped = {}, {}
-    snapshots = [(e, json.loads(e["rows"])) for e in entries]
+    snapshots = [(e, _current(json.loads(e["rows"]))) for e in entries]
+    unplaced = {e["task_id"]: found for e, snap in snapshots if (found := _unplaced(c, snap))}
+    if unplaced:
+        return {"restored": [], "unplaced": unplaced}
     c.execute("SAVEPOINT trash_restore")
     try:
         for e, snap in snapshots:

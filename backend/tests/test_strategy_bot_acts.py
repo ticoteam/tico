@@ -472,3 +472,26 @@ def test_a_bot_the_strategy_bot_cant_see_is_answered_as_a_bot_that_isnt_there(ap
     assert hidden_left == [(t.replace("nobody", "finance"), w.replace("nobody", "finance")) for t, w in missing_left]
     assert hidden_body == missing_body.replace("nobody", "finance"), (hidden_body, missing_body)
     assert task(api, work)["owner"] == "bot:ops"
+
+
+def test_undo_puts_back_a_decision_logged_before_a_tasks_column_was_renamed(api, monkeypatch):
+    # A decision keeps each task's fields before and after, keyed by the tasks columns of the release that made it.
+    # After a column rename (a later wave of backend/migrations/renames_data.py), Undo reads them under the new name;
+    # under the old one it could not find what to put back.
+    import json
+    from backend.migrations import renames
+    strategy_token = with_strategy_bot(api)
+    bot(api, "ops")
+    bot(api, "finance")
+    first = bot_task(api, "ops", "Write the onboarding email")
+    level(api, 3)
+    made = decide(api, strategy_token, [{"do": "reassign", "task_id": first, "owner": "finance"}])
+    assert task(api, first)["owner"] == "bot:finance"
+    monkeypatch.setattr(renames, "COLUMNS", (*renames.COLUMNS, ("tasks", "owner_before_rename", "owner", "9")))
+    with api.app.state.store.transaction() as c:
+        changes = json.loads(c.execute("SELECT changes FROM strategy_actions WHERE id=?", (made["id"],)).fetchone()[0])
+        for side in ("before", "after"):
+            changes["done"][0][side]["owner_before_rename"] = changes["done"][0][side].pop("owner")
+        c.execute("UPDATE strategy_actions SET changes=? WHERE id=?", (json.dumps(changes), made["id"]))
+    assert post(api, f"strategy-bot/log/{made['id']}/undo", {})["state"] == "undone"
+    assert task(api, first)["owner"] == "bot:ops"

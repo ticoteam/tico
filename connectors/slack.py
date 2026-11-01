@@ -424,9 +424,14 @@ SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 
 def bot_folder(slug):
-    """The bot's folder: bot-<slug> if it exists, else emp-<slug> if that does, else bot-<slug> (this repeats clients/manifest.py)."""
+    """The bot's folder: for this run's own bot the folder the runner names (HUB_BOT_FOLDER: a bot made with a UUID id
+    is not in bot-<id>, and a rename keeps its folder), else bot-<slug> if it exists, else emp-<slug> if that does,
+    else bot-<slug> (this repeats clients/manifest.py)."""
     if not SLUG.fullmatch(slug or ""):                  # a slug is one folder name: never a path out of PROJECTS
         raise Refused(f"{slug!r} is not a bot slug")
+    own = os.environ.get("HUB_BOT_FOLDER") or ""
+    if own and SLUG.fullmatch(own) and slug.lower() == bot_from_env().lower():
+        return PROJECTS / own
     for prefix in ("bot-", "emp-"):
         if (PROJECTS / (prefix + slug)).exists():
             return PROJECTS / (prefix + slug)
