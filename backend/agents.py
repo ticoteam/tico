@@ -132,8 +132,10 @@ def heartbeat(c, who, body):
         bot_tools.agent_report(c, bot, body.tools)
     c.execute("UPDATE agent_pairings SET state='claimed',token=NULL WHERE bot=? AND state='approved'", (bot,))
     inbox = H.inbox(c, who.actor, at=now)
-    from . import task_privacy as privacy
-    inbox["messages"] = [m for m in inbox["messages"] if privacy.message_readable(c, privacy.actor(who), m)]
+    from . import task_privacy as privacy, threads
+    reader = threads.Viewer(None, who)
+    inbox["messages"] = [m for m in inbox["messages"] if threads.message_readable(c, reader, m)
+                         and privacy.message_readable(c, privacy.actor(who), m)]
     inbox["tasks"] = [t for t in inbox["tasks"] if privacy.task_readable(c, who, t)]
     return {"server_time": now, "bot": bot, "presence_gap_s": PRESENCE_GAP,
             "waiting": {"messages": len(inbox["messages"]), "tasks": len(inbox["tasks"])}}

@@ -6369,10 +6369,9 @@ def create_app(settings=None):
             rooms = {}
 
             def room_open(message):
-                """A bot reads a message only in a conversation it may read: checked once per room, before the message's
-                own privacy, so a backlog in rooms this turn was never handed costs a lookup each, not a provenance walk."""
-                if who.role != "bot":
-                    return True
+                """Anyone reads a message only in a thread they may read now (C1, the same check for people and bots):
+                checked once per thread, before the message's own privacy, so a backlog in threads this reader was
+                never given costs a lookup each, not a provenance walk."""
                 if message["conversation_id"] not in rooms:
                     try:
                         auth.conversation(c, who, message["conversation_id"])
@@ -6385,8 +6384,7 @@ def create_app(settings=None):
                 """The unread backlog newest first, a page at a time: each page's rooms read together, then its messages
                 in open rooms read together INBOX_LIMIT at a time, only as far as they are checked one by one."""
                 for page in H.inbox_pages(c, who.actor, size=INBOX_PAGE):
-                    if who.role == "bot":
-                        H.prime_conversations(c, {m["conversation_id"] for m in page} - set(rooms))
+                    H.prime_conversations(c, {m["conversation_id"] for m in page} - set(rooms))
                     candidates = [m for m in page if room_open(m)]
                     for at in range(0, len(candidates), INBOX_LIMIT):
                         part = candidates[at:at + INBOX_LIMIT]
