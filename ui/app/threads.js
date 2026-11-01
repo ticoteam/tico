@@ -64,7 +64,9 @@ async function threadsLoad() {
   THREADS.loading = (async () => {
     try {
       const r = await get('/v2/threads?limit=50', {fresh: true});
-      Object.assign(THREADS, {on: true, attention: r.attention || [], threads: r.threads || [], dms: r.dms || []});
+      // Only a real list turns Threads on; any other answer is a server without them.
+      if (!Array.isArray(r?.threads)) { if (THREADS.on !== true) THREADS.on = false; return; }
+      Object.assign(THREADS, {on: true, attention: r.attention || [], threads: r.threads, dms: r.dms || []});
       liveTopicAdd('threads');
     } catch (e) {
       // 404: a server without threads. Anything else keeps what was drawn and tries again on the next change.
