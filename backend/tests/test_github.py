@@ -196,7 +196,8 @@ def test_task_link_upgrade_preserves_legacy_pr_rows(api):
         c.execute('ALTER TABLE legacy_task_links RENAME TO task_links')
         c.execute('PRAGMA user_version=17')
         c.execute('DELETE FROM cloud_migrations WHERE version=51')
-    Store(store.settings).initialize(seed_market=False)
+    # Version 17 is below the bridge, so this boot is the legacy import path (adopt_legacy), as test_upgrade does.
+    Store(store.settings).initialize(seed_market=False, adopt_legacy=True)
     with store.read() as c:
         link = H.task_links(c, task['id'])[0]
         assert link['url'] == PR and link['state'] == 'open' and link['title'] == 'tico#412'
