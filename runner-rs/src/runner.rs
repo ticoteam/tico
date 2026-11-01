@@ -382,7 +382,7 @@ impl Runner {
             && candidates.iter().all(|entry| entry["computer_logins_v1"] == true);
         let runtimes = readiness::runtime_report(&config, &self.sign_in, &self.client, &candidates, computer_logins).await;
         *self.runtime_rows.lock().unwrap() = runtimes.clone();
-        let mut checks = readiness::preflight(&config, &candidates, &runtimes, computer_logins).await;
+        let mut checks = readiness::preflight(&config, &self.sign_in, &candidates, &runtimes, computer_logins).await;
         self.perbot.decorate(&self.config, &mut checks, &candidates);
         self.publish_unpublished(&candidates, &mut checks).await;
         let notes = self.publish_notes.lock().unwrap().clone();
@@ -429,9 +429,10 @@ impl Runner {
             }
         }
         if !crate::lanes::held_back("profiles") {
+            // Profiles only: a subscription login is shared by its bots, so no bot is asked for (signin.refusal_key).
             let rejected = |runtime: &str, name: &str| {
                 let profile = crate::profiles::select(&config.data, Some(name));
-                profile.is_some_and(|p| self.sign_in.rejection(runtime, Some(&p)).is_some())
+                profile.is_some_and(|p| self.sign_in.rejection(runtime, Some(&p), "").is_some())
             };
             body["profiles"] = json!(crate::profiles::report(&config.data, &rejected).await);
         }

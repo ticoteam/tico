@@ -42,6 +42,12 @@ pub fn held(bot: &str) -> Vec<String> {
     grants().lock().unwrap().get(bot).cloned().unwrap_or_default()
 }
 
+/// Give `bot` these granted names, as a full pass would (tests only).
+#[cfg(test)]
+pub fn set_held(bot: &str, names: Vec<String>) {
+    grants().lock().unwrap().insert(bot.to_string(), names);
+}
+
 pub fn credential_warnings(bot: &str) -> Vec<String> {
     held(bot)
         .into_iter()

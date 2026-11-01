@@ -370,8 +370,9 @@ impl Runner {
     /// when the turn runs on one), not refused, not out of quota on that login (`out_of_quota`), and not turned off
     /// here by the owner. Read from the last readiness
     /// report, never probed mid-turn. A runtime signed in only by a key in the environment is left out: a turn's
-    /// environment carries only its own runtime's keys. A runtime that turns a key into a login needs none.
-    pub fn fallback_ready(&self, runtime: &str, profile: Option<&crate::profiles::Profile>) -> bool {
+    /// environment carries only its own runtime's keys. A runtime that turns a key into a login needs none. `bot` is
+    /// the bot asking: on a bot-keyed runtime only its own refused key makes the runtime not ready for it.
+    pub fn fallback_ready(&self, runtime: &str, profile: Option<&crate::profiles::Profile>, bot: &str) -> bool {
         if crate::harness_tools::shared().is_some_and(|t| t.lock().unwrap().chosen_off(runtime)) {
             return false; // the owner's "off" here holds even while a copy on PATH still answers
         }
@@ -384,7 +385,7 @@ impl Runner {
         }
         crate::util::truthy(row.get("installed"))
             && row["authenticated"] == "ready"
-            && self.sign_in.rejection(runtime, profile).is_none()
+            && self.sign_in.rejection(runtime, profile, bot).is_none()
             && login(runtime, "", profile).is_none_or(|l| !out_of_quota(&l, runtime, crate::util::epoch_s()))
             && (!crate::harness_tools::caps(runtime, "").api_key_login.is_empty() || self.sign_in.headless_secret(runtime).is_none())
     }

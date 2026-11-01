@@ -309,7 +309,9 @@ pub async fn runtime_report(config: &Config, sign: &SignIn, client: &Client, ass
             if status["installed"] != true {
                 continue;
             }
-            if let Some(r) = sign.rejection(runtime, profile.as_ref()) {
+            // No bot in hand on the runtime's row. A bot-keyed runtime's own key is refused for one bot, so this row
+            // shows no refusal for it: each refused bot's own row (preflight) says so, and the others stay ready.
+            if let Some(r) = sign.rejection(runtime, profile.as_ref(), "") {
                 let source = if name.is_empty() && sign.team_key_only(runtime) { "credentials" } else { "computer" };
                 let detail: String = format!("Sign-in rejected: {}", r.reason).chars().take(500).collect();
                 let s = status.as_object_mut().unwrap();
@@ -427,7 +429,7 @@ fn subscribed(entry: &Value, runtime: &str) -> bool {
 }
 
 /// Each assigned bot's row: what blocks its turns here (`problems`) and what only warns.
-pub async fn preflight(config: &Config, assignments: &[Value], runtimes: &Map<String, Value>, computer_logins: bool) -> Vec<Map<String, Value>> {
+pub async fn preflight(config: &Config, sign: &SignIn, assignments: &[Value], runtimes: &Map<String, Value>, computer_logins: bool) -> Vec<Map<String, Value>> {
     let mut rows = vec![];
     for entry in assignments {
         let bot = text_of(&entry["bot"]);
@@ -459,6 +461,8 @@ pub async fn preflight(config: &Config, assignments: &[Value], runtimes: &Map<St
             })
             .filter(|_| requested.is_empty() || profile.is_some())
             .and_then(|r| r["data_problem"].as_str().map(String::from));
+        // A bot-keyed runtime's key refused for this bot (signin.rs refusal_key); the runtime row never carries it.
+        let refused = if signin::bot_keyed(&runtime) { sign.rejection(&runtime, profile.as_ref(), &bot) } else { None };
         let mut problems: Vec<String> = vec![];
         let mut warnings: Vec<String> = crate::readiness_extra::credential_warnings(&bot);
         if !requested.is_empty() && !profiles::covers(expected) {
@@ -511,6 +515,8 @@ pub async fn preflight(config: &Config, assignments: &[Value], runtimes: &Map<St
         } else if let Some(problem) = &data_problem {
             // Signed in, but its turns can't save a session: the folder is the problem, not the sign-in.
             problems.push(problem.clone());
+        } else if let Some(r) = refused {
+            problems.push(signed_out(format!("Sign-in rejected: {}", r.reason).chars().take(500).collect()));
         } else if status["authenticated"] == "rejected" {
             problems.push(signed_out(text_of(&status["detail"])));
         } else if (status["authenticated"] == "missing" || status["authenticated"] == "failed")
@@ -805,5 +811,23 @@ mod tests {
         assert_eq!((row["authenticated"].clone(), row["key"].clone()), (json!("missing"), key.clone()));
         let alone = combined(map(json!({"": {"installed": true, "authenticated": "ready", "key": key}})), Map::new());
         assert_eq!(alone["key"], key);
+    }
+
+    #[tokio::test]
+    async fn a_refused_bot_key_is_a_problem_for_that_bot_and_not_for_the_others_on_its_runtime() {
+        let dir = std::env::temp_dir().join(format!("tico-refused-bot-key-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = Config { path: dir.join("runner.json"), data: map(json!({"projects_dir": dir.join("projects").display().to_string()})) };
+        let sign = SignIn::new(&dir);
+        sign.reject("pi", "401 invalid OPENROUTER_API_KEY", None, "readiness-alpha");
+        let assignment = |bot: &str| json!({"bot": bot, "config": {"runtime": "pi", "harness": "pi", "model": "openrouter/model"}});
+        let assignments = vec![assignment("readiness-alpha"), assignment("readiness-beta")];
+        // The runtime row is signed in (its grants are); the refusal is the refused bot's own.
+        let runtimes = map(json!({"pi": {"installed": true, "authenticated": "ready"}}));
+        let rows = preflight(&config, &sign, &assignments, &runtimes, false).await;
+        let problems = |bot: &str| rows.iter().find(|r| r["bot"] == bot).map(|r| r["problems"].to_string()).unwrap_or_default();
+        assert!(problems("readiness-alpha").contains("Sign-in rejected"), "{}", problems("readiness-alpha"));
+        assert!(!problems("readiness-beta").contains("Sign-in rejected"), "{}", problems("readiness-beta"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
