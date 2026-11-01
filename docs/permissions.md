@@ -6,7 +6,7 @@ team, readable by one group and open to requests from everyone.
 | Permission | What it covers |
 | --- | --- |
 | **See** | The bot in the team chart and in every bot list: its name, role, who owns it and who it reports to. |
-| **Read** | Its activity: its tasks, updates, files, status and run log, routines, the shared rooms and chats it is in, and the activity sections of its page. |
+| **Read** | Its activity: its tasks, updates, files, status and run log, routines, the threads it is in, and the activity sections of its page. |
 | **Write** | Sending it messages, chatting with it, asking it; creating or reassigning tasks to it; leaving it notes; comments that wake it. Its approvals work as they always did. |
 
 Write access does not make a stopped bot run. Messages and comments to a paused or quarantined bot are kept until it
@@ -49,9 +49,9 @@ Whatever the audiences say, these callers can see, read and write to a bot:
   them change the bot's settings, so being able to edit who has access and having access always go together.
 
 A bot above another in the `reports_to` chain also reads that bot's runs (`hub_run_list`, with each run's tokens and
-estimated cost) and their steps: its task and routine runs, and the wake-ups the hub posts into its chat room. A run a
-human started by chatting with the bot stays with that chat, and private tasks stay with their parties. Peers and
-the bots below keep the usual conversation rule, so they never read a manager's chat-room runs.
+estimated cost) and their steps: its task and routine runs, and the wake-ups the hub posts into its Home thread. A run a
+human started by messaging the bot in a DM stays with that DM, and private tasks stay with their parties. Peers and
+the bots below keep the usual thread rule, so they never read a manager's Home runs.
 
 ## Roles, and what a member may do
 
@@ -93,6 +93,18 @@ are then not credential administrators. The owner may turn **Admins store creden
 never one, but stores a credential for a bot they own or manage (a chat card, or BotOps with `hub credential set --for-bot`), granted to
 that bot at once, unless the owner turns **Members store credentials for their bots** off. They replace only a credential they stored, never
 read its value, and share it with their other bots ([Bot owners](#bot-owners)).
+
+## Threads and their audiences
+
+Threads ([Threads](threads.md)) have their own audience, separate from a bot's three permissions:
+
+- **company**: every person on the team. **team**: the people in one group, and the company owner. **members**: the people,
+  bots and groups added to the thread. It is private by default.
+- **home**: a bot's or a person's Home, readable by its Read audience. **personal**: a DM, read by the people in it, with
+  no owner bypass. **task**: whoever may read the task. **meeting**: the people who may see the meeting.
+- The starter of a thread, or an admin, can make it public to a group or to the company. Adding a person, bot or group
+  needs **Write** on them. Removing someone needs the thread's owner or an admin.
+- Following a thread never gives access, and neither does a mention.
 
 ## Dashboard, team pages and pins
 
