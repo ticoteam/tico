@@ -1409,7 +1409,8 @@ def test_wages_paid_through_a_quickbooks_payroll_liability_hide_their_bank_row_f
         assert c.execute("SELECT status FROM fin_feed_txns").fetchone()[0] == "matched"
 
 
-def test_a_payroll_liability_balance_shows_on_the_sheet_but_its_entries_do_not_without_detail(books):
+def _pay_run(books: Any) -> str:
+    """Wages (6200) accrue to payroll clearing (2150) and clear to the bank (1000) through a QuickBooks import."""
     fake = FakeBooks()
     _chart(fake)
     base = {"SyncToken": "1", "Active": True}
@@ -1425,6 +1426,11 @@ def test_a_payroll_liability_balance_shows_on_the_sheet_but_its_entries_do_not_w
         _bank_on(c, "1000", -123456, "2026-10-12", "Gusto")
     _mirror(books, cid)
     assert _drain(books, fake, cid) == []
+    return cid
+
+
+def test_a_payroll_liability_balance_shows_on_the_sheet_but_its_entries_do_not_without_detail(books):
+    _pay_run(books)
     with books.transaction() as c:
         assert act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "balance_sheet"}).status == "committed"
     with books.read() as c:
@@ -1434,6 +1440,34 @@ def test_a_payroll_liability_balance_shows_on_the_sheet_but_its_entries_do_not_w
         owner, cara = line(OWNER), line("human:cara")
         assert owner["balance"] == cara["balance"] == 123456     # a balance sheet grant sees whole balances (§7.5)
         assert owner["entry_sources"] and cara["entry_sources"] == [] and cara["sources"] == []   # no line detail
+
+def test_an_accountant_granted_full_detail_on_wages_and_clearing_sees_the_clearing_entries(books):
+    _pay_run(books)
+    with books.transaction() as c:
+        assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "balance_sheet"}).status == "committed"
+        bank = act(c, OWNER, "private_lines_set", {"account_id": account(c, "1000"), "private": True})
+        assert (bank.status, bank.code) == ("failed", "invalid")       # bank accounts keep their fixed rules
+    with books.read() as c:
+        assert FR.line_detail(c, "human:dan", account(c, "2150"), "2026-10-01", "2026-10-31", at=AT)["entries"] == []
+    with books.transaction() as c:
+        for code in ("6200", "2150"):
+            granted = act(c, OWNER, "private_lines_set", {"account_id": account(c, code), "private": True,
+                                                           "others_see": "totals", "full_detail": ["human:dan"]})
+            assert granted.status == "committed", granted.reason
+    with books.read() as c:
+        entries = FR.line_detail(c, "human:dan", account(c, "2150"), "2026-10-01", "2026-10-31", at=AT)["entries"]
+        assert sorted(int(e["amount"]) for e in entries) == [-123456, 123456]
+
+
+def test_a_card_account_stays_refused_as_private_even_on_a_liability_line(books):
+    _pay_run(books)
+    with books.transaction() as c:
+        book_id = SL.book(c).id  # type: ignore[union-attr]
+        c.execute("INSERT INTO fin_money_accounts(id, book_id, kind, name, provider, account_id, created_at, "
+                  "created_by) VALUES(?,?,?,?,?,?,?,?)",
+                  (SL.new_id(), book_id, "card_program", "Card", "mercury", account(c, "2150"), AT, OWNER))
+        refused = act(c, OWNER, "private_lines_set", {"account_id": account(c, "2150"), "private": True})
+        assert (refused.status, refused.code) == ("failed", "invalid")   # a card's line follows its fixed rules
 
 
 _TEAM_RULE = {

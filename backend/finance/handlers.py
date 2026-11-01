@@ -1057,8 +1057,11 @@ def view_revoke(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 def private_lines_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("account_id", "private", "others_see", "full_detail"))
     account = _account(ctx, V.text(p, "account_id", 80))
-    if account.type != "expense":
-        raise invalid("private lines are expense lines (payroll by person)")
+    money = {str(m["account_id"] or "") for m in SK.money_accounts(ctx.c, ctx.book.id)}
+    # Payroll by person is private on expense and liability lines alike, payroll clearing included (spec §4, §7.5);
+    # a bank or card account keeps its fixed rules.
+    if account.type not in ("expense", "liability") or account.id in money:
+        raise invalid("private lines are expense or liability lines (payroll by person), not bank or card accounts")
     private = V.flag(p, "private", True)
     others = V.choice(p, "others_see", VW.OTHERS_SEE, "totals")
     detail = V.texts(p, "full_detail") if p.get("full_detail") else []
