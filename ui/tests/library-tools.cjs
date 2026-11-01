@@ -4,7 +4,7 @@
 // Removed; search, who has access (a bot, a person, or a team with the teams under it) and Issues narrow the list and
 // ride in the address. A row opens the tool: its issues, who has it (each with what they may change there), its
 // credentials (set or not, when a bot last used it, Rotate / Access / Add), then the page, its queries and learnings.
-// A credential no tool names has its own page. The old addresses (#/library/connections, #/integrations, #/credentials)
+// A credential no tool names has its own page. The old addresses (#/library/connections/<tool>, #/integrations, #/credentials)
 // lead here. A member who cannot open the vault never reads it. No secret value is ever on the page.
 // Phone first (390×844), then a computer. TICO_UI_SHOTS=<dir> saves screenshots.
 const {chromium} = require('playwright');

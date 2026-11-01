@@ -4,7 +4,8 @@
 
 const API = '/api';
 const GH = 'https://github.com/ticoteam/tico';
-// The building is an optional view of the team; Updates remains the default route.
+// My dashboard (Overview › Mine) is where the app opens; Company is the company's Dashboard.
+const HOME = '#/home';
 const OVERVIEW = '#/overview';
 const WELCOME = '#/welcome';          // first run: names, the team, the bot templates, a computer
 const CHAT = '#/chat';                // retired with the Tico chat: old links land on Tasks

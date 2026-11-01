@@ -1,5 +1,6 @@
-/* ui/app/dashboard.js — Overview › Dashboard and team pages (#/team/<group>): a grid of pinned built-in cards and
-   pages (backend/cards.py). Each card shows its reader only what they may already see; a person who arranges the
+/* ui/app/dashboard.js — Overview › Mine (My dashboard, #/home, the landing page), Overview › Company (the Dashboard)
+   and team pages (#/team/<group>): a grid of pinned built-in cards and pages (backend/cards.py). My dashboard is the
+   place person:me, the reader's own. Each card shows its reader only what they may already see; a person who arranges the
    place drags, sizes, adds and removes pins. The bot sidebar draws its card and page widgets with the same pieces.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -12,7 +13,7 @@ let DASH = null;
 
 const dashApi = place => '/v2/places/' + encodeURIComponent(place);
 const dashTabsHTML = on => `<nav class="tabs slim strat-tabs dash-tabs" aria-label="Overview">${
-  [['dashboard', OVERVIEW, 'Dashboard'], ['campus', OVERVIEW_CAMPUS, 'Campus']].map(([id, href, label]) =>
+  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Company'], ['campus', OVERVIEW_CAMPUS, 'Campus']].map(([id, href, label]) =>
     `<a href="${href}"${on === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const dashNum = n => n == null ? '–' : Number(n).toLocaleString(undefined, {maximumFractionDigits: 2});
 const dashMoney = n => n == null ? '–' : '$' + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
@@ -39,6 +40,17 @@ function dashPageRow(p) {
   return `<li><a href="#/page/${encodeURIComponent(p.file_id)}">${esc(p.title || 'Untitled')}</a>
     <span class="muted">${esc(dashBot(p.bot))} · ${agoSpan(p.updated)}</span></li>`;
 }
+// A thread's address: the threads page's own when this build has it (ui/app/threads*.js).
+const dashThreadHref = id => typeof window.threadHref === 'function' ? window.threadHref(id) : '#/threads/' + encodeURIComponent(id);
+function dashNeeds(d) {
+  return `<a class="dash-big" href="${NEEDS_YOU}"><strong>${dashNum(d.count)}</strong><span class="muted">waiting on you</span></a>
+    ${d.items.length ? `<ul class="dash-list">${d.items.map(it => `<li>${it.task_id ? `<a href="#/task/${encodeURIComponent(it.task_id)}">${esc(it.title || 'Untitled')}</a>` : `<a href="${NEEDS_YOU}">${esc(it.title || 'Untitled')}</a>`}</li>`).join('')}</ul>` : ''}`;
+}
+const dashDue = due => {
+  if (!due) return '';
+  const day = String(due).slice(0, 10), today = new Date().toISOString().slice(0, 10);
+  return `<span class="${day < today ? 'dash-bad' : 'muted'}">${day < today ? 'Overdue' : 'Due'} ${esc(day.slice(5))}</span>`;
+};
 const DASH_BODY = {
   tasks_by_status: (d, card) => `<div class="dash-stats">${[['open', 'Open'], ['doing', 'Doing'], ['waiting', 'Waiting'], ['done', 'Done this week']]
     .map(([k, label]) => `<a class="dash-stat" href="${dashTasksHref(card)}"><strong>${dashNum(d.counts[k])}</strong><span>${label}</span></a>`).join('')}</div>`,
@@ -46,8 +58,16 @@ const DASH_BODY = {
     const weeks = d.weeks || [], last = weeks[weeks.length - 1]?.done ?? 0, total = weeks.reduce((s, w) => s + w.done, 0);
     return `<div class="dash-big"><strong>${dashNum(last)}</strong><span class="muted">this week · ${dashNum(total)} in ${weeks.length} weeks</span></div>${dashBars(weeks)}`;
   },
-  needs_you: d => `<a class="dash-big" href="${NEEDS_YOU}"><strong>${dashNum(d.count)}</strong><span class="muted">waiting on you</span></a>
-    ${d.items.length ? `<ul class="dash-list">${d.items.map(it => `<li>${it.task_id ? `<a href="#/task/${encodeURIComponent(it.task_id)}">${esc(it.title || 'Untitled')}</a>` : `<a href="${NEEDS_YOU}">${esc(it.title || 'Untitled')}</a>`}</li>`).join('')}</ul>` : ''}`,
+  needs_you: dashNeeds,
+  needs_attention: dashNeeds,
+  unread_threads: d => d.threads.length ? `<ul class="dash-list">${d.threads.map(t => `<li><a href="${dashThreadHref(t.id)}">${esc(t.title || 'Untitled')}</a>
+      <span class="muted">${t.unread ? dashNum(t.unread) + ' new · ' : ''}${agoSpan(t.updated)}</span></li>`).join('')}</ul>` : '<p class="muted dash-none">Nothing unread</p>',
+  my_tasks: d => d.tasks.length ? `<a class="dash-big" href="${TASKS}?view=list"><strong>${dashNum(d.count)}</strong><span class="muted">open</span></a>
+    <ul class="dash-list">${d.tasks.map(t => `<li><a href="#/task/${encodeURIComponent(t.id)}">${esc(t.title || 'Untitled')}</a> ${dashDue(t.due)}</li>`).join('')}</ul>`
+    : '<p class="muted dash-none">No open tasks</p>',
+  updates: d => `<a class="dash-big" href="${UPDATES}"><strong>${dashNum(d.unread)}</strong><span class="muted">unread</span></a>
+    ${d.updates.length ? `<ul class="dash-list">${d.updates.map(u => `<li><a href="${UPDATES}"${u.read ? '' : ' class="dash-unread"'}>${esc(u.headline || 'Update')}</a>
+      <span class="muted">${esc(String(u.author || '').startsWith('human:') ? (S.people || []).find(p => 'human:' + p.id === u.author)?.name || '' : dashBot(u.author))} · ${agoSpan(u.created)}</span></li>`).join('')}</ul>` : ''}`,
   spend: d => {
     const pct = d.budget ? Math.min(100, d.spent / d.budget * 100) : 0;
     return `<div class="dash-big"><strong>${dashMoney(d.spent)}</strong><span class="muted">${d.budget ? 'of ' + dashMoney(d.budget) : 'no budget'} · ${esc(d.month)}</span></div>
@@ -97,7 +117,7 @@ async function pageDashboard(place) {
   const team = place.startsWith('team:'), kept = (S.lastRead.places ||= {})[place];
   const main = $('#main'); main.classList.add('dash-layout');
   main.innerHTML = `<div class="dash" id="dash-root"><header class="dash-head">
-      <h1>${team ? '' : 'Overview'}</h1>${team ? '' : dashTabsHTML('dashboard')}<span class="spacer"></span>
+      <h1>${team ? '' : 'Overview'}</h1>${team ? '' : dashTabsHTML(place === 'person:me' ? 'mine' : 'dashboard')}<span class="spacer"></span>
       <span class="dash-actions" hidden>${team ? '<button type="button" class="ghost dash-audience" data-dash-audience></button>' : ''}
         <button type="button" class="ghost" data-dash-add="card"><span class="dash-plus" aria-hidden="true">+</span>Card</button>
         <button type="button" class="ghost" data-dash-add="page"><span class="dash-plus" aria-hidden="true">+</span>Page</button></span></header>
@@ -111,7 +131,7 @@ async function pageDashboard(place) {
   catch (e) {
     if (DASH !== state) return;
     if (kept) delete S.lastRead.places[place];
-    $('#dash-grid').innerHTML = `<p class="empty">${esc(e.status === 404 ? 'No such team' : e.status === 403 ? 'This team page is not shared with you' : e.message)}</p>`;
+    $('#dash-grid').innerHTML = `<p class="empty">${esc(!team ? e.message : e.status === 404 ? 'No such team' : e.status === 403 ? 'This team page is not shared with you' : e.message)}</p>`;
     return;
   }
   if (!Array.isArray(view?.pins)) view = {kind: place.split(':')[0], pins: [], can_edit: false, saved: true};
@@ -274,7 +294,7 @@ function dashFieldsHTML(template, choices, settings) {
   const fields = choices.templates.find(t => t.id === template)?.fields || [];
   return fields.map(f => f === 'team' ? `<label>Team<select name="team">${dashTeamOptions(choices.teams, settings.team || '')}</select></label>`
     : f === 'weeks' ? `<label>Weeks<input type="number" name="weeks" min="4" max="26" value="${esc(settings.weeks ?? 8)}" required></label>`
-    : f === 'count' ? `<label>Pages<input type="number" name="count" min="1" max="10" value="${esc(settings.count ?? 5)}" required></label>`
+    : f === 'count' ? `<label>${{unread_threads: 'Threads', my_tasks: 'Tasks', updates: 'Updates'}[template] || 'Pages'}<input type="number" name="count" min="1" max="10" value="${esc(settings.count ?? 5)}" required></label>`
     : f === 'kpi' ? `<label>KPI<select name="kpi" required>${choices.kpis.length ? choices.kpis.map(k => `<option value="${esc(k.id)}"${k.id === settings.kpi ? ' selected' : ''}>${esc(k.name)}</option>`).join('') : '<option value="">No KPIs</option>'}</select></label>`
     : '').join('');
 }

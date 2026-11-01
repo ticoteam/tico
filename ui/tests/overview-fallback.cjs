@@ -39,7 +39,7 @@ const SCENE = `export function createBuilding() {
       return json(unrouted(p));
     });
     await page.goto('http://tico-ui.test/');
-    await page.waitForFunction(() => location.hash === '#/updates');
+    await page.waitForFunction(() => location.hash === '#/home');
     await page.evaluate(() => location.hash = '#/overview/campus');
     await page.frameLocator('#overview-frame').locator('body[data-scene-ready]').waitFor();
     await page.evaluate(() => hlRefresh());
