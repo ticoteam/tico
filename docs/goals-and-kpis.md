@@ -130,7 +130,8 @@ bet's wrong-if trips, puts one Decide card in front of them; the owner writes an
 On goals and KPIs it does five things:
 
 1. **Goals make sense.** It flags vague or duplicate goals and may suggest a measure once or clearer wording, as proposals on
-   the goal. At Passive it does this when you ask it. It prefers goals that serve a strategy bet and have a KPI, and
+   the goal. A goal can be saved without a measure. The Strategy Bot suggests a measure once; a suggestion you turn down
+   is kept on the goal. At Passive it does this when you ask it. It prefers goals that serve a strategy bet and have a KPI, and
    suggests one or two per active bet that no KPI-backed goal serves.
 2. **KPIs.** It is the steward of every KPI. Each has a folder in its repository, `kpis/<slug>/`, with `definition.md`,
    `sources.md`, the query or script (`hub sql`, PostHog or another API through a tool the team declared), a
