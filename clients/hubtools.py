@@ -6931,7 +6931,7 @@ CALL_TOOLS = ("hub_call_list", "hub_call_show", "hub_call_start", "hub_call_join
       "ended. `next_before` reads older ones.",
       {"thread_id": _s("The thread's id"),
        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
-       "before": _s("The `started_at` of the last call you read, from `next_before`")}, required=("thread_id",))
+       "before": _s("The `next_before` of the page you read, from that page's answer")}, required=("thread_id",))
 def call_list(api, args):
     query = {key: args[key] for key in ("limit", "before") if args.get(key) not in (None, "")}
     return _as_person(api).get(f"threads/{args['thread_id']}/calls", **query)
@@ -6947,10 +6947,14 @@ def call_show(api, args):
 @tool("hub_call_start", "Start a call in a thread you can write to. Its audio and screen share reach the people in the "
       "thread, and a live transcript is kept while it runs and posted to the thread when it ends. You are its connector. "
       "Refused while another call runs in the thread, and while Tico Meet is not set up on this server.",
-      {"thread_id": _s("The thread's id"), "title": _s("What the call is called, up to 200 characters")},
+      {"thread_id": _s("The thread's id"), "title": _s("What the call is called, up to 200 characters"),
+       "speak_replies": {"type": "boolean", "description": "Bots speak their replies on this call. Off unless asked; "
+                         "spoken replies are not sent yet, so bots reply in text either way"}},
       required=("thread_id",), writes=True)
 def call_start(api, args):
     body = {"title": str(args["title"])} if args.get("title") else {}
+    if args.get("speak_replies"):
+        body["speak_replies"] = True
     return _as_person(api).post(f"threads/{args['thread_id']}/calls", body, key=_key(args))
 
 

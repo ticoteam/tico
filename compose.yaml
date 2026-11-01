@@ -347,16 +347,17 @@ services:
     networks: [edge]
 
   # Tico Meet's media server (LiveKit, Apache-2.0), for audio and screen-share calls. Off unless COMPOSE_PROFILES
-  # includes meet; one per cell host. Only the server calls its API, at http://livekit:7880 on the compose network.
-  # People's browsers reach the signal port through a TLS front on the meet hostname (docs/meet.md); Caddy keeps
-  # 443. The media and TURN ports are published directly. The key and secret come from .env and go to this service
-  # and the server only. The image tag is not yet checked against the registry: pin a digest before enabling it.
+  # includes meet; one per cell host. The server calls its API at http://livekit:7880, and Caddy proxies browsers'
+  # signal connection from the app host's /rtc path to that same port (backend/caddy_assets.py), so only the media
+  # and TURN ports are published. The key and secret come from .env and go to this service and the server only. The
+  # image tag v1.8.4 is on Docker Hub; pin a digest before enabling it. This service joins edge so Caddy can reach it.
   livekit:
     <<: *hardening
     profiles: [meet]
     image: ${TICO_MEET_IMAGE:-livekit/livekit-server:v1.8.4}
     read_only: true
     tmpfs: [/tmp]
+    networks: [default, edge]
     environment:
       LIVEKIT_KEYS: "${TICO_MEET_API_KEY:-}: ${TICO_MEET_API_SECRET:-}"
       LIVEKIT_CONFIG: |
@@ -381,7 +382,6 @@ services:
     volumes:
       - ${TICO_MEET_CERT_DIR:-tico-meet-certs}:/certs:ro
     ports:
-      - "127.0.0.1:7880:7880"
       - "7881:7881"
       - "3478:3478/udp"
       - "5349:5349"

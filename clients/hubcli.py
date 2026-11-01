@@ -137,7 +137,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub meeting dismiss <id>               keep a meeting out of the queue
     hub meeting import <file> [--title T] [--date D] [--participant P ...]
     hub call list <thread> [--limit N] [--before T]  the calls in a thread, newest first
-    hub call start <thread> [--title T]    start a call there; you are its connector
+    hub call start <thread> [--title T] [--speak]  start a call there; you are its connector
     hub call show <call>                   a call: its state, people, bots, how it ended
     hub call join <call>                   join: the URL and a token good for 5 minutes
     hub call token <call>                  a fresh token while you are joined
@@ -2583,11 +2583,13 @@ def parser():
     s = call.add_parser("list", help="the calls in a thread, newest first")
     s.add_argument("thread_id")
     s.add_argument("--limit", type=int, default=25)
-    s.add_argument("--before", help="the started_at to read older calls from (next_before)")
+    s.add_argument("--before", help="the next_before of the page you read, to read the next page")
     s.set_defaults(fn="call list")
     s = call.add_parser("start", help="start a call in a thread you can write to; you become its connector")
     s.add_argument("thread_id")
     s.add_argument("--title", default="")
+    s.add_argument("--speak", dest="speak_replies", action="store_true",
+                   help="bots speak their replies on this call (off by default; spoken replies are not sent yet)")
     s.set_defaults(fn="call start")
     for action, help_text in (("show", "a call: its state, people, bots and how it ended"),
                               ("join", "join a call: the URL and a token good for 5 minutes"),

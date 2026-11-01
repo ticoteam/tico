@@ -1,29 +1,34 @@
 """The media side of Tico Meet calls (backend/calls.py): LiveKit join tokens, LiveKit's server API, the server's own audio
 participant, and the Gateway's speech-to-text relay.
 
-Tokens are HS256 JWTs signed with the install's LiveKit API secret. They are built here with the standard library, so
-the server gains no SDK. A person's token carries audio and screen-share sources only; camera is never granted, and
-neither is a data channel. The server's recorder participant is hidden and can subscribe, but cannot publish.
+Tokens are HS256 JWTs signed with the install's LiveKit API secret, built here with the standard library. A person's
+token carries audio and screen-share sources only; camera is never granted, and neither is a data channel. The server's
+recorder participant is hidden and can subscribe, but cannot publish.
 
 The server API is LiveKit's Twirp HTTP interface (`/twirp/livekit.RoomService/...`), called with a short admin token.
 Nothing here returns or logs a secret.
 
-Only the recorder participant needs the LiveKit real-time package (`livekit`, imported when a call starts). It is not
-in the server's requirements yet, so a call cannot start on an install without it: the call is refused with
-`meet_unavailable` rather than running without a transcript.
+The recorder is the one place that needs LiveKit's real-time package (`livekit`, pinned in backend/requirements.txt and
+imported only when a call starts). A server without it refuses calls with `meet_unavailable`, rather than running a
+call that nobody hears.
 """
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import io
 import json
+import logging
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
 import wave
 from dataclasses import dataclass
+
+log = logging.getLogger("tico.call_media")
 
 TOKEN_TTL_SECONDS = 300
 # Sources a person may publish. Camera is deliberately absent: Tico Meet has audio and screen share only.
@@ -32,6 +37,8 @@ SAMPLE_RATE = 16000
 TWIRP_TIMEOUT = 8
 TRANSCRIBE_TIMEOUT = 120
 TRANSCRIBE_MODEL = "elevenlabs/scribe-v2"     # the Recorder's default speech-to-text model (recorder/src/settings.rs)
+CONNECT_TIMEOUT = 15                          # the recorder's join, and its leave
+RECORDER_PREFIX = "tico-recorder-"            # the recorder's identity is this and the call id, never a person's
 
 
 class MediaUnavailable(Exception):
@@ -121,6 +128,80 @@ def _post_json(url, token, payload):
         raise MediaUnavailable("LiveKit did not answer") from exc
 
 
+def _sdk():
+    """LiveKit's real-time package, imported when a call starts: a server without it still runs, and refuses calls."""
+    try:
+        from livekit import rtc
+    except ImportError:
+        raise MediaUnavailable("The Tico Meet recorder needs the livekit package on this server") from None
+    return rtc
+
+
+def _ws_url(url):
+    """The SDK connects over a websocket; the server's own address (TICO_MEET_INTERNAL_URL) is http(s)."""
+    return url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
+
+
+class Recorder:
+    """The server's audio participant in one call's room. Its frames arrive on the media loop, so `on_audio` must not
+    block: backend/calls.py hands each clip to a worker."""
+
+    def __init__(self, sdk, loop, url, token, on_audio):
+        self.sdk, self.loop, self.url, self.token, self.on_audio = sdk, loop, url, token, on_audio
+        self.room = None
+        self.joined_at = None
+        self.lost = self.closed = False
+
+    def alive(self):
+        return not (self.lost or self.closed)
+
+    def connect(self):
+        asyncio.run_coroutine_threadsafe(self._connect(), self.loop).result(CONNECT_TIMEOUT)
+
+    async def _connect(self):
+        # The SDK binds its objects to the loop that is running when they are made, so they are made here.
+        self.room = self.sdk.Room()
+        self.room.on("track_subscribed", self._subscribed)
+        self.room.on("disconnected", self._disconnected)
+        await self.room.connect(self.url, self.token, options=self.sdk.RoomOptions(auto_subscribe=True))
+        self.joined_at = time.monotonic()
+        if self.closed:         # closed while joining: leave again, so no recorder stays in the room unseen
+            await self.room.disconnect()
+
+    def _subscribed(self, track, publication, participant):
+        speech = (self.sdk.TrackSource.SOURCE_MICROPHONE, self.sdk.TrackSource.SOURCE_SCREENSHARE_AUDIO)
+        if track.kind == self.sdk.TrackKind.KIND_AUDIO and publication.source in speech:
+            self.loop.create_task(self._listen(track, participant.identity))
+
+    async def _listen(self, track, identity):
+        stream = self.sdk.AudioStream(track, sample_rate=SAMPLE_RATE, num_channels=1)
+        heard, base = 0, None   # samples heard from this speaker, and where their first frame falls (ms since joining)
+        try:
+            async for event in stream:
+                if self.closed:
+                    break
+                if base is None:
+                    base = int((time.monotonic() - self.joined_at) * 1000)
+                self.on_audio(identity, bytes(event.frame.data), base + heard * 1000 // SAMPLE_RATE)
+                heard += event.frame.samples_per_channel
+        except Exception:
+            log.warning("The call recorder stopped hearing one speaker", exc_info=True)
+        finally:
+            await stream.aclose()
+
+    def _disconnected(self, *_reason):
+        self.lost = True        # LiveKit dropped the recorder: the sweep sees it is not running and joins again
+
+    def close(self):
+        self.closed = True
+        if self.room is None:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self.room.disconnect(), self.loop).result(CONNECT_TIMEOUT)
+        except Exception:
+            log.warning("The call recorder did not leave its room cleanly", exc_info=True)
+
+
 class LiveKitMedia:
     """The media port backend/calls.py uses, against a real LiveKit server.
 
@@ -129,13 +210,17 @@ class LiveKitMedia:
     def __init__(self, config):
         self.config = config
         self.recorders = {}
+        self.lock = threading.Lock()        # guards `recorders` and the media loop
+        self.starting = threading.Lock()    # one recorder joins at a time, so a call never has two
+        self.loop = None
 
     @property
     def url(self):
         return self.config.url
 
     def running(self, call_id):
-        return call_id in self.recorders
+        recorder = self.recorders.get(call_id)
+        return recorder is not None and recorder.alive()
 
     def _twirp(self, method, payload, room=""):
         return _post_json(f"{self.config.internal_url}/twirp/livekit.RoomService/{method}",
@@ -163,18 +248,37 @@ class LiveKitMedia:
         return person_token(self.config, room, identity, name)
 
     def start_recorder(self, call_id, room, on_audio):
-        """Join the room as the hidden recorder and hand each speaker's audio to `on_audio(identity, pcm, start_ms)`.
-        `pcm` is 16 kHz mono signed 16-bit little-endian. Needs the `livekit` real-time package."""
-        try:
-            import livekit.rtc as rtc  # noqa: F401
-        except ImportError:
-            raise MediaUnavailable("The Tico Meet recorder needs the livekit package on this server") from None
-        raise MediaUnavailable("The Tico Meet recorder is not wired on this server yet")
+        """Join the room as the hidden recorder and hand each speaker's audio to `on_audio(identity, pcm, start_ms)`:
+        `pcm` is 16 kHz mono signed 16-bit little-endian, and `start_ms` counts from when the recorder joined. Returns
+        once the recorder is in the room. Refuses with MediaUnavailable when it cannot join, or the package is
+        missing."""
+        sdk = _sdk()
+        with self.starting:
+            with self.lock:
+                current = self.recorders.get(call_id)
+                if current is not None and current.alive():
+                    return
+                if self.loop is None:
+                    self.loop = asyncio.new_event_loop()
+                    threading.Thread(target=self.loop.run_forever, name="tico-meet-media", daemon=True).start()
+                loop = self.loop
+            token = recorder_token(self.config, room, RECORDER_PREFIX + call_id)
+            recorder = Recorder(sdk, loop, _ws_url(self.config.internal_url), token, on_audio)
+            try:
+                recorder.connect()
+            except Exception as exc:
+                recorder.close()
+                raise MediaUnavailable("The Tico Meet recorder could not join the call") from exc
+            with self.lock:
+                stale, self.recorders[call_id] = self.recorders.get(call_id), recorder
+            if stale is not None:
+                stale.close()
 
     def stop_recorder(self, call_id):
-        handle = self.recorders.pop(call_id, None)
-        if handle:
-            handle.close()
+        with self.lock:
+            recorder = self.recorders.pop(call_id, None)
+        if recorder is not None:
+            recorder.close()
 
 
 def wav_bytes(pcm, rate=SAMPLE_RATE):

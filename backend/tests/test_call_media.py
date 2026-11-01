@@ -1,11 +1,16 @@
 """Tico Meet's media tokens never grant a camera, and the server's calls to LiveKit act only on the call's own room."""
+import asyncio
 import base64
 import hashlib
 import hmac
 import io
 import json
+import sys
+import time
+import types
 import urllib.error
 import wave
+from types import SimpleNamespace
 
 import pytest
 
@@ -159,3 +164,141 @@ def test_transcribing_returns_the_gateway_text_and_a_failed_gateway_is_unavailab
     monkeypatch.setattr(gateway, "relay", lambda *args, **kwargs: (503, b"{}"))
     with pytest.raises(media.MediaUnavailable):
         media.transcribe("https://gateway.acme.example/v1", "gw-key", b"RIFF")
+
+
+KIND_AUDIO, KIND_VIDEO = "audio", "video"
+SOURCE_MICROPHONE, SOURCE_CAMERA, SOURCE_SCREENSHARE_AUDIO = "microphone", "camera", "screen_share_audio"
+
+
+def wait_until(check, seconds=5):
+    """Poll until `check()` is true: the recorder's frames arrive on its own thread and loop."""
+    deadline = time.monotonic() + seconds
+    while not check():
+        if time.monotonic() > deadline:
+            raise AssertionError("timed out waiting for the recorder")
+        time.sleep(0.01)
+
+
+class FakeLiveKit:
+    """The LiveKit server and the rtc package the recorder uses, in memory. `rooms` maps a room to the identities in it,
+    as the room service lists them. `joins` holds every room the recorder made, so a test can speak into one."""
+
+    def __init__(self):
+        self.rooms, self.joins, self.refuse = {}, [], False
+
+    def hear(self, loop, recorder, speaker, frames, *, kind=KIND_AUDIO, source=SOURCE_MICROPHONE):
+        """Publish a track from `speaker` that the recorder `recorder` subscribes to, on the media loop."""
+        room = [joined for joined in self.joins if joined.identity == recorder][-1]
+        track = SimpleNamespace(kind=kind, frames=[
+            SimpleNamespace(data=memoryview(frame), samples_per_channel=len(frame) // 2) for frame in frames])
+        publication, participant = SimpleNamespace(source=source), SimpleNamespace(identity=speaker)
+        asyncio.run_coroutine_threadsafe(room.emit("track_subscribed", track, publication, participant), loop).result(5)
+
+
+class FakeRoom:
+    def __init__(self, server):
+        self.server, self.handlers, self.token, self.options = server, {}, None, None
+        self.identity = self.room = None
+        self.connected = False
+
+    def on(self, event, handler):
+        self.handlers[event] = handler
+
+    async def connect(self, url, token, options=None):
+        if self.server.refuse:
+            raise RuntimeError("the server refused the join")
+        claims = decode(token)
+        self.token, self.options = token, options
+        self.identity, self.room = claims["sub"], claims["video"]["room"]
+        self.server.rooms.setdefault(self.room, set()).add(self.identity)
+        self.server.joins.append(self)
+        self.connected = True
+
+    async def disconnect(self):
+        self.connected = False
+        self.server.rooms.get(self.room, set()).discard(self.identity)
+
+    async def emit(self, event, *args):
+        self.handlers[event](*args)
+
+
+class FakeAudioStream:
+    def __init__(self, track, sample_rate=0, num_channels=0):
+        self.frames = list(track.frames)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self.frames:
+            raise StopAsyncIteration
+        return SimpleNamespace(frame=self.frames.pop(0))
+
+    async def aclose(self):
+        pass
+
+
+@pytest.fixture
+def fake_rtc(monkeypatch):
+    """`livekit.rtc` as the recorder imports it, backed by one FakeLiveKit."""
+    server = FakeLiveKit()
+    rtc = types.ModuleType("livekit.rtc")
+    rtc.Room = lambda: FakeRoom(server)
+    rtc.RoomOptions = lambda **options: SimpleNamespace(**options)
+    rtc.AudioStream = FakeAudioStream
+    rtc.TrackKind = SimpleNamespace(KIND_AUDIO=KIND_AUDIO, KIND_VIDEO=KIND_VIDEO)
+    rtc.TrackSource = SimpleNamespace(SOURCE_MICROPHONE=SOURCE_MICROPHONE, SOURCE_CAMERA=SOURCE_CAMERA,
+                                      SOURCE_SCREENSHARE_AUDIO=SOURCE_SCREENSHARE_AUDIO)
+    package = types.ModuleType("livekit")
+    package.rtc = rtc
+    monkeypatch.setitem(sys.modules, "livekit", package)
+    monkeypatch.setitem(sys.modules, "livekit.rtc", rtc)
+    return server
+
+
+def test_the_recorder_joins_hidden_and_hears_microphones_but_never_camera(fake_rtc):
+    live = media.LiveKitMedia(CONFIG)
+    heard = []
+    live.start_recorder("call1", "tico-call-call1",
+                        lambda identity, pcm, start_ms: heard.append((identity, pcm, start_ms)))
+    try:
+        recorder = fake_rtc.joins[-1]
+        assert fake_rtc.rooms["tico-call-call1"] == {media.RECORDER_PREFIX + "call1"}
+        claims = decode(recorder.token)["video"]
+        assert claims["hidden"] is True and claims["canPublish"] is False and claims["canSubscribe"] is True
+        assert recorder.options.auto_subscribe is True
+        frame = b"\x01\x00" * 800                                 # 50 ms at 16 kHz
+        fake_rtc.hear(live.loop, recorder.identity, "human:ana", [frame], kind=KIND_VIDEO, source=SOURCE_CAMERA)
+        fake_rtc.hear(live.loop, recorder.identity, "human:ana", [frame, frame])
+        wait_until(lambda: len(heard) == 2)
+        assert {identity for identity, _pcm, _ms in heard} == {"human:ana"}
+        assert heard[0][1] == frame and heard[1][2] - heard[0][2] == 50
+        assert live.running("call1")
+    finally:
+        live.stop_recorder("call1")
+    assert not live.running("call1") and fake_rtc.rooms["tico-call-call1"] == set()
+
+
+def test_a_recorder_that_livekit_drops_is_not_running_until_it_joins_again(fake_rtc):
+    live = media.LiveKitMedia(CONFIG)
+    live.start_recorder("call2", "tico-call-call2", lambda *args: None)
+    first = fake_rtc.joins[-1]
+    asyncio.run_coroutine_threadsafe(first.emit("disconnected", "server_shutdown"), live.loop).result(5)
+    assert not live.running("call2")
+    live.start_recorder("call2", "tico-call-call2", lambda *args: None)
+    assert live.running("call2") and fake_rtc.joins[-1] is not first
+    live.stop_recorder("call2")
+
+
+def test_a_recorder_the_server_refuses_leaves_the_call_unavailable(fake_rtc):
+    fake_rtc.refuse = True
+    live = media.LiveKitMedia(CONFIG)
+    with pytest.raises(media.MediaUnavailable):
+        live.start_recorder("call3", "tico-call-call3", lambda *args: None)
+    assert not live.running("call3")
+
+
+def test_a_server_without_the_livekit_package_refuses_calls_and_keeps_running(monkeypatch):
+    monkeypatch.setitem(sys.modules, "livekit", None)
+    with pytest.raises(media.MediaUnavailable):
+        media.LiveKitMedia(CONFIG).start_recorder("call4", "tico-call-call4", lambda *args: None)

@@ -92,7 +92,7 @@ def observe(*, root=ROOT, environ=None, database=Path("/data/hub.sqlite"), direc
     enabled = env.get("TICO_CADDY_VISUALS") == "1"
     runner = caddy_assets._runner_host(env.get("TICO_RUNNER_URL", ""), app) if enabled else ""
     config, generation, serving, reason = caddy_assets._configuration(
-        app, env.get("TICO_VISUAL_ORIGIN", ""), runner, enabled)
+        app, env.get("TICO_VISUAL_ORIGIN", ""), runner, enabled, signal=caddy_assets._signal_dial(env))
     actual = read_file(directory / "caddy.json", 262144)
     if reason or serving != enabled or actual != caddy_assets._encoded(config) + b"\n":
         raise wire.Pending("generated_configuration_mismatch")

@@ -52,6 +52,23 @@ def test_external_origin_does_not_enable_local_serving_and_marker_is_private_and
         assert hosts(assets.render(domain)) == [domain]
 
 
+MEET_ENV = {"TICO_MEET_URL": "wss://" + APP, "TICO_MEET_INTERNAL_URL": "http://livekit:7880",
+            "TICO_MEET_API_KEY": "APIacme", "TICO_MEET_API_SECRET": "acme-secret-0123456789abcdef0123456789abcdef"}
+
+
+def test_the_meet_signal_is_proxied_on_the_app_host_at_rtc_and_only_while_calls_are_set_up():
+    server = assets.render(APP, "", "", signal="livekit:7880")["apps"]["http"]["servers"]["tico"]
+    assert server["routes"][0] == {
+        "match": [{"host": [APP], "path": ["/rtc", "/rtc/*"]}],
+        "handle": [{"handler": "reverse_proxy", "upstreams": [{"dial": "livekit:7880"}]}],
+        "terminal": True}
+    plain = assets.render(APP, "", "")["apps"]["http"]["servers"]["tico"]
+    assert "path" not in plain["routes"][0]["match"][0]
+    assert assets._signal_dial({}) is None
+    assert assets._signal_dial(MEET_ENV) == "livekit:7880"
+    assert assets._signal_dial({**MEET_ENV, "TICO_MEET_INTERNAL_URL": "http://bad host:7880"}) is None
+
+
 def test_both_proxies_hold_a_request_through_a_server_restart_like_the_cell_router_and_never_answer_502():
     from setup import cell
     public = assets.render(APP, "https://" + VISUAL, RUNNER, serve_visuals=True)["apps"]["http"]["servers"]["tico"]

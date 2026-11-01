@@ -29629,7 +29629,7 @@
     },
     "/api/v2/threads/{thread_id}/calls": {
       "get": {
-        "summary": "The calls in a thread, newest first",
+        "summary": "The calls in a thread, newest first, a page at a time: before=<next_before> reads the next page",
         "operationId": "listCalls",
         "parameters": [
           {
@@ -36693,6 +36693,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "speak_replies": {
+            "type": "boolean",
+            "description": "Whether bots were asked to speak their replies on this call; off unless the call asked. Spoken replies are not sent yet"
           }
         },
         "required": [
@@ -36703,6 +36707,7 @@
           "id",
           "meeting_id",
           "participants",
+          "speak_replies",
           "started_at",
           "state",
           "thread_id",
@@ -52109,6 +52114,11 @@
             "minLength": 1,
             "title": "Title",
             "default": "Call"
+          },
+          "speak_replies": {
+            "type": "boolean",
+            "title": "Speak Replies",
+            "default": false
           }
         },
         "additionalProperties": false,

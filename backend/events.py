@@ -47,7 +47,7 @@ from fastapi.responses import StreamingResponse
 from . import visuals as V
 from .store import H, Problem, encode
 
-TOPICS = ("tasks", "messages", "runs", "bots", "needs")
+TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads")
 KEEP_HOURS = 24           # a client away longer than this reads in full
 FALLBACK_SECONDS = 1.5    # the shared look for changes another process wrote
 RUNNER_FALLBACK_SECONDS = 5  # the same for computers' streams: work another process queued waits this long at most
@@ -955,6 +955,16 @@ def _bots(view, rows):
     return out
 
 
+def _threads(view, rows):
+    """Tico Meet call changes (backend/calls.py) reach the people who may read the call's thread, and no one else."""
+    from . import calls
+    out = []
+    for row in rows:
+        if row["conversation_id"] and calls.readable(view.c, view.who.actor, row["conversation_id"]):
+            out.append((row, {"kind": row["kind"], "call_id": row["subject_id"], "thread_id": row["conversation_id"]}))
+    return out
+
+
 NEEDS_CHANGES_MAX = 100   # ids named in one `needs` event; more than this reads the list whole (views.NEEDS_IDS_MAX)
 
 
@@ -998,7 +1008,8 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
             return [], newest, True, False
         clauses, args = ["seq>?", "topic IN (%s)" % ",".join("?" * len(topics))], [after, *topics]
         if conversations:
-            clauses.append("(topic NOT IN ('messages','runs') OR conversation_id IN (%s))" % ",".join("?" * len(conversations)))
+            clauses.append("(topic NOT IN ('messages','runs','threads') OR conversation_id IN (%s))"
+                           % ",".join("?" * len(conversations)))
             args += list(conversations)
         if bots:
             clauses.append("(topic NOT IN ('runs','bots') OR bot IN (%s))" % ",".join("?" * len(bots)))
@@ -1031,6 +1042,8 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
             picked += [("runs", r, e) for r, e in _runs(view, by_topic["runs"])]
         if by_topic.get("bots"):
             picked += [("bots", r, e) for r, e in _bots(view, by_topic["bots"])]
+        if by_topic.get("threads"):
+            picked += [("threads", r, e) for r, e in _threads(view, by_topic["threads"])]
         if by_topic.get("needs"):
             picked += [("needs", r, e) for r, e in _needs_list(view, by_topic["needs"], task_view, needs_held)]
         events = []

@@ -10,18 +10,21 @@ Speech reaches the transcript through the Gateway's speech-to-text, and no raw a
 restart, because its state is in the database and the sweep picks it up; if LiveKit restarts and loses the room, the
 call ends with its transcript kept.
 
-Until core's threads contract lands (docs/dev/threads-contract.md), the thread checks use auth.conversation (`READER`)
-and the thread post uses hubdb.say. Both are shims: replace them in one place each when core's functions exist.
+The thread checks and posts are core's (backend/threads.py, docs/dev/threads-contract.md). A bot's rights on a teammate
+are teammate_access's, as they are everywhere else.
 """
+import json
 import logging
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, wait
 
 from fastapi import Request
 from pydantic import Field
 
-from . import audit_log, call_media, gateway_connection, live_meetings
+from . import (audit_log, call_items, call_media, gateway_connection, live_meetings, recorder_relay, teammate_access,
+               threads)
 from .models import Contract
 from .store import H, Problem
 from .views import human_only
@@ -35,6 +38,9 @@ TRANSCRIPT_BYTES = 12_000
 LIST_LIMIT = 50
 PARTICIPANT_LIMIT = 200
 PCM_BYTES_PER_SECOND = call_media.SAMPLE_RATE * 2
+WORKERS = 4                  # clips transcribed at once: the Gateway waits on them, the recorder's audio must not
+DRAIN_SECONDS = 150          # the longest a call's end waits for its last clips (the Gateway itself stops at 120 s)
+CALL_LIST_BYTES = 262_144    # as the audit list: a page stays under 256 KB (backend/audit_log.py)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS calls(
@@ -50,6 +56,8 @@ CREATE TABLE IF NOT EXISTS calls(
  ended_at TEXT,
  media_seen_at TEXT,
  transcript_posted_at TEXT,
+ action_items_posted_at TEXT,
+ speak_replies INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS calls_thread ON calls(thread_id, started_at);
@@ -63,8 +71,8 @@ CREATE TABLE IF NOT EXISTS call_participants(
  PRIMARY KEY(call_id, actor));
 """
 
-# (c, actor, thread_id) -> bool. The thread check until core's threads.readable lands; set by install_calls.
-READER = None
+# The auth module, set by install_calls: an actor becomes the identity that the thread rules read.
+AUTH = None
 
 
 def ensure(c):
@@ -78,29 +86,32 @@ def ensure(c):
 
 
 def readable(c, actor, thread_id):
-    """Whether `actor` may read the thread, and so hear the call in it."""
-    return bool(READER and READER(c, actor, thread_id))
+    """Whether `actor` may read the thread, and so hear the call in it: the thread's own rule decides."""
+    try:
+        who = AUTH.identity_for_actor(c, actor)
+    except Problem:
+        return False
+    return threads.readable(c, threads.viewer(AUTH, who), thread_id)
 
 
-def _auth_reader(auth):
-    def reader(c, actor, thread_id):
-        try:
-            auth.conversation(c, auth.identity_for_actor(c, actor), thread_id)
-        except Problem:
-            return False
-        return True
-    return reader
+def speak(c, call_id, text):
+    """A bot's reply read aloud in the call. Not built yet (docs/meet.md): the flag is kept on the call, and the reply
+    goes to the thread as text only."""
+    return None
 
 
 def project_reply(c, rid, reply, who):
     """A bot's reply in a call's meeting also goes into the call's thread, as that bot's message. Registered as a
     live_meetings reply hook, so it commits with the reply: the thread gets the reply or nothing."""
-    row = c.execute("SELECT id,thread_id,connector_actor FROM calls WHERE live_meeting_id=?", (rid,)).fetchone()
+    row = c.execute("SELECT id,thread_id,connector_actor,speak_replies FROM calls WHERE live_meeting_id=?",
+                    (rid,)).fetchone()
     if not row:
         return
-    H.say(c, who.actor, row["connector_actor"], reply["text"], conversation_id=row["thread_id"], kind="say",
-          refs={"call": {"id": row["id"], "meeting_id": rid},
-                "live_meeting": {"meeting_id": rid, "chat_id": reply["id"]}})
+    threads.post(c, who, row["thread_id"], reply["text"], kind="say", to_actor=row["connector_actor"],
+                 refs={"call": {"id": row["id"], "meeting_id": rid},
+                       "live_meeting": {"meeting_id": rid, "chat_id": reply["id"]}})
+    if row["speak_replies"]:
+        speak(c, row["id"], reply["text"])
 
 
 class Empty(Contract):
@@ -109,6 +120,7 @@ class Empty(Contract):
 
 class StartCall(Contract):
     title: str = Field(default="Call", min_length=1, max_length=200)
+    speak_replies: bool = False      # a bot's reply is read aloud in the call: not built yet (docs/meet.md)
 
 
 class CallBots(Contract):
@@ -127,6 +139,11 @@ def _participant(c, call_id, actor):
     return dict(row) if row else None
 
 
+def _clock(ms):
+    seconds = int(ms or 0) // 1000
+    return f"{seconds // 60:02d}:{seconds % 60:02d}"
+
+
 def _summary(row):
     return {"id": row["id"], "thread_id": row["thread_id"], "title": row["title"], "state": row["state"],
             "connector": row["connector_actor"], "started_at": row["started_at"], "ended_at": row["ended_at"],
@@ -141,6 +158,8 @@ class Calls:
         self.app, self.store, self.auth = app, store, auth
         self.buffers = {}            # (call_id, identity) -> {"pcm": bytearray, "start_ms": int, "at": float}
         self.lock = threading.Lock()
+        self.pending = {}            # call_id -> the clips it is still transcribing
+        self.workers = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="tico-meet-stt")
 
     @property
     def media(self):
@@ -159,7 +178,7 @@ class Calls:
         return {"id": row["id"], "thread_id": row["thread_id"], "title": row["title"], "state": row["state"],
                 "connector": row["connector_actor"], "meeting_id": row["live_meeting_id"],
                 "started_at": row["started_at"], "ended_at": row["ended_at"], "end_reason": row["end_reason"],
-                "participants": people, "bots": bots}
+                "participants": people, "bots": bots, "speak_replies": bool(row["speak_replies"])}
 
     def readable_view(self, c, who, call_id):
         human_only(who)
@@ -179,8 +198,8 @@ class Calls:
     def _record(self, c, actor, call_id, thread_id, kind, detail=None):
         """The audit row and the threads change for one call write."""
         audit_log.write(c, actor, f"call:{call_id}", None, {"kind": kind, **(detail or {})})
-        c.execute("INSERT INTO changes(topic,kind,subject_id,conversation_id,at) VALUES('threads',?,?,?,?)",
-                  (kind, call_id, thread_id, H.now()))
+        c.execute("INSERT INTO changes(topic,kind,subject_id,conversation_id,actor,at) VALUES('threads',?,?,?,?,?)",
+                  (kind, call_id, thread_id, actor, H.now()))
 
     def _connector(self, c, who, call_id):
         human_only(who)
@@ -192,10 +211,10 @@ class Calls:
             raise Problem("forbidden", "Only the person who started this call can end it", 403)
         return row
 
-    def start(self, c, who, thread_id, title):
+    def start(self, c, who, thread_id, title, speak_replies=False):
         human_only(who)
         self.auth.domain(who)
-        self.auth.conversation(c, who, thread_id, write=True)
+        threads.require(c, threads.viewer(self.auth, who), thread_id, write=True)
         if self.media is None:
             raise Problem("meet_unavailable", "Tico Meet is not set up on this server", 503)
         live = c.execute("SELECT id FROM calls WHERE thread_id=? AND state='live'", (thread_id,)).fetchone()
@@ -214,9 +233,9 @@ class Calls:
         live_meetings._event(c, meeting_id, "meeting.state", {"state": "live", "connected_by": who.actor,
                                                               "visibility": "private"})
         c.execute("INSERT INTO calls(id,thread_id,live_meeting_id,connector_actor,title,state,room_name,started_at,"
-                  "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  "created_at,updated_at,speak_replies) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                   (call_id, thread_id, meeting_id, who.actor, meeting.title, "live", ROOM_PREFIX + call_id,
-                   stamp, stamp, stamp))
+                   stamp, stamp, stamp, int(bool(speak_replies))))
         c.execute("INSERT INTO call_participants(call_id,actor,joined_at) VALUES(?,?,?)", (call_id, who.actor, stamp))
         self._record(c, who.actor, call_id, thread_id, "call.started", {"meeting_id": meeting_id})
         return self.view(c, call_id)
@@ -290,7 +309,7 @@ class Calls:
             raise Problem("forbidden", "Join this call before attaching bots", 403)
         for slug in slugs:
             live_meetings._active_bot(c, slug)
-            access = self.auth.bot_access(c, who, slug)
+            access = teammate_access.levels_for(c, who, f"bot:{slug}", self.auth)
             if not access["see"]:
                 raise Problem("forbidden", f"You cannot see org-chart bot {slug}", 403)
             if not access["write"]:
@@ -349,7 +368,7 @@ class Calls:
             if len(buffer["pcm"]) < FLUSH_SECONDS * PCM_BYTES_PER_SECOND:
                 return
             taken = self.buffers.pop(key)
-        self._transcribe(call_id, identity, taken)
+        self._submit(call_id, identity, taken)
 
     def flush(self, call_id=None, *, idle=False):
         """Send the speech that is waiting: all of it for the call (or every call), or only what has been quiet for
@@ -360,13 +379,40 @@ class Calls:
                     if (call_id is None or key[0] == call_id) and (not idle or now - buffer["at"] >= IDLE_SECONDS)]
             taken = [(key, self.buffers.pop(key)) for key in keys]
         for (cid, identity), buffer in taken:
-            self._transcribe(cid, identity, buffer)
+            self._submit(cid, identity, buffer)
+
+    def _submit(self, call_id, identity, buffer):
+        """Transcribe a clip on a worker, so the recorder's audio never waits on the Gateway."""
+        future = self.workers.submit(self._transcribe_clip, call_id, identity, buffer)
+        with self.lock:
+            self.pending.setdefault(call_id, []).append(future)
+
+    def drain(self, call_id):
+        """Wait (up to DRAIN_SECONDS) for the clips a call is still transcribing, so its transcript has them all."""
+        with self.lock:
+            waiting = self.pending.pop(call_id, [])
+        wait(waiting, timeout=DRAIN_SECONDS)
+
+    def finish_speech(self, call_id):
+        """Send the speech still waiting for a call, and wait for it: the call's transcript must have every clip."""
+        self.flush(call_id)
+        self.drain(call_id)
+
+    def _transcribe_clip(self, call_id, identity, buffer):
+        try:
+            self._transcribe(call_id, identity, buffer)
+        except Exception as exc:
+            from .batch_work import report
+            report("calls_transcribe", call_id, exc, logger="tico.calls")
 
     def _transcribe(self, call_id, identity, buffer):
         pcm = bytes(buffer["pcm"])
         if not pcm:
             return
         with self.store.read() as c:
+            state = c.execute("SELECT state FROM calls WHERE id=?", (call_id,)).fetchone()
+            if not state or state["state"] != "live":
+                return      # the call has ended: its speech was sent at the end, and nothing after it is kept
             key, base, _fingerprint = gateway_connection.target(c, self.app.state.vault, self.store.settings)
         if not key:
             log.warning("A call's speech was not transcribed: no Gateway connection is set")
@@ -392,7 +438,8 @@ class Calls:
         self.app.state.live_meeting_routing.later(meeting["id"])
 
     def after_end(self, call_id):
-        """What an ended call still owes outside the database: its room, its last windows, its transcript in the thread."""
+        """What an ended call still owes outside the database: its room, its last windows, its transcript and its action
+        items in the thread."""
         with self.store.read() as c:
             row = _call(c, call_id)
         try:
@@ -400,35 +447,79 @@ class Calls:
             self.media.end_room(row["room_name"])
         except call_media.MediaUnavailable:
             log.warning("A call ended, but the media server did not confirm the room closed")
+        self.drain(call_id)
         try:
             live_meetings._run_windows(self.app, row["live_meeting_id"], final=True)
         except Exception as exc:
             from .batch_work import report
             report("calls_final_windows", call_id, exc, logger="tico.calls")
         self.post_transcript(call_id)
+        self.post_action_items(call_id)
+
+    def _post_in_thread(self, c, row, body):
+        """One message in the call's thread, from its connector, naming the call and its meeting as the source.
+        Restricted: the message names the call, so it reaches only people who may read the call."""
+        who = self.auth.identity_for_actor(c, row["connector_actor"])
+        threads.post(c, who, row["thread_id"], body, kind="say", refs={
+            "call": {"id": row["id"], "meeting_id": row["live_meeting_id"]}, "provenance": "restricted"})
 
     def post_transcript(self, call_id):
-        """The call's transcript, bounded, as one message in its thread, with the meeting it came from. Once only."""
-        with self.store.transaction() as c:
+        """The call's transcript, bounded, as one message in its thread, with the meeting it came from. Once only. A
+        connector who can no longer post in the thread leaves it unposted, and the report says so."""
+        try:
+            with self.store.transaction() as c:
+                row = _call(c, call_id)
+                if row["transcript_posted_at"]:
+                    return
+                lines, size, cut = [], 0, False
+                for chunk in c.execute("SELECT speaker,text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq",
+                                       (row["live_meeting_id"],)):
+                    line = f"{chunk['speaker']}: {chunk['text']}"
+                    if size + len(line) > TRANSCRIPT_BYTES:
+                        cut = True
+                        break
+                    lines.append(line)
+                    size += len(line) + 1
+                body = f"Call transcript: {row['title']}\n" + ("\n".join(lines) or "(no speech was transcribed)")
+                if cut:
+                    body += f"\n(cut short; the full transcript is on meeting {row['live_meeting_id']})"
+                self._post_in_thread(c, row, body)
+                c.execute("UPDATE calls SET transcript_posted_at=? WHERE id=?", (H.now(), call_id))
+        except Problem as exc:
+            from .batch_work import report
+            report("calls_transcript", call_id, exc, logger="tico.calls")
+
+    def post_action_items(self, call_id):
+        """Action items drafted from the transcript, as one message in the thread, once. A Gateway that does not answer
+        leaves the transcript as the call's record, and no items are posted."""
+        with self.store.read() as c:
             row = _call(c, call_id)
-            if row["transcript_posted_at"]:
+            if row["action_items_posted_at"]:
                 return
-            lines, size, cut = [], 0, False
-            for chunk in c.execute("SELECT speaker,text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq",
-                                   (row["live_meeting_id"],)):
-                line = f"{chunk['speaker']}: {chunk['text']}"
-                if size + len(line) > TRANSCRIPT_BYTES:
-                    cut = True
-                    break
-                lines.append(line)
-                size += len(line) + 1
-            body = f"Call transcript: {row['title']}\n" + ("\n".join(lines) or "(no speech was transcribed)")
-            if cut:
-                body += f"\n(cut short; the full transcript is on meeting {row['live_meeting_id']})"
-            H.say(c, row["connector_actor"], row["connector_actor"], body, conversation_id=row["thread_id"],
-                  kind="say", refs={"call": {"id": call_id, "meeting_id": row["live_meeting_id"]},
-                                    "provenance": "restricted"})
-            c.execute("UPDATE calls SET transcript_posted_at=? WHERE id=?", (H.now(), call_id))
+            rows = [{"t": _clock(r["start_ms"]), "speaker": r["speaker"], "text": r["text"]} for r in c.execute(
+                "SELECT start_ms,speaker,text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq",
+                (row["live_meeting_id"],))]
+            key, base, _fingerprint = gateway_connection.target(c, self.app.state.vault, self.store.settings)
+            model = recorder_relay.chat_model(c, self.store.settings)
+        if not rows or not key:
+            return
+        try:
+            items = call_items.draft(base, key, model, rows)
+        except call_items.ItemsUnavailable as exc:
+            log.warning("A call's action items were not drafted: %s", exc)
+            return
+        listed = "\n".join(f"- {item['title']}" for item in items) or "No action items were found."
+        body = f"Action items: {row['title']}\n{listed}"
+        try:
+            with self.store.transaction() as c:
+                row = _call(c, call_id)
+                if row["action_items_posted_at"]:
+                    return
+                self._post_in_thread(c, row, body)
+                c.execute("UPDATE calls SET action_items_posted_at=? WHERE id=?", (H.now(), call_id))
+        except Problem as exc:
+            from .batch_work import report
+            report("calls_action_items", call_id, exc, logger="tico.calls")
 
     # --- the sweep: access that ended, bots whose attacher lost Write, and a LiveKit that restarted
 
@@ -440,7 +531,7 @@ class Calls:
         if who.role not in ("human", "owner"):
             return False
         try:
-            return bool(self.auth.bot_access(c, who, slug)["write"])
+            return teammate_access.can(c, who, "write", f"bot:{slug}", auth=self.auth)
         except Problem:
             return False
 
@@ -500,8 +591,8 @@ class Calls:
 def install_calls(app, store, auth, write):
     """The call routes and the media port. `write` is the app's idempotent write (as live meetings use). Tests set
     app.state.call_media to a fake before the first call; without the Tico Meet settings it is None and calls are off."""
-    global READER
-    READER = _auth_reader(auth)
+    global AUTH
+    AUTH = auth
     if project_reply not in live_meetings.REPLY_HOOKS:
         live_meetings.REPLY_HOOKS.append(project_reply)
     if not hasattr(app.state, "call_media"):
@@ -511,21 +602,31 @@ def install_calls(app, store, auth, write):
 
     @app.get("/api/v2/threads/{thread_id}/calls")
     def list_calls(request: Request, thread_id: str, limit: int = 25, before: str = ""):
+        """A thread's calls, newest first, a page at a time. `next_before` is the cursor for the next page, or null."""
         who = request.state.identity
         human_only(who)
         auth.domain(who)
         size = min(max(limit, 1), LIST_LIMIT)
+        at, _, call_id = before.partition("|")
         with store.read() as c:
-            auth.conversation(c, who, thread_id)
-            rows = c.execute("SELECT * FROM calls WHERE thread_id=? AND (?='' OR started_at<?) "
-                             "ORDER BY started_at DESC, id LIMIT ?", (thread_id, before, before, size)).fetchall()
-        calls_page = [_summary(r) for r in rows]
-        return {"calls": calls_page, "next_before": calls_page[-1]["started_at"] if len(calls_page) == size else None}
+            threads.require(c, threads.viewer(auth, who), thread_id)
+            found = [_summary(r) for r in c.execute(
+                "SELECT * FROM calls WHERE thread_id=? AND (?='' OR started_at<? OR (started_at=? AND id<?)) "
+                "ORDER BY started_at DESC, id DESC LIMIT ?", (thread_id, before, at, at, call_id, size + 1))]
+        shown, used = [], 256
+        for item in found[:size]:
+            cost = len(json.dumps(item).encode()) + 1
+            if shown and used + cost > CALL_LIST_BYTES:
+                break               # the first call of a page always fits
+            used += cost
+            shown.append(item)
+        more = len(found) > len(shown)
+        return {"calls": shown, "next_before": f"{shown[-1]['started_at']}|{shown[-1]['id']}" if more else None}
 
     @app.post("/api/v2/threads/{thread_id}/calls")
     def start_call(request: Request, thread_id: str, body: StartCall):
         who = request.state.identity
-        result = write(request, body, lambda c: calls.start(c, who, thread_id, body.title))
+        result = write(request, body, lambda c: calls.start(c, who, thread_id, body.title, body.speak_replies))
         calls.begin_media(result["id"])
         return result
 
@@ -571,7 +672,7 @@ def install_calls(app, store, auth, write):
         who = request.state.identity
         with store.read() as c:
             calls._connector(c, who, call_id)      # refuses before any speech is sent on the call's behalf
-        calls.flush(call_id)
+        calls.finish_speech(call_id)
         result = write(request, body, lambda c: calls.end(c, who, call_id))
         calls.after_end(call_id)
         return result

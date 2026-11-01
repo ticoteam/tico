@@ -2329,7 +2329,8 @@ def _refs(node, found):
 
 # Tico Meet calls (docs/meet.md): a call belongs to a thread. Joining hands back a token for audio and screen share only.
 STABLE.extend([
-    ("/api/v2/threads/{thread_id}/calls", "get", "Calls", "listCalls", "The calls in a thread, newest first", "CallList"),
+    ("/api/v2/threads/{thread_id}/calls", "get", "Calls", "listCalls",
+     "The calls in a thread, newest first, a page at a time: before=<next_before> reads the next page", "CallList"),
     ("/api/v2/threads/{thread_id}/calls", "post", "Calls", "startCall", "Start a call in a thread you can write to", "Call"),
     ("/api/v2/calls/{call_id}", "get", "Calls", "getCall", "A call: its state, people, bots and how it ended", "Call"),
     ("/api/v2/calls/{call_id}/join", "post", "Calls", "joinCall", "Join a call: its media URL and a token good for 5 minutes",
@@ -2347,7 +2348,9 @@ SCHEMAS.update({
                         "started_at": "s", "ended_at": "n", "end_reason": "n"}),
     "Call": obj({"id": "s", "thread_id": "s", "title": "s", "state": {"enum": ["live", "ended"]}, "connector": "s",
                  "meeting_id": "s", "started_at": "s", "ended_at": "n", "end_reason": "n",
-                 "participants": items(ref("CallParticipant")), "bots": items({"type": "string"})}),
+                 "participants": items(ref("CallParticipant")), "bots": items({"type": "string"})},
+                speak_replies={"type": "boolean", "description": "Whether bots were asked to speak their replies "
+                               "on this call; off unless the call asked. Spoken replies are not sent yet"}),
     "CallList": obj({"calls": items(ref("CallSummary")), "next_before": "n"}),
     "CallJoin": obj({"call": ref("Call"), "url": "s", "expires_in": "i", "token": "s"}),
     "CallToken": obj({"url": "s", "expires_in": "i", "token": "s"}),
