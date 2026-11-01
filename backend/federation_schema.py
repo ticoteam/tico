@@ -22,7 +22,11 @@ like backend/strategy.py: an older release never reads these tables.
 - `federation_outbox`: what this install still has to send: a delivery from core (a replica's post to the home), an
   item (the home's stream to a member), a catch-up request, or a refusal receipt for a message this install did not take.
   A delivery is rebuilt from the message as it is when it is sent; an item to a member the message was not for goes as
-  a signed skip, so the member's stream has no hole.
+  a signed skip, so the member's stream has no hole. `thread_origin` is the root's origin id: a row waits behind an
+  earlier row for the same peer and root, and only the first row of each such lane is sent.
+- `federation_deferrals`: envelopes this install has acked to HQ but cannot apply yet (a rule check that has not run,
+  a paused peering, or an envelope behind one of those in its own root). Kept per peer and root in arrival order; a
+  lane waits for its first one, and other roots and peers are applied as they arrive.
 """
 
 SCHEMA = """
@@ -69,10 +73,15 @@ CREATE TABLE IF NOT EXISTS federation_receipts (
 CREATE TABLE IF NOT EXISTS federation_outbox (
   id TEXT PRIMARY KEY, recipient TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('delivery','item','catch_up','refusal')),
-  delivery_id TEXT, item_id TEXT, payload BLOB, attempts INTEGER NOT NULL DEFAULT 0,
+  delivery_id TEXT, item_id TEXT, payload BLOB, thread_origin TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt_at REAL NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
   UNIQUE (kind, delivery_id), UNIQUE (kind, item_id, recipient));
 CREATE INDEX IF NOT EXISTS federation_outbox_due ON federation_outbox(next_attempt_at);
+CREATE TABLE IF NOT EXISTS federation_deferrals (
+  id TEXT PRIMARY KEY, peer_install TEXT NOT NULL, thread_origin TEXT NOT NULL, envelope_id TEXT NOT NULL,
+  headers_json TEXT NOT NULL, body BLOB NOT NULL, received_at REAL NOT NULL, reason TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+  UNIQUE (peer_install, envelope_id));
 CREATE TABLE IF NOT EXISTS federation_state (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1), cursor INTEGER NOT NULL DEFAULT 0,
   acked INTEGER NOT NULL DEFAULT 0, last_pull_at REAL, failing_since REAL, last_error TEXT NOT NULL DEFAULT '',
@@ -86,7 +95,8 @@ COLUMNS = (("federation_peerings", "peer_company", "TEXT NOT NULL DEFAULT ''"), 
            ("federation_state", "company", "TEXT NOT NULL DEFAULT ''"),
            ("federation_threads", "subtree_seq", "INTEGER NOT NULL DEFAULT 0"),
            ("federation_members", "joined_message_seq", "INTEGER NOT NULL DEFAULT 0"),
-           ("federation_messages", "sent_revision", "INTEGER"))
+           ("federation_messages", "sent_revision", "INTEGER"),
+           ("federation_outbox", "thread_origin", "TEXT NOT NULL DEFAULT ''"))
 
 
 def ensure(c):

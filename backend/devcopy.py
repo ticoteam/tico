@@ -106,6 +106,7 @@ EMPTY = (
     # speaks for the source to another company (the shared threads' messages are kept with the history).
     "federation_keys", "federation_peerings", "federation_outbox", "federation_receipts", "federation_state",
     "federation_directory", "federation_threads", "federation_members", "federation_items", "federation_messages",
+    "federation_deferrals",
     # Slack links: an active link posts to Slack both ways; its queue and message map only serve that link.
     "slack_thread_links", "slack_link_members", "slack_message_links", "slack_inbound_queue",
 )

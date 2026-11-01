@@ -45,7 +45,8 @@ is refused with a 409.
 ## Pause, resume, revoke, rotate
 
 - `hub peer pause <peering>` is the kill switch. While paused, nothing crosses the peering in either direction.
-  Messages wait on the sending side, and envelopes that arrive from the peer wait in HQ's mailbox.
+  Messages for that peer wait on the sending side and go out on resume. Envelopes the peer sends are held here until
+  resume. Other peers and other roots keep flowing.
 - `hub peer resume <peering>` lets it carry again. What waited is applied in order, and what was missed is caught up.
 - `hub peer revoke <peering>` ends the peering. A new request starts over and needs both approvals.
 - `hub peer rotate-key` makes a new key and retires the old one. Every peering needs approving again, on both sides.
@@ -84,8 +85,8 @@ Every route is owner only. Each write records an audit row and a change event, l
 - **Rules and screening.** A message from another install is checked before anything is written. The org rules and the
   injection screener (source `federation`, default `warn`) run first, outside the write, and the verdict is applied inside
   it. A message the rules block is written nowhere, and the sender gets a refusal. A check that did not run (no verdict, or
-  the rules could not check) is never treated as a pass: the receiver holds that envelope and everything after it, and
-  retries on the next pull. Outbound needs no extra step: a local member's post passes the org rule check in `threads.post`
+  the rules could not check) is never treated as a pass: the receiver holds that envelope, and the later envelopes for
+  the same peer and root wait behind it. Other roots and peers are not held. Outbound needs no extra step: a local member's post passes the org rule check in `threads.post`
   before it is stored, so it is checked before it can replicate.
 - **Refusals.** A receiver that refuses a message (rules, namespace or unknown thread) sends a signed refusal to the
   install that sent it. That install posts a quiet note to the message's author in the thread, like a held message's note.
@@ -93,6 +94,16 @@ Every route is owner only. Each write records an audit row and a change event, l
 - **Order.** The home numbers each shared thread's messages (`home_seq`). A replica applies them in that order. An edit
   or delete for a message the replica does not have yet waits for a catch-up. A catch-up asks the home for everything
   after the last `home_seq` the replica applied.
+- **Lanes.** Order is kept per peer and per root, in both directions. A lane is one peer and one root. Outbound, a
+  message waits behind an earlier one for the same peer and root, and only the first is sent next. A send HQ refuses
+  for a reason that will not change (a 4xx other than a pause, a timeout or a rate limit) is settled as failed; a
+  pause or any other failure waits and is tried again. Inbound, an envelope this install cannot apply yet is held (see
+  below), and the later envelopes for that peer and root wait behind it. Nothing else waits: another root or another
+  peer keeps flowing.
+- **Held envelopes.** This install keeps what it cannot apply yet in its own database, in arrival order, and acks it to
+  HQ, so the mailbox moves on. Each held envelope is retried with a backoff (30 seconds, doubling, at most 5 minutes),
+  so a rule check that finishes can take up to 5 minutes to apply. `GET /api/v2/federation` shows how many are held
+  (`held`).
 - **Membership.** The home is the membership authority. Its member list goes out as a signed membership item whenever it
   changes, and a replica mirrors it as guest rows (`<actor>@<home install>`). Guests from a third install are in the same
   roster as `<actor>@<that install>`, so every replica can name their author. A removed install gets a membership
@@ -125,5 +136,5 @@ Treat HQ as a relay you trust for delivery, not as a place a shared thread is ke
 - Core's member lists do not show company names yet. `GET /api/v2/federation` does (`company` on each peering, `members` and
   `guests` on each thread).
 - A thread's history from before it was shared is never sent to a later member.
-- A deferred envelope (a paused peer, or a check that has not run) holds back the envelopes after it from every peer until it
-  clears. The receiver does not skip past a message it has not checked, so one stuck peer can delay the others.
+- Held envelopes live in this install's database. If that database is lost before they are applied, they are lost with
+  it: the sender does not keep a copy once HQ has taken the envelope.
