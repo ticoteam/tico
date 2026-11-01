@@ -205,6 +205,24 @@ def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
         assert raised.value.rule == "profile"
 
 
+def test_health_counts_a_keepers_ordinary_task_for_a_reviewer_but_not_its_pool_review(api):
+    """The reviewer_holds_tasks finding for Muse (2026-10-28): a Review 1 pool request filed under a general-type ticket
+    is review work, however its type reads; the nightly learnings task the keeper routes to the same reviewer is not."""
+    with api.app.state.store.transaction() as c:
+        add_bot(c, "checker")
+        put(c, "checker", P.REVIEWER)
+        add_bot(c, "pr-reviewer")
+        ticket = H.task_create(c, "bot:pr-reviewer", "Goals: read-back", "x", "bot:pr-reviewer")
+        review = H.task_create(c, "bot:pr-reviewer", "Review 1: PR #1801", "x", "bot:checker", parent_id=ticket["id"],
+                               wake_refs={"check_pool": "Review 1"})
+        assert review["type_id"] == H.GENERAL_TYPE and P.is_review_task(c, H.task(c, review["id"]))
+        assert P.mismatches(c) == []
+        nightly = H.task_create(c, H.KEEPER, "Nightly learnings: Oct 28", "x", "bot:checker", deduplicate=False,
+                                lint=False, private=True)
+        assert not P.is_review_task(c, H.task(c, nightly["id"]))
+        assert P.mismatches(c) == [("reviewer_holds_tasks", "checker", 1)]
+
+
 def test_sweeps_follow_the_profile_and_a_custom_bot_reads_its_own_setting(api):
     with api.app.state.store.transaction() as c:
         for slug, name, options in (("d", P.DOER, {}), ("r", P.REVIEWER, {}), ("l", P.LEAD, {}), ("m", P.MONITOR, {}),
