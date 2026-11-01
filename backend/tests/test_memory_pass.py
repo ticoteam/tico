@@ -1,6 +1,8 @@
 """A nightly memory tidy pass's check subtask (backend/check_models.py file_pass, spec nightly-memory-tidy v1.3): its named
 model at low effort and never Haiku-tier, skipped rather than moved or held when that model cannot run, and a free skip
 that ignores the pass's own commits and the wake turn it caused. Synthetic fixtures only."""
+import json
+
 import pytest
 
 from backend import check_models, memory_history
@@ -103,10 +105,16 @@ def queued_for(api, bot):
         return c.execute("SELECT count(*) FROM jobs WHERE bot=? AND state='queued'", (bot,)).fetchone()[0]
 
 
-def test_a_skipped_pass_wakes_nothing_on_its_parent(api):
+def test_a_skipped_pass_wakes_nothing_on_its_parent_or_its_requester(api):
     machine, parent, sub = pass_filed(api)
     check = claim(api, machine)
     assert check["task"]["id"] == sub["id"]
-    before = queued_for(api, "ops")
     out_of_quota(api, machine, check)
-    assert queued_for(api, "ops") == before, "a skipped pass adds no job for its parent (or anything else)"
+    with api.app.state.store.read() as c:
+        queued = [dict(r) for r in c.execute(
+            "SELECT m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'").fetchall()]
+    news = [json.loads(r["refs_json"] or "{}").get("news") for r in queued]
+    assert "task_declined" not in news, "the decline is not sent to the requester"
+    assert "subtask_finished" not in [json.loads(r["refs_json"] or "{}").get("wake") for r in queued], "the parent is not woken"
+    leftover = claim(api, machine)   # a requeued notice for the pass is refused at claim: it is never claimed again
+    assert leftover is None or leftover["task"]["id"] != sub["id"], leftover

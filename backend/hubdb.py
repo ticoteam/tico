@@ -6338,7 +6338,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
                 verdict_head=None, skip_step_wake=(), review_reader=None, receipt_owner=None, public_allowance=0,
-                parent_wake=True):
+                wake_others=True):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -6815,7 +6815,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # A bot that asked for `tasks` is always told and never woken for it, so there is nothing to
     # weigh: the news is free. Everyone else keeps the original rule, where the only way to
     # spare a bot the run was to withhold the notice.
-    notify_requester = (status in ("done", "declined") and actor != row["requester"]
+    notify_requester = (wake_others and status in ("done", "declined") and actor != row["requester"]
                         and (status == "declined" or tasks_only(conn, after["requester"])
                              or TR.parent_of(conn, task_id) and is_bot(after["requester"])
                              or _owed_the_news(conn, after)))
@@ -6920,7 +6920,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             check_pools.safely(conn, check_pools.entered, actor, after, review_prs)
     recount(conn, [after["owner"], after["requester"], row["owner"]])   # the old owner too, on a handoff
     if not closing_step:
-        _parent_finished(conn, after, row["status"], actor, told=subtask_told, wake=parent_wake)
+        _parent_finished(conn, after, row["status"], actor, told=subtask_told, wake=wake_others)
     if asked_in:
         after = {**after, "asked_in": {k: asked_in[k] for k in ("id", "title", "owner")}}
     return {**after, "warnings": plain} if plain else after
