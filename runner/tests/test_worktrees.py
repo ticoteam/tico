@@ -1512,7 +1512,7 @@ def test_a_staged_deletion_paired_with_an_identical_addition_is_kept(trees, tmp_
     with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
         W.act(workspace, row, 'remove', os.environ.copy())
     git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
-    assert 'other' not in git(path, 'ls-files').split()
+    assert 'other' in git(path, 'diff', '--no-renames', '--cached', '--name-only').split()
 
 
 def test_a_staged_addition_the_merge_did_not_make_is_kept(trees, tmp_path):
