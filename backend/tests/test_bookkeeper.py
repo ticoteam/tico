@@ -255,3 +255,25 @@ def test_only_the_failed_bills_the_body_lists_are_reported(environment, monkeypa
     text, shown = BK.render_shown(items, {"bill_email": 25})
     assert 0 < len(shown) < 25 and all(f"- {x['id']} " in text for x in shown)
     assert all(f"- {x['id']} " not in text or x in shown for x in items[len(shown) + 1:])
+
+
+def test_the_tick_that_sets_finance_up_builds_the_bookkeeper_too(environment):
+    """Finance set up by the hourly scheduler tick (not at a start) builds the Bookkeeper in that same tick. The
+    scheduler gets the onboarding and auth the app built it with (backend/app.py), else the Bookkeeper waited for the
+    next restart or a computer's enrollment."""
+    from backend.scheduler import Scheduler
+    api = built(environment)
+    store = api.app.state.store
+
+    def granted(c):   # the Bookkeeper's Finance rights; only ensure grants them, once Finance is set up
+        if not FR.is_set_up(c):
+            return set()
+        return {r for t in FR.access(c, BK.ACTOR)["teammates"] if t["teammate"] == BK.ACTOR for r in t["rights"]}
+    with store.read() as c:
+        assert not FR.is_set_up(c) and granted(c) == set()
+    failures = []
+    Scheduler(store, api.app.state.execution, onboarding=api.app.state.onboarding,
+              auth=api.app.state.auth).finance_tick(H.parse_ts(H.now()), failures)
+    assert failures == []
+    with store.read() as c:
+        assert FR.is_set_up(c) and granted(c) == DEFAULT_RIGHTS
