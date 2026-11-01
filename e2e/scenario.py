@@ -132,7 +132,7 @@ def populate_direct(path):
     with sqlite3.connect(path) as c:
         c.execute("INSERT INTO rate_limits(runtime,used_percent,window_minutes,resets_at,updated) "
                   "VALUES('codex',12.5,300,'2026-11-01T05:00:00.000000Z','2026-11-01T00:00:00.000000Z')")
-        c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) "
+        c.execute("INSERT INTO service_health(service,last_success,last_error,detail) "
                   "VALUES('mail','2026-11-01T00:00:00.000000Z',NULL,'{\"checked\": 3}')")
         c.execute("INSERT INTO perf_points(runner_id,span,ts,n,scope,cpu,cpu_max,load1,mem_used,mem_max,mem_total,"
                   "swap_used,swap_total,disk_free,disk_total,active) "

@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HERE = ROOT / "scripts/cleanup"
 WAVE_ORDER = ["1", "2", "2s", "2b", "3"]
 
-PY_DIRS = ("backend", "clients", "runner", "scripts", "setup", "evals", "connectors", "integrations", "tools", "ui", "docker",
+PY_DIRS = ("backend", "e2e", "clients", "runner", "scripts", "setup", "evals", "connectors", "integrations", "tools", "ui", "docker",
            "docs-eval", "contracts")
 PY_FILES = ("conftest.py",)
 JS_GLOBS = ("ui/**/*.js", "ui/**/*.cjs", "ui/**/*.mjs", "app/shell/**/*.js", "scripts/**/*.cjs", "scripts/**/*.mjs")
