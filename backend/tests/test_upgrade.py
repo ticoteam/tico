@@ -33,11 +33,12 @@ def old_release(tmp_path):
 
 
 def test_previous_release_database_boots_twice_and_keeps_rows(tmp_path):
+    # Below the bridge (test_migrations), so this is the legacy import path: adopt_legacy, as manage.migrate_legacy boots.
     path = old_release(tmp_path)
-    boot(path)
+    boot(path, adopt_legacy=True)
     first = state(path)
     assert first[0] == len(H.MIGRATIONS)
-    boot(path)
+    boot(path, adopt_legacy=True)
     assert state(path) == first
     with sqlite3.connect(path) as c:
         assert [r[0] for r in c.execute("SELECT slug FROM bots ORDER BY slug")] == ["coo", "cmo", "seo"][::-1][::-1] or True
@@ -51,7 +52,7 @@ def test_goal_id_already_present_with_version_behind_still_boots(tmp_path):
     with sqlite3.connect(path) as c:
         assert "goal_id" in {r[1] for r in c.execute("PRAGMA table_info(tasks)")}
         c.execute("PRAGMA user_version=5")   # the goals migration (and everything after) not recorded
-    boot(path)
+    boot(path, adopt_legacy=True)
     assert state(path)[0] == len(H.MIGRATIONS)
 
 
@@ -107,7 +108,7 @@ def test_retired_routine_tables_are_copied_before_they_are_dropped(tmp_path):
         c.execute("CREATE TABLE routine_sources(id TEXT, body TEXT)")
         c.execute("INSERT INTO routine_sources VALUES('r1','keep me')")
         c.execute("DELETE FROM cloud_migrations WHERE version=28")
-    boot(path)
+    boot(path, adopt_legacy=True)
     with sqlite3.connect(path) as c:
         assert c.execute("SELECT body FROM routine_sources_retired").fetchall() == [("keep me",)]
         assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='routine_sources'").fetchone()

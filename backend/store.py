@@ -1106,6 +1106,9 @@ class Store:
     def initialize(self, *, seed_market=True, adopt_legacy=False):
         from . import redesign_migration    # the one-time move to Automations, at the end of this method
         self.settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Refuses a database this code must not open, before anything writes to it (backend/migrations).
+        from . import migrations as Migrations
+        Migrations.preflight(self.settings.db_path, adopt_legacy=adopt_legacy)
         with H.connect(self.settings.db_path, adopt_legacy=adopt_legacy) as c:
             c.executescript(SCHEMA)
             from . import start_places as _start_places
@@ -1140,8 +1143,6 @@ class Store:
             _system_routines.ensure(c)
             from . import task_rules as _task_rules
             c.executescript(_task_rules.SCHEMA)
-            from . import audit_log as _audit_log
-            c.executescript(_audit_log.SCHEMA)
             from . import rules as _rules
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)
@@ -2108,6 +2109,9 @@ class Store:
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
+            # The histories this file already has are recorded as applied, then its pending migration files run
+            # (backend/migrations): the persistent schema changes, each in its own transaction.
+            Migrations.apply(c)
         c.close()
         # Once per install: routines and wake rules become automations (backend/redesign_migration.py). Each object
         # in its own write, so a restart part way goes on where it stopped.
