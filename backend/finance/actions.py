@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
-from . import banking, budgeting, cards, documents, gateway_sync, gating, handlers, jobs, payments, posting
+from . import banking, budgeting, cards, documents, gateway_sync, gating, handlers, jobs, mirror, payments, posting
 from . import raw_totals, runs
 from . import setup as setup_mod
 from . import rights, sync, tax, usage
@@ -46,7 +46,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     "reconcile_undo": banking.reconcile_undo,
     "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
     "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
-    **documents.PLANNERS, **tax.PLANNERS, **raw_totals.PLANNERS}
+    **documents.PLANNERS, **mirror.PLANNERS, **tax.PLANNERS, **raw_totals.PLANNERS}
 assert set(PLANNERS) == set(K.LIVE)
 
 STATUSES = ("committed", "needs_approval", "denied", "failed", "expired", "withdrawn")
@@ -198,10 +198,14 @@ def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
           action_id: str) -> tuple[K.Gate, handlers.Plan]:
     """The right check first (a missing right is a denial, or for budgets a request to the asker's manager), then the
     kind's own checks and default gate, then the gate rules (§6.3), which run again whenever this does: at consume."""
+    if ctx.book.mode == "mirror" and kind in mirror.REFUSED:
+        raise FinanceError(NOT_AVAILABLE, f"{kind} is not available while the books are a provider's (mirror mode)")
     by_right = K.authority(ctx.org, p.who, kind, ctx.rights(p.who))
     if by_right is not None and by_right.outcome == "deny":
         raise FinanceError(DENIED, f"{kind} needs {by_right.rule.removeprefix('right:')}")
-    plan = PLANNERS[kind](ctx, p.who, payload)
+    # A mirrored book sends its documents to the provider first: the mirror's planner queues the write.
+    planner = mirror.DOC_PLANNERS.get(kind) if ctx.book.mode == "mirror" else None
+    plan = (planner or PLANNERS[kind])(ctx, p.who, payload)
     gate = by_right or plan.gate
     if by_right is not None:
         gate = gating.combine(by_right, plan.gate, p.who)
@@ -555,6 +559,8 @@ banking_stop = sync.stop
 banking_ring = sync.ring
 banking_step = sync.step
 mercury_probe = sync.probe_credential
+stripe_delivery = sync.stripe_delivery
+stripe_probe = sync.stripe_probe
 
 
 def receive(c: sqlite3.Connection, payload: dict[str, object]) -> bool:

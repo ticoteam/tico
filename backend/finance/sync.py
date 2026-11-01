@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from . import banking, cards, payments, transfers
+from . import banking, cards, payments, stripe_sync, transfers
 from .context import is_set_up, load
 from .core import feeds as F
 from .core.errors import FinanceError
@@ -134,13 +134,32 @@ def delivery(c: Any, connection_id: str | None, body: Mapping[str, object], at: 
     return kept
 
 
+def stripe_delivery(c: Any, body: Mapping[str, object], at: str | None = None) -> bool:
+    """A verified Stripe webhook (backend/triggers.py checked its signature), kept once in fin_inbox by event id and the
+    worker rung. The worker reads the balance itself, so the event only says when to read. With one live Stripe
+    connection the event is its; with none or several it is not kept."""
+    eid = str(body.get("id") or "")
+    if not eid or not is_set_up(c):
+        return False
+    live = [str(r["id"]) for r in SK.connections(c, "stripe") if str(r["status"]) in ("active", "error")]
+    if len(live) != 1:
+        return False
+    kept = SK.inbox_add(c, connection_id=live[0], provider="stripe", event_id=eid, payload=body, at=at or _now())
+    if kept:
+        tico.after_commit(c, ring)
+    return kept
+
+
+stripe_probe = stripe_sync.probe_credential
+
+
 # ------------------------------------------------------------------------------------------------ one step
 def step(store: Any, vault: Any, *, rehearsal: bool = False, make: Make | None = None, at: str | None = None) -> None:
     """One pass over every connection that is due, or rung."""
     with store.read() as c:
         if not is_set_up(c):
             return
-        rows = SK.connections(c, "mercury")
+        rows = [r for r in SK.connections(c) if str(r["provider"]) in ("mercury", "stripe")]
     for row in rows:
         if str(row["status"]) not in ("active", "error"):
             continue
@@ -170,6 +189,8 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
             len(SK.outbox_stuck(c, _after(now, -CLAIM_MINUTES * 60), cid)) > 0
     if row is None or str(row["status"]) == "disconnected":
         return "gone"
+    if str(row["provider"]) == "stripe":
+        return stripe_sync.connection(store, vault, cid, rehearsal=rehearsal, make=make, at=now)
     if rehearsal:
         with store.transaction() as c:
             for o in SK.outbox_due(c, now, OUTBOX_MOST, cid):

@@ -249,14 +249,27 @@ def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_a
                 through: str) -> list[Any]:
     """This money account's rows no done reconciliation cleared, each with what its entries moved on the account's GL
     line: `through`, every entry ever posted for it (originals, their reversals, replacements, a shared transfer)
-    dated through that day; `live`, its current posted entry, whatever its date."""
+    dated through that day; `live`, its current posted entry, whatever its date. A Stripe row in a day's summary shares
+    its entry with the day's other rows, so it counts its own amount (its net) rather than the whole entry's line. A row
+    that left its summary keeps that summary's amount through the days before the summary was reversed (`summary_entry`),
+    since the closed period it was booked in still holds it."""
+    summary = "json_extract(f.raw_json, '$.summary')=1"
+    left = "json_extract(f.raw_json, '$.summary_entry')"
+    left_share = (f"CASE WHEN {left} IS NOT NULL AND EXISTS (SELECT 1 FROM fin_entries e WHERE e.id={left} AND "
+                  f"e.entry_date<=:through) AND NOT EXISTS (SELECT 1 FROM fin_entries r WHERE r.reverses_id={left} AND "
+                  "r.status='posted' AND r.entry_date<=:through) THEN f.amount ELSE 0 END")
     return c.execute(
-        "SELECT f.id, COALESCE((SELECT SUM(l.amount) FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id AND "
+        f"SELECT f.id, (CASE WHEN {summary} THEN CASE WHEN EXISTS (SELECT 1 FROM fin_entries e WHERE e.id=f.entry_id "
+        "AND e.status='posted' AND e.entry_date<=:through) THEN f.amount ELSE 0 END ELSE "
+        "COALESCE((SELECT SUM(l.amount) FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id AND "
         "l.account_id=:gl WHERE e.book_id=:book AND e.source IN ('bank','card') AND e.entry_date<=:through AND "
         "(e.source_id=f.id OR substr(e.source_id, 1, length(f.id) + 1)=f.id || ':' OR (e.source_id LIKE 'transfer:%' "
-        "AND instr(e.source_id, f.id)>0))), 0) AS through_amount, "
+        "AND instr(e.source_id, f.id)>0))), 0) END) + "
+        f"{left_share} AS through_amount, "
+        f"CASE WHEN {summary} THEN CASE WHEN EXISTS (SELECT 1 FROM fin_entries e WHERE e.id=f.entry_id "
+        "AND e.status='posted') THEN f.amount ELSE 0 END ELSE "
         "COALESCE((SELECT SUM(l.amount) FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id AND e.status='posted' "
-        "WHERE l.entry_id=f.entry_id AND l.account_id=:gl), 0) AS live_amount "
+        "WHERE l.entry_id=f.entry_id AND l.account_id=:gl), 0) END AS live_amount "
         "FROM fin_feed_txns f WHERE f.money_account_id=:money AND f.reconciliation_id IS NULL",
         {"gl": gl_account_id, "book": book_id, "through": through, "money": money_account_id}).fetchall()
 
@@ -737,6 +750,14 @@ def card_create_payload(c: sqlite3.Connection, card_id: str) -> dict[str, Any]:
     return loads(row[0]) if row is not None else {}
 
 
+def open_writes(c: sqlite3.Connection, connection_id: str, ops: Sequence[str]) -> list[Any]:
+    """Writes of these kinds the provider does not hold yet: pending ones, and failed ones it could not rule out. A
+    write it refused gives its amount back."""
+    return c.execute(f"SELECT * FROM fin_outbox WHERE connection_id=? AND op IN ({_marks(ops)}) AND "
+                     "(status='pending' OR (status='failed' AND unknown=1)) ORDER BY created_at, id",
+                     (connection_id, *ops)).fetchall()
+
+
 def outbox_stuck(c: sqlite3.Connection, before: str, connection_id: str) -> list[Any]:
     """Writes claimed before `before` and never recorded: the worker stopped mid-call."""
     return c.execute("SELECT * FROM fin_outbox WHERE status='pending' AND claimed_at IS NOT NULL AND claimed_at<? AND "
@@ -880,3 +901,104 @@ def last_rule_run(c: sqlite3.Connection, action_id: str) -> Any:
 def recipient_paid(c: sqlite3.Connection, recipient_id: str) -> bool:
     return c.execute("SELECT 1 FROM fin_payments WHERE recipient_id=? AND status='settled' LIMIT 1",
                      (recipient_id,)).fetchone() is not None
+
+
+# ------------------------------------------------------------------------------------------------ Stripe
+def feed_total(c: sqlite3.Connection, money_account_id: str) -> int:
+    """What a money account's feed rows add up to: a Stripe balance's nets, every row taken in so far."""
+    row = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE money_account_id=?",
+                    (money_account_id,)).fetchone()
+    return int(row[0])
+
+
+def stripe_source(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], link: str) -> Any:
+    """The Stripe row of these kinds whose link is this id (a sale, or a payout), the first one taken in."""
+    return c.execute(f"SELECT * FROM fin_feed_txns WHERE money_account_id=? AND kind IN ({_marks(kinds)}) AND "
+                     "json_extract(raw_json, '$.link')=? ORDER BY txn_date, id LIMIT 1",
+                     (money_account_id, *kinds, link)).fetchone()
+
+
+def stripe_refunded(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], link: str) -> int:
+    """What the posted refunds, disputes and returned refunds of one charge add up to so far (a refund is positive)."""
+    return int(c.execute(f"SELECT COALESCE(SUM(-json_extract(raw_json, '$.amount')), 0) FROM fin_feed_txns WHERE "
+                         f"money_account_id=? AND kind IN ({_marks(kinds)}) AND json_extract(raw_json, '$.link')=? AND "
+                         "status='posted' AND entry_id IS NOT NULL",
+                         (money_account_id, *kinds, link)).fetchone()[0])
+
+
+def stripe_given(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], link: str) -> dict[str, int]:
+    """What the posted refunds, disputes and returned refunds of one charge gave back to each settlement (settlement id
+    to cents; a restore is negative). Each refund keeps its shares in raw_json.gave."""
+    rows = c.execute("SELECT j.key, COALESCE(SUM(j.value), 0) FROM fin_feed_txns f, json_each(f.raw_json, '$.gave') j "
+                     f"WHERE f.money_account_id=? AND f.kind IN ({_marks(kinds)}) AND "
+                     "json_extract(f.raw_json, '$.link')=? AND f.status='posted' AND f.entry_id IS NOT NULL "
+                     "GROUP BY j.key", (money_account_id, *kinds, link)).fetchall()
+    return {str(key): int(total) for key, total in rows}
+
+
+def stripe_restored(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], source: str) -> bool:
+    """Whether a posted restore (a refund failure, or a dispute won back) already names this Stripe source id."""
+    return c.execute(f"SELECT 1 FROM fin_feed_txns WHERE money_account_id=? AND kind IN ({_marks(kinds)}) AND "
+                     "json_extract(raw_json, '$.source')=? AND json_extract(raw_json, '$.amount')>0 AND "
+                     "status='posted' AND entry_id IS NOT NULL LIMIT 1", (money_account_id, *kinds, source)).fetchone() \
+        is not None
+
+
+def stripe_reversal(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], source: str) -> Any:
+    """The posted money-out row (a refund or a dispute) that a refund failure names by its Stripe source id, or None."""
+    return c.execute(f"SELECT * FROM fin_feed_txns WHERE money_account_id=? AND kind IN ({_marks(kinds)}) AND "
+                     "json_extract(raw_json, '$.source')=? AND json_extract(raw_json, '$.amount')<0 AND "
+                     "status='posted' AND entry_id IS NOT NULL ORDER BY json_extract(raw_json, '$.created') LIMIT 1",
+                     (money_account_id, *kinds, source)).fetchone()
+
+
+def stripe_summary_rows(c: sqlite3.Connection, money_account_id: str) -> list[Any]:
+    """Stripe rows marked for their day's summary entry that have not posted yet."""
+    return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND status='new' AND entry_id IS NULL AND "
+                     "json_extract(raw_json, '$.summary')=1 ORDER BY txn_date, id", (money_account_id,)).fetchall()
+
+
+def stripe_waiting(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], most: int) -> list[Any]:
+    """Stripe rows of these kinds still waiting for the sale or payout they are about, oldest first."""
+    return c.execute(f"SELECT * FROM fin_feed_txns WHERE money_account_id=? AND kind IN ({_marks(kinds)}) AND "
+                     "status='new' AND entry_id IS NULL ORDER BY txn_date, id LIMIT ?",
+                     (money_account_id, *kinds, most)).fetchall()
+
+
+# A posted entry that is the bank side of a Stripe payout's clearing: its source id is `stripe:clear:<feed row id>`,
+# and `fresh_source` may add `:<when>` after it. `f` is the feed row of the payout.
+_CLEARED = ("e.source='bank' AND e.status='posted' AND (e.source_id = 'stripe:clear:' || f.id OR "
+            "substr(e.source_id, 1, length('stripe:clear:') + length(f.id) + 1) = 'stripe:clear:' || f.id || ':')")
+
+
+def stripe_cleared(c: sqlite3.Connection, payout_id: str) -> bool:
+    """Whether a Stripe payout's transfer to the bank has posted (a deposit cleared it)."""
+    return c.execute(f"SELECT 1 FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id JOIN "
+                     f"fin_entries e ON e.book_id=m.book_id WHERE f.id=? AND {_CLEARED} LIMIT 1",
+                     (payout_id,)).fetchone() is not None
+
+
+def stripe_transit(c: sqlite3.Connection, book_id: str, *, start: str, end: str, amount: int | None, most: int
+                   ) -> list[Any]:
+    """Stripe payouts still in transit: posted, not returned, and not cleared by a bank deposit. `amount` is the
+    payout's own (negative) amount when given."""
+    return c.execute(
+        "SELECT f.* FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id "
+        "WHERE m.book_id=? AND m.kind='stripe' AND f.kind='payout' AND f.status='posted' AND "
+        "f.txn_date BETWEEN ? AND ? AND (? IS NULL OR f.amount=?) AND NOT EXISTS (SELECT 1 FROM fin_feed_txns g "
+        "WHERE g.money_account_id=f.money_account_id AND g.kind IN ('payout_failure', 'payout_cancel') AND "
+        "json_extract(g.raw_json, '$.link')=json_extract(f.raw_json, '$.link')) AND NOT EXISTS (SELECT 1 FROM "
+        f"fin_entries e WHERE e.book_id=m.book_id AND {_CLEARED}) ORDER BY f.txn_date, f.id LIMIT ?",
+        (book_id, start, end, amount, amount, most)).fetchall()
+
+
+def stripe_deposits(c: sqlite3.Connection, book_id: str, *, start: str, end: str, amount: int | None, most: int
+                    ) -> list[Any]:
+    """Bank deposits that look like Stripe's (STRIPE in the counterparty or description) and wait for their payout:
+    new, settled, and not a card's or a request's."""
+    return c.execute(
+        "SELECT f.* FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id "
+        "WHERE m.book_id=? AND m.kind='bank' AND f.status='new' AND f.pending=0 AND f.entry_id IS NULL AND "
+        "f.card_id IS NULL AND f.request_id IS NULL AND f.amount>0 AND f.txn_date BETWEEN ? AND ? AND "
+        "(? IS NULL OR f.amount=?) AND (UPPER(f.counterparty) LIKE '%STRIPE%' OR UPPER(f.description) LIKE '%STRIPE%') "
+        "ORDER BY f.txn_date, f.id LIMIT ?", (book_id, start, end, amount, amount, most)).fetchall()

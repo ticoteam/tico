@@ -3,6 +3,7 @@ signed cents, the webhook signature check, statement balances, and the hash that
 recipient. Mercury is the first provider; its documented gaps are settled here, once, in tested functions."""
 import hashlib
 import hmac
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -188,3 +189,57 @@ REQUEST_STATUS = {"pendingApproval": "awaiting_bank_approval", "approved": "subm
 def request_status(value: object) -> str:
     """A Mercury send-money request's status as a payment status; anything unknown stays where it is ("")."""
     return REQUEST_STATUS.get(str(value or ""), "")
+
+
+# ------------------------------------------------------------------------------------------------ Stripe
+STRIPE_PAYOUT = "payout"                                    # the balance moved to the bank: a transfer, never income
+STRIPE_PAYOUT_BACK = ("payout_failure", "payout_cancel")    # a payout that came back to the balance
+STRIPE_CHARGES = ("charge", "payment")                      # sales: income, or the invoice they pay
+STRIPE_UNWINDS = ("refund", "payment_refund", "refund_failure", "adjustment")   # reverse or restore a sale (disputes)
+STRIPE_COSTS = ("stripe_fee", "network_cost", "tax_fee")    # Stripe's own charges: expense, no income
+STRIPE_LINKED = (*STRIPE_CHARGES, STRIPE_PAYOUT, *STRIPE_PAYOUT_BACK)   # kinds whose source object is the link itself
+
+
+def _int(value: object) -> int:
+    """A Stripe amount: whole cents (Stripe never sends a fraction of one)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise invalid("a Stripe amount is a whole number of cents")
+    return value
+
+
+def _link(kind: str, source: dict[str, Any], source_id: str) -> str:
+    """The sale or payout a balance transaction is about: the charge a refund or dispute names, else the source itself
+    for a sale or a payout, else "" (a person is asked)."""
+    charge = str(source.get("charge") or "")
+    if charge:
+        return charge
+    return source_id if kind in STRIPE_LINKED else ""
+
+
+def stripe_txn(raw: dict[str, Any], account: str) -> FeedTxn:
+    """A Stripe balance transaction on its Stripe account. Its `net` (gross less fee) is what the balance moved, so it is
+    the feed amount; gross and fee are kept in the raw copy for posting (`stripe_parts`). The day is the UTC day it was
+    created. Only the billing name is kept from the source (the part that matches an invoice); the source is kept by id,
+    and `link` names the sale or payout it is about."""
+    tid = str(raw.get("id") or "")
+    if not tid or not account:
+        raise invalid("a balance transaction has an id and an account")
+    kind = str(raw.get("type") or "")
+    gross, fee, net = _int(raw.get("amount")), _int(raw.get("fee")), _int(raw.get("net"))
+    created = _int(raw.get("created"))
+    day = datetime.fromtimestamp(created, timezone.utc).date().isoformat()
+    source = raw.get("source")
+    obj = _dict(source)
+    source_id = str(obj.get("id") or (source if isinstance(source, str) else "") or "")[:200]
+    billing = _dict(obj.get("billing_details"))
+    description = str(raw.get("description") or "")[:500]
+    keep: dict[str, Any] = {"id": tid, "type": kind, "amount": gross, "fee": fee, "net": net,
+                            "currency": str(raw.get("currency") or ""), "created": created,
+                            "description": description, "source": source_id, "link": _link(kind, obj, source_id)}
+    return FeedTxn(provider_id=tid, account_id=account, amount=net, txn_date=day, status=POSTED, kind=kind,
+                   counterparty=str(billing.get("name") or "")[:200], description=description, version=1, raw=keep)
+
+
+def stripe_parts(raw: Mapping[str, Any]) -> tuple[int, int]:
+    """A stored Stripe balance transaction's (gross, fee) in cents."""
+    return _int(raw.get("amount")), _int(raw.get("fee"))

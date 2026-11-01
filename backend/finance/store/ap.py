@@ -459,6 +459,12 @@ def settled_from(c: sqlite3.Connection, from_kind: str, from_id: str) -> int:
     return int(row[0])
 
 
+def repoint_credit(c: sqlite3.Connection, old: str, new: str) -> None:
+    """The credit applications a credit memo's entry made now come from its replacement entry, still applied."""
+    c.execute("UPDATE fin_settlements SET from_id=?, entry_id=? WHERE from_kind='credit' AND from_id=? "
+              "AND voided_at IS NULL", (new, new, old))
+
+
 def open_owing(c: sqlite3.Connection, kind: str, book_id: str, left: int, most: int = 20) -> list[Any]:
     """Open documents that still owe exactly `left`, with `contact_name` (what a new feed row may be paying). A
     scheduled bill counts (the vendor may pull it before its day); one with a live Finance payment does not (that
@@ -472,6 +478,14 @@ def open_owing(c: sqlite3.Connection, kind: str, book_id: str, left: int, most: 
     return c.execute(f"SELECT d.*, k.name AS contact_name FROM {table} d LEFT JOIN fin_contacts k ON k.id=d.{contact} "
                      f"WHERE d.book_id=? AND d.status IN ({_marks(statuses)}) AND d.total - {paid} = ? {live} "
                      "ORDER BY d.id LIMIT ?", args).fetchall()
+
+
+def paid_owing(c: sqlite3.Connection, kind: str, book_id: str, total: int, most: int = 20) -> list[Any]:
+    """Documents marked paid for exactly `total`, with `contact_name` (a sale that paid one already)."""
+    table, _, _, _, contact = DOCS[kind]
+    return c.execute(f"SELECT d.*, k.name AS contact_name FROM {table} d LEFT JOIN fin_contacts k ON k.id=d.{contact} "
+                     "WHERE d.book_id=? AND d.status='paid' AND d.total=? ORDER BY d.id LIMIT ?",
+                     (book_id, total, most)).fetchall()
 
 
 def drop_unmatched(c: sqlite3.Connection, book_id: str, file_ids: Sequence[str]) -> int:
