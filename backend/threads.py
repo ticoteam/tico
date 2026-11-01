@@ -683,10 +683,18 @@ def _bot_denial(c, v, row, root, audience):
         if _bot_grant(c, v, row) or _own_ask_to_a_person(v.who, row):
             return None
         return _MISSING
-    # An external agent: membership is the grant (what a claim would have granted a turn for the same message).
-    if audience_has(c, root, v.actor, viewer_=v) or _own_ask_to_a_person(v.who, row):
+    # An external agent (spec C1, outside a turn): membership, participation, its Home or one it reads, or a task it
+    # may read. A company or team thread reaches it only through a turn's grant: being in a thread's wake audience
+    # (audience_has) is not standing read access.
+    if _bot_standing(c, v, root, audience) or _own_ask_to_a_person(v.who, row):
         return None
     return _MISSING
+
+
+def _bot_standing(c, v, root, audience):
+    if audience in ("company", "team"):
+        return v.actor in (root.get("participants") or [])
+    return audience_has(c, root, v.actor, viewer_=v)
 
 
 def audience_has(c, thread, actor, *, viewer_=None):
@@ -884,10 +892,15 @@ def can_post(c, v, thread):
     root = root_of(c, row)
     if row.get("archived_at") or root.get("archived_at") or row.get("closed_at"):
         return False
-    if audience_of(root) == "home" and not v.is_bot:
+    if audience_of(root) == "home":
         from . import teammate_access
         owner = home_owner(root)
-        return bool(owner) and teammate_access.can(c, v.who, "write", owner, auth=v.auth)
+        if v.is_bot and (owner == v.actor or (v.runner_turn and _bot_grant(c, v, row))):
+            return True                  # its own Home, or a reply back into the thread its run was granted
+        try:
+            return bool(owner) and teammate_access.can(c, v.who, "write", owner, auth=v.auth)
+        except (ValueError, KeyError, Problem):
+            return False
     if audience_of(root) == "meeting":
         return False
     return True
@@ -943,8 +956,7 @@ def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FR
             terms = (f"({terms} OR COALESCE({x}root_id,{x}id) IN (SELECT r.id FROM {t('conversations')} r WHERE "
                      f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='r')} WHERE value={me}) OR "
                      f"(r.audience IS NULL AND {_LEGACY_ROOM_BOT.format(r='r')}={slug}) OR "
-                     f"(r.audience='home' AND (r.owner_actor={me} OR {home_bot})) OR r.audience='company' OR "
-                     f"(r.audience='team' AND r.audience_group_id IN {_qlist(v.chain(c))}) "
+                     f"(r.audience='home' AND (r.owner_actor={me} OR {home_bot})) "
                      f"OR (r.audience IN ('members','personal') AND EXISTS (SELECT 1 FROM {t('thread_members')} tm "
                      f"WHERE tm.thread_id=r.id AND tm.actor IN {names}))))")
         out = f"({terms}) AND {fence}"
@@ -1048,13 +1060,55 @@ def readable_ids(c, v, ids):
 
 
 # ----------------------------------------------------------------------------- writing: stamp and record
-def restricted_for(conv, refs, in_reply_to, attachments=False):
+# Safe keys whose value may be one level of structure (the rest are plain values): what threads itself writes.
+NESTED_REF_KEYS = ("origin", "mentions", "warnings")
+_REFERENCE = re.compile(r"^task:|#/task/|/tasks/")
+
+
+def _ref_strings(refs):
+    """Every string under `refs`, or None when its shape is not one threads knows to be harmless: a key outside
+    SAFE_REF_KEYS, or structure anywhere but one level under NESTED_REF_KEYS (warnings: a list of flat objects)."""
+    if refs in (None, "", {}):
+        return []
+    if not isinstance(refs, dict):
+        return None
+    out = []
+
+    def flat(value, depth):
+        if isinstance(value, str):
+            out.append(value)
+            return True
+        if value is None or isinstance(value, (bool, int, float)):
+            return True
+        if depth <= 0:
+            return False
+        items = value.values() if isinstance(value, dict) else value if isinstance(value, list) else None
+        return items is not None and all(flat(v, depth - 1) for v in items)
+
+    for key, value in refs.items():
+        if key not in SAFE_REF_KEYS:
+            return None
+        depth = 2 if key == "warnings" else 1 if key in NESTED_REF_KEYS else 0
+        if not flat(value, depth):
+            return None
+    return out
+
+
+def restricted_for(conv, refs, in_reply_to, attachments=False, c=None):
+    """1 when the message needs the per-message check: a reply, files, a task or meeting thread, or refs that are
+    not plainly harmless (an unknown key or shape, a string that names a task, or with `c`, any task's id), the same
+    nested walk the per-message check makes (task_privacy.message_tasks)."""
     if in_reply_to or attachments:
         return 1
     if conv and (audience_of(conv) in ("task", "meeting") or conv.get("task_id")):
         return 1
-    if isinstance(refs, dict) and any(k not in SAFE_REF_KEYS for k in refs):
+    strings = _ref_strings(refs)
+    if strings is None or any(_REFERENCE.search(x) for x in strings):
         return 1
+    if c is not None and strings:
+        from . import task_privacy
+        if task_privacy.references(c, list(strings)):
+            return 1
     return 0
 
 
@@ -1064,7 +1118,7 @@ def stamp(c, row, conv, refs):
     origin = (POSTING.get() or {}).get("origin") or {}
     row["origin_id"] = str(origin.get("origin_id") or "") or mint_origin(c)
     row["revision"] = int(origin.get("revision") or 0)
-    row["restricted"] = restricted_for(conv, refs, row.get("in_reply_to"), (POSTING.get() or {}).get("attachments"))
+    row["restricted"] = restricted_for(conv, refs, row.get("in_reply_to"), (POSTING.get() or {}).get("attachments"), c)
     row["legacy_audience"] = None
     return row
 
@@ -1099,12 +1153,11 @@ def record(c, message, conv):
         c.execute("UPDATE conversations SET last_unread_seq=MAX(last_unread_seq,?) WHERE id=?",
                   (message.get("seq") or 0, thread["id"]))
     _follow(c, thread["id"], author, "posted", message.get("seq"))
-    if posting is None:
-        # A legacy writer: its primary delivery is the trigger's; mention rows are kept, nobody else is woken.
-        for actor, _kind in in_audience:
-            if str(actor).startswith("human:") and actor != author:
-                _follow(c, thread["id"], actor, "mentioned", (message.get("seq") or 1) - 1)
-        return {"warnings": warnings}
+    # Every write fans out the same way (mentions, DM members, the Home's owner, sub-thread repliers, outside
+    # destinations) under the same loop guard, legacy writers (runner replies, old routes) included. A task comment's
+    # mentions are the task rules' (hubdb.mentioned_people, task bots), so a legacy write in a task thread leaves them.
+    if posting is None and audience_of(root_of(c, thread)) == "task":
+        in_audience = []
     woken = deliver(c, thread, message, in_audience, posting)
     return {"warnings": warnings, "deliveries": woken}
 
@@ -1182,7 +1235,10 @@ def deliver(c, thread, message, in_audience, posting):
     author = message.get("from_actor") or ""
     primary = message.get("to_actor") or None
     refs = message.get("refs") or {}
-    replay = bool(refs.get("import") or refs.get("replay"))
+    # An import or replay wakes no bot; nor does a legacy writer's notice (the keeper telling a bot something already
+    # starts what it should, hubdb.notice).
+    replay = bool(refs.get("import") or refs.get("replay")) or (
+        posting is None and (message.get("kind") == "notice" or author == H.KEEPER))
     wanted = {}                                          # actor -> reason, first reason wins
     for actor, kind in in_audience:
         wanted.setdefault(actor, "ask" if message.get("kind") == "ask" and actor == primary else kind)
@@ -1230,6 +1286,10 @@ def deliver(c, thread, message, in_audience, posting):
                 _capped_notice(c, root)
             elif mode in ("queue", "steer"):
                 carrier = _carrier(c, thread, message, actor, reason, rule)
+                if carrier is None:
+                    c.execute("UPDATE message_deliveries SET state='moot', updated_at=? WHERE id=?", (_now(), did))
+                    out.append({"recipient": actor, "mode": mode, "reason": reason, "state": "moot"})
+                    continue
                 c.execute("UPDATE message_deliveries SET carrier_id=? WHERE id=?", (carrier, did))
             elif mode == "defer":
                 _defer_note(c, message, actor)
@@ -1312,18 +1372,43 @@ def quiet_notice(message):
     return isinstance(refs, dict) and any(refs.get(k) for k in NO_WAKE_REF_KEYS)
 
 
+def carrier_current(c, carrier, bot):
+    """Whether a carrier may still start `bot`'s run: the message it carries is still there, undeleted, in the same
+    thread, the bot is still in that thread's audience, and the per-message check passes for it. Checked when the
+    carrier is written and again when its job is claimed (execution.start_claimed)."""
+    carrier = dict(carrier or {})
+    refs = carrier.get("refs") or H._json(carrier.get("refs_json"), {}) or {}
+    source = H.message(c, refs.get("carries")) if isinstance(refs, dict) and refs.get("carries") else None
+    if not source or source.get("conversation_id") != carrier.get("conversation_id"):
+        return False
+    return _source_readable(c, thread_row(c, source["conversation_id"]), source, bot)
+
+
+def _source_readable(c, thread, message, bot):
+    if thread is None or not audience_has(c, thread, bot):
+        return False
+    from . import task_privacy
+    return task_privacy.message_readable(c, bot, message)
+
+
 def _carrier(c, thread, message, bot, reason, rule):
-    """A keeper notice to `bot` in the same thread whose job starts its run for `message`. No seq: no timeline,
-    counter or SSE thread view shows it."""
+    """A keeper notice to `bot` in the same thread whose job starts its run for `message`, or None when the bot may not
+    read that message. No seq: no timeline, counter or SSE thread view shows it. It carries the source's provenance
+    by reference: the per-message check reads a carrier as the message it carries (task_privacy.message_readable),
+    and its legacy audience is copied."""
+    if not _source_readable(c, thread, message, bot):
+        return None
     cid = _new_id()
     refs = {"carries": message["id"], "wake": "thread", "reason": reason, "from": message.get("from_actor")}
     if rule:
         refs["rule"] = rule
     author = message.get("from_actor") or ""
     body = f"{author} in this thread: {message.get('body') or ''}"
+    legacy = c.execute("SELECT legacy_audience FROM messages WHERE id=?", (message["id"],)).fetchone()
     c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,in_reply_to,created,"
-              "origin_id,revision,restricted) VALUES(?,?,?,?,'notice',?,?,NULL,?,?,0,1)",
-              (cid, thread["id"], H.KEEPER, bot, body, H._dump(refs), _now(), mint_origin(c)))
+              "origin_id,revision,restricted,legacy_audience) VALUES(?,?,?,?,'notice',?,?,NULL,?,?,0,1,?)",
+              (cid, thread["id"], H.KEEPER, bot, body, H._dump(refs), _now(), mint_origin(c),
+               legacy[0] if legacy else None))
     return cid
 
 
@@ -1410,6 +1495,9 @@ def resume_capped(c, root_id, *, limit=None):
             c.execute("UPDATE message_deliveries SET state='moot', updated_at=? WHERE id=?", (_now(), d["id"]))
             continue
         carrier = _carrier(c, thread, message, d["recipient"], d["reason"], None)
+        if carrier is None:
+            c.execute("UPDATE message_deliveries SET state='moot', updated_at=? WHERE id=?", (_now(), d["id"]))
+            continue
         c.execute("UPDATE message_deliveries SET state='pending', carrier_id=?, updated_at=? WHERE id=?",
                   (carrier, _now(), d["id"]))
     if rows:
@@ -2216,8 +2304,11 @@ def _revise(c, message, actor, *, body=None, deleted=False, revision=None):
         c.execute("UPDATE messages SET body='', deleted_at=?, revision=? WHERE id=?", (now, new, message["id"]))
         reopened = [r[0] for r in c.execute("SELECT id FROM messages WHERE answered_by=?", (message["id"],))]
         c.execute("UPDATE messages SET answered_by=NULL WHERE answered_by=?", (message["id"],))
+        # Nobody gets a deleted message any more, except an outside destination that already received it: it gets
+        # the tombstone below, even while an edit to it was still on its way.
         c.execute("UPDATE message_deliveries SET state='moot', updated_at=? WHERE message_id=? "
-                  "AND state IN ('pending','capped','held')", (now, message["id"]))
+                  "AND state IN ('pending','capped','held') AND NOT ((recipient LIKE 'slack:%' OR recipient LIKE "
+                  "'peer:%') AND delivered_at IS NOT NULL)", (now, message["id"]))
         if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'").fetchone():
             c.execute("UPDATE jobs SET state='cancelled' WHERE message_id=? AND state='queued'", (message["id"],))
             c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND message_id IN (SELECT carrier_id FROM "
@@ -2588,7 +2679,8 @@ def _migrate(c):
               f"WHEN conversation_id IN (SELECT id FROM conversations v WHERE {_derived_audience('v')} IN ('task','meeting') "
               "OR task_id IS NOT NULL) THEN 1 "
               "WHEN COALESCE(refs_json,'')<>'' AND (NOT json_valid(refs_json) OR json_type(refs_json)<>'object' OR "
-              f"EXISTS (SELECT 1 FROM json_each(refs_json) WHERE key NOT IN {safe})) THEN 1 ELSE 0 END")
+              f"EXISTS (SELECT 1 FROM json_each(refs_json) WHERE key NOT IN {safe}) OR {_NESTED_REFS_SQL}) "
+              "THEN 1 ELSE 0 END")
     c.execute(f"UPDATE messages SET legacy_audience='shared:'||(SELECT {_ROOM_BOT.format(r='v')} FROM conversations v "
               "WHERE v.id=messages.conversation_id), restricted=1 WHERE conversation_id IN "
               "(SELECT id FROM conversations WHERE scope='shared' AND COALESCE(room_key,'')<>'')")
@@ -2611,6 +2703,16 @@ def _migrate(c):
     c.execute("INSERT INTO registry_metadata(key,value_json) VALUES(?,?)",
               (MIGRATION_KEY, json.dumps({"at": now, "seq": c.execute(
                   "SELECT value FROM sequences WHERE name='messages'").fetchone()[0]})))
+
+
+# The migration's rendering of _ref_strings/restricted_for: structure outside NESTED_REF_KEYS, or any string that
+# names a task (a task: prefix, a task link or any task's id), restricts the message.
+_NESTED_REFS_SQL = (
+    "EXISTS (SELECT 1 FROM json_tree(refs_json) t WHERE t.fullkey<>'$' AND ("
+    "(t.type IN ('object','array') AND NOT (t.fullkey IN ('$.origin','$.mentions','$.warnings') OR "
+    "(t.path='$.warnings' AND t.type='object'))) OR "
+    "(t.type='text' AND (t.atom LIKE 'task:%' OR t.atom LIKE '%#/task/%' OR t.atom LIKE '%/tasks/%' OR "
+    "t.atom IN (SELECT id FROM tasks)))))")
 
 
 def _store_shared_homes(c, slug=None):

@@ -181,14 +181,21 @@ Sub-threads are evaluated through their **root** row (same audience by §1.1, bu
   `root_id` (`attempt_conversations` joined through `conversations.root_id`). Task threads it may read are added as
   today (`auth.task`). Its own open asks to a person stay readable (`_own_ask_to_a_person`).
 - **Outside a turn** (agent token): access membership (`thread_members`, including via a group), the participant
-  grant (`participants_json`), or `home` when the bot is the Home's owner or holds Read on its owner.
+  grant (`participants_json`), `home` when the bot is the Home's owner or holds Read on its owner, or a task thread it
+  may read. A `company` or `team` thread gives no standing read: a bot in its wake audience (`threads.audience_has`:
+  company bots, the group's bots) reads it only through a turn's grant.
+- **Posting in a Home** takes Write on its owner for bots as for people (`can_post`). Only the Home's own bot and a
+  run replying into the thread its attempt was granted skip it.
 - There is no `threads: read_open`. Membership is the grant.
 - The Assistant acts with its person's rights (`auth.tico_principal`); the Librarian keeps its principal.
 
 ### 2.3 Per-message checks (inside the audience)
 - Unchanged rule: `task_privacy.message_readable` (meeting provenance, referenced private tasks, bot limits).
 - **`restricted`** is computed at write time: 1 when the message has `legacy_audience`, an `in_reply_to`, any
-  `refs` key outside `threads.SAFE_REF_KEYS`, sits in a `task` or `meeting` thread, or attaches files. A message with
+  `refs` key outside `threads.SAFE_REF_KEYS`, structure under a safe key other than one level under
+  `threads.NESTED_REF_KEYS` (`origin`, `mentions`, `warnings`), any string in refs that names a task (`task:`, a task
+  link, or any task's id), sits in a `task` or `meeting` thread, or attaches files. The migration computes the same in
+  SQL (`json_tree`). A message with
   `restricted=0` skips `message_readable` once the audience check passed (the SSE and timeline fast path).
 - **`legacy_audience='shared:<slug>'`**: readable by exactly today's live predicate, no more and no less:
   `rooms.shared_member(c, auth, actor, slug)` with bot Read for people; participants and the room's bot for an
@@ -245,7 +252,8 @@ threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_mes
   in-audience mention or ask target, otherwise NULL.
 - `via`: who really acts (`assistant`, `botops`, `slack`, `peer`), recorded in `refs.via`. `origin`:
   `{"origin_id", "revision", "install", "actor"}` for replicated inbound (Slack, federation); a repeat
-  `(origin_id, revision)` returns the existing message and writes nothing.
+  `(origin_id, revision)`, once the writer is authorized, returns the existing message (`duplicate: true`) and writes
+  nothing. A repeat whose message is in another thread or from another signer is 409 `origin_taken`.
 - `checked`: the org-rule verdict from `org_rule_check.preflight` (step 5, done by the caller **outside** the
   transaction, operation `threads`). `post` applies it with `org_rule_check.apply(c, checked, body, replay)` (the
   payload is the body text) and reads **apply's return**: held → returns `org_rule_check.answer(gate)` and writes no
@@ -361,7 +369,14 @@ and `wake_rules.judge` still run per delivery and may turn `queue` into `defer`.
 The primary bot recipient (`to_actor`) is queued by the existing `queue_bot_message` trigger (job id = message id).
 Each further woken bot gets a **carrier**: a keeper notice to that bot in the same thread, `refs={"carries": <id>,
 "wake": "thread", "reason": ...}`, no `seq`; its job starts the run, and the delivery's `carrier_id` names it.
-`jobs.message_id` stays unique.
+`jobs.message_id` stays unique. No carrier is written when the bot may not read the message (audience and the
+per-message check); the delivery is `moot`. The per-message check reads a carrier as the message it carries, and a
+claim refuses a carrier whose message is gone, moved or no longer readable (`threads.carrier_current`).
+
+Every message write fans out the same way, through `post` or a legacy writer (`hubdb.say`, runner replies, old
+routes): mentions, DM members, the Home's owner, sub-thread repliers and outside destinations, under the loop guard.
+A legacy write in a `task` thread leaves its mentions to the task rules, and a legacy notice or keeper write wakes no
+further bot.
 
 ### 4.5 Loop guard
 `threads.LOOP_GUARD_PER_HOUR` (default 6, `TICO_THREAD_LOOP_GUARD`): bot-caused wakes (`cause='bot'`, bot
