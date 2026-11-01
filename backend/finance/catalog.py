@@ -151,6 +151,14 @@ def item_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     return Plan(K.default_gate(ctx.org, who, "item_create"), f"Add item {f['name']}"[:200], apply)
 
 
+def _books_kind_change(old: str, new: str) -> None:
+    """Refuses a kind change that crosses the item type the books hold, since the books keep an item's type."""
+    held = mirror.books_item_type(old)
+    if held != mirror.books_item_type(new):
+        raise invalid(f"an item the books hold as {held} cannot change to {mirror.books_item_type(new)}: "
+                      "add a new item instead")
+
+
 def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("item_id", *ITEM_FIELDS, "active"))
     old = RR.get(ctx.c, "items", V.text(p, "item_id", 80))
@@ -160,6 +168,8 @@ def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     f = _shape(lambda: _item_fields(ctx, p, create=False))
     if _mirrored(ctx) and "price" in f and f["price"] is None and old["price"] is not None:
         raise invalid("an item the provider holds keeps a price: set a new one")
+    if _mirrored(ctx) and "kind" in f and f["kind"] != old["kind"]:
+        _books_kind_change(str(old["kind"]), str(f["kind"]))
     gate = K.default_gate(ctx.org, who, "item_update")
     if "price" in f and f["price"] != old["price"] and who != ctx.org.owner:
         gate = K.Gate("needs_approval", "finance_admin", "default:item-price")

@@ -136,7 +136,8 @@ def restore_lines(ctx: Ctx, who: str, amounts: Mapping[str, int]) -> None:
 def give_back(ctx: Ctx, who: str, bill_id: str, *, posted: bool) -> None:
     """A bill that stops billing gives each order line it billed its room back. A bill still holding a line moves that
     hold back to the line; a posted bill's spend has been reversed in the books by now, so the line takes the amount
-    back with nothing moved from a hold. Neither is fit-checked."""
+    back with nothing moved from a hold. Neither is fit-checked. A line the bill keeps billed after a provider revision
+    that no longer names it gives its room back the same way."""
     for n, row in enumerate(SAP.lines(ctx.c, "bill", [bill_id])[bill_id]):
         po_line = str(row["po_line_id"] or "")
         line = SP.po_line(ctx.c, po_line) if po_line else None
@@ -152,6 +153,10 @@ def give_back(ctx: Ctx, who: str, bill_id: str, *, posted: bool) -> None:
                                target=budgeting.scope_target(DOC.scope_tags(tags)))
         elif posted:
             _restore(ctx, who, line, int(row["amount"]))
+    for po_line_id, amount in SP.bill_retained(ctx.c, bill_id).items():
+        line = SP.po_line(ctx.c, po_line_id)
+        if line is not None and posted:
+            _restore(ctx, who, line, amount)
 
 
 def bill_orders(ctx: Ctx, bill_id: str) -> list[str]:

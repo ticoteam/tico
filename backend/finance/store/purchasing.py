@@ -15,8 +15,19 @@ LINES = {"po": ("fin_po_lines", "po_id"), "estimate": ("fin_estimate_lines", "es
 CONTACT = {"po": "vendor_id", "estimate": "customer_id"}
 HEAD = {"po": "fin_purchase_orders", "estimate": "fin_estimates"}
 DATED = {"po": "po_date", "estimate": "estimate_date"}
-_BILLED_ON = ("SELECT COALESCE(SUM(bl.amount), 0) FROM fin_bill_lines bl JOIN fin_bills b ON b.id=bl.bill_id "
-              "JOIN fin_po_lines l ON l.id=bl.po_line_id WHERE l.po_id={po} AND b.status!='void'")
+# What the bills on an order's lines have billed: the lines of every bill but a void one, and what a bill keeps billed
+# on a line its provider lines no longer name (fin_bill_retained).
+_BILLED_ON = ("SELECT COALESCE(SUM(x.amount), 0) FROM ("
+              "SELECT bl.amount AS amount FROM fin_bill_lines bl JOIN fin_bills b ON b.id=bl.bill_id "
+              "JOIN fin_po_lines l ON l.id=bl.po_line_id WHERE l.po_id={po} AND b.status!='void' "
+              "UNION ALL "
+              "SELECT r.amount AS amount FROM fin_bill_retained r JOIN fin_bills b ON b.id=r.bill_id "
+              "JOIN fin_po_lines l ON l.id=r.po_line_id WHERE l.po_id={po} AND b.status!='void') x")
+# What one order line has been billed: the same two sums, on the line.
+_BILLED_LINE = ("SELECT COALESCE((SELECT SUM(bl.amount) FROM fin_bill_lines bl JOIN fin_bills b ON b.id=bl.bill_id "
+                "WHERE bl.po_line_id=? AND b.status!='void'), 0) + COALESCE((SELECT SUM(r.amount) "
+                "FROM fin_bill_retained r JOIN fin_bills b ON b.id=r.bill_id WHERE r.po_line_id=? "
+                "AND b.status!='void'), 0)")
 
 
 def insert(c: sqlite3.Connection, table: str, row: Mapping[str, object]) -> str:
@@ -78,10 +89,24 @@ def po_line(c: sqlite3.Connection, po_line_id: str) -> Any:
 
 
 def billed(c: sqlite3.Connection, po_line_id: str) -> int:
-    """What the bills on an order line have billed so far: every bill but a void one."""
-    row = c.execute("SELECT COALESCE(SUM(bl.amount), 0) FROM fin_bill_lines bl JOIN fin_bills b ON b.id=bl.bill_id "
-                    "WHERE bl.po_line_id=? AND b.status!='void'", (po_line_id,)).fetchone()
-    return int(row[0])
+    """What the bills on an order line have billed so far: every bill but a void one, and what a bill keeps billed on
+    the line after a provider revision that no longer names it."""
+    return int(c.execute(_BILLED_LINE, (po_line_id, po_line_id)).fetchone()[0])
+
+
+def bill_retained(c: sqlite3.Connection, bill_id: str) -> dict[str, int]:
+    """What a bill keeps billed on the order lines its provider lines no longer name, by order line."""
+    return {str(r[0]): int(r[1]) for r in c.execute(
+        "SELECT po_line_id, amount FROM fin_bill_retained WHERE bill_id=?", (bill_id,))}
+
+
+def set_bill_retained(c: sqlite3.Connection, bill_id: str, amounts: Mapping[str, int]) -> None:
+    """Replace what a bill keeps billed on order lines it no longer names. An order line kept at none is not stored."""
+    c.execute("DELETE FROM fin_bill_retained WHERE bill_id=?", (bill_id,))
+    for po_line_id, amount in amounts.items():
+        if amount > 0:
+            c.execute("INSERT INTO fin_bill_retained(bill_id, po_line_id, amount) VALUES(?, ?, ?)",
+                      (bill_id, po_line_id, amount))
 
 
 # A bill write held against an order line's room until it is refused outright or confirmed. Confirmed writes are in
@@ -122,7 +147,7 @@ def queued_for_line(c: sqlite3.Connection, po_line_id: str) -> int:
 
 def billed_total(c: sqlite3.Connection, po_id: str) -> int:
     """What the bills on an order's lines have billed so far: every bill but a void one."""
-    return int(c.execute(_BILLED_ON.format(po="?"), (po_id,)).fetchone()[0])
+    return int(c.execute(_BILLED_ON.format(po="?"), (po_id, po_id)).fetchone()[0])
 
 
 def shown_po(status: str, billed_so_far: int, total: int) -> str:
@@ -136,9 +161,10 @@ def shown_estimate(status: str, invoice_id: object) -> str:
 
 
 def bill_orders(c: sqlite3.Connection, bill_id: str) -> list[str]:
-    """The orders a bill bills a line of, in id order."""
+    """The orders a bill bills a line of, in id order: its own lines, and the lines it keeps billed."""
     return [str(r[0]) for r in c.execute(
-        "SELECT DISTINCT p.id FROM fin_bill_lines bl JOIN fin_po_lines l ON l.id=bl.po_line_id "
+        "SELECT DISTINCT p.id FROM (SELECT bill_id, po_line_id FROM fin_bill_lines UNION "
+        "SELECT bill_id, po_line_id FROM fin_bill_retained) bl JOIN fin_po_lines l ON l.id=bl.po_line_id "
         "JOIN fin_purchase_orders p ON p.id=l.po_id WHERE bl.bill_id=? ORDER BY p.id", (bill_id,))]
 
 

@@ -24,6 +24,7 @@ from .core import feeds as F
 from .core import kinds as K
 from .core import ledger as L
 from .core import mirror as M
+from .core import qbo as Q
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, FinanceError, denied, invalid
 from .core.org import SYSTEM
@@ -194,6 +195,14 @@ def _pending(c: sqlite3.Connection, cid: str) -> dict[str, dict[str, Any]]:
 RECORD_IMPORTED = ("account.create", "party.create")
 
 
+def _provider_lines(r: Record) -> tuple[str, ...]:
+    """The provider's ids for a document's lines, in order, when it names one for every line; else none."""
+    if not isinstance(r, M.Document):
+        return ()
+    keys = tuple(x.key for x in r.lines if not x.rounding)
+    return keys if all(keys) else ()
+
+
 def _adopt(c: sqlite3.Connection, cid: str, records: Sequence[Record], at: str) -> None:
     """A write the provider took before its answer was recorded (the call was cut off) comes back in the change feed
     with its reference in its note. The write is recorded as sent here, from its local payload (which keeps the tags
@@ -219,7 +228,8 @@ def _adopt(c: sqlite3.Connection, cid: str, records: Sequence[Record], at: str) 
         try:
             revised = _revised(c, cid, op, local, ext, r)
             sent = Sent(ok=True, kind=ext.kind, external_id=ext.external_id,
-                        revision=(_initial_revision(c, cid) or "") if revised else ext.revision)
+                        revision=(_initial_revision(c, cid) or "") if revised else ext.revision,
+                        lines=_provider_lines(r))
             _record(c, cid, o, local, _translate(c, cid, op, local), sent, at,
                     confirm=op not in RECORD_IMPORTED)
         except (_Missing, FinanceError, sqlite3.IntegrityError):
@@ -393,6 +403,12 @@ def _record_write(c: sqlite3.Connection, cid: str, table: str, ext: M.Ext, field
 
 # The kinds the books hold an item as when it is plain: no quantity is tracked.
 PLAIN_ITEM_KINDS = ("non_inventory", "service")
+
+
+def books_item_type(kind: str) -> str:
+    """The item type the books keep for a kind. QuickBooks cannot change an item's type, so a kind change that crosses
+    types is refused in a mirrored book; a change inside one type stays a Tico label."""
+    return Q.ITEM_TYPES[kind]
 
 
 def _item_kind(c: sqlite3.Connection, cid: str, i: M.Item) -> str:
@@ -944,6 +960,7 @@ def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, ve
     settled: list[Any] = []
     old_orders: list[str] = []
     old_billed: dict[str, int] = {}
+    retained: dict[str, int] = {}
     if verdict == M.REPLACE and row is not None and row["local_id"]:
         local = str(row["local_id"])
         settled = [s for s in SAP.settlements_to(c, kind, local) if str(s["from_kind"]) != "credit"]
@@ -960,7 +977,7 @@ def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, ve
         SAP.update(c, table, local, _doc_update(kind, contact, d, total, state, at))
         line_tags = _carry_lines(c, kind, local, old_entry, keys, rows, sign)
         if kind == "bill" and not po_lines:
-            po_lines = _carried_order_lines(c, local, keys, rows)
+            po_lines, retained = _carried_order_lines(c, local, keys, rows)
     else:
         old_entry = ""
         local = SAP.insert(c, table, _doc_row(ctx, kind, contact, d, total, _doc_state(kind, total, 0, 0), at))
@@ -974,6 +991,7 @@ def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, ve
                                               tags=line_tags, control_id=control, keys=keys), at)
     SAP.update(c, table, local, {"entry_id": new_entry, "updated_at": at})
     if kind == "bill":
+        SP.set_bill_retained(c, local, retained)
         new_billed = _billed_by_order_line(c, local)
         PU.restore_lines(ctx, SYSTEM, {po: amount - new_billed.get(po, 0) for po, amount in old_billed.items()})
         PU.sync_orders(ctx, SYSTEM, sorted({*old_orders, *SP.bill_orders(c, local)}))
@@ -986,34 +1004,61 @@ def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, ve
 
 
 def _billed_by_order_line(c: sqlite3.Connection, doc_id: str) -> dict[str, int]:
-    """What a bill bills on each order line it names, by the order line's id."""
+    """What a bill bills on each order line: its own lines, and what it keeps billed on a line its provider lines no
+    longer name, by the order line's id."""
     out: dict[str, int] = {}
     for x in SAP.lines(c, "bill", [doc_id])[doc_id]:
         if x["po_line_id"]:
             po = str(x["po_line_id"])
             out[po] = out.get(po, 0) + int(x["amount"])
+    for po, amount in SP.bill_retained(c, doc_id).items():
+        out[po] = out.get(po, 0) + amount
     return out
 
 
 def _carried_order_lines(c: sqlite3.Connection, doc_id: str, keys: Sequence[str],
-                         rows: Sequence[tuple[str, int, str]]) -> list[str]:
-    """The order line each replaced bill line keeps: the one its provider line id had, else the one at the same position
-    when it bills the same account and amount. A link the new lines do not keep is cleared on purpose, and audited."""
+                         rows: Sequence[tuple[str, int, str]]) -> tuple[list[str], dict[str, int]]:
+    """The order line each replaced bill line bills, and what the bill keeps billed on the order lines it no longer
+    names. A line takes the order line its provider line id had, else the one at its position when the bill's line count
+    is unchanged; a line that matches neither takes an order line the bill lost, in order. An order line whose link is
+    not matched keeps what the bill billed on it before the revision, so a revision never releases room on its own: only
+    a void, a deletion at the provider or an unlink does. The audit names those order lines."""
     old = SAP.lines(c, "bill", [doc_id])[doc_id]
-    by_key = {str(x["external_line"]): str(x["po_line_id"] or "") for x in old if x["external_line"]}
+    before = _billed_by_order_line(c, doc_id)
     marks = list(keys) or [""] * len(rows)
-    out: list[str] = []
-    for i, (key, (account, amount, _)) in enumerate(zip(marks, rows, strict=True)):
-        if key and key in by_key:
-            out.append(by_key[key])
-        elif i < len(old) and str(old[i]["account_id"]) == account and int(old[i]["amount"]) == amount:
-            out.append(str(old[i]["po_line_id"] or ""))
+    taken: set[int] = set()
+    matched: list[int | None] = [None] * len(rows)
+    for i, key in enumerate(marks):
+        if key:
+            j = next((j for j, x in enumerate(old) if j not in taken and str(x["external_line"]) == key), None)
+            if j is not None:
+                matched[i] = j
+                taken.add(j)
+    if len(old) == len(rows):
+        for i in range(len(rows)):
+            if matched[i] is None and i not in taken:
+                matched[i] = i
+                taken.add(i)
+    out = [""] * len(rows)
+    free: list[int] = []
+    for i, j in enumerate(matched):
+        if j is None:
+            free.append(i)
         else:
-            out.append("")
-    dropped = sorted({str(x["po_line_id"]) for x in old if x["po_line_id"]} - set(out))
-    if dropped:
-        tico.audit(c, SYSTEM, "finance.mirror.order_link_cleared", doc_id, {"po_line_ids": dropped})
-    return out
+            out[i] = str(old[j]["po_line_id"] or "")
+    lost = [str(x["po_line_id"]) for j, x in enumerate(old) if j not in taken and x["po_line_id"]]
+    for po_line_id in lost:
+        if free:
+            out[free.pop(0)] = po_line_id
+    billed_now: dict[str, int] = {}
+    for po_line_id, (_, amount, _) in zip(out, rows, strict=True):
+        if po_line_id:
+            billed_now[po_line_id] = billed_now.get(po_line_id, 0) + amount
+    retained = {po_line_id: before[po_line_id] - billed_now.get(po_line_id, 0) for po_line_id in set(lost)
+                if before.get(po_line_id, 0) > billed_now.get(po_line_id, 0)}
+    if lost:
+        tico.audit(c, SYSTEM, "finance.mirror.order_link_unmatched", doc_id, {"po_line_ids": sorted(set(lost))})
+    return out, retained
 
 
 def _credit(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str) -> None:
@@ -2007,16 +2052,19 @@ def outbox(store: Any, books: Books, cid: str, now: str) -> list[str]:
         local, provider = prepared
         sent, found = _send(books, o, provider)
         # A record the provider changed after the write is bound at the oldest revision, so the change feed, read again
-        # from the start, replaces it with the provider's record as it holds it. A bill or invoice is confirmed at once:
-        # its order lines keep the room its write took, which must not wait for the feed.
+        # from the start, replaces it with the provider's record as it holds it. A bill, an invoice or a record create
+        # is confirmed at once: an order line keeps the room its write took, and a record keeps its alias and the fields
+        # only Tico holds, whatever revision the provider answers at.
         with store.transaction() as c:
             op, initial = str(o["op"]), _initial_revision(c, cid)
             revised = found and sent.ok and \
                 _revised(c, cid, op, local, M.Ext(sent.kind, sent.external_id, sent.revision), sent.record)
             document = op in ("bill.create", "invoice.create")
-            if revised and (not initial or document):
+            record_create = op in ("item.create", "location.create", "project.create")
+            if revised and (not initial or document or record_create):
                 sent = Sent(ok=True, kind=sent.kind, external_id=sent.external_id, revision=initial, lines=sent.lines)
-            _record(c, cid, o, local, provider, sent, now, confirm=not revised or not initial or document)
+            _record(c, cid, o, local, provider, sent, now,
+                    confirm=not revised or not initial or document or record_create)
             if revised:
                 SX.set_mirror_state(c, cid, {"cursors": {}, "changed_at": None, "exact": []})
         if not sent.ok:

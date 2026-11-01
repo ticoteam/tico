@@ -138,7 +138,8 @@ KEEP = frozenset((
     "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
     "usage_limits", "usage_pools", "task_caps",
     # Finance history and definitions (EMPTY has what acts; prune drops pending actions and settles undrained events)
-    "fin_accounts", "fin_actions", "fin_allocations", "fin_attachments", "fin_bill_lines", "fin_bills", "fin_books",
+    "fin_accounts", "fin_actions", "fin_allocations", "fin_attachments", "fin_bill_lines", "fin_bill_retained",
+    "fin_bills", "fin_books",
     "fin_budget_versions", "fin_budgets", "fin_contacts", "fin_dimensions", "fin_entries", "fin_events",
     "fin_feed_txns", "fin_invoice_lines", "fin_invoices", "fin_line_tags", "fin_lines", "fin_money_accounts",
     "fin_periods", "fin_private_lines", "fin_projections", "fin_reconciliations", "fin_restatements", "fin_rights",

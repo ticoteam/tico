@@ -560,7 +560,8 @@ CREATE TABLE IF NOT EXISTS fin_tax_seeds (
 """
 
 # Purchase orders and estimates (backend/finance/store/purchasing.py). An order's line holds budget while it is open;
-# an estimate is invoiced once, so its invoice id is unique.
+# an estimate is invoiced once, so its invoice id is unique. A bill keeps billed on an order line that its provider
+# revision no longer names in fin_bill_retained.
 PURCHASING = """
 CREATE TABLE IF NOT EXISTS fin_purchase_orders (
   id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), vendor_id TEXT NOT NULL REFERENCES fin_contacts(id),
@@ -592,6 +593,10 @@ CREATE TABLE IF NOT EXISTS fin_estimate_lines (
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE (estimate_id, line_no));
 
 CREATE UNIQUE INDEX IF NOT EXISTS fin_estimates_invoice ON fin_estimates(invoice_id) WHERE invoice_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS fin_bill_retained (
+  bill_id TEXT NOT NULL REFERENCES fin_bills(id), po_line_id TEXT NOT NULL REFERENCES fin_po_lines(id),
+  amount BIGINT NOT NULL CHECK (amount > 0), PRIMARY KEY (bill_id, po_line_id));
 """
 
 def table_names() -> list[str]:
