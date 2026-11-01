@@ -523,6 +523,17 @@ details.more[open] summary svg { transform: rotate(90deg); }
 }
 
 /* ---- Live text ---- */
+/* A line shared live: edit and remove appear on hover (always on touch screens). */
+.bubble { position: relative; }
+.line-tools { position: absolute; top: 3px; right: 3px; display: none; gap: 2px; }
+.bubble:hover .line-tools, .bubble:focus-within .line-tools { display: flex; }
+@media (hover: none) { .line-tools { display: flex; } }
+.line-tools .icon-btn { background: var(--panel); }
+.line-note { display: block; font-size: 11px; font-style: normal; color: var(--text-3); margin-top: 2px; }
+.line-edit { display: block; width: 100%; min-width: 220px; box-sizing: border-box; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 8px; resize: vertical; }
+.line-actions { display: flex; gap: 6px; align-items: center; justify-content: flex-end; margin-top: 6px; flex-wrap: wrap; }
+.line-actions .faint { margin-right: auto; }
+.turn.removed .bubble p { color: var(--text-3); font-style: italic; }
 .turn.partial .bubble { color: var(--text-2); background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
 .turn.partial.me .bubble { background: transparent; }
 .live-dot { width: 6px; height: 6px; border-radius: 3px; background: var(--accent); flex: none; }

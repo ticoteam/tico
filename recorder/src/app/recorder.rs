@@ -13,7 +13,7 @@ use tico_recorder_native::{
     audio::Channel,
     capture,
     engine::RecordingHandle,
-    live::LiveSync,
+    live::{self, LiveSync},
     network::{self, Tico, Transcriber},
     notices,
     settings::{self, AppLock, Settings},
@@ -1300,6 +1300,15 @@ impl Recorder {
         self.report(result);
         self.reload();
     }
+    /// A person's edit of a line already shared live, or its removal when `text` is None.
+    pub fn edit_shared_line(&mut self, seq: i64, text: Option<&str>) {
+        let Some(id) = self.meeting.clone() else {
+            return;
+        };
+        let result = live::edit_shared(&self.store, &id, seq, text);
+        self.report(result);
+        self.reload();
+    }
     pub fn finish_live(&mut self) {
         if self.context.live_id.is_empty() {
             return;
@@ -2168,6 +2177,9 @@ impl Recorder {
         };
         let recording = record.state == "recording"
             || self.active.as_ref().is_some_and(|(id, _)| id == &record.id);
+        if let Some(view) = self.shared_transcript(record, recording) {
+            return view;
+        }
         if recording {
             // While recording: finished chunks, streamed final words, then the words still
             // being spoken, which the window shows softer and updates in place.
@@ -2189,6 +2201,41 @@ impl Recorder {
             self.blocks = (current, transcript_blocks(record));
         }
         json!({"id": record.id, "blocks": self.blocks.1})
+    }
+    /// A meeting shared live shows the lines Tico holds, one per line, so an edit or removal names
+    /// the line Tico changes. Speech not sent yet follows without controls. None if not shared.
+    fn shared_transcript(&self, record: &Recording, recording: bool) -> Option<Value> {
+        let context = self.store.context(&record.id).ok()?;
+        if context.live_id.is_empty() || context.live_destination.is_empty() {
+            return None;
+        }
+        let lines = live::shared_lines(&self.store, &record.id, &context.live_destination).ok()?;
+        let open = ["live", "paused"].contains(&context.live_state.as_str());
+        let sent_until = lines.iter().map(|line| line.end_ms).max();
+        let mut blocks: Vec<Value> = lines
+            .iter()
+            .map(|line| {
+                let removed = line.edited && line.text == live::REMOVED;
+                json!({"speaker":line.speaker,"me":line.speaker == "Me","start_ms":line.start_ms,
+                    "paragraphs":[line.text],"partial":false,"streamed":false,"seq":line.seq,
+                    "edited":line.edited,"removed":removed,
+                    "editable":open && line.acknowledged})
+            })
+            .collect();
+        if let Ok(turns) = stream::live_turns(&self.store, &record.id) {
+            blocks.extend(
+                turns
+                    .iter()
+                    .filter(|turn| !turn.text.trim().is_empty())
+                    .filter(|turn| sent_until.is_none_or(|end| turn.start_ms >= end))
+                    .map(|turn| {
+                        json!({"speaker":turn.speaker,"me":turn.me,"start_ms":turn.start_ms,
+                            "paragraphs":[turn.text.trim()],"partial":turn.partial,
+                            "streamed":turn.streamed,"seq":null,"editable":false})
+                    }),
+            );
+        }
+        Some(json!({"id": record.id, "live": recording, "shared": true, "blocks": blocks}))
     }
     fn meeting_view(&mut self) -> Value {
         let Some(record) = self

@@ -1208,3 +1208,105 @@ fn meeting_notices_are_read_from_new_events_only() {
     worker.join().unwrap();
     tico.read_notices("live-events", 42).unwrap();
 }
+
+/// Edits and removals of lines already shared live (synthetic replay, no bots): an edit during the
+/// meeting, an edit after Stop, a removal, a lost reply retried, a finished chunk that arrives after
+/// the edit, then Send. Each change is one revision, the person's text wins, and Send files it.
+#[test]
+fn edits_and_removals_of_shared_lines_go_up_as_revisions_and_win_over_automatic_corrections() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Edited live");
+    let id = record.id.as_str();
+    let pass = |steps: Vec<Option<Value>>| {
+        let (tico, seen, worker) = server(steps);
+        let result = tico.push_live(&store, id);
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap().clone();
+        (result, requests)
+    };
+    let correction = |seq: u64, revision: u64| json!({"id":"live-fixture","seq":seq,"revision":revision,"replayed":false,"event_id":1});
+    streamed(&store, id, "me", 1_000, "helo there", "");
+    streamed(&store, id, "them", 1_200, "hi all", "S1");
+    let (result, _) = pass(vec![Some(json!({"accepted":[1,2]}))]);
+    result.unwrap();
+    // Before Tico has a line, there is nothing to edit.
+    assert!(
+        crate::live::edit_shared(&store, id, 9, Some("nope"))
+            .unwrap_err()
+            .to_string()
+            .contains("not shared live")
+    );
+    // During the meeting: the first line is corrected, the second removed.
+    crate::live::edit_shared(&store, id, 1, Some("Hello there")).unwrap();
+    crate::live::edit_shared(&store, id, 2, None).unwrap();
+    // Saving the same text again is no new revision.
+    crate::live::edit_shared(&store, id, 1, Some("Hello there")).unwrap();
+    let (result, requests) = pass(vec![Some(correction(1, 2)), Some(correction(2, 2))]);
+    result.unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|(line, body, _)| (line.clone(), body.clone()))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "POST /api/v2/live-meetings/live-fixture/chunks/1/corrections HTTP/1.1".to_owned(),
+                json!({"revision":2,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"Hello there"})
+            ),
+            (
+                "POST /api/v2/live-meetings/live-fixture/chunks/2/corrections HTTP/1.1".to_owned(),
+                json!({"revision":2,"speaker":"S1","start_ms":1200,"end_ms":1750,"text":"[removed]"})
+            ),
+        ]
+    );
+    // After Stop, a line's edit is a revision 3, and its reply is lost: the retry repeats the request.
+    store.state(id, "stopped").unwrap();
+    crate::live::edit_shared(&store, id, 1, Some("Hello there, everyone")).unwrap();
+    let (result, first) = pass(vec![None]);
+    assert!(result.is_err());
+    let (result, retry) = pass(vec![Some(correction(1, 3))]);
+    result.unwrap();
+    assert_eq!(first[0], retry[0], "the retry is the same request");
+    assert!(retry[0].2.contains(":live:1:r3:"), "{}", retry[0].2);
+    // A finished chunk that transcribes after the edit must not put its words back.
+    finished_chunk(
+        &store,
+        id,
+        0,
+        2_000,
+        vec![
+            word(1_000, 1_250, "Hello", ""),
+            word(1_300, 1_550, "there", ""),
+        ],
+    );
+    let (result, requests) = pass(vec![]);
+    result.unwrap();
+    assert!(requests.is_empty(), "{requests:?}");
+    // Tico's view: each line at its latest revision, with the person's edits marked.
+    let lines = crate::live::shared_lines(&store, id, "synthetic").unwrap();
+    let texts: Vec<(i64, &str, bool, bool)> = lines
+        .iter()
+        .map(|line| (line.seq, line.text.as_str(), line.acknowledged, line.edited))
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            (1, "Hello there, everyone", true, true),
+            (2, "[removed]", true, true),
+        ]
+    );
+    // Send with an edit that Tico never received (the meeting ended there first) files nothing.
+    crate::live::edit_shared(&store, id, 1, Some("Late words")).unwrap();
+    let mut context = store.context(id).unwrap();
+    context.live_state = "ended".into();
+    store.save_context(id, &context).unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"id":"live-fixture","state":"ended"}))]);
+    let error = tico.finish_live(&store, id).unwrap_err().to_string();
+    worker.join().unwrap();
+    assert!(
+        error.contains("1 edited line(s) did not reach Tico"),
+        "{error}"
+    );
+    assert_eq!(seen.lock().unwrap().len(), 1, "nothing is filed");
+}

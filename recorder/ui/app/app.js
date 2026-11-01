@@ -20,6 +20,7 @@
     statusKey: '',
     ui: {
       search: '', ask: '', addItem: '', peopleQuery: '', ownerQuery: '', tq: '', signin: null, legacy: '', key: '', xai: '',
+      editLine: null, editDraft: '', editInitial: '', removeLine: null,
       hot: 0, mention: null,
       panel: null, opened: null, pop: null, tsearch: false, showAudio: false, confirm: null,
       form: null, saving: false, titleDraft: null, notesDraft: null, prevPage: 'library', stick: true,
@@ -615,12 +616,30 @@
         previous = null;
       }
       const who = !b.me && previous !== b.speaker ? `<div class="who" style="color:${colors[b.speaker]}">${esc(b.speaker)}</div>` : '';
-      items.push(`<div class="turn ${b.me ? 'me' : ''} ${b.partial ? 'partial' : ''}">${who}<div class="bubble">${b.paragraphs.map((p) => `<p>${highlight(p, q)}</p>`).join('')}</div></div>`);
+      items.push(`<div class="turn ${b.me ? 'me' : ''} ${b.partial ? 'partial' : ''} ${b.removed ? 'removed' : ''}">${who}<div class="bubble">${sharedLine(b, q)}</div></div>`);
       previous = b.speaker;
     }
     const tail = blocks[blocks.length - 1];
     if (a.pending && !m.setup.length && !recording && !q && !tail.partial) items.push(`<div class="turn"><div class="bubble typing"><i></i><i></i><i></i></div></div>`);
     return items;
+  }
+  /** A line shared live: its text, or the edit form or removal question while one is open. */
+  function sharedLine(b, q) {
+    const seq = b.seq ?? null;
+    if (seq !== null && S.ui.editLine === seq) {
+      // The draft is typed into the box without a re-render, so the box keeps its place and focus.
+      return `<textarea class="line-edit" data-model="editDraft" rows="3" aria-label="Edit line" spellcheck="false">${esc(S.ui.editInitial)}</textarea><div class="line-actions"><button class="btn small quiet" data-act="cancel-line">Cancel</button><button class="btn small" data-act="save-line" data-seq="${seq}">Save</button></div>`;
+    }
+    let html = b.paragraphs.map((p) => `<p>${highlight(p, q)}</p>`).join('');
+    if (seq === null) return html;
+    if (b.edited && !b.removed) html += `<i class="line-note">edited</i>`;
+    if (S.ui.removeLine === seq) {
+      return html + `<div class="line-actions"><span class="faint">Remove this line in Tico?</span><button class="btn small quiet" data-act="cancel-remove-line">Cancel</button><button class="btn small danger" data-act="remove-line" data-seq="${seq}">Remove</button></div>`;
+    }
+    if (b.editable) {
+      html += `<div class="line-tools"><button class="icon-btn tiny" data-act="edit-line" data-seq="${seq}" title="Edit line" aria-label="Edit line">${icon('pencil', 12)}</button><button class="icon-btn tiny" data-act="ask-remove-line" data-seq="${seq}" title="Remove line" aria-label="Remove line">${icon('trash', 12)}</button></div>`;
+    }
+    return html;
   }
   /** Replaces only the rows that changed, so a partial turn grows in place instead of jumping. */
   function patchTranscript(body) {
@@ -1114,6 +1133,29 @@
     'close-pop': () => { S.ui.pop = null; render(); },
     'send-meeting': (el) => { S.ui.pop = null; act('send_meeting', { id: el.dataset.id, destination: el.dataset.dest }); },
     finish: () => act('finish_live'),
+    'edit-line': (el) => {
+      const seq = Number(el.dataset.seq);
+      const block = (S.transcript?.blocks || []).find((b) => b.seq === seq);
+      if (!block) return;
+      S.ui.editLine = seq;
+      S.ui.editInitial = block.paragraphs.join(' ');
+      S.ui.editDraft = S.ui.editInitial;
+      S.ui.removeLine = null;
+      render();
+      document.querySelector('.line-edit')?.focus();
+    },
+    'cancel-line': () => { S.ui.editLine = null; render(); },
+    'save-line': async (el) => {
+      const text = S.ui.editDraft || '';
+      S.ui.editLine = null;
+      await act('edit_shared_line', { seq: Number(el.dataset.seq), text });
+    },
+    'ask-remove-line': (el) => { S.ui.removeLine = Number(el.dataset.seq); S.ui.editLine = null; render(); },
+    'cancel-remove-line': () => { S.ui.removeLine = null; render(); },
+    'remove-line': async (el) => {
+      S.ui.removeLine = null;
+      await act('remove_shared_line', { seq: Number(el.dataset.seq) });
+    },
     retry: (el) => { S.ui.pop = null; act('retry', { id: el.dataset.id }); },
     'audio-status': () => { S.ui.pop = null; S.ui.panel = 'transcript'; S.ui.showAudio = true; render(); },
     'toggle-transcript': () => { S.ui.panel = S.ui.panel === 'transcript' ? null : 'transcript'; S.ui.stick = true; render(); },

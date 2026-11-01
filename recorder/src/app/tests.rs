@@ -996,3 +996,56 @@ fn the_open_meetings_bot_notices_show_with_the_bots_name() {
     app.context.live_id = "live-other".into();
     assert_eq!(full_view(&mut app)["live"]["notices"], json!([]));
 }
+
+#[test]
+fn a_meeting_shared_live_shows_the_lines_tico_holds_with_controls_only_where_an_edit_can_reach_it()
+{
+    use tico_recorder_native::live;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let record = store.create("Shared edit view").unwrap();
+    let mut context = store.context(&record.id).unwrap();
+    context.live_id = "live-fixture".into();
+    context.live_destination = "synthetic".into();
+    context.live_state = "live".into();
+    store.save_context(&record.id, &context).unwrap();
+    // Three lines in Tico's order: two accepted, one still on its way.
+    {
+        let db = store.db().unwrap();
+        for (seq, speaker, start, end, text, acknowledged) in [
+            (1, "Me", 1000, 1550, "Hello there", 1),
+            (2, "S1", 1200, 1750, "hi all", 1),
+            (3, "S1", 2000, 2500, "pending words", 0),
+        ] {
+            db.execute(
+                "INSERT INTO live_outbox(recording_id,destination_id,seq,chunk_id,payload_json,acknowledged) VALUES(?,?,?,?,?,?)",
+                rusqlite::params![
+                    record.id,
+                    "synthetic",
+                    seq,
+                    format!("stream:{seq}"),
+                    json!({"seq":seq,"speaker":speaker,"start_ms":start,"end_ms":end,"text":text}).to_string(),
+                    acknowledged
+                ],
+            )
+            .unwrap();
+        }
+    }
+    live::edit_shared(&store, &record.id, 1, Some("Hi there")).unwrap();
+    live::edit_shared(&store, &record.id, 2, None).unwrap();
+    let mut app = app(store, directory.path());
+    app.open(&record.id).unwrap();
+    let blocks = full_view(&mut app)["transcript"]["data"]["blocks"].clone();
+    assert_eq!(
+        blocks,
+        json!([
+            {"speaker":"Me","me":true,"start_ms":1000,"paragraphs":["Hi there"],"partial":false,
+             "streamed":false,"seq":1,"edited":true,"removed":false,"editable":true},
+            {"speaker":"S1","me":false,"start_ms":1200,"paragraphs":["[removed]"],"partial":false,
+             "streamed":false,"seq":2,"edited":true,"removed":true,"editable":true},
+            {"speaker":"S1","me":false,"start_ms":2000,"paragraphs":["pending words"],"partial":false,
+             "streamed":false,"seq":3,"edited":false,"removed":false,"editable":false},
+        ]),
+        "{blocks}"
+    );
+}
