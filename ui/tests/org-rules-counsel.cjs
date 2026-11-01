@@ -214,7 +214,8 @@ const suggest = (hub, read, text, who, cite = {section: '4. Messaging', quote: O
     // sees the rule but not its quote.
     assert.deepEqual((await call(hub, 'release-manager', 'GET', '/v2/rules/' + open.id)).cite, {hidden: true});
     const other = await pageAs(browser, hub, 'release-manager');
-    await other.locator('#main').waitFor({timeout: t(20000)});
+    // Initial authentication can still restore its default route after #main mounts.
+    await ready(other);
     await go(other, `#/rules/external?rule=${open.id}`);
     await other.locator(`#ru-side form[data-rule="${open.id}"]`).waitFor({timeout: t(20000)});
     assert.equal(await other.locator('#ru-side .ru-quote, #ru-side .ru-qsrc').count(), 0, 'no quote for a teammate who cannot read the file');

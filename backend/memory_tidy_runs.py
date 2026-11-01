@@ -74,12 +74,16 @@ def report_stop(c, total):
     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (key, json.dumps({'task': report['id'], 'total': total})))
 
 
-def close_pass(c, row, reason):
+def close_tasks(c, row, reason):
     # Closing the last child wakes an open parent even with quiet=True. Retire
     # the container first so deadline cancellation never starts an ordinary turn.
     for key in ('parent_task_id', 'check_task_id'):
         if row[key]:
             H.task_close(c, H.KEEPER, row[key], note=reason, quiet=True)
+
+
+def close_pass(c, row, reason):
+    close_tasks(c, row, reason)
     c.execute("UPDATE memory_tidy_passes SET status='skipped',reason=? WHERE id=?", (reason, row['id']))
     log(c, row['bot'], reason)
 
@@ -92,6 +96,7 @@ def sweep(c, at):
 def admit(c, settings, at):
     """One nightly admission transaction; all skips precede task creation/model dispatch."""
     sweep(c, at)
+    sync_decisions(c)
     if not SR.config_of(c, controls.KEY)['on']:
         return []
     local = at.astimezone(ZONE)
@@ -148,3 +153,47 @@ def admit(c, settings, at):
             log(c, bot, 'filed: ' + model)
         rows.append(ident)
     return rows
+
+
+def deliver(c, pass_id, *, snapshot, raw, checkout_before, checkout_after,
+            conflict_check, memory_commit, reviewer, since=None, previous_learnings=None):
+    """Trusted runner handoff only; never expose caller-supplied manifests as an API.
+
+    Read/check the result and file the independent card before retiring either task.
+    A deadline, terminal skip or retry cannot leave a partial or duplicate card.
+    """
+    from . import memory_tidy, memory_tidy_cards
+    row = c.execute('SELECT * FROM memory_tidy_passes WHERE id=?', (pass_id,)).fetchone()
+    if not row or row['status'] != 'filed':
+        return None
+    if H.now() >= row['deadline']:
+        close_pass(c, row, 'skipped: not finished')
+        return None
+    child = H.task(c, row['check_task_id']) if row['check_task_id'] else None
+    if not child or child['status'] in ('declined', 'closed'):
+        close_pass(c, row, 'skipped: model unavailable')
+        return None
+    total = refresh_costs(c)
+    if total >= STOP:
+        report_stop(c, total)
+    row = c.execute('SELECT * FROM memory_tidy_passes WHERE id=?', (pass_id,)).fetchone()
+    result = memory_tidy.evaluate(snapshot, raw, since=since, today=H.parse_ts(H.now()).astimezone(ZONE).date(),
+                                  checkout_before=checkout_before,
+                                  checkout_after=checkout_after, conflict_check=conflict_check,
+                                  previous_learnings=previous_learnings)
+    card = memory_tidy_cards.file_card(c, bot=row['bot'], reviewer=reviewer, pass_id=pass_id,
+        memory_commit=memory_commit, model=row['model'], cost_usd=row['cost_usd'], result=result,
+        started_at=row['started'], parent_task_id=row['parent_task_id'], check_task_id=row['check_task_id'])
+    close_tasks(c, row, result.status)
+    c.execute('UPDATE memory_tidy_passes SET status=?,reason=? WHERE id=?',
+              ('offered' if card else result.status, '; '.join(result.flags), pass_id))
+    log(c, row['bot'], 'result: ' + result.status)
+    return card
+
+
+def sync_decisions(c):
+    # Only the last kept/discarded pass advances the free-skip baseline. Expiry,
+    # replacement and failed checks leave genuinely new memory eligible next night.
+    c.execute("UPDATE memory_tidy_passes SET status=(SELECT status FROM memory_tidy_cards "
+              "WHERE pass_id=memory_tidy_passes.id) WHERE status='offered' AND EXISTS "
+              "(SELECT 1 FROM memory_tidy_cards WHERE pass_id=memory_tidy_passes.id AND status IN ('kept','discarded'))")

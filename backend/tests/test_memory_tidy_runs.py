@@ -161,3 +161,40 @@ def test_free_skip_excludes_pass_turn_commits_with_ordinary_subjects(api):
         assert not runs.changed(c, 'ops', '2026-11-01T11:30:00Z')
         commit(c)
         assert runs.changed(c, 'ops', '2026-11-01T11:30:00Z')
+
+
+def test_trusted_result_files_card_before_closure_without_parent_wake(api, monkeypatch):
+    from backend.tests.test_memory_tidy import snapshot, proposal
+    store = setup(api)
+    monkeypatch.setattr(H, 'now', lambda: '2026-11-01T11:45:00.000000Z')
+    with store.transaction() as c:
+        parent = H.task_create(c, H.KEEPER, 'Synthetic private container', '', 'bot:ops',
+                               private=True, quiet_notice=True, lint=False)
+        child = H.task_create(c, H.KEEPER, 'Synthetic private child', '', 'bot:ops',
+                              parent_id=parent['id'], private=True, quiet_notice=True, lint=False)
+        last(c, status='filed')
+        c.execute('UPDATE memory_tidy_passes SET parent_task_id=?,check_task_id=?', (parent['id'], child['id']))
+        before = c.execute('SELECT count(*) FROM jobs').fetchone()[0]
+        snap = snapshot()
+        card = runs.deliver(c, 'past', snapshot=snap, raw=json.dumps(proposal(snap)),
+            checkout_before={'manifest': 'same'}, checkout_after={'manifest': 'same'},
+            conflict_check=lambda agent, rules: [], memory_commit='a' * 40, reviewer='human:ana')
+        assert card and card['status'] == 'open'
+        assert H.task(c, child['id'])['status'] == H.task(c, parent['id'])['status'] == 'closed'
+        assert c.execute('SELECT count(*) FROM jobs').fetchone()[0] == before
+        assert runs.deliver(c, 'past', snapshot={}, raw='', checkout_before={}, checkout_after={},
+            conflict_check=None, memory_commit='a' * 40, reviewer='human:ana') is None
+        c.execute("UPDATE memory_tidy_cards SET status='discarded'")
+        runs.sync_decisions(c)
+        assert c.execute("SELECT status FROM memory_tidy_passes").fetchone()[0] == 'discarded'
+
+
+def test_cancelled_child_cannot_leave_partial_card(api, monkeypatch):
+    store = setup(api)
+    monkeypatch.setattr(H, 'now', lambda: '2026-11-01T11:45:00.000000Z')
+    with store.transaction() as c:
+        last(c, status='filed')
+        assert runs.deliver(c, 'past', snapshot={}, raw='', checkout_before={}, checkout_after={},
+            conflict_check=None, memory_commit='a' * 40, reviewer='human:ana') is None
+        assert c.execute('SELECT count(*) FROM memory_tidy_cards').fetchone()[0] == 0
+        assert c.execute('SELECT reason FROM memory_tidy_passes').fetchone()[0] == 'skipped: model unavailable'
