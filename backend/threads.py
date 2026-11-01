@@ -2083,10 +2083,12 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
             subs[s["parent_message_id"]] = {"id": s["id"], "count": n, "last_seq": s["last_seq"],
                                             "unread": u["unread"], "more": n > 0}
     marks = reactions(c, ids)
+    # Every message sits at its thread's depth in the tree: 0 in a root, 1 in a sub-thread, and so on (`path`).
+    depth = max(0, len([p for p in str(row.get("path") or f"/{row['id']}/").split("/") if p]) - 1)
     out, size, hidden_open = [], 0, False
     for m in rows:
         if m.get("deleted_at"):
-            item = {**_message_out(m), "depth": 0}
+            item = {**_message_out(m), "depth": depth}
             hidden_open = False
         elif not message_readable(c, v, m, thread_checked=True):
             if hidden_open:
@@ -2094,7 +2096,7 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
             item = {"id": m["id"], "seq": m["seq"], "thread_id": row["id"], "hidden": True}
             hidden_open = True
         else:
-            item = {**_message_out(m), "depth": 0}
+            item = {**_message_out(m), "depth": depth}
             hidden_open = False
         if m["id"] in subs and not item.get("hidden"):
             item["sub_thread"] = subs[m["id"]]

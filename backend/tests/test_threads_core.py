@@ -393,4 +393,7 @@ def test_a_sub_thread_is_titled_by_its_parents_first_line_and_keeps_it(world):
         assert sub["subject"] == "Budget for Q3 is ready"
         threads.edit_message(c, owner, parent["id"], "Changed")
         assert threads.thread_row(c, sub["id"])["subject"] == "Budget for Q3 is ready"
+        threads.post(c, owner, sub["id"], "A reply")
+        assert {m["depth"] for m in threads.timeline(c, owner, tid)["messages"]} == {0}
+        assert {m["depth"] for m in threads.timeline(c, owner, sub["id"])["messages"]} == {1}
     assert threads.sub_thread_title("word " * 30).endswith("…") and len(threads.sub_thread_title("word " * 30)) <= 61
