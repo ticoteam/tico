@@ -86,10 +86,10 @@ const A = (id, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1', titl
     // the words above keep the column
     const words = await m1.locator('.th-body').evaluate(b => b.getBoundingClientRect().height);
     assert(words < 120, `${label}: the reply's words are not pushed away ${words}`);
-    // your own upload too, on your side
+    // your own upload too (threads have no sides: every row starts at the left)
     const mine = await page.locator('[data-message="m2"] figure.vcard').evaluate(c => [c.getBoundingClientRect().width, c.closest('.vcards').getBoundingClientRect().width,
       c.getBoundingClientRect().right, c.closest('.vcards').getBoundingClientRect().right]);
-    assert(mine[0] <= mine[1] * 0.3 && Math.abs(mine[2] - mine[3]) < 2, `${label}: your own picture is a thumbnail on your side ${mine}`);
+    assert(mine[0] <= mine[1] * 0.3, `${label}: your own picture is a thumbnail ${mine}`);
     // no visual address: the thumbnail is the same size and whole
     const t = page.locator('[data-message="m3"] .chat-thumb.ready');
     await t.waitFor();
