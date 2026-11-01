@@ -452,12 +452,14 @@ def _code(code: object, system: System) -> str:
 
 def tracking_records(j: Mapping[str, Any], system: System) -> list[Record]:
     """A tracking category's options: the location category's options are locations, the other categories' are classes.
-    Each option is keyed by its category and its id, so a location and a class never share a key. An archived option is
-    kept as inactive, and its revision follows its name and status, so a rename or an archive is a change the books
-    take."""
+    Each option is keyed by its category and its id, so a location and a class never share a key. An archived option, or
+    any option of an archived category, is kept as inactive: a bill or journal line on it still resolves on import, and it
+    is not offered for a new write. Its revision follows its name and status, so a rename or an archive is a change the
+    books take."""
     category = str(j.get("TrackingCategoryID") or "")
-    if not category or _status(j) != "ACTIVE":
+    if not category:
         return []
+    category_live = _status(j) == "ACTIVE"
     as_location = system("location") == category
     out: list[Record] = []
     for raw in as_list(j.get("Options")):
@@ -466,7 +468,7 @@ def tracking_records(j: Mapping[str, Any], system: System) -> list[Record]:
         if not option_id:
             continue
         name = str(option.get("Name") or "")
-        live = str(option.get("Status") or "ACTIVE") == "ACTIVE"
+        live = category_live and str(option.get("Status") or "ACTIVE") == "ACTIVE"
         # Xero gives an option no revision, so the books make one from this digest when they take the option in.
         digest = hashlib.sha256(f"{name}|{'ACTIVE' if live else 'ARCHIVED'}".encode()).hexdigest()[:16]
         when = stamp(option.get("UpdatedDateUTC"))

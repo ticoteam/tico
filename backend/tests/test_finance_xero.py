@@ -1948,6 +1948,24 @@ def test_a_bill_backfilled_on_an_archived_tracking_option_imports_with_its_tag(b
         assert {(str(k), str(v)) for k, v in c.execute("SELECT kind, value FROM fin_line_tags")} == {("class", clazz)}
 
 
+def test_a_bill_backfilled_on_an_option_in_an_archived_category_imports_with_its_tag(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    xbooks.rows["TrackingCategories"][1]["Status"] = "ARCHIVED"      # the Team category is archived by now
+    xbooks.rows["Contacts"][0]["IsSupplier"] = True
+    tracked = [{"Name": "Team", "Option": "Field"}]
+    xbooks.rows["Invoices"] = [{**_invoice("bill-1", kind="ACCPAY"),
+                                "LineItems": [{**_line("acct-6100", "100.00"), "Tracking": tracked}]}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_bills").fetchone()[0] == 1
+        clazz = _local(c, "TrackingOption:cat-team/opt-field", "fin_dimensions")
+        assert c.execute("SELECT active FROM fin_dimensions WHERE id=?", (clazz,)).fetchone()[0] == 0
+        assert {(str(k), str(v)) for k, v in c.execute("SELECT kind, value FROM fin_line_tags")} == {("class", clazz)}
+
+
 @pytest.mark.parametrize("echoed", [True, False], ids=["item_code_echoed", "item_code_not_echoed"])
 def test_a_bill_made_here_on_an_item_keeps_the_item_when_xero_edits_it(books, echoed):
     xbooks = XeroBooks()
