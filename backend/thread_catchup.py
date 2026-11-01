@@ -4,10 +4,13 @@ summary is theirs alone.
 
 What is summarized: the messages the person may read (`threads.readable`, per message) that are newer than their read
 point in their thread, from people and bots, minus their own posts and the system notices (cards, follow-ups). The
-newest MAX_MESSAGES that fit MAX_BYTES are kept; anything older is named as left out, not read.
+newest messages that fit MAX_BYTES are kept, counted as the lines the model reads (each one clipped to LINE_CHARS, then
+encoded), and anything older is named as omitted, not read.
 
 The model call happens outside any transaction (reads, then the call, then the write), so a slow model never holds
-the write lock. With no model available, the reply is a short excerpt of the newest messages instead.
+the write lock. Before the reply is written, every message the summary read is checked again: one the person can no
+longer read is a 409, and nothing is posted, because the summary may already carry its text. With no model available,
+the reply is a short excerpt of the newest messages instead.
 """
 import logging
 
@@ -40,7 +43,8 @@ def _name(c, actor, names):
 
 
 def transcript(c, viewer, thread, scope, me):
-    """The messages to summarize, oldest first, from one snapshot: {"messages": [...], "left_out": n, "through": seq}."""
+    """The messages to summarize, oldest first, from one snapshot: {"messages": [...], "left_out": n, "through": seq}.
+    Each message carries its `line`, the text the model reads, and the budget counts those lines."""
     from . import threads
     if scope == "thread":
         where, args = "m.conversation_id=?", [thread["id"]]
@@ -53,25 +57,22 @@ def transcript(c, viewer, thread, scope, me):
         f"WHERE {where} AND m.seq>COALESCE(f.last_read_seq, 0) AND m.from_actor<>? "
         "AND m.kind IN ('say','ask','answer','notice') AND m.deleted_at IS NULL "
         "ORDER BY m.seq DESC LIMIT ?", [me, *args, me, SCAN_LIMIT]).fetchall()
+    names = {}
     kept, size, through, left_out = [], 0, 0, 0
     for row in rows:
         refs = H._json(row["refs_json"], {}) or {}
         if any(key in refs for key in SYSTEM_REFS) or not threads.readable(c, viewer, row["id"]):
             continue
         through = max(through, row["seq"] or 0)
-        line = len(row["body"] or "") + 40
-        if len(kept) >= MAX_MESSAGES or size + line > MAX_BYTES:
+        line = f"{_name(c, row['from_actor'], names)}: {_clip(row['body'], LINE_CHARS)}"
+        cost = len(line.encode("utf-8")) + 1
+        if len(kept) >= MAX_MESSAGES or size + cost > MAX_BYTES:
             left_out += 1
             continue
-        kept.append(dict(row))
-        size += line
+        kept.append({**dict(row), "line": line})
+        size += cost
     kept.reverse()
     return {"messages": kept, "left_out": left_out, "through": through}
-
-
-def _lines(c, messages):
-    names = {}
-    return [f"{_name(c, m['from_actor'], names)}: {_clip(m['body'], LINE_CHARS)}" for m in messages]
 
 
 def summarize(writer, title, lines):
@@ -97,15 +98,18 @@ def prepare(c, auth, who, thread_id, scope):
     viewer = threads.viewer(auth, who)
     thread = dict(threads.require(c, viewer, thread_id))
     got = transcript(c, viewer, thread, scope, who.actor)
-    return {"thread": thread, "scope": scope, **got, "lines": _lines(c, got["messages"])}
+    return {"thread": thread, "scope": scope, **got, "lines": [m["line"] for m in got["messages"]]}
 
 
 def post(c, auth, who, settings, plan, summary):
-    """Reply in the person's Assistant DM. Its own permission check: the person must still read the thread."""
+    """Reply in the person's Assistant DM. Its own permission check: the person must still read the thread and every
+    message the summary read."""
     from . import assistant, threads
     from .store import Problem
     viewer = threads.viewer(auth, who)
     threads.require(c, viewer, plan["thread"]["id"])
+    if any(not threads.readable(c, viewer, m["id"]) for m in plan["messages"]):
+        raise Problem("changed", "Part of this thread changed while it was read. Catch up again.", 409)
     info = assistant.availability(c, settings, who)
     if not info["available"]:
         raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
@@ -115,8 +119,9 @@ def post(c, auth, who, settings, plan, summary):
     body = f"Catch-up: {title}, {count} new\n\n{summary}"
     if plan["left_out"]:
         body += f"\n\n{plan['left_out']} older not included."
+    sources = [m["id"] for m in plan["messages"]]
     refs = {"catch_up": {"thread_id": plan["thread"]["id"], "scope": plan["scope"], "through_seq": plan["through"],
-                         "messages": count}}
+                         "messages": count, "sources": sources}}
     posted = threads.post(c, H.bot_actor(info["bot"]), room["id"], body, kind="say", refs=refs, to_actor=who.actor,
                           via="assistant")
     H.event(c, who.actor, "thread.catch_up", plan["thread"]["id"],
@@ -138,7 +143,8 @@ def install(app, store, auth, mutate):
     @app.post("/api/v2/threads/{thread_id}/catch-up")
     def catch_up(request: Request, thread_id: str, body: CatchUp):
         """A bounded summary of what is new in a thread (scope `subtree`: its sub-threads too), posted to the caller's
-        Assistant DM. Nothing new is a reply with `posted` null, and nothing is written."""
+        Assistant DM. Nothing new is a reply with `posted` null and `left_out` 0; a reply with `posted` null and
+        `left_out` above 0 means the new messages were too long for the budget, and nothing is written."""
         who = request.state.identity
         auth.domain(who)
         if who.role not in ("owner", "human") or not H.is_human(who.actor) or who.via:
@@ -150,7 +156,9 @@ def install(app, store, auth, mutate):
             plan = prepare(c, auth, who, thread_id, body.scope)
             writer = updates.writer_for(c, settings, store)
         if not plan["messages"]:
-            return {"thread_id": thread_id, "scope": body.scope, "messages": 0, "left_out": 0, "posted": None,
-                    "words": "Nothing new since you last read it"}
+            words = ("Nothing new since you last read it" if not plan["left_out"]
+                     else f"{plan['left_out']} new messages are too long to summarize here")
+            return {"thread_id": thread_id, "scope": body.scope, "messages": 0, "left_out": plan["left_out"],
+                    "posted": None, "words": words}
         summary = summarize(writer, plan["thread"]["subject"] or "Thread", plan["lines"])
         return mutate(request, body, lambda c: post(c, auth, who, settings, plan, summary))

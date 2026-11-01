@@ -3,7 +3,7 @@ what the caller may read, so a message they cannot read reaches neither the repl
 
 import pytest
 
-from backend import threads, updates
+from backend import thread_catchup, threads, updates
 from backend.auth import Identity
 from backend.tests.test_api import api, as_member, post  # noqa: F401
 
@@ -108,4 +108,42 @@ def test_a_thread_the_person_cannot_read_is_not_found(api, monkeypatch):
     tid = thread(api, members=("human:ana",))       # Ben is not a member, so the thread does not exist for him
     say(api, tid, "Ana only.")
     catch_up(api, tid, expected=404)
+    assert assistant_bodies(api) == []
+
+
+def test_a_message_revoked_while_the_model_reads_is_not_posted(api, monkeypatch):
+    """The model reads the thread, then a message in it stops being readable to Ben before the reply is written. The
+    summary was built from it, so nothing is posted, and the reply says why."""
+    tid = thread(api)
+    say(api, tid, "Lease renewal is due Friday.")
+    secret = say(api, tid, "Ben's offer is confidential.")
+
+    def writer(system, user):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE messages SET legacy_audience='shared:nobody', restricted=1 WHERE id=?", (secret["id"],))
+        return {"summary": "Lease renewal is due Friday. Ben's offer is confidential."}
+
+    monkeypatch.setattr(updates, "writer_for", lambda *a, **k: writer)
+    catch_up(api, tid, expected=409)
+    assert assistant_bodies(api) == []
+
+
+def test_the_budget_counts_the_lines_the_model_reads_not_the_raw_bodies(api, monkeypatch):
+    no_model(monkeypatch)
+    tid = thread(api)
+    for i in range(30):
+        say(api, tid, f"Note {i}: " + "x" * 3000)
+    response = catch_up(api, tid)
+    assert response["messages"] >= 20
+    assert response["left_out"] == 30 - response["messages"]
+
+
+def test_a_message_too_big_for_the_budget_is_reported_as_omitted_not_as_nothing_new(api, monkeypatch):
+    no_model(monkeypatch)
+    monkeypatch.setattr(thread_catchup, "MAX_BYTES", 10)
+    tid = thread(api)
+    say(api, tid, "Lease renewal is due Friday.")
+    response = catch_up(api, tid)
+    assert response["posted"] is None and response["messages"] == 0
+    assert response["left_out"] == 1
     assert assistant_bodies(api) == []
