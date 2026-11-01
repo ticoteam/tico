@@ -2,7 +2,7 @@
 30 minutes left out, people on the org chart count 40 hours a week, weeks are Monday to Sunday in the company's time
 zone, and only people may read the totals. Synthetic runs only."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from backend import bot_hours as B
 from backend.store import encode
@@ -97,7 +97,7 @@ def test_a_silence_over_thirty_minutes_is_left_out():
 
 def test_a_long_runs_few_reads_find_every_silence_and_only_people_read_it(api):
     store, run = api.app.state.store, runs(api)
-    start = datetime.now(ZONE) - timedelta(hours=7)
+    start = datetime.now(timezone.utc) - timedelta(hours=7)
     s = lambda n: start + timedelta(seconds=n)  # noqa: E731
     # A six-hour run with an event every 20 seconds, silent 40 min after 1 h, 31 min after 3 h and 29 min after 4 h,
     # and quiet for its last 45 minutes: 6 h - 40 - 31 - 45 min = 4 h 4 min.
