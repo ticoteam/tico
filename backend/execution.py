@@ -150,6 +150,33 @@ def positive_effect(c, aid, body):
     return False
 
 
+def only_a_notice(c, aid, row, body):
+    """Whether a stopped turn did nothing but report why it stopped, so nothing of it needs its session continued.
+    Claude Code writes a limit or a refused request as an assistant message of its own, the same line as the turn's
+    error, so "a message came back" is no evidence of work. Missing token counts are never proof here (a host may not
+    report them). The proof is what the host promised and streamed: it reports every tool call and none came, no text
+    streamed, each message is word for word a line the turn ended on, and no write, push, output or used approval shows.
+    An older runner or a harness that makes no such promise never passes."""
+    stopped_on = {error.strip() for error in limit_errors(c, aid) if error.strip()}
+    for event in c.execute("SELECT kind,payload_json FROM attempt_events WHERE attempt_id=? ORDER BY seq", (aid,)):
+        payload = json.loads(event["payload_json"] or "{}") or {}
+        if event["kind"] == "tokens":
+            usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+            if payload.get("output") or usage.get("output"):
+                return False
+        elif event["kind"] == "message":
+            if str(payload.get("text") or "").strip() not in stopped_on:
+                return False
+        elif event["kind"] not in SILENT_KINDS:
+            return False
+    text = split_runner_notices(body.text or "")[0].strip()
+    if (text and text not in stopped_on) or body.yielded or positive_effect(c, aid, body.model_copy(update={"text": ""})):
+        return False
+    job = c.execute("SELECT * FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
+    facts = retry_facts(c, job, row["started"], H.now())
+    return bool(facts["reported"] and not facts["calls"] and not facts["consumed"] and not facts["fallback_unknown"])
+
+
 def turns_here(c, runner_id):
     """{bot: turns it holds on this computer now}."""
     return start_places.held(c, runner_id)
@@ -4705,16 +4732,21 @@ class Execution:
         failure = None
         source_pause = False
         quota_acted = False
+        notice_only = False
         if body.outcome in ('failed', 'interrupted') and not row['stop_requested']:
             failure = run_backoff.classify(c, aid, body)
             errors = limit_errors(c, aid)
+            notice_only = only_a_notice(c, aid, row, body)
+            if notice_only and body.continues and errors and all(login_holds.capacity(e) for e in errors):
+                # The runner took the busy notice for work and kept the thread; the turn never ran, so it just waits.
+                body = body.model_copy(update={'limited': True, 'continues': False})
             if body.limited and not any(gateway.run_code(e) for e in errors) and not (errors and all(login_holds.capacity(e) for e in errors)):
                 job = c.execute('SELECT * FROM jobs WHERE id=?', (row['job_id'],)).fetchone()
                 facts = retry_facts(c, job, row['started'], H.now())
                 quota_acted = bool(facts['consumed'] or outside_actions(c, job, row['started'], H.now()))
                 source_pause = not quota_acted
                 if source_pause:
-                    worked = c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind IN ('tool','message','delta') LIMIT 1", (aid,)).fetchone()
+                    worked = not notice_only and c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind IN ('tool','message','delta') LIMIT 1", (aid,)).fetchone()
                     body = body.model_copy(update={'outcome': 'interrupted' if worked else body.outcome, 'retryable': True})
         c.execute("UPDATE attempts SET state=?,finished=?,final_text=?,result_json=? WHERE id=?",
                   (body.outcome, H.now(), body.text,
@@ -4754,8 +4786,8 @@ class Execution:
         errors = limit_errors(c, aid)
         busy = (body.outcome != "completed" and not stopped and bool(errors)
                 and all(login_holds.capacity(error) for error in errors))
-        busy_acted = busy and c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? "
-                                        "AND kind IN ('message','tool') LIMIT 1", (aid,)).fetchone() is not None
+        busy_acted = busy and not notice_only and c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? "
+                                                            "AND kind IN ('message','tool') LIMIT 1", (aid,)).fetchone() is not None
         # Unless the runner kept its thread (`continues`): then the job goes back in the queue, and after the capacity
         # hold its next turn continues that thread, which knows what it did. Once only: a continuation the model's
         # capacity stops again is held for review, even before it acts (capacity_continuation).
@@ -4770,7 +4802,7 @@ class Execution:
             c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.limited',json('true'),"
                       "'$.capacity_continue',json('true')) WHERE id=?", (aid,))
         source = body.source_continuation
-        if (source_pause or continues) and source and body.fallback and source.harness == body.fallback:
+        if (source_pause or continues) and source and body.fallback and source.harness == body.fallback and not notice_only:
             computer = c.execute('SELECT capabilities_json FROM runners WHERE id=?', (row['runner_id'],)).fetchone()
             if computer and SOURCE_CONTINUE in json.loads(computer[0] or '[]'):
                 c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.source_continue',json('true')) WHERE id=?", (aid,))
@@ -4815,9 +4847,9 @@ class Execution:
             kinds = {r[0] for r in c.execute("SELECT DISTINCT kind FROM attempt_events WHERE attempt_id=?", (aid,))}
             tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (row["job_id"],)).fetchone()[0]
             quick = (row["started"] or row["created"]) >= H.shift(H.now(), seconds=-NO_EFFECT_WITHIN)
-            silent = (kinds <= SILENT_KINDS and (quick or tico_code == gateway.UNAVAILABLE) and tries < NO_EFFECT_TRIES
-                      and tico_code not in gateway.FINAL)
-            if silent and positive_effect(c, aid, body):
+            silent = ((kinds <= SILENT_KINDS or notice_only) and (quick or tico_code == gateway.UNAVAILABLE)
+                      and tries < NO_EFFECT_TRIES and tico_code not in gateway.FINAL)
+            if silent and not notice_only and positive_effect(c, aid, body):
                 silent = False
         # A refused key or sign-in blocks this profile until its credential changes.
         # Only runs with no evidence of actions may wait queued rather than held for review.
@@ -4955,7 +4987,9 @@ class Execution:
             elif not checkpoint_safe(c, aid, checkpoint_task):
                 c.execute("UPDATE tasks SET checkpoint_blocked=1 WHERE id=?", (checkpoint_task["id"],))
                 checkpoint_task = None
-        if (body.outcome == "completed" or yielded or source_pause) and body.text and checkpoint_task:
+        # A turn that only said why it stopped leaves the task where it stood: its line is no place to pick the work up
+        # from, and a checkpoint would have the same-state rule hold the stall checks.
+        if (body.outcome == "completed" or yielded or source_pause) and not notice_only and body.text and checkpoint_task:
             # Where the task stood after this turn: a later turn that cannot resume this session
             # starts from it (runner prompt). It is not the task's activity, so `updated` stays.
             started = (c.execute("SELECT started FROM turns WHERE id=?", (aid,)).fetchone() or [None])[0]
