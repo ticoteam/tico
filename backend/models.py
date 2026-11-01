@@ -2947,6 +2947,7 @@ class BrandExample(Contract):
 
 
 class BrandBody(Contract):
+    name: Annotated[str, Field(max_length=60)] | None = None
     positioning: Annotated[str, Field(max_length=120)] | None = None
     voice: list[BrandVoice] | None = Field(default=None, max_length=12)
     tone: list[BrandTone] | None = Field(default=None, max_length=20)

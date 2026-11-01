@@ -125,7 +125,7 @@ The report links to the Finance report for the books. It does not copy them.
 
 Two cards on the Strategy page feed Growth and every bot that writes outward.
 
-**Brand** is the brand book: the positioning line, voice traits (each with a do and a don't), tone by situation, the
+**Brand** is the brand book: the brand name (when it differs from the company's), the positioning line, voice traits (each with a do and a don't), tone by situation, the
 words to use and to avoid, naming rules, claims and proof, visual files (as links to Library Files) and examples.
 `hub brand check` runs the cheap checks on a draft: avoided words, naming, and `claims.never` phrases. It runs no model
 and does not detect claims missing from the allowed list, so a bot checks those against the claims list itself.

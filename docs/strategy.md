@@ -30,7 +30,7 @@ The page is cards, in this order: the summary on top; **Where we play** beside t
 **Related news**; then the sections. The owner edits each in place; a × on hover (always shown on a touch screen)
 removes a thing.
 
-- **Brand and GTM.** Two cards beside the Summary: the Brand strip (positioning, colours, voice, never-say) and the
+- **Brand and GTM.** Two cards beside the Summary: the Brand strip (name, positioning, colours, voice, never-say) and the
   Go-to-market card (motion, buyer, channels, North Star and target). Each opens its full page, is versioned on its own,
   and is published by the owner. See [Growth](growth.md#brand-and-gtm-cards).
 - **Growth.** The Growth tab (`#/strategy/growth`) beside Market: ideas, tests, verdicts, channel economics and the

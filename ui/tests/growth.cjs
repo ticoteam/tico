@@ -149,6 +149,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const pos = page.locator('form[data-sec="positioning"] input[name="positioning"]');
   await pos.waitFor({timeout: t(10000)});
   await pos.fill('Home cleaning you never have to think about');
+  await page.locator('form[data-sec="positioning"] input[name="name"]').fill('Acme Clean');
   await page.locator('form[data-sec="positioning"] [type=submit]').click();
   await page.waitForFunction(() => document.querySelector('.br-subs [data-sub="positioning"] .gr-dot'), null, {timeout: t(10000)})
     .catch(async () => assert.fail(`${tag}: the section saved (${await page.locator('.toast').allInnerTexts()} ${JSON.stringify(page.errors)})`));
@@ -170,6 +171,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const brand = await ok(page, 'GET', 'brand');
   assert.equal(brand.published.n, 2, `${tag}: published v2`);
   assert.equal(brand.published.body.positioning, 'Home cleaning you never have to think about', `${tag}: the saved section`);
+  assert.equal(brand.published.body.name, 'Acme Clean', `${tag}: the brand name saves with Positioning`);
 
   // Go-to-market: Motion, then Sources flags the revenue clash.
   await go(page, '#/strategy/gtm');

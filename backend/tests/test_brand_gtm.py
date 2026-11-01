@@ -50,6 +50,17 @@ def test_draft_merges_sections_publish_versions_and_stale_revision_is_409(api):
     post(api, "brand/publish", {"note": "Nothing"}, expected=409)
 
 
+def test_brand_name_differs_from_the_company_and_leads_the_summary(api):
+    draft(api, sections={"name": "x" * 61}, expected=422)
+    draft(api, sections={"name": "Acme Clean", "positioning": BRAND["positioning"]})
+    post(api, "brand/publish", {"note": "Named"})
+    assert get(api, "brand")["published"]["body"]["name"] == "Acme Clean"
+    assert get(api, "brand/summary")["text"].startswith("Brand v1: Acme Clean. Home cleaning")
+    draft(api, sections={"name": None})
+    post(api, "brand/publish", {"note": "Unnamed"})
+    assert get(api, "brand/summary")["text"].startswith("Brand v2. Home cleaning")
+
+
 def test_bots_propose_members_read_only_published_and_admins_confirm(api):
     ops = bot(api, "ops")
     draft(api, sections={"positioning": "Acme cleans homes"})
