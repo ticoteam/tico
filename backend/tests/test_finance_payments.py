@@ -16,6 +16,7 @@ from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.actions import FinanceError
 from backend.finance.mercury import Answer
+from backend.finance.store import tico
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
 from backend.tests.test_api import api, get, post  # noqa: F401
@@ -126,7 +127,9 @@ def test_watch_rule_actions_run_as_the_rules_maker_once_per_event(books):
         assert not by_bot["ok"] and _card(c, eve)["status"] == "frozen"         # a bot's rule has only the bot's rights
         paused = pause(c, "rule-3", OWNER, {}, values, event="finance.budget.warn", subject="e2", revision=None)
         assert paused["ok"]
-        assert FA.budget_state(c, budget_id, AT).amount == 0
+        # The rule's pause runs on the clock now and starts the current period, so read the budget on that day. AT is in
+        # October: reading there passed only while the current month was October.
+        assert FA.budget_state(c, budget_id, tico.now()).amount == 0
         assert _card(c, eve)["status"] == "frozen"         # a pause freezes the budget's cards, keeping allocations
         rule_of = c.execute("SELECT on_behalf_of, actor FROM fin_actions WHERE kind='budget_update'").fetchone()
         assert tuple(rule_of)[1] == OWNER
