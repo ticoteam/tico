@@ -89,12 +89,6 @@ CREATE TABLE IF NOT EXISTS fin_vendor_labels (
   book_id TEXT NOT NULL REFERENCES fin_books(id), name_key TEXT NOT NULL, label TEXT NOT NULL,
   seen_on TEXT NOT NULL, PRIMARY KEY (book_id, name_key));
 
--- Vendor keys lines carried before names were keyed folded (phase 1 posted a name as written), found by migration
--- 66: lines never change, so a name key (and a contact, through its aliases) also counts lines under these.
-CREATE TABLE IF NOT EXISTS fin_vendor_legacy (
-  book_id TEXT NOT NULL REFERENCES fin_books(id), raw TEXT NOT NULL, name_key TEXT NOT NULL,
-  PRIMARY KEY (book_id, raw));
-
 CREATE TABLE IF NOT EXISTS fin_bills (
   id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), vendor_id TEXT REFERENCES fin_contacts(id),
   number TEXT NOT NULL DEFAULT '', bill_date TEXT NOT NULL, due_date TEXT,
@@ -444,7 +438,6 @@ CREATE INDEX IF NOT EXISTS fin_invoices_list ON fin_invoices(book_id, invoice_da
 CREATE INDEX IF NOT EXISTS fin_invoice_lines_invoice ON fin_invoice_lines(invoice_id);
 CREATE INDEX IF NOT EXISTS fin_contacts_name ON fin_contacts(book_id, name);
 CREATE INDEX IF NOT EXISTS fin_vendor_aliases_contact ON fin_vendor_aliases(contact_id);
-CREATE INDEX IF NOT EXISTS fin_vendor_legacy_key ON fin_vendor_legacy(book_id, name_key);
 CREATE INDEX IF NOT EXISTS fin_rules_kind ON fin_rules(kind, active, priority);
 CREATE INDEX IF NOT EXISTS fin_external_refs_local ON fin_external_refs(connection_id, local_table, local_id);
 CREATE INDEX IF NOT EXISTS fin_restatements_period ON fin_restatements(period_id);
@@ -693,16 +686,13 @@ def gaps_books(c: sqlite3.Connection) -> None:
 
 def vendor_keys_folded(c: sqlite3.Connection) -> None:
     """Phase 2 keys a plain vendor name folded (core/ledger.name_key); phase 1 posted it as written. Each vendor value
-    lines carry that is no contact's id is recorded under its key (fin_vendor_legacy, when they differ) and labels the
-    key (its newest entry date's text); a budget's vendor name is keyed. Idempotent."""
+    lines carry that is no contact's id labels its key (its newest entry date's text); a budget's vendor name is keyed.
+    Idempotent."""
     rows = c.execute("SELECT l.book_id, l.contact_id, MAX(l.entry_date) FROM fin_lines l WHERE l.contact_id<>'' AND "
                      "NOT EXISTS (SELECT 1 FROM fin_contacts k WHERE k.id=l.contact_id) "
                      "GROUP BY l.book_id, l.contact_id").fetchall()
     for book_id, raw, day in rows:
         key = name_key(str(raw))
-        if key != raw:
-            c.execute("INSERT INTO fin_vendor_legacy(book_id, raw, name_key) VALUES(?,?,?) "
-                      "ON CONFLICT(book_id, raw) DO NOTHING", (book_id, raw, key))
         c.execute("INSERT INTO fin_vendor_labels(book_id, name_key, label, seen_on) VALUES(?,?,?,?) "
                   "ON CONFLICT(book_id, name_key) DO UPDATE SET label=excluded.label, seen_on=excluded.seen_on "
                   "WHERE excluded.seen_on>fin_vendor_labels.seen_on", (book_id, key, str(raw).strip(), day))
@@ -710,6 +700,12 @@ def vendor_keys_folded(c: sqlite3.Connection) -> None:
                                  "(SELECT 1 FROM fin_contacts k WHERE k.id=b.vendor)").fetchall():
         if name_key(str(vendor)) != vendor:
             c.execute("UPDATE fin_budgets SET vendor=? WHERE id=?", (name_key(str(vendor)), bid))
+
+
+def vendor_legacy_dropped(c: sqlite3.Connection) -> None:
+    """Cloud migration 76: fin_vendor_legacy, the vendor names phase 1 posted as written (migration 66), is retired. Its
+    keys are not carried over: a line posted under such a name no longer counts toward its vendor. Idempotent."""
+    c.execute("DROP TABLE IF EXISTS fin_vendor_legacy")
 
 
 def tax(c: sqlite3.Connection) -> None:

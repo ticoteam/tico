@@ -668,11 +668,10 @@ def test_vendor_keys_fold_names_aliases_keep_history_and_inactive_contacts_captu
         assert labels["GitHub"] == 800 and labels["Globex"] == 2_000    # the newest row's text; the alias's contact
 
 
-def test_phase_one_vendor_names_still_count_after_migration_66_and_keys_are_whole_and_never_contact_ids(books):
-    """Codex review: phase 1 posted vendor names as written; migration 66 records them (fin_vendor_legacy), so a
-    budget on the name, then the contact that takes it, still count those lines, and the name labels its key. A key is
-    folded whole (two long names never meet by truncation) and folding it again changes nothing. A contact's id is
-    never another vendor's name, and a stored contact id never goes by an alias."""
+def test_phase_two_keys_a_budget_vendor_name_and_never_takes_a_contact_id(books):
+    """Phase 2 keys a vendor name a budget kept as phase 1 wrote it, and the budget counts lines under that key. A key is
+    folded whole (two long names never meet by truncation) and folding it again changes nothing. A contact's id is never
+    another vendor's name, and a stored contact id never goes by an alias."""
     from backend.finance import budgeting
     from backend.finance.core.ledger import name_key
     from backend.finance.store import budgets as SB
@@ -689,21 +688,14 @@ def test_phase_one_vendor_names_still_count_after_migration_66_and_keys_are_whol
                                                        "parent_id": root.result["budget_id"]}).result["budget_id"])
 
         bid = budget("Acme", line, "acme cloud")
-        spend(c, "6100", 10_000, vendor="ACME CLOUD")
-        # As phase 1 left it: the line, its rollups and the budget under the name as written, no label.
-        c.execute("DROP TRIGGER fin_lines_no_update")
-        c.execute("UPDATE fin_lines SET contact_id='ACME CLOUD' WHERE contact_id='acme cloud'")
-        for table in ("fin_rollups", "fin_cash_rollups"):
-            c.execute(f"UPDATE {table} SET vendor='ACME CLOUD' WHERE vendor='acme cloud'")
+        spend(c, "6100", 10_000, vendor="acme cloud")
+        # As phase 1 left the budget: its vendor under the name as written, no label.
         c.execute("UPDATE fin_budgets SET vendor='ACME CLOUD' WHERE id=?", (bid,))
         c.execute("DELETE FROM fin_vendor_labels")
         schema.create(c)
-        assert budgeting.budget_state(c, bid, AT).actual == 0                 # what the upgrade would lose
         schema.phase2(c)
         assert c.execute("SELECT vendor FROM fin_budgets WHERE id=?", (bid,)).fetchone()[0] == "acme cloud"
         assert budgeting.budget_state(c, bid, AT).actual == 10_000
-        rows = FR.spend_by(c, OWNER, "vendor", "2026-10-01", "2026-10-31", account_id=line)["rows"]
-        assert [(r["label"], r["amount"]) for r in rows] == [("ACME CLOUD", 10_000)]
         vendor = _vendor(c, "Acme Cloud")
         assert budgeting.budget_state(c, bid, AT).actual == 10_000             # through the contact's alias too
         held = budget("Acme Co", misc, vendor)
@@ -713,6 +705,28 @@ def test_phase_one_vendor_names_still_count_after_migration_66_and_keys_are_whol
         other = _vendor(c, "Globex")
         c.execute("INSERT INTO fin_vendor_aliases VALUES(?,?,?,?)", (book, vendor, other, AT))   # as if it got in
         assert SB.budgets(c, book)[held].vendor == vendor
+
+
+def test_the_upgrade_drops_fin_vendor_legacy_and_vendor_keys_still_follow_aliases(books):
+    """Migration 76 removes fin_vendor_legacy from an install that has it; a vendor's keys still come from its contact's
+    id and its names (vendor_keys reads no legacy table)."""
+    from backend.finance.store import ap as SAP
+    from backend.finance.store import schema
+    with books.transaction() as c:
+        book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
+        vendor = _vendor(c, "Acme Supplies")
+        SAP.alias_add(c, book, "acme supplies co", vendor, AT)
+        c.execute("DELETE FROM cloud_migrations WHERE version=76")
+        c.execute("CREATE TABLE fin_vendor_legacy (book_id TEXT NOT NULL, raw TEXT NOT NULL, name_key TEXT NOT NULL, "
+                  "PRIMARY KEY (book_id, raw))")
+        c.execute("INSERT INTO fin_vendor_legacy VALUES(?, 'ACME SUPPLIES CO', 'acme supplies co')", (book,))
+    books.initialize(seed_market=False)
+    with books.read() as c:
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_vendor_legacy'").fetchone()
+        assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=76").fetchone()[0] == 1
+        assert "fin_vendor_legacy" not in schema.table_names()
+        keys = SAP.vendor_keys(c, book, vendor)
+        assert keys[0] == vendor and "acme supplies co" in keys and "ACME SUPPLIES CO" not in keys
 
 
 def test_a_long_vendor_name_whose_key_folds_longer_still_reclassifies_and_settles(books):

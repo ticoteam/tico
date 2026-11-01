@@ -145,7 +145,6 @@ KEEP = frozenset((
     "fin_rollups",
     "fin_rule_counters", "fin_rule_runs", "fin_rules", "fin_settings", "fin_statements", "fin_usage_snapshots",
     "fin_settlements", "fin_cash_rollups", "fin_credit_refunds", "fin_vendor_aliases", "fin_vendor_labels",
-    "fin_vendor_legacy",
     "fin_view_defaults", "fin_view_grants", "fin_view_versions",
     "fin_raw_imports", "fin_close_snapshots", "fin_tax_jurisdictions", "fin_tax_seeds",
     # Growth, brand and go-to-market (backend/growth.py, backend/brand_gtm.py)

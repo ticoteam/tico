@@ -1793,6 +1793,11 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.feed_lines(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(75,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=76").fetchone():
+                    # fin_vendor_legacy goes (backend/finance/store/schema.py vendor_legacy_dropped).
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.vendor_legacy_dropped(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(76,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the
