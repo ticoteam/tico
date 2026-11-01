@@ -21,6 +21,20 @@ routines:
     template: playbooks/weekly-marketing-summary.md
     labels: [priority:p2]
     enabled: false
+  - id: weekly-growth-meeting
+    title: Weekly growth meeting
+    cron: "0 8 * * 1"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-meeting.md
+    labels: [priority:p2]
+    enabled: false
+  - id: monthly-growth-report
+    title: Monthly growth report
+    cron: "0 9 3 * *"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/monthly-report.md
+    labels: [priority:p2]
+    enabled: false
 
 # What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
 # arrives in, never the value; declaring access here does not create it. Changing access is an
