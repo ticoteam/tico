@@ -68,7 +68,7 @@ function settingsAgentPair(slug) {
 async function settingsAgentCredential(slug) {
   const e = S.emps.find(row => row.name === slug); if (!e) return;
   const rotating = !!e.agent?.credential;
-  if (rotating && !confirm(`Rotate the agent credential for ${e.display_name}? The current token stops working at once; install the new one on its computer.`)) return;
+  if (rotating && !await settingsConfirm({title: `Rotate the agent credential for ${e.display_name}?`, ok: 'Rotate', text: 'The current token stops working at once; install the new one on its computer.'})) return;
   let issued;
   try { issued = await post(`/v2/bots/${encodeURIComponent(slug)}/agent-credential`, {}); }
   catch (error) { toast(error.message, true); return; }
@@ -146,7 +146,7 @@ function settingsTokenShow(issued) {
 // Connect an agent: ui/connect-agent.js.
 $('#connect-agent').onclick = () => window.connectAgent?.();
 async function settingsTokenRevoke(id, label) {
-  if (!confirm(`Revoke the token ${label}? Anything using it stops at once.`)) return;
+  if (!await settingsConfirm({title: `Revoke the token ${label}?`, ok: 'Revoke', text: 'Anything using it stops at once.'})) return;
   try { await post(`/v2/me/tokens/${encodeURIComponent(id)}/revoke`, {}); toast(`Token ${label} revoked`); }
   catch (error) { toast(error.message, true); }
   await renderSettingsTokens();
@@ -156,7 +156,7 @@ function agentConfigYaml(setup) {
 }
 async function settingsAgentRevoke(slug) {
   const e = S.emps.find(row => row.name === slug); if (!e) return;
-  if (!confirm(`Revoke the agent credential for ${e.display_name}? Its computer loses access at once; the bot record stays.`)) return;
+  if (!await settingsConfirm({title: `Revoke the agent credential for ${e.display_name}?`, ok: 'Revoke', text: 'Its computer loses access at once; the bot record stays.'})) return;
   try { await post(`/v2/bots/${encodeURIComponent(slug)}/agent-credential/revoke`, {}); toast(`${e.display_name} credential revoked`); await loadSettings(); }
   catch (error) { toast(error.message, true); }
 }
@@ -447,13 +447,13 @@ function renderSettingsMachines() {
     if (remove) {
       const machine = SETTINGS_DATA.machines.find(m => m.id === remove.dataset.computerRemove);
       const bots = (machine?.bots || []).length;
-      if (!confirm(`Revoke ${machine?.label || 'this computer'}? It stops taking work at once${bots ? `; its ${bots === 1 ? 'bot waits' : `${bots} bots wait`} until reassigned on the Bots page` : ''}.`)) return;
+      if (!await settingsConfirm({title: `Revoke ${machine?.label || 'this computer'}?`, ok: 'Revoke', text: `It stops taking work at once${bots ? `; its ${bots === 1 ? 'bot waits' : `${bots} bots wait`} until reassigned on the Bots page` : ''}.`})) return;
       remove.disabled = true;
       try {
         await post(`/v2/computers/${encodeURIComponent(remove.dataset.computerRemove)}/revoke`, {});
         dialog?.close();
         await loadSettings();
-        $('#machine-enroll-status').innerHTML = 'Computer revoked. Its bots wait until reassigned in Bots. For Docker, stop its runner from its install directory: <code>docker compose -f runner.compose.yaml down</code>. Include <code>-f runner.override.yaml</code> before <code>down</code> if that file is present. This keeps repositories and sign-in.';
+        $('#machine-enroll-status').innerHTML = 'Computer revoked. Its bots wait until reassigned in Bots.<details class="settings-details"><summary>Details</summary>For Docker, stop its runner from its install directory: <code>docker compose -f runner.compose.yaml down</code>. Include <code>-f runner.override.yaml</code> before <code>down</code> if that file is present. This keeps repositories and sign-in.</details>';
         toast('Computer revoked');
       } catch (error) { toast(error.message, true); remove.disabled = false; }
       return;

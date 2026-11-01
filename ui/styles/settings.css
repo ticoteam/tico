@@ -16,6 +16,10 @@
 .settings-group-line{margin:0 0 12px;color:var(--muted)}
 /* A card's first line: what it controls, in plain words. */
 .settings-card-line{margin:0 0 12px;color:var(--muted)}
+/* Ask BotOps: a small link at the end of each card's heading row. */
+section.card>header>.settings-ask{margin-left:auto;font-size:var(--t-sm)}
+/* Commands, permission names and JSON wait behind Details. */
+.settings-details{margin:4px 0 8px}.settings-details>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}
 @media (max-width:760px){
   .settings-layout{grid-template-columns:minmax(0,1fr);gap:12px}
   .settings-groups{position:static}
@@ -74,9 +78,12 @@ input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-left{margin-top:var(--s2);padding-top:var(--s2);border-top:1px solid var(--line)}
 .people-left summary{padding:4px 0;color:var(--muted);font-size:var(--t-base);cursor:pointer}
 .people-row.is-left{grid-template-columns:minmax(0,1fr) auto}.people-row.is-left .people-who{opacity:.6}
-.people-limit{margin-top:var(--s2);padding-top:var(--s3);border-top:1px solid var(--line)}
-.people-limit input{width:76px}
-.people-rules{display:grid;gap:var(--s2);margin-top:var(--s2);padding-top:var(--s3);border-top:1px solid var(--line)}
+.policy-group{display:grid;gap:var(--s2)}
+.policy-group+.policy-group{margin-top:var(--s3);padding-top:var(--s3);border-top:1px solid var(--line)}
+.policy-group>h3{margin:0}
+.policy-line{align-items:flex-start}
+.policy-line>span{display:grid;gap:2px}
+.policy-number input{width:76px}
 button.people-danger{background:var(--fail);color:var(--surface)}
 /* Sync with directory (ui/directory-sync.js) */
 .ds-form{display:grid;gap:10px;max-width:560px}.ds-form [hidden]{display:none!important}

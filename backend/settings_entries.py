@@ -53,14 +53,21 @@ _RULE_WHERE = {"health_monitor_reports": (HEALTH + " > Health monitor", _card("h
                "topic_fresh": (RULES + " > What Tico runs on its own", _card("automation", "set-system-card")),
                "stall_triage": (RULES + " > What Tico runs on its own", _card("automation", "set-system-card"))}
 _ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage")
+# The ten team policies sit in Company & policies under three headings (ui/app/settings-people.js POLICY_GROUPS).
+_ALONE, _SEE = POLICIES + " > What bots may do alone", POLICIES + " > Who may see and store what"
+_POLICY_WHERE = {"assistant_direct": _ALONE, "assistant_approvals": _ALONE, "botops_direct": _ALONE,
+                 "botops_manages_bots": _ALONE, "bots_go_ahead": _ALONE, "admin_credentials": _SEE,
+                 "members_store_credentials": _SEE, "admin_sql": _SEE, "member_tokens": _SEE,
+                 "support_access": POLICIES + " > Support access"}
+_POLICY_CARD = _card("policies", "settings-policies")
 
 TEAM_RULES = [
-    S("team.rules." + key, name, _RULE_WHERE.get(key, (PEOPLE + " > Team rules",))[0],
+    S("team.rules." + key, name, _RULE_WHERE.get(key, (_POLICY_WHERE.get(key),))[0],
       "admin" if key in _ADMIN_RULES else "owner", kind, "PUT", "access/rules", key,
-      card=_RULE_WHERE.get(key, ("", _card("people")))[1], read="access#rules." + key, words="team rule", why=why)
+      card=_RULE_WHERE.get(key, ("", _POLICY_CARD))[1], read="access#rules." + key, words="team rule policy", why=why)
     for key, (name, kind, why) in _RULE_NAMES.items()
-] + [S("team.rules.go_ahead_days", "Days a bot waits before it goes ahead", PEOPLE + " > Team rules", "owner",
-       "confirm", "PUT", "access/rules", "go_ahead_days", "int", _card("people"), "access#rules.go_ahead_days",
+] + [S("team.rules.go_ahead_days", "Days a bot waits before it goes ahead", _ALONE, "owner",
+       "confirm", "PUT", "access/rules", "go_ahead_days", "int", _POLICY_CARD, "access#rules.go_ahead_days",
        words="wait days go ahead")]
 
 _USD = "hourly_usd, daily_usd, weekly_usd, monthly_usd"
@@ -101,8 +108,8 @@ ENTRIES = TEAM_RULES + [
       "directory/scim-token", value="json", card=_card("people"), why="A new token is shown once, to the owner"),
     S("people.add", "Add a human", PEOPLE + " > Add a human", "anyone", "confirm", "POST", "access/humans",
       value="json", card=_card("people"), words="invite person"),
-    S("people.member_bot_limit", "Member bot limit", PEOPLE + " > Team rules", "admin", "confirm", "PUT",
-      "access/limits", "member_bot_limit", "int", _card("people"), "access#limits.member_bot_limit"),
+    S("people.member_bot_limit", "Member bot limit", _SEE, "admin", "confirm", "PUT",
+      "access/limits", "member_bot_limit", "int", _POLICY_CARD, "access#limits.member_bot_limit"),
     S("people.person.role", "A person's role", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}", "role",
       "choice:member|admin", _card("people"), words="admin member role"),
     S("people.person.sign_in", "A person may sign in", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}",
@@ -168,8 +175,8 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("bots"), words="model effort harness computer move"),
     S("bot.restore", "Restore an archived bot", BOTS, "bot", "direct", "POST", "bots/{bot}/restore", value="json",
       card=_card("bots")),
-    S("bot.limit.usd", "Bot spend limit", BOTS + " > Spend limit", "bot", "confirm", "PUT", "usage/limits/{bot}",
-      value="json", card=_card("bots"), read="usage/limits#bots.{bot}", words="usd dollars spend budget " + _USD),
+    S("bot.limit.usd", "Bot spend limit", LIMITS + " > Bot spend limits", "bot", "confirm", "PUT", "usage/limits/{bot}",
+      value="json", card=_card("limits", "settings-spend-limits"), read="usage/limits#bots.{bot}", words="usd dollars spend budget " + _USD),
     S("team.budget", "Run budget", LIMITS + " > Run budget", "admin", "confirm", "POST", "settings/turn-budgets",
       value="json", card=_card("limits", "settings-turn-budgets"), words="turns per hour day"),
     S("bots.create", "New bot", BOTS + " > New bot", "anyone", "direct", "POST", "bots", value="json",

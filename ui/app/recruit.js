@@ -122,15 +122,7 @@ async function recruitNewSeat(seed = {}) {
 }
 
 function recruitAskBotOps() {
-  const bot = (S.emps || []).find(row => row.name === 'botops' && row.can_chat && !botLimited(row));
-  if (!bot) { toast('BotOps chat is unavailable. Ask your team owner for access.', true); return; }
-  const pill = botPill('botops'), box = pq(pill, '.p-text');
-  if (!box.value.trim()) {
-    box.value = 'Help me connect an agent I already run. Here is where it lives (folder path and computer, or GitHub URL):\n\n';
-    box.dispatchEvent(new Event('input', {bubbles: true}));
-  }
-  pill.focusOnOpen = true;
-  if (location.hash === '#/bot/botops/chat') showBotTab('chat'); else location.hash = '#/bot/botops/chat';
+  botopsAsk('Help me connect an agent I already run. Here is where it lives (folder path and computer, or GitHub URL):\n\n', {keep: true});   // ui/app/settings-cards.js
 }
 
 function recruitDraftLine(seat) {

@@ -9,11 +9,23 @@
 const PEOPLE_PROXY = {cloudflare: 'Cloudflare Access', 'aws-alb': 'your Cognito user pool'};
 const PEOPLE_ROLE = {owner: 'Owner', admin: 'Admin', member: 'Member'};
 const PEOPLE_SOURCE = {google: 'Google Workspace', entra: 'Microsoft Entra ID', scim: 'SCIM'};
-// Team rules the owner turns off to tighten (backend/team_rules.py): all on by default.
-const PEOPLE_RULES = [['assistant_direct', 'Assistant acts without asking'], ['assistant_approvals', 'People may let their Assistant decide their approvals'], ['botops_direct', 'BotOps changes providers and limits without asking'],
-  ['botops_manages_bots', 'BotOps manages every bot'],
-  ['admin_credentials', 'Admins store credentials'], ['members_store_credentials', 'Members store credentials for their bots'], ['admin_sql', 'Admins see SQL'], ['member_tokens', 'Members make personal tokens'],
-  ['bots_go_ahead', 'Bots go ahead on their recommendation when nobody answers'], ['support_access', 'Owners and admins may let Tico support in']];
+// The team policies (backend/team_rules.py) in Company & policies, under three headings, each switch with one line on
+// what it does: on by default; the owner turns one off to tighten. The lines are the Settings Owner's (Dev 648).
+const POLICY_GROUPS = [
+  ['What bots may do alone', [
+    ['assistant_direct', 'Assistant acts without asking', "The Assistant makes tasks, comments and messages to bots, and the task and setting changes a person asks for in chat, without a card first. Off: it asks with a card for anything beyond the person's own tasks."],
+    ['assistant_approvals', 'People may let their Assistant decide their approvals', 'Each person may let their own Assistant answer the approvals sent to them. Off: only the person answers.'],
+    ['botops_direct', 'BotOps changes providers and limits without asking', 'BotOps changes AI providers and spending limits without a card. Off: a person confirms each change on a card, except lowering a limit.'],
+    ['botops_manages_bots', 'BotOps manages every bot', "In its own runs (the daily update, routines only the owner wrote), BotOps changes the tools, repositories, contact and Instructions of any bot that isn't built in. Never its people, status, credentials or deletion."],
+    ['bots_go_ahead', 'Bots go ahead on their recommendation when nobody answers', 'When the person asked says nothing in time, the bot goes ahead on the recommendation it gave. Only reversible, internal steps: sends, spending and deletes always wait.']]],
+  ['Who may see and store what', [
+    ['admin_credentials', 'Admins store credentials', "Admins add, change and share the team's credentials, not only the owner. Off: only the owner."],
+    ['members_store_credentials', 'Members store credentials for their bots', 'Anyone on the team may store a credential for a bot they manage. Off: only an admin or the owner stores one, and members no longer manage the ones they stored.'],
+    ['admin_sql', 'Admins see SQL', 'Admins see the SQL page. Off: only the owner sees it. A query only returns what that person may already read.'],
+    ['member_tokens', 'Members make personal tokens', 'Members make personal API tokens for their own scripts. Off: only admins and the owner make them. Tokens already made keep working until they expire or are revoked.']]],
+  ['Support access', [
+    ['support_access', 'Owners and admins may let Tico support in', 'An owner or admin may let Tico support into this team for a set time, from a support ticket. Off: nobody can, and any visit in progress ends.']]],
+];
 let PEOPLE_MODE = '';        // 'manual' or 'sync' picked on this page; '' follows the saved directory source
 let PEOPLE_ADDED = '';       // who was just let in, for the one-line identity proxy reminder
 let PEOPLE_INVITE_FAILED = null;   // {id, message}: added, but the invite did not go; shown on their row once
@@ -107,9 +119,6 @@ async function renderSettingsPeople() {
         ${left.length ? `<details class="people-left"><summary>Left <span class="tnum">${left.length}</span></summary><ul class="people-list">${left.map(p => `<li class="people-row is-left" data-person="${esc(p.id)}">
           <div class="people-who">${personAvatar(p, 32)}<div class="people-id"><div class="people-name">${esc(p.name)}</div><div class="people-email">${esc(p.email || 'No email')}</div></div></div>
           <div class="people-cell-more">${owner && p.removable ? '<button class="ghost danger-text" type="button" data-person-act="remove">Remove</button>' : ''}<button class="ghost" type="button" data-person-act="restore">Restore</button></div></li>`).join('')}</ul></details>` : ''}
-        <label class="people-line people-limit">Bot limit per member<input id="member-bot-limit" type="number" inputmode="numeric" min="0" max="1000" value="${esc(String(view.member_bot_limit))}"></label>
-        ${owner ? `<div class="people-rules">${PEOPLE_RULES.map(([key, label]) => `<label class="people-line">${peopleSwitch(`data-rule="${key}"`, view.rules?.[key] !== false, false, label)}<span>${label}</span></label>`).join('')}
-          <label class="people-line"><span>Days a bot waits before it goes ahead (reversible, internal steps; sends, spending and deletes always wait)</span><input type="number" min="1" max="14" step="1" data-rule-days="go_ahead_days" value="${esc(String(view.rules?.go_ahead_days ?? 3))}" aria-label="Days a bot waits before it goes ahead"></label></div>` : ''}
       </section>`;
     if (mode === 'sync' && owner) window.mountDirectorySync?.($('#directory-sync'), renderSettingsPeople);   // ui/directory-sync.js
     if (owner) void peopleFromSetup($('#people-from-setup'));
@@ -120,8 +129,6 @@ async function renderSettingsPeople() {
       const person = control?.closest?.('[data-person]')?.dataset.person;
       const find = () => person ? $(`#set-people [data-person="${CSS.escape(person)}"]`)
         : control?.id ? $(`#${CSS.escape(control.id)}`)
-        : control?.dataset?.rule ? $(`#set-people [data-rule="${CSS.escape(control.dataset.rule)}"]`)
-        : control?.dataset?.ruleDays ? $(`#set-people [data-rule-days="${CSS.escape(control.dataset.ruleDays)}"]`)
         : control?.matches?.('.people-extras') ? $('#set-people .people-extras') : null;
       try { await work(); await again(message); }
       catch (error) {
@@ -208,13 +215,6 @@ async function renderSettingsPeople() {
         text: domain ? `People at ${x} who are not added here can no longer sign in.` : `${x} can no longer sign in.`})) return;
       void change(() => allow(view.allowed.filter(e => e !== x), view.allowed_domains.filter(d => d !== x)), `Removed ${x}`, button.closest('.people-extras'));
     });
-    el.querySelectorAll('[data-rule]').forEach(box => box.onchange = () => change(() => put('/v2/access/rules', {[box.dataset.rule]: box.checked}), 'Saved', box));
-    el.querySelectorAll('[data-rule-days]').forEach(box => box.onchange = () => {
-      const days = Math.round(Number(box.value));
-      if (days >= 1 && days <= 14) change(() => put('/v2/access/rules', {[box.dataset.ruleDays]: days}), 'Saved', box);
-      else settingsFieldError(box, 'Choose a number of days from 1 to 14.');
-    });
-    $('#member-bot-limit').onchange = event => change(() => put('/v2/access/limits', {member_bot_limit: Number(event.target.value)}), 'Saved', event.target);
     el.querySelectorAll('.people-row').forEach(row => {
       const p = person(row.dataset.person), path = `/v2/access/humans/${encodeURIComponent(p.id)}`;
       const role = row.querySelector('[data-person-role]');
@@ -359,4 +359,44 @@ async function peopleFromSetup(el) {
       if (String(error.body?.error?.code || '').startsWith('invite_')) form.email.hidden = true;
     }
   });
+}
+
+// Company & policies > Team policies: the bot limit per member (owners and admins) and the policies (the owner), from
+// the same access view People reads. Each control saves when it changes; a refusal stays in red under it.
+async function renderSettingsPolicies() {
+  const el = $('#set-policies'); if (!el || formBusy(el)) return;
+  let view;
+  try { view = await get('/v2/access'); }
+  catch (error) { el.innerHTML = `<div class="empty">Couldn't load the policies: ${esc(error.message || 'try again')}</div>`; return; }
+  if (!$('#set-policies')) return;
+  const owner = S.me?.role === 'owner';
+  const row = ([key, label, line]) => `<label class="people-line policy-line">${peopleSwitch(`data-policy="${key}"`, view.rules?.[key] !== false, false, label)}
+    <span><span>${esc(label)}</span><span class="settings-cell-note">${esc(line)}</span></span></label>`;
+  const limit = `<label class="people-line policy-line policy-number"><input id="member-bot-limit" type="number" inputmode="numeric" min="0" max="1000" value="${esc(String(view.member_bot_limit))}" aria-label="Bot limit per member">
+    <span><span>Bot limit per member</span><span class="settings-cell-note">The most bots one member may have added and not archived. Owners and admins have no limit.</span></span></label>`;
+  const days = `<label class="people-line policy-number"><span>Days a bot waits before it goes ahead (reversible, internal steps; sends, spending and deletes always wait)</span><input type="number" min="1" max="14" step="1" data-rule-days="go_ahead_days" value="${esc(String(view.rules?.go_ahead_days ?? 3))}" aria-label="Days a bot waits before it goes ahead"></label>`;
+  el.innerHTML = POLICY_GROUPS.map(([heading, rules]) => {
+    // The days sit directly under the go-ahead switch they belong to.
+    const rows = [...(owner ? rules.flatMap(rule => rule[0] === 'bots_go_ahead' ? [row(rule), days] : [row(rule)]) : []),
+      ...(heading === 'Who may see and store what' ? [limit] : [])];
+    return rows.length ? `<div class="policy-group"><h3>${esc(heading)}</h3>${rows.join('')}</div>` : '';
+  }).join('') + (owner ? '' : settingsWhoCanHTML('the team policies'));
+  const find = control => control.id ? $(`#${CSS.escape(control.id)}`)
+    : control.dataset.policy ? $(`#set-policies [data-policy="${CSS.escape(control.dataset.policy)}"]`)
+    : $(`#set-policies [data-rule-days="${CSS.escape(control.dataset.ruleDays)}"]`);
+  const change = async (work, control) => {
+    try { await work(); toast('Saved'); await renderSettingsPolicies(); }
+    catch (error) {
+      await renderSettingsPolicies();
+      const where = find(control);
+      if (where) settingsFieldError(where, error.message); else toast(error.message, true);
+    }
+  };
+  el.querySelectorAll('[data-policy]').forEach(box => box.onchange = () => change(() => put('/v2/access/rules', {[box.dataset.policy]: box.checked}), box));
+  el.querySelectorAll('[data-rule-days]').forEach(box => box.onchange = () => {
+    const value = Math.round(Number(box.value));
+    if (value >= 1 && value <= 14) change(() => put('/v2/access/rules', {[box.dataset.ruleDays]: value}), box);
+    else settingsFieldError(box, 'Choose a number of days from 1 to 14.');
+  });
+  $('#member-bot-limit').onchange = event => change(() => put('/v2/access/limits', {member_bot_limit: Number(event.target.value)}), event.target);
 }

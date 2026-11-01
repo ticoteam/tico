@@ -6,7 +6,7 @@
 // listen to it. Outgoing (backend/webhooks.py): endpoints Tico posts its events to. Through Tico Gateway
 // (backend/hook_relay.py): a second address for an incoming webhook, held by Tico Gateway, for a server the internet
 // cannot reach. A secret is shown once, right after it is made, and is gone from the next screen.
-const WH_PRESETS = [['none', 'None'], ['hmac', 'HMAC'], ['github', 'GitHub'], ['standard', 'Standard Webhooks'], ['stripe', 'Stripe'], ['slack', 'Slack']];
+const WH_PRESETS = [['none', 'None'], ['hmac', 'Shared secret (HMAC)'], ['github', 'GitHub'], ['standard', 'Standard Webhooks'], ['stripe', 'Stripe'], ['slack', 'Slack']];
 // Where a preset reads the event type (backend/trigger_presets.py TYPE_FROM): the API has no list of presets to read.
 const WH_TYPE_FROM = {github: 'X-GitHub-Event', stripe: '/type', standard: '/type', slack: '/event/type|/type'};
 const WH_UNHEARD = [['log', 'Log it'], ['note', 'Tell the maker']];
@@ -245,7 +245,7 @@ function whTriggerDialog(t) {
     : `<label>Name<input name="name" maxlength="100" required autocomplete="off" value="${esc(t?.name || '')}"></label>
     ${t ? '' : `<label>Signing<select name="preset" data-wh-preset>${WH_PRESETS.map(([k, v]) => whOpt(k, v, 'none')).join('')}</select></label>
     <label data-wh-secret-field hidden>Signing secret<input name="secret" maxlength="300" autocomplete="off" spellcheck="false" placeholder="Leave empty to make one"></label>`}
-    <label>Type from<input name="type_from" maxlength="120" autocomplete="off" spellcheck="false" value="${esc(t?.type_from || '')}" placeholder="Header or /json/path"></label>
+    <label>Type from<input name="type_from" maxlength="120" autocomplete="off" spellcheck="false" value="${esc(t?.type_from || '')}" placeholder="A header name, or a place in the body such as /event/type"></label>
     <label>Per hour<input name="hourly" type="number" min="1" max="600" required value="${esc(t?.hourly || 60)}"></label>
     <label>Keep days<input name="keep_days" type="number" min="1" max="30" required value="${esc(t?.keep_days || 7)}"></label>
     <label>If nothing listens<select name="unheard">${WH_UNHEARD.map(([k, v]) => whOpt(k, v, t?.unheard || 'log')).join('')}</select></label>`;
@@ -295,7 +295,7 @@ function whSigningDialog(t) {
   `${t.signed ? '<button type="button" class="ghost danger" data-wh-sign-off>Turn off</button>' : ''}<button type="submit" class="primary">Save</button>`);
   const path = `/v2/triggers/${encodeURIComponent(t.id)}/signing`;
   whSubmit(dialog, async v => {
-    if (t.signed && !confirm('Replace the signing secret? Calls signed with the current one are refused at once.')) return;
+    if (t.signed && !await settingsConfirm({title: 'Replace the signing secret?', ok: 'Replace secret', text: 'Calls signed with the current one are refused at once.'})) return;
     const secret = String(v.get('secret') || '').trim();
     const made = (await post(path, {preset: String(v.get('preset')), ...(secret ? {secret} : {})})).trigger;
     WH.shown = {...(WH.shown?.id === t.id ? WH.shown : {}), id: t.id};
@@ -304,13 +304,13 @@ function whSigningDialog(t) {
   });
   const off = dialog.querySelector('[data-wh-sign-off]');
   if (off) off.onclick = async () => {
-    if (!confirm('Turn signing off? Anyone with the address can call it.')) return;
+    if (!await settingsConfirm({title: 'Turn signing off?', ok: 'Turn off', text: 'Anyone with the address can call it.'})) return;
     try { await post(path, {off: true}); if (WH.shown?.id === t.id) delete WH.shown.signing; dialog.close(); void renderSettingsWebhooks(); }
     catch (e) { dialog.querySelector('[data-wh-error]').textContent = e.message; }
   };
 }
 async function whRotate(t) {
-  if (!confirm('Make a new address? The current one stops working at once.')) return;
+  if (!await settingsConfirm({title: 'Make a new address?', ok: 'Make new address', text: 'The current one stops working at once.'})) return;
   try {
     const made = (await post(`/v2/triggers/${encodeURIComponent(t.id)}/rotate`, {})).trigger;
     WH.shown = {...(WH.shown?.id === t.id ? WH.shown : {}), id: t.id, url: made.replayed ? '' : made.url};
@@ -319,8 +319,8 @@ async function whRotate(t) {
   } catch (e) { toast(e.message, true); }
 }
 async function whTriggerDelete(t) {
-  const using = t.routines.length ? ` ${whPlural(t.routines.length, 'routine')} will stop running on it.` : '';
-  if (!confirm(`Delete “${t.name}”?${using}`)) return;
+  const using = t.routines.length ? `${whPlural(t.routines.length, 'routine')} will stop running on it.` : 'Calls to its address stop at once.';
+  if (!await settingsConfirm({title: `Delete “${t.name}”?`, ok: 'Delete', text: using})) return;
   try {
     await post(`/v2/triggers/${encodeURIComponent(t.id)}/delete`, {});
     Object.assign(WH, {trigger: '', shown: null});
@@ -545,16 +545,16 @@ async function whHookDetail(el, run) {
   const act = async (fn, after) => { try { await fn(); after?.(); void renderSettingsWebhooks(); } catch (e) { toast(e.message, true); } };
   on('[data-wh-hook-edit]', () => void whHookDialog(h));
   on('[data-wh-hook-pause]', () => act(() => post(`${path}/${h.enabled ? 'pause' : 'resume'}`, {})));
-  on('[data-wh-hook-rotate]', () => {
-    if (!confirm('Make a new signing secret? The old one keeps working for a while.')) return;
+  on('[data-wh-hook-rotate]', async () => {
+    if (!await settingsConfirm({title: 'Make a new signing secret?', ok: 'Make new secret', danger: false, text: 'The old one keeps working for a while.'})) return;
     void act(async () => {
       const made = (await post(path + '/rotate', {})).webhook;
       WH.hookShown = made.replayed ? null : {id, secret: made.secret};
       if (made.replayed) toast('A new secret was made, but it was lost on the way. Try again.', true);
     });
   });
-  on('[data-wh-hook-delete]', () => {
-    if (!confirm(`Delete “${h.name}”? Nothing more is sent to it.`)) return;
+  on('[data-wh-hook-delete]', async () => {
+    if (!await settingsConfirm({title: `Delete “${h.name}”?`, ok: 'Delete', text: 'Nothing more is sent to it.'})) return;
     void act(() => post(path + '/delete', {}), () => { WH.hook = ''; WH.hookShown = null; });
   });
   on('[data-wh-example]', () => act(async () => {
@@ -610,8 +610,8 @@ async function whGateway(el, run) {
   }; });
   el.querySelectorAll('[data-wh-relay-do]').forEach(b => { b.onclick = async () => {
     const id = b.closest('[data-wh-relay]').dataset.whRelay, what = b.dataset.whRelayDo, path = `/v2/triggers/${encodeURIComponent(id)}/relay`;
-    if (what === 'delete' && !confirm('Remove the Gateway address? Calls to it stop at once.')) return;
-    if (what === 'rotate' && !confirm('Make a new Gateway address? The current one stops working at once.')) return;
+    if (what === 'delete' && !await settingsConfirm({title: 'Remove the Gateway address?', ok: 'Remove', text: 'Calls to it stop at once.'})) return;
+    if (what === 'rotate' && !await settingsConfirm({title: 'Make a new Gateway address?', ok: 'Make new address', text: 'The current one stops working at once.'})) return;
     b.disabled = true;
     try {
       const r = (await post(what === 'make' ? path : `${path}/${what}`, {})).relay;

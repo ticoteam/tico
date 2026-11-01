@@ -799,7 +799,7 @@ function renderSettingsBots() {
       const slug = cap.dataset.useLimit, name = settingsBotName(slug);
       useLimitDialog(slug, name, SETTINGS_DATA.limits?.bots?.[slug], SETTINGS_DATA.limits?.default, async () => {
         try { SETTINGS_DATA.limits = await get('/v2/usage/limits'); } catch {}
-        renderSettingsBots();
+        renderSettingsBots(); renderSettingsSpendLimits();
       });
       return;
     }
@@ -951,5 +951,28 @@ async function settingsCatalogPicker() {
       }
       submit.disabled = false;
     }
+  };
+}
+
+// Limits & billing > Bot spend limits: the same limits the Bots table and Usage show (backend/usage_limits.py), each
+// bot's with the default it falls back to, so a bot's dollar limit sits with the run budget and the turn levels.
+function renderSettingsSpendLimits() {
+  const card = $('#settings-spend-limits'), el = $('#set-spend-limits'), limits = SETTINGS_DATA.limits;
+  if (!card || !el) return;
+  const bots = (S.emps || []).filter(e => limits?.bots?.[e.name] && !e.archived);
+  card.hidden = !limits?.bots;
+  if (card.hidden) return;
+  const reload = async () => {
+    try { SETTINGS_DATA.limits = await get('/v2/usage/limits'); } catch {}
+    renderSettingsSpendLimits(); renderSettingsBots();
+  };
+  el.innerHTML = `<div class="sb-rows"><div class="sb-row"><span>Default for each bot</span><span>${esc(useLimitText(limits.default) || 'No limit')}</span>
+      ${limits.may_edit_default ? '<button type="button" class="linkish" data-spend-default>Change</button>' : '<span></span>'}</div>
+    ${bots.map(e => `<div class="sb-row"><span>${esc(settingsBotName(e.name))}</span>${useLimitButton(e.name, settingsBotName(e.name), limits.bots[e.name])}<span></span></div>`).join('')}</div>
+    <p class="settings-cell-note">Team and group limits: <a href="#/usage">Usage</a>.</p>`;
+  el.onclick = event => {
+    if (event.target.closest('[data-spend-default]')) return void useDefaultDialog(limits, reload);
+    const cap = event.target.closest('[data-use-limit]');
+    if (cap) useLimitDialog(cap.dataset.useLimit, settingsBotName(cap.dataset.useLimit), limits.bots[cap.dataset.useLimit], limits.default, reload);
   };
 }

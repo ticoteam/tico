@@ -252,10 +252,11 @@ function pageSettings() {
       <section class="card settings-bots-card" id="settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section>`)}
     ${pane('models', `<section class="card" id="settings-models"><header><h2>Models</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsIsAdmin() ? `<div id="settings-gateway"><div id="set-gateway-page">${skelRows(3, {card: true, dot: false})}</div></div>` : ''}`)}
-    ${pane('computers', `<section class="card" id="settings-computers"><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
+    ${pane('computers', `<section class="card" id="settings-computers"><header><h2>Computers</h2></header><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsIsAdmin() ? '<section class="card" id="settings-hosted" hidden><header><h2>Hosted servers</h2></header><div id="set-hosted"></div></section>' : ''}
       <section class="card" id="settings-sleep" hidden><header><h2>Sleep when idle</h2></header><div id="set-sleep"></div></section>`)}
-    ${settingsIsAdmin() ? pane('limits', `<section class="card" id="settings-turn-budgets" hidden><header><h2>Run budget</h2></header><div id="set-turn-budgets"></div></section>
+    ${settingsIsAdmin() ? pane('limits', `<section class="card" id="settings-spend-limits" hidden><header><h2>Bot spend limits</h2></header><div id="set-spend-limits"></div></section>
+      <section class="card" id="settings-turn-budgets" hidden><header><h2>Run budget</h2></header><div id="set-turn-budgets"></div></section>
       <section class="card" id="settings-turn-levels"><header><h2>Company turn levels</h2></header><div id="set-turn-levels"></div></section>
       <div id="settings-billing"><section class="card"><header><h2>Billing</h2></header><div id="set-billing">${skelRows(3, {card: true, dot: false})}</div></section></div>`) : ''}
     ${pane('automation', `<p class="settings-group-line">What happens without anyone clicking: routines, rules and the jobs Tico runs on its own.</p>
@@ -270,7 +271,7 @@ function pageSettings() {
       <section class="card" id="set-task-settings-card"><header><h2>Task settings</h2></header><div id="set-task-settings"></div></section>
       <div id="settings-types"></div>
       <section class="card" id="settings-roadmaps"></section>
-      <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
+      <section class="card" id="settings-tags-card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>`)}
     ${pane('connections', `<div id="settings-repos"><section class="card repos-card" id="set-repos">${skelRows(3, {card: true, dot: false})}</section></div>
       <div id="settings-inbound"><section class="card" id="set-inbound"></section></div>
@@ -279,7 +280,7 @@ function pageSettings() {
         <div id="set-webhooks">${skelRows(2, {card: true, dot: false})}</div></section></div>
       ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
       <section class="card" id="settings-tools-link"><header><h2>Tools &amp; Credentials</h2></header>
-        <p class="settings-cell-note">The tools bots use and the credentials they sign in with have their own page. <a href="${INTEGRATIONS}">Open Tools &amp; Credentials</a></p></section>`)}
+        <p class="settings-card-line">The tools bots use and the credentials they sign in with have their own page. <a href="${INTEGRATIONS}">Open Tools &amp; Credentials</a></p></section>`)}
     ${settingsIsAdmin() ? pane('policies', `<section class="card" id="settings-team"><header><h2>Team</h2></header>
         <p class="settings-cell-note" id="settings-team-moved">Stale ticket review and Start fresh when the topic changes:
           <a href="#/settings/routines" data-settings-moved>Moved to Settings &gt; Automation</a></p>
@@ -292,12 +293,13 @@ function pageSettings() {
           </div>
         </div>` : ''}
         <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p></section>
+      <section class="card" id="settings-policies"><header><h2>Team policies</h2></header><div id="set-policies">${skelRows(3, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-company"><header><h2>Tico company</h2></header><div id="set-company"></div></section>
       ${S.me?.role === 'owner' ? `<section class="card" id="settings-storage"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-privacy"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}`) : ''}
     ${pane('health', `<div id="settings-health"><div class="hl-page" id="hl-page"></div>
       ${hlSetupCheckHTML()}
-      <section class="card"><header><h2>Services</h2></header><div id="set-services">${skelRows(3, {card: true, dot: false})}</div></section></div>
+      <section class="card" id="settings-services-card"><header><h2>Services</h2></header><div id="set-services">${skelRows(3, {card: true, dot: false})}</div></section></div>
       <div id="settings-history"><section class="card"><header><h2>History</h2>
       ${S.me?.role === 'owner' ? '<div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="runs">Runs</button><button type="button" role="radio" data-history-view="changes">Changes</button></div>' : ''}</header>
       <div id="set-runs">${skelRows(3, {card: true, dot: false})}</div>
@@ -311,6 +313,7 @@ function pageSettings() {
   $('#settings-app-log')?.addEventListener('click', () => nativeHandler('showLog')?.postMessage(null));
   pageSettingsThemeBind();
   settingsTeamIconBind();
+  settingsCardsWatch();   // ui/app/settings-cards.js: each card's first line and Ask BotOps
   $('#settings-history-view')?.addEventListener('click', event => {
     const button = event.target.closest('[data-history-view]');
     if (button) settingsHistoryShow(button.dataset.historyView);
@@ -403,7 +406,7 @@ function settingsShow(tab, {group: picked = false} = {}) {
   if (on('models')) load(SETTINGS_DATA.loaded && renderSettingsProviders(), $('#settings-gateway') && renderSettingsGateway());
   settingsMachinesWatch();
   if (settingsMachinesVisible() && SETTINGS_DATA.loaded) void settingsMachinesRefresh();
-  if (on('limits')) load(renderTeamBudgets(), SETTINGS_DATA.loaded && renderSettingsTurnLevels(), $('#settings-billing') && renderSettingsBilling());
+  if (on('limits')) load(SETTINGS_DATA.loaded && renderSettingsSpendLimits(), renderTeamBudgets(), SETTINGS_DATA.loaded && renderSettingsTurnLevels(), $('#settings-billing') && renderSettingsBilling());
   if (on('automation')) {
     load(renderSystemRoutines(), renderSettingsRules(), renderReleaseCard(), renderTaskManagerCard());
     if (!formBusy($('#set-routines-card'))) renderSettingsRecurring();
@@ -413,7 +416,8 @@ function settingsShow(tab, {group: picked = false} = {}) {
   if (on('connections')) load(!formBusy($('#settings-repos')) && renderSettingsRepos(), inboundMount(), !formBusy($('#settings-webhooks')) && renderSettingsWebhooks());
   if (on('policies')) {
     const privacy = $('#settings-privacy'), storage = $('#settings-storage'), company = $('#settings-company');
-    load(privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(), company && settingsIsAdmin() && renderSettingsCompany());
+    load(privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(), company && settingsIsAdmin() && renderSettingsCompany(),
+      $('#settings-policies') && renderSettingsPolicies());
   }
   if (on('health')) load(window.hlMount?.(), settingsHistoryShow());
   const reveal = SETTINGS_REVEAL;
@@ -476,7 +480,7 @@ async function renderSettingsAssistantApprovals() {
       <span>My assistant can decide approvals for me</span></label>
     <p class="settings-cell-note">${v.team_allows
       ? `When you ask in its chat, your ${name} approves or declines your approvals. It reads the list back first, and only your own words count.`
-      : 'Your team’s owner has turned this off for everyone (Settings > People).'}</p>
+      : 'Your team’s owner has turned this off for everyone (Settings > Company & policies).'}</p>
     ${rows ? `<h3>Decided by ${name} for you</h3><ul class="assistant-decisions">${rows}</ul>` : ''}`;
   $('#assistant-decides').onchange = async ev => {
     const box = ev.target;
@@ -572,7 +576,7 @@ async function loadSettings() {
     if (TASK_SETTINGS && !formBusy($('#set-task-settings'))) taskSettingsPaint();
     renderTree();
     if (S.route !== SETTINGS) return;
-    renderSettingsIssues(); renderSettingsBots(); renderSettingsMachines(); renderSettingsServices(); renderSettingsHistory();
+    renderSettingsIssues(); renderSettingsBots(); renderSettingsSpendLimits(); renderSettingsMachines(); renderSettingsServices(); renderSettingsHistory();
     if (!formBusy($('#set-recurring'))) renderSettingsRecurring();   // not while its search box has the cursor
     void renderSettingsTokens();
     void renderSettingsHosted();

@@ -129,7 +129,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     // Add manually is the mode with no directory; no title/team column and no Edit button; the bot limit reads 25.
     assert.equal(await page.locator('[data-people-mode=manual]').getAttribute('aria-pressed'), 'true');
     assert.doesNotMatch(await page.locator('#set-people').textContent(), /leadership|Edit/);
-    assert.equal(await page.locator('#member-bot-limit').inputValue(), '25');
+    assert.equal(await page.locator('#settings-people #member-bot-limit, #settings-people [data-policy]').count(), 0, 'policies live in Company & policies');
     assert.equal(await page.locator('#people-proxy-note').count(), 0);
     assert.equal(await row('ana').locator('[data-person-role]').count(), 0);
     assert.equal(await row('ana').locator('[data-person-signin]').count(), 0, 'the owner can always sign in: words, not a switch');
@@ -209,16 +209,29 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     assert.deepEqual(await next(), ['allow', {allowed: ['ana@acme.example', 'cy@acme.example'], allowed_domains: [], expected_revision: 5}]);
     await page.waitForFunction(() => !document.querySelector('[data-allow="old@partner.example"]'));
 
+    // Company & policies > Team policies: three headings, each policy with its one line, the days under the go-ahead
+    // switch and the bot limit under "Who may see and store what".
+    await page.getByRole('tab', {name: 'Company & policies'}).click();
+    await page.locator('#set-policies [data-policy]').first().waitFor();
+    assert.deepEqual(await page.locator('#set-policies h3').allInnerTexts(),
+      ['What bots may do alone', 'Who may see and store what', 'Support access']);
+    assert.equal(await page.locator('#member-bot-limit').inputValue(), '25');
+    assert.equal(await page.locator('.policy-group:nth-of-type(2) #member-bot-limit').count(), 1);
+    for (const line of await page.locator('#set-policies .policy-line .settings-cell-note').allInnerTexts()) assert.match(line, /\.$/);
+    assert.equal(await page.locator('#set-policies .policy-line .settings-cell-note').count(), 11, 'ten policies and the bot limit, one line each');
+    assert.equal(await page.locator('#set-policies .people-line:has([data-policy=bots_go_ahead]) + .people-line [data-rule-days]').count(), 1);
     await page.locator('#member-bot-limit').fill('30');
     await page.locator('#member-bot-limit').press('Enter');
     assert.deepEqual(await next(), ['limits', {member_bot_limit: 30}]);
 
-    // The owner's rules are all on, and turning one off saves it (backend/team_rules.py).
-    assert.equal(await page.locator('[data-rule]').count(), 10);
-    assert.equal(await page.locator('[data-rule]:checked').count(), 10);
-    await page.locator('[data-rule=admin_sql]').uncheck();
+    // The owner's policies are all on, and turning one off saves it (backend/team_rules.py).
+    await page.locator('#set-policies [data-policy]').first().waitFor();
+    assert.equal(await page.locator('[data-policy]').count(), 10);
+    assert.equal(await page.locator('[data-policy]:checked').count(), 10);
+    await page.locator('[data-policy=admin_sql]').uncheck();
     assert.deepEqual(await next(), ['rules', {admin_sql: false}]);
-    await page.waitForFunction(() => document.querySelector('[data-rule=admin_sql]')?.checked === false);
+    await page.waitForFunction(() => document.querySelector('[data-policy=admin_sql]')?.checked === false);
+    await page.getByRole('tab', {name: 'People'}).click();
 
     // Sync with directory: pick a source and save; going back to manual stops the sync after a confirm.
     await page.locator('[data-people-mode=sync]').click();

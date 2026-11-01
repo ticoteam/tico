@@ -287,7 +287,7 @@ async function hlCheckUpdates() {
 // (POST /v2/support/setup-check, backend/setup_check.py). It sits beside the Health list, not in it, so the minute's
 // redraw of that list keeps the result on screen; Send to support attaches it to a request (ui/support.js).
 const hlSetupCheckHTML = () => `<section class="card hl-setup" id="hl-setup-check" aria-labelledby="hl-setup-h"><header><h2 id="hl-setup-h">Setup check</h2></header>
-  <p class="muted">Runs the installer's checks from here and says how to fix what fails.</p>
+  <p class="settings-card-line">Runs the installer's checks from here and says how to fix what fails.</p>
   <button class="ghost" type="button" data-hl-setup-check>Setup check</button>
   <div class="hl-setup-result" data-hl-setup-result aria-live="polite"></div></section>`;
 async function hlSetupCheck(button) {

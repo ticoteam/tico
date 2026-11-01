@@ -43,7 +43,8 @@ async function renderStorageMove(host, t) {
   button.textContent = t.state === 'on' ? 'Move existing files' : 'Move files back';
   button.onclick = async () => {
     const cost = t.state === 'on' ? ' Tico file hosting bills what it stores in Gateway credits.' : '';
-    if (!window.confirm(`Copy ${e.files} files (${gb(e.bytes)}), every version, to ${t.state === 'on' ? 'Tico file hosting' : "the company's own storage"}?${cost} Each copy is checked before it is used, and nothing is deleted where it is now.`)) return;
+    if (!await settingsConfirm({title: `Copy ${e.files} files (${gb(e.bytes)}), every version, to ${t.state === 'on' ? 'Tico file hosting' : "the company's own storage"}?`, ok: 'Copy files', danger: false,
+      text: `${cost.trim()} Each copy is checked before it is used, and nothing is deleted where it is now.`.trim()})) return;
     try { await post('/v2/system/storage/move', {expect_bytes: e.bytes}); toast('Moving files'); } catch (err) { toast(err.message, true); }
     void renderStorageMove(host, t);
   };
@@ -69,7 +70,8 @@ async function renderSettingsStorage() {
       <label>Access key ID<input name="access_key_id" required maxlength="128" placeholder="AKIA…" spellcheck="false"></label>
       <label>Secret access key<input name="secret_access_key" type="password" maxlength="128" autocomplete="new-password"
         placeholder="${a ? 'Leave empty to keep the saved one for the same key ID' : ''}"></label>
-      <p class="settings-cell-note">The keys need <code>s3:PutObject</code>, <code>s3:GetObject</code> and <code>s3:AbortMultipartUpload</code> on the bucket, and <code>s3:DeleteObject</code> to replace the team icon. Tico writes and reads back a small check object before saving.</p>
+      <p class="settings-cell-note">Tico writes and reads back a small check object before saving.</p>
+      <details class="settings-details"><summary>Details</summary><p class="settings-cell-note">The keys need <code>s3:PutObject</code>, <code>s3:GetObject</code> and <code>s3:AbortMultipartUpload</code> on the bucket, and <code>s3:DeleteObject</code> to replace the team icon.</p></details>
       <div class="row"><button class="primary" type="submit">${a ? 'Save changes' : 'Use this bucket'}</button>
         ${a ? `<button class="ghost" type="button" data-storage-off>Use the server's storage</button>` : ''}</div>
       <p class="settings-cell-note" data-storage-status role="status"></p>
@@ -97,7 +99,7 @@ async function renderSettingsStorage() {
   };
   const off = host.querySelector('[data-storage-off]');
   if (off) off.onclick = async () => {
-    if (!window.confirm("Store new files on the server's storage again? Files already in the bucket keep opening from it.")) return;
+    if (!await settingsConfirm({title: "Store new files on the server's storage again?", ok: 'Switch back', danger: false, text: 'Files already in the bucket keep opening from it.'})) return;
     try { await writeRequest('DELETE', '/v2/system/storage'); toast("New files now go to the server's storage"); } catch (e) { toast(e.message, true); }
     void renderSettingsStorage();
   };

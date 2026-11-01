@@ -204,8 +204,8 @@ function gatewayWire(gateway) {
   const automaticOn = root.querySelector('[data-gateway-automatic-on]');
   if (automaticOn) automaticOn.onclick = () => run(automaticOn, 'Connecting…', () => post('/v2/providers/gateway/automatic', {}), () => 'Connecting automatically');
   const clear = root.querySelector('[data-gateway-clear]');
-  if (clear) clear.onclick = () => {
-    if (!confirm('Clear the gateway key? Bots on Tico models stop until a key is saved again.')) return;
+  if (clear) clear.onclick = async () => {
+    if (!await settingsConfirm({title: 'Clear the gateway key?', ok: 'Clear key', text: 'Bots on Tico models stop until a key is saved again.'})) return;
     run(clear, 'Clearing…', () => writeRequest('DELETE', '/v2/providers/gateway'), () => 'Gateway key cleared');
   };
 }

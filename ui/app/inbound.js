@@ -181,8 +181,8 @@ async function inboundMount() {
         const id=accept?.dataset.inboundPhoneAccept || cancel.dataset.inboundPhoneCancel;
         const request=phoneRequests.find(r=>r.request_id===id);
         if (!request) return;
-        if (accept && !confirm(`Accept ${price(request.price_micros)} per 30 days for ${request.name}? Incoming SMS is included. TICO must still approve the rental; this does not buy a number.`)) return;
-        if (cancel && !confirm(`Cancel the phone request for ${request.name}?`)) return;
+        if (accept && !await settingsConfirm({title: `Accept ${price(request.price_micros)} per 30 days for ${request.name}?`, ok: 'Accept', danger: false, text: 'Incoming SMS is included. TICO must still approve the rental; this does not buy a number.'})) return;
+        if (cancel && !await settingsConfirm({title: `Cancel the phone request for ${request.name}?`, ok: 'Cancel request', text: 'No number is rented for it.'})) return;
         const button=accept || cancel;button.disabled=true;
         try {
           await post('/v2/inbound/phone-requests/'+encodeURIComponent(id)+(accept ? '/accept' : '/cancel'),accept ? {price_micros:request.price_micros} : {});
@@ -212,10 +212,11 @@ async function inboundMount() {
       }
       if (release) {
         const i=inboxes.find(i=>i.inbox_id===release.dataset.inboundRelease);
-        const warning=i.kind==='sms' ? 'Cancel renewal? The number keeps receiving until the paid period ends.' : 'Release this address permanently? Future messages will no longer be delivered.';
+        const [question,result]=i.kind==='sms' ? ['Cancel renewal?','The number keeps receiving until the paid period ends.'] : ['Release this address permanently?','Future messages will no longer be delivered.'];
+        const warning=`${question} ${result}`;
         let confirmation='';
         if (i.used_for) { confirmation=prompt(`${warning}\nUsed for: ${i.used_for}\nType ${i.address} to confirm.`);if(confirmation!==i.address)return; }
-        else if (!confirm(warning)) return;
+        else if (!await settingsConfirm({title: question, ok: i.kind==='sms' ? 'Cancel renewal' : 'Release', text: result})) return;
         await post('/v2/inbound/inboxes/'+i.inbox_id+'/release',{confirm:confirmation});await refreshInboxes();
       }
     } catch(error) {

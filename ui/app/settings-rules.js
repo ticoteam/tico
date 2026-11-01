@@ -537,7 +537,7 @@ async function ruleEditor(rule, preset = null) {
   };
   const del = dialog.querySelector('[data-rule-delete]');
   if (del) del.onclick = async () => {
-    if (!confirm('Delete this rule?')) return;
+    if (!await settingsConfirm({title: 'Delete this rule?', ok: 'Delete', text: 'It stops acting at once.'})) return;
     del.disabled = true; error.textContent = '';
     try {
       await post('/v2/rules/' + encodeURIComponent(rule.id) + '/delete', {expected_revision: rule.revision});

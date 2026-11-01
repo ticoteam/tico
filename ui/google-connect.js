@@ -51,7 +51,7 @@ window.mountGoogleConnect = async function (host) {
   };
   const disconnect = host.querySelector('[data-google-disconnect]');
   if (disconnect) disconnect.onclick = async () => {
-    if (!confirm(`Disconnect ${state.mailbox}? Tico's access is revoked at Google, and your message bot stops reading this inbox.`)) return;
+    if (!await settingsConfirm({title: `Disconnect ${state.mailbox}?`, ok: 'Disconnect', text: "Tico's access is revoked at Google, and your message bot stops reading this inbox."})) return;
     disconnect.disabled = true;
     try { await post('/v2/mail/google/disconnect', {}); window.mountGoogleConnect(host); }
     catch (error) { status.textContent = error.message; disconnect.disabled = false; }
