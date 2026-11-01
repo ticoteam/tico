@@ -377,7 +377,9 @@ const words = text => text.trim().split(/\s+/).length;
     // A line says diagnostics weren't sent, with Attach diagnostics (criterion 7). Attach opens Review and edit for that
     // request, and nothing is sent until Send (criterion 8).
     const noDiag = page.locator('#ask-panel .ask-sys', {hasText: "Diagnostics weren't sent."});
-    assert.deepEqual(await page.locator('#ask-panel .ask-sys').allInnerTexts(), ['You added Tico Support. They can now see chats.', "Diagnostics weren't sent. Attach diagnostics"]);
+    // The reply promise once, then the diagnostics line (criterion 7).
+    const promise = "Delivered to Tico support. We usually reply within 1 business day (Monday to Friday). The reply will appear here.";
+    assert.deepEqual(await page.locator('#ask-panel .ask-sys').allInnerTexts(), ['You added Tico Support. They can now see chats.', promise, "Diagnostics weren't sent. Attach diagnostics"]);
     await noDiag.getByRole('button', {name: 'Attach diagnostics'}).click();
     const review = page.getByRole('dialog', {name: 'Review and edit diagnostics'});
     await review.waitFor();
@@ -405,6 +407,7 @@ const words = text => text.trim().split(/\s+/).length;
     await page.locator('#ask-panel [data-ask-people] .ask-sup-chip').waitFor();
     assert.equal(state.filed.length, 1, 'no new request');
     assert.equal(await noDiag.count(), 1, 'no diagnostics line repeats');
+    assert.equal(await page.locator('#ask-panel .ask-sys', {hasText: 'Delivered to Tico support.'}).count(), 1, 'the promise line is not repeated (criterion 9)');
     await page.waitForFunction(() => !document.querySelector('.ask-fly'));
     assert.equal(await page.locator('#ask-panel').evaluate(el => [...el.querySelectorAll('*')].every(x => x.getBoundingClientRect().right <= innerWidth + 1)), true, 'no horizontal scroll with the chip');
     // Closing flies the dot back down into the tab bar.

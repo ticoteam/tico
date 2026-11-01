@@ -266,12 +266,16 @@ async function askFlip() {
     if (sw) sw.disabled = false;
   }
 }
-// A request Loop in Support filed (none was open before): one line that diagnostics weren't sent, with Attach
-// diagnostics. It is keyed by the request, so looping in again never repeats it.
+// A request Loop in Support filed (none was open before): the reply promise, then one line that diagnostics weren't
+// sent, with Attach diagnostics. Both are keyed by the request, so looping in again never repeats them.
 function askFiled(id) {
   ASK.sys ||= [];
+  const at = new Date().toISOString();
+  // The reply promise, once: the same words the pop-up shows under a sent request (ui/support.js supportDelivered).
+  const promise = 'sys:promise:' + id;
+  if (!ASK.sys.some(s => s.key === promise) && window.supportDelivered) ASK.sys.push({at, text: window.supportDelivered(), id, key: promise});
   const key = 'sys:diag:' + id;
-  if (!ASK.sys.some(s => s.key === key)) ASK.sys.push({at: new Date().toISOString(), text: ASK_NO_DIAG, id, key, attach: true});
+  if (!ASK.sys.some(s => s.key === key)) ASK.sys.push({at, text: ASK_NO_DIAG, id, key, attach: true});
 }
 const askLoopNoteKey = () => ASK_LOOP_NOTE + '.' + (S.me?.id || 'me');
 function askLoopNoteSeen() { try { return localStorage.getItem(askLoopNoteKey()) === '1'; } catch { return true; } }
