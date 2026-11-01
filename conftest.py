@@ -1,4 +1,5 @@
 """Tests read the registry from a fictional company, never from a real environment's."""
+import _scan_json  # noqa
 import os
 import sys
 from pathlib import Path
