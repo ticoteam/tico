@@ -5253,6 +5253,11 @@ def create_app(settings=None):
             report = restore_tasks(c, [row["task_id"]], actor=who.actor)
             if report.get("conflict"):
                 raise Problem("conflict", "This task cannot go back: something newer has taken its place", 409)
+            if report.get("unplaced"):
+                fields = ", ".join(f"{table}.{key}" for table, keys in report["unplaced"][row["task_id"]].items()
+                                   for key in keys)
+                raise Problem("unplaced", "This task was deleted before an upgrade and holds data this version has no "
+                              f"place for ({fields}). It stays in Deleted tasks", 409)
             return {"restored": row["task_id"], "unlinked": report["unlinked"].get(row["task_id"], []),
                     "skipped": report["skipped"]}
         return mutate(request, body, work)

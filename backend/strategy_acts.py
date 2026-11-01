@@ -23,6 +23,7 @@ import contextvars
 
 from . import strategy_bot
 from . import hubdb as H
+from .migrations import renames
 
 STRATEGY_BOT = "bot:" + strategy_bot.SLUG
 ACTIONS = ("create", "reorder", "reassign", "close")
@@ -470,6 +471,12 @@ def _stored(c, action_id):
         return None
     changes = H._json(row.pop("changes"), None) or {}
     row["done"], row["left"] = changes.get("done") or [], changes.get("left") or []
+    for item in row["done"]:
+        # A task's fields before and after, as stored: keyed by the tasks columns of the release that made the
+        # decision, read under this one's (backend/migrations/renames_data.py), so Undo puts back what was there.
+        for side in ("before", "after"):
+            if isinstance(item.get(side), dict):
+                item[side] = renames.current_row("tasks", item[side])
     row["undo"] = H._json(row.pop("undo", None), None) or None
     row["undoable"] = row["state"] == "done"
     return row
