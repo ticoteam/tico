@@ -13,7 +13,7 @@ function orgRecent() {
 // Bottom up: the eight most recent (most recent lowest), then every bot that needs you, most first.
 // "show the top 8 recent. Make sure they are easily clickable (bigger/spread out)".
 function orgFanBots() {
-  const shown = new Set(shownEmps().filter(orgBranchVisible).map(e => e.name));
+  const shown = new Set(shownEmps().filter(orgBranchVisible).map(e => e.id));
   const recent = orgRecent().filter(slug => shown.has(slug)).slice(0, 8);
   const needs = [...shown].filter(slug => !recent.includes(slug))
     .map(slug => ({slug, n: needsMeCount(slug) + (stateOf(slug) === 'needs' ? 1 : 0)}))
@@ -31,7 +31,7 @@ function orgFanClose() {
 // In a bot's chat on a phone, its icon left of the chat bar opens the same fan
 // over the bar: the four bots most recently opened (not this one), with Search on top of the stack.
 function orgFanChatBots(current) {
-  const shown = new Set(shownEmps().filter(orgBranchVisible).map(e => e.name));
+  const shown = new Set(shownEmps().filter(orgBranchVisible).map(e => e.id));
   return orgRecent().filter(slug => shown.has(slug) && slug !== current).slice(0, 4)
     .map(slug => ({slug, recent: true, n: needsMeCount(slug)}));
 }
@@ -43,7 +43,7 @@ function orgFanOpen(opts = {}) {
   const bots = chat ? orgFanChatBots(opts.chat) : orgFanBots();
   if (!bots.length && !chat) { searchOpen(); return; }  // nothing recent and nothing waiting: pick one
   const item = (b, i) => `<li><button class="org-fan-item" type="button" role="menuitem" data-org-bot="${esc(b.slug)}" style="--i:${i}">
-      ${avatar(b.slug, 34)}<span>${empName(b.slug)}</span>${orgBranchMark(S.emps.find(e => e.name === b.slug))}${treeLimitMark(b.slug)}${b.n ? `<span class="org-fan-badge" aria-label="${b.n} need you">${b.n}</span>` : ''}</button></li>`;
+      ${avatar(b.slug, 34)}<span>${empName(b.slug)}</span>${orgBranchMark(botRow(b.slug))}${treeLimitMark(b.slug)}${b.n ? `<span class="org-fan-badge" aria-label="${b.n} need you">${b.n}</span>` : ''}</button></li>`;
   // In a chat the bottom bar is hidden, so a menu button left of Search is the way back to the side menu.
   const search = i => `<li class="org-fan-row"><button class="org-fan-item org-fan-menu" type="button" role="menuitem" data-org-menu aria-label="Open menu" aria-controls="side" aria-expanded="false" style="--i:${i}">
       <span class="nav-icon org-fan-search-icon" aria-hidden="true">menu</span></button><button class="org-fan-item org-fan-search" type="button" role="menuitem" data-org-search style="--i:${i}">

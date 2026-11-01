@@ -398,7 +398,7 @@ const BOT_FILTER_START = {status: ['open', 'doing', 'waiting'], step: '', assign
   needs: 'you', waiting_on: 'any', created_within: 7, updated_within: 7, done_within: 14, due: 'overdue', label: ''};
 function botFilterParties(slug, others) {
   const people = (S.people || []).map(p => [actorOf('human', p.id), p.id === S.me?.id ? `${p.name || p.id} (you)` : p.name || p.id]);
-  const bots = (S.emps || []).map(e => [`bot:${e.name}`, e.display_name || e.name]);
+  const bots = (S.emps || []).map(e => [`bot:${e.id}`, e.display_name || e.slug]);
   return [['this_bot', empName(slug)], ['me', 'Me'], ...(others ? [['others', 'Others']] : []), ...people, ...bots];
 }
 const actorOf = (kind, id) => `${kind}:${id}`;

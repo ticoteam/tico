@@ -376,8 +376,8 @@ function machineBrowserExitHTML(machine) {
   const id = esc(machine.id);
   const toggle = `<label class="computer-detail-check"><input type="checkbox" role="switch" class="people-switch" data-browser-exit="${id}"${x.sharing ? ' checked' : ''}${x.may_change || (x.may_turn_off && x.sharing) ? '' : ' disabled'}> Share internet with bots</label>`;
   if (!x.sharing) return toggle;
-  const names = new Map((S.emps || []).filter(e => !e.agent && (e.status === 'active' || x.bots.includes(e.name)))
-    .map(e => [e.name, e.display_name || botDisplayName(e.name)]));
+  const names = new Map((S.emps || []).filter(e => !e.agent && (e.status === 'active' || x.bots.includes(e.id)))
+    .map(e => [e.id, e.display_name || botDisplayName(e.id)]));
   for (const bot of x.bots) if (!names.has(bot)) names.set(bot, botDisplayName(bot));
   const bots = x.may_change
     ? `<fieldset class="computer-exit-bots" data-browser-exit-bots="${id}"><legend>Bots</legend>${[...names].sort((a, b) => a[1].localeCompare(b[1]))

@@ -24,7 +24,7 @@ const tasksFinishedView = view => view === 'done' || view === 'closed';
 const DONE_CAP = 20;                // The Done list shows 20 at a time
 const ACTIVE_TASK_STATUSES = 'open,doing,waiting,review,ready,declined';
 let TASKS_ST = null;
-const teamOf = slug => S.emps.find(e => e.name === slug)?.team || '';
+const teamOf = id => botRow(id)?.team || '';
 // A run of a schedule (a routine before it became an automation): not work a person asked for, so Done lists leave it out.
 const isRecurringTask = t => !!t.routine_id || /from schedule/.test(String(t.body || ''));
 const isRecurringIssue = i => (i.labels || []).some(l => /^type:recurring$/i.test(l)) || /_Created by dispatcher from schedule/.test(i.body || '');

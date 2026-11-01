@@ -32,18 +32,24 @@ const TL_ICON = {
   caret: '<svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true" focusable="false"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   all: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><rect x="2" y="2" width="10" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4.6 7.2l1.7 1.6 3.2-3.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
+// A bot in the address is `bot:<id>`; an old link's slug (or a bare name) is moved to its id.
+const tasksBotActor = v => {
+  if (v === 'me' || v === 'all' || (v.includes(':') && !v.startsWith('bot:'))) return v;
+  const ref = v.replace(/^bot:/, '');
+  return 'bot:' + (botByRef(ref)?.id || ref);
+};
 function tasksFiltersFromURL(state) {
   const query = new URLSearchParams(String(location.hash).split('?')[1] || '');
   state.filters = tasksEmptyFilters();
   for (const k of Object.keys(state.filters)) {
     const raw = query.get(k);
-    if (raw) state.filters[k] = [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean))];
+    if (raw) state.filters[k] = [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean).map(v => k === 'owner' || k === 'asked' ? tasksBotActor(v) : v))];
   }
   state.urlType = query.get('type') || '';
   state.urlView = query.get('view') || '';
   // An address with any of these says whose tasks the first tab shows (Me when it names nobody).
   if ([...query.keys()].length) {
-    state.who = query.get('who') || 'me';
+    state.who = tasksBotActor(query.get('who') || 'me');
     state.side = query.get('side') === 'asked' ? 'asked' : 'plate';
     state.whoFixed = true;
   }
@@ -148,7 +154,7 @@ function tasksMigrateOldFilters(state, saved) {
   let changed = false;
   if (old.filter === 'mine') changed = add('owner', 'me') || changed;
   if (old.filter === 'asked') changed = add('asked', 'me') || changed;
-  if (old.bot) changed = add('owner', old.bot.includes(':') ? old.bot : 'bot:' + old.bot) || changed;
+  if (old.bot) changed = add('owner', tasksBotActor(old.bot)) || changed;
   if (old.label) changed = add('tag', old.label) || changed;
   return changed || Object.keys(old).some(k => old[k] != null && old[k] !== '' && old[k] !== 'all');
 }
@@ -217,7 +223,7 @@ function tasksWhoKnown(who) {
   if (who === 'me' || who === 'all') return true;
   const pid = actorPerson(who), slug = actorSlug(who);
   if (pid) return !(S.people || []).length || S.people.some(p => p.id === pid);
-  if (slug) return !(S.emps || []).length || S.emps.some(e => e.name === slug);
+  if (slug) return !(S.emps || []).length || !!botRow(slug);
   return false;
 }
 // 'me', 'all' or an actor id; anyone this install does not know is Me
@@ -292,8 +298,8 @@ function tasksWhoMenu(state, anchor, toggle = true) {
   for (const p of people) { const team = p.team || ''; if (!teams.has(team)) teams.set(team, []); teams.get(team).push(p); }
   const order = [...teams.keys()].sort((a, b) => (b === (mine?.team || null)) - (a === (mine?.team || null)) || (a === '') - (b === '') || taskTeamLabel(a).localeCompare(taskTeamLabel(b)));
   const name = p => p.name || titleCase(p.id);
-  const bots = (S.emps || []).filter(e => e.status !== 'archived' && !isHiddenBot(e.name))
-    .sort((a, b) => String(botDisplayName(a.name)).localeCompare(String(botDisplayName(b.name))));
+  const bots = (S.emps || []).filter(e => e.status !== 'archived' && !isHiddenBot(e.id))
+    .sort((a, b) => String(botDisplayName(a.id)).localeCompare(String(botDisplayName(b.id))));
   const html = `<div class="tl-menu tl-who-menu" role="group" aria-label="Whose tasks">
     <div class="tl-seg" role="group" aria-label="Show">${[['plate', 'On their plate'], ['asked', 'Asked by them']].map(([k, label]) =>
       `<button type="button" data-who-side="${k}" aria-pressed="${(k === 'asked') === asked}">${esc(label)}</button>`).join('')}</div>
@@ -305,7 +311,7 @@ function tasksWhoMenu(state, anchor, toggle = true) {
         ${teams.get(team).sort((a, b) => name(a).localeCompare(name(b))).map(p => opt('human:' + p.id, actorFace('human:' + p.id, 16), name(p), count('human:' + p.id), `${name(p)} ${p.email || ''} ${taskTeamLabel(team)}`)).join('')}</div>`).join('')}
       ${bots.length ? `<button type="button" class="tl-mi tl-who-more" data-who-bots>${bots.length} bot${bots.length === 1 ? '' : 's'}</button>
         <div class="tl-who-team tl-who-bots" hidden><div class="tl-menu-h" aria-hidden="true">Bots</div>
-        ${bots.map(e => opt('bot:' + e.name, actorFace('bot:' + e.name, 16), botDisplayName(e.name), count('bot:' + e.name), `${botDisplayName(e.name)} ${e.name}`)).join('')}</div>` : ''}
+        ${bots.map(e => opt('bot:' + e.id, actorFace('bot:' + e.id, 16), botDisplayName(e.id), count('bot:' + e.id), `${botDisplayName(e.id)} ${e.slug}`)).join('')}</div>` : ''}
       <div class="tl-menu-none" hidden>Nobody by that name</div>
     </div></div>`;
   tasksMenu(state, anchor, html, pop => {
@@ -1060,7 +1066,7 @@ function tasksBulkMenu(state, kind, anchor) {
       pop.onclick = ev => {
         const b = ev.target.closest('[data-bulk-owner]'); if (!b) return;
         const owner = b.dataset.bulkOwner, actor = owner.includes(':') ? owner : 'bot:' + owner;
-        void tasksBulkApply(state, {done: `handed to ${actorLabel(actor)}`, already: `with ${actorLabel(actor)}`}, t => t.owner === actor ? null : {owner}, {action: 'owner', owner});
+        void tasksBulkApply(state, {done: `handed to ${actorLabel(actor)}`, already: `with ${actorLabel(actor)}`}, t => t.owner === actor ? null : {owner: actor}, {action: 'owner', owner: actor});
       };
     });
   } else if (kind === 'tags') {

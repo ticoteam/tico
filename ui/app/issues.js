@@ -15,21 +15,28 @@ const needsLabel = owner => {
 const prioPill = i => i.priority ? `<span class="pill ${i.priority}">${i.priority}</span>` : '';
 // Memoized per roster: task rows and sort comparators call this many times per render. Rebuilt when S.emps is
 // replaced (every refresh), grows in place (bot-branches.js) or the assistant's name changes.
+// A bot is named everywhere by its id (S.emps rows' `id`, the `bot:<id>` actor, routes and API paths); its slug is a
+// label people type and read, and it can change. `botRow(id)` is the roster row for an id (a leading `bot:` is
+// dropped); `botByRef(text)` also takes a slug, for what a person typed or an old link; `botSlug(id)` is the label.
+const botRow = id => { const key = String(id || '').replace(/^bot:/, ''); return key ? (S.emps || []).find(e => e.id === key) : undefined; };
+const botByRef = ref => { const key = String(ref || '').replace(/^bot:/, ''); return key ? botRow(key) || (S.emps || []).find(e => e.slug === key) : undefined; };
+const botSlug = id => botRow(id)?.slug || String(id || '').replace(/^bot:/, '');
 let BOT_NAMES = {emps: null, len: -1, key: '', map: new Map()};
-const botDisplayName = slug => {
+const botDisplayName = id => {
   const key = assistantBot() + '\n' + assistantName();
   if (BOT_NAMES.emps !== S.emps || BOT_NAMES.len !== S.emps.length || BOT_NAMES.key !== key)
     BOT_NAMES = {emps: S.emps, len: S.emps.length, key, map: new Map()};
-  const hit = BOT_NAMES.map.get(slug);
+  const hit = BOT_NAMES.map.get(id);
   if (hit !== undefined) return hit;
-  const name = slug === assistantBot() ? assistantName() : S.emps.find(e => e.name === slug)?.display_name || slug || '—';
-  const out = S.emps.filter(e => e.status !== 'archived' && (e.display_name || e.name).toLowerCase() === name.toLowerCase()).length > 1
-    ? `${name} (${slug})` : name;
-  BOT_NAMES.map.set(slug, out);
+  const row = botRow(id);
+  const name = id === assistantBot() ? assistantName() : row?.display_name || row?.slug || id || '—';
+  const out = S.emps.filter(e => e.status !== 'archived' && (e.display_name || e.slug || e.id).toLowerCase() === name.toLowerCase()).length > 1
+    ? `${name} (${row?.slug || id})` : name;
+  BOT_NAMES.map.set(id, out);
   return out;
 };
-const empName = slug => esc(botDisplayName(slug));
-const empChip = slug => slug && S.emps.some(e => e.name === slug) ? `<a class="chip" href="#/bot/${slug}">${avatar(slug, 16)}<span>${empName(slug)}</span></a>` : `<span class="chip">${empName(slug)}</span>`;
+const empName = id => esc(botDisplayName(id));
+const empChip = id => id && botRow(id) ? `<a class="chip" href="#/bot/${encodeURIComponent(id)}">${avatar(id, 16)}<span>${empName(id)}</span></a>` : `<span class="chip">${empName(id)}</span>`;
 
 // A bot's code lives in a repository named by the environment. The server sends repo_url when it
 // knows the full address; otherwise a bare name or owner/name is resolved against github_owner, and
@@ -118,8 +125,8 @@ function needsYouItem(i, folded, showName = true) {
     const parentNo = +((text.match(/Parent:?\**\s*#?(\d+)/i) || [])[1] || 0);
     const parentOwner = parentNo ? S.issues.find(x => x.number === parentNo)?.owner : null;
     const bucketOwner = mine ? (text.match(/s3:\/\/[^/]+\/([^/\s]+)/i) || [])[1] : null;
-    const askerSlug = (asker && S.emps.find(e => e.display_name.toLowerCase() === asker.trim().toLowerCase())?.name)
-      || (bucketOwner && S.emps.some(e => e.name === bucketOwner) ? bucketOwner : null)
+    const askerSlug = (asker && S.emps.find(e => String(e.display_name || '').toLowerCase() === asker.trim().toLowerCase())?.id)
+      || (bucketOwner && botByRef(bucketOwner)?.id)
       || (mine ? parentOwner : i.owner);
     // The title is the plain-English decision. Keep the useful context visible, fold away the
     // handoff boilerplate, and retain the authored request in full below it.
@@ -312,7 +319,7 @@ const ranOnNote = made => ((made || {}).task_model || {}).note || '';
 function runsReportHTML(r, icon = false) {
   if (!window.supportOn?.() || !window.reportThisHTML) return '';
   const why = r.failure_reason || r.outcome || `exit ${r.exit}`;
-  return `<div>${window.reportThisHTML({kind: 'run', title: `${r.employee || 'Run'} failed: ${why}`, detail: why, ref: r.attempt_id || r.id || '',
+  return `<div>${window.reportThisHTML({kind: 'run', title: `${r.employee ? botDisplayName(r.employee) : 'Run'} failed: ${why}`, detail: why, ref: r.attempt_id || r.id || '',
     group: 'run:' + String(why).replace(/\d+/g, '#').slice(0, 80)}, icon)}</div>`;
 }
 function runsTable(list, showEmp=true) {

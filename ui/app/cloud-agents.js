@@ -17,15 +17,15 @@
     const v = String(value || '');
     if (v.startsWith('seat:')) return (S.seats || []).find(s => s.id === v.slice(5))?.title || '';
     if (v.startsWith('human:')) return (S.people || []).find(p => 'human:' + p.id === v)?.name || v.slice(6);
-    return (S.emps || []).find(e => e.name === v)?.display_name || v;
+    return botRow(v)?.display_name || botSlug(v);
   };
 
   // The head of a team, the way the team's plus menu finds it (team-add.js teamAddBot): the bot that no other bot in
   // the team reports to. A seat added from the team reports to it.
   const teamHead = group => {
     const bots = (S.emps || []).filter(e => e.team === group && e.status !== 'archived' && !isHelperBot(e));
-    const names = new Set(bots.map(e => 'b:' + e.name));
-    return bots.find(e => !names.has(orgBossKey({kind: 'bot', ...e})))?.name || '';
+    const names = new Set(bots.map(e => 'b:' + e.id));
+    return bots.find(e => !names.has(orgBossKey({kind: 'bot', ...e})))?.id || '';
   };
 
   const card = agent => `<article class="cloud-card">

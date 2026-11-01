@@ -274,7 +274,7 @@ function decideAfter(st, key) {
 // no link.
 const decideChatHref = actor => {
   const slug = actorSlug(actor);
-  return slug && (S.emps || []).some(e => e.name === slug) ? `#/bot/${encodeURIComponent(slug)}` : '';
+  return slug && botRow(slug) ? `#/bot/${encodeURIComponent(slug)}` : '';
 };
 const decideCurrent = st => st.at ? st.cards.get(st.at) : null;
 function decidePaintHead(st) {

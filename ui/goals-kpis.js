@@ -668,8 +668,8 @@ function goalTreeShape() {
   const bots = (S.emps || []).filter(e => !['archived', 'retired'].includes(e.status));
   // The sidebar's own rule: built-in and message bots stay outside the chart. The Strategy Bot is placed and then lifted
   // out (orgTreeWithHelpers), so the Heads and groups the server hangs under it show under the owner, as on the sidebar.
-  const placed = bots.filter(e => !isHelperBot(e) || e.name === 'goal-manager');
-  const keys = new Set([...(S.orgGroups || []).map(g => 'g:' + g.id), ...people.map(p => 'p:' + p.id), ...placed.map(e => 'b:' + e.name)]);
+  const placed = bots.filter(e => !isHelperBot(e) || e.id === 'goal-manager');
+  const keys = new Set([...(S.orgGroups || []).map(g => 'g:' + g.id), ...people.map(p => 'p:' + p.id), ...placed.map(e => 'b:' + e.id)]);
   const byParent = {}, groupOf = orgGroupOf(people, placed);
   const put = (parent, node) => (byParent[keys.has(parent) ? parent : ''] ||= []).push(node);
   for (const g of (S.orgGroups || [])) put(orgGroupParent(g, keys), {kind: 'group', id: g.id, name: g.name, order: g.order || 0});
@@ -678,9 +678,9 @@ function goalTreeShape() {
     // A bot under a built-in or message bot (or a bot that is gone) hangs from the next one up, else its owner.
     let parent = orgBossKey({kind: 'bot', ...e});
     for (let hops = 0; parent.startsWith('b:') && !keys.has(parent) && hops < 5; hops++)
-      parent = orgBossKey({kind: 'bot', ...(S.emps.find(x => x.name === parent.slice(2)) || {})});
+      parent = orgBossKey({kind: 'bot', ...(botRow(parent.slice(2)) || {})});
     if (parent.startsWith('b:') && !keys.has(parent)) parent = e.operator || e.users?.[0]?.id ? 'p:' + (e.operator || e.users[0].id) : '';
-    put(orgHang('b:' + e.name, parent, groupOf), {kind: 'bot', ...e});
+    put(orgHang('b:' + e.id, parent, groupOf), {kind: 'bot', ...e});
   }
   return {byParent: orgTreeWithHelpers(byParent)};
 }
@@ -802,7 +802,7 @@ function bindGoalWhy(state, root, reload) {
 
 // What the tree is drawn from in the roster, so a refresh redraws it only when that changed (goalsFollowRoster).
 const goalTreeKey = () => JSON.stringify([
-  (S.emps || []).map(e => [e.name, e.display_name, e.org_parent, e.team, e.status]),
+  (S.emps || []).map(e => [e.id, e.slug, e.display_name, e.org_parent, e.team, e.status]),
   (S.people || []).map(p => [p.id, p.org_parent, p.team, p.hidden]), (S.orgGroups || []).map(g => [g.id, g.parent, g.org_parent])]);
 // The tree's lines (goals.css, tree-lines.css). The rows are one flat list, each with its depth, so whether a line
 // runs on past a row depends on the rows after it: read bottom up, open[l] says a row at depth l is still to come
@@ -843,14 +843,14 @@ function goalsRender(state) {
   const seen = new Set([GOAL_COMPANY]);
   const rows = (actor, depth, standing) => { seen.add(actor); return goalTreeRows(actor, depth, owned[actor] || [], loose[actor] || [], standing); };
   const walk = (parent, depth, path) => (byParent[parent] || []).slice().sort(goalTreeOrder(parent)).map(n => {
-    const key = n.kind === 'group' ? 'g:' + n.id : n.kind === 'person' ? 'p:' + n.id : 'b:' + n.name;
+    const key = n.kind === 'group' ? 'g:' + n.id : n.kind === 'person' ? 'p:' + n.id : 'b:' + n.id;
     if (path.has(key)) return '';
     const below = walk(key, depth + 1, new Set([...path, key]));
     if (n.kind === 'group') {
       const add = goalGroupOwner(n.id) ? `<span class="gt-add" data-goal-add-group="${esc(n.id)}" aria-hidden="true" title="Add goal">+</span>` : '';
       return below ? `<li class="gt-group" data-group="${esc(n.id)}" style="--d:${depth}"><span class="gt-ind" aria-hidden="true"></span><span class="gt-name"><span>${esc(n.name)}</span></span>${add}</li>${below}` : '';
     }
-    return rows(n.kind === 'person' ? 'human:' + n.id : 'bot:' + n.name, depth, n.kind === 'person' ? n.person.goals : '') + below;
+    return rows(n.kind === 'person' ? 'human:' + n.id : 'bot:' + n.id, depth, n.kind === 'person' ? n.person.goals : '') + below;
   }).join('');
   const tree = goalTreeRows(GOAL_COMPANY, 0, owned[GOAL_COMPANY] || [], loose[GOAL_COMPANY] || []) + walk('', 0, new Set());
   // Helpers are off the chart here (as on the Org tab); one with goals still shows below, with anyone else who has

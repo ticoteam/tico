@@ -19,9 +19,9 @@ const rdoFoldedSave = () => { try { localStorage.setItem(RDO_FOLDED_KEY, JSON.st
 const rdoGroups = () => RDO?.groups || S.orgGroups || [];
 const rdoGroup = id => rdoGroups().find(g => g.id === id) || (S.orgGroups || []).find(g => g.id === id) || null;
 const rdoGroupName = id => id ? rdoGroup(id)?.name || id : 'No group';
-const rdoRef = n => n.kind === 'person' ? 'person:' + n.id : 'bot:' + n.name;
-const rdoKey = n => n.kind === 'group' ? 'g:' + n.id : n.kind === 'person' ? 'p:' + n.id : 'b:' + n.name;
-const rdoName = n => n.kind === 'group' ? n.name : n.kind === 'person' ? (n.person?.name || n.id) : botDisplayName(n.name);
+const rdoRef = n => n.kind === 'person' ? 'person:' + n.id : 'bot:' + n.id;
+const rdoKey = n => n.kind === 'group' ? 'g:' + n.id : n.kind === 'person' ? 'p:' + n.id : 'b:' + n.id;
+const rdoName = n => n.kind === 'group' ? n.name : n.kind === 'person' ? (n.person?.name || n.id) : botDisplayName(n.id);
 function rdoRefName(ref) {
   const [kind, id] = [String(ref).split(':')[0], String(ref).slice(String(ref).indexOf(':') + 1)];
   if (kind === 'person' || kind === 'human') return (S.people || []).find(p => p.id === id)?.name || id;
@@ -30,7 +30,7 @@ function rdoRefName(ref) {
 // A teammate's home group: the `team` its roster row carries (backend/groups.py).
 function rdoHome(ref) {
   const id = ref.slice(ref.indexOf(':') + 1);
-  return (ref.startsWith('person:') ? (S.people || []).find(p => p.id === id)?.team : (S.emps || []).find(e => e.name === id)?.team) || '';
+  return (ref.startsWith('person:') ? (S.people || []).find(p => p.id === id)?.team : botRow(id)?.team) || '';
 }
 const rdoLeadOf = ref => rdoGroups().filter(g => g.lead === ref).map(g => g.id);
 // The leads of a group and of every group above it.
@@ -75,9 +75,9 @@ function rdoCount(by, key, seen = new Set()) {
 function rdoCard(n, {top = false} = {}) {
   const ref = rdoRef(n), name = rdoName(n);
   const lead = rdoLeadOf(ref).length > 0;
-  const bot = n.kind === 'bot' ? (S.emps || []).find(e => e.name === n.name) : null;
+  const bot = n.kind === 'bot' ? botRow(n.id) : null;
   const role = top ? 'Owner' : lead ? 'Lead' : String(bot?.role || '').trim().length <= 24 ? String(bot?.role || '').trim() : '';
-  const av = n.kind === 'person' ? personAvatar(n.person || {name}, 16) : avatar(n.name, 16);
+  const av = n.kind === 'person' ? personAvatar(n.person || {name}, 16) : avatar(n.id, 16);
   const cls = ['rdo-card', top && 'top', lead && 'lead'].filter(Boolean).join(' ');
   return `<button type="button" class="${cls}" data-rdo-ref="${esc(ref)}" aria-label="${esc(name)}" title="${esc(name)}"><b>${esc(name)}</b>
     <span class="rdo-r">${av}${role ? `<span class="rdo-rl">${esc(role)}</span>` : ''}</span></button>`;

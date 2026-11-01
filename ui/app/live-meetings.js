@@ -160,10 +160,11 @@ function livePaintDetail(state, detail) {
   const me = liveIsHumanJoined(detail);
   const active = detail.state !== 'ended';
   const controls = detail.owner_actor === `human:${S.me?.id || ''}`;
-  const candidates = state.candidates.filter(bot => !(detail.bots || []).some(attached => attached.bot === bot.slug));
+  // A candidate's `id` is what the meeting's bots name; a server from before ids sent only `slug`, which held it.
+  const candidates = state.candidates.map(bot => ({...bot, id: bot.id ?? bot.slug})).filter(bot => !(detail.bots || []).some(attached => attached.bot === bot.id));
   const chunks = detail.chunks || [], chat = detail.chat || [], notices = detail.notices || [], router = detail.router || {windows: [], turns: []};
-  const teammates = (detail.bots || []).map(attached => `<span class="live-teammate">${esc(attached.bot)}${me && active ?
-    ` <button class="ghost" type="button" data-live-bot-remove="${esc(attached.bot)}" aria-label="Remove ${esc(attached.bot)} from this meeting">Remove</button>` : ''}</span>`).join(' ');
+  const teammates = (detail.bots || []).map(attached => `<span class="live-teammate">${empName(attached.bot)}${me && active ?
+    ` <button class="ghost" type="button" data-live-bot-remove="${esc(attached.bot)}" aria-label="Remove ${empName(attached.bot)} from this meeting">Remove</button>` : ''}</span>`).join(' ');
   host.innerHTML = `<article class="live-card">
     <header class="live-card-head"><div><h2>${esc(detail.title)}</h2>${detail.client === 'tico-recorder' ? '<p class="muted">From Tico Recorder</p>' : ''}<span class="live-state ${esc(detail.state)}">${esc(detail.state)}</span></div>
       <div class="live-controls">${controls && detail.state === 'live' ? '<button class="ghost" data-live-control="pause">Pause</button><button class="ghost" data-live-control="disconnect">Disconnect</button>' : ''}
@@ -172,7 +173,7 @@ function livePaintDetail(state, detail) {
       ${controls && detail.state === 'ended' && !detail.imported_meeting_id ? '<button class="primary" data-live-finalize>Finalize transcript</button>' : ''}</div></header>
     ${!me ? '<p class="live-join"><button class="primary" data-live-join>Join to chat</button></p>' : ''}
     ${me && active ? `<form class="live-bot-picker" id="live-bot-picker"><label>Attach teammates<select name="bots" data-live-focus-key="bot-picker" multiple size="${Math.min(5, Math.max(2, candidates.length))}" aria-label="Choose visible bots">
-      ${candidates.map(bot => `<option value="${esc(bot.slug)}">${esc(bot.name)}${bot.team ? ' · ' + esc(bot.team) : ''}</option>`).join('')}
+      ${candidates.map(bot => `<option value="${esc(bot.id)}">${esc(bot.name)}${bot.team ? ' · ' + esc(bot.team) : ''}</option>`).join('')}
       </select></label><button class="ghost" type="submit"${candidates.length ? '' : ' disabled'}>Attach bots</button></form>` : ''}
     <div class="live-members"><span>People: ${(detail.humans || []).map(person => esc(person.name || person.actor)).join(', ') || '—'}</span>
       <span>Teammates: ${teammates || '—'}</span></div>
@@ -183,7 +184,7 @@ function livePaintDetail(state, detail) {
       <div class="live-router">${router.windows?.length ? router.windows.map(window => `<details><summary>Window ${window.window_index + 1}: ${esc(window.outcome)} <small>${window.start_ms}–${window.end_ms} ms · ${window.trace?.ms ?? '—'} ms</small></summary><pre>${esc(JSON.stringify(window.trace || {}, null, 2))}</pre></details>`).join('') : '<p class="muted">No routing windows yet.</p>'}
       ${router.chat_routes?.length ? `<div class="live-chat-routes"><b>Chat routing</b>${router.chat_routes.map(route => `<details><summary>${esc(route.outcome || route.status)} · ${esc(route.started || '')} · ${route.trace?.ms ?? '—'} ms</summary><pre>${esc(JSON.stringify(route.trace || {}, null, 2))}</pre></details>`).join('')}</div>` : ''}
       ${router.bypasses?.length ? `<div class="live-bypasses"><b>Named mentions</b>${router.bypasses.map(bypass => `<pre>${esc(JSON.stringify(bypass, null, 2))}</pre>`).join('')}</div>` : ''}</div>
-      ${router.turns?.length ? `<div class="live-turns"><b>Bot turns</b>${router.turns.map(turn => `<span>${esc(turn.bot)} · ${esc(turn.status)}${turn.skip_reason ? ' · ' + esc(turn.skip_reason) : ''}</span>`).join('')}</div>` : ''}</section>
+      ${router.turns?.length ? `<div class="live-turns"><b>Bot turns</b>${router.turns.map(turn => `<span>${empName(turn.bot)} · ${esc(turn.status)}${turn.skip_reason ? ' · ' + esc(turn.skip_reason) : ''}</span>`).join('')}</div>` : ''}</section>
     ${detail.imported_meeting_id ? `<p class="live-finalized">Saved in Meetings: <a href="#/meetings?meeting=${encodeURIComponent(detail.imported_meeting_id)}">Open transcript</a></p>` : ''}
   </article>`;
   state.paintedId = detail.id;
@@ -228,7 +229,7 @@ function liveNotice(notice) {
   const bot = botDisplayName(notice.bot);
   const text = notice.kind === 'deferred' ? (notice.reason === 'replying_in_meeting' ? 'Will answer this in the reply it is giving.' : 'Busy. Will answer after its current work.')
     : notice.kind === 'retried' ? 'Gave an empty reply. Asking again.'
-    : liveNoticeDetail(notice.detail, bot, notice.bot) || (notice.kind === 'waiting' ? 'Waiting for its computer.' : 'Could not answer.');
+    : liveNoticeDetail(notice.detail, bot, botSlug(notice.bot), notice.bot) || (notice.kind === 'waiting' ? 'Waiting for its computer.' : 'Could not answer.');
   return `<p class="live-notice ${notice.kind === 'failed' ? 'failed' : ''}" data-live-notice="${esc(notice.kind)}"><b>${esc(bot)}</b><span>${esc(text)}</span></p>`;
 }
 
@@ -290,7 +291,7 @@ async function liveRemoveBot(state, id, bot) {
   try {
     state.busy = true;
     await writeRequest('DELETE', LIVE_API + '/' + encodeURIComponent(id) + '/bots/' + encodeURIComponent(bot), {});
-    liveStatus(state, `${bot} no longer has access to this meeting.`);
+    liveStatus(state, `${botDisplayName(bot)} no longer has access to this meeting.`);
     state.busy = false;
     await liveLoad(state);
   } catch (error) { liveStatus(state, error.message); }

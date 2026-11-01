@@ -23,7 +23,7 @@ function releaseLastHTML(last) {
   return `<span data-release-last>${what}</span> ${when}`;
 }
 function releaseBotPick(name, chosen, found, label) {
-  const bots = (S.emps || []).filter(e => e.state !== 'archived').map(e => e.name).sort((a, b) => empName(a).localeCompare(empName(b)));
+  const bots = (S.emps || []).filter(e => e.state !== 'archived').map(e => e.id).sort((a, b) => empName(a).localeCompare(empName(b)));
   const auto = found && !chosen ? `Find by template (${empName(found)})` : 'Find by template';
   return `<select class="settings-inline-select" name="${name}" aria-label="${esc(label)}"><option value="">${esc(auto)}</option>
     ${bots.map(b => `<option value="${esc(b)}"${b === chosen ? ' selected' : ''}>${esc(empName(b))}</option>`).join('')}</select>`;

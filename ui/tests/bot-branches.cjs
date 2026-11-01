@@ -41,11 +41,11 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p === '/api/v2/computers') return json({computers});
       if (p.endsWith('/branches')) return json({original: 'architect', shared: original.shared,
-        branches: bots.filter(b => b.shared_from).map(b => ({...b, slug: b.name}))});
+        branches: bots.filter(b => b.shared_from).map(b => ({...b, id: b.id || b.name, slug: b.name}))});
       if (p.endsWith('/copies')) {
         writes.push([p, JSON.parse(request.postData())]);
         if (collision) return route.fulfill({status: 409, contentType: 'application/json', body: JSON.stringify({error: {detail: 'That computer already runs the original or a branch of it. Choose another computer.'}})});
-        const branch = {...base, name: 'architect-ana', slug: 'architect-ana', display_name: 'Architect', operator: 'ana', shared_from: 'architect',
+        const branch = {...base, id: 'architect-ana', name: 'architect-ana', slug: 'architect-ana', display_name: 'Architect', operator: 'ana', shared_from: 'architect',
           status: JSON.parse(request.postData()).runner_id ? 'active' : 'planned'};
         bots.push(branch); return json(branch);
       }

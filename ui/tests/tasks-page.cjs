@@ -89,7 +89,7 @@ const BOTS = [['engineer', 'Engineer', 'engineering'], ['support', 'Support', 's
   ({name, display_name, team, host: 'keeper', status: 'active', state: 'active', can_chat: true}));
 
 async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/issues', failIds = [], prefs = null, mover = true,
-  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null, activePage = null} = {}) {
+  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null, activePage = null, bots = BOTS} = {}) {
   const tasks = [...(baseTasks ?? fixtures()), ...extraTasks];
   // These scripts read Needs you grouped by who asks; `byNeed` keeps the default, What it takes.
   if (!byNeed && !('hub.tasks.layout' in local)) local = {...local, 'hub.tasks.layout': JSON.stringify({group: {foryou: 'requester'}})};
@@ -119,7 +119,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);
-    if (p === '/api/employees') return json(BOTS);
+    if (p === '/api/employees') return json(bots);
     if (p === '/api/humans') return json({people: people || [{id: 'ana', name: 'Ana', team: 'operations'}, {id: 'sam', name: 'Sam', team: 'marketing'}],
       org_groups: [{id: 'engineering', name: 'Engineering'}, {id: 'support', name: 'Support'}, {id: 'marketing', name: 'Marketing'}, {id: 'operations', name: 'Operations'}]});
     if (p === '/api/issues') return json([]);
@@ -671,7 +671,7 @@ async function properties(browser) {
   await page.keyboard.type('supp');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="owner"]')?.textContent.includes('Support'));
-  assert.deepEqual(taskWrites(posts).at(-1).body, {version: 4, owner: 'support'});
+  assert.deepEqual(taskWrites(posts).at(-1).body, {version: 4, owner: 'bot:support'});
   // Due: a date picker; × clears it.
   await props.locator('[data-prop-date]').fill('2026-10-09');
   await page.waitForFunction(() => /Oct 9/.test(document.querySelector('#task-peek [data-prop="due"]')?.textContent || ''));
@@ -1227,7 +1227,7 @@ async function recheckSaves(browser) {
   await peek.locator('.prop-pop [data-prop-pick="writer"]').click();
   await page.waitForFunction(() => /Writer/.test(document.querySelector('#task-peek [data-prop="owner"]')?.textContent || ''));
   const writes = () => taskWrites(posts).filter(x => x.p.endsWith('/t-triage')).map(x => x.body);
-  assert.deepEqual(writes(), [{version: 3, status: 'waiting'}, {version: 4, owner: 'writer'}], 'one at a time, each with the newest version');
+  assert.deepEqual(writes(), [{version: 3, status: 'waiting'}, {version: 4, owner: 'bot:writer'}], 'one at a time, each with the newest version');
   assert.equal(tasks.find(x => x.id === 't-triage').owner, 'bot:writer');
   releaseLists();
   // the last reload has drawn the list (the row shows the new owner)
@@ -1427,12 +1427,36 @@ async function recheckFinal(browser) {
   console.log('re-check 2: menus, Undo failures, overtaken reloads, names: ok');
 }
 
+// A bot made since bots got ids: its id is a UUID and its slug only a label. Filters, faces and the owner picker use the
+// id; an old link that names it by slug still finds it.
+async function renamedBot(browser) {
+  const id = '0192f0c4-7b1e-7cc2-9d1a-3f5e8a6b2c10';
+  const helper = {id, slug: 'sales-helper', name: 'sales-helper', display_name: 'Sales Helper', team: 'support', host: 'keeper', status: 'active', state: 'active', can_chat: true};
+  const call = {...fixtures().find(x => x.id === 't-demo'), id: 't-call', title: 'Call the Acme lead', owner: 'bot:' + id};
+  const {page, errors, posts} = await open(browser, {bots: [...BOTS, helper], extraTasks: [call], hash: '#/tasks?owner=bot:sales-helper&view=list'});
+  assert.deepEqual(await page.evaluate(() => TASKS_ST.filters.owner), ['bot:' + id], 'an old link\'s slug becomes the id');
+  assert.deepEqual(await rowKeys(page), ['tt-call']);
+  assert.equal(await page.locator('[data-task-key="tt-call"] .tl-face').getAttribute('title'), 'Sales Helper');
+  assert.equal(await page.locator('[data-task-key="tt-call"] .tl-face [data-av]').getAttribute('data-av'), id);
+  // Handing a task to it sends its id.
+  await page.locator('[data-chip-drop="owner"]').click();
+  await page.waitForFunction(() => !location.hash.includes('owner='));
+  await page.locator('[data-task-key="tt-checkout"] .tl-title').click();
+  await page.locator('#task-peek [data-prop="owner"]').click();
+  await page.locator(`#task-peek .prop-pop [data-prop-pick="${id}"]`).click();
+  await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="owner"]')?.textContent.includes('Sales Helper'));
+  assert.equal(posts.filter(x => x.p === '/api/v2/tasks/t-checkout').at(-1).body.owner, 'bot:' + id);
+  assert.deepEqual(errors, []);
+  await page.close();
+  console.log('a bot whose id is not its slug: ok');
+}
+
 module.exports = {open, fixtures};
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, wakeNotes, deferredWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, wakeNotes, deferredWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal, renamedBot}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

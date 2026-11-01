@@ -17,8 +17,8 @@ function taskStateLabel(t) {
 }
 function actorAvatarOnly(a) {
   const slug = actorSlug(a), pid = actorPerson(a);
-  if (slug && S.emps.some(e => e.name === slug))
-    return `<a class="who-av" href="#/bot/${esc(slug)}" title="${esc(empName(slug))}">${avatar(slug, 22)}</a>`;
+  if (slug && botRow(slug))
+    return `<a class="who-av" href="#/bot/${encodeURIComponent(slug)}" title="${esc(empName(slug))}">${avatar(slug, 22)}</a>`;
   const person = pid === S.me?.id ? (mePerson() || {id: pid, name: S.me?.name}) : (S.people || []).find(p => p.id === pid) || {id: pid, name: actorLabel(a)};
   return `<span class="who-av" title="${esc(pid === S.me?.id ? 'You' : actorLabel(a))}">${personAvatar(person, 22)}</span>`;
 }

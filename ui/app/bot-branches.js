@@ -16,28 +16,28 @@ function branchDialog(title) {
 }
 
 function botBranchChatTarget(slug) {
-  const original = S.emps.find(e => e.name === slug);
+  const original = botRow(slug);
   if (!original?.shared) return slug;
-  return S.emps.find(e => e.shared_from === slug && e.operator === S.me?.id && e.status === 'active')?.name || slug;
+  return S.emps.find(e => e.shared_from === slug && e.operator === S.me?.id && e.status === 'active')?.id || slug;
 }
 
 async function botBranchesLoad(slug) {
-  const host = $('#bot-branches'), bot = S.emps.find(e => e.name === slug);
+  const host = $('#bot-branches'), bot = botRow(slug);
   if (!host || !bot || botLimited(bot) || (!bot.shared && !bot.shared_from && !S.emps.some(e => e.shared_from === slug))) return;
   try {
     const data = await get(`/v2/bots/${encodeURIComponent(slug)}/branches`);
     if (BOT?.slug !== slug || !host.isConnected) return;
-    const original = S.emps.find(e => e.name === data.original);
+    const original = botRow(data.original);
     const branches = [...(data.branches || [])];
     if (!data.shared && !bot.shared_from && !branches.length) { host.innerHTML = ''; return; }
-    if (bot.shared_from && !branches.some(b => b.slug === slug)) branches.push({...bot, slug});
+    if (bot.shared_from && !branches.some(b => b.id === slug)) branches.push(bot);
     const mine = branches.find(b => b.operator === S.me?.id);
     const make = data.shared && original?.operator !== S.me?.id && !mine;
     // With no branches yet the picker has nothing to choose, so the button alone offers a branch.
     const pick = branches.length > 0;
     host.innerHTML = `${pick ? `<select aria-label="Branch" aria-description="Press Enter to open" data-branch-picker>
       <option value="${esc(data.original)}" ${slug === data.original ? 'selected' : ''}>Original</option>
-      ${branches.map(b => `<option value="${esc(b.slug)}" ${slug === b.slug ? 'selected' : ''} ${b.status === 'archived' ? 'disabled' : ''}>${esc(branchPersonLabel(b))}${b.status === 'archived' ? ' · Archived' : ''}</option>`).join('')}
+      ${branches.map(b => `<option value="${esc(b.id)}" ${slug === b.id ? 'selected' : ''} ${b.status === 'archived' ? 'disabled' : ''}>${esc(branchPersonLabel(b))}${b.status === 'archived' ? ' · Archived' : ''}</option>`).join('')}
       </select>` : ''}
       ${bot.shared_from ? `<a href="${branchBotLink(data.original)}" aria-label="Open original ${esc(botDisplayName(data.original))}">Original</a>${data.shared ? '' : '<span class="muted">branches off</span>'}` : ''}
       ${make ? '<button type="button" class="ghost" data-branch-make>Make my branch</button>' : ''}`;
@@ -64,9 +64,9 @@ async function botBranchCreate(source) {
   try {
     const data = await get('/v2/computers');
     const owned = (data.computers || []).filter(c => !c.revoked_at && c.operator === S.me?.id);
-    const family = new Set(S.emps.filter(e => e.name === source || e.shared_from === source).map(e => e.name));
-    const occupied = new Set(S.emps.filter(e => family.has(e.name)).map(e => e.machine?.runner_id || e.assignment?.runner_id).filter(Boolean));
-    const computers = owned.filter(c => !occupied.has(c.id) && !(c.bots || []).some(bot => family.has(typeof bot === 'string' ? bot : bot.slug || bot.name)));
+    const family = new Set(S.emps.filter(e => e.id === source || e.shared_from === source).map(e => e.id));
+    const occupied = new Set(S.emps.filter(e => family.has(e.id)).map(e => e.machine?.runner_id || e.assignment?.runner_id).filter(Boolean));
+    const computers = owned.filter(c => !occupied.has(c.id) && !(c.bots || []).some(bot => family.has(typeof bot === 'string' ? bot : bot.id || bot.slug)));
     const planned = !computers.length;
     const dialog = branchDialog('Make my branch');
     dialog.innerHTML = `<form><div class="tmodal-head"><h2>Make my branch</h2><span class="spacer"></span>
@@ -86,10 +86,10 @@ async function botBranchCreate(source) {
       try {
         const made = await post(`/v2/bots/${encodeURIComponent(source)}/copies`, planned ? {} : {runner_id: form.elements.runner_id.value});
         dialog.close(); await refresh(true);
-        if (!S.emps.some(e => e.name === made.slug)) S.emps.push({...made, name: made.slug,
+        if (!botRow(made.id)) S.emps.push({...made, name: made.slug,
           host: 'keeper', schedules: [], users: [], can_chat: true, can_manage: true,
           my_access: {see: true, read: true, write: true}});
-        location.hash = branchBotLink(made.slug);
+        location.hash = branchBotLink(made.id);
       } catch (error) {
         if (dialog.isConnected) { status.textContent = error.message; button.disabled = false; }
         else toast(error.message);
@@ -100,7 +100,7 @@ async function botBranchCreate(source) {
 }
 
 function settingsEditBranch(e, host) {
-  if (!host) { location.hash = `#/bot/${encodeURIComponent(e.name)}/settings`; return; }
+  if (!host) { location.hash = `#/bot/${encodeURIComponent(e.id)}/settings`; return; }
   if (e.status === 'archived') return toast('This branch is archived. Restore it in Settings.');
   const dialog = host;
   let revision = e.revision;
@@ -119,20 +119,20 @@ function settingsEditBranch(e, host) {
     try {
       // A branch's profile is its own (backend/profiles.py); each save moves the revision. Leaving Custom asks first.
       if (form.elements.profile.value !== profile) {
-        const out = await profileSave(e.name, {profile: form.elements.profile.value}, revision);
+        const out = await profileSave(e.id, {profile: form.elements.profile.value}, revision);
         if (!out) { button.disabled = false; return; }
         revision = out.revision;
       }
-      await post(`/v2/bots/${encodeURIComponent(e.name)}/definition`, {status: form.elements.status.value, expected_revision: revision});
+      await post(`/v2/bots/${encodeURIComponent(e.id)}/definition`, {status: form.elements.status.value, expected_revision: revision});
       const here = location.hash, tab = BOT?.tab || 'more';
       if (here.startsWith('#/bot/')) {
         await refresh(true);
-        if (location.hash === here && BOT?.slug === e.name) { BOT = null; pageBot(e.name, tab); }
+        if (location.hash === here && BOT?.slug === e.id) { BOT = null; pageBot(e.id, tab); }
       }
       else { await loadSettings(); settingsShow('bots'); }
     } catch (error) {
       if (error.body?.error?.code === 'version_conflict') {
-        try { revision = (await get(`/v2/bots/${encodeURIComponent(e.name)}`)).revision; } catch {}
+        try { revision = (await get(`/v2/bots/${encodeURIComponent(e.id)}`)).revision; } catch {}
       }
       if (dialog.isConnected) { status.textContent = error.message; button.disabled = false; }
       else toast(error.message);

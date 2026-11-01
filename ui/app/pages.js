@@ -13,7 +13,7 @@ const PAGE_FULL_MIN = 240;
 const pageDay = iso => { const d = new Date(String(iso) + 'T12:00:00'); return isNaN(d) ? String(iso) : d.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}); };
 const pageHref = id => PAGE_ROUTE + encodeURIComponent(id);
 // The bot's name as the rest of the app shows it (duplicates get their slug), else the server's.
-const pageBotName = x => x.bot && (S.emps || []).some(e => e.name === x.bot) ? botDisplayName(x.bot) : x.bot_name || x.bot || '';
+const pageBotName = x => x.bot && botRow(x.bot) ? botDisplayName(x.bot) : x.bot_name || x.bot || '';
 // `link: false` inside a card that is itself a link: the replacing page's title without its own link.
 function pageStatusHTML(p, {link = true} = {}) {
   if (p.replaced_by) {
@@ -232,6 +232,7 @@ function lfApiQuery(cursor) {
 async function pageLibraryFiles() {
   const params = new URLSearchParams(S.route.split('?')[1] || '');
   const filter = Object.fromEntries(LF_FILTERS.map(k => [k, ['pinned', 'archived'].includes(k) ? params.get(k) === '1' : params.get(k) || '']));
+  if (filter.bot) filter.bot = botByRef(filter.bot)?.id || filter.bot;     // an old link names the bot by slug
   const same = LF && document.body.contains(LF.root);
   if (!same) {
     $('#main').innerHTML = `<div class="lf" id="lf-root">
@@ -254,7 +255,7 @@ async function pageLibraryFiles() {
 }
 function lfControls() {
   const root = LF.root, f = LF.filter;
-  const bots = (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.name, botDisplayName(e.name)])
+  const bots = (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.id, botDisplayName(e.id)])
     .sort((a, b) => a[1].localeCompare(b[1], undefined, {numeric: true}));
   const opt = (v, l) => `<option value="${esc(v)}">${esc(l)}</option>`;
   const bot = root.querySelector('.lf-bot'), team = root.querySelector('.lf-team');

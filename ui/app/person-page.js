@@ -51,7 +51,7 @@ function pagePerson(id, tab) {
   const placed = byReportOrder('p:' + p.id), inOrder = (a, b) => placed(a, b) || chartFallback(a, b);
   const reports = (S.people || []).filter(row => row.reports_to === p.id && !row.hidden)
     .sort((a, b) => inOrder({kind: 'person', person: a}, {kind: 'person', person: b}));
-  const bots = (p.bots || []).map(slug => S.emps.find(e => e.name === slug)).filter(e => e && !isHiddenBot(e.name));    // not the Assistant or its helpers (ui/app/sidebar.js)
+  const bots = (p.bots || []).map(slug => botRow(slug)).filter(e => e && !isHiddenBot(e.id));    // not the Assistant or its helpers (ui/app/sidebar.js)
   const under = shownEmps().filter(e => e.org_parent === 'p:' + p.id);
   const boss = (S.people || []).find(row => row.id === p.reports_to);
   const edit = personCanEdit(p);
@@ -87,7 +87,7 @@ function pagePerson(id, tab) {
     ${reports.length ? `<section class="card"><header><h2>Reports</h2></header>
       <div>${reports.map(row => `<a class="chip" href="#/person/${encodeURIComponent(row.id)}">${personAvatar(row, 20)}<span>${esc(firstName(row.name) || row.id)}</span></a>`).join('')}</div></section>` : ''}
     ${(bots.length || under.length) ? `<section class="card"><header><h2>Bots</h2></header>
-      <div>${[...new Map([...bots, ...under].map(e => [e.name, e])).values()].sort((a, b) => inOrder({kind: 'bot', ...a}, {kind: 'bot', ...b})).map(e => `<a class="chip" href="#/bot/${esc(e.name)}">${avatar(e.name, 20, stateOf(e.name))}<span>${shownName(e)}</span>${runtimeTag(e)}</a>`).join('')}</div></section>` : ''}
+      <div>${[...new Map([...bots, ...under].map(e => [e.id, e])).values()].sort((a, b) => inOrder({kind: 'bot', ...a}, {kind: 'bot', ...b})).map(e => `<a class="chip" href="#/bot/${encodeURIComponent(e.id)}">${avatar(e.id, 20, stateOf(e.id))}<span>${shownName(e)}</span>${runtimeTag(e)}</a>`).join('')}</div></section>` : ''}
     ${edit ? `<section class="card" id="person-notify"><header><h2>Notifications</h2></header>
       <label class="person-notify" title="A Slack DM when a task they asked for is finished or declined">
         <input type="checkbox" role="switch" class="people-switch" id="person-notify-slack" ${p.notify_slack_task_done !== false ? 'checked' : ''}>
@@ -140,12 +140,12 @@ function pagePerson(id, tab) {
     const box = $('#person-muted');
     if (!box) return;
     const muted = p.slack_muted_bots || [];
-    const rest = shownEmps().filter(e => !muted.includes(e.name));
+    const rest = shownEmps().filter(e => !muted.includes(e.id));
     box.innerHTML = `<span class="muted">Muted</span>
-      ${muted.map(slug => { const e = S.emps.find(x => x.name === slug);
-        return `<span class="chip">${avatar(slug, 18)}<span>${e ? shownName(e) : esc(slug)}</span><button type="button" class="people-chip-x" data-unmute="${esc(slug)}" aria-label="Unmute ${esc(slug)}">×</button></span>`; }).join('')}
+      ${muted.map(slug => { const e = botRow(slug);
+        return `<span class="chip">${avatar(slug, 18)}<span>${e ? shownName(e) : esc(slug)}</span><button type="button" class="people-chip-x" data-unmute="${esc(slug)}" aria-label="Unmute ${empName(slug)}">×</button></span>`; }).join('')}
       ${rest.length ? `<select id="person-mute-add" aria-label="Mute a bot in Slack"><option value="">${muted.length ? '+ Bot' : 'None · mute a bot'}</option>
-        ${rest.map(e => `<option value="${esc(e.name)}">${shownName(e)}</option>`).join('')}</select>` : ''}`;
+        ${rest.map(e => `<option value="${esc(e.id)}">${shownName(e)}</option>`).join('')}</select>` : ''}`;
     const save = async next => {
       const status = $('#person-notify-status');
       box.querySelectorAll('button,select').forEach(el => el.disabled = true); status.textContent = '';
@@ -315,7 +315,7 @@ async function personSlackLoad(p) {
     el.innerHTML = threads.map(t => {
       const msgs = t.messages || [];
       return `<div class="conv-bots-one"><div class="conv-run-head">${avatar(t.bot, 20, stateOf(t.bot))}
-          <a href="#/bot/${esc(t.bot)}">${esc(t.display_name || t.bot)}</a>
+          <a href="#/bot/${encodeURIComponent(t.bot)}">${esc(t.display_name || botDisplayName(t.bot))}</a>
           <span class="spacer" style="flex:1"></span><span class="tnum">${esc(ago(t.last_message_at))}</span></div>
         ${msgs.map(m => `<div class="bubble ${String(m.from_actor || '').startsWith('bot:') ? 'bot reply' : 'you'}">
             <span class="who">${esc(actorLabel(m.from_actor))}</span>

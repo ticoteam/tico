@@ -102,9 +102,11 @@ function jumpToMessage(slug, id) {
   if (location.hash !== href) location.hash = href;
   return Promise.resolve(true);
 }
-const chatJumpRoom = slug => CHAT_JUMP?.slug === slug ? CHAT_JUMP.conversation || '' : '';
+// A shared link may name the bot by its slug; the chat is held by its id.
+const chatJumpFor = slug => !!CHAT_JUMP && (CHAT_JUMP.slug === slug || botByRef(CHAT_JUMP.slug)?.id === slug);
+const chatJumpRoom = slug => chatJumpFor(slug) ? CHAT_JUMP.conversation || '' : '';
 async function chatJumpPending(state) {
-  if (!CHAT_JUMP || CHAT_JUMP.slug !== state.slug || V2C !== state) return;
+  if (!chatJumpFor(state.slug) || V2C !== state) return;
   const {id} = CHAT_JUMP; CHAT_JUMP = null;
   await chatJumpTo(state, id);
 }

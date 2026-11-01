@@ -35,6 +35,7 @@ const historyStatus = v => { const w = statusWord(v); return w.charAt(0).toUpper
 function settingsDefinitionChange(before, after) {
   const b = before || {}, a = after || {}, out = [];
   if (b.display_name !== a.display_name) out.push(b.display_name ? `Renamed from ${b.display_name} to ${a.display_name}` : `Named ${a.display_name}`);
+  if (b.slug && a.slug && b.slug !== a.slug) out.push(`Slug ${b.slug} → ${a.slug}`);
   if (b.status !== a.status) out.push(`${historyStatus(b.status) || 'New'} → ${historyStatus(a.status)}`);
   if ((b.reports_to || '') !== (a.reports_to || '')) out.push(a.reports_to ? `Now reports to ${settingsBotName(a.reports_to)}` : 'Now at the top level');
   return out.join(' · ') || 'No visible change';
@@ -95,7 +96,7 @@ function renderSettingsHistory(el = $('#set-history'), history = SETTINGS_DATA.h
   const transitionById = new Map(transitions.map(t => [t.id, t]));
   const pendingRows = pending.map(t => `<div class="settings-history-row"><span>${avatar(t.bot, 24, stateOf(t.bot))}</span><div><strong>${esc(settingsBotName(t.bot))} · ${t.kind === 'model' ? 'model change' : 'computer move'}</strong><p>${esc(t.state === 'preparing' ? `Checkpointing ${t.progress.prepared} of ${t.progress.total} conversations` : t.error || t.state)}</p></div><div class="history-action"><span class="pill ${t.state === 'failed' ? 'fail' : 'waiting'}">${esc(t.state)}</span><button class="ghost" type="button" data-transition-review="${esc(t.id)}">Review</button></div></div>`).join('');
   const rows = changes.map(change => {
-    const e = S.emps.find(row => row.name === change.bot), transition = transitionById.get(change.transition_id);
+    const e = botRow(change.bot), transition = transitionById.get(change.transition_id);
     const field = {owners:'who it works for',access:'access',model:'model',placement:'computer',fallback:'fallback',
       compact_at:'compact at',wake_preset:'wakes',profile:'profile',keep_tasks_going:'keep tasks going',
       turns_at_once:'Turns at once',definition:'setup',task_model:'task model',identity:'name and description',

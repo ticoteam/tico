@@ -61,7 +61,7 @@ async function auLastRun(ed) {
 
 const auOpt = (list, val) => list.map(([k, label]) => `<option value="${esc(k)}"${String(k) === String(val ?? '') ? ' selected' : ''}>${esc(label)}</option>`).join('');
 const auWithCur = (list, val, label) => val && !list.some(([k]) => k === val) ? [[val, label || val], ...list] : list;
-const auBots = () => (S.emps || []).filter(e => e.name !== AU_BOT && e.status !== 'archived').map(e => ['bot:' + e.name, botDisplayName(e.name)]);
+const auBots = () => (S.emps || []).filter(e => e.id !== AU_BOT && e.status !== 'archived').map(e => ['bot:' + e.id, botDisplayName(e.id)]);
 const auPeople = () => (S.people || []).map(p => ['person:' + p.id, p.name || p.id]);
 function auFld(label, control, cls = '') { return `<label class="au-f${cls ? ' ' + cls : ''}"><span class="au-lb">${esc(label)}</span>${control}</label>`; }
 function auBox(label, body) { return `<div class="au-f"><span class="au-lb">${esc(label)}</span>${body}</div>`; }

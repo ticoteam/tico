@@ -30,7 +30,7 @@ function screenSaved(id, saved) {
 }
 // The bot's computer when its screen is on and this person may open it; '' otherwise.
 function botScreenComputer(slug) {
-  const id = (S.emps || []).find(e => e.name === slug)?.machine?.runner_id;
+  const id = botRow(slug)?.machine?.runner_id;
   const machine = screenMachine(id);
   return screenOn(machine) && screenMayOpen(machine) ? id : '';
 }
@@ -50,7 +50,7 @@ const taskScreenLinkHTML = owner => {
 // Always there, so the feature stays findable when it is not working: the status, and when it is not ready, why and
 // what to do. Read from the bot row (online, its computer's platform) and the computer's row; no extra request.
 function botScreenState(slug) {
-  const e = (S.emps || []).find(x => x.name === slug);
+  const e = botRow(slug);
   // Someone who may see the bot but not read it gets a row without its computer (backend/views.py): say so, name nobody.
   if (e && !('machine' in e)) return {state: 'hidden'};
   const id = e?.machine?.runner_id, machine = screenMachine(id);
@@ -127,7 +127,7 @@ function screenControlHTML(machine, online = true) {
 function botScreenSettingsPaint(slug) {
   const host = $('#bot-screen-settings'); if (!host || BOT?.slug !== slug) return;
   const state = botScreenState(slug);
-  const html = `<dt>Screen</dt><dd>${screenControlHTML(state.machine, !!S.emps.find(e => e.name === slug)?.online)}</dd>`;
+  const html = `<dt>Screen</dt><dd>${screenControlHTML(state.machine, !!botRow(slug)?.online)}</dd>`;
   const box = document.createElement('div'); box.innerHTML = html;
   const key = box.querySelector('[data-screen-control]')?.dataset.screenControlKey;
   if (key && host.querySelector('[data-screen-control]')?.dataset.screenControlKey === key) return;

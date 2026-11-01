@@ -24,13 +24,13 @@ const GT_MAY = [['read', 'Read'], ['write', 'Write notes'], ['act', 'Act within 
 const GT_ROLES = [['north_star', 'North Star'], ['input', 'Input'], ['guardrail', 'Guardrail']];
 const gtMayList = s => String(s || '').split(',').map(x => x.trim()).filter(Boolean);
 const gtMayText = s => gtMayList(s).map(x => GT_MAY.find(m => m[0] === x)?.[1] || x).join(' · ');
-// The people and bots a row can belong to, as human:<id> and bot:<slug>.
+// The people and bots a row can belong to, as human:<id> and bot:<id>.
 function grOwnerOpts(selected) {
-  const sel = String(selected || ''), bare = sel.replace(/^bot:/, '');
+  const sel = String(selected || ''), picked = sel.startsWith('human:') ? '' : botByRef(sel)?.id;
   const people = (S.people || []).filter(p => !p.hidden).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
-  const bots = (S.emps || []).filter(e => e.status !== 'archived').slice().sort((a, b) => String(a.display_name || a.name).localeCompare(String(b.display_name || b.name)));
+  const bots = (S.emps || []).filter(e => e.status !== 'archived').slice().sort((a, b) => String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
   return `<option value="">—</option><optgroup label="People">${people.map(p => `<option value="human:${esc(p.id)}"${sel === 'human:' + p.id ? ' selected' : ''}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
-    <optgroup label="Bots">${bots.map(e => `<option value="bot:${esc(e.name)}"${bare === e.name ? ' selected' : ''}>${esc(e.display_name || e.name)}</option>`).join('')}</optgroup>`;
+    <optgroup label="Bots">${bots.map(e => `<option value="bot:${esc(e.id)}"${picked === e.id ? ' selected' : ''}>${esc(e.display_name || e.slug)}</option>`).join('')}</optgroup>`;
 }
 const gtBar = (now, target) => {
   if (now == null || target == null || !Number(target)) return '';

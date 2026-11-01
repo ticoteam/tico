@@ -378,7 +378,7 @@ async function whFilterChoices() {
   if (routines?.task_rule_departments) WH_DEPTS = {task_rule_departments: routines.task_rule_departments};
   return {
     departments: (routines?.task_rule_departments || []).map(d => [d.id, d.name]),
-    bots: (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.name, empName(e.name)]).sort((a, b) => a[1].localeCompare(b[1])),
+    bots: (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.id, empName(e.id)]).sort((a, b) => a[1].localeCompare(b[1])),
     task_types: (TASK_TYPES || []).map(t => [t.id, t.name]),
   };
 }

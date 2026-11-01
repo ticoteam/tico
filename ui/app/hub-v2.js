@@ -16,7 +16,7 @@ const V2_PILL = {running: 'in-progress', waiting_human: 'needs', waiting_bot: 'w
                  limited: 'waiting', crashed: 'fail', quarantined: 'fail', idle: ''};
 const V2_KIND = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
                  question: 'Question', task: 'Task', notice: 'Message', setup: 'Set up'};
-const hostOf = slug => String(S.emps.find(e => e.name === slug)?.host || 'dispatcher');
+const hostOf = slug => String(botRow(slug)?.host || 'dispatcher');
 const isKeeper = slug => hostOf(slug) === 'keeper';
 const v2StatusOf = slug => S.v2.status[slug] || null;
 const actorSlug = a => String(a || '').startsWith('bot:') ? String(a).slice(4) : '';
@@ -61,8 +61,8 @@ const taskBody = t => {
 };
 const actorChip = a => {
   const slug = actorSlug(a);
-  return slug && S.emps.some(e => e.name === slug)
-    ? `<a class="chip" href="#/bot/${esc(slug)}">${avatar(slug, 16)}<span>${empName(slug)}</span></a>`
+  return slug && botRow(slug)
+    ? `<a class="chip" href="#/bot/${encodeURIComponent(slug)}">${avatar(slug, 16)}<span>${empName(slug)}</span></a>`
     : `<span class="chip">${personCircle(actorLabel(a), 16)}<span>${esc(actorLabel(a))}</span></span>`;
 };
 const v2Firstline = body => String(body || '').split('\n').map(s => s.trim()).find(Boolean) || '';
@@ -205,7 +205,7 @@ async function limitRetry(slug) {
   await v2Refresh();
   toast(`${empName(slug)} will try again now`);
 }
-const limitRetryButton = (slug, cls = 'linkish') => v2StatusOf(slug)?.state === 'limited' && settingsCanManageBot(S.emps.find(x => x.name === slug))
+const limitRetryButton = (slug, cls = 'linkish') => v2StatusOf(slug)?.state === 'limited' && settingsCanManageBot(botRow(slug))
   ? ` <button type="button" class="${cls}" data-limit-retry>Try now</button>` : '';
 // Release: Tico stopped the bot (backend/bot_stops.py: five fast failed runs, or over its run budget) and a person
 // who manages it lets it run again (POST /v2/bots/{bot}/release, which clears both). One click, wherever it shows.
@@ -214,7 +214,7 @@ async function botRelease(slug) {
   await v2Refresh();
   toast(`${empName(slug)} released`);
 }
-const botMayRelease = slug => settingsCanManageBot((S.emps || []).find(x => x.name === slug));
+const botMayRelease = slug => settingsCanManageBot(botRow(slug));
 const botReleaseButton = (slug, cls = 'linkish') => botMayRelease(slug)
   ? ` <button type="button" class="${cls}" data-bot-release="${esc(slug)}">Release</button>` : '';
 // Every Release button (the chat line, the bot page, Health) goes through one listener; each page redraws its own.
@@ -237,7 +237,7 @@ function pausedNotice(slug) {
   const when = since => since ? ` since ${clockTime(since)}` : '';
   if (s.bot_state === 'quarantined') {
     // A refusal-count quarantine lifts itself after an hour; anything else waits for a person (backend/hubdb.py).
-    const q = s.quarantine || {}, e = S.emps.find(x => x.name === slug);
+    const q = s.quarantine || {}, e = botRow(slug);
     const resume = e && settingsCanManageBot(e) ? ' <button type="button" class="linkish" data-quarantine-resume>Resume bot</button>' : '';
     const at = q.since || s.since, paused = (at ? ` paused at ${clockTime(at)}` : ' is paused') + (q.auto ? '' : ' for review');
     const who = q.auto || resume ? '' : ' A person who manages it can resume it.';
@@ -260,7 +260,7 @@ function pausedNotice(slug) {
 // The 30 s refresh reloads the health issues, not the roster, so the two warnings follow the
 // issue the server raises and only the quiet line reads the roster's last-seen time.
 function agentNotice(slug) {
-  const e = S.emps.find(x => x.name === slug); if (!e?.agent) return '';
+  const e = botRow(slug); if (!e?.agent) return '';
   const a = e.agent, name = agentKind(a);
   // A Grok Bot or Dots is synced in by the agent itself (docs/external-agent-sync.md): its history is copied
   // here, and what its person writes here goes to it with the next sync.
@@ -274,7 +274,7 @@ function agentNotice(slug) {
   return `${empName(slug)} is a ${name}; it reads its messages on its own schedule · reporting in`;
 }
 function agentQuiet(slug) {
-  return !(S.status?.health_issues || []).some(i => i.kind === 'agent' && i.bot === slug) && !!S.emps.find(x => x.name === slug)?.agent?.credential;
+  return !(S.status?.health_issues || []).some(i => i.kind === 'agent' && i.bot === slug) && !!botRow(slug)?.agent?.credential;
 }
 function pausedRender() {
   const el = $('#conv-paused'); if (!el || !V2C) return;

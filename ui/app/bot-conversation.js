@@ -16,7 +16,7 @@ async function loadConversation(slug, keep) {
   convStop();
   const state = CONV = {slug, runs: [], active: null, older: false, pending: keep?.pending || [], replyFor: null, tail: 0, poll: 0, busy: false, loadedAt: Date.now()};
   let d;
-  try { d = await get(`/employees/${slug}/conversation`); }
+  try { d = await get(`/employees/${encodeURIComponent(slug)}/conversation`); }
   catch (err) {
     if (CONV !== state || !$('#conv-thread')) return;
     $('#conv-state').textContent = '';
@@ -44,7 +44,7 @@ async function convTail(state) {
   if (CONV !== state || state.busy || !state.active) return;
   state.busy = true;
   try {
-    const d = await get(`/employees/${state.slug}/conversation/tail?run=${encodeURIComponent(state.active.run)}&from=${state.active.offset || 0}`);
+    const d = await get(`/employees/${encodeURIComponent(state.slug)}/conversation/tail?run=${encodeURIComponent(state.active.run)}&from=${state.active.offset || 0}`);
     if (CONV !== state || !$('#conv-thread')) return;
     if (d.offset != null) state.active.offset = d.offset;
     const g = state.runs.find(r => r.run === (d.run || state.active.run));
@@ -98,7 +98,7 @@ function convGroup(r, slug) {
     <span class="tnum" title="${esc(fmt(r.started))}">${r.finished ? ago(r.finished) : ago(r.started)}${r.duration_s != null ? ` · ${Math.round(r.duration_s / 60)}m` : ''}</span>
     ${r.local ? '' : `<a class="muted" href="${API}/runs/${esc(r.run)}/log" target="_blank" rel="noopener">log</a>`}</div>${
     live || r.local ? '' : `<div class="conv-replay">Replay of run <span class="mono">${esc(r.run)}</span> on ${
-      esc(CONV?.session?.runtime || S.emps.find(e => e.name === slug)?.runtime || 'its runtime')}, ended ${esc(fmt(r.finished) || 'unknown')}</div>`}`;
+      esc(CONV?.session?.runtime || botRow(slug)?.runtime || 'its runtime')}, ended ${esc(fmt(r.finished) || 'unknown')}</div>`}`;
   const ask = chat ? convChatAsk(r)
     : !r.issue_body ? ''
     : isRecurring(r) ? `<div class="bubble sched"><span class="who">Routine</span>${esc(r.issue_title || 'Routine')}
@@ -164,7 +164,7 @@ function convRender(state) {
   if (older) older.onclick = async () => {
     older.disabled = true; older.textContent = 'Loading…';
     try {
-      const d = await get(`/employees/${slug}/conversation?before=${encodeURIComponent(state.runs[0]?.run || '')}`);
+      const d = await get(`/employees/${encodeURIComponent(slug)}/conversation?before=${encodeURIComponent(state.runs[0]?.run || '')}`);
       if (CONV !== state) return;
       state.runs = (d.runs || []).slice().reverse().concat(state.runs);
       state.older = !!d.older; state.prepending = true; convRender(state);   // "Load older" must not move what you are reading
@@ -181,11 +181,11 @@ function convRender(state) {
 // The CLI's own resume command comes from its manifest (`resume_command`); a CLI without one gets `<name> --resume`.
 function botResumeCommand(runtime, sid, slug) {
   const r = String(runtime || '').toLowerCase();
-  return `cd ~/tico-work/emp-${slug} && ${harnessCaps(r).resume_command || `${r} --resume`} ${sid}`;
+  return `cd ~/tico-work/emp-${botSlug(slug)} && ${harnessCaps(r).resume_command || `${r} --resume`} ${sid}`;
 }
 async function loadBotIssues(slug) {
   try {
-    const list = await get(`/employees/${slug}/issues`);
+    const list = await get(`/employees/${encodeURIComponent(slug)}/issues`);
     const open = list.filter(i => i.state === 'OPEN').sort((a,b) => (a.needs_human ? 0 : 1) - (b.needs_human ? 0 : 1) || (a.priority||'p9').localeCompare(b.priority||'p9'));
     // Done Recently: closed in the last 14 days, as for a Tico bot's tasks.
     const since = new Date(Date.now() - BOT_DONE_RECENT_DAYS * 86400000).toISOString();
@@ -216,7 +216,7 @@ async function fillBotRuns(slug) {
 }
 async function loadDocs(slug) {
   try {
-    const f = await get(`/employees/${slug}/files`);
+    const f = await get(`/employees/${encodeURIComponent(slug)}/files`);
     if (BOT?.slug !== slug) return;
     if ($('#agent')) $('#agent').innerHTML = f['AGENT.md'] ? md(f['AGENT.md'].replace(/^# .*\n/, '')) : '<div class="empty">Instructions have not been published by the computer yet.</div>';
     for (const [n, t] of Object.entries(f.playbooks || {})) { const el = document.getElementById('pb-' + n); if (el) el.innerHTML = md(t); }

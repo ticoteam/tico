@@ -282,7 +282,7 @@ function taskRailBind(d, t) {
     $('[data-sub-add-error]', rail)?.remove();
     try {
       // The details are required; the title stands in until someone writes more (the modal does not repeat it).
-      await post('/v2/tasks', {title, body: title, owner, relations: [{task: t.id, kind: 'parent'}]});
+      await post('/v2/tasks', {title, body: title, owner: owner.includes(':') ? owner : 'bot:' + owner, relations: [{task: t.id, kind: 'parent'}]});
       input.value = '';
       const data = await get(`/v2/tasks/${encodeURIComponent(t.id)}`);
       if (TASKS_ST) void tasksLoad(TASKS_ST);
