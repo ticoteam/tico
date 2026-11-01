@@ -538,7 +538,7 @@ mod tests {
         let secrets = ["granted-file-secret-fixture", "Zm9vYmFyYmF6cXV4", "a:b c+d/e=fghij"];
         let sample = "x granted-file-secret-fixture y Z3JhbnRlZC1maWxlLXNlY3JldC1maXh0dXJl z a%3Ab%20c%2Bd%2Fe%3Dfghij w b c+d/e=fghij";
         let r = Redactor::new(&secrets.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-        let script = "import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom runner.redact import Redactor\nprint(Redactor(json.loads(sys.argv[2])).scrub_text(sys.argv[3]))";
+        let script = "import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom runner_support.redact import Redactor\nprint(Redactor(json.loads(sys.argv[2])).scrub_text(sys.argv[3]))";
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let out = Command::new("python3")
             .args(["-c", script])
