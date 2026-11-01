@@ -6,8 +6,9 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const CN_ICONS = {slack: 'forum', github: 'code', mailbox: 'mail', inbox: 'inbox', meetings: 'videocam', trigger: 'webhook',
-                  webhook: 'call_made', postal: 'local_post_office', listening: 'hearing'};
+// Icons the UI's font holds (ui/vendor/fonts/icons.txt).
+const CN_ICONS = {slack: 'forum', github: 'code', mailbox: 'mail', inbox: 'inbox', meetings: 'co_present', trigger: 'bolt',
+                  webhook: 'open_in_new', postal: 'local_shipping', listening: 'campaign'};
 const CN_STATUS = {on: ['On', 'ok'], off: ['Off', 'idle'], waiting: ['Waiting', 'wait'], paused: ['Paused', 'wait'], error: ['Error', 'fail']};
 const CN_SCOPE = {company: 'Company', team: 'Team', person: 'Personal'};
 let CN_VIEW = 0;

@@ -41,7 +41,7 @@ function redesignNav() {
   libRow.append(library, libToggle);
   const subs = document.createElement('div'); subs.className = 'rd-lib'; subs.id = 'rd-lib';
   const tools = link('tools', RD_TOOLS, 'api', 'Tools');   // ui/app/redesign-library.js
-  const connections = link('connections', RD_CONNECTIONS, 'hub', 'Connections');   // ui/app/connections.js
+  const connections = link('connections', RD_CONNECTIONS, 'link', 'Connections');   // ui/app/connections.js
   const files = link('files', RD_FILES, 'folder_shared', 'Files');   // ui/app/pages.js
   subs.append(...[pick('a[data-nav="docs"]'), files, pick('a[data-nav="meetings"]'), tools, connections].filter(Boolean));
   // Rules (ui/app/org-rules.js) folds the same way, its tabs under it, folded until opened.
