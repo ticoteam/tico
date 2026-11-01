@@ -83,6 +83,7 @@ async function thvLoad(view) {
     view.state = view.messages.length ? 'ready' : 'empty';
     thvDraw(view, {stick: true});
     thvMarkRead(view);
+    void callLoad(view);
   } catch (e) {
     if (view.gone) return;
     view.state = e?.status === 404 ? 'gone' : 'error';
@@ -139,7 +140,7 @@ function thvHeadHTML(view) {
       `<a href="${threadHref(c.id)}">${esc(c.title || 'Thread')}</a>`).join('<span aria-hidden="true">›</span>')}</nav>` : ''}
     <div class="thv-titleline">${crumbs.length ? `<a class="thv-back" href="${threadHref(crumbs[crumbs.length - 1].id)}" aria-label="Back" title="Back">‹</a>` : ''}
       ${threadMarkHTML(t, 22)}<h1 class="thv-title">${esc(threadTitle(t))}</h1>
-      ${aud ? `<span class="thv-aud muted">${esc(aud)}</span>` : ''}<span class="spacer"></span>
+      ${aud ? `<span class="thv-aud muted">${esc(aud)}</span>` : ''}<span class="spacer"></span>${callHeadHTML(view)}
       ${!t.parent_id && ['members', 'personal'].includes(t.audience) ? '<button type="button" class="ghost small" data-thv-members>Members</button>' : ''}
       <button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="menu" aria-expanded="false" aria-label="Thread menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div>`;
 }
@@ -172,9 +173,13 @@ function thvWhoHTML(a) {
 function thvUpdateHTML(m) {
   const u = m.refs?.update, id = typeof u === 'object' ? u?.id : u;
   const title = (typeof u === 'object' && u?.title) || v2Firstline(m.body) || 'Update';
-  return `<a class="th-update" href="${UPDATES}?update=${encodeURIComponent(id || '')}"><span class="th-update-k">Update</span>
+  if (!id) return `<div class="th-body">${esc(title)}</div>`;
+  const q = new URLSearchParams({...(u?.kind ? {kind: u.kind} : {}), ...(u?.day ? {day: u.day} : {}), update: id});
+  return `<a class="th-update" href="${UPDATES}?${q}"><span class="th-update-k">Update</span>
     <strong>${esc(title)}</strong></a>`;
 }
+// Update cards are notices the server writes with refs.card 'update'; older rows may carry only refs.update.
+const thvIsUpdateCard = m => m.refs?.card === 'update' || m.kind === 'update' || (!!m.refs?.update && m.kind === 'notice');
 function thvFilesHTML(m) {
   const lib = (m.refs?.files || []).filter(f => f?.id);
   return (m.refs?.attachments?.length ? chatAttachmentsHTML(m.refs.attachments, m.id) : '')
@@ -188,7 +193,7 @@ function thvReactionsHTML(m) {
 function thvMsgHTML(view, m) {
   const depth = Math.min(Number(m.depth) || 0, THV_DEPTH_MAX), sub = m.thread_id && m.thread_id !== view.id;
   const fresh = thvIsNew(view, m), quiet = fresh && !thvAddressed(m);
-  const cls = ['th-msg', sub && 'th-sub', thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted']
+  const cls = ['th-msg', sub && 'th-sub', m.refs?.follow_up && 'th-followup', thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted']
     .filter(Boolean).join(' ');
   const head = `<div class="th-head">${thvWhoHTML(m.from_actor)}<time title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>${
     m.edited_at && !m.deleted ? '<span class="th-edited muted">edited</span>' : ''}</div>`;
@@ -196,7 +201,7 @@ function thvMsgHTML(view, m) {
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
   else if (view.editing === m.id) body = `<div class="th-edit"><textarea class="th-edit-text" rows="2" aria-label="Edit message">${esc(m.body || '')}</textarea>
       <div class="th-edit-acts"><button type="button" class="ghost small" data-th-edit-cancel>Cancel</button><button type="button" class="primary small" data-th-edit-save>Save</button></div></div>`;
-  else if (m.kind === 'update' || m.refs?.update) body = thvUpdateHTML(m);
+  else if (thvIsUpdateCard(m)) body = thvUpdateHTML(m);
   else body = `<div class="th-body md">${safeMd(m.body || '', {shortLinks: true})}</div>`;
   const st = m.sub_thread, more = st?.more ? `<a class="th-more" href="${threadHref(st.id)}" style="--d:${Math.min(depth + 1, THV_DEPTH_MAX)}">${
     typeof st.more === 'number' ? `${st.more} more ${st.more === 1 ? 'reply' : 'replies'}` : 'More replies'}${st.unread ? ` · <span class="th-more-new">${st.unread} new</span>` : ''}</a>` : '';
@@ -344,6 +349,7 @@ function threadViewsLive(topic, d) {
     if (topic === 'reset') { liveSoon('thv:' + view.key, () => thvRefresh(view), 150); continue; }
     if (topic === 'threads') {
       if (d.thread_id === view.id && d.thread) { view.thread = {...view.thread, ...d.thread}; thvDraw(view); }
+      if (d.thread_id === view.id && String(d.kind || '').startsWith('call.')) liveSoon('call:' + view.key, () => callLoad(view), 200);
       // Who may read changed, or a sub-thread opened under a message on screen: read again.
       if ((d.thread_id === view.id && ['audience', 'members'].includes(d.kind)) || (d.kind === 'sub_thread' && view.messages.some(m => m.id === d.thread?.parent_message_id)))
         liveSoon('thv:' + view.key, () => thvRefresh(view), 150);
@@ -570,6 +576,7 @@ async function thvClick(view, ev) {
   const m = thvMsgOf(view, row);
   if (t.closest('[data-th-file]')) { const b = t.closest('[data-th-file]'); void openFileLink(b.dataset.thFile, b.dataset.name); return; }
   if (t.closest('[data-thv-members]')) { threadMembersOpen(view); return; }
+  if (t.closest('[data-call]')) { void callAction(view, t.closest('[data-call]').dataset.call); return; }
   if (t.closest('[data-thv-menu]')) { threadMenuOpen(view, t.closest('[data-thv-menu]')); return; }
   if (t.closest('[data-th-earlier]')) {
     const b = t.closest('[data-th-earlier]'); b.disabled = true;
