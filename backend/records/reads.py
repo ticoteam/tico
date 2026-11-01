@@ -43,3 +43,14 @@ def search(c: sqlite3.Connection, table: str, text: str = "", *, active: bool | 
         args += list(after)
     args.append(most)
     return c.execute(f"SELECT * FROM {table} WHERE {where} ORDER BY name, id LIMIT ?", args).fetchall()
+
+
+def active_rows(c: sqlite3.Connection, table: str, columns: tuple[str, ...]) -> list[tuple[Any, ...]]:
+    """(id, *columns) of the rows not archived, for name and duplicate checks. The columns are this code's own names."""
+    assert table in ROW_TABLES
+    return c.execute(f"SELECT id, {', '.join(columns)} FROM {table} WHERE archived_at IS NULL").fetchall()
+
+
+def active_equipment(c: sqlite3.Connection) -> list[tuple[Any, ...]]:
+    """(id, name, serial) of the equipment not archived, for name and serial checks."""
+    return c.execute("SELECT id, name, serial FROM equipment WHERE archived_at IS NULL").fetchall()

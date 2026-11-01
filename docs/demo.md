@@ -28,6 +28,21 @@ published port. Ordinary local installs still check their configured port.
 
 ![Updates](images/updates-desktop-light.png)
 
+## Other demo companies
+
+Three more fictional companies show Operations (locations, items, equipment and due dates). Each one's records
+come from CSV files in `backend/demo_data/<company>/`, through the same import a customer uses
+(`POST /api/v2/imports/commit`), so a row the import refuses shows up as a refused row:
+
+```bash
+python3 -m backend.demo --company heating-air     # Acme Heating & Air: 2 shops, 3 vans, service items
+python3 -m backend.demo --company kitchen         # Acme Kitchen: 2 stores, menu items, health permits
+python3 -m backend.demo --company works           # Acme Works: plant and warehouse, raw materials, machines
+```
+
+Each one starts on its own, with Finance set up and Ana as owner. A file whose record type this build does
+not have yet is named in the startup output and not loaded.
+
 ## It cannot be mistaken for a real install
 
 - A **Demo — sample data** strip stays across the top of every page and cannot be closed.

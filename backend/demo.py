@@ -11,6 +11,9 @@ minute with no domain, DNS, sign-in or model account. It cannot be mistaken for 
 - it listens on loopback only. A container has to bind 0.0.0.0 inside, so there it answers only
   requests whose Host is a loopback name; `--public-demo` is the one way to serve anyone else, and
   then the demo is read-only.
+
+`--company heating-air`, `kitchen` or `works` builds one of three other fictional companies instead, with its records
+imported from CSV files (backend/demo_companies.py).
 """
 
 import argparse
@@ -33,6 +36,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from .auth import LOCAL_SIGNIN_PATH
 from .config import LOOPBACK, Settings
+from .demo_companies import COMPANIES
 from .store import H, Problem
 
 log = logging.getLogger("tico.demo")
@@ -234,7 +238,7 @@ def install(app, auth, settings):
 
 
 # ----------------------------------------------------------------------------- start
-def prepare(directory, url="", public=False):
+def prepare(directory, url="", public=False, company=""):
     """Settings for a demo whose files live in `directory`. Sign-in is the loopback owner session."""
     directory = Path(directory)
     token_file = directory / "local-owner.token"
@@ -244,7 +248,8 @@ def prepare(directory, url="", public=False):
             out.write(os.urandom(32).hex())
     settings = Settings(
         db_path=directory / "hub.sqlite", registry_dir=directory / "registry", environment_id="demo",
-        company_name="Acme", app_name="Tico", assistant_name="Assistant", owner_email=OWNER_EMAIL,
+        company_name=COMPANIES.get(company, "Acme"), app_name="Tico", assistant_name="Assistant",
+        owner_email=OWNER_EMAIL,
         github_owner="acme", local_owner_token_file=token_file, public_url=(url.rstrip("/") if url and not public else f"http://127.0.0.1:{DEFAULT_PORT}"),
         scheduler_enabled=False, blob_dir=directory / "blobs", enabled_providers=("anthropic",),
         default_runtime="claude", default_model="claude-opus-5-5", release_id="demo", demo=True,
@@ -256,22 +261,27 @@ def prepare(directory, url="", public=False):
     return settings
 
 
-def build(directory, now=None, url="", public=False):
-    """A ready demo in `directory`: its registry, database and files. Returns its Settings."""
-    from . import demo_seed
+def build(directory, now=None, url="", public=False, company=""):
+    """A ready demo in `directory`: its registry, database and files. Returns its Settings. `company` (a key of
+    COMPANIES) builds that company instead of the Acme software team."""
+    from . import demo_companies, demo_seed
     os.environ["TICO_UPDATE_CHECK"] = "off"
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     marker = directory / ".tico-demo"
+    expected = f"tico-demo-{company}-v1\n" if company else "tico-demo-v1\n"
     data = [directory / name for name in ("hub.sqlite", "registry", "local-owner.token", "blobs")]
     # Only a completed seed may reopen as a demo owner. Never overwrite another install or a partial seed.
-    if marker.is_file() and marker.read_text() == "tico-demo-v1\n" and all(p.exists() for p in data[:3]):
-        return prepare(directory, url, public)
+    if marker.is_file() and marker.read_text() == expected and all(p.exists() for p in data[:3]):
+        return prepare(directory, url, public, company)
     if marker.exists() or any(p.exists() for p in data):
         raise Problem("demo_data", "This directory is not a completed Tico demo; use an empty directory", 409)
-    settings = prepare(directory, url, public)
-    demo_seed.populate(settings, now)
-    marker.write_text("tico-demo-v1\n")
+    settings = prepare(directory, url, public, company)
+    if company:
+        demo_companies.populate(settings, company)
+    else:
+        demo_seed.populate(settings, now)
+    marker.write_text(expected)
     return settings
 
 
@@ -284,6 +294,8 @@ def main(argv=None):
     parser.add_argument("--url", default="", help="the browser address, e.g. http://localhost:8877 or https://demo.example.com")
     parser.add_argument("--in-container", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--data-dir", default="", help="keep the demo's files here (default: a temporary folder)")
+    parser.add_argument("--company", default="", choices=sorted(COMPANIES),
+                        help="build another fictional company instead of the Acme software team")
     args = parser.parse_args(argv)
     host = args.host if args.host is not None else ("0.0.0.0" if args.in_container else "127.0.0.1")
     check_bind(host, args.public_demo, args.in_container)
@@ -299,9 +311,9 @@ def main(argv=None):
     # SIGTERM (docker stop, a supervisor) ends the demo the way Ctrl+C does, so the folder below still goes.
     previous = signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))
     try:
-        print("Building the Acme demo ...", flush=True)
+        print(f"Building the {COMPANIES.get(args.company, 'Acme')} demo ...", flush=True)
         with network_blocked():
-            settings = build(directory, url=args.url, public=args.public_demo)
+            settings = build(directory, url=args.url, public=args.public_demo, company=args.company)
             if args.port != DEFAULT_PORT and not args.public_demo and not args.url:
                 settings.public_url = settings.runner_url = f"http://127.0.0.1:{args.port}"
             browser_url = args.url.rstrip("/") if args.url else f"http://localhost:{args.port}"

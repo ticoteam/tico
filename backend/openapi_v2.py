@@ -2549,6 +2549,26 @@ SCHEMAS.update({
 SCHEMAS["Seat"]["properties"].update({name: _t("s") for name in ("agent", "agent_name", "request_state")})
 SCHEMAS["Seat"]["required"] = sorted(set(SCHEMAS["Seat"]["required"]) | {"agent", "agent_name", "request_state"})
 
+# CSV imports of shared records: the preview and the commit answer the same shape, one line per row.
+TAGS["Imports"] = "CSV files of shared records (locations, items, equipment, due dates), checked before they import."
+SCHEMAS["RecordsImport"] = obj({
+    "record_type": "s", "kind": "s", "rows": "i", "summary": "o", "truncated": "b",
+    "ignored_columns": items(_t("s")), "report_csv": "s",
+    "lines": items(obj({"line": "i", "name": "s", "status": "s", "reason": "s", "record_id": "s",
+                        "matches": {"type": ["object", "null"]}, "approval_id": "s"},
+                       required=["line", "name", "status"]))},
+    required=["record_type", "kind", "rows", "summary", "truncated", "ignored_columns", "lines"])
+STABLE.extend([
+    ("/api/v2/imports/preview", "post", "Imports", "previewRecordsImport",
+     "Check a CSV file of records row by row and write nothing: what each row would create, what is already here, and "
+     "each row's error. A row that looks like a record already held (the same address, SKU or serial) is flagged for a "
+     "person to decide", "RecordsImport"),
+    ("/api/v2/imports/commit", "post", "Imports", "commitRecordsImport",
+     "Import a CSV file of records: each new row is one Finance action, as hand entry is, so rights and approvals "
+     "apply. A row already imported says already_there; a bad row is reported and the rest still import",
+     "RecordsImport"),
+])
+
 
 def generate():
     """The document for a default installation: what docs/openapi/v2.json holds."""

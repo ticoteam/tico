@@ -161,6 +161,10 @@
     {
       "name": "Memory tidy",
       "description": "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
+    },
+    {
+      "name": "Imports",
+      "description": "CSV files of shared records (locations, items, equipment, due dates), checked before they import."
     }
   ],
   "paths": {
@@ -14978,6 +14982,130 @@
         },
         "tags": [
           "Team chart"
+        ]
+      }
+    },
+    "/api/v2/imports/commit": {
+      "post": {
+        "summary": "Import a CSV file of records: each new row is one Finance action, as hand entry is, so rights and approvals apply. A row already imported says already_there; a bad row is reported and the rest still import",
+        "operationId": "commitRecordsImport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordsImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordsImport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Imports"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/imports/preview": {
+      "post": {
+        "summary": "Check a CSV file of records row by row and write nothing: what each row would create, what is already here, and each row's error. A row that looks like a record already held (the same address, SKU or serial) is flagged for a person to decide",
+        "operationId": "previewRecordsImport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordsImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordsImport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Imports"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
         ]
       }
     },
@@ -50414,6 +50542,134 @@
           "since"
         ],
         "additionalProperties": true
+      },
+      "RecordsImport": {
+        "type": "object",
+        "properties": {
+          "record_type": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "integer"
+          },
+          "summary": {
+            "type": "object"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "ignored_columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "report_csv": {
+            "type": "string"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "line": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "record_id": {
+                  "type": "string"
+                },
+                "matches": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "approval_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "line",
+                "name",
+                "status"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "ignored_columns",
+          "kind",
+          "lines",
+          "record_type",
+          "rows",
+          "summary",
+          "truncated"
+        ],
+        "additionalProperties": true
+      },
+      "RecordsImportRequest": {
+        "properties": {
+          "record_type": {
+            "type": "string",
+            "enum": [
+              "locations",
+              "items",
+              "equipment",
+              "due_dates"
+            ],
+            "title": "Record Type"
+          },
+          "csv": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Csv"
+          },
+          "assign": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Assign"
+          },
+          "include_lines": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 2000,
+            "title": "Include Lines"
+          },
+          "report": {
+            "type": "string",
+            "enum": [
+              "json",
+              "csv"
+            ],
+            "title": "Report",
+            "default": "json"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "record_type",
+          "csv"
+        ],
+        "title": "RecordsImportRequest",
+        "description": "A CSV file of shared records: the kind its rows are, the file's text, a location or a customer to give every row\nthat does not name one (`location_id`, `customer_id`), and the lines to import although they look like a record\nalready here."
       },
       "Refresh": {
         "properties": {
