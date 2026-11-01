@@ -30,7 +30,7 @@ GONE = "gone"           # deleted at the provider and never in the books: nothin
 
 BOOK_ENTITIES = {  # what a provider's backfill reads, in the order the books take it (one cursor per entity)
     "quickbooks": ("accounts", "parties", "records", "documents", "payments", "entries"),
-    "xero": ("accounts", "parties", "invoices", "credit_notes", "payments", "manual_journals",
+    "xero": ("accounts", "parties", "items", "tracking", "invoices", "credit_notes", "payments", "manual_journals",
              "bank_transactions", "bank_transfers", "overpayments", "prepayments"),
 }
 

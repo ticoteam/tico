@@ -26,9 +26,10 @@ LATER2 = "2026-10-15T14:00:00.000000Z"
 TENANT = "acme-tenant"
 BASE_PATH = "/api.xro/2.0"
 BASE = "https://api.xero.test" + BASE_PATH
-ENDPOINTS = ("Accounts", "Contacts", "Invoices", "CreditNotes", "Payments", "ManualJournals", "BankTransactions",
-             "BankTransfers", "Overpayments", "Prepayments")
-IDS = {"Accounts": "AccountID", "Contacts": "ContactID", "Invoices": "InvoiceID", "CreditNotes": "CreditNoteID",
+ENDPOINTS = ("Accounts", "Contacts", "Items", "TrackingCategories", "Invoices", "CreditNotes", "Payments",
+             "ManualJournals", "BankTransactions", "BankTransfers", "Overpayments", "Prepayments")
+IDS = {"Accounts": "AccountID", "Contacts": "ContactID", "Items": "ItemID", "Invoices": "InvoiceID",
+       "CreditNotes": "CreditNoteID",
        "Payments": "PaymentID", "ManualJournals": "ManualJournalID", "BankTransactions": "BankTransactionID",
        "BankTransfers": "BankTransferID", "Overpayments": "OverpaymentID", "Prepayments": "PrepaymentID"}
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -347,8 +348,8 @@ def _pass_setup(books: Any, xbooks: XeroBooks, monkeypatch: Any, transport: Any 
     real = xero.Xero
     monkeypatch.setattr("backend.hook_relay.link_of", lambda c, vault, settings: object())
     monkeypatch.setattr(books_link, "access_token", lambda *a, **k: "token-1")
-    monkeypatch.setattr(xero, "Xero", lambda tenant, tokens: real(
-        tenant, tokens, base=BASE, transport=transport or xbooks, sleep=lambda s: None))
+    monkeypatch.setattr(xero, "Xero", lambda tenant, tokens, **kw: real(
+        tenant, tokens, base=BASE, transport=transport or xbooks, sleep=lambda s: None, **kw))
     return cid
 
 
@@ -1850,3 +1851,100 @@ def test_a_full_refund_of_a_credit_note_with_a_negative_rounding_line_recognizes
         rounding = c.execute("SELECT COALESCE(SUM(r.amount), 0) FROM fin_cash_rollups r JOIN fin_accounts a "
                              "ON a.id = r.account_id WHERE a.code = '4900' AND r.day = ?", (refund_day,)).fetchone()[0]
         assert abs(credit) == 9999 and recognized == credit and rounding == -1
+
+
+def _local(c: Any, ext: str, table: str) -> str:
+    """The local record a provider record is bound to."""
+    return str(c.execute("SELECT local_id FROM fin_external_refs WHERE external_id=? AND local_table=?",
+                         (ext, table)).fetchone()[0])
+
+
+def _tracked_chart(xbooks: XeroBooks) -> None:
+    """The chart, an item sold on account 4000 and bought on 6100, and two tracking categories: the location one and a
+    team one (which the books take as classes)."""
+    _chart(xbooks)
+    xbooks.rows["Items"] = [{"ItemID": "item-1", "Code": "CONSULT", "Name": "Consulting", "IsTrackedAsInventory": False,
+                             "SalesDetails": {"UnitPrice": 150.0, "AccountCode": "4000"},
+                             "PurchaseDetails": {"AccountCode": "6100"}, "UpdatedDateUTC": ms("2026-10-01T00:00:00Z")}]
+    xbooks.rows["TrackingCategories"] = [
+        {"TrackingCategoryID": "cat-loc", "Name": "Location", "Status": "ACTIVE",
+         "Options": [{"TrackingOptionID": "opt-austin", "Name": "Austin", "Status": "ACTIVE"}]},
+        {"TrackingCategoryID": "cat-team", "Name": "Team", "Status": "ACTIVE",
+         "Options": [{"TrackingOptionID": "opt-field", "Name": "Field", "Status": "ACTIVE"}]}]
+
+
+def test_xero_items_and_tracking_options_come_in_and_a_line_takes_its_place_and_class(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    tracked = [{"Name": "Location", "Option": "Austin"}, {"Name": "Team", "Option": "Field"}]
+    xbooks.rows["Invoices"] = [{**_invoice("inv-1"), "LineItems": [{**_line("acct-4000", "100.00"), "Tracking": tracked}]}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    with books.transaction() as c:
+        SL.set_setting(c, mirror.XERO_LOCATION_SETTING, "cat-loc", by=OWNER, at=AT)
+    client = xero.Xero(TENANT, lambda force: "token-1", base=BASE, transport=xbooks, sleep=lambda s: None,
+                       location="cat-loc")
+    assert _drain(books, client, cid) == []
+    with books.read() as c:
+        item = c.execute("SELECT name, sku, price, income_account_id FROM rec_items").fetchone()
+        assert item[:3] == ("Consulting", "CONSULT", 15000)
+        assert item[3] == _local(c, "Account:acct-4000", "fin_accounts")
+        place = _local(c, "TrackingOption:cat-loc/opt-austin", "rec_places")
+        clazz = _local(c, "TrackingOption:cat-team/opt-field", "fin_dimensions")
+        assert {(str(k), str(v)) for k, v in c.execute("SELECT kind, value FROM fin_line_tags")} == {
+            ("place", place), ("class", clazz)}
+
+
+def test_xero_takes_an_item_by_its_account_codes_and_a_bill_line_by_its_tracking_options():
+    item = X.item_body({"name": "Consulting", "sku": "CONSULT", "kind": "service", "price": 15_000,
+                        "income_code": "4000", "expense_code": "6100"})
+    assert item == {"Code": "CONSULT", "Name": "Consulting", "IsSold": True, "IsPurchased": True,
+                    "SalesDetails": {"AccountCode": "4000", "UnitPrice": "150.00"},
+                    "PurchaseDetails": {"AccountCode": "6100"}}
+    bill = X.document_body({"party": "Contact:contact-1", "day": "2026-10-05", "memo": "", "lines": [
+        {"account": "Account:acct-6100", "amount": 1500, "description": "seats",
+         "place": "TrackingOption:cat-loc/opt-austin", "class": "cat-team/opt-field"}]}, "Bill")
+    assert bill["Invoices"][0]["LineItems"][0]["Tracking"] == [
+        {"TrackingCategoryID": "cat-loc", "TrackingOptionID": "opt-austin"},
+        {"TrackingCategoryID": "cat-team", "TrackingOptionID": "opt-field"}]
+
+
+def test_an_item_made_here_is_sent_to_xero_by_the_codes_of_its_accounts():
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    client = xero.Xero(TENANT, lambda force: "token-1", base=BASE, transport=xbooks, sleep=lambda s: None)
+    sent = client.send("item.create", {"name": "Design", "sku": "DESIGN", "kind": "service", "price": 9_000,
+                                       "income": "Account:acct-4000", "expense": "", "asset": ""}, "item:design")
+    assert sent.ok and sent.kind == "Item" and sent.external_id, sent
+    assert xbooks.rows["Items"][-1]["SalesDetails"] == {"AccountCode": "4000", "UnitPrice": "90.00"}
+
+
+def test_an_item_made_here_in_a_xero_book_is_written_to_xero_and_its_row_appears_once_xero_confirms(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    cid = _connection(books)
+    _mirror(books, cid)
+    client = _client(xbooks)
+    assert _drain(books, client, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "item_create", {"name": "Design", "sku": "DESIGN", "kind": "service", "price": 9_000,
+                                             "income_account_id": _local(c, "Account:acct-4000", "fin_accounts")})
+        assert made.status == "committed", made
+        assert c.execute("SELECT COUNT(*) FROM rec_items WHERE name='Design'").fetchone()[0] == 0
+    assert _drain(books, client, cid, now=LATER) == []
+    assert [row["Code"] for row in xbooks.rows["Items"]] == ["CONSULT", "DESIGN"]
+    with books.read() as c:
+        assert c.execute("SELECT price FROM rec_items WHERE id=?", (made.result["item_id"],)).fetchone()[0] == 9_000
+        assert c.execute("SELECT COUNT(*) FROM rec_items WHERE name='Design'").fetchone()[0] == 1
+
+
+def test_a_location_or_job_made_here_in_a_xero_book_is_refused_since_xero_keeps_them_elsewhere(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.transaction() as c:
+        assert act(c, OWNER, "place_create", {"name": "Dallas"}).code == "invalid"
+        customer = _local(c, "Contact:contact-1", "fin_contacts")
+        assert act(c, OWNER, "project_create", {"name": "Deck", "customer_id": customer}).code == "invalid"

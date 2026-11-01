@@ -41,6 +41,7 @@ PENDING_MOST = 500                          # provider records the books could n
 # In the order the books take them in: documents need the parties and accounts, payments need the documents.
 ENTITIES = ("accounts", "parties", "records", "documents", "payments", "entries")   # the groups, in the order the books
 TAG_SETTING = "mirror.tags"                 # {"enabled": bool, "map": {tag kind: {tag value: provider class id}}}
+XERO_LOCATION_SETTING = "mirror.xero_location"   # the Xero tracking category whose options are places ("" for none)
 # Actions a mirrored book refuses: the provider holds these records, so Tico cannot write them here.
 REFUSED = ("bill_update", "bill_approve", "bill_schedule", "invoice_send",
            "payment_create", "payment_cancel", "recipient_add", "contact_create", "contact_update",
@@ -63,7 +64,7 @@ TABLE_OF = {"Account": "fin_accounts", "JournalEntry": "fin_entries", "CreditMem
 GROUP_OF = {"Account": "accounts", "Vendor": "parties", "Customer": "parties", "Bill": "documents",
             "Invoice": "documents", "CreditMemo": "documents", "BillPayment": "payments", "Payment": "payments",
             "JournalEntry": "entries", "Item": "records", "Department": "records", "Class": "records",
-            "Project": "records", **{kind: "entries" for kind in POSTED + JOURNAL_KINDS}}
+            "Project": "records", "TrackingOption": "records", **{kind: "entries" for kind in POSTED + JOURNAL_KINDS}}
 # A payment that only applies credit memos (no money in it) keeps its settlements as its ref's local id, comma-separated
 APPLICATION_TABLE = "fin_settlements"
 FOREIGN_CURRENCY = "a record in another currency: the books hold one currency"
@@ -2038,8 +2039,34 @@ def mirror_tags(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
                          f"Send tags as provider classes: {'on' if enabled else 'off'}", apply_tags)
 
 
+def mirror_xero_location(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
+    """Which Xero tracking category holds the locations: its options are places, and the other category's are classes."""
+    V.only(p, ("category_id",))
+    category = V.opt_text(p, "category_id", 80) or ""
+    if _provider(ctx) != "xero":
+        raise invalid("only a Xero book has a location category")
+
+    def apply_location(aid: str) -> handlers.Result:
+        SL.set_setting(ctx.c, XERO_LOCATION_SETTING, category, by=who, at=ctx.at)
+        return {"category_id": category}
+    return handlers.Plan(K.default_gate(ctx.org, who, "mirror_xero_location"), "Set the Xero location category",
+                         apply_location)
+
+
+def provider_takes_records(ctx: Ctx, what: str) -> None:
+    """QuickBooks takes locations as departments and jobs as customers with jobs; Xero keeps its locations as tracking
+    options, which Tico does not write yet, and it has no jobs."""
+    if _provider(ctx) == "xero":
+        raise invalid(f"{what} is written to QuickBooks only; add it in Xero")
+
+
+def _provider(ctx: Ctx) -> str:
+    cid = _cid(ctx)
+    return next((str(row[1]) for row in SX.books_connections(ctx.c) if row[0] == cid), "")
+
+
 PLANNERS: dict[str, handlers.Planner] = {"mirror_start": mirror_start, "mirror_stop": mirror_stop,
-                                         "mirror_tags": mirror_tags}
+                                         "mirror_tags": mirror_tags, "mirror_xero_location": mirror_xero_location}
 
 
 # ------------------------------------------------------------------------------------------------ documents out

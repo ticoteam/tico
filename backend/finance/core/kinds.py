@@ -20,7 +20,8 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        # not in §5: the Finance tab's Access and Sources pages (§12), attaching receipts and documents (§8.4), and
        # linking a bank row to payments marked paid when the automatic match cannot tell which (feed_match)
        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "attach",
-       "feed_match", "mirror_start", "mirror_stop", "mirror_tags", "tax_jurisdiction_add", "tax_remit",
+       "feed_match", "mirror_start", "mirror_stop", "mirror_tags", "mirror_xero_location", "tax_jurisdiction_add",
+       "tax_remit",
        "import_raw_totals",
        # shared records (backend/records): items, places and projects
        "item_create", "item_update", "place_create", "place_update", "project_create", "project_update",
@@ -41,7 +42,7 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         "bill_mark_paid", "bill_void", "invoice_create", "invoice_send", "invoice_record_payment",
         "invoice_write_off", "invoice_void", "attach", "feed_match",
         # mirror mode (spec §10): a provider's books are the books
-        "mirror_start", "mirror_stop", "mirror_tags",
+        "mirror_start", "mirror_stop", "mirror_tags", "mirror_xero_location",
         # phase 3: the vendor accounts a card is saved on (bot cards, §8.3)
         "card_save", "card_unsave",
         # phase 3: sales tax jurisdictions and remittances (finance/tax.py)
@@ -68,7 +69,7 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "bill_create": R.AP, "bill_update": R.AP, "bill_approve": R.AP, "bill_schedule": R.AP, "bill_mark_paid": R.AP,
          "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_record_payment": R.AR,
          "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
-         "feed_match": (R.AP, R.AR), "mirror_start": R.BOOK, "mirror_stop": R.BOOK, "mirror_tags": R.BOOK,
+         "feed_match": (R.AP, R.AR), "mirror_start": R.BOOK, "mirror_stop": R.BOOK, "mirror_tags": R.BOOK, "mirror_xero_location": R.BOOK,
          "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP, "import_raw_totals": R.BOOK,
          "item_create": R.BOOK, "item_update": R.BOOK, "place_create": R.BOOK, "place_update": R.BOOK,
          "project_create": R.BOOK, "project_update": R.BOOK,
@@ -79,7 +80,7 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
               "connection_disconnect", "connection_map")
 # Only the owner turns direct send on or off for the company (§9) and sets what each role sees by default (§7.5).
-OWNER_ONLY = ("payment_settings", "view_defaults_set", "mirror_tags")
+OWNER_ONLY = ("payment_settings", "view_defaults_set", "mirror_tags", "mirror_xero_location")
 # System work may freeze cards (a budget at cutoff, §6.4 rule 4) and nothing else card-side.
 SYSTEM_KINDS = ("card_freeze",)
 SPEND = ("payment_create",)
@@ -215,6 +216,7 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "mirror_stop": (),
     "mirror_tags": (("enabled", "bool", "send tags as provider classes"),
                     ("map?", "obj", "{tag kind: {tag value: provider class id}}")),
+    "mirror_xero_location": (("category_id", "str", "the Xero tracking category whose options are places ('' for none)"),),
     "view_defaults_set": (("manager?", "str", ""), ("member?", "str", ""), ("manager_payroll?", "totals|hidden", "")),
     "right_grant": (("teammate", "str", ""), ("right", "str", "finance.book|ap|ar|pay|cards|budgets|rules|admin"),
                     ("expires_at?", "str", "")),
@@ -370,6 +372,7 @@ WORDS: dict[str, str] = {
     "mirror_start": "Switch the books to a provider's books (preview first).",
     "mirror_stop": "Switch a mirrored book back to native.",
     "mirror_tags": "Send tags to the provider as its classes (off by default).",
+    "mirror_xero_location": "Pick the Xero tracking category that holds locations (the other is classes).",
     "right_grant": "Give a teammate a Finance right.", "right_revoke": "Take a Finance right back.",
     "reconcile": "Match a statement to the feed and lock it.", "reconcile_undo": "Unlock a reconciliation.",
     "connection_create": "Connect a bank or Stripe.", "connection_sync": "Sync a connection now.",

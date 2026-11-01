@@ -15,9 +15,12 @@ from . import ledger as L
 from . import mirror as M
 from .qbo import as_list, as_map, minor
 
-Record = M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Refused | M.Ext
+Record = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Refused | M.Ext | M.Item
+          | M.Place | M.Dimension)
 Built = list[Record]
-System = Callable[[str], str]     # a Xero system account's key by its SystemAccount name ("" when Xero holds none)
+# A Xero key by a name, "" when Xero holds none: a system account by its role ("DEBTORS"), an account by its code
+# ("code:200"), a tracking option by its names ("option:Region/East"), or the location's tracking category ("location").
+System = Callable[[str], str]
 MS_DATE = re.compile(r"/Date\((-?\d+)([+-]\d{4})?\)/")
 MARK = re.compile(r"\[tico:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]")
 ROUNDING_LIMIT = 10               # minor units: a document's rounding is at most this much either way
@@ -129,7 +132,26 @@ def _net(item: Mapping[str, Any], inclusive: bool) -> tuple[int, int]:
     return (gross - due if inclusive else gross), due
 
 
-def _lines(rows: object, inclusive: bool, sign: int = 1, party: str = "") -> tuple[list[M.EntryLine], int]:
+def _option(key: object) -> str:
+    """A tracking option's Xero pair, "category/option", from its provider key."""
+    return str(key or "").removeprefix("TrackingOption:")
+
+
+def _tags(item: Mapping[str, Any], system: System | None) -> tuple[tuple[str, str], ...]:
+    """A line's tracking options as tags: the location's option is a place, any other option is a class."""
+    if system is None:
+        return ()
+    out: list[tuple[str, str]] = []
+    for raw in as_list(item.get("Tracking")):
+        option = as_map(raw) or {}
+        key = system(f"option:{option.get('Name') or ''}/{option.get('Option') or ''}")
+        if key:
+            out.append(("place" if _option(key).partition("/")[0] == system("location") else "class", key))
+    return tuple(out)
+
+
+def _lines(rows: object, inclusive: bool, sign: int = 1, party: str = "",
+           system: System | None = None) -> tuple[list[M.EntryLine], int]:
     """A record's lines on their accounts (signed by `sign`) without their tax, and the tax they carry in all."""
     lines: list[M.EntryLine] = []
     tax = 0
@@ -137,7 +159,8 @@ def _lines(rows: object, inclusive: bool, sign: int = 1, party: str = "") -> tup
         item = as_map(raw) or {}
         net, due = _net(item, inclusive)
         tax += due
-        lines.append(M.EntryLine(_account(item), sign * net, party=party, description=str(item.get("Description") or "")))
+        lines.append(M.EntryLine(_account(item), sign * net, party=party, description=str(item.get("Description") or ""),
+                                 tags=_tags(item, system)))
     return lines, tax
 
 
@@ -211,7 +234,7 @@ def document_record(j: Mapping[str, Any], system: System, credit: bool = False) 
     if _status(j) in ("", "DRAFT", "SUBMITTED"):
         return None
     try:
-        lines, tax = _lines(j.get("LineItems"), str(j.get("LineAmountTypes") or "") == "Inclusive")
+        lines, tax = _lines(j.get("LineItems"), str(j.get("LineAmountTypes") or "") == "Inclusive", system=system)
         rounding_account = system("ROUNDING")
         lines = [replace(x, rounding=True) if rounding_account and x.account == rounding_account else x for x in lines]
         total = minor(j["Total"]) if j.get("Total") is not None else sum(x.amount for x in lines) + tax
@@ -325,7 +348,7 @@ def manual_journal_record(j: Mapping[str, Any], system: System) -> M.Journal | M
         return replace(ext, deleted=True)
     if _status(j) != "POSTED":
         return None
-    lines, tax = _lines(j.get("JournalLines"), str(j.get("LineAmountTypes") or "") == "Inclusive")
+    lines, tax = _lines(j.get("JournalLines"), str(j.get("LineAmountTypes") or "") == "Inclusive", system=system)
     if tax:
         lines.append(M.EntryLine(M.TAX_ACCOUNT, tax, description="tax"))
     basis = "accrual" if j.get("ShowOnCashBasisReports") is False else "both"
@@ -398,11 +421,50 @@ def _one(made: Record | None) -> Built:
     return [] if made is None else [made]
 
 
+def item_record(j: Mapping[str, Any], system: System) -> M.Item | M.Ext:
+    """An item, keyed by its id, with the accounts it sells and buys on (found by their codes). Xero's item has no kind but
+    its inventory flag, so an item tracked as inventory is inventory and any other is a service."""
+    sales = as_map(j.get("SalesDetails")) or {}
+    purchase = as_map(j.get("PurchaseDetails")) or {}
+    price = sales.get("UnitPrice")
+    return M.Item(_ext("Item", j, "ItemID"), str(j.get("Name") or j.get("Code") or ""), sku=str(j.get("Code") or ""),
+                  kind="inventory" if j.get("IsTrackedAsInventory") else "service",
+                  price=None if price is None else minor(price), income=_code(sales.get("AccountCode"), system),
+                  expense=_code(purchase.get("AccountCode"), system),
+                  asset=_code(j.get("InventoryAssetAccountCode"), system))
+
+
+def _code(code: object, system: System) -> str:
+    return system(f"code:{code}") if code else ""
+
+
+def tracking_records(j: Mapping[str, Any], system: System) -> list[Record]:
+    """A tracking category's active options: the location category's options are places, the other categories' are
+    classes. Each option is keyed by its category and its id, so a place and a class never share a key."""
+    category = str(j.get("TrackingCategoryID") or "")
+    if not category or _status(j) != "ACTIVE":
+        return []
+    as_place = system("location") == category
+    out: list[Record] = []
+    for raw in as_list(j.get("Options")):
+        option = as_map(raw) or {}
+        if str(option.get("Status") or "ACTIVE") != "ACTIVE" or not option.get("TrackingOptionID"):
+            continue
+        ext = M.Ext("TrackingOption", f"{category}/{option['TrackingOptionID']}", "1")
+        name = str(option.get("Name") or "")
+        out.append(M.Place(ext, name) if as_place else M.Dimension(ext, name))
+    return out
+
+
 def _build(entity: str, j: Mapping[str, Any], system: System) -> Built:
     if entity == "accounts":
         return [account_record(j)]
     if entity == "parties":
         return [contact_record(j)]
+    if entity == "items":
+        return [item_record(j, system)]
+    if entity == "tracking":
+        return tracking_records(j, system)
     if entity == "invoices":
         return _one(document_record(j, system))
     if entity == "credit_notes":
@@ -522,13 +584,18 @@ def void_body(ident: str) -> dict[str, Any]:
 
 def document_body(body: Mapping[str, Any], kind: str) -> dict[str, Any]:
     """A bill or an invoice as Xero takes it: an authorised document on its contact, each line on its account at its amount
-    (a quantity of one, so the line amount is the amount). The lines are sent without tax, as the books hold them."""
+    (a quantity of one, so the line amount is the amount), tagged with its place and class when it names them. The lines
+    are sent without tax, as the books hold them."""
     lines: list[dict[str, Any]] = []
     for raw in as_list(body.get("lines")):
         line = as_map(raw) or {}
-        lines.append({"AccountID": _ref(line.get("account"), "Account"),
-                      "Description": str(line.get("description") or "")[:4000], "Quantity": 1,
-                      "UnitAmount": amount_text(int(line["amount"]))})
+        row: dict[str, Any] = {"AccountID": _ref(line.get("account"), "Account"),
+                               "Description": str(line.get("description") or "")[:4000], "Quantity": 1,
+                               "UnitAmount": amount_text(int(line["amount"]))}
+        tracking = _tracking({"place": _option(line.get("place")), "class": _option(line.get("class"))})
+        if tracking:
+            row["Tracking"] = tracking
+        lines.append(row)
     out: dict[str, Any] = {"Type": "ACCREC" if kind == "Invoice" else "ACCPAY",
                            "Contact": {"ContactID": _ref(body.get("party"), "Contact")},
                            "Date": str(body["day"]), "DueDate": str(body.get("due") or body["day"]),
@@ -537,6 +604,28 @@ def document_body(body: Mapping[str, Any], kind: str) -> dict[str, Any]:
     if body.get("number"):
         out["InvoiceNumber"] = str(body["number"])[:255]
     return {"Invoices": [out]}
+
+
+def item_body(body: Mapping[str, Any]) -> dict[str, Any]:
+    """An item as Xero takes it, keyed by its code (the SKU, else the name). Its sale and purchase accounts are sent by
+    the codes the adapter found for them; a side with no account or price is left off."""
+    sales: dict[str, Any] = {}
+    if body.get("income_code"):
+        sales["AccountCode"] = str(body["income_code"])
+    if body.get("price") is not None:
+        sales["UnitPrice"] = amount_text(int(body["price"]))
+    purchase = {"AccountCode": str(body["expense_code"])} if body.get("expense_code") else {}
+    out: dict[str, Any] = {"Code": (str(body.get("sku") or "") or str(body["name"]))[:30],
+                           "Name": str(body["name"])[:50], "IsSold": bool(sales), "IsPurchased": bool(purchase)}
+    if sales:
+        out["SalesDetails"] = sales
+    if purchase:
+        out["PurchaseDetails"] = purchase
+    if body.get("kind") == "inventory":
+        out["IsTrackedAsInventory"] = True
+        if body.get("asset_code"):
+            out["InventoryAssetAccountCode"] = str(body["asset_code"])
+    return out
 
 
 def void_document_body(ident: str) -> dict[str, Any]:

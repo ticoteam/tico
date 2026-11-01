@@ -159,6 +159,8 @@ def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 def place_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, PLACE_FIELDS)
     f = _shape(lambda: _place_fields(ctx, p, create=True))
+    if _mirrored(ctx):
+        mirror.provider_takes_records(ctx, "a location")
     place_id = SL.new_id()
 
     def apply(aid: str) -> Result:
@@ -176,6 +178,7 @@ def place_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise invalid("a place cannot sit under itself")
     f = _shape(lambda: _place_fields(ctx, p, create=False))
     if _mirrored(ctx):
+        mirror.provider_takes_records(ctx, "a location")
         mirror.record_in_provider(ctx, "rec_places", place_id)
 
     def apply(aid: str) -> Result:
@@ -186,8 +189,10 @@ def place_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 def project_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, PROJECT_FIELDS)
     f = _shape(lambda: _project_fields(ctx, p, create=True))
-    if _mirrored(ctx) and not f.get("customer_id"):
-        raise invalid("a job in a mirrored book sits under a customer")
+    if _mirrored(ctx):
+        mirror.provider_takes_records(ctx, "a job")
+        if not f.get("customer_id"):
+            raise invalid("a job in a mirrored book sits under a customer")
     project_id = SL.new_id()
 
     def apply(aid: str) -> Result:
