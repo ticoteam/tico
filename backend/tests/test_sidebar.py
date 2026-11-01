@@ -1,6 +1,6 @@
 """The company's sidebar (backend/sidebar.py): the business type's defaults are set once, in setup, and never over a choice;
-the owner and admins change the sidebar while a member only reads it; an upgrade keeps Operations on only where records
-exist; and hiding changes no permission, no data and no API or MCP answer. Cross-company isolation needs no test here:
+the owner and admins change the sidebar while a member only reads it; an upgrade keeps the Operations tabs that records
+and connections need; and hiding changes no permission, no data and no API or MCP answer. Cross-company isolation needs no test here:
 each hosted company runs its own server and database (docs/cell.md), so no process holds two companies' choices."""
 
 import json
@@ -80,21 +80,96 @@ def test_the_owner_and_admins_change_the_sidebar_and_a_member_reads_it(api):
     assert json.loads(rows[-1][1])["after"]["hidden_sections"] == ["growth", "operations"]
 
 
-def test_an_upgrade_hides_operations_without_records_and_keeps_it_on_with_them(api):
-    """X6 and X7: an install set up before business types gets Operations hidden when it holds no records, and keeps it
-    on when it does (a QuickBooks import's locations and items). Only the Operations entry is set."""
-    store = api.app.state.store
-    with store.transaction() as c:
+LOCATION = ("INSERT INTO locations (id, name, created_at, created_by_id) "
+            "VALUES ('loc-acme', 'Acme Shop', '2026-01-01T00:00:00Z', 'human:ana')")
+ITEM = ("INSERT INTO items (id, name, kind, created_at, created_by_id) "
+        "VALUES ('item-acme', 'Acme visit', 'service', '2026-01-01T00:00:00Z', 'human:ana')")
+BOOKS = ("INSERT INTO fin_connections (id, provider, purpose, status, created_at, created_by) "
+         "VALUES ('conn-books', 'quickbooks', 'books', 'active', '2026-01-01T00:00:00Z', 'human:ana')")
+STRIPE = ("INSERT INTO fin_connections (id, provider, purpose, status, created_at, created_by) "
+          "VALUES ('conn-stripe', 'stripe', 'payments', 'active', '2026-01-01T00:00:00Z', 'human:ana')")
+
+
+def upgrade(api, *sql):
+    """A start of the server on an install set up before business types: the sidebar is unset, `sql` adds the data the
+    install holds, and `ensure` runs once, as it does at start. Returns what the clients read from /api/v2/config."""
+    with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM registry_metadata WHERE key=?", (sidebar.KEY,))
+        for statement in sql:
+            c.execute(statement)
         sidebar.ensure(c)
+    return config(api)
+
+
+def test_an_upgrade_with_no_records_or_connections_hides_operations(api):
+    """X6: an install set up before business types, holding nothing Operations is for, hides the whole section."""
+    cfg = upgrade(api)
+    assert cfg["hidden_sections"] == ["operations"]
+    assert cfg["business_type"] is None
+
+
+def test_an_upgrade_shows_the_operations_tabs_whose_tables_hold_rows(api):
+    """X7: a QuickBooks import's locations and items keep their tabs on; Projects and Equipment have no rows, so they
+    stay hidden, and Operations itself stays on."""
+    cfg = upgrade(api, LOCATION, ITEM)
+    assert cfg["hidden_sections"] == ["operations.projects", "operations.equipment"]
+    assert "operations" not in sidebar.hidden_now(cfg["hidden_sections"])
+
+
+def test_a_books_connection_shows_locations_and_products_before_its_first_sync(api):
+    """A connected book with no rows yet: the sync has not run at the upgrade, so the connection alone keeps Locations and
+    Products & services on, and the sync's records land on a visible section."""
+    cfg = upgrade(api, BOOKS)
+    assert cfg["hidden_sections"] == ["operations.projects", "operations.equipment"]
+
+
+def test_a_stripe_connection_shows_products_and_services_only(api):
+    cfg = upgrade(api, STRIPE)
+    assert cfg["hidden_sections"] == ["operations.locations", "operations.projects", "operations.equipment"]
+
+
+def test_a_disconnected_books_connection_counts_for_nothing(api):
+    cfg = upgrade(api, BOOKS.replace("'active'", "'disconnected'"))
+    assert cfg["hidden_sections"] == ["operations"]
+
+
+def test_setup_that_completes_without_an_answer_keeps_what_its_records_show(api):
+    """Plan §5 through setup: a company that completes setup with no business type is Other, and keeps the Operations
+    tabs its records need on, rather than the whole section hidden."""
+    reopen_setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (sidebar.KEY,))
+        c.execute(LOCATION)
+        c.execute(ITEM)
+        api.app.state.onboarding.complete(c, api.app.state.auth.owner_identity(c), seats=False)
+    assert config(api)["business_type"] == "other"
+    assert config(api)["hidden_sections"] == ["operations.projects", "operations.equipment"]
+
+
+def test_setup_that_completes_without_an_answer_and_no_records_hides_operations(api):
+    reopen_setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (sidebar.KEY,))
+        api.app.state.onboarding.complete(c, api.app.state.auth.owner_identity(c), seats=False)
+    assert config(api)["business_type"] == "other"
     assert config(api)["hidden_sections"] == ["operations"]
-    assert config(api)["business_type"] is None
-    with store.transaction() as c:
-        c.execute("DELETE FROM registry_metadata WHERE key=?", (sidebar.KEY,))
-        c.execute("INSERT INTO locations (id, name, created_at, created_by_id) "
-                  "VALUES ('loc-acme', 'Acme Shop', '2026-01-01T00:00:00Z', 'human:ana')")
+
+
+def test_running_the_upgrade_again_changes_nothing_after_an_admin_choice(api):
+    """Defaults apply once: after an admin has chosen, another run of `ensure` (a restart) changes nothing and writes no
+    event."""
+    upgrade(api, LOCATION)
+    put_sidebar(api, {"hidden_sections": []}, token="ben-test")
+
+    def audited():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT COUNT(*) FROM events WHERE action='settings.sidebar'").fetchone()[0]
+
+    before, count = config(api), audited()
+    with api.app.state.store.transaction() as c:
         sidebar.ensure(c)
-    assert config(api)["hidden_sections"] == []
+    assert config(api) == before and before["hidden_sections"] == []
+    assert audited() == count
 
 
 def test_the_upgrade_default_applies_once_and_a_choice_survives_a_restart(api):

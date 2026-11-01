@@ -13,7 +13,7 @@ document lives in its own database: a hosted company runs its own server, so one
   answer made. Nothing else re-derives it, so a choice someone made is never overwritten.
 - Defaults apply once. Setup derives them for a new company (`onboarding.save`, and `settle_setup` when setup completes
   without an answer). A company set up before business types existed gets the upgrade default the first time a server
-  starts after the change (`ensure`).
+  starts after the change (`ensure`): the Operations tabs its records and books or Stripe connections need stay on.
 
 Every write leaves a `settings.sidebar` event with the before and after.
 """
@@ -35,9 +35,12 @@ OPERATIONS_TABS = ("operations.locations", "operations.products", "operations.pr
 # Tabs that appear only once a connected system provides them (plan §5); they can be hidden like any other tab.
 CONNECTED_TABS = ("operations.stock", "operations.jobs", "operations.production", "operations.business_systems")
 KEYS = SECTIONS + OPERATIONS_TABS + CONNECTED_TABS
-# The records an Operations section is for (plan §5, upgrade): a company that holds any of them keeps Operations on. A
-# pending import and a connected Operations system count here too, once there is such a thing to look at.
-OPERATIONS_RECORDS = ("locations", "items", "projects", "equipment")
+# Each Operations tab and the table behind it (plan §5, upgrade): a tab whose table holds a row is shown at the upgrade
+# and at a setup with no answer. Books and Stripe connections count too (`_shown`), since their sync fills these tables
+# after the upgrade. A CSV preview is stateless, and no other connected Operations system exists until O3, so nothing
+# else counts here.
+RECORD_TABS = (("operations.locations", "locations"), ("operations.products", "items"),
+               ("operations.projects", "projects"), ("operations.equipment", "equipment"))
 
 # The Operations tabs each business type shows at setup (plan §5). None hides the whole section.
 BUSINESS_TYPES = {
@@ -135,10 +138,16 @@ def set_business_type(c, actor, value, during_setup=False):
 
 
 def settle_setup(c, actor):
-    """Setup is complete: a company that never answered is Other, which hides Operations (plan §5)."""
+    """Setup is complete without a business type: the company is Other, and its sidebar is what its records and
+    connections need (`_upgrade_hidden`), which hides Operations when nothing is there (plan §5)."""
     if stored(c)["business_type"]:
         return stored(c)
-    return _write(c, actor, lambda state: _apply_business_type(state, "other", False))
+
+    def change(state):
+        state["business_type"] = "other"
+        if state["hidden_sections"] is None:
+            state["hidden_sections"] = _upgrade_hidden(c)
+    return _write(c, actor, change)
 
 
 def set_settings(c, actor, body):
@@ -174,15 +183,47 @@ def _past_setup(c):
     return completed or c.execute("SELECT 1 FROM bots WHERE state='active' LIMIT 1").fetchone() is not None
 
 
+def _connections(c):
+    """Whether a books connection (QuickBooks or Xero) and a Stripe connection exist and are not disconnected. A table
+    this install has not created yet holds none."""
+    try:
+        rows = c.execute("SELECT provider, purpose FROM fin_connections WHERE status != 'disconnected'").fetchall()
+    except sqlite3.OperationalError:
+        return False, False
+    books = any(str(purpose) == "books" for _, purpose in rows)
+    stripe = any(str(provider) == "stripe" for provider, _ in rows)
+    return books, stripe
+
+
+def _shown(c):
+    """The Operations tabs the company's records and connections need: a tab whose table holds a row, a books
+    connection's Locations and Products & services, and a Stripe connection's Products & services."""
+    shown = {tab for tab, table in RECORD_TABS if _has_rows(c, table)}
+    books, stripe = _connections(c)
+    if books:
+        shown |= {"operations.locations", "operations.products"}
+    if stripe:
+        shown.add("operations.products")
+    return shown
+
+
+def _upgrade_hidden(c):
+    """What the upgrade and a setup with no answer hide: the Operations tabs `_shown` does not need, or the whole section
+    when it needs none of them."""
+    shown = _shown(c)
+    if not shown:
+        return [OPERATIONS]
+    return [tab for tab in OPERATIONS_TABS if tab not in shown]
+
+
 def ensure(c):
     """At every start, once per install: a company set up before this change, with nothing chosen yet, gets the upgrade
-    default. Operations stays on when the company holds records for it; otherwise it is hidden. A company still in
-    setup is left for setup to answer."""
+    default (`_upgrade_hidden`). A company still in setup is left for setup to answer."""
     current = stored(c)
     if current["business_type"] or current["hidden_sections"] is not None or not _past_setup(c):
         return
-    records = any(_has_rows(c, table) for table in OPERATIONS_RECORDS)
-    _write(c, "system", lambda state: state.update(hidden_sections=[] if records else [OPERATIONS]))
+    hidden = _upgrade_hidden(c)
+    _write(c, "system", lambda state: state.update(hidden_sections=hidden))
 
 
 class SidebarSettings(Contract):
