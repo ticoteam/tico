@@ -320,7 +320,7 @@ def candidate_details(c, slugs):
     from .usage_records import ran_on
     out = []
     for slug in dict.fromkeys(str(s) for s in slugs):
-        bot = c.execute("SELECT display_name FROM bots WHERE id=? AND coalesce(state,'')<>'archived'", (slug,)).fetchone()
+        bot = c.execute("SELECT slug,display_name FROM bots WHERE id=? AND coalesce(state,'')<>'archived'", (slug,)).fetchone()
         if not bot:
             continue
         row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()

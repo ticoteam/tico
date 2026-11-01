@@ -66,7 +66,7 @@ def test_connect_is_explicit_team_visible_and_second_human_must_join_to_chat(liv
     meeting = connect(live, client_id="recorder-session-1")
     candidates = get(live, "live-meetings/bot-candidates")
     assert set(candidates) == {"bots"}
-    assert all(set(bot) == {"slug", "name", "description", "team"} for bot in candidates["bots"])
+    assert all(set(bot) == {"id", "slug", "name", "description", "team"} for bot in candidates["bots"])
     assert any(bot["slug"] == "ops" for bot in candidates["bots"])
     same = connect(live, client_id="recorder-session-1")
     assert same["id"] == meeting["id"]
@@ -418,7 +418,7 @@ def test_joined_human_can_attach_visible_bots_but_nonmember_cannot(live):
     post(live, f"live-meetings/{private_meeting['id']}/join", {}, token="cara-test")
     candidates = get(live, "live-meetings/bot-candidates", token="cara-test")
     assert set(candidates) == {"bots"}
-    assert all(set(bot) == {"slug", "name", "description", "team"} for bot in candidates["bots"])
+    assert all(set(bot) == {"id", "slug", "name", "description", "team"} for bot in candidates["bots"])
     assert "ops" not in {bot["slug"] for bot in candidates["bots"]}
     hidden_bot = live.post("/api/v2/live-meetings/" + private_meeting["id"] + "/bots",
                            json={"bots": ["ops"]}, headers=headers("cara-test"))
