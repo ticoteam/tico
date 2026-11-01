@@ -2325,6 +2325,76 @@ def _refs(node, found):
             _refs(value, found)
 
 
+# Threads (docs/dev/threads-contract.md §10): a thread is a conversation read through threads.view, and its messages
+# carry thread_id, root_id-free fields as _message_out writes them.
+TAGS["Threads"] = ("Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages "
+                   "in a thread. A thread the viewer may not read answers 404, never 403.")
+SCHEMAS.update({
+    "ThreadView": obj({"id": "s", "title": "s", "audience": "s", "audience_group_id": "n", "owner_actor": "n",
+                       "parent_id": "n", "parent_message_id": "n", "root_id": "s", "path": "a", "kind": "n",
+                       "task_id": "n", "created_at": "s", "last_message_at": "n", "archived_at": "n",
+                       "last_seq": "i", "last_unread_seq": "i", "me": "o"},
+                      required=["id", "title", "audience", "root_id", "last_seq", "last_unread_seq"]),
+    "ThreadSidebar": obj({"attention": items({"type": "object"}), "threads": items(ref("ThreadView")),
+                          "dms": items({"type": "object"}), "next_cursor": "n"},
+                         required=["attention", "threads", "dms"]),
+    "ThreadSearch": obj({"hits": items(obj({"message_id": "s", "thread_id": "s", "title": "s", "from_actor": "s",
+                                            "created": "s", "excerpt": "s"},
+                                           required=["message_id", "thread_id", "excerpt"])),
+                         "next_cursor": "n"}, required=["hits", "next_cursor"]),
+    "ThreadMessage": obj({"id": "s", "conversation_id": "s", "thread_id": "s", "seq": "i", "from_actor": "s",
+                          "to_actor": "n", "kind": "s", "body": "n", "created": "s", "edited_at": "n",
+                          "revision": "i", "refs": "o", "deleted": "b"}, required=["id", "thread_id"]),
+    "ThreadTimeline": obj({"thread": ref("ThreadView"), "breadcrumb": items({"type": "object"}),
+                           "messages": items({"type": "object"}), "next_cursor": "n"},
+                          required=["thread", "messages"]),
+    "ThreadMembers": obj({"members": items(obj({"actor": "s", "role": "s", "added_by": "n", "created_at": "s"},
+                                               required=["actor", "role"])),
+                          "next_cursor": "n"}, required=["members"]),
+    "ThreadMemberChange": obj({"thread_id": "s", "actor": "s", "role": "s", "removed": "b"},
+                              required=["thread_id", "actor"]),
+    "ThreadRead": obj({"thread_id": "s", "last_read_seq": "i"}, required=["thread_id", "last_read_seq"]),
+    "ThreadReadAll": obj({"threads": "i"}, required=["threads"]),
+    "ThreadFollow": obj({"thread_id": "s", "following": "b", "notify": "s"}, required=["thread_id", "following"]),
+    "ThreadMessageDeleted": obj({"id": "s", "deleted": "b", "revision": "i"}, required=["id", "deleted"]),
+})
+STABLE.extend([
+    ("/api/v2/threads", "get", "Threads", "listThreads",
+     "The viewer's sidebar: needs attention, threads (recent first) and DMs they may read, one page (`cursor`)", "ThreadSidebar"),
+    ("/api/v2/threads", "post", "Threads", "createThread",
+     "Start a thread (audience members unless asked otherwise); with `parent_message_id` it is a sub-thread; with `body` "
+     "its first message is posted too", "ThreadView"),
+    ("/api/v2/threads/search", "get", "Threads", "searchThreads",
+     "Messages whose text matches every word of `q`, newest first, only in threads and messages the viewer may read", "ThreadSearch"),
+    ("/api/v2/threads/{thread_id}", "get", "Threads", "getThread",
+     "A thread as the viewer sees it: its unread count, read mark and what they may do", "ThreadView"),
+    ("/api/v2/threads/{thread_id}", "patch", "Threads", "updateThread",
+     "Rename, archive or unarchive a thread, or change who it is for; its managers only", "ThreadView"),
+    ("/api/v2/threads/{thread_id}/timeline", "get", "Threads", "getThreadTimeline",
+     "The thread's messages in tree order, a page at a time (`cursor` is the seq from next_cursor), with the breadcrumb", "ThreadTimeline"),
+    ("/api/v2/threads/{thread_id}/members", "get", "Threads", "listThreadMembers",
+     "Who a thread is for, a page at a time", "ThreadMembers"),
+    ("/api/v2/threads/{thread_id}/members", "post", "Threads", "addThreadMember",
+     "Add a member to a thread (its managers); the new member reads up to now, so the backfill is not unread", "ThreadMemberChange"),
+    ("/api/v2/threads/{thread_id}/members/{actor}", "delete", "Threads", "removeThreadMember",
+     "Remove a member from a thread (its managers)", "ThreadMemberChange"),
+    ("/api/v2/threads/{thread_id}/messages", "post", "Threads", "postThreadMessage",
+     "Post a message in a thread, or in a sub-thread with `parent_message_id`; a bot's post passes the org rules first", "ThreadMessage"),
+    ("/api/v2/threads/{thread_id}/read", "post", "Threads", "markThreadRead",
+     "Read up to `seq` in the thread; the highest mark wins, so a device that is ahead keeps its place", "ThreadRead"),
+    ("/api/v2/threads/{thread_id}/read-all", "post", "Threads", "markThreadAndSubthreadsRead",
+     "Read up to now in the thread and every sub-thread under it", "ThreadReadAll"),
+    ("/api/v2/threads/{thread_id}/follow", "put", "Threads", "followThread",
+     "Follow a thread so its messages reach the viewer (`notify`: live or digest)", "ThreadFollow"),
+    ("/api/v2/threads/{thread_id}/follow", "delete", "Threads", "unfollowThread",
+     "Stop following a thread", "ThreadFollow"),
+    ("/api/v2/messages/{message_id}", "patch", "Threads", "editMessage",
+     "Edit one's own message in a thread; the search index and the timeline follow", "ThreadMessage"),
+    ("/api/v2/messages/{message_id}", "delete", "Threads", "deleteMessage",
+     "Delete one's own message in a thread", "ThreadMessageDeleted"),
+])
+
+
 def spec(app):
     """The v2 document for this app: the stable operations of `app.openapi()`, described."""
     full = copy.deepcopy(app.openapi())
