@@ -135,3 +135,19 @@ def test_hourly_scheduler_persists_withdrawal_after_weekend(api, monkeypatch):
     with api.app.state.store.read() as c:
         row = c.execute('SELECT status,reason FROM memory_tidy_cards WHERE id=?', (card['id'],)).fetchone()
         assert row[:] == ('withdrawn', 'expired')
+
+
+def test_standalone_card_stays_out_of_batch_and_live_brief(api):
+    with api.app.state.store.transaction() as c:
+        card = offer(c)
+        task = H.task_create(c, 'bot:ops', 'Review synthetic notes', 'Ready for review.', 'human:ana', lint=False)
+        before = {t: c.execute('SELECT count(*) FROM ' + t).fetchone()[0] for t in ('jobs', 'messages')}
+    assert any(i['id'] == card['id'] for i in get(api, 'needs-you')['items'])
+    brief = get(api, 'live/brief')
+    assert sum(g['items'] for g in brief['lineup']) == 1
+    batch = post(api, 'batch', {})
+    assert batch['total'] == 1
+    assert batch['item']['key'] == 'task:' + task['id']
+    assert get(api, 'memory-tidy/cards/' + card['id'])['card']['status'] == 'open'
+    with api.app.state.store.read() as c:
+        assert {t: c.execute('SELECT count(*) FROM ' + t).fetchone()[0] for t in before} == before

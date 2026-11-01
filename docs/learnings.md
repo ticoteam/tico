@@ -258,6 +258,9 @@ rates are $2 input, $0.10 cached and $10 output per million; filing calculates c
 while cards preserve its estimate. Do not use a stand-in rate or “unmeasured”.
 Skipped/flagged/no-change results create no card and do not replace an existing one.
 Only this internal seam files a proposal; there is no client offer endpoint.
+The pilot model floor forbids Haiku-tier passes; the card rejects Haiku-labelled
+filings as defense in depth alongside filing admission. This never changes the
+bot’s everyday model.
 
 The persistent record is independent of the private parent/check tasks. File it
 before closing both tasks. The named reviewer retains access after those closures

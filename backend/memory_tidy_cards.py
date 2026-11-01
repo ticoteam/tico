@@ -69,6 +69,7 @@ def file_card(c, *, bot, reviewer, pass_id, memory_commit, model, cost_usd,
     previous = c.execute('SELECT * FROM memory_tidy_cards WHERE pass_id=?', (pass_id,)).fetchone()
     if previous:
         return view(previous)
+    # The pilot forbids Haiku-tier passes. Reject a misconfigured filing before showing Keep.
     if (not bot or not pass_id or not re.fullmatch(r'(?:human|bot):[^\s:]+', reviewer)
             or not re.fullmatch(r'[0-9a-f]{40,64}', memory_commit)
             or not model or 'haiku' in model.lower()
