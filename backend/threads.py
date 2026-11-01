@@ -44,8 +44,10 @@ Every message gets an `origin_id` ('<uuid v7>@<install id>') and a `revision`; `
 import contextvars
 import json
 import os
+import re
 import secrets
 import time
+import uuid
 
 from . import people as P
 from .store import H, Problem
@@ -63,6 +65,7 @@ REASONS = ("dm", "mention", "ask", "assign", "addressed", "home", "sub_thread", 
 STATES = ("pending", "delivered", "read", "capped", "held", "failed", "moot")
 NOTIFY = ("live", "mentions", "digest", "muted")
 OUTSIDE_PREFIXES = ("slack:", "peer:")
+REMOTE_ACTOR = re.compile(r"^(human|bot):[^@\s]+@([^@\s]+)$")   # a federation guest: <kind>:<name>@<install>
 LOOP_GUARD_PER_HOUR = int(os.environ.get("TICO_THREAD_LOOP_GUARD") or 6)
 MIGRATION_KEY = "threads-migration"
 STRATEGY_ROOM = "ceo"           # rooms.STRATEGY_ROOM, read here without importing rooms
@@ -121,8 +124,8 @@ TABLES = (
     "revision INTEGER NOT NULL DEFAULT 0, carrier_id TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT, "
     "error TEXT, delivered_at TEXT, read_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
     "UNIQUE (message_id, recipient))",
-    "CREATE INDEX IF NOT EXISTS message_deliveries_inbox ON message_deliveries(recipient, created_at) "
-    "WHERE state IN ('pending','delivered')",
+    "CREATE INDEX IF NOT EXISTS message_deliveries_waiting ON message_deliveries(recipient, created_at) "
+    "WHERE state IN ('pending','delivered','capped','held')",
     "CREATE INDEX IF NOT EXISTS message_deliveries_capped ON message_deliveries(root_id, created_at) "
     "WHERE state='capped'",
     "CREATE INDEX IF NOT EXISTS message_deliveries_loop ON message_deliveries(root_id, created_at) "
@@ -136,6 +139,9 @@ TABLES = (
     "kind TEXT NOT NULL CHECK (kind IN ('mention','ask','assign')), in_audience INTEGER NOT NULL DEFAULT 1, "
     "created_at TEXT NOT NULL, UNIQUE (message_id, actor))",
     "CREATE INDEX IF NOT EXISTS message_mentions_actor ON message_mentions(actor, created_at)",
+    "CREATE TABLE IF NOT EXISTS message_reactions (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, actor TEXT NOT NULL, "
+    "emoji TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE (message_id, actor, emoji))",
+    "CREATE INDEX IF NOT EXISTS message_reactions_actor ON message_reactions(actor, created_at)",
     "CREATE TABLE IF NOT EXISTS message_revisions (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, "
     "origin_id TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT, deleted INTEGER NOT NULL DEFAULT 0, "
     "actor TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE (origin_id, revision))",
@@ -163,6 +169,13 @@ _ROOM_BOT = "substr({r}.room_key,1,instr({r}.room_key||':',':')-1)"
 _FIRST_HUMAN = ("(SELECT value FROM json_each(CASE WHEN json_valid({r}.participants_json) THEN {r}.participants_json END) "
                 "WHERE value LIKE 'human:%' LIMIT 1)")
 _PARTICIPANTS = "json_each(CASE WHEN json_valid({r}.participants_json) THEN {r}.participants_json END)"
+
+
+# rooms.room_bot as SQL over a row named {r}: a shared room's key names its bot, any other room its first bot.
+_LEGACY_ROOM_BOT = ("(CASE WHEN {r}.scope='shared' AND COALESCE({r}.room_key,'')<>'' "
+                    "THEN substr({r}.room_key,1,instr({r}.room_key||':',':')-1) "
+                    "ELSE (SELECT substr(value,5) FROM json_each(CASE WHEN json_valid({r}.participants_json) "
+                    "THEN {r}.participants_json END) WHERE value LIKE 'bot:%' LIMIT 1) END)")
 
 
 def _derived_audience(r):
@@ -236,6 +249,11 @@ def _triggers():
             "UPDATE message_deliveries SET delivered_at=NEW.delivered_at, "
             "state=CASE WHEN state='pending' AND NEW.delivered_at IS NOT NULL THEN 'delivered' ELSE state END, "
             f"updated_at={_NOW_SQL} WHERE carrier_id=NEW.id;"),
+        # A deleted message keeps no words anywhere: every writer that deletes (a thread delete, a task comment taken
+        # back, a hidden roadmap comment) empties its revision history too.
+        "threads_revisions_deleted": (
+            "AFTER UPDATE OF deleted_at ON messages WHEN NEW.deleted_at IS NOT NULL AND OLD.deleted_at IS NULL",
+            "UPDATE message_revisions SET body='' WHERE message_id=NEW.id;"),
     }
 
 
@@ -258,6 +276,7 @@ def ensure(c):
             continue
         c.execute(f"DROP TRIGGER IF EXISTS {name}")
         c.execute(sql)
+    c.execute("DROP INDEX IF EXISTS message_deliveries_inbox")     # replaced by message_deliveries_waiting
     for name in ("messages_seq", "messages_origin"):    # unique in an early build of this branch
         found = c.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (name,)).fetchone()
         if found and "UNIQUE" in str(found[0]).upper():
@@ -267,6 +286,12 @@ def ensure(c):
 
 
 # ----------------------------------------------------------------------------- small helpers
+def _new_id():
+    """A row id for the tables threads keeps. Not hubdb.new_id: the demo seeds that one as a counter
+    (backend/demo_seed.py), and rows written beside each message must not move the ids of the demo's own rows."""
+    return str(uuid.uuid4())
+
+
 def uuid7():
     """A UUID version 7: 48 bits of milliseconds, then random bits, so ids sort by time."""
     ms = int(time.time() * 1000)
@@ -554,6 +579,8 @@ def denial(c, v, row):
     if not index.conversation_readable(principals(v.who), row["id"]):
         return _MISSING
     root = root_of(c, row)
+    if root.get("audience") not in AUDIENCES:
+        return _legacy_denial(c, v, row, root, index)
     audience = audience_of(root)
     task_id = row.get("task_id") or root.get("task_id")
     if task_id and not _task_readable(c, v, task_id):
@@ -586,6 +613,42 @@ def denial(c, v, row):
     return None if v.role == "owner" or v.actor in (root.get("participants") or []) else _MISSING
 
 
+def _legacy_denial(c, v, row, root, index):
+    """C1 for a thread whose root predates threads (or was written by a legacy writer): its audience is not stored, so
+    the rules it was read by before threads still decide, exactly (spec section 4: every existing conversation keeps
+    its reader set). Shared rooms read their members live (rooms.shared_member_ids). A sub-thread of such a root
+    reads as its root, except that a run's grant on any thread of the tree counts."""
+    from . import rooms
+    task_id = row.get("task_id") or root.get("task_id")
+    if task_id:
+        if not _task_readable(c, v, task_id):
+            return _MISSING
+        if root.get("kind") == "task":
+            return None
+    if v.is_bot:
+        from .auth import _own_ask_to_a_person
+        if v.runner_turn:
+            grant = _bot_grant(c, v, row)
+        else:
+            grant = v.actor in (root.get("participants") or []) or rooms.room_bot(root) == H.actor_id(v.actor)
+        return None if grant or _own_ask_to_a_person(v.who, row) else _MISSING
+    if not v.is_person:
+        return _MISSING
+    if index.bound_conversation(root["id"]):
+        return None
+    scope = root.get("scope") or "direct"
+    if scope == rooms.PERSONAL:
+        if v.actor != personal_owner(root):
+            return _MISSING
+        if root.get("room_key") == STRATEGY_ROOM and v.role != "owner":
+            return _MISSING
+        return None
+    if scope == rooms.SHARED:
+        bot = rooms.room_bot(root)
+        return None if bot and v.shared_slugs(c, [bot]) else _MISSING
+    return None if v.role == "owner" or v.actor in (root.get("participants") or []) else _MISSING
+
+
 def _bot_denial(c, v, row, root, audience):
     from .auth import _own_ask_to_a_person
     if v.runner_turn:
@@ -605,6 +668,8 @@ def audience_has(c, thread, actor, *, viewer_=None):
     root = root_of(c, thread)
     if root is None:
         return False
+    if remote_guest(c, actor):
+        return remote_member(c, root, actor)
     v = viewer_ or actor_viewer(c, actor)
     if v is None:
         return False
@@ -753,10 +818,17 @@ def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FR
         terms = f"({grant} OR ({x}kind='task' AND {x}task_id IS NOT NULL))"
         if not v.runner_turn:
             names = _qlist(v.member_names(c))
+            slug = _q(H.actor_id(v.actor))
+            hidden = v.hidden_read(c)
+            home_bot = (f"(r.owner_actor IS NOT NULL AND r.owner_actor NOT IN {_qlist(sorted(hidden))})"
+                        if hidden is not None else "0")
+            # A legacy root (no stored audience) reads as _legacy_denial: a participant, or the room's bot.
             terms = (f"({terms} OR COALESCE({x}root_id,{x}id) IN (SELECT r.id FROM {t('conversations')} r WHERE "
                      f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='r')} WHERE value={me}) OR "
-                     f"(COALESCE(r.audience,{_derived_audience('r')})='home' AND COALESCE(r.owner_actor,{_derived_owner('r')})={me}) "
-                     f"OR (COALESCE(r.audience,{_derived_audience('r')}) IN ('members','personal') AND EXISTS (SELECT 1 FROM {t('thread_members')} tm "
+                     f"(r.audience IS NULL AND {_LEGACY_ROOM_BOT.format(r='r')}={slug}) OR "
+                     f"(r.audience='home' AND (r.owner_actor={me} OR {home_bot})) OR r.audience='company' OR "
+                     f"(r.audience='team' AND r.audience_group_id IN {_qlist(v.chain(c))}) "
+                     f"OR (r.audience IN ('members','personal') AND EXISTS (SELECT 1 FROM {t('thread_members')} tm "
                      f"WHERE tm.thread_id=r.id AND tm.actor IN {names}))))")
         out = f"({terms}) AND {fence}"
         return f"({out}) AND {conversation(x + 'id')}" if conversation else out
@@ -771,7 +843,13 @@ def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FR
     member = f"EXISTS (SELECT 1 FROM {t('thread_members')} tm WHERE tm.thread_id=r.id AND tm.actor IN {names})"
     meeting_term = meeting("r.id") if meeting else "0"
     participant = "1" if owner else f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='r')} WHERE value={me})"
-    root = (f"CASE COALESCE(r.audience,{_derived_audience('r')}) "
+    # A legacy root (no stored audience) reads as _legacy_denial: by scope, with shared rooms' members read live.
+    shared = sorted(v.shared_slugs(c, [b["slug"] for b in H.bots(c)])) if person else []
+    legacy = (f"(CASE COALESCE(r.scope,'direct') WHEN 'personal' THEN COALESCE(r.owner_actor,{_FIRST_HUMAN.format(r='r')})={me} "
+              f"AND (COALESCE(r.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
+              f"WHEN 'shared' THEN {_LEGACY_ROOM_BOT.format(r='r')} IN {_qlist(shared)} ELSE {participant} END "
+              f"OR (r.kind='task' AND r.task_id IS NOT NULL))")
+    root = (f"CASE WHEN r.audience IS NULL THEN {legacy} ELSE CASE r.audience "
             f"WHEN 'company' THEN {1 if person else 0} "
             f"WHEN 'team' THEN {'1' if owner else ('r.audience_group_id IN ' + chain)} "
             f"WHEN 'members' THEN {member} "
@@ -780,7 +858,7 @@ def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FR
             f"WHEN 'personal' THEN (COALESCE(r.owner_actor,{_FIRST_HUMAN.format(r='r')})={me} OR {member}) "
             f"AND (COALESCE(r.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
             f"WHEN 'participants' THEN {participant} "
-            f"WHEN 'meeting' THEN {meeting_term} ELSE 0 END")
+            f"WHEN 'meeting' THEN {meeting_term} ELSE 0 END END")
     if not person or not v.in_good_standing(c):
         return "0"
     bound = f" OR {meeting(x + 'id')}" if meeting else ""
@@ -867,7 +945,7 @@ def record(c, message, conv):
         return {}
     posting = POSTING.get()
     c.execute("INSERT OR IGNORE INTO message_revisions(id,message_id,origin_id,revision,body,deleted,actor,created_at) "
-              "VALUES(?,?,?,?,?,0,?,?)", (H.new_id(), message["id"], message.get("origin_id") or message["id"],
+              "VALUES(?,?,?,?,?,0,?,?)", (_new_id(), message["id"], message.get("origin_id") or message["id"],
                                           int(message.get("revision") or 0), message.get("body") or "",
                                           message.get("from_actor") or "", message.get("created") or _now()))
     thread = thread_row(c, conv["id"]) if conv else None
@@ -880,7 +958,7 @@ def record(c, message, conv):
     for actor, kind in found:
         inside = audience_has(c, thread, actor)
         c.execute("INSERT OR IGNORE INTO message_mentions(id,message_id,actor,kind,in_audience,created_at) "
-                  "VALUES(?,?,?,?,?,?)", (H.new_id(), message["id"], actor, kind, int(inside), now))
+                  "VALUES(?,?,?,?,?,?)", (_new_id(), message["id"], actor, kind, int(inside), now))
         if inside:
             in_audience.append((actor, kind))
         else:
@@ -900,12 +978,12 @@ def record(c, message, conv):
 
 
 def _follow(c, thread_id, actor, reason, seq=None):
-    if not actor or not str(actor).startswith(("human:", "bot:")):
+    if not actor or not str(actor).startswith(("human:", "bot:")) or remote_guest(c, actor):
         return
     now = _now()
     c.execute("INSERT OR IGNORE INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,"
               "created_at,updated_at) VALUES(?,?,?,1,'live',?,?,?,?)",
-              (H.new_id(), thread_id, actor, reason, max(int(seq or 0), 0), now, now))
+              (_new_id(), thread_id, actor, reason, max(int(seq or 0), 0), now, now))
 
 
 def mentions(c, thread, body, *, author=None):
@@ -1062,7 +1140,7 @@ def _outside(c, thread_id):
 
 
 def _insert_delivery(c, message, recipient, thread, root, mode, reason, *, state="pending"):
-    did = H.new_id()
+    did = _new_id()
     now = _now()
     c.execute("INSERT OR IGNORE INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,"
               "state,revision,next_attempt_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -1105,7 +1183,7 @@ def quiet_notice(message):
 def _carrier(c, thread, message, bot, reason, rule):
     """A keeper notice to `bot` in the same thread whose job starts its run for `message`. No seq: no timeline,
     counter or SSE thread view shows it."""
-    cid = H.new_id()
+    cid = _new_id()
     refs = {"carries": message["id"], "wake": "thread", "reason": reason, "from": message.get("from_actor")}
     if rule:
         refs["rule"] = rule
@@ -1121,7 +1199,7 @@ def _defer_note(c, message, bot):
     """A deferred delivery rides to the bot's next run as a quiet note, as bot_to_bot.hold leaves one."""
     try:
         c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created,message_id) VALUES(?,?,?,?,?,?)",
-                  (H.new_id(), message.get("from_actor") or H.KEEPER, bot,
+                  (_new_id(), message.get("from_actor") or H.KEEPER, bot,
                    str(message.get("body") or "")[:2000], _now(), message["id"]))
     except Exception:  # noqa: BLE001 - a bare hub database has no notes table
         pass
@@ -1177,6 +1255,16 @@ def capped(c, v):
     return out
 
 
+def _involved(c, v, root):
+    """The viewer owns the root, is a member or participant, or follows it: whose Needs attention its holds are."""
+    if root.get("owner_actor") == v.actor or v.actor in (root.get("participants") or []):
+        return True
+    if _is_member(c, v, root["id"]):
+        return True
+    return c.execute("SELECT 1 FROM thread_followers WHERE thread_id=? AND actor=? AND following=1",
+                     (root["id"], v.actor)).fetchone() is not None
+
+
 def resume_capped(c, root_id, *, limit=None):
     """Let capped wakes in this root go, oldest first: each starts its run through a carrier. A person posting in the
     root lets them all go; the scheduler (`reopen_windows`) lets go as many as the reopened window allows."""
@@ -1216,17 +1304,115 @@ def _actor_of(principal):
     return (v.actor if v else str(principal or "")), v
 
 
-def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None, via=None,
-         origin=None, checked=None, attachments=None):
-    """Write a message (contract §3.1). Inside the caller's write transaction; `checked` is the org-rule verdict its
-    preflight returned outside it."""
+def _post_making(c, principal, thread_id, body, start, parent_message_id, checked, args):
+    """The part of a post that makes its thread: everything is checked, then the org-rule verdict is applied, and only
+    a message that goes makes the thread (or the sub-thread). Returns {"held": answer} or the thread to post in."""
     actor, v = _actor_of(principal)
+    if not str(body or "").strip() and not args.get("attachments"):
+        raise Problem("empty", "Write the message", 422)
+    plan = None
+    if start is not None:
+        if thread_id:
+            raise Problem("start", "A post that starts a thread names no thread", 422)
+        if args.get("as_actor") is not None:
+            raise Problem("start", "A remote author posts into a linked thread", 422)
+        start = dict(start)
+        if "dm" in start:
+            members = _dm_members_for(c, actor, start.get("dm"))
+            existing = _open_dm(c, actor, members)
+            plan = None if existing else _create_plan(c, principal, audience="personal", members=members,
+                                                      title=start.get("title") or "")
+            if existing:
+                thread_id = existing
+        else:
+            allowed = ("title", "audience", "audience_group_id", "members", "task_id", "kind")
+            plan = _create_plan(c, principal, **{k: start[k] for k in allowed if k in start})
+    else:
+        parent = H.message(c, parent_message_id)
+        thread = thread_row(c, thread_id)
+        if not parent or thread is None or parent["conversation_id"] != thread["id"]:
+            raise Problem("not_found", "Message not found", 404)
+        if v is not None and (not message_readable(c, v, parent) or not can_post(c, v, thread)):
+            raise Problem("not_found", "Message not found", 404)
+        if args.get("as_actor") is not None and not remote_member(c, root_of(c, thread), args["as_actor"]):
+            raise Problem("not_found", "Thread not found", 404)
+    text = str(body or "")
+    if checked is not None:
+        from . import org_rule_check
+        replay = {"thread_id": thread_id if start is None else None, "body": text, "kind": args.get("kind"),
+                  "refs": args.get("refs") or None, "parent_message_id": parent_message_id,
+                  "to_actor": args.get("to_actor"), "via": args.get("via"), "origin": args.get("origin"),
+                  "attachments": args.get("attachments"), "start": start}
+        gate = org_rule_check.apply(c, checked, text, replay)
+        if gate and gate.get("moved"):
+            raise Problem("moved", "The thread changed while the message was checked; send it again", 409,
+                          retryable=True)
+        if gate and gate.get("held"):
+            _emit_message_held(c, thread_row(c, thread_id) if thread_id else None, actor, gate)
+            return {"held": org_rule_check.answer(gate)}
+        if gate and gate.get("warn"):
+            text = org_rule_check.warned_text(gate, text)
+    if plan is not None:
+        thread_id = _create_from(c, principal, plan)["id"]
+    elif start is None:
+        thread_id = sub_thread(c, principal, parent_message_id)["id"]
+    return {"thread_id": thread_id, "body": text}
+
+
+def remote_install(actor):
+    """The install a remote author belongs to (`human:ana@<install>`, `bot:legal@<install>`), else None."""
+    match = REMOTE_ACTOR.match(str(actor or ""))
+    return match.group(2) if match else None
+
+
+def remote_guest(c, actor):
+    """`remote_install` for an actor not on this roster: a federation guest (a local id with an @ is a teammate)."""
+    install = remote_install(actor)
+    return install if install and H.resolve_actor(c, actor) is None else None
+
+
+def remote_member(c, root, actor):
+    """C1 for a remote author (a guest): a member row for it, or for its install's link (`peer:<install>`), on the
+    root. Never an owner, never Manage, no in-turn grant."""
+    install = remote_guest(c, actor)
+    if not install or root is None:
+        return False
+    return c.execute("SELECT 1 FROM thread_members WHERE thread_id=? AND actor IN (?,?) LIMIT 1",
+                     (root["id"], actor, "peer:" + install)).fetchone() is not None
+
+
+def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None, via=None,
+         origin=None, checked=None, attachments=None, as_actor=None, start=None):
+    """Write a message (contract §3.1). Inside the caller's write transaction; `checked` is the org-rule verdict its
+    preflight returned outside it. `as_actor`: a remote author (federation, spec §7.2), only for the keeper writing
+    `via="peer"`, and only in the signing install's namespace (`<kind>:<name>@<origin install>`).
+
+    A post that would make a thread (`start`: a new thread's `create` arguments, or `{"dm": [...], "title"}`, with
+    `thread_id` None; or a `parent_message_id` with no sub-thread yet) is checked first: a held message makes
+    nothing, and its Send anyway replays this same post."""
+    actor, v = _actor_of(principal)
+    if as_actor is not None:
+        install = str((origin or {}).get("install") or "")
+        if actor != H.KEEPER or v is not None or via != "peer" or not install:
+            raise Problem("forbidden", "Only the keeper writes as a remote author, for a peer", 403)
+        namespaced = re.fullmatch(r"(human|bot):[^@\s]+@" + re.escape(install), str(as_actor))
+        if not namespaced or not remote_guest(c, as_actor):
+            raise Problem("actor", "A remote author is in its signer's namespace: <kind>:<name>@" + install, 422)
+        actor = as_actor                 # the author from here on; the keeper only carried it in
     if origin and origin.get("origin_id"):
         found = c.execute("SELECT message_id FROM message_revisions WHERE origin_id=? AND revision=?",
                           (origin["origin_id"], int(origin.get("revision") or 0))).fetchone()
         if found:
             existing = H.message(c, found[0], include_deleted=True)
             return {**(existing or {"id": found[0]}), "duplicate": True}
+    if start is not None or (parent_message_id and not c.execute(
+            "SELECT 1 FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()):
+        made = _post_making(c, principal, thread_id, body, start, parent_message_id, checked,
+                            dict(kind=kind, refs=refs, to_actor=to_actor, via=via, origin=origin,
+                                 attachments=attachments, as_actor=as_actor))
+        if made.get("held") is not None:
+            return made["held"]
+        thread_id, body, parent_message_id, checked = made["thread_id"], made["body"], None, None
     thread = thread_row(c, thread_id)
     if thread is None:
         raise Problem("not_found", "Thread not found", 404)
@@ -1242,12 +1428,17 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
             raise Problem("not_found", "Thread not found", 404)
         if not can_post(c, v, thread):
             raise Problem("forbidden", "You can read this thread but not post in it", 403)
+    if as_actor is not None:
+        if not remote_member(c, root_of(c, thread), as_actor):
+            raise Problem("not_found", "Thread not found", 404)
+        if kind not in ("say", "ask", "answer"):
+            raise Problem("kind", "A remote author says, asks or answers", 422)
     if kind not in ("say", "ask", "answer", "notice", "steer"):
         raise Problem("kind", "A message is say, ask, answer, notice or steer", 422)
     text = str(body or "")
     if not text.strip() and not attachments:
         raise Problem("empty", "Write the message", 422)
-    refs = dict(refs or {})
+    given_refs, refs = refs, dict(refs or {})
     if via:
         refs["via"] = via
     if quiet_notice({"refs": refs}):
@@ -1270,24 +1461,50 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
         others = [a for a in _dm_members(c, root_of(c, thread)) if a != actor]
         target = others[0] if len(others) == 1 else None
     if checked is not None:
+        # The org-rule verdict its preflight returned, applied inside the write: a hold writes nothing (no message, no
+        # delivery) and answers with the hold; a warning goes on the recipients' copy. The payload is the body the
+        # reviewer reads; `replay` is what Send anyway runs (org_rule_check's `threads` replayer: this post again as
+        # the person it was held for, the check skipped). Callers preflight with operation `threads`.
         from . import org_rule_check
-        verdict = checked
-        if getattr(verdict, "held", False) or (isinstance(verdict, dict) and verdict.get("held")):
-            return org_rule_check.answer(verdict)
-        try:
-            org_rule_check.apply(c, verdict, {"thread_id": thread["id"], "body": text}, None)
-        except TypeError:
-            pass
+        replay = {"thread_id": thread_id, "body": text, "kind": kind, "refs": given_refs or None,
+                  "parent_message_id": parent_message_id, "to_actor": to_actor, "via": via, "origin": origin,
+                  "attachments": attachments}
+        gate = org_rule_check.apply(c, checked, text, replay)
+        if gate and gate.get("moved"):
+            raise Problem("moved", "The thread changed while the message was checked; send it again", 409,
+                          retryable=True)
+        if gate and gate.get("held"):
+            _emit_message_held(c, thread, actor, gate)
+            return org_rule_check.answer(gate)
+        if gate and gate.get("warn"):
+            text = org_rule_check.warned_text(gate, text)
     token = POSTING.set({"origin": origin or {}, "attachments": bool(attachments), "via": via})
     try:
-        if target and not str(target).startswith(OUTSIDE_PREFIXES):
+        if as_actor is not None:
+            message = H._write_message(c, as_actor, target, text, thread, kind, refs, None, None)
+        elif target and not str(target).startswith(OUTSIDE_PREFIXES):
             message = H.say(c, actor, target, text, thread["id"], kind, refs)
         else:
             message = _write_open(c, actor, text, thread, kind, refs, target)
     finally:
         POSTING.reset(token)
     _audit(c, actor, "message:" + message["id"], None, {"thread_id": thread["id"], "kind": kind}, via)
+    _emit_message_created(c, thread, message)
     return message
+
+
+# Outgoing thread webhooks (backend/thread_webhooks.py, threads/surfaces) hook in here at integration: create, post
+# and a held post each call one. Inside the write transaction; they must only enqueue.
+def _emit_thread_created(c, thread):
+    return None
+
+
+def _emit_message_created(c, thread, message):
+    return None
+
+
+def _emit_message_held(c, thread, actor, verdict):
+    return None
 
 
 def _write_open(c, actor, text, thread, kind, refs, target):
@@ -1309,7 +1526,7 @@ def _message_view(c, message, warnings=None):
 # ----------------------------------------------------------------------------- creating threads
 def _insert_thread(c, actor, *, title, audience, audience_group_id=None, owner_actor=None, parent=None,
                    parent_message_id=None, task_id=None, kind="chat", participants=()):
-    tid = H.new_id()
+    tid = _new_id()
     now = _now()
     if parent is not None:
         root = root_of(c, parent)
@@ -1321,18 +1538,30 @@ def _insert_thread(c, actor, *, title, audience, audience_group_id=None, owner_a
     people = list(dict.fromkeys([actor] + [p for p in participants if p != actor])) if participants else [actor]
     c.execute("INSERT INTO conversations(id,kind,subject,task_id,participants_json,created,last_message_at,closed_at,"
               "scope,owner_actor,room_key,audience,audience_group_id,parent_id,parent_message_id,root_id,path,"
-              "last_seq,last_unread_seq,archived_at,updated_at) VALUES(?,?,?,?,?,?,NULL,NULL,'direct',?,NULL,?,?,?,?,?,?,"
+              "last_seq,last_unread_seq,archived_at,updated_at) VALUES(?,?,?,?,?,?,NULL,NULL,?,?,NULL,?,?,?,?,?,?,"
               "0,0,NULL,?)",
-              (tid, kind, str(title or "")[:MAX_TITLE], task_id, H._dump(people), now, owner_actor, audience,
+              # The legacy scope as hubdb writes it (scope is NOT NULL). Who reads a thread is its root's audience.
+              (tid, kind, str(title or "")[:MAX_TITLE], task_id, H._dump(people), now,
+               "task" if task_id else "direct", owner_actor, audience,
                audience_group_id, parent["id"] if parent is not None else None, parent_message_id, root_id, path, now))
     return thread_row(c, tid)
 
 
 def create(c, principal, *, title="", audience="members", audience_group_id=None, members=(), parent_message_id=None,
            task_id=None, kind="chat"):
-    """A new root thread (or, with `parent_message_id`, that message's sub-thread). The starter is its owner member."""
+    """A new root thread (or, with `parent_message_id`, that message's sub-thread). The starter is its owner member.
+    A thread made with its first message is `post(..., start={...})`: a held first message makes no thread."""
     if parent_message_id:
         return view(c, principal, sub_thread(c, principal, parent_message_id))
+    row = _create_from(c, principal, _create_plan(c, principal, title=title, audience=audience,
+                                                  audience_group_id=audience_group_id, members=members,
+                                                  task_id=task_id, kind=kind))
+    return view(c, principal, thread_row(c, row["id"]))
+
+
+def _create_plan(c, principal, *, title="", audience="members", audience_group_id=None, members=(), task_id=None,
+                 kind="chat"):
+    """Every check a new root thread needs, writing nothing: what `_create_from` then makes."""
     actor, v = _actor_of(principal)
     if audience not in ("company", "team", "members", "task", "personal"):
         raise Problem("audience", "A new thread is company, team, members, task or personal", 422)
@@ -1352,20 +1581,28 @@ def create(c, principal, *, title="", audience="members", audience_group_id=None
         if target != actor:
             _require_write(c, v, target)
             resolved.append(target)
+    return {"title": title, "audience": audience, "audience_group_id": audience_group_id, "members": resolved,
+            "task_id": task_id, "kind": kind}
+
+
+def _create_from(c, principal, plan):
+    actor, _v = _actor_of(principal)
+    audience, resolved = plan["audience"], plan["members"]
     owner = actor if audience != "task" else None
-    row = _insert_thread(c, actor, title=title, audience=audience, audience_group_id=audience_group_id,
-                         owner_actor=owner, task_id=task_id, kind=kind)
+    row = _insert_thread(c, actor, title=plan["title"], audience=audience, audience_group_id=plan["audience_group_id"],
+                         owner_actor=owner, task_id=plan["task_id"], kind=plan["kind"])
     now = _now()
     if audience in ("members", "personal"):
         for who, role in [(actor, "owner")] + [(m, "member") for m in resolved]:
             c.execute("INSERT OR IGNORE INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) "
-                      "VALUES(?,?,?,?,?,?,?)", (H.new_id(), row["id"], who, role, actor, now, now))
+                      "VALUES(?,?,?,?,?,?,?)", (_new_id(), row["id"], who, role, actor, now, now))
     for who in [actor] + resolved:
         _follow(c, row["id"], who, "starter" if who == actor else "joined", 0)
     _event(c, actor, "thread.created", row["id"], {"audience": audience, "members": resolved})
+    _emit_thread_created(c, row)
     _audit(c, actor, "thread:" + row["id"], None, {"audience": audience, "title": row["subject"],
                                                     "members": resolved})
-    return view(c, principal, thread_row(c, row["id"]))
+    return row
 
 
 def _require_write(c, v, target):
@@ -1373,8 +1610,8 @@ def _require_write(c, v, target):
     if v is None:
         return
     from . import teammate_access
-    if str(target).startswith(OUTSIDE_PREFIXES):
-        return
+    if str(target).startswith(OUTSIDE_PREFIXES) or remote_guest(c, target):
+        return                           # an outside destination or a remote guest: not a teammate here
     try:
         levels = teammate_access.levels_for(c, v.who, target, auth=v.auth)
     except (ValueError, KeyError):
@@ -1387,25 +1624,39 @@ def _require_write(c, v, target):
 
 
 def dm(c, principal, members, *, title=""):
-    """A personal thread with exactly these teammates: the open one, or a new one."""
+    """A personal thread with exactly these teammates: the open one, or a new one. With a first message it is
+    `post(..., start={"dm": members})`: a held first message makes no DM."""
     actor, v = _actor_of(principal)
+    resolved = _dm_members_for(c, actor, members)
+    existing = _open_dm(c, actor, resolved)
+    if existing:
+        return view(c, principal, thread_row(c, existing))
+    return create(c, principal, title=title, audience="personal", members=resolved)
+
+
+def _dm_members_for(c, actor, members):
     resolved = []
     for m in members or ():
         target = H.resolve_actor(c, m)
         if not target:
             raise Problem("not_found", f"Unknown teammate {m}", 404)
-        if target != actor:
+        if target != actor and target not in resolved:
             resolved.append(target)
     if not resolved:
         raise Problem("members", "Name who the DM is with", 422)
+    return resolved
+
+
+def _open_dm(c, actor, resolved):
+    """The open personal thread with exactly `resolved` and the actor, or None."""
     want = set(resolved) | {actor}
     for r in c.execute("SELECT c.id FROM conversations c JOIN thread_members m ON m.thread_id=c.id "
                        "WHERE c.audience='personal' AND c.parent_id IS NULL AND c.closed_at IS NULL "
                        "AND c.archived_at IS NULL AND m.actor=? ORDER BY c.last_seq DESC LIMIT 500", (actor,)):
         have = {x[0] for x in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (r[0],))}
         if have == want:
-            return view(c, principal, thread_row(c, r[0]))
-    return create(c, principal, title=title, audience="personal", members=resolved)
+            return r[0]
+    return None
 
 
 def home(c, owner_actor, *, create=True):
@@ -1443,6 +1694,24 @@ def home(c, owner_actor, *, create=True):
     return row
 
 
+SUB_THREAD_TITLE = 60
+_MARKDOWN = re.compile(r"(!?\[([^\]]*)\]\([^)]*\))|[*_`~>#]+")
+_MENTION = re.compile(r"(?<![\w@])@[\w.\-]+")
+
+
+def sub_thread_title(body):
+    """A sub-thread's stored title: its parent message's first line, without markdown or @mentions, clipped to about
+    60 characters at a word, with "…" when clipped. Stored, so a later edit of the parent leaves it."""
+    line = next((part for part in str(body or "").splitlines() if part.strip()), "")
+    line = _MARKDOWN.sub(lambda m: m.group(2) if m.group(1) else "", line)
+    line = " ".join(_MENTION.sub("", line).split())
+    if len(line) <= SUB_THREAD_TITLE:
+        return line
+    head = line[:SUB_THREAD_TITLE + 1]
+    cut = head.rsplit(" ", 1)[0] if " " in head else line[:SUB_THREAD_TITLE]
+    return cut.rstrip(" ,.;:-") + "…"
+
+
 def sub_thread(c, principal, parent_message_id):
     """The message's sub-thread, made if it has none. Two starts at once make one: the loser reads the winner's row
     (the parent_message_id index is unique)."""
@@ -1459,7 +1728,8 @@ def sub_thread(c, principal, parent_message_id):
     import sqlite3
     try:
         c.execute("SAVEPOINT threads_sub_thread")
-        row = _insert_thread(c, actor, title="", audience=None, parent=parent, parent_message_id=parent_message_id,
+        row = _insert_thread(c, actor, title=sub_thread_title(parent_message.get("body")), audience=None,
+                             parent=parent, parent_message_id=parent_message_id,
                              kind=parent.get("kind") or "chat", owner_actor=None)
         c.execute("RELEASE threads_sub_thread")
     except sqlite3.IntegrityError:
@@ -1468,7 +1738,91 @@ def sub_thread(c, principal, parent_message_id):
         found = c.execute("SELECT id FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()
         return thread_row(c, found[0])
     _event(c, actor, "thread.sub_thread", row["id"], {"parent": parent["id"], "message": parent_message_id})
+    _emit_thread_created(c, row)
     return row
+
+
+def reply_destination(c, principal, thread, parent_message_id):
+    """Where a run's reply goes: the sub-thread of `parent_message_id` when that message is in the same thread tree
+    as the run's thread (made if it has none), else the run's thread. A parent from another tree never moves a reply
+    there: a run answers only inside the tree its attempt was granted."""
+    thread = thread_row(c, thread)
+    if not parent_message_id or thread is None:
+        return thread["id"] if thread else None
+    if thread.get("parent_message_id") == parent_message_id:
+        return thread["id"]
+    parent = H.message(c, parent_message_id)
+    home = thread_row(c, parent["conversation_id"]) if parent else None
+    if home is None or (home.get("root_id") or home["id"]) != (thread.get("root_id") or thread["id"]):
+        return thread["id"]
+    return sub_thread(c, principal if isinstance(principal, str) else _actor_of(principal)[0], parent_message_id)["id"]
+
+
+# ----------------------------------------------------------------------------- reactions (spec section 3.4)
+MAX_EMOJI = 32
+MAX_REACTIONS_PER_MESSAGE = 50     # distinct emoji a message carries; the rest are refused
+
+
+def _reactable(c, principal, message_id):
+    """The message, when the principal reads it (C1 plus the per-message check); else 404."""
+    actor, v = _actor_of(principal)
+    message = H.message(c, message_id)
+    if not message or _carrier_message(message) or (v is not None and not message_readable(c, v, message)):
+        raise Problem("not_found", "Message not found", 404)
+    return actor, message
+
+
+def _carrier_message(message):
+    refs = message.get("refs") if isinstance(message.get("refs"), dict) else H._json(message.get("refs_json"), {})
+    return bool((refs or {}).get("carries"))
+
+
+def react(c, principal, message_id, emoji):
+    """Add the principal's reaction. Idempotent: the same emoji twice is one reaction. Returns the message's
+    reactions."""
+    actor, message = _reactable(c, principal, message_id)
+    emoji = str(emoji or "").strip()
+    if not emoji or len(emoji) > MAX_EMOJI or any(ch.isspace() for ch in emoji):
+        raise Problem("emoji", "A reaction is one emoji or a short :name:", 422)
+    distinct = c.execute("SELECT COUNT(DISTINCT emoji) FROM message_reactions WHERE message_id=? AND emoji<>?",
+                         (message["id"], emoji)).fetchone()[0]
+    if distinct >= MAX_REACTIONS_PER_MESSAGE:
+        raise Problem("too_many", "This message has as many different reactions as it can hold", 422)
+    added = c.execute("INSERT OR IGNORE INTO message_reactions(id,message_id,actor,emoji,created_at) VALUES(?,?,?,?,?)",
+                      (_new_id(), message["id"], actor, emoji, _now())).rowcount
+    if added:
+        _event(c, actor, "message.reacted", message["id"], {"emoji": emoji, "thread": message["conversation_id"]})
+        _audit(c, actor, "message:" + message["id"], None, {"reaction": emoji})
+    return reactions(c, [message["id"]]).get(message["id"], [])
+
+
+def unreact(c, principal, message_id, emoji):
+    """Remove the principal's own reaction (a no-op when there is none). Returns the message's reactions."""
+    actor, message = _reactable(c, principal, message_id)
+    emoji = str(emoji or "").strip()
+    gone = c.execute("DELETE FROM message_reactions WHERE message_id=? AND actor=? AND emoji=?",
+                     (message["id"], actor, emoji)).rowcount
+    if gone:
+        _event(c, actor, "message.unreacted", message["id"], {"emoji": emoji, "thread": message["conversation_id"]})
+        _audit(c, actor, "message:" + message["id"], {"reaction": emoji}, None)
+    return reactions(c, [message["id"]]).get(message["id"], [])
+
+
+def reactions(c, message_ids):
+    """{message id: [{emoji, count, actors}]} for messages the caller already checked, oldest emoji first. `actors`
+    keeps the first 20 per emoji."""
+    ids = [i for i in dict.fromkeys(message_ids) if i]
+    out = {}
+    for start in range(0, len(ids), 500):
+        part = ids[start:start + 500]
+        for row in c.execute("SELECT message_id,emoji,actor FROM message_reactions WHERE message_id IN (%s) "
+                             "ORDER BY created_at, rowid" % ",".join("?" * len(part)), part):
+            bucket = out.setdefault(row[0], {})
+            entry = bucket.setdefault(row[1], {"emoji": row[1], "count": 0, "actors": []})
+            entry["count"] += 1
+            if len(entry["actors"]) < 20:
+                entry["actors"].append(row[2])
+    return {mid: list(found.values()) for mid, found in out.items()}
 
 
 # ----------------------------------------------------------------------------- membership and attention
@@ -1490,11 +1844,13 @@ def _root_for_membership(c, principal, thread_id):
 
 def add_member(c, principal, thread_id, actor, *, role="member"):
     me, v, root = _root_for_membership(c, principal, thread_id)
-    target = actor if str(actor).startswith(("group:",) + OUTSIDE_PREFIXES) else H.resolve_actor(c, actor)
+    target = actor if remote_guest(c, actor) or str(actor).startswith(("group:",) + OUTSIDE_PREFIXES) else H.resolve_actor(c, actor)
     if not target:
         raise Problem("not_found", "Unknown teammate", 404)
     if role not in ("owner", "member"):
         raise Problem("role", "A member is owner or member", 422)
+    if role == "owner" and (remote_guest(c, target) or str(target).startswith(OUTSIDE_PREFIXES)):
+        raise Problem("role", "A remote member is a guest, never an owner", 422)
     if role == "owner" and v is not None and not can_manage(c, v, root):
         raise Problem("forbidden", "Only the thread's owner adds an owner", 403)
     if v is not None and not can_post(c, v, root):
@@ -1503,7 +1859,7 @@ def add_member(c, principal, thread_id, actor, *, role="member"):
     now = _now()
     c.execute("INSERT INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?) "
               "ON CONFLICT(thread_id,actor) DO UPDATE SET role=excluded.role, updated_at=excluded.updated_at",
-              (H.new_id(), root["id"], target, role, me, now, now))
+              (_new_id(), root["id"], target, role, me, now, now))
     if audience_of(root) == "participants":
         people = list(root.get("participants") or [])
         if target not in people:
@@ -1557,7 +1913,7 @@ def follow(c, v, thread_id, *, notify="live"):
     c.execute("INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,created_at,"
               "updated_at) VALUES(?,?,?,1,?,'manual',?,?,?) ON CONFLICT(thread_id,actor) DO UPDATE SET following=1, "
               "notify=excluded.notify, updated_at=excluded.updated_at",
-              (H.new_id(), row["id"], v.actor, notify, row.get("last_seq") or 0, now, now))
+              (_new_id(), row["id"], v.actor, notify, row.get("last_seq") or 0, now, now))
     _event(c, v.actor, "thread.followed", row["id"], {"notify": notify})
     _audit(c, v.actor, "thread:" + row["id"], None, {"following": True, "notify": notify})
     return {"thread_id": row["id"], "following": True, "notify": notify}
@@ -1593,7 +1949,7 @@ def set_audience(c, principal, thread_id, audience, *, audience_group_id=None):
         now = _now()
         owner = root.get("owner_actor") or actor
         c.execute("INSERT OR IGNORE INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) "
-                  "VALUES(?,?,?,'owner',?,?,?)", (H.new_id(), root["id"], owner, actor, now, now))
+                  "VALUES(?,?,?,'owner',?,?,?)", (_new_id(), root["id"], owner, actor, now, now))
     _event(c, actor, "thread.audience", root["id"], {"from": current, "to": audience, "group": group})
     _audit(c, actor, "thread:" + root["id"], {"audience": current, "audience_group_id": root.get("audience_group_id")},
            {"audience": audience, "audience_group_id": group})
@@ -1627,7 +1983,7 @@ def mark_read(c, v, thread_id, seq):
     c.execute("INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,created_at,"
               "updated_at) VALUES(?,?,?,0,'live','read',?,?,?) ON CONFLICT(thread_id,actor) DO UPDATE SET "
               "last_read_seq=MAX(last_read_seq,excluded.last_read_seq), updated_at=excluded.updated_at "
-              "WHERE excluded.last_read_seq>last_read_seq", (H.new_id(), row["id"], v.actor, seq, now, now))
+              "WHERE excluded.last_read_seq>last_read_seq", (_new_id(), row["id"], v.actor, seq, now, now))
     c.execute("UPDATE message_deliveries SET state='read', read_at=?, updated_at=? WHERE recipient=? AND thread_id=? "
               "AND state IN ('pending','delivered') AND message_id IN (SELECT id FROM messages WHERE conversation_id=? "
               "AND seq<=?) AND recipient NOT LIKE 'bot:%'", (now, now, v.actor, row["id"], row["id"], seq))
@@ -1658,9 +2014,12 @@ def unread(c, v, thread_id, *, follower=None):
         return {"unread": 0, "activity": False}
     f = follower if follower is not None else c.execute(
         "SELECT last_read_seq FROM thread_followers WHERE thread_id=? AND actor=?", (row["id"], v.actor)).fetchone()
-    # No follower row: the viewer has read nothing here, so the mark is 0 and the contract's rule counts every human or
-    # addressed message (a deliveries-only count missed the humans in a sub-thread the viewer never followed).
-    mark = 0 if f is None else (f[0] if not isinstance(f, int) else f)
+    if f is None:
+        n = c.execute("SELECT COUNT(*) FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
+                      "WHERE d.recipient=? AND d.thread_id=? AND d.state IN ('pending','delivered') "
+                      "AND m.deleted_at IS NULL", (v.actor, row["id"])).fetchone()[0]
+        return {"unread": n, "activity": False}
+    mark = f[0] if not isinstance(f, int) else f
     if int(row.get("last_seq") or 0) <= mark:
         return {"unread": 0, "activity": False}
     n = c.execute("SELECT COUNT(*) FROM messages m WHERE m.conversation_id=? AND m.seq>? AND m.deleted_at IS NULL "
@@ -1725,7 +2084,7 @@ def _revise(c, message, actor, *, body=None, deleted=False, revision=None):
             inside = audience_has(c, thread, actor_)
             named.add(actor_)
             c.execute("INSERT OR IGNORE INTO message_mentions(id,message_id,actor,kind,in_audience,created_at) "
-                      "VALUES(?,?,?,?,?,?)", (H.new_id(), message["id"], actor_, kind, int(inside), now))
+                      "VALUES(?,?,?,?,?,?)", (_new_id(), message["id"], actor_, kind, int(inside), now))
         # A mention taken out of the text no longer reaches anyone who has not had it yet.
         for d in c.execute("SELECT id, recipient FROM message_deliveries WHERE message_id=? AND reason='mention' "
                            "AND state='pending'", (message["id"],)).fetchall():
@@ -1737,7 +2096,7 @@ def _revise(c, message, actor, *, body=None, deleted=False, revision=None):
               "updated_at=? WHERE message_id=? AND (recipient LIKE 'slack:%' OR recipient LIKE 'peer:%') "
               "AND state IN ('delivered','failed','pending')", (new, now, now, message["id"]))
     c.execute("INSERT OR IGNORE INTO message_revisions(id,message_id,origin_id,revision,body,deleted,actor,created_at) "
-              "VALUES(?,?,?,?,?,?,?,?)", (H.new_id(), message["id"], origin, new, None if deleted else body,
+              "VALUES(?,?,?,?,?,?,?,?)", (_new_id(), message["id"], origin, new, None if deleted else body,
                                           int(bool(deleted)), actor, now))
     return new, reopened
 
@@ -1786,8 +2145,9 @@ def apply_revision(c, origin, *, body=None, deleted=False):
         return None
     if row.get("deleted_at") or revision <= int(row.get("revision") or 0):
         c.execute("INSERT OR IGNORE INTO message_revisions(id,message_id,origin_id,revision,body,deleted,actor,"
-                  "created_at) VALUES(?,?,?,?,?,?,?,?)", (H.new_id(), row["id"], oid, revision,
-                                                          None if deleted else body, int(bool(deleted)),
+                  "created_at) VALUES(?,?,?,?,?,?,?,?)", (_new_id(), row["id"], oid, revision,
+                                                          None if deleted or row.get("deleted_at") else body,
+                                                          int(bool(deleted)),
                                                           str(origin.get("actor") or row["from_actor"]), _now()))
         return None
     actor = str(origin.get("actor") or row["from_actor"])
@@ -1869,10 +2229,13 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
             u = unread(c, v, s["id"])
             subs[s["parent_message_id"]] = {"id": s["id"], "count": n, "last_seq": s["last_seq"],
                                             "unread": u["unread"], "more": n > 0}
+    marks = reactions(c, ids)
+    # Every message sits at its thread's depth in the tree: 0 in a root, 1 in a sub-thread, and so on (`path`).
+    depth = max(0, len([p for p in str(row.get("path") or f"/{row['id']}/").split("/") if p]) - 1)
     out, size, hidden_open = [], 0, False
     for m in rows:
         if m.get("deleted_at"):
-            item = {**_message_out(m), "depth": 0}
+            item = {**_message_out(m), "depth": depth}
             hidden_open = False
         elif not message_readable(c, v, m, thread_checked=True):
             if hidden_open:
@@ -1880,10 +2243,12 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
             item = {"id": m["id"], "seq": m["seq"], "thread_id": row["id"], "hidden": True}
             hidden_open = True
         else:
-            item = {**_message_out(m), "depth": 0}
+            item = {**_message_out(m), "depth": depth}
             hidden_open = False
         if m["id"] in subs and not item.get("hidden"):
             item["sub_thread"] = subs[m["id"]]
+        if m["id"] in marks and not item.get("hidden") and not item.get("deleted"):
+            item["reactions"] = marks[m["id"]]
         size += len(json.dumps(item, default=str))
         if out and size > max_bytes:
             more = True
@@ -1930,7 +2295,17 @@ def sidebar(c, v, *, cursor=None, limit=50):
         if budget < 0 or len(found) >= limit:
             break
         found.append(item)
-    attention = [t for t in found if t["me"]["unread"] and t["audience"] in ("personal", "participants")]
+    # Needs attention: threads with unread mentions, asks or DM messages (the `unread` counter), then every root the
+    # viewer is in whose bots' wakes the loop guard holds (`capped`, whichever page it is on): a person's post there
+    # lets them go.
+    attention = [t for t in found if t["me"]["unread"]]
+    listed = {t["id"] for t in attention}
+    for row in capped(c, v):
+        root = thread_row(c, row["root_id"])
+        if root is None or root["id"] in listed or not _involved(c, v, root):
+            continue
+        attention.append({**view(c, v, root), "capped": row["count"], "capped_since": row["oldest"]})
+        listed.add(root["id"])
     dms = [t for t in found if t["audience"] in ("personal", "participants")]
     threads = [t for t in found if t["audience"] not in ("personal", "participants")]
     tail = found[-1] if found else None
@@ -1950,9 +2325,36 @@ def add_outside_delivery(c, thread_id, recipient, *, added_by=H.KEEPER):
         raise Problem("not_found", "Thread not found", 404)
     now = _now()
     c.execute("INSERT OR IGNORE INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) "
-              "VALUES(?,?,?,'member',?,?,?)", (H.new_id(), row["id"], recipient, added_by, now, now))
+              "VALUES(?,?,?,'member',?,?,?)", (_new_id(), row["id"], recipient, added_by, now, now))
     _event(c, added_by, "thread.outside_linked", row["id"], {"recipient": recipient})
     return {"thread_id": row["id"], "recipient": recipient}
+
+
+def remove_outside_member(c, principal, thread_id, actor):
+    """Take an outside destination (`slack:<channel>`, `peer:<install>`) off a thread: its member row goes and its
+    unsent deliveries become `moot`. One check: Manage on the thread, or an admin (who runs the bridges); a system
+    write (an actor string) is the keeper's only. Idempotent: a destination not linked returns removed False."""
+    who, v = _actor_of(principal)
+    recipient = str(actor or "")
+    if not recipient.startswith(OUTSIDE_PREFIXES):
+        raise Problem("recipient", "An outside destination is slack:<channel> or peer:<install>", 422)
+    if v is not None:
+        row = require(c, v, thread_id)
+        if not (can_manage(c, v, row) or (v.is_person and v.admin(c))):
+            raise Problem("forbidden", "Only someone who manages this thread, or an admin, can do that", 403)
+    else:
+        if who != H.KEEPER:
+            raise Problem("forbidden", "Only the keeper changes a thread's outside links without a viewer", 403)
+        row = thread_row(c, thread_id)
+        if row is None:
+            raise Problem("not_found", "Thread not found", 404)
+    gone = c.execute("DELETE FROM thread_members WHERE thread_id=? AND actor=?", (row["id"], recipient)).rowcount
+    if gone:
+        c.execute("UPDATE message_deliveries SET state='moot', updated_at=? WHERE thread_id=? AND recipient=? "
+                  "AND state='pending'", (_now(), row["id"], recipient))
+        _event(c, who, "thread.outside_removed", row["id"], {"recipient": recipient})
+        _audit(c, who, "thread:" + row["id"], {"outside_member": recipient}, None)
+    return {"thread_id": row["id"], "recipient": recipient, "removed": bool(gone)}
 
 
 def outside_due(c, prefix, limit=50):

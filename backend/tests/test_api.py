@@ -261,7 +261,7 @@ def test_the_assistant_chats_only_in_its_own_room_and_people_still_hand_it_work(
     ben = post(api, "tasks", {"owner": "coo", "title": "Ben's review", "body": "Private context."},
                   token="ben-test")
     assert ana["conversation_id"] != ben["conversation_id"]
-    get(api, "conversations/" + ana["conversation_id"] + "/messages", "ben-test", expected=403)
+    get(api, "conversations/" + ana["conversation_id"] + "/messages", "ben-test", expected=404)   # unreadable looks missing
     post(api, "messages", {"to": "coo", "text": "Injected", "conversation_id": ana["conversation_id"]},
          token="ben-test", expected=403)
 
@@ -270,7 +270,7 @@ def test_shared_room_membership_updates_and_revokes_history_access(api):
     message = post(api, "chat/cpo", {"text": "The group can read this."})
     changed = post(api, "bots/cpo/owners", {"owners": ["cara"], "expected_revision": 1})
     assert [owner["id"] for owner in changed["owners"]] == ["cara"]
-    get(api, "conversations/" + message["conversation_id"] + "/messages", "ben-test", expected=403)
+    get(api, "conversations/" + message["conversation_id"] + "/messages", "ben-test", expected=404)
     visible = get(api, "conversations/" + message["conversation_id"] + "/messages", "cara-test")
     assert visible[0]["body"] == "The group can read this."
 

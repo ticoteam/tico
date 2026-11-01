@@ -22,9 +22,8 @@ signed-in person as they commit, filtered to what that person may read:
   before, so an older page keeps working.
 
 `after` (or the browser's `Last-Event-ID`) resumes from the last change number seen, so a
-reconnect misses nothing; a client further behind than the log keeps (24 h), or more than BACKLOG_MAX changes behind
-(a slow consumer), is sent `reset` and reads its page in full. One read sends at most READ_BYTES of events and leaves
-the rest for the next read, so one poll's work and its payload stay bounded however busy the team is.
+reconnect misses nothing; a client further behind than the log keeps (24 h) is sent `reset` and
+reads its page in full.
 
 Delivery has no per-client polling. `Store.mutate` and `Store.write` ring an in-process doorbell
 after a write that logged changes commits; one shared reader per event loop also looks for
@@ -45,17 +44,13 @@ import time
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 
-from . import thread_events
 from . import visuals as V
 from .store import H, Problem, encode
 
 TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads")
-AGENT_TOPICS = ("messages", "threads")   # what an external agent's standing token may follow (outside a turn)
 KEEP_HOURS = 24           # a client away longer than this reads in full
 FALLBACK_SECONDS = 1.5    # the shared look for changes another process wrote
 RUNNER_FALLBACK_SECONDS = 5  # the same for computers' streams: work another process queued waits this long at most
-BACKLOG_MAX = 5000        # changes a stream may fall behind before it is reset rather than replayed (a slow consumer)
-READ_BYTES = 256 * 1024   # event bytes one read sends; the rest of its changes wait for the next read
 LIFETIME_SECONDS = 900    # bounded; each read and keepalive re-checks the sign-in, so this only caps stale state
 RUNNER_LIFETIME_SECONDS = 300
 KEEPALIVE_SECONDS = 15    # under the proxies' idle timeouts; TICO_STREAM_KEEPALIVE_SECONDS replaces it
@@ -379,31 +374,36 @@ RUNNER_TRIGGERS = [
 ]
 TRIGGERS += RUNNER_TRIGGERS
 
-# The `threads` topic (docs/dev/threads-contract.md §9): a thread's changes, its members, and each reader's read mark,
-# sent to that reader only. Every message moves its thread's counters, so a busy thread writes one row per message.
+# Threads (docs/dev/threads-contract.md §9): `subject_id` and `conversation_id` are the thread id. The per-message
+# counters move with every message, which the `messages` topic already carries, so `counters` is written only when a
+# message is not the cause (a migration or a repair).
 THREAD_TRIGGERS = [
-    ("changes_threads_created", "INSERT", "conversations", None,
-     _row("threads", "created", "NEW.id", conversation="NEW.id", where="NEW.parent_id IS NULL")),
-    ("changes_threads_sub_thread", "INSERT", "conversations", None,
-     _row("threads", "sub_thread", "NEW.id", conversation="NEW.id", where="NEW.parent_id IS NOT NULL")),
-    ("changes_threads_renamed", "UPDATE", "conversations", _changed("subject"),
-     _row("threads", "renamed", "NEW.id", conversation="NEW.id")),
-    ("changes_threads_archived", "UPDATE", "conversations", _changed("archived_at"),
-     _row("threads", "archived", "NEW.id", conversation="NEW.id", where="NEW.archived_at IS NOT NULL")
-     + _row("threads", "unarchived", "NEW.id", conversation="NEW.id", where="NEW.archived_at IS NULL")),
-    ("changes_threads_audience", "UPDATE", "conversations", _changed("audience", "audience_group_id"),
-     _row("threads", "audience", "NEW.id", conversation="NEW.id")),
-    ("changes_threads_counters", "UPDATE", "conversations", _changed("last_seq", "last_unread_seq"),
-     _row("threads", "counters", "NEW.id", conversation="NEW.id")),
+    ("changes_threads_insert", "INSERT", "conversations", None,
+     _row("threads", "created", "NEW.id", conversation="NEW.id", where="NEW.parent_id IS NULL")
+     + _row("threads", "sub_thread", "NEW.id", conversation="NEW.id", where="NEW.parent_id IS NOT NULL")),
+    ("changes_threads_update", "UPDATE", "conversations",
+     _changed("subject", "archived_at", "audience", "audience_group_id", "closed_at"),
+     _row("threads", "renamed", "NEW.id", conversation="NEW.id", where=_changed("subject"))
+     + _row("threads", "archived", "NEW.id", conversation="NEW.id",
+            where="OLD.archived_at IS NULL AND NEW.archived_at IS NOT NULL")
+     + _row("threads", "unarchived", "NEW.id", conversation="NEW.id",
+            where="OLD.archived_at IS NOT NULL AND NEW.archived_at IS NULL")
+     + _row("threads", "audience", "NEW.id", conversation="NEW.id",
+            where=_changed("audience", "audience_group_id"))),
     ("changes_thread_members_insert", "INSERT", "thread_members", None,
-     _row("threads", "members", "NEW.thread_id", conversation="NEW.thread_id")),
-    ("changes_thread_members_update", "UPDATE", "thread_members", _changed("role"),
-     _row("threads", "members", "NEW.thread_id", conversation="NEW.thread_id")),
+     _row("threads", "members", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
     ("changes_thread_members_delete", "DELETE", "thread_members", None,
-     _row("threads", "members", "OLD.thread_id", conversation="OLD.thread_id")),
-    ("changes_thread_followers_insert", "INSERT", "thread_followers", "NEW.last_read_seq>0",
+     _row("threads", "members", "OLD.thread_id", ref="OLD.actor", conversation="OLD.thread_id")),
+    ("changes_message_reactions_insert", "INSERT", "message_reactions", None,
+     _row("threads", "reactions", "(SELECT conversation_id FROM messages WHERE id=NEW.message_id)", ref="NEW.message_id",
+          conversation="(SELECT conversation_id FROM messages WHERE id=NEW.message_id)")),
+    ("changes_message_reactions_delete", "DELETE", "message_reactions", None,
+     _row("threads", "reactions", "(SELECT conversation_id FROM messages WHERE id=OLD.message_id)", ref="OLD.message_id",
+          conversation="(SELECT conversation_id FROM messages WHERE id=OLD.message_id)")),
+    ("changes_thread_followers_insert", "INSERT", "thread_followers", None,
      _row("threads", "read", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
-    ("changes_thread_followers_update", "UPDATE", "thread_followers", _changed("last_read_seq"),
+    ("changes_thread_followers_update", "UPDATE", "thread_followers",
+     _changed("last_read_seq", "following", "notify"),
      _row("threads", "read", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
 ]
 TRIGGERS += THREAD_TRIGGERS
@@ -426,6 +426,9 @@ NEEDS = {
     "changes_runner_task_links_update": ("task_links.computer_id",),
     "changes_runner_task_links_delete": ("task_links.computer_id",),
     "changes_runner_restart": ("runners.restart_requested",),
+    "changes_threads_insert": ("conversations.parent_id",),
+    "changes_threads_update": ("conversations.archived_at", "conversations.audience",
+                               "conversations.audience_group_id"),
 }
 # #118's first cut, replaced by `changes`.
 _RETIRED = ["task_changes_insert", "task_changes_update", "task_changes_delete",
@@ -806,6 +809,8 @@ class _Viewer:
         self.principal = privacy.actor(who)
         self._bots = None
         self._conversations = {}
+        from . import threads
+        self.reader = threads.Viewer(auth, who)
 
     def bots(self):
         if self._bots is None:
@@ -817,6 +822,17 @@ class _Viewer:
 
     def hidden_actor(self, actor):
         return bool(actor) and str(actor).startswith("bot:") and not self.bot_readable(str(actor)[4:])
+
+    def prime(self, cids):
+        """Decide many threads at once (threads.readable_ids, C1's SSE rendering)."""
+        from . import threads
+        wanted = [cid for cid in dict.fromkeys(cids) if cid and cid not in self._conversations]
+        if not wanted:
+            return
+        readable = threads.readable_ids(self.c, self.reader, wanted)
+        for cid in wanted:
+            if cid not in readable:
+                self._conversations[cid] = None
 
     def conversation(self, cid):
         if cid not in self._conversations:
@@ -879,10 +895,11 @@ def _messages(view, rows):
     for row in rows:
         last[(row["kind"] == "goal", row["subject_id"])] = row
     out = []
+    view.prime(row["conversation_id"] for row in last.values())
+    from . import threads
     for (goal, subject), row in last.items():
         cid = row["conversation_id"]
-        conversation = view.conversation(cid) if cid else None
-        if not conversation:
+        if not cid or not view.conversation(cid):
             continue
         if goal:
             found = c.execute("SELECT * FROM chat_goals WHERE id=?", (subject,)).fetchone()
@@ -895,13 +912,57 @@ def _messages(view, rows):
         message = dict(message)
         if message["conversation_id"] != cid:
             continue
-        fields = thread_events.message_fields(conversation, message)
-        # An unrestricted message needs no more than its thread's check, which passed above (the restricted flag).
-        if not message.get("restricted") or privacy.message_readable(c, view.principal, message):
-            out.append((row, {"id": subject, "conversation_id": cid, **fields,
-                              "message": {**message, **fields, "refs": H._json(message["refs_json"], {}) or {}}}))
-        elif message.get("deleted_at") and _readable_before_deletion(view, message):
-            out.append((row, {"id": subject, "conversation_id": cid, **fields, "deleted": True}))
+        refs = H._json(message["refs_json"], {}) or {}
+        if isinstance(refs, dict) and refs.get("carries"):
+            continue                    # a carrier starts a bot's run; no thread shows it (threads._carrier)
+        conversation = view.conversation(cid)
+        place = {"thread_id": cid, "root_id": conversation.get("root_id") or cid,
+                 "message_seq": message.get("seq"), "revision": message.get("revision") or 0}
+        if threads.message_readable(c, view.reader, message, thread_checked=True):
+            out.append((row, {"id": subject, "conversation_id": cid, **place,
+                              "message": {**message, "refs": refs, "thread_id": cid,
+                                          "root_id": place["root_id"]}}))
+        elif (message.get("deleted_at") and not threads.legacy_hidden(c, view.reader, message)
+              and _readable_before_deletion(view, message)):
+            out.append((row, {"id": subject, "conversation_id": cid, **place, "deleted": True}))
+    return out
+
+
+def _threads(view, rows):
+    """The `threads` topic (contract §9): one event per thread and kind, as it stands now. A `read` row goes only to
+    the reader it names; a thread the viewer cannot read sends nothing."""
+    from . import threads
+    last = {}
+    for row in rows:
+        if row["kind"] == "read" and row["ref"] != view.who.actor:
+            continue
+        # Reactions are per message: one event for each message whose reactions moved.
+        last[(row["subject_id"], row["kind"], row["ref"] if row["kind"] == "reactions" else None)] = row
+    view.prime(subject for subject, _, _ in last)
+    out = []
+    for (tid, kind, ref), row in last.items():
+        if not view.conversation(tid):
+            continue
+        found = threads.thread_row(view.c, tid)
+        if found is None:
+            continue
+        entry = {"thread_id": tid, "root_id": found.get("root_id") or tid, "kind": kind}
+        if kind == "read":
+            mark = view.c.execute("SELECT last_read_seq FROM thread_followers WHERE thread_id=? AND actor=?",
+                                  (tid, view.who.actor)).fetchone()
+            entry["read"] = {"last_read_seq": mark[0] if mark else 0}
+        elif kind == "reactions":
+            message = H.message(view.c, ref) if ref else None
+            if not message or not threads.message_readable(view.c, view.reader, message, thread_checked=True):
+                continue
+            entry["message_id"] = ref
+            entry["reactions"] = threads.reactions(view.c, [ref]).get(ref, [])
+        elif kind == "counters":
+            entry["counters"] = {"last_seq": found.get("last_seq") or 0,
+                                 "last_unread_seq": found.get("last_unread_seq") or 0}
+        else:
+            entry["thread"] = threads.view(view.c, view.reader, found)
+        out.append((row, entry))
     return out
 
 
@@ -1021,7 +1082,7 @@ def _needs_list(view, rows, task_view, held=None):
 
 
 def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks=(), parties=(), task_views=None,
-         task_view=None, limit=BATCH, needs_held=None, visuals=None, threads_scope=()):
+         task_view=None, limit=BATCH, needs_held=None, visuals=None):
     """What `who` may be sent after change `after`: (events, cursor, reset, more). Each event is
     (seq, topic, data). `cursor` moves past every row read, sent or not, so a resume starts after
     what this viewer could not see. `more` when a full batch was read and more waits. `needs_held`
@@ -1031,17 +1092,12 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
         newest = latest(c)
         first = oldest(c)
         floor = (first - 1) if first is not None else newest
-        if after > newest or after < floor or newest - after > BACKLOG_MAX:
+        if after > newest or after < floor:
             return [], newest, True, False
         clauses, args = ["seq>?", "topic IN (%s)" % ",".join("?" * len(topics))], [after, *topics]
         if conversations:
             clauses.append("(topic NOT IN ('messages','runs') OR conversation_id IN (%s))" % ",".join("?" * len(conversations)))
             args += list(conversations)
-        if threads_scope:               # ?thread=: the messages and threads of these threads' subtrees (by path)
-            clauses.append("(topic NOT IN ('messages','threads') OR conversation_id IN (SELECT d.id FROM conversations d "
-                           "JOIN conversations t ON t.id IN (%s) AND substr(d.path,1,length(t.path))=t.path))"
-                           % ",".join("?" * len(threads_scope)))
-            args += list(threads_scope)
         if bots:
             clauses.append("(topic NOT IN ('runs','bots') OR bot IN (%s))" % ",".join("?" * len(bots)))
             args += list(bots)
@@ -1069,23 +1125,18 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
             if visuals:                 # a visual on a new message carries this reader's own address (backend/visuals.py)
                 visuals(c, who, [e["message"] for _, e in found if "message" in e])
             picked += [("messages", r, e) for r, e in found]
-        if by_topic.get("threads"):
-            picked += [("threads", r, e) for r, e in thread_events.threads_entries(view, by_topic["threads"])]
         if by_topic.get("runs"):
             picked += [("runs", r, e) for r, e in _runs(view, by_topic["runs"])]
         if by_topic.get("bots"):
             picked += [("bots", r, e) for r, e in _bots(view, by_topic["bots"])]
         if by_topic.get("needs"):
             picked += [("needs", r, e) for r, e in _needs_list(view, by_topic["needs"], task_view, needs_held)]
-        events, size = [], 0
+        if by_topic.get("threads"):
+            picked += [("threads", r, e) for r, e in _threads(view, by_topic["threads"])]
+        events = []
         for topic, row, entry in sorted(picked, key=lambda item: item[1]["seq"]):
             actor = None if view.hidden_actor(row["actor"]) else row["actor"]
-            data = {"seq": row["seq"], "actor": actor, "at": row["at"], **entry}
-            # The first event always goes, however large; the rest wait for the next read once the budget is spent.
-            size += len(encode(data))
-            if events and size > READ_BYTES:
-                return events, events[-1][0], False, True
-            events.append((row["seq"], topic, data))
+            events.append((row["seq"], topic, {"seq": row["seq"], "actor": actor, "at": row["at"], **entry}))
         return events, cursor, False, more
     finally:
         if c.in_transaction:
@@ -1162,23 +1213,18 @@ def install(app, store, auth, task_views, task_view):
     @app.get("/api/v2/events")
     async def events(request: Request, topics: str | None = None, after: int | None = None,
                      conversation: str | None = None, bot: str | None = None, needs: str | None = None,
-                     task: str | None = None, party: str | None = None, thread: str | None = None):
+                     task: str | None = None, party: str | None = None):
         """Server-sent events for people's pages: see the module docstring."""
         who = request.state.identity
         auth.domain(who)
-        # An external agent's standing token (outside a turn) follows messages and threads, filtered by C1.
-        agent = who.role == "bot" and bool(who.agent) and not who.attempt_id
-        if who.role not in ("human", "owner") and not agent:
-            raise Problem("forbidden", "Live events are for people's pages and agents", 403)
-        wanted = _list(topics, "topics") or (AGENT_TOPICS if agent else TOPICS)
-        if agent and any(topic not in AGENT_TOPICS for topic in wanted):
-            raise Problem("forbidden", "An agent may follow " + " and ".join(AGENT_TOPICS), 403)
+        if who.role not in ("human", "owner"):
+            raise Problem("forbidden", "Live events are for people's pages", 403)
+        wanted = _list(topics, "topics") or TOPICS
         unknown = [topic for topic in wanted if topic not in TOPICS]
         if unknown:
             raise Problem("validation", "Unknown topic: " + ", ".join(unknown) + " (one of " + ", ".join(TOPICS) + ")", 422)
         conversations, bots = _list(conversation, "conversation"), _list(bot, "bot")
         tasks, parties = _list(task, "task"), _list(party, "party")
-        threads_scope = _list(thread, "thread")
         # The browser resends the last id it was given when it reconnects on its own.
         resume = request.headers.get("last-event-id", "")
         if resume.isdigit():
@@ -1202,8 +1248,7 @@ def install(app, store, auth, task_views, task_view):
                 return read(c, auth, who, cursor, topics=wanted, conversations=conversations, bots=bots,
                             tasks=tasks, parties=parties,
                             task_views=task_views, task_view=task_view, needs_held=held,
-                            visuals=None if agent else lambda c, who, rows: V.for_reader(app, auth.settings, c, who, rows),
-                            threads_scope=threads_scope)
+                            visuals=lambda c, who, rows: V.for_reader(app, auth.settings, c, who, rows))
 
         now_seq = await asyncio.to_thread(start)
         doorbell.observe(now_seq)
@@ -1256,9 +1301,7 @@ def install(app, store, auth, task_views, task_view):
                         return
                     wait = min(remaining, max(0.0, every - (time.monotonic() - quiet_since)))
                     if await doorbell.wait(generation, wait):
-                        # A thread page is a chat for this purpose: its messages stay prompt, inside the 1-second target.
-                        await asyncio.sleep(gathered(GATHER_CHAT_SECONDS if conversations or threads_scope else GATHER_SECONDS,
-                                                     read_at))
+                        await asyncio.sleep(gathered(GATHER_CHAT_SECONDS if conversations else GATHER_SECONDS, read_at))
                     # Due whether or not the bell rang: rings for changes this viewer may not see send nothing.
                     if time.monotonic() - quiet_since >= every:
                         beat.start()
