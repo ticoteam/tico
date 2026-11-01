@@ -1,4 +1,4 @@
-"""A task's run panel: every attempt that worked the task and what happened to it, the subagents each one started,
+"""A task's run panel: every run (stored as an attempt) that worked the task and what happened to it, the subagents each one started,
 the background shells and monitors it left running, and the task's checkpoint.
 
 `GET /api/v2/tasks/{id}/run-view` reads only what the hub already records: `turns` (one per attempt, by task),
@@ -13,7 +13,7 @@ from datetime import timezone
 from fastapi import Request
 
 from .store import H, Problem
-from . import login_holds, login_waits, run_diagnostics, task_privacy as privacy
+from . import login_holds, login_waits, run_diagnostics, runs, task_privacy as privacy
 from .turns import TOOL_START, TOOL_BACKGROUNDED, clip, seconds
 
 ATTEMPT_LIMIT, NODE_LIMIT, SUMMARY_CHARS = 20, 50, 120
@@ -206,7 +206,7 @@ def run_view(c, auth, who, tid):
     checkpoint = ({"text": task["checkpoint"], "at": task["checkpoint_at"], "by": task["checkpoint_by"]}
                   if task and (task["checkpoint"] or "").strip() and not task["checkpoint_blocked"] else None)
     if not ids:
-        return {"task_id": tid, "checkpoint": checkpoint, "attempts": []}
+        return {"task_id": tid, "checkpoint": checkpoint, "runs": []}
     marks, job_marks = ",".join("?" * len(ids)), ",".join("?" * len(jobs))
     job_rows = {r["id"]: r for r in H._rows(c.execute(f"SELECT id,state FROM jobs WHERE id IN ({job_marks})", jobs))}
     # Tries are counted over every attempt of the job, not only the ones this page shows.
@@ -242,10 +242,10 @@ def run_view(c, auth, who, tid):
         live = r["state"] in LIVE
         subagents, background = work(events[r["id"]], live)
         out.append({
-            "run": r["id"], "bot": r["bot"], "job": r["job_id"],
+            "id": r["id"], "bot": r["bot"], "job": r["job_id"],
             **run_diagnostics.metadata(c, r["id"]),
             "try": next((n for n, t in enumerate(job_tries, 1) if t["id"] == r["id"]), 1), "tries": len(job_tries),
-            "state": r["state"], "outcome": r["exit"], "created": r["created"], "started": r["started"],
+            "state": runs.state(r["state"]), "outcome": r["exit"], "created": r["created"], "started": r["started"],
             "finished": r["finished"], "took_s": seconds(r["started"], r["finished"]), "ran_on": made.get(r["id"]),
             "lease_until": r["lease_until"] if live else None, "lease": lease.get(r["id"], []),
             "reason": failure_reason(r["state"], r["result_json"], run_diagnostics.metadata(c, r["id"])["end_reason"]),
@@ -263,7 +263,7 @@ def run_view(c, auth, who, tid):
             "subagents": subagents, "background": background,
             # What woke the turn and the wake preset in force (backend/wake_presets.py record); None before presets.
             "wake": H._json(r["wake_json"])})
-    return {"task_id": tid, "checkpoint": checkpoint, "attempts": out}
+    return {"task_id": tid, "checkpoint": checkpoint, "runs": out}
 
 
 def install(app, store, auth):

@@ -674,11 +674,11 @@ function taskLiveHTML(x, stopping = '', sent = '') {
   const step = part ? clipLine(part.text.replace(/\s+/g, ' ').trim(), 120) : '';
   const label = `<span class="typing ${t.mode}" aria-hidden="true"><i></i><i></i><i></i></span><span class="thinking-word">${esc(word)}${
     working ? '…' : ''}</span>${step ? `<span class="task-live-step">${esc(step)}</span>` : ''}`;
-  const stop = working && x.attempt_id && settingsCanManageBot(S.emps.find(e => e.name === x.bot))
-    ? `<button type="button" class="ghost task-live-stop" data-task-stop="${esc(x.attempt_id)}" data-bot="${esc(x.bot)}" ${
-      stopping === x.attempt_id ? 'title="Stopping…" disabled>Stopping…' : 'title="Stop this run">Stop'}</button>` : '';
+  const stop = working && x.run_id && settingsCanManageBot(S.emps.find(e => e.name === x.bot))
+    ? `<button type="button" class="ghost task-live-stop" data-task-stop="${esc(x.run_id)}" data-bot="${esc(x.bot)}" ${
+      stopping === x.run_id ? 'title="Stopping…" disabled>Stopping…' : 'title="Stop this run">Stop'}</button>` : '';
   return `<div class="thinking task-live" role="status" aria-label="${esc(t.tip)}${step ? ': ' + esc(step) : ''}">${
-    working && x.attempt_id ? taskStepsFold(x.attempt_id, label, true) : label}${pendingHintHTML(run)}${stop}</div>`;
+    working && x.run_id ? taskStepsFold(x.run_id, label, true) : label}${pendingHintHTML(run)}${stop}</div>`;
 }
 // Whether the draft @mentions one of `names`, as the server reads an @mention (backend/hubdb.py _at): the name, not
 // inside a word or another @name.
@@ -793,7 +793,7 @@ function taskComposerToPaint(state) {
 async function taskRunStop(state, button) {
   button.disabled = true; button.title = 'Stopping…';
   try {
-    await post(`/v2/bots/${encodeURIComponent(button.dataset.bot)}/stop`, {attempt_id: button.dataset.taskStop});
+    await post(`/v2/bots/${encodeURIComponent(button.dataset.bot)}/stop`, {run_id: button.dataset.taskStop});
     state.stopping = button.dataset.taskStop;      // the redraws keep "Stopping…" until the run has ended
     button.textContent = 'Stopping…';
     taskChatLive(state);

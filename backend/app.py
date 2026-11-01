@@ -37,6 +37,7 @@ from . import login_holds
 from . import cloud_access
 from . import counsel
 from . import step_age
+from . import runs
 from . import bot_stops, turn_budgets, proposals, task_caps
 from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
                topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits)
@@ -1058,6 +1059,20 @@ def create_app(settings=None):
             response.headers["Content-Length"] = str(len(body))
         return response
 
+    def run_names(request, response):
+        """An answer's `attempt_id` keys read `run_id`: storage's attempt is the contract's run (backend/runs.py).
+        File downloads and other raw bytes keep theirs."""
+        body = getattr(response, "body", None)
+        if (not body or "content-disposition" in response.headers or "x-content-sha256" in response.headers
+                or "content-encoding" in response.headers
+                or "application/json" not in response.headers.get("content-type", "")):
+            return response
+        renamed = runs.public_json(body, request.url.path)
+        if renamed is not body:
+            response.body = renamed
+            response.headers["Content-Length"] = str(len(renamed))
+        return response
+
     class DisplayNameRoute(APIRoute):
         def __init__(self, path, endpoint, **options):
             # FastAPI calls the handler it was given; the JSON it answers is encoded by orjson (backend/fast_json.py).
@@ -1072,7 +1087,7 @@ def create_app(settings=None):
 
             async def named_response(request):
                 from .json_response import compress
-                return await compress(request, await display_names(request, await handler(request)))
+                return await compress(request, run_names(request, await display_names(request, await handler(request))))
             return named_response
 
     # HTTP middleware's call_next wraps every response as a stream, hiding its original
@@ -7488,7 +7503,7 @@ def create_app(settings=None):
 
     @app.post("/api/v2/bots/{bot}/stop")
     def stop_turn(request: Request, bot: str, body: M.StopTurn):
-        return mutate(request, body, lambda c: execution.stop(c, request.state.identity, bot, body.attempt_id, body.redirect))
+        return mutate(request, body, lambda c: execution.stop(c, request.state.identity, bot, body.run_id, body.redirect))
 
     @app.get("/api/v2/bots/{bot}/pause-state")
     def bot_pause_state(request: Request, bot: str):

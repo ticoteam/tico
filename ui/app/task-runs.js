@@ -1,5 +1,5 @@
 /* ui/app/task-runs.js — A task's Runs section: where the work left off (the checkpoint), what is still running in the
-   background, and every attempt with what followed it and the subagents it started (GET /v2/tasks/{id}/run-view).
+   background, and every run with what followed it and the subagents it started (GET /v2/tasks/{id}/run-view).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -59,7 +59,7 @@ function runShellHTML(s) {
 function runReportHTML(a) {
   if (!['failed', 'expired'].includes(a.state) || !window.supportOn?.() || !window.reportThisHTML) return '';
   return `<p class="truns-report">${window.reportThisHTML({kind: 'run', title: `${a.bot ? a.bot + ' run ' : 'Run '}${runStateWord(a)}${a.reason ? ': ' + a.reason : ''}`,
-    detail: a.reason || '', ref: a.run || '', group: 'run:' + (a.state || '') + ':' + String(a.reason || '').replace(/\d+/g, '#').slice(0, 80)})}</p>`;
+    detail: a.reason || '', ref: a.id || '', group: 'run:' + (a.state || '') + ':' + String(a.reason || '').replace(/\d+/g, '#').slice(0, 80)})}</p>`;
 }
 function runAttemptHTML(a, open) {
   const model = ranOn(a.ran_on);
@@ -77,7 +77,7 @@ function runAttemptHTML(a, open) {
   const woke = a.wake ? `<p class="muted truns-wake">Woke for: ${esc(a.wake.reason)} · ${esc(a.wake.profile_label || a.wake.preset_label)}${a.wake.held_until
     ? ` · held until ${esc(fmt(a.wake.held_until))}` : ''}</p>` : '';
   const shells = (a.background || []).length ? `<div class="truns-sub"><div class="lbl">Background</div><ul class="truns-list">${a.background.map(runShellHTML).join('')}</ul></div>` : '';
-  return `<details class="truns-try${a.state === 'running' || a.state === 'leased' ? ' live' : ''}"${open ? ' open' : ''} data-run="${esc(a.run)}">
+  return `<details class="truns-try${a.state === 'running' || a.state === 'leased' ? ' live' : ''}"${open ? ' open' : ''} data-run="${esc(a.id)}">
     <summary><span>${esc(head)}</span><span class="muted tnum" title="${esc(fmt(a.started || a.created))}">${esc(ago(a.started || a.created))}</span></summary>
     ${woke}${a.reason ? `<p class="truns-reason">${esc(a.reason)}</p>` : ''}${[a.waiting, a.paused, a.moved, ranOnNote(a.ran_on)].filter(Boolean).map(t =>
       `<p class="muted truns-moved">${esc(t)}</p>`).join('')}${runReportHTML(a)}${lease ? `<ul class="truns-list truns-lease">${lease}</ul>` : ''}${nxt}
@@ -85,14 +85,14 @@ function runAttemptHTML(a, open) {
     ${(a.subagents || []).length || shells || nxt || a.reason || a.waiting || a.paused || a.moved || ranOnNote(a.ran_on) ? '' : '<p class="muted truns-empty">No subagents or background work.</p>'}</details>`;
 }
 function taskRunsHTML(v) {
-  const attempts = v.attempts || [], cp = v.checkpoint;
-  const live = attempts.flatMap(a => (a.background || []).filter(s => s.running));
-  if (!attempts.length && !cp) return '';
+  const runs = v.runs || [], cp = v.checkpoint;
+  const live = runs.flatMap(a => (a.background || []).filter(s => s.running));
+  if (!runs.length && !cp) return '';
   return `<h3 class="rail-h">Runs</h3>
     ${cp ? `<div class="truns-cp"><div class="lbl">Where it left off</div><div class="truns-cp-text">${esc(cp.text)}</div>
       <div class="muted">${esc(actorLabel(cp.by))} · <span title="${esc(fmt(cp.at))}">${esc(ago(cp.at))}</span></div></div>` : ''}
     ${live.length ? `<div class="truns-live"><div class="lbl">Still running in the background</div><ul class="truns-list">${live.map(runShellHTML).join('')}</ul></div>` : ''}
-    ${attempts.map((a, i) => runAttemptHTML(a, i === 0)).join('')}`;
+    ${runs.map((a, i) => runAttemptHTML(a, i === 0)).join('')}`;
 }
 // Loads once per open and again every RUNS_POLL_MS while a run is live; a closed or moved dialog stops it.
 async function taskRunsLoad(d, id) {
@@ -112,5 +112,5 @@ async function taskRunsLoad(d, id) {
     });
   }
   el.hidden = !html;
-  if ((view.attempts || []).some(a => a.state === 'running' || a.state === 'leased')) d.runsTimer = setTimeout(() => taskRunsLoad(d, id), RUNS_POLL_MS);
+  if ((view.runs || []).some(a => a.state === 'running' || a.state === 'leased')) d.runsTimer = setTimeout(() => taskRunsLoad(d, id), RUNS_POLL_MS);
 }

@@ -80,7 +80,7 @@ def _build():
     add("needs_you.created", "Something now needs a person's answer.", asked)
     add("needs_you.answered", "A person answered something that needed them.", asked)
 
-    add("bot.run_failed", "A bot's run failed.", {"bot": "ops", "attempt_id": "r1", "error_class": "login"})
+    add("bot.run_failed", "A bot's run failed.", {"bot": "ops", "run_id": "r1", "error_class": "login"})
     add("bot.held", "A bot was held: it hit a limit or kept failing.",
         {"bot": "ops", "reason": "budget", "window": "1h", "runs": 40, "budget": 30, "task": _TASK})
     add("bot.released", "A held bot was released.", {"bot": "ops", "reason": "budget", "released_by": "human:ana"})

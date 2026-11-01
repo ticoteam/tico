@@ -322,7 +322,7 @@ document.addEventListener('pointerdown', ev => {
 async function pillStop(P) {
   if (!P.running || P.stopping) return;
   P.stopping = true; pillButtons(P);
-  try { await post(`/v2/bots/${encodeURIComponent(P.slug)}/stop`, P.running.attempt_id ? {attempt_id: P.running.attempt_id} : {}); }
+  try { await post(`/v2/bots/${encodeURIComponent(P.slug)}/stop`, P.running.run_id ? {run_id: P.running.run_id} : {}); }
   catch (e) { P.stopping = false; pillButtons(P); toast(`Not stopped: ${e.message}`, true); }
 }
 // "when i paste an image into a box, can we show a clickable preview of it?"

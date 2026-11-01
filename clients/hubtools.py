@@ -5493,7 +5493,7 @@ def status_history(api, args):
     return api.get(f"bots/{args['bot']}/history", since=args.get("since"))
 
 
-@tool("hub_run_list", "A bot's recent runs and failed or expired attempts, with end_reason, last_event_at, stalled, tokens and "
+@tool("hub_run_list", "A bot's recent runs, failed and expired ones included, each with its `state` (run.state), end_reason, last_event_at, stalled, tokens and "
       "estimated cost (`est_cost_usd`) and start/end load snapshots (`load_start`, `load_end`). Yours, and those of the bots that report to you.",
       {"bot": _s("Bot slug"), "since": _s("Window like `24h` or an ISO timestamp")}, required=("bot",))
 def turns(api, args):
@@ -5519,7 +5519,7 @@ def turns(api, args):
       "- queues.<bot>.held: jobs a wake preset holds until its release.\n"
       "- queues.<bot>.dead / dead_ids: queued jobs behind an interrupted run nobody reviewed; they never run until that run is resumed or dismissed. Never counted as queued.\n"
       "- queues.<bot>.uncertain: interrupted runs waiting for that review.\n"
-      "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, attempt, current (false once the job has run a later try), state (held, canceled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Cancelled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
+      "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, run, current (false once the job has run a later try), state (held, canceled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Cancelled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
       "- failures.total / by_cause / by_bot: failed, interrupted or expired runs since `since`; causes quota, capacity, restart, timeout, crash, stopped, each with n, first and last time.\n"
       "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).\n"
       "- exceptions[] (the engineering type's manager only; absent for anyone else): key (subject:kind), kind (stuck, run, pool, slots, backlog, outage, refusal, merge), cause and since; ticket (id, number, title, step, owner) when it is about a ticket, check (id, title, owner) when the open check below it is what stands, bot, step or tickets for the others, pr and head on a failed merge. One row per subject and kind, oldest first.",
@@ -5536,23 +5536,23 @@ def pipeline(api, args):
 
 
 @tool("hub_run_export", "Owners and engineering bots: whether a run's raw provider stream was captured, and its size. "
-      "Write the replay fixture with `hub run export <attempt> --fixture`. A bounded stderr tail is available even without a stream; streams require capture_stream on, "
-      "kept a week.", {"attempt": _s("The attempt id, from hub_run_list")}, required=("attempt",))
+      "Write the replay fixture with `hub run export <run> --fixture`. A bounded stderr tail is available even without a stream; streams require capture_stream on, "
+      "kept a week.", {"run": _s("The run id, from hub_run_list")}, required=("run",))
 def run_export(api, args):
-    return api.get(f"attempts/{args['attempt']}/capture", full="false")
+    return api.get(f"attempts/{args['run']}/capture", full="false")
 
 
-def run_export_full(api, attempt):
+def run_export_full(api, run):
     """The whole export, for the CLI to write to files; never returned into a bot's context."""
-    return api.get(f"attempts/{attempt}/capture")
+    return api.get(f"attempts/{run}/capture")
 
 
 def write_fixture(found, parent):
     """A run export as a replay fixture folder: input.json, <provider>_transcript.ndjson and output.json."""
-    folder = Path(parent) / ("replay-" + re.sub(r"[^A-Za-z0-9_-]", "", str(found["attempt"]["id"])))
+    folder = Path(parent) / ("replay-" + re.sub(r"[^A-Za-z0-9_-]", "", str(found["run"]["id"])))
     folder.mkdir(parents=True, exist_ok=True)
     provider = re.sub(r"[^a-z0-9_-]", "", str(found.get("provider") or "provider").lower()) or "provider"
-    meta = {k: found.get(k) for k in ("attempt", "provider", "truncated", "dropped_bytes", "captured")}
+    meta = {k: found.get(k) for k in ("run", "provider", "truncated", "dropped_bytes", "captured")}
     files = {"input.json": json.dumps({**found["input"], "source": meta}, indent=2, ensure_ascii=False) + "\n",
              f"{provider}_transcript.ndjson": found["transcript"].rstrip("\n") + "\n",
              "output.json": json.dumps(found["output"], indent=2, ensure_ascii=False) + "\n"}

@@ -8,7 +8,7 @@ import json
 
 from fastapi import Request
 
-from . import routines
+from . import routines, runs
 from .mail import message_public, visible_addresses
 from . import slack_channels as SC
 from .slack_gateway import permalink
@@ -198,7 +198,8 @@ def install_messaging(app, store, auth):
                                         "ORDER BY a.created DESC LIMIT 1", (row["message_id"],)).fetchone()
                     digests.append({"id": row["id"], "created": row["created"], "count": row["count"],
                                     "skipped": row["skipped"], "channels": _json(row["channels_json"], []),
-                                    "event_ids": event_ids, "attempt": dict(attempt) if attempt else None})
+                                    "event_ids": event_ids,
+                                    "run": {**dict(attempt), "state": runs.state(attempt["state"])} if attempt else None})
                 posts = [{"channel": row["channel"], "thread_ts": row["thread_ts"],
                           "text": row["text"], "state": row["state"], "created": row["created"],
                           "error": row["error"], "url": _slack_link(team_url, row["channel"], row["slack_ts"] or row["thread_ts"])}

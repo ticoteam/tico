@@ -164,7 +164,9 @@ def envelope(type_, subject, data, timestamp):
 
 
 def body_of(env):
-    return json.dumps(env, separators=(",", ":"), ensure_ascii=False)
+    # A delivered body names a run as the API does (backend/runs.py): its attempt_id keys read run_id.
+    from .runs import public_json
+    return public_json(json.dumps(env, separators=(",", ":"), ensure_ascii=False))
 
 
 # ----------------------------------------------------------------------------------------------------- who may read

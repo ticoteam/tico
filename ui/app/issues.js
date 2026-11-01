@@ -308,18 +308,20 @@ const ranOn = (made, effort = true) => [...new Set(((made || {}).segments || [])
   .map(s => s.model + (effort && s.effort ? ` (${s.effort})` : '')))].join(' then ');
 // Why a task run was on that model: the bot's task model, the fallback from it, or a check kept (backend/task_models.py).
 const ranOnNote = made => ((made || {}).task_model || {}).note || '';
+// A run that failed or whose lease ran out (run.state, docs/status-and-state.md Runs): its reason shows with it.
+const runUnfinished = r => ['failed', 'expired'].includes(r.state);
 // A failed run offers Report this: Support opens with it attached (ui/support.js).
 function runsReportHTML(r, icon = false) {
   if (!window.supportOn?.() || !window.reportThisHTML) return '';
   const why = r.failure_reason || r.outcome || `exit ${r.exit}`;
-  return `<div>${window.reportThisHTML({kind: 'run', title: `${r.employee || 'Run'} failed: ${why}`, detail: why, ref: r.attempt_id || r.id || '',
+  return `<div>${window.reportThisHTML({kind: 'run', title: `${r.employee || 'Run'} failed: ${why}`, detail: why, ref: r.id || '',
     group: 'run:' + String(why).replace(/\d+/g, '#').slice(0, 80)}, icon)}</div>`;
 }
 function runsTable(list, showEmp=true) {
   if (!list.length) return `<div class="empty">No runs yet.</div>`;
   return `<div class="scroll"><table><tr>${showEmp ? '<th>Bot</th>' : ''}<th>Finished</th><th>Result</th><th>Duration</th><th>Cost</th><th>Model</th><th>Picked up</th><th></th></tr>
   ${list.map(r => `<tr>${showEmp ? `<td>${empChip(r.employee)}</td>` : ''}
-    <td class="muted tnum">${ago(r.finished)}</td><td>${r.record_kind === 'attempt' ? `<span class="pill fail">${esc(r.outcome)} attempt</span><div class="mono muted">${esc(r.attempt_id)}</div>${r.failure_reason ? `<div class="muted">${esc(r.failure_reason)}</div>` : ''}${runsReportHTML(r)}` : r.exit === 0 ? '<span class="pill ok">Done</span>' : `<span class="pill fail">${esc(r.outcome || `exit ${r.exit}`)}</span>${runsReportHTML(r)}`}</td>
+    <td class="muted tnum">${ago(r.finished)}</td><td>${runUnfinished(r) ? `<span class="pill fail">${esc(r.outcome)} run</span><div class="mono muted">${esc(r.id)}</div>${r.failure_reason ? `<div class="muted">${esc(r.failure_reason)}</div>` : ''}${runsReportHTML(r)}` : r.exit === 0 ? '<span class="pill ok">Done</span>' : `<span class="pill fail">${esc(r.outcome || `exit ${r.exit}`)}</span>${runsReportHTML(r)}`}</td>
     <td class="tnum">${r.duration_s != null ? Math.round(r.duration_s/60) + 'm ' + (r.duration_s%60) + 's' : ''}</td>
     <td class="tnum">${r.cost_usd != null ? '$' + r.cost_usd.toFixed(2) : (r.output_tokens != null ? r.output_tokens.toLocaleString() + ' tokens out' : '')}</td>
     <td class="mono muted" title="${esc(ranOnNote(r.ran_on) || 'the model that actually ran it, which a fallback changes')}">${esc(ranOn(r.ran_on))}${(r.ran_on?.task_model || {}).source === 'fallback' ? ` <span class="pill waiting" title="${esc(ranOnNote(r.ran_on))}">task model off</span>` : ''}</td>
