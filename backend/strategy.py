@@ -706,6 +706,8 @@ def apply_proposal(c, actor, payload):
                              fields["wrong_if"], fields["cites"], fields["status"] or "proposed")
         ids.append(row["id"])
         for task_id in item.get("ideas") or []:
+            if not H._one(c, "SELECT task_id FROM growth_ideas WHERE task_id=?", (task_id,)):
+                continue                 # deleted since the proposal was filed: nothing to link
             G._set_idea(c, actor, task_id, {"bet_id": row["id"]}, "growth.idea.update")
             linked.append(task_id)
     return {"draft": True, "bets": ids, "ideas": linked, "revision": draft(c)["revision"]}
