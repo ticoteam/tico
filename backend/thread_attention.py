@@ -11,7 +11,8 @@ does, not by a click:
 A bot's mention of the person and a bot's ask are the thread's questions to the person and count; a bot's post that
 names nobody is activity, not attention.
 
-Every item is listed. The caller pages the whole list (views.needs_items), so nothing is cut here.
+Every item is listed. The caller pages the whole list (views.needs_items), so nothing is cut here. A person the reader
+may not see is named only to someone in the same thread (`teammate_access.Known`), as everywhere a thread is read.
 """
 from . import hubdb as H
 
@@ -35,6 +36,7 @@ def items(c, auth, who, skip=()):
     """The thread items for `who`, skipping message ids in `skip` (asks Needs you already lists, e.g. loose asks)."""
     from . import threads
     viewer, me = threads.viewer(auth, who), who.actor
+    known = viewer.known(c)
     seen, out = set(skip), []
     for row in _addressed(c, me):
         if row["id"] in seen or not threads.readable(c, viewer, row["id"]):
@@ -43,13 +45,15 @@ def items(c, auth, who, skip=()):
         kind = "thread_ask" if row["kind"] == "ask" else "thread_mention"
         first = _clip((row["body"] or "").strip().splitlines()[0] if (row["body"] or "").strip() else "")
         out.append(_item(kind, row["id"], row["conversation_id"], first or _clip(row["subject"] or "Thread"),
-                         row["created"], row["from_actor"], message_id=row["id"], first_line=first))
+                         row["created"], known.name(row["from_actor"], row["conversation_id"]), message_id=row["id"],
+                         first_line=first))
     for row in _unread_dms(c, viewer, me):
         out.append(_item("thread_dm", row["id"], row["id"], _clip(row["subject"] or "Direct message"),
-                         row["created"], row["from_actor"]))
+                         row["created"], known.name(row["from_actor"], row["id"])))
     for row in _holds(c, who):
         title = "A message is held for your review" if row["role"] == "reviewer" else "A message of yours is held"
-        out.append(_item("thread_held", row["id"], None, title, row["created"], row["author"]))
+        # A hold has no thread here: the list names its author only to someone who may see them.
+        out.append(_item("thread_held", row["id"], None, title, row["created"], known.name(row["author"], None)))
     for row in _capped(c):
         root = c.execute("SELECT * FROM conversations WHERE id=?", (row["root_id"],)).fetchone()
         if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):

@@ -6,7 +6,7 @@ what the viewer may read. Python, the hub SQL and the live stream answer alike w
 from types import SimpleNamespace
 
 from backend import events as E
-from backend import task_privacy, threads, views
+from backend import task_privacy, thread_attention, threads, updates, views
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
@@ -321,3 +321,67 @@ def test_search_keeps_to_a_private_task_and_a_restricted_message(acme, monkeypat
     assert [h["message_id"] for h in found["hits"]] == [plain["id"]] and found["next_cursor"] is None
     assert {h["id"] for h in hits("eve-test", "context/search?q=quokka&source=threads")["results"]} == {plain["id"]}
     assert len(hits("cara-test")["hits"]) == 2      # she reads her own task's discussion
+
+
+# ----------------------------------------------------------------------------- Needs you and Catch up name no one hidden
+def needs(api, token, kind):
+    return [i for i in ok(call(api, "GET", "needs-you", token))["items"] if i["kind"] == kind]
+
+
+def test_needs_you_names_a_hidden_person_only_to_someone_in_the_thread_with_them(acme):
+    api, _ = acme
+    made = dm(api, "cara-test", "human:eve")
+    set_access(api, "humans/cara", token="cara-test", see=LEGAL, read=LEGAL, write=LEGAL)
+    thread = create_thread(api, "cara-test", audience="company")
+    say(api, "cara-test", thread["id"], "Can you check the lease?", to="human:eve")
+    say(api, "cara-test", made["id"], "A word?", to="human:eve")
+
+    item = next(i for i in needs(api, "eve-test", "thread_mention") if i["conversation_id"] == thread["id"])
+    assert item["first_line"] == "Can you check the lease?"
+    assert (item["requester"], item["origin_actor"], item["from_person"]) == ("", "", None)
+    # Eve is in the DM with her, so there she is told who it is.
+    item = next(i for i in needs(api, "eve-test", "thread_mention") + needs(api, "eve-test", "thread_dm")
+                if i["conversation_id"] == made["id"])
+    assert (item["requester"], item["from_person"]) == ("human:cara", "human:cara")
+
+
+def test_needs_you_names_a_held_writes_author_only_to_someone_who_may_see_them(acme, monkeypatch):
+    api, _ = acme
+    set_access(api, "humans/cara", token="cara-test", see=LEGAL, read=LEGAL, write=LEGAL)
+    held = {"id": "hold-1", "author": "human:cara", "role": "reviewer", "created": "2026-11-01T00:00:00"}
+    monkeypatch.setattr(thread_attention, "_holds", lambda c, person: [held])
+    with api.app.state.store.read() as c:
+        hidden = thread_attention.items(c, api.app.state.auth, who(api, "eve"))
+        seen = thread_attention.items(c, api.app.state.auth, who(api, "fay"))
+    assert [(i["requester"], i["from_person"]) for i in hidden] == [("", None)]
+    assert [(i["requester"], i["from_person"]) for i in seen] == [("human:cara", "human:cara")]
+
+
+def test_catch_up_never_gives_the_model_a_hidden_persons_name(acme, monkeypatch):
+    api, _ = acme
+    set_access(api, "humans/cara", token="cara-test", see=LEGAL, read=LEGAL, write=LEGAL)
+    thread = create_thread(api, "cara-test", audience="company", members=["human:ben"])
+    say(api, "cara-test", thread["id"], "Lease renewal is due Friday.")
+    say(api, "fay-test", thread["id"], "Noted.")
+    prompts = []
+
+    def writer(system, user):
+        prompts.append(user)
+        return {"summary": "The lease renewal is due Friday."}
+
+    # What the model reads.
+    monkeypatch.setattr(updates, "writer_for", lambda *a, **k: writer)
+    ok(call(api, "POST", f"threads/{thread['id']}/catch-up", "eve-test", {"scope": "thread"}))
+    assert len(prompts) == 1
+    assert "Someone: Lease renewal is due Friday." in prompts[0]
+    assert "cara" not in prompts[0].lower()
+    assert "Fay: Noted." in prompts[0]
+    # Ben is in the thread with her, so his catch-up says who it was.
+    ok(call(api, "POST", f"threads/{thread['id']}/catch-up", "ben-test", {"scope": "thread"}))
+    assert "Cara: Lease renewal is due Friday." in prompts[1]
+
+    # With no model the reply is an excerpt of the same lines.
+    monkeypatch.setattr(updates, "writer_for", lambda *a, **k: None)
+    posted = ok(call(api, "POST", f"threads/{thread['id']}/catch-up", "eve-test", {"scope": "thread"}))["posted"]
+    assert "Someone: Lease renewal is due Friday." in posted["body"]
+    assert "cara" not in posted["body"].lower()

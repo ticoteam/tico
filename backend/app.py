@@ -2912,9 +2912,9 @@ def create_app(settings=None):
         return place
 
     def rule_check(who, operation, output, audience, obj="", context=None, place=None):
-        """The check for one write by a person or a bot, or None (nothing to judge, a write the caller cannot make: the
-        write itself refuses that). `place`: the write's place, or a function of (c, author, recipients) that reads
-        it."""
+        """The check for one write by a person or a bot, or None (nothing to judge). An audience the caller may not name
+        is `org_rule_check.refused`: never unchecked, the write fails with that error (`apply`). `place`: the write's
+        place, or a function of (c, author, recipients) that reads it."""
         if not output or not org_rule_check.author_of(who, settings.assistant_bot):
             return None
         with store.read() as c:
@@ -2922,8 +2922,8 @@ def create_app(settings=None):
                 return None             # no rule in force: the audience (a roster read, @mentions) is never resolved
             try:
                 recipients = audience(c)
-            except Problem:
-                return None
+            except Problem as exc:
+                return org_rule_check.refused(exc)
         return org_rule_check.preflight(store, app.state.judge, who, operation, output, recipients, context, obj,
                                         place=place)
 
@@ -3016,8 +3016,8 @@ def create_app(settings=None):
             with store.read() as c:
                 try:
                     row = auth.task(c, who, auth.resolve_task(c, who, tid))
-                except Problem:
-                    return None
+                except Problem as exc:
+                    return org_rule_check.refused(exc)
         text = rule_update_text(body, row)
         if not text:
             return None

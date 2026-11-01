@@ -1,6 +1,8 @@
 """Catch up: a bounded summary of what is new in a thread, posted to the caller's Assistant DM. The summary reads only
 what the caller may read, so a message they cannot read reaches neither the reply nor the model that writes it."""
 
+import json
+
 import pytest
 
 from backend import thread_catchup, threads, updates
@@ -147,3 +149,54 @@ def test_a_message_too_big_for_the_budget_is_reported_as_omitted_not_as_nothing_
     assert response["posted"] is None and response["messages"] == 0
     assert response["left_out"] == 1
     assert assistant_bodies(api) == []
+
+
+def prompts_of(monkeypatch):
+    prompts = []
+
+    def writer(system, user):
+        prompts.append(user)
+        return {"summary": "Short."}
+
+    monkeypatch.setattr(updates, "writer_for", lambda *a, **k: writer)
+    return prompts
+
+
+def test_someone_added_later_gets_only_what_came_after_they_joined_in_any_sub_thread(api, monkeypatch):
+    tid = thread(api, members=("human:cara",))
+    parent = say(api, tid, "Old root plan")
+    sub = thread(api, members=(), parent=parent["id"])
+    say(api, sub, "Old sub-thread plan")
+    with api.app.state.store.transaction() as c:
+        threads.add_member(c, "human:cara", tid, "human:ben")
+    say(api, tid, "New root note")
+    say(api, sub, "New sub-thread note")
+    prompts = prompts_of(monkeypatch)
+    got = catch_up(api, tid)
+    assert got["messages"] == 2 and got["left_out"] == 0
+    assert "New root note" in prompts[0] and "New sub-thread note" in prompts[0]
+    assert "Old" not in prompts[0]
+
+
+def test_what_the_migration_carried_and_imported_history_are_not_new(api, monkeypatch):
+    with api.app.state.store.transaction() as c:
+        tid = threads.create(c, "human:cara", title="All hands", audience="company")["id"]
+    say(api, tid, "Before the earlier-messages cut")
+    opened = say(api, tid, "Earlier message opened to everyone")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET legacy_audience=NULL WHERE id=?", (opened["id"],))
+        carried = c.execute("SELECT value FROM sequences WHERE name='messages'").fetchone()[0]
+        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value_json) VALUES(?,?)",
+                  (threads.MIGRATION_KEY, json.dumps({"at": "2026-10-01T00:00:00Z", "seq": carried})))
+        threads.post(c, "human:cara", tid, "Imported from Slack", refs={"import": True})
+    say(api, tid, "Written after it")
+    prompts = prompts_of(monkeypatch)
+    got = catch_up(api, tid)
+    assert got["messages"] == 1
+    assert "Written after it" in prompts[0]
+    for old in ("Before the", "Earlier message", "Imported"):
+        assert old not in prompts[0]
+    # Nothing else new: nothing is written, and the model is not asked.
+    with api.app.state.store.transaction() as c:
+        threads.mark_all_read(c, threads.viewer(api.app.state.auth, BEN), tid)
+    assert catch_up(api, tid)["posted"] is None and len(prompts) == 1

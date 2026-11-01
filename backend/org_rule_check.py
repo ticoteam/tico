@@ -521,8 +521,18 @@ def inbound(store, primary, principal, operation, output, recipients=(), *, sour
                     context=context, obj=obj, place=place, origin={"source": str(source), "origin": str(origin or "")})
 
 
+def refused(problem):
+    """The verdict for a write whose audience the caller may not name (`Problem`: an unknown or hidden recipient, a thread
+    they cannot read). Nothing can be judged, so nothing may go: `apply` raises it inside the write. There, a saved retry
+    has already replayed its answer, so the retry of a write that went still answers as it did."""
+    return {"refused": problem}
+
+
 def holds(verdict):
-    """Whether a verdict will hold the write (so a caller skips ask ingest's own call: a block skips it)."""
+    """Whether a verdict will hold the write (so a caller skips ask ingest's own call: a block skips it, and so does a
+    refusal)."""
+    if verdict and "refused" in verdict:
+        return True
     if not verdict or verdict["outcome"] not in ("broken", "too_large"):
         return False
     return any(r["if_broken"] != "warn" for r in verdict["rules"] if r["id"] in verdict["broken"])
@@ -665,7 +675,10 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     it (`current_obj`). Moved since the check, a verdict that holds still holds (a version bump never releases a
     Block); any other comes back as {"moved": True}, and the caller does not write: its next try checks again.
     `audience_now`: the recipients the write reads now (the route's audience, read inside the write). A hold is only made
-    for the audience the check named, so a different one comes back as {"moved": True} as well."""
+    for the audience the check named, so a different one comes back as {"moved": True} as well. A refused verdict
+    (`refused`) raises its error here, so the write fails with it."""
+    if verdict and "refused" in verdict:
+        raise verdict["refused"]
     if verdict and "applied" in verdict:
         return verdict["applied"]
     if not verdict or verdict.get("draft"):

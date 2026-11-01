@@ -3,9 +3,13 @@ who asks. The Assistant acts with that person's rights, and its reply lands in t
 summary is theirs alone.
 
 What is summarized: the messages the person may read (`threads.readable`, per message) that are newer than their read
-point in their thread, from people and bots, minus their own posts and the system notices (cards, follow-ups). The
+point in their thread and came after they joined it and after the threads migration, from people and bots, minus their
+own posts, the system notices (cards, follow-ups) and history written back (imports, replays). A sub-thread has its own
+read point, or none yet, so joining the tree is the floor for all of it: what is old to the person is never new. The
 newest messages that fit MAX_BYTES are kept, counted as the lines the model reads (each one clipped to LINE_CHARS, then
-encoded), and anything older is named as omitted, not read.
+encoded), and anything older is named as omitted, not read. A person the reader may not see is named only to someone in
+the same thread (`teammate_access.Known`). Anyone else's lines say UNNAMED, before the model reads them, since a summary
+can't be cleaned afterwards.
 
 The model call happens outside any transaction (reads, then the call, then the write), so a slow model never holds
 the write lock. Before the reply is written, every message the summary read is checked again: one the person can no
@@ -24,7 +28,8 @@ SCAN_LIMIT = 300         # rows read before the readability check, newest first
 LINE_CHARS = 400         # one message's text in the transcript
 SUMMARY_CHARS = 1200     # the reply's summary at most
 EXCERPT_LINES = 5        # lines in the fallback excerpt
-SYSTEM_REFS = ("card", "follow_up", "carries")   # system notices: never summarized
+SYSTEM_REFS = ("card", "follow_up", "carries", "import", "replay")   # system notices and history: never summarized
+UNNAMED = "Someone"      # the author of a line, when the reader may not be told who
 
 
 def _clip(text, n):
@@ -33,6 +38,8 @@ def _clip(text, n):
 
 
 def _name(c, actor, names):
+    if not actor:
+        return UNNAMED
     if actor not in names:
         if H.is_human(actor):
             names[actor] = H.person_name(c, H.actor_id(actor)) or actor
@@ -40,6 +47,22 @@ def _name(c, actor, names):
             bot = H.bot(c, H.actor_id(actor))
             names[actor] = (bot or {}).get("display_name") or H.actor_id(actor)
     return names[actor]
+
+
+def _read_from(c, viewer, thread):
+    """Where this person's new messages start: (the last sequence number the threads migration carried over, when they
+    joined this thread's tree). A person a thread never added, as on a company thread, has no join: "" passes all."""
+    from . import threads
+    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (threads.MIGRATION_KEY,)).fetchone()
+    carried = int((H._json(row[0], {}) or {}).get("seq") or 0) if row else 0
+    root, names = thread.get("root_id") or thread["id"], viewer.member_names(c)
+    joined = c.execute("SELECT MIN(created_at) FROM thread_members WHERE thread_id=? AND actor IN (%s)"
+                       % ",".join("?" * len(names)), (root, *names)).fetchone()[0]
+    if not joined:
+        follow = c.execute("SELECT created_at FROM thread_followers WHERE thread_id=? AND actor=? AND reason='joined'",
+                           (root, viewer.actor)).fetchone()
+        joined = follow[0] if follow else ""
+    return carried, joined
 
 
 def transcript(c, viewer, thread, scope, me):
@@ -50,21 +73,23 @@ def transcript(c, viewer, thread, scope, me):
         where, args = "m.conversation_id=?", [thread["id"]]
     else:
         where, args = "cv.path LIKE ?", [thread["path"] + "%"]
+    carried, joined = _read_from(c, viewer, thread)
     rows = c.execute(
         "SELECT m.id, m.conversation_id, m.seq, m.from_actor, m.body, m.created, m.refs_json FROM messages m "
         "JOIN conversations cv ON cv.id=m.conversation_id "
         "LEFT JOIN thread_followers f ON f.thread_id=m.conversation_id AND f.actor=? "
-        f"WHERE {where} AND m.seq>COALESCE(f.last_read_seq, 0) AND m.from_actor<>? "
+        f"WHERE {where} AND m.seq>MAX(COALESCE(f.last_read_seq, 0), ?) AND m.created>=? AND m.from_actor<>? "
         "AND m.kind IN ('say','ask','answer','notice') AND m.deleted_at IS NULL "
-        "ORDER BY m.seq DESC LIMIT ?", [me, *args, me, SCAN_LIMIT]).fetchall()
-    names = {}
+        "ORDER BY m.seq DESC LIMIT ?", [me, *args, carried, joined, me, SCAN_LIMIT]).fetchall()
+    names, known = {}, viewer.known(c)
     kept, size, through, left_out = [], 0, 0, 0
     for row in rows:
         refs = H._json(row["refs_json"], {}) or {}
         if any(key in refs for key in SYSTEM_REFS) or not threads.readable(c, viewer, row["id"]):
             continue
         through = max(through, row["seq"] or 0)
-        line = f"{_name(c, row['from_actor'], names)}: {_clip(row['body'], LINE_CHARS)}"
+        author = known.name(row["from_actor"], row["conversation_id"])
+        line = f"{_name(c, author, names)}: {_clip(row['body'], LINE_CHARS)}"
         cost = len(line.encode("utf-8")) + 1
         if len(kept) >= MAX_MESSAGES or size + cost > MAX_BYTES:
             left_out += 1
