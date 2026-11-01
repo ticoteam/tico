@@ -1288,10 +1288,10 @@ THREAD_REPLAY = ("kind", "refs", "parent_message_id", "to_actor", "via", "origin
 def _replay_thread(c, bot, hold, replay, ingest, gate=None):
     """A message held in a thread: Send anyway posts it again through `threads.post`, as the person it was held for
     (`bot` is their replay identity), with the check skipped; the hold's nonce and the reviewer's send are the check.
-    `replay` is what core's post passed to `apply`: `thread_id` and `body`, and the post's own arguments
-    (`THREAD_REPLAY`)."""
+    `replay` is what core's post passed to `apply`: `thread_id` (None when the post starts a thread, with `start` the
+    create arguments that make it) and `body`, and the post's own arguments (`THREAD_REPLAY`)."""
     args = {k: replay[k] for k in THREAD_REPLAY if replay.get(k) is not None}
-    message = T.post(c, bot, replay["thread_id"], replay["body"], checked=None, **args)
+    message = T.post(c, bot, replay.get("thread_id"), replay["body"], checked=None, start=replay.get("start"), **args)
     return {"id": (message or {}).get("id")}
 
 

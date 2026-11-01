@@ -8,6 +8,7 @@ import pytest
 
 from backend import org_rule_check as K
 from backend import org_rules as R
+from backend import threads as T
 from backend import views
 from backend.auth import Identity
 from backend.store import H
@@ -301,3 +302,28 @@ def test_send_anyway_posts_a_held_thread_message_once_as_the_person(ruled):
         row = c.execute("SELECT from_actor, conversation_id FROM messages WHERE body=?", (text,)).fetchone()
     assert (row[0], row[1]) == ("human:cara", thread["id"])               # as the person, into the thread
     post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]}, expected=409)
+
+
+def test_a_held_first_message_makes_no_dm_until_its_send_anyway_posts_it(ruled):
+    api, judge = ruled
+    block_everyone(api)
+    store, text = api.app.state.store, "Kickoff: our favorite color is gold."
+    cara = Identity("human:cara", "human")
+    verdict = K.preflight(store, judge, cara, "threads", text, ["human:ben"])
+    with store.read() as c:
+        conversations = c.execute("SELECT COUNT(*) FROM conversations").fetchone()[0]
+    with store.transaction() as c:
+        held = T.post(c, cara, None, text, checked=verdict, start={"dm": ["human:ben"], "title": "Kickoff"})
+    assert held["held"]["id"] and K.holds(verdict)
+    with store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] == conversations   # no DM yet
+    assert bodies(api, "Kickoff:") == []
+    view = get(api, f"rule-holds/{held['held']['id']}")
+    assert view["can_send"]
+    sent = post(api, f"rule-holds/{held['held']['id']}/send", {"nonce": view["nonce"]})
+    assert sent["hold"]["state"] == "sent"
+    with store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] == conversations + 1
+        row = c.execute("SELECT from_actor, conversation_id FROM messages WHERE body=?", (text,)).fetchone()
+    assert (row[0], row[1] is not None) == ("human:cara", True)           # one message, as the person, in the new DM
+    assert len(bodies(api, "Kickoff:")) == 1
