@@ -170,9 +170,9 @@ def runner_memory_default():
 
 
 def env_file_sets(name):
-    """Whether the install's .env sets the key, with or without spaces around the `=`: its value wins over the default,
-    and an empty value counts. A commented line does not."""
-    pattern = re.compile(r"[ \t]*%s[ \t]*=" % re.escape(name))
+    """Whether the install's .env sets the key in any form compose reads (`NAME=v`, `NAME = v`, `NAME: v`, `export NAME=v`):
+    its value wins over the default, and an empty value counts. A commented line does not."""
+    pattern = re.compile(r"[ \t]*(?:export[ \t]+)?%s[ \t]*[=:]" % re.escape(name))
     try:
         with open(os.path.join(PROJECT, ".env")) as f:
             return any(pattern.match(line) for line in f)

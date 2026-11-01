@@ -110,6 +110,9 @@ def test_the_default_memory_cap_is_the_host_less_a_reserve_and_a_setting_in_env_
     assert env.read_text().endswith("TICO_RUNNER_MEMORY=0\n")
     env.write_text("TICO_TAG=v0.2.0\nTICO_RUNNER_MEMORY = 2g\n")
     assert "memory unset" in run(33554432, "--runner")            # spaces around the = still make a setting
+    for line in ("TICO_RUNNER_MEMORY: 0", "export TICO_RUNNER_MEMORY=0"):  # compose's other assignment forms
+        env.write_text("TICO_TAG=v0.2.0\n" + line + "\n")
+        assert "memory unset" in run(33554432, "--runner"), line
     env.write_text("TICO_TAG=v0.2.0\n# TICO_RUNNER_MEMORY=0\n")
     assert "memory 28g\n" in run(33554432, "--runner")           # a commented line is no setting
 

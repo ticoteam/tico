@@ -89,6 +89,10 @@ def test_a_spaced_or_commented_setting_in_env_is_read_as_the_setting_it_is(monke
     (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\nTICO_RUNNER_MEMORY = 2g\n")
     updater.compose("ps", "-q", "runner")
     assert seen[-1] is None                                                 # `NAME = value` is a setting
+    for line in ("TICO_RUNNER_MEMORY: 0", "export TICO_RUNNER_MEMORY=0"):     # compose's other assignment forms
+        (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\n" + line + "\n")
+        updater.compose("ps", "-q", "runner")
+        assert seen[-1] is None, line
     (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\n# TICO_RUNNER_MEMORY=2g\n")
     updater.compose("ps", "-q", "runner")
     assert seen[-1] == "28g"                                                # a commented line is no setting

@@ -815,7 +815,7 @@ run_runner() {
   # The default memory cap, unless .env has TICO_RUNNER_MEMORY (empty counts as set, and 0 means no limit). It goes in
   # the environment of compose, which outranks .env, so it is never written to .env: a later, bigger computer gets a new default.
   memory_env=
-  if ! as_root grep -Eq '^[[:space:]]*TICO_RUNNER_MEMORY[[:space:]]*=' "$DIR/.env" && [ -f "$work/docker/runner-memory.sh" ]; then
+  if ! as_root grep -Eq '^[[:space:]]*(export[[:space:]]+)?TICO_RUNNER_MEMORY[[:space:]]*[=:]' "$DIR/.env" && [ -f "$work/docker/runner-memory.sh" ]; then
     cap=$(sh "$work/docker/runner-memory.sh" "$MEMINFO" 2>/dev/null) || cap=
     if [ -n "$cap" ]; then
       memory_env="TICO_RUNNER_MEMORY=$cap"
