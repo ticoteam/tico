@@ -495,14 +495,17 @@ audience `members|personal|participants|meeting`, a private task's thread, or a 
              "created": "...", "edited_at": null}}
 {"seq": 813, ..., "id": "<message id>", "thread_id": "...", "root_id": "...", "deleted": true, "revision": 2}
 ```
+`?conversation=` and `?thread=` narrow `messages` to what is on screen (the union of the two) and `?conversation=`
+narrows `runs`. They do not narrow `threads`: the sidebar stays live while a thread is open.
+
 `threads` topic (`changes.topic='threads'`, `subject_id` = thread id, `conversation_id` = thread id; its view is
 `_threads` in `backend/events.py`):
 ```json
 {"seq": 900, "thread_id": "...", "root_id": "...",
- "kind": "created|renamed|archived|unarchived|audience|members|read|sub_thread|counters|reactions",
+ "kind": "created|renamed|archived|unarchived|audience|members|read|sub_thread|counters|activity|reactions",
  "thread": {<thread view>},                      // created|renamed|archived|unarchived|audience|members|sub_thread
  "read": {"last_read_seq": 4411},                // kind=read, only to that reader
- "counters": {"last_seq": 4411, "last_unread_seq": 4400},   // kind=counters
+ "counters": {"last_seq": 4411, "last_unread_seq": 4400},   // kind=counters|activity
  "message_id": "...", "reactions": [{"emoji": ":+1:", "count": 2, "actors": ["human:ana", "bot:legal"]}]}
                                                  // kind=reactions, only when the viewer reads that message
 ```
@@ -514,6 +517,11 @@ audience `members|personal|participants|meeting`, a private task's thread, or a 
 carries them (`message_seq`, and the thread's `last_seq` is the highest `message_seq` seen): clients derive unread
 counts and badges from `messages` events plus their own `read` events. `counters` is written only when the counters
 change without a message (the threads migration, a repair), and tells clients to replace their numbers.
+
+`activity` (`ref` = message id) is written per message posted or deleted, carriers aside, and sent to whoever reads
+that message (or read it before it was deleted; never to someone who opens a migrated Home only for its old history),
+at most once per thread per read. It moves the row in a sidebar that follows no conversation: its counts are the
+viewer's own, so a client reads `GET /api/v2/threads` again, at most every few seconds.
 
 ## 10. REST shapes (§3.4; T2 builds the routes on these service functions)
 
@@ -530,7 +538,7 @@ Thread view (`threads.view(c, viewer, row)`):
 
 | Route | Service function |
 |---|---|
-| `GET /api/v2/threads?cursor=&limit=` | `threads.sidebar(c, viewer, cursor=None, limit=50)` → `{"attention": [...], "threads": [...], "dms": [...], "next_cursor"}`; `attention`: threads with `me.unread` (mentions, asks, DM messages), then every root the viewer owns, is in or follows that holds capped wakes, each with `"capped": n, "capped_since"` |
+| `GET /api/v2/threads?cursor=&limit=` | `threads.sidebar(c, viewer, cursor=None, limit=50)` → `{"attention": [...], "threads": [...], "dms": [...], "next_cursor"}`, ranked before it is paged: roots with an open Needs attention item for the viewer (`thread_attention.items`: mention, ask, DM, held post) or capped wakes the viewer can manage, then unread, then recent, newest first in each. `attention`: the first group's rows on this page, capped ones with `"capped": n, "capped_since"`. Each root row sums its live subtree for this viewer: `me.unread`, `me.activity`, `last_message_at`, and `activity_seq` (the newest `seq` under it). `cursor` is opaque |
 | `GET /api/v2/threads/{id}` | `threads.get(c, viewer, thread_id)` → thread view + `"breadcrumb": [{"id","title"}]` |
 | `GET /api/v2/threads/{id}/timeline?cursor=&limit=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=...)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor"}`; each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "count", "last_seq", "unread", "more"}` |
 | `POST /api/v2/threads/{id}/read {seq}` | `threads.mark_read` |

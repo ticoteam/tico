@@ -988,7 +988,8 @@ def held_for(c, who, operations):
                      f"({marks}) ORDER BY created, id", tuple(operations)).fetchall()
     out = []
     for row in rows:
-        role = _reader(who, dict(row), c)
+        # A person's hold names its reviewer too (reviewer_for); `_reader` without `auth` settles only a bot's.
+        role = _reader(who, dict(row), c) or ("reviewer" if row["reviewer"] == who.actor else None)
         if role in ("reviewer", "represented", "author"):     # author: a person's own held post
             out.append({**dict(row), "role": role})
     return out

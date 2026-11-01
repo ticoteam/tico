@@ -340,3 +340,118 @@ def test_the_people_list_says_my_access_with_see_read_write_and_manage(api):
     assert cara["ops"]["my_access"] == {"see": True, "read": True, "write": True, "manage": False}
     assert "inbox" not in cara                                          # the mail bot is Ana's alone
     assert bot_rows(api, "ana-test")["ops"]["my_access"]["manage"] is True
+
+
+def sidebar(api, token="ben-test", **params):
+    response = api.get("/api/v2/threads", params=params, headers=headers(token))
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def row_of(listed, thread_id):
+    return next((t for t in listed["threads"] + listed["dms"] if t["id"] == thread_id), None)
+
+
+def post_as(api, thread_id, actor, text, **kw):
+    with api.app.state.store.transaction() as c:
+        return threads.post(c, actor, thread_id, text, **kw)
+
+
+def test_the_sidebar_ranks_attention_then_unread_then_recent_before_it_pages(api):
+    mentioned = new_thread(api, title="Mentioned")
+    post_as(api, mentioned["id"], "human:ana", "Can you check this?", to_actor="human:ben")
+    unread = new_thread(api, title="Unread")
+    say(api, unread["id"], "A plain update")            # a person's post is unread for Ben, and asks nothing of him
+    recent = [new_thread(api, title=f"Recent {n}") for n in range(4)]
+    for thread in recent:
+        post_as(api, thread["id"], "bot:ops", "Newer than both, from a bot")
+    first = sidebar(api, limit=1)
+    # The oldest row, and a one-row page still holds it: it is ranked before the page is cut.
+    assert [t["id"] for t in first["attention"]] == [mentioned["id"]] and row_of(first, mentioned["id"])
+    second = sidebar(api, limit=1, cursor=first["next_cursor"])
+    assert [t["id"] for t in second["threads"]] == [unread["id"]]
+    assert second["attention"] == []                    # unread alone is not Needs attention
+    seen, cursor = [mentioned["id"], unread["id"]], second["next_cursor"]
+    while cursor:
+        page = sidebar(api, limit=2, cursor=cursor)
+        seen += [t["id"] for t in page["threads"] + page["dms"]]
+        cursor = page["next_cursor"]
+    assert seen == [mentioned["id"], unread["id"], *[t["id"] for t in reversed(recent)]]    # all of them, once each
+
+
+def test_a_root_row_speaks_for_its_sub_threads_for_each_viewer(api):
+    root = new_thread(api, title="Root", members=("human:ben", "human:cara"), body="Kickoff")
+    assert api.post(f"/api/v2/threads/{root['id']}/read", json={"seq": root["last_seq"] or 1 << 40},
+                    headers=headers("ben-test")).status_code == 200
+    first = message_in(api, root["id"])[0]
+    sub = new_thread(api, title="Sub", members=("human:ben", "human:cara"), parent_message_id=first["id"])
+    other = new_thread(api, title="Other", members=("human:ben",))
+    post_as(api, other["id"], "bot:ops", "Older than the reply below")
+    for token in ("ben-test", "cara-test"):
+        response = api.post(f"/api/v2/threads/{root['id']}/read-all", headers=headers(token))
+        assert response.status_code == 200, response.text
+    reply = say(api, sub["id"], "A reply below the root", token="cara-test")
+    ben = row_of(sidebar(api), root["id"])
+    assert ben["me"]["unread"] == 1 and ben["activity_seq"] == reply["seq"] and ben["activity_seq"] > ben["last_seq"]
+    assert ben["last_message_at"] == reply["created"]
+    assert [t["id"] for t in sidebar(api)["threads"]][0] == root["id"]            # newer than Other, by the sub-thread
+    assert row_of(sidebar(api, "cara-test"), root["id"])["me"]["unread"] == 0      # her own reply is not unread for her
+    post_as(api, sub["id"], "bot:ops", "A bot below the root")
+    assert api.post(f"/api/v2/threads/{sub['id']}/read", json={"seq": 1 << 40}, headers=headers("ben-test")).status_code == 200
+    post_as(api, sub["id"], "bot:ops", "Another bot below the root")
+    quiet = row_of(sidebar(api), root["id"])["me"]
+    assert quiet["unread"] == 0 and quiet["activity"] is True                      # a dot on the root, not a count
+    assert row_of(sidebar(api, "ben-test", **{"with": "human:cara"}), root["id"])["me"]["activity"] is True
+
+
+def test_a_reply_below_a_thread_a_person_cannot_read_lists_nothing_for_them(api):
+    root = new_thread(api, title="Salary bands", members=("human:ben",), body="Kickoff")
+    first = message_in(api, root["id"])[0]
+    sub = new_thread(api, title="Below", members=(), parent_message_id=first["id"])
+    say(api, sub["id"], "A reply below")
+    assert row_of(sidebar(api), root["id"])["me"]["unread"] == 2         # Ben's: the kickoff and the reply
+    assert root["id"] not in str(sidebar(api, "cara-test")) and sub["id"] not in str(sidebar(api, "cara-test"))
+
+
+def test_releasing_a_held_upload_keeps_its_files_for_the_people_in_the_thread(ruled):
+    api, _ = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
+    thread = new_thread(api, members=("human:ben", "human:cara"))
+    sent = api.post(f"/api/v2/uploads/threads/{thread['id']}/messages", data={"text": GOLD},
+                    files={"files": ("gold.txt", b"swatches", "text/plain")}, headers=headers("cara-test"))
+    assert sent.status_code == 200, sent.text
+    held = sent.json()["held"]
+    view = get(api, f"rule-holds/{held['id']}")
+    assert post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]}, token="ana-test")["hold"]["state"] == "sent"
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT id, refs_json FROM messages WHERE body=?", (GOLD,)).fetchone()
+        linked = [r[0] for r in c.execute("SELECT blob_id FROM message_assets WHERE message_id=?", (row["id"],))]
+    [attached] = [m for m in message_in(api, thread["id"], token="ben-test") if m.get("id") == row["id"]]
+    [file] = attached["refs"]["attachments"]
+    assert file["name"] == "gold.txt" and linked == [file["id"]]
+    got = api.get(f"/api/v2/files/{file['id']}", headers=headers("ben-test"))
+    assert got.status_code == 200 and got.content == b"swatches"
+
+
+def test_a_native_held_post_is_on_the_needs_list_and_moves_its_thread_up_for_who_reads_it(ruled):
+    api, _ = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
+    quiet = new_thread(api, title="Held here", members=("human:ben",))
+    say(api, quiet["id"], "Hello.")
+    for later in ("Newer one", "Newer two"):
+        new_thread(api, title=later, members=("human:ben",))
+    held = api.post(f"/api/v2/threads/{quiet['id']}/messages", json={"text": GOLD}, headers=headers("ben-test")).json()["held"]
+    mine = [i for i in get(api, "needs-you", token="ben-test")["items"] if i["kind"] == "thread_held"]
+    assert [(i["id"], i["thread_id"]) for i in mine] == [(held["id"], quiet["id"])]
+    assert [t["id"] for t in sidebar(api, limit=1)["attention"]] == [quiet["id"]]
+    reviewing = [i for i in get(api, "needs-you", token="ana-test")["items"] if i["kind"] == "thread_held"]
+    assert [i["id"] for i in reviewing] == [held["id"]]                   # Ana wrote the rule: it names her reviewer
+    assert quiet["id"] in {t["id"] for t in sidebar(api, "ana-test")["attention"]}
+    # A reviewer outside the thread: her list says a hold waits on her, and her sidebar says nothing of the thread.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE org_rule_holds SET reviewer='human:cara' WHERE id=?", (held["id"],))
+    review = [i for i in get(api, "needs-you", token="cara-test")["items"] if i["kind"] == "thread_held"]
+    assert [i["id"] for i in review] == [held["id"]] and review[0]["thread_id"] is None
+    assert quiet["id"] not in str(sidebar(api, "cara-test"))
+    assert post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")
+    assert sidebar(api, limit=1)["attention"] == []

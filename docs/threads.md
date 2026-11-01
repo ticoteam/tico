@@ -61,8 +61,10 @@ Each reader follows a thread at one level:
 - **muted**: unread counts stay, nothing is sent.
 
 Only human messages, and anything addressed to you, count as unread. A bot's post in a thread you follow is activity:
-a dot, not a count. **Needs attention** at the top of the list holds your threads with unread mentions, asks or DM
-messages, and any thread you are in where the loop guard paused the bots' wakes; posting there lets them go. `hub thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
+a dot, not a count. **Needs attention** at the top of the list holds the threads with something open on your Needs you list: a mention or
+ask you have not answered, an unread DM, a post of yours held for review or held for you to review, and any thread you
+are in where the loop guard paused the bots' wakes; posting there lets them go. Unread threads come next, then the rest,
+newest first. A thread's row counts its sub-threads too. `hub thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
 sub-thread under it.
 
 ## Bots in threads

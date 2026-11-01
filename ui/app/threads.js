@@ -46,10 +46,12 @@ function threadMarkHTML(t, size = 18) {
 }
 const threadUnread = t => Number(t?.me?.unread) || 0;
 const threadActivity = t => !threadUnread(t) && !!t?.me?.activity;
+// A root row speaks for its sub-threads: the newest message anywhere under it.
+const threadSeq = t => Number(t?.activity_seq ?? t?.last_seq) || 0;
 // Unread first, then the most recent; a thread already listed above is left out.
 function threadsOrder(list, skip = new Set()) {
   return list.filter(t => t && !skip.has(t.id) && !t.archived_at)
-    .sort((a, b) => (threadUnread(b) > 0) - (threadUnread(a) > 0) || (Number(b.last_seq) || 0) - (Number(a.last_seq) || 0));
+    .sort((a, b) => (threadUnread(b) > 0) - (threadUnread(a) > 0) || threadSeq(b) - threadSeq(a));
 }
 function threadRowHTML(t, {attention = false} = {}) {
   const n = threadUnread(t), cur = S.route === threadHref(t) || S.route.startsWith(threadHref(t) + '?');
@@ -111,7 +113,9 @@ function threadsPut(view) {
   for (const key of ['attention', 'threads', 'dms']) THREADS[key] = THREADS[key].map(t => {
     if (t.id !== view.id) return t;
     found = true;
-    return {...t, ...view};
+    // A view is that thread's own numbers; what the row sums up from its sub-threads stays until the list is read again.
+    return {...t, ...view, activity_seq: t.activity_seq, last_message_at: t.last_message_at || view.last_message_at,
+            me: {...t.me, ...view.me, unread: t.me?.unread ?? view.me?.unread, activity: t.me?.activity ?? view.me?.activity}};
   });
   if (!found && !view.parent_id) (threadIsDm(view) ? THREADS.dms : THREADS.threads).unshift(view);
   threadsSideRender();
@@ -121,11 +125,21 @@ function threadsMarkedRead(id, seq) {
   for (const key of ['attention', 'threads', 'dms']) THREADS[key] = THREADS[key].map(t => {
     if (t.id !== id || !t.me) return t;
     const me = {...t.me, last_read_seq: Math.max(Number(t.me.last_read_seq) || 0, seq)};
-    if (me.last_read_seq >= (Number(t.last_unread_seq) || 0)) me.unread = 0;
-    if (me.last_read_seq >= (Number(t.last_seq) || 0)) me.activity = false;
+    // Something newer in a sub-thread keeps the row's marks: the list read after this says what is left.
+    const below = Number(t.activity_seq) > (Number(t.last_seq) || 0);
+    if (!below && me.last_read_seq >= (Number(t.last_unread_seq) || 0)) me.unread = 0;
+    if (!below && me.last_read_seq >= (Number(t.last_seq) || 0)) me.activity = false;
     return {...t, me};
   });
   threadsSideRender();
+}
+// A message anywhere under a root: its row moves up now, and its counts come with the next read of the list.
+function threadsActivity(d) {
+  const seq = Number(d.counters?.last_seq) || 0, theirs = d.actor && d.actor !== myActor(), here = S.route === threadHref(d.root_id);
+  for (const key of ['attention', 'threads', 'dms']) THREADS[key] = THREADS[key].map(t => t.id !== d.root_id ? t : {
+    ...t, activity_seq: Math.max(threadSeq(t), seq), me: theirs && !here ? {...t.me, activity: true} : t.me});
+  threadsSideRender();
+  liveThrottle('threads-side-live', threadsLoad, 3000);
 }
 // Every route: the first load, the current row marked, and the stream wired once.
 function threadsSync() {
@@ -138,11 +152,14 @@ function threadsSync() {
   // (`attention`) or a loop guard paused a root (`capped`): the counts are the viewer's own, so the list is read
   // again (once per burst), and each open view is told.
   liveOn('threads', d => {
+    if (d.kind === 'activity') return threadsActivity(d);
     if (d.kind === 'read' && d.read) threadsMarkedRead(d.thread_id, Number(d.read.last_read_seq) || 0);
     else if (d.thread && !d.thread.parent_id) threadsPut(d.thread);
     liveSoon('threads-side', threadsLoad, 400);
     threadViewsLive('threads', d);
   });
+  // A hold or an ask moved on the viewer's Needs you list: the rows it marks are ranked first.
+  liveOn('needs', () => { if (THREADS.on) liveThrottle('threads-side-live', threadsLoad, 3000); });
   liveOn('reset', () => { liveSoon('threads-side', threadsLoad, 400); threadViewsLive('reset', {}); });
 }
 document.addEventListener('click', ev => {

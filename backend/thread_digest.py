@@ -3,8 +3,9 @@ digest gets one email an hour that lists the threads with new messages for them.
 unread count and a link to it. The email carries no message text and no author names, and a title goes only for a
 thread the person can still read, judged message by message at the moment of the send (C1).
 
-Unread means what the thread shows: the messages past the person's read mark (thread_followers.last_read_seq). A
-digest lists a thread when it holds an unread message the person can read that no digest has listed yet, which
+Unread means what the thread shows: the messages past the person's read mark (thread_followers.last_read_seq) written
+by a person or delivered to them, never their own or another bot's post (threads.unread_message_sql). A digest lists a
+thread when it holds an unread message the person can read that no digest has listed yet, which
 thread_digests records per person and thread as the last sequence number a sent email covered. A refused send records
 nothing, so the next run lists the same messages again. A thread beyond MAX_THREADS waits for the next run.
 
@@ -33,7 +34,7 @@ SCHEMA = [
 ]
 # A thread this person follows on digest that has a message past their read mark and past the last digest.
 _BEHIND = ("f.actor=? AND f.following=1 AND f.notify='digest' AND conv.archived_at IS NULL "
-           "AND conv.last_seq > MAX(f.last_read_seq, COALESCE(td.emailed_seq, 0))")
+           "AND conv.last_unread_seq > MAX(f.last_read_seq, COALESCE(td.emailed_seq, 0))")
 
 
 def ensure(c):
@@ -47,7 +48,7 @@ def candidates(c):
         "SELECT DISTINCT f.actor FROM thread_followers f JOIN conversations conv ON conv.id=f.thread_id "
         "LEFT JOIN thread_digests td ON td.thread_id=f.thread_id AND td.actor=f.actor "
         "WHERE f.actor LIKE 'human:%' AND f.following=1 AND f.notify='digest' AND conv.archived_at IS NULL "
-        "AND conv.last_seq > MAX(f.last_read_seq, COALESCE(td.emailed_seq, 0)) ORDER BY f.actor").fetchall()]
+        "AND conv.last_unread_seq > MAX(f.last_read_seq, COALESCE(td.emailed_seq, 0)) ORDER BY f.actor").fetchall()]
 
 
 def title_of(subject):
@@ -85,8 +86,9 @@ def _plan(c, actor):
     for row in behind:
         if not THREAD_ID.fullmatch(row["thread_id"] or ""):
             continue
-        window = c.execute("SELECT * FROM messages WHERE conversation_id=? AND seq>? AND deleted_at IS NULL "
-                           "ORDER BY seq DESC LIMIT ?", (row["thread_id"], row["last_read_seq"], WINDOW)).fetchall()
+        window = c.execute(f"SELECT m.* FROM messages m WHERE m.conversation_id=? AND m.seq>? AND "
+                           f"{threads.unread_message_sql()} ORDER BY m.seq DESC LIMIT ?",
+                           (row["thread_id"], row["last_read_seq"], actor, actor, WINDOW)).fetchall()
         readable = [m for m in window if threads.readable(c, viewer, dict(m))]
         if not any(m["seq"] > row["emailed"] for m in readable):
             continue

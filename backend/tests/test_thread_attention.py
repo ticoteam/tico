@@ -185,3 +185,16 @@ def test_a_paused_thread_is_listed_to_its_manager_only(api):
                   (H.new_id(), H.new_id(), "bot:finance", tid, tid, "queue", "mention", "bot", "capped", now, now))
     assert [i["conversation_id"] for i in needs(api, "thread_capped", token="cara-test")] == [tid]
     assert needs(api, "thread_capped", token="ben-test") == []     # reads the thread, does not manage it
+
+
+def test_a_bot_post_in_a_group_dm_is_listed_as_unread_for_its_people(api):
+    with api.app.state.store.transaction() as c:
+        tid = threads.dm(c, "human:cara", ["human:ana", "human:ben"], title="Numbers")["id"]
+        c.execute("UPDATE conversations SET audience='participants' WHERE id=?", (tid,))
+    say(api, tid, "Numbers are in.", actor="bot:finance")
+    assert [i["conversation_id"] for i in needs(api, "thread_dm")] == [tid]
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT last_seq, last_unread_seq FROM conversations WHERE id=?", (tid,)).fetchone()
+    assert row["last_unread_seq"] == row["last_seq"]
+    with api.app.state.store.read() as c:
+        assert threads.unread(c, ana_viewer(api), tid)["unread"] == 1
