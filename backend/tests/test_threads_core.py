@@ -237,6 +237,51 @@ def test_revisions_apply_highest_first_and_a_delete_is_final(world):
         assert row["deleted_at"] and not row["body"]
         kept = [r[0] for r in c.execute("SELECT body FROM message_revisions WHERE message_id=?", (message["id"],))]
         assert kept and not any(kept), "a deleted message keeps no words in its history"
+        mine = threads.post(c, owner, tid, "Private words")
+        threads.edit_message(c, owner, mine["id"], "Other private words")
+        threads.delete_message(c, owner, mine["id"])
+        # An early build wrote message words into the audit log: the one-time scrub keeps only their lengths.
+        c.execute("INSERT INTO audit_log VALUES('old-row','2026-10-31T00:00:00Z','human:ana','message:old',"
+                  "'{\"body\":\"Old words\",\"revision\":0}',NULL,NULL)")
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (threads.AUDIT_SCRUB_KEY,))
+        threads.ensure(c)
+        audits = " ".join(str(r[0]) + str(r[1]) for r in c.execute(
+            "SELECT before_json, after_json FROM audit_log WHERE object IN (?, 'message:old')", ("message:" + mine["id"],)))
+        assert "words" not in audits and '"length"' in audits, "audit rows keep lengths, never a message's words"
+
+
+def test_only_a_reader_gets_a_duplicate_a_sub_thread_or_a_tombstone(world):
+    """A replicated repeat, an existing sub-thread and a deleted message's tombstone are each answered only after the
+    caller is authorized: an outsider gets 404, a repeat aimed at another thread 409, and a reader who could not read
+    a message before it was deleted gets the quiet hidden row, not its author and refs."""
+    store, auth, who = world
+    with store.transaction() as c:
+        owner = threads.viewer(auth, owner_of(c, auth))
+        member, outsider = [a for a in people(who) if a != owner.actor][:2]
+        tid = threads.create(c, owner, title="Inner", audience="members", members=[member])["id"]
+        other = threads.create(c, owner, title="Other", audience="personal")["id"]
+        origin = {"origin_id": "0191-acme@peer-1", "revision": 0, "install": "peer-1"}
+        sent = threads.post(c, owner, tid, "Mirrored", via="peer", origin=origin)
+        stranger = threads.viewer(auth, who[outsider])
+        with pytest.raises(Problem) as hidden:
+            threads.post(c, stranger, tid, "Mirrored", via="peer", origin=origin)
+        assert hidden.value.status == 404
+        with pytest.raises(Problem) as moved:
+            threads.post(c, owner, other, "Mirrored", via="peer", origin=origin)
+        assert moved.value.status == 409
+        threads.sub_thread(c, owner, sent["id"])
+        with pytest.raises(Problem) as hidden:
+            threads.sub_thread(c, stranger, sent["id"])
+        assert hidden.value.status == 404
+        secret = H.task_create(c, owner.actor, "Acme acquisition", "", owner.actor, private=True, lint=False)
+        gone = threads.post(c, owner, tid, "See the plan", refs={"task": secret["id"]})
+        threads.delete_message(c, owner, gone["id"])
+    with store.read_transaction() as c:
+        listed = threads.timeline(c, threads.viewer(auth, who[member]), tid)["messages"]
+        row = next(m for m in listed if m["id"] == gone["id"])
+        assert row.get("hidden") and "from_actor" not in row and "refs" not in row
+        mine = next(m for m in threads.timeline(c, owner, tid)["messages"] if m["id"] == gone["id"])
+        assert mine["deleted"] and mine["refs"] == {} and mine["body"] is None
 
 
 # ----------------------------------------------------------------------------- C3: loop guard

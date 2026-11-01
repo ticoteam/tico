@@ -418,8 +418,9 @@ The only narrowing: a person who left, or whose sign-in is off, reads nothing. T
 `room_key`, `scope`, `kind` and `task_id` (`threads.audience_of`) for sessions, wakes and posting rules,
 because legacy writers set those columns after the insert. A sub-thread of such a root reads as its root. Likewise `owner_actor` stays as written.
 Threads made by `threads.create`/`home`/`sub_thread` store an audience, and so does each bot's open shared room: the
-migration (and `rooms.sync_shared_room` for a room made later) stores `audience='home'`,
-`owner_actor='bot:<slug>'` on it. Archived duplicate shared rooms stay unstored and read as before.
+migration stores `audience='home'`, `owner_actor='bot:<slug>'` on it. Archived duplicate shared rooms, and a shared
+room `rooms.sync_shared_room` opens after the migration (a bot newly in shared mode), stay unstored and read by the
+live shared-room rule as before.
 
 | today | audience | notes |
 |---|---|---|
