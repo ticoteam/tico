@@ -9,7 +9,8 @@
 //!
 //! Three sockets, all dialled out by runners:
 //! - `/api/v2/runners/me/browser-exit/ws`: the exit computer's link, held while its owner shares. Its runner token is
-//!   checked by Python. The relay sends one JSON `open` message per tunnel down it.
+//!   checked by Python. The relay sends one JSON `open` message per tunnel down it. `seen` (plain GET, same check)
+//!   answers the address a request came from.
 //! - `/api/v2/runners/me/browser-exit/tunnels/{id}/ws?ticket=`: the bot computer's end of one tunnel. The ticket is
 //!   the one-use ticket Python's grant returned to that runner.
 //! - `/api/v2/runners/me/browser-exit/tunnels/{id}/exit?ticket=`: the exit computer's end, with the ticket from `open`.
@@ -529,25 +530,45 @@ pub(super) async fn link_seen(
     ws: WebSocketUpgrade,
     seen: Option<std::net::IpAddr>,
 ) -> Response {
+    let Some(exit) = sharing_exit(&app, &headers).await else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    ws.on_upgrade(move |socket| link_task(app, exit, socket, seen))
+}
+
+/// The exit computer a request's runner token names, when Python says its owner shares it.
+async fn sharing_exit(app: &App, headers: &HeaderMap) -> Option<String> {
     let bearer = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if bearer.is_empty() || bearer.len() > 8192 {
-        return StatusCode::FORBIDDEN.into_response();
+        return None;
     }
     let answer = app
         .policy_answer(json!({"kind": "exit_link", "authorization": bearer}))
         .await;
-    let Some(exit) = answer
+    answer
         .as_ref()
         .and_then(|a| a["runner_id"].as_str())
         .filter(|r| !r.is_empty() && r.len() <= 128)
         .map(str::to_owned)
-    else {
+}
+
+/// The address a sharing exit's request came from. The exit asks once over IPv4 and once over IPv6, since its link
+/// shows only the family it happened to use, and refuses each answer as its own address.
+pub(super) async fn seen(app: App, headers: HeaderMap, seen: Option<std::net::IpAddr>) -> Response {
+    if sharing_exit(&app, &headers).await.is_none() {
         return StatusCode::FORBIDDEN.into_response();
-    };
-    ws.on_upgrade(move |socket| link_task(app, exit, socket, seen))
+    }
+    match seen {
+        Some(ip) => axum::Json(json!({"seen": ip.to_string()})).into_response(),
+        None => (
+            StatusCode::BAD_REQUEST,
+            axum::Json(json!({"error": "the relay can't read this request's address"})),
+        )
+            .into_response(),
+    }
 }
 
 async fn link_task(app: App, exit: String, mut socket: WebSocket, seen: Option<std::net::IpAddr>) {
@@ -1085,6 +1106,23 @@ mod tests {
         };
         // The link came from loopback, a trusted proxy here with no X-Forwarded-For: that is the address it saw.
         assert_eq!(hello.unwrap()["seen"], json!(["127.0.0.1"]));
+        let seen_url = format!(
+            "http{}/api/v2/runners/me/browser-exit/seen",
+            relay.trim_start_matches("ws")
+        );
+        let http = reqwest::Client::new();
+        let refused = http.get(&seen_url).send().await.unwrap();
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        let answer: Value = http
+            .get(&seen_url)
+            .bearer_auth("laptop-token")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(answer, json!({"seen": "127.0.0.1"}));
         let exit_url = format!(
             "{relay}/api/v2/runners/me/browser-exit/tunnels/t1/exit?ticket={}",
             open["ticket"].as_str().unwrap()

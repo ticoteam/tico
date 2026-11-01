@@ -65,6 +65,8 @@ decides who may use which exit; Rust moves opaque bytes (the browser's own TLS) 
 
 - `/api/v2/runners/me/browser-exit/ws` (exit computer's link, runner bearer; Python's policy callback
   answers `{"kind": "exit_link"}` with the runner id). One link per exit; a newer one replaces it.
+- `/api/v2/runners/me/browser-exit/seen` (GET, same bearer and check): `{"seen": ip}`, the address the request
+  came from. The exit asks over IPv4 and IPv6 and refuses each answer as its own address.
 - `/api/v2/runners/me/browser-exit/tunnels/{id}/ws?ticket=...` (bot computer's end)
 - `/api/v2/runners/me/browser-exit/tunnels/{id}/exit?ticket=...` (exit computer's end)
 

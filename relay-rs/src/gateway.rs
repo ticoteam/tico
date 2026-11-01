@@ -173,6 +173,16 @@ async fn exit_link(
     super::exit::link_seen(app, headers, ws, seen).await
 }
 
+/// The address an exit computer's request came from (exit.rs `seen`).
+async fn exit_seen(
+    State(app): State<App>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    let seen = client_ip(&headers, peer.ip(), &app.trusted_proxies);
+    super::exit::seen(app, headers, seen).await
+}
+
 fn strip_hop_headers(headers: &mut HeaderMap) {
     let connection = headers
         .get("connection")
@@ -359,6 +369,7 @@ pub(super) fn routes(app: App) -> Router {
         .route("/api/v2/runners/{rid}/screen/ws", get(browser))
         .route("/api/v2/runners/me/screen/{sid}/ws", get(runner))
         .route("/api/v2/runners/me/browser-exit/ws", get(exit_link))
+        .route("/api/v2/runners/me/browser-exit/seen", get(exit_seen))
         .route(
             "/api/v2/runners/me/browser-exit/tunnels/{tid}/ws",
             get(super::exit::client),

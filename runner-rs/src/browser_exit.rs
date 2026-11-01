@@ -179,6 +179,69 @@ fn hello_seen(text: &str) -> Option<Vec<IpAddr>> {
     })
 }
 
+/// How often the exit asks the relay again which public addresses it connects from: a laptop changes networks.
+const PROBE_EVERY: Duration = Duration::from_secs(300);
+const SEEN_PATH: &str = "/api/v2/runners/me/browser-exit/seen";
+
+/// Whether IPv4 sites are refused: this computer has an IPv4 route but the relay has not told it its public IPv4
+/// address (the router's, behind NAT), which a name could resolve to. Refused until a probe over IPv4 succeeds.
+static V4_UNKNOWN: AtomicBool = AtomicBool::new(true);
+
+fn ipv4_unknown(ip: IpAddr) -> Option<&'static str> {
+    (canonical(ip).is_ipv4() && V4_UNKNOWN.load(Ordering::SeqCst))
+        .then_some("an IPv4 address, refused while this computer's public IPv4 address is unknown (the relay has not answered over IPv4)")
+}
+
+/// Whether this computer can reach the IPv4 internet at all (a UDP connect sends nothing).
+fn has_ipv4_route() -> bool {
+    std::net::UdpSocket::bind("0.0.0.0:0").and_then(|s| s.connect("192.0.2.1:9")).is_ok()
+}
+
+/// Ask the relay, once over IPv4 and once over IPv6 (the hub name's A and AAAA records, dialled separately), which
+/// address each connection came from, and refuse those like this computer's own. The link alone shows only the family
+/// it happened to use. Without IPv6 the IPv4 answer is enough: IPv6 hosts are rarely behind NAT, and their interface
+/// addresses are refused already.
+async fn probe_seen(client: &Client) {
+    let learned = probe_families(client).await;
+    V4_UNKNOWN.store(!learned && has_ipv4_route(), Ordering::SeqCst);
+}
+
+/// Whether a public IPv4 address was learned.
+async fn probe_families(client: &Client) -> bool {
+    let Ok(url) = reqwest::Url::parse(&client.url) else { return false };
+    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else { return false };
+    let host = host.trim_start_matches('[').trim_end_matches(']').to_string();
+    let Ok(token) = bearer(&client.token) else { return false };
+    let addrs: Vec<SocketAddr> = match tokio::time::timeout(DIAL, tokio::net::lookup_host((host.as_str(), port))).await
+    {
+        Ok(Ok(found)) => found.collect(),
+        _ => return false,
+    };
+    let endpoint = format!("{}{SEEN_PATH}", client.url.trim_end_matches('/'));
+    let mut learned = false;
+    for ipv4 in [true, false] {
+        let Some(addr) = addrs.iter().find(|a| a.is_ipv4() == ipv4) else { continue };
+        let Ok(http) = crate::tls::http_builder()
+            .resolve(&host, *addr)
+            .timeout(DIAL)
+            .redirect(reqwest::redirect::Policy::none())
+            .user_agent(format!("Tico-Client/{CLIENT_VERSION}"))
+            .build()
+        else {
+            continue;
+        };
+        let answer = match http.get(&endpoint).bearer_auth(&token).send().await {
+            Ok(r) if r.status().is_success() => r.json::<Value>().await.unwrap_or_default(),
+            _ => continue,
+        };
+        if let Some(ip) = answer["seen"].as_str().and_then(|ip| ip.parse::<IpAddr>().ok()) {
+            remember_seen(&[ip]);
+            learned |= canonical(ip).is_ipv4();
+        }
+    }
+    learned
+}
+
 /// Every address this computer refuses to dial as its own: its interfaces and what the relay saw.
 fn own_and_seen() -> Vec<IpAddr> {
     let mut deny = own_addresses();
@@ -244,7 +307,7 @@ pub async fn dial(host: &str, port: u16) -> Result<TcpStream, String> {
     let mut why = None;
     let allowed: Vec<SocketAddr> = resolved
         .into_iter()
-        .filter(|addr| match refused(addr.ip(), &deny) {
+        .filter(|addr| match refused(addr.ip(), &deny).or_else(|| ipv4_unknown(addr.ip())) {
             Some(reason) => {
                 why.get_or_insert(reason);
                 false
@@ -378,6 +441,7 @@ async fn link_loop(client: Client) {
             continue;
         }
         let began = Instant::now();
+        probe_seen(&client).await;
         match run_link(&client).await {
             Ok(()) => said = None,
             Err(e) => {
@@ -429,8 +493,13 @@ async fn run_link(client: &Client) -> Result<(), String> {
     let mut ws = connect(client, "/api/v2/runners/me/browser-exit/ws", true).await?;
     let room = Arc::new(Semaphore::new(EXIT_TUNNELS));
     let s = shared();
+    let mut probe = tokio::time::interval_at(tokio::time::Instant::now() + PROBE_EVERY, PROBE_EVERY);
     loop {
         tokio::select! {
+            _ = probe.tick() => {
+                let client = client.clone();
+                tokio::spawn(async move { probe_seen(&client).await });
+            }
             frame = ws.next() => match frame {
                 Some(Ok(Message::Text(text))) => {
                     if let Some(addresses) = hello_seen(&text) {
@@ -1266,5 +1335,49 @@ mod tests {
         symlink(format!("{}-{}", host.trim(), gone), &lock).unwrap();
         assert!(run(&[], Some(proxy)).0, "a lock left by a browser that exited is stale");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A stand-in hub answering the relay's `seen` with `body` (an HTTP status line and JSON).
+    async fn seen_hub(status: &'static str, body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut conn, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let mut seen = Vec::new();
+                    while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                        let n = conn.read(&mut buf).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        seen.extend_from_slice(&buf[..n]);
+                    }
+                    let authorized = String::from_utf8_lossy(&seen).contains("Bearer runner-token");
+                    let (status, body) = if authorized { (status, body) } else { ("403 Forbidden", "{}") };
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = conn.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn the_exit_learns_its_public_ipv4_address_from_the_relay_or_refuses_ipv4_sites() {
+        let hub = seen_hub("404 Not Found", "{}").await;
+        probe_seen(&Client::new(&hub, "runner-token", 5, 0).unwrap()).await;
+        if has_ipv4_route() {
+            let why = ipv4_unknown("93.184.215.14".parse().unwrap()).unwrap();
+            assert!(why.contains("public IPv4 address is unknown"), "{why}");
+        }
+        assert_eq!(ipv4_unknown("2606:4700::1111".parse().unwrap()), None, "IPv6 sites go on");
+        let hub = seen_hub("200 OK", r#"{"seen":"81.2.69.170"}"#).await;
+        probe_seen(&Client::new(&hub, "runner-token", 5, 0).unwrap()).await;
+        assert_eq!(ipv4_unknown("93.184.215.14".parse().unwrap()), None);
+        assert_eq!(refused("81.2.69.170".parse().unwrap(), &own_and_seen()), Some("this computer's own address"));
     }
 }
