@@ -253,7 +253,7 @@ class Relay:
             self.trouble("refused")
         except HR.Failed as failed:
             self.trouble(failed.code)
-        except Exception:                                   # the next tick tries again; the state row keeps the code
+        except Exception:  # noqa: BLE001 - the next tick tries again; the state row keeps the code
             self.trouble("internal")
         finally:
             self.lock.release()
@@ -291,8 +291,8 @@ class Relay:
         while not stop.is_set():
             try:
                 await asyncio.to_thread(self.tick)
-            except Exception:
-                pass                                        # the next tick tries again; the error is in the state row
+            except Exception:  # noqa: BLE001, S110 - the next tick tries again; the error is in the state row
+                pass
             try:
                 await asyncio.wait_for(stop.wait(), self.interval)
             except TimeoutError:
