@@ -20,8 +20,6 @@ const OPS_EQUIPMENT_KINDS = [['owned', 'Owned'], ['customer', 'Customer']];
 const OPS_PROJECT_STATUSES = [['open', 'Open'], ['closed', 'Closed']];
 const OPS_SOURCE_ICONS = {quickbooks: 'account_balance', xero: 'account_balance', stripe: 'payments', square: 'store', shopify: 'shopping_cart', csv: 'description', tico: 'edit_note'};
 const OPS_SOURCE_NAMES = {quickbooks: 'QuickBooks', xero: 'Xero', stripe: 'Stripe', square: 'Square', shopify: 'Shopify', csv: 'CSV import', tico: 'Tico'};
-// How far ahead Due soon looks on a row.
-const OPS_DUE_SOON_DAYS = 30;
 let OPS = null;           // the open page: {load, tab, sel, rows, next, money, refs, panelLoad}
 const OPS_FILTERS = {};   // each tab's search and filters, kept while the person moves between tabs
 let OPS_REFS = null;      // what the forms pick from and rows name: {customers, locations, accounts}, read once a visit
@@ -30,12 +28,17 @@ const opsHref = (tab, id = '') => `${OPS_ROUTE}/${tab}${id ? '?id=' + encodeURIC
 const opsCustomerHref = (tab, id) => `${OPS_ROUTE}/${tab}?customer=${encodeURIComponent(id)}`;
 const opsQs = obj => new URLSearchParams(Object.entries(obj).filter(([, v]) => v != null && v !== '')).toString();
 const opsLabel = (pairs, value) => (pairs.find(([v]) => v === value) || [])[1] || value || '';
-const opsDayAdd = days => { const d = new Date(); d.setDate(d.getDate() + days); return finIso(d); };
 const opsDay = s => s ? finDayLabel(s) : '';
 const opsFail = e => `<p class="muted ops-note">${esc(e?.status === 403 ? 'Not in your view.' : e?.message || 'Did not load.')}</p>`;
 // A route a sibling feature has not shipped answers 404: the same as having nothing yet.
 const opsAbsent = e => e?.status === 404 || e?.status === 405;
-const opsMoney = (r, c = r.price) => c == null ? '' : finUsd(c) + (r.currency && r.currency !== 'USD' ? ' ' + esc(r.currency) : '');
+// In the row's own currency: finUsd says dollars, so only USD goes through it.
+function opsMoney(r, c = r.price) {
+  if (c == null) return '';
+  if (!r.currency || r.currency === 'USD') return finUsd(c);
+  try { return esc((c / 100).toLocaleString('en-US', {style: 'currency', currency: r.currency})); }
+  catch { return esc(`${(c / 100).toFixed(2)} ${r.currency}`); }
+}
 // Who holds the records right: Admins by default, anyone else by a grant (GET /v2/finance/access). The server decides.
 const opsEditor = () => settingsIsAdmin() || !!finCapsOf(FIN_ACCESS, finMe())?.may('finance.records');
 // Part of the company's lines: figures are labeled, never called a total.
@@ -46,7 +49,7 @@ function opsSourceIcon(r) {
   return `<span class="nav-icon ops-src" title="${esc(name)}" role="img" aria-label="${esc(name)}">${esc(OPS_SOURCE_ICONS[key] || 'description')}</span>`;
 }
 const opsCustomerName = r => r.customer_name || '';
-const opsLocationName = r => r.location_name || (OPS_REFS?.locations || []).find(l => l.id === r.location_id)?.name || '';
+const opsLocationName = r => r.location_name || '';
 
 // The tabs in this company's sidebar choice, keeping the one a link opened even when it is hidden. All hidden lists all:
 // the page opened by a bookmark still has its tabs.
@@ -82,16 +85,14 @@ function pageOperations() {
   })();
 }
 function operationsStop() {
-  if (OPS && !rdUnder(S.route || '', OPS_ROUTE)) { OPS = null; OPS_REFS = null; document.querySelectorAll('dialog.fin-dlg').forEach(d => d.close()); }
+  if (OPS && !rdUnder(S.route || '', OPS_ROUTE)) { OPS = null; OPS_REFS = null; document.body.classList.remove('ops-sheet-open'); document.querySelectorAll('dialog.fin-dlg').forEach(d => d.close()); }
 }
 // Who may edit, the customers (every teammate reads their names), the locations, and the accounts for whoever holds the
 // books. Each may be refused or absent; the page draws without it.
 async function opsRefs(fresh = false) {
   if (OPS_REFS && !fresh) return OPS_REFS;
-  const list = (promise, key) => promise.then(r => r?.[key] || []).catch(() => []);
-  const [, customers, locations] = await Promise.all([finProbe(),
-    list(get('/v2/customers?' + opsQs({limit: 200}), {fresh: true}), 'customers'),
-    list(get('/v2/locations?' + opsQs({limit: 200}), {fresh: true}), 'locations')]);
+  const list = (promise, key) => promise.then(r => Array.isArray(r) ? r : r?.[key] || []).catch(() => []);
+  const [, customers, locations] = await Promise.all([finProbe(), list(finPaged('/v2/customers', 'customers'), 'x'), list(finPaged('/v2/locations', 'locations'), 'x')]);
   // Accounts are for whoever may set them; a teammate holding only the records right never sees the picker.
   const accounts = finCapsOf(FIN_ACCESS, finMe())?.may('finance.book') ? await list(get('/v2/finance/chart', {fresh: true}), 'accounts') : [];
   return (OPS_REFS = {customers, locations, accounts});
@@ -117,10 +118,9 @@ const OPS_COLS = {
 const opsNameCell = r => `<a href="${opsHref(OPS.tab, r.id)}" class="ops-name">${esc(r.name)}</a>${r.archived_at ? ' <span class="pill">Inactive</span>' : ''}`;
 function opsNextDue(r) {
   if (!r.next_due_on) return '';
-  const when = opsDueState(r.next_due_on);
-  return `<span class="${when === 'overdue' ? 'ops-overdue' : when === 'soon' ? 'ops-soon' : ''}">${esc(opsDay(r.next_due_on))}</span>`;
+  const when = r.next_due_status;
+  return `<span class="${when === 'overdue' ? 'ops-overdue' : when === 'due' ? 'ops-soon' : ''}">${esc(opsDay(r.next_due_on))}</span>`;
 }
-const opsDueState = day => !day ? '' : day < finToday() ? 'overdue' : day <= opsDayAdd(OPS_DUE_SOON_DAYS) ? 'soon' : 'later';
 
 // ----------------------------------------------------------------- the bar and the table
 function opsFilterControls(state) {
@@ -142,12 +142,14 @@ function opsShell(state) {
       ${edit && importable ? '<button type="button" class="ghost" data-ops-import>Import CSV</button>' : ''}
       ${edit && state.tab === 'equipment' ? '<button type="button" class="ghost" data-ops-photo>+ Add from photo</button><input type="file" accept="image/*" data-ops-photo-file hidden aria-label="Data plate photo">' : ''}
       ${edit ? '<button type="button" class="primary" data-ops-add>+ Add</button>' : ''}</div>
-    <div class="ops-split" id="ops-split"><div class="ops-main"><div class="ops-scroll" id="ops-table">${skelRows(6, {dot: false})}</div></div><aside class="ops-panel" id="ops-panel" aria-label="Details" hidden></aside></div>`;
+    <div class="ops-split" id="ops-split"><div class="ops-main"><div class="ops-scroll" id="ops-table">${skelRows(6, {dot: false})}</div></div><aside class="ops-panel" id="ops-panel" aria-label="Details" tabindex="-1" hidden></aside></div>`;
   const body = $('#ops-body');
   let timer = 0;
   body.querySelector('[data-ops-q]').oninput = ev => { clearTimeout(timer); timer = setTimeout(() => { f.q = ev.target.value.trim(); void opsLoad(state); }, 300); };
   body.querySelector('[data-ops-inactive]').onchange = ev => { f.inactive = ev.target.checked; void opsLoad(state); };
   body.onchange = ev => { const k = ev.target.dataset?.opsF; if (k) { f[k] = ev.target.value; void opsLoad(state); } };
+  // Esc closes the panel; the search box keeps Esc for itself, and an open dialog sits outside this body.
+  body.onkeydown = ev => { if (ev.key === 'Escape' && !ev.target.matches?.('input,select,textarea') && (state.sel || state.customer)) location.hash = opsHref(state.tab); };
   const on = (sel, run) => { const el = body.querySelector(sel); if (el) el.onclick = run; };
   on('[data-ops-add]', () => opsForm(state.tab, null));
   on('[data-ops-import]', () => opsImportOpen(state.tab));
@@ -179,6 +181,7 @@ async function opsLoad(state, more = false) {
     }
   } catch (e) {
     if (OPS !== state || state.load !== load) return;
+    if (more) { toast(e?.message || 'Did not load', true); opsTable(state); return; }   // the rows already here stay
     if (!opsAbsent(e)) { $('#ops-table').innerHTML = opsFail(e); return; }
     page = {[state.tab]: [], next_cursor: null};
   }
@@ -186,9 +189,10 @@ async function opsLoad(state, more = false) {
   state.rows = [...(more ? state.rows : []), ...(page?.[state.tab] || [])];
   state.next = page?.next_cursor || null;
   state.money = money;
+  const first = !state.loaded;
   state.loaded = true;
   opsTable(state);
-  opsSelect();
+  if (first) opsSelect();   // later reads leave the open panel as it is: opsTable marks its row
 }
 function opsTable(state) {
   const host = $('#ops-table'); if (!host) return;
@@ -198,14 +202,14 @@ function opsTable(state) {
   const f = OPS_FILTERS[state.tab], narrowed = !!(f.q || f.customer || f.location || f.kind || f.status || f.due);
   if (!rows.length) {
     const noun = {locations: 'locations', items: 'products or services', projects: 'projects', equipment: 'equipment'}[state.tab];
-    host.innerHTML = `<p class="muted ops-note">No ${noun}${narrowed ? ' match' : ''}</p>`;
+    host.innerHTML = `<p class="muted ops-note">No ${noun}${narrowed ? (state.tab === 'equipment' ? ' matches' : ' match') : ''}</p>`;
     return;
   }
   const your = state.tab === 'projects' && state.money && state.moneyPartial;
   const moneyCol = label => ['Income', 'Costs', 'Profit'].includes(label);
   host.innerHTML = `<table class="ops-t ops-t-${state.tab}"><thead><tr>${cols.map(([label, , cls]) =>
       `<th scope="col" class="${cls || ''}">${esc(label)}${your && label === 'Income' ? ' <span class="pill" data-ops-your-view>Your view</span>' : ''}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map(r => `<tr data-ops-row="${esc(r.id)}"${r.archived_at ? ' class="ops-off"' : ''}>${cols.map(([label, cell, cls]) => {
+    <tbody>${rows.map(r => `<tr data-ops-row="${esc(r.id)}" class="${r.archived_at ? 'ops-off' : ''}${r.id === state.sel ? ' ops-on' : ''}">${cols.map(([label, cell, cls]) => {
       const html = cell(r);
       return `<td data-l="${esc(label)}${your && moneyCol(label) ? ' · Your view' : ''}" class="${cls || ''}">${html}</td>`;
     }).join('')}</tr>`).join('')}</tbody></table>
@@ -229,7 +233,7 @@ const opsLocationFields = r => {
   const a = r?.address || {};
   return `${opsInput('Name', 'name', r?.name, 'maxlength="200" required')}
     ${opsPick('Kind', 'kind', OPS_LOCATION_KINDS, r?.kind || 'store', null)}
-    ${opsPick('Parent', 'parent_id', opsLocations(r?.id), r?.parent_id, '—')}
+    ${opsPick('Parent', 'parent_id', opsLocations(r?.id), r?.parent_id, '—', r?.parent_name)}
     ${opsPick('Customer', 'customer_id', opsCustomers(), r?.customer_id, '—', r && opsCustomerName(r))}
     ${opsInput('Street', 'street', a.street)}
     ${opsInput('City', 'city', a.city)}${opsInput('State', 'state', a.state)}${opsInput('Postal code', 'postal_code', a.postal_code)}
@@ -258,10 +262,12 @@ const opsEquipmentFields = r => `${opsInput('Name', 'name', r?.name, 'maxlength=
     ${opsInput('Installed', 'installed_on', r?.installed_on, 'type="date"')}${opsInput('Warranty ends', 'warranty_ends_on', r?.warranty_ends_on, 'type="date"')}`;
 
 // What the form says, per record type: every field the person can edit.
-function opsFormValues(tab, form) {
+function opsFormValues(tab, form, was) {
   const v = n => form.elements[n]?.value.trim() ?? '';
   if (tab === 'locations') {
-    const address = Object.fromEntries(['street', 'city', 'state', 'postal_code'].map(k => [k, v(k)]).filter(([, x]) => x));
+    // Over the old address: a key the form doesn't show (an import's country) stays.
+    const address = {...was?.address};
+    for (const k of ['street', 'city', 'state', 'postal_code']) { if (v(k)) address[k] = v(k); else delete address[k]; }
     return {name: v('name'), kind: v('kind'), parent_id: v('parent_id'), customer_id: v('customer_id'), address};
   }
   if (tab === 'items') {
@@ -279,7 +285,9 @@ function opsFormValues(tab, form) {
     installed_on: v('installed_on'), warranty_ends_on: v('warranty_ends_on')};
 }
 const opsEmpty = x => x == null || x === '' || x === false || (typeof x === 'object' && !Object.keys(x).length);
-const opsSame = (a, b) => JSON.stringify(a ?? '') === JSON.stringify(b ?? '') || (opsEmpty(a) && opsEmpty(b));
+// Key by key: the API may order an address differently from the form.
+const opsSorted = x => x && typeof x === 'object' && !Array.isArray(x) ? Object.entries(x).sort(([a], [b]) => a.localeCompare(b)) : x ?? '';
+const opsSame = (a, b) => JSON.stringify(opsSorted(a)) === JSON.stringify(opsSorted(b)) || (opsEmpty(a) && opsEmpty(b));
 // A create sends what was filled in; an edit, only what changed.
 function opsPayload(tab, values, was) {
   const one = OPS_ONE[tab];
@@ -290,13 +298,13 @@ function opsForm(tab, was) {
   const one = OPS_ONE[tab], title = (was ? 'Edit ' : 'New ') + {locations: 'location', items: 'product or service', projects: 'project', equipment: 'equipment'}[tab];
   const fields = {locations: opsLocationFields, items: opsItemFields, projects: opsProjectFields, equipment: opsEquipmentFields}[tab](was);
   const dlg = finDialog(title, fields, was ? 'Save' : 'Add', async form => {
-    const values = opsFormValues(tab, form);
+    const values = opsFormValues(tab, form, was);
     if (!values.name) throw new Error('A name');
     const payload = opsPayload(tab, values, was);
     if (tab === 'locations' && !was) payload.in_books = !!form.elements.in_books?.checked;
     if (was && Object.keys(payload).length === 1) return;
     await finAct(`${one}_${was ? 'update' : 'create'}`, payload);
-    await opsAfterWrite();
+    await opsAfterWrite(was?.id);
   });
   // In books follows the kind until the person sets it themselves (customer sites and vehicles stay out of the books).
   const form = dlg.querySelector('form'), books = form.elements.in_books, kind = form.elements.kind;
@@ -306,15 +314,18 @@ function opsForm(tab, was) {
     kind.onchange = () => { if (!touched) books.checked = !OPS_LOCAL_KINDS.includes(kind.value); };
   }
 }
-// A write's effect: every list and pick list read again.
-async function opsAfterWrite() {
+// A write's effect: the pick lists read again, and the record's row and panel, in place, so a person deep in the list stays
+// there. A new record or an import reads the list again.
+async function opsAfterWrite(id = '') {
   await opsRefs(true);
-  if (OPS && $('#ops-table')) { await opsLoad(OPS); }
+  if (!OPS || !$('#ops-table')) return;
+  if (id) { await opsRowRefresh(OPS, id); opsSelect(); }
+  else await opsLoad(OPS);
 }
 async function opsSetActive(tab, r, active) {
-  await finAct(`${OPS_ONE[tab]}_update`, {[OPS_ONE[tab] + '_id']: r.id, active});
-  toast(active ? 'Restored' : 'Marked inactive');
-  await opsAfterWrite();
+  const done = await finAct(`${OPS_ONE[tab]}_update`, {[OPS_ONE[tab] + '_id']: r.id, active});
+  if (done?.status === 'committed') toast(active ? 'Restored' : 'Marked inactive');   // otherwise finAct said who it went to
+  await opsAfterWrite(r.id);
 }
 
 // ----------------------------------------------------------------- + Add from photo

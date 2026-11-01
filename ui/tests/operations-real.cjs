@@ -182,6 +182,26 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       assert.equal(await page.locator('#ops-panel h2').innerText(), 'Beta Foods');
       await page.locator('#ops-panel').getByText('EST-77').waitFor({timeout: t(15000)});
       await shot(page, 'real-desktop-customer-panel-owner');
+
+      // The panel's link opens that document in Finance, not the list.
+      const estimate = page.locator('#ops-panel a', {hasText: 'EST-77'});
+      assert.match(await estimate.getAttribute('href'), /receivables\/estimates\?doc=/);
+      await estimate.click();
+      await page.locator('#fin-rail', {hasText: 'EST-77'}).waitFor({timeout: t(15000)});
+
+      // Light mode, for a look at contrast.
+      await page.evaluate(() => window.ticoTheme?.set('light'));
+      await go(page, '#/operations/equipment');
+      await tabReady(page, 'equipment');
+      await shot(page, 'real-light-equipment');
+      await page.locator('#ops-table').getByText('Rooftop unit 3').click();
+      await page.locator('#ops-panel h2').waitFor();
+      await page.locator('[data-due]').first().waitFor({timeout: t(15000)});
+      await shot(page, 'real-light-equipment-panel');
+      await go(page, '#/operations/locations');
+      await tabReady(page, 'locations');
+      await shot(page, 'real-light-locations');
+      await page.evaluate(() => window.ticoTheme?.set('dark'));
       assert.deepEqual(errors, [], 'owner page errors');
       await page.context().close();
     }

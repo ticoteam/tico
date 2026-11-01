@@ -17,7 +17,7 @@ async function renderSettingsSidebar() {
   const sw = (key, label, child = false) => `<label class="sbset-row${child ? ' sbset-child' : ''}"><span>${esc(label)}</span><input type="checkbox" role="switch" class="people-switch" data-sb-key="${esc(key)}" aria-label="${esc(label)}"${hidden.has(key) ? '' : ' checked'}${admin ? '' : ' disabled'}></label>`;
   host.innerHTML = `<div class="sbset-rows">${RD_SECTIONS.map(([key, label]) => sw(key, label)
       + (key === 'operations' ? OPS_TABS.map(([tab, name]) => sw(opsTabKey(tab), name, true)).join('') : '')).join('')}</div>
-    <label class="sbset-row sbset-type"><span>Business type</span><select data-sbset-type aria-label="Business type"${admin ? '' : ' disabled'}>${grOpts(SB_BUSINESS_TYPES, S.config.business_type || '', '—')}</select></label>
+    <label class="sbset-row sbset-type"><span>Business type</span><select data-sbset-type aria-label="Business type"${admin ? '' : ' disabled'}>${grOpts(SB_BUSINESS_TYPES, S.config.business_type || '', S.config.business_type ? null : '—')}</select></label>
     ${admin ? '' : `<p class="settings-cell-note" data-sb-who>${esc((w => w[0].toUpperCase() + w.slice(1))(read?.who_may_change || 'the owner or an admin'))} can change this.</p>`}
     <p class="settings-cell-note err" role="status" data-sb-status hidden></p>`;
   if (!admin) return;
@@ -44,5 +44,10 @@ async function renderSettingsSidebar() {
     };
   });
   const type = host.querySelector('[data-sbset-type]'), was = type.value;
-  type.onchange = () => void save({business_type: type.value}, () => { type.value = S.config.business_type || was; });
+  // Once set it stays set: the server takes no blank, so a chosen type stops offering one.
+  type.onchange = () => {
+    if (!type.value) { type.value = S.config.business_type || was; return; }
+    void save({business_type: type.value}, () => { type.value = S.config.business_type || was; })
+      .then(() => { if (S.config.business_type) type.querySelector('option[value=""]')?.remove(); });
+  };
 }

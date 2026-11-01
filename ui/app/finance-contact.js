@@ -67,7 +67,7 @@ function finContactDraw(me, parts) {
   } else {
     const list = (title, rows, row) => rows?.length ? `<h3 class="fin-h">${title}</h3>${rows.map(row).join('')}` : '';
     const open = (href, label) => `<a class="fin-link" href="${esc(href)}">${esc(label)}</a>`;
-    out.push(list('Sites', parts.sites, s => finKv(s.name, esc([s.address?.city, s.address?.state].filter(Boolean).join(', ')))),
+    out.push(list('Locations', parts.sites, s => finKv(s.name, esc([s.address?.city, s.address?.state].filter(Boolean).join(', ')))),
       list('Equipment', parts.gear, e => finKv(e.name, esc([e.make, e.model].filter(Boolean).join(' ')))),
       list('Estimates', parts.estimates, e => finKv(e.number || 'Estimate', open(finHref('/receivables/estimates', {doc: e.id}), finUsd(e.total)))),
       list('Invoices', parts.invoices, i => finKv(i.number || 'Invoice', open(finHref('/receivables', {doc: i.id}), finUsd(i.status === 'draft' ? i.total : i.remaining ?? i.total)))),

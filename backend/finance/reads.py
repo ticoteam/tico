@@ -1536,6 +1536,12 @@ def _customer_names(ctx: Ctx, kind: str, rows: Sequence[Any]) -> dict[str, str]:
     return {cid: str(row["name"]) for cid, row in SAP.contacts(ctx.c, ids).items()}
 
 
+def _place_names(ctx: Ctx, kind: str, rows: Sequence[Any]) -> dict[str, str]:
+    """The name of each location the rows name: a location's parent, a piece of equipment's location."""
+    column = {"location": "parent_id", "equipment": "location_id"}.get(kind)
+    return RR.names_of(ctx.c, "locations", [str(r[column]) for r in rows if r[column]]) if column else {}
+
+
 def _account_shown(view: VW.View, accounts: Mapping[str, Account], account_id: object) -> bool:
     """Whether a record's account may show: an unset one always (it reveals nothing), a set one when the viewer sees
     that account."""
@@ -1608,24 +1614,27 @@ def _in_books(ctx: Ctx, kind: str, rows: Sequence[Any]) -> set[str] | None:
 
 
 def _record_out(ctx: Ctx, kind: str, r: Any, view: VW.View, source: str, names: Mapping[str, str],
-                due: Mapping[str, str] | None = None, books: set[str] | None = None) -> Row:
+                due: Mapping[str, str] | None = None, books: set[str] | None = None,
+                places: Mapping[str, str] | None = None, due_status: Mapping[str, str] | None = None) -> Row:
     """A record as the records API shows it, to a teammate: an item's sale price and description whatever the viewer's
     Finance view; an item's accounts show to the viewers who see them. A location's, equipment's or project's customer
-    shows by id and name. A location's or equipment's next due day comes from `due` (records/due_dates.next_due_for),
-    null when none is open. On a mirrored book a location says whether it is `in_books` (see _in_books). An item carries
+    shows by id and name, a location's parent and equipment's location too (`places`). A location's or equipment's next
+    due day comes from `due` (records/due_dates.next_due_for), null when none is open, and its status from `due_status`. On a mirrored book a location says whether it is `in_books` (see _in_books). An item carries
     its last synced quantity, null on books that keep none. Only teammates reach this (see _teammate_or_refuse)."""
     out: Row = {"id": str(r["id"]), "name": str(r["name"]), "archived_at": r["archived_at"], "source": source,
                 "as_of": ctx.at}
     if kind == "location":
         out.update(kind=str(r["kind"]), parent_id=r["parent_id"], address=json.loads(r["address"] or "{}"),
-                   next_due_on=(due or {}).get(str(r["id"])))
+                   parent_name=(places or {}).get(str(r["parent_id"])), next_due_on=(due or {}).get(str(r["id"])),
+                   next_due_status=(due_status or {}).get(str(r["id"])))
         if books is not None:
             out["in_books"] = str(r["id"]) in books
         out.update(_customer_out(r["customer_id"], names))
     elif kind == "equipment":
         out.update(kind=str(r["kind"]), location_id=r["location_id"], make=str(r["make"]), model=str(r["model"]),
                    serial=str(r["serial"]), installed_on=r["installed_on"], warranty_ends_on=r["warranty_ends_on"],
-                   photo_file_id=r["photo_file_id"], next_due_on=(due or {}).get(str(r["id"])))
+                   photo_file_id=r["photo_file_id"], location_name=(places or {}).get(str(r["location_id"])),
+                   next_due_on=(due or {}).get(str(r["id"])), next_due_status=(due_status or {}).get(str(r["id"])))
         out.update(_customer_out(r["customer_id"], names))
     elif kind == "item":
         out.update(sku=str(r["sku"]), kind=str(r["kind"]), unit=str(r["unit"]), currency=str(r["currency"]),
@@ -1636,6 +1645,14 @@ def _record_out(ctx: Ctx, kind: str, r: Any, view: VW.View, source: str, names: 
         out.update(status=str(r["status"]))
         out.update(_customer_out(r["customer_id"], names))
     return out
+
+
+def _due_of(ctx: Ctx, kind: str, rows: Sequence[Any]) -> tuple[dict[str, str], dict[str, str]]:
+    """The rows' next due days and statuses; only locations and equipment have them."""
+    if kind not in ("location", "equipment"):
+        return {}, {}
+    both = RD.next_due_and_status(ctx.c, kind, [str(r["id"]) for r in rows], DD.today_of(ctx))
+    return {k: day.isoformat() for k, (day, _) in both.items()}, {k: state for k, (_, state) in both.items()}
 
 
 def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archived: str = "hide",
@@ -1660,10 +1677,11 @@ def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archi
     nxt = tab.encode_cursor([str(shown[-1]["name"]), str(shown[-1]["id"])]) if len(rows) > most else None
     sources = SM.record_providers(c, RECORD_TABLE[kind], [str(r["id"]) for r in shown])
     names = _customer_names(ctx, kind, shown)
-    due = RD.next_due_for(c, kind, [str(r["id"]) for r in shown]) if kind in ("location", "equipment") else {}
-    books = _in_books(ctx, kind, shown)
-    return {RECORD_PLURAL[kind]: [_record_out(ctx, kind, r, view, sources.get(str(r["id"]), "tico"), names, due=due, books=books)
-                                  for r in shown], "next_cursor": nxt}
+    due, states = _due_of(ctx, kind, shown)
+    books, places = _in_books(ctx, kind, shown), _place_names(ctx, kind, shown)
+    return {RECORD_PLURAL[kind]: [_record_out(ctx, kind, r, view, sources.get(str(r["id"]), "tico"), names, due=due,
+                                              books=books, places=places, due_status=states) for r in shown],
+            "next_cursor": nxt}
 
 
 def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at: str | None = None) -> Row:
@@ -1675,9 +1693,9 @@ def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at:
     if row is None:
         raise FinanceError(NOT_FOUND, f"no such {kind}")
     source = SM.record_providers(c, RECORD_TABLE[kind], [str(row["id"])]).get(str(row["id"]), "tico")
-    due = RD.next_due_for(c, kind, [str(row["id"])]) if kind in ("location", "equipment") else {}
+    due, states = _due_of(ctx, kind, [row])
     return {kind: _record_out(ctx, kind, row, view, source, _customer_names(ctx, kind, [row]), due=due,
-                              books=_in_books(ctx, kind, [row]))}
+                              books=_in_books(ctx, kind, [row]), places=_place_names(ctx, kind, [row]), due_status=states)}
 
 
 def customer_extras(c: sqlite3.Connection, viewer: str, customer_id: str, at: str | None = None) -> Row:
@@ -1692,10 +1710,11 @@ def customer_extras(c: sqlite3.Connection, viewer: str, customer_id: str, at: st
     ids = [str(r["id"]) for r in equipment]
     sources = SM.record_providers(c, "equipment", ids)
     names = _customer_names(ctx, "equipment", equipment)
-    due = RD.next_due_for(c, "equipment", ids)
+    due, states = _due_of(ctx, "equipment", equipment)
+    places = _place_names(ctx, "equipment", equipment)
     return {
-        "equipment": [_record_out(ctx, "equipment", r, view, sources.get(str(r["id"]), "tico"), names, due=due)
-                      for r in equipment],
+        "equipment": [_record_out(ctx, "equipment", r, view, sources.get(str(r["id"]), "tico"), names, due=due,
+                                  places=places, due_status=states) for r in equipment],
         "due_dates": DD.customer_due_dates(ctx, viewer, contact_id=customer_id,
                                            location_ids=[str(r["id"]) for r in locations], equipment_ids=ids),
     }
@@ -1733,8 +1752,8 @@ def customer_panel(c: sqlite3.Connection, viewer: str, contact_id: str, at: str 
     names = _customer_names(ctx, "location", locations)
     out: Row = {
         "contact": {"id": str(row["id"]), "name": str(row["name"])},
-        "locations": [_record_out(ctx, "location", r, view, sources.get(str(r["id"]), "tico"), names)
-                      for r in locations],
+        "locations": [_record_out(ctx, "location", r, view, sources.get(str(r["id"]), "tico"), names,
+                                  places=_place_names(ctx, "location", locations)) for r in locations],
         "estimates": None,
         "invoices": None,
     }
