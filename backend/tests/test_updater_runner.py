@@ -52,6 +52,30 @@ def test_runner_mode_manages_the_runner_service_and_image(monkeypatch, tmp_path)
     assert "TICO_TAG=v0.2.0" in (tmp_path / ".env").read_text()      # a later `docker compose up` stays on it
 
 
+def test_the_runner_compose_gets_the_host_memory_default_unless_env_sets_one(monkeypatch, tmp_path):
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:       33554432 kB\n")                     # 32 GiB: the same default the installer gives
+    monkeypatch.setenv("TICO_RUNNER_MEMORY_RULE", str(SOURCE.parent / "runner-memory.sh"))
+    monkeypatch.setenv("TICO_UPDATER_MEMINFO", str(meminfo))
+    updater = load(monkeypatch, "runner", tmp_path)
+    seen = []
+
+    def run(argv, env=None, **kw):
+        seen.append(env.get("TICO_RUNNER_MEMORY"))
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(updater, "docker_run", run)
+    (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\n")
+    updater.compose("ps", "-q", "runner")
+    assert seen[-1] == "28g"
+    (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\nTICO_RUNNER_MEMORY=0\n")
+    updater.compose("ps", "-q", "runner")
+    assert seen[-1] is None                                                 # .env says 0: compose gets no override
+    (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\nTICO_RUNNER_MEMORY=2g\n")
+    updater.compose("ps", "-q", "runner")
+    assert seen[-1] is None
+
+
 def test_a_runner_that_does_not_turn_healthy_is_rolled_back(monkeypatch, tmp_path):
     updater = load(monkeypatch, "runner", tmp_path)
     (tmp_path / ".env").write_text("TICO_URL=https://tico.example.com\n")
