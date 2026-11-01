@@ -317,7 +317,7 @@ volume, so harnesses survive a restart or a new image. The directory is put last
 
 ## Choosing what a computer installs
 
-**Settings > Computers > Installation and updates** lists every harness on each computer with an **Enabled** switch for
+Each computer's pop-up has an **Installation and updates** section, under **Versions and updates** in **Settings > Computers**. It lists every harness on that computer with a **Keep installed** switch for
 the owner. These controls manage installation; the separate status above says whether each tool is signed in.
 A harness a bot on that computer runs on, as its own or its fallback, is always on: the switch is locked and the
 server refuses an off for it (409; `bot_runtimes` in `GET /api/v2/operations` lists them). Any other one can be turned on, for
@@ -347,7 +347,7 @@ A harness can be **pinned** to a version: the runner keeps that version and only
 The manifest can ship a pin (`[update] policy = "pinned"`, `pin = "1.2.3"`), and the owner can pin or unpin per
 computer.
 
-**Settings > Computers > Installation and updates** shows a chip per harness on each computer: name, installed version, `pinned`, `<version> available`,
+Under **Versions and updates** in each computer's pop-up, **Installation and updates** shows a chip per harness: name, installed version, `pinned`, `<version> available`,
 `installing`, `updating`. The owner (and only the owner) sees the actions, for installs the runner manages:
 
 - **Update**: install the newest release now (waits for an idle moment; moves the pin if the harness is pinned).
