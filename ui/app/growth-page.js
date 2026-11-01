@@ -303,7 +303,7 @@ function grGrid(d) {
   const inBet = (i, id) => id ? i.bet_id === id : !i.bet_id || !d.bets.some(b => b.id === i.bet_id);
   return `<div class="card gr-scroll"><table class="gr-grid"><thead><tr><th scope="col"><span class="sr-only">Bet</span></th>${cols.map(c =>
     `<th scope="col">${c.track ? `<span class="gr-track gr-track-${esc(c.track)}">${c.track === 'brand' ? 'Brand' : 'Performance'}</span>` : ''}<span>${esc(c.name)}</span></th>`).join('')}</tr></thead>
-    <tbody>${bets.map(b => `<tr><th scope="row">${esc(b.label)}</th>${cols.map(c =>
+    <tbody>${bets.map(b => `<tr><th scope="row" title="${esc(b.label)}"><span>${esc(b.label)}</span></th>${cols.map(c =>
       `<td>${grCards(d.ideas.filter(i => inBet(i, b.id) && has(i, c.slug)), d, {chan: false})}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 function grExperiments(d) {
