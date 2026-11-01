@@ -390,7 +390,9 @@ pub async fn watch_pass(client: &Client, driver: &Path) -> Pass {
     };
     let mut fresh = false;
     for row in list["bots"].as_array().into_iter().flatten() {
-        let (slug, app) = (text_of(&row["slug"]), text_of(&row["app"]));
+        // The bot's id names it to the server; a server from before ids sends only `slug`, which was its id then.
+        let slug = Some(text_of(&row["id"])).filter(|id| !id.is_empty()).unwrap_or_else(|| text_of(&row["slug"]));
+        let app = text_of(&row["app"]);
         if slug.is_empty() || app.is_empty() {
             continue;
         }

@@ -2518,7 +2518,8 @@ def create_app(settings=None):
                 if not drawn(row["id"]) or (can and not level[can]):
                     continue
                 bot = live.get(row["id"]) or {}
-                shown = {**row, "display_name": bot.get("display_name") or row["display_name"],
+                shown = {**row, "slug": bot.get("slug") or row["id"], "name": bot.get("slug") or row["id"],
+                         "display_name": bot.get("display_name") or row["display_name"],
                          "department": departments.get(row["id"], ""),
                          "template": configs.get(row["id"], {}).get("template") or "",
                          "status": bot.get("state") or "", "access": level,
@@ -7642,6 +7643,9 @@ def create_app(settings=None):
     def claim(request: Request, body: M.Claim):
         # A read first: an idle runner asks every fraction of a second and must not take the write lock.
         with store.read() as c:
+            if body.bot:
+                # The runner names a bot by its id; a slug (an older runner, or a person's command) means the same bot.
+                body = body.model_copy(update={"bot": (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)})
             selected, failed = [], ClaimFaults()
             idle = execution.idle_claim(c, request.state.identity, body,
                                         request.headers.get("idempotency-key"), selected, failed)

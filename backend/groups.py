@@ -609,7 +609,12 @@ def install(app, store, auth, mutate, settings):
         auth.domain(who)
         with store.read() as c:
             access = auth.bot_accesses(c, who)
-            return rows(_roster(c), _configs(c), _archived(c), lambda slug: access.get(slug, auth.FULL)["see"], True)
+            out = rows(_roster(c), _configs(c), _archived(c), lambda slug: access.get(slug, auth.FULL)["see"], True)
+            # `bots` holds ids (the key a client calls with); `bot_slugs` the same bots by the label people read.
+            slugs = {row["id"]: row["slug"] for row in c.execute("SELECT id,slug FROM bots")}
+            for group in out:
+                group["bot_slugs"] = [slugs.get(bot, bot) for bot in group["bots"]]
+            return out
 
     @app.post("/api/v2/groups")
     def group_create(request: Request, body: M.GroupCreate):

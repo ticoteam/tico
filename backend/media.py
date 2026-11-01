@@ -277,7 +277,7 @@ def view(c, who, rid, *, include_transcripts=False):
     state = c.execute("SELECT * FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
     delivery = record["delivery"]
     if delivery and delivery["task_id"]:
-        meta["sent"] = {"task": delivery["task_id"], "slug": delivery["destination"], "sent_by": delivery["requested_by"]}
+        meta["sent"] = {"task": delivery["task_id"], "bot": delivery["destination"], "sent_by": delivery["requested_by"]}
     result = {**meta, "notes": record["notes"], "transcript_readable": record["transcript_readable"],
               "meeting_context": MS.context(record), "delivery": delivery,
               "version": state["version"] if state else 1, "turns": meta.get("turns", []),
@@ -363,7 +363,7 @@ def deliver(c, auth, who, rid, body, uploads):
                 raise Problem("delivery_sender", "The original sender must retry this delivery", 409)
             c.execute("UPDATE meeting_deliveries SET status='pending',error=NULL WHERE meeting_id=?", (rid,))
             return finish_delivery(c, auth, who, rid)
-        return {"id": rid, "slug": slug, "task": previous["task_id"], "pending": previous["status"] == "pending"}
+        return {"id": rid, "bot": slug, "task": previous["task_id"], "pending": previous["status"] == "pending"}
     extra = attachments(c, who, rid, uploads)
     meta["attachments"] = meta.get("attachments", []) + extra
     save(c, meta)
@@ -381,7 +381,7 @@ def finish_delivery(c, auth, who, rid):
     if not delivery or delivery["task_id"]:
         return None
     if meta["status"] != "done":
-        return {"id": rid, "slug": delivery["destination"], "pending": True}
+        return {"id": rid, "bot": delivery["destination"], "pending": True}
     # Recheck authorization at delivery time, not just when the request was queued.
     slug = delivery["destination"]
     auth.target(c, who, slug, need="write")
@@ -397,9 +397,9 @@ def finish_delivery(c, auth, who, rid):
         c.execute("INSERT INTO task_assets VALUES(?,?)", (task["id"], item["id"]))
     c.execute("UPDATE meeting_deliveries SET status='delivered',task_id=?,delivered_at=?,error=NULL WHERE meeting_id=?",
               (task["id"], H.now(), rid))
-    meta["sent"] = {"task": task["id"], "slug": slug, "sent_by": who.email}
+    meta["sent"] = {"task": task["id"], "bot": slug, "sent_by": who.email}
     save(c, meta)
-    return {"id": rid, "slug": slug, "task": task["id"], "pending": False}
+    return {"id": rid, "bot": slug, "task": task["id"], "pending": False}
 
 
 def write_upload(store, request, body, uploads, fn):

@@ -807,6 +807,6 @@ def hire(auth, onboarding, c, who, seat_id, body):
         model = ""
     setup_task = onboard(c, who, onboarding, row, card, bot_id, name=name, description=description,
                          instructions=instructions, rendered=rendered, answers=record["answers"], model=model)
-    return {"slug": slug, "name": name, "seat": seat_id, "stage": lifecycle.ONBOARDING, "reports_to": row["reports_to"],
+    return {"bot": bot_id, "slug": slug, "name": name, "seat": seat_id, "stage": lifecycle.ONBOARDING, "reports_to": row["reports_to"],
             "template": card["template"], "model": model, "setup_task_id": setup_task,
             "note": (created or {}).get("note") if isinstance(created, dict) else None}

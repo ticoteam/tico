@@ -1250,7 +1250,7 @@ def install_live_meetings(app, store, auth, write):
                 if not access["see"] or not access["write"]:
                     continue
                 config = c.execute("SELECT team,description FROM bot_config WHERE bot=?", (bot["id"],)).fetchone()
-                rows.append({"slug": slug, "name": bot.get("name") or slug,
+                rows.append({"id": bot["id"], "slug": slug, "name": bot.get("display_name") or slug,
                              "description": config["description"] if config else "",
                              "team": config["team"] if config else None})
             return {"bots": rows}

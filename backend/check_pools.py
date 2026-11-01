@@ -342,7 +342,7 @@ def candidate_details(c, slugs):
                 actual = {"model": ", ".join(labels) if labels else "Unknown model",
                           "provider": providers.PROVIDER_BY_ID.get(family, {}).get("label") if family else "Unknown provider",
                           "family": family}
-        out.append({"slug": slug, "name": bot["display_name"],
+        out.append({"id": slug, "slug": bot["slug"], "name": bot["display_name"],
                     "configured": {"model": configured.get("label") or model or "Unknown model",
                                    "provider": providers.PROVIDER_BY_ID.get(configured_provider, {}).get("label")
                                    if configured_provider else "Unknown provider",

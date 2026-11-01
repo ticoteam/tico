@@ -449,7 +449,7 @@ def install_imports(app, store, auth, execution, mutate):
         if body.send_to and meta.get("review_state") == "live":
             # The same Send a person presses: the bot's task carries the transcript and notes.
             sent = deliver(c, auth, who, rid, Send(slug=body.send_to), [])
-            result["sent"] = {"slug": sent["slug"], "task": sent.get("task")}
+            result["sent"] = {"bot": sent["bot"], "task": sent.get("task")}
         return result
 
     app.state.import_meeting = file_meeting
