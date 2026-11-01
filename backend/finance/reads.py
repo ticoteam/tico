@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
+from ..records import due_dates as RDD
 from ..records import reads as RR
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
 from . import due_dates as DD
@@ -1528,9 +1529,12 @@ def _record_out(ctx: Ctx, kind: str, r: Any, view: VW.View, source: str, names: 
 
 
 def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archived: str = "hide",
-            cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
-    """Locations, items or projects by name (an item also by sku), past `cursor`. `archived` is hide, only or all.
-    A guest is refused; an item's accounts are cut to what the viewer sees."""
+            cursor: str | None = None, limit: int = 50, at: str | None = None,
+            equal: Mapping[str, str] | None = None) -> Row:
+    """Locations, items or projects by name (an item also by sku), past `cursor`. `archived` is hide, only or all, and
+    `equal` narrows by column (a location's kind or customer, an item's kind, a project's status or customer). A
+    location row carries `next_due_on`, its earliest open due day, or null. A guest is refused; an item's accounts are
+    cut to what the viewer sees."""
     ctx = load(c, at)
     view = ctx.view(viewer)
     _teammate_or_refuse(ctx, viewer)
@@ -1538,13 +1542,18 @@ def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archi
     after = (parts[0], parts[1]) if len(parts) == 2 else None
     active = {"hide": True, "only": False, "all": None}[archived]
     most = tab.page_size(limit)
-    rows = RR.search(c, RECORD_TABLE[kind], (q or "").strip()[:100], active=active, after=after, most=most + 1)
+    rows = RR.search(c, RECORD_TABLE[kind], (q or "").strip()[:100], active=active, after=after, most=most + 1,
+                     equal=equal)
     shown = rows[:most]
     nxt = tab.encode_cursor([str(shown[-1]["name"]), str(shown[-1]["id"])]) if len(rows) > most else None
     sources = SM.record_providers(c, RECORD_TABLE[kind], [str(r["id"]) for r in shown])
     names = _customer_names(ctx, kind, shown)
-    return {RECORD_PLURAL[kind]: [_record_out(ctx, kind, r, view, sources.get(str(r["id"]), "tico"), names)
-                                  for r in shown], "next_cursor": nxt}
+    out = [_record_out(ctx, kind, r, view, sources.get(str(r["id"]), "tico"), names) for r in shown]
+    if kind == "location":
+        due = RDD.next_due_for(c, "location", [str(r["id"]) for r in shown])
+        for row in out:
+            row["next_due_on"] = due.get(str(row["id"]))
+    return {RECORD_PLURAL[kind]: out, "next_cursor": nxt}
 
 
 def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at: str | None = None) -> Row:

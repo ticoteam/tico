@@ -207,3 +207,99 @@ def test_a_record_read_by_an_id_it_was_merged_under_resolves_to_the_row_kept(boo
         with pytest.raises(FinanceError) as missing:
             FR.record(c, OWNER, kind="location", record_id="loc-never-existed", at=AT)
         assert missing.value.code == NOT_FOUND
+
+
+def _made(c, action: str, payload: dict, key: str) -> str:
+    done = act(c, OWNER, action, payload)
+    assert done.status == "committed", done.reason
+    return str(done.result[key])
+
+
+def test_location_lists_narrow_by_kind_page_through_it_and_carry_the_next_due_day(books):
+    with books.transaction() as c:
+        denver = _made(c, "location_create", {"name": "Denver", "kind": "store"}, "location_id")
+        _made(c, "location_create", {"name": "Boise", "kind": "store"}, "location_id")
+        _made(c, "location_create", {"name": "Office", "kind": "office"}, "location_id")
+        due = act(c, OWNER, "due_date_create", {"name": "Permit", "subject_type": "location", "subject_id": denver,
+                                                "repeats": "once", "starts_on": "2026-11-05", "assignee_id": OWNER})
+        assert due.status == "committed", due.reason
+        first = FR.records(c, OWNER, kind="location", equal={"kind": "store"}, limit=1, at=AT)
+        assert [r["name"] for r in first["locations"]] == ["Boise"] and first["next_cursor"]
+        rest = FR.records(c, OWNER, kind="location", equal={"kind": "store"}, limit=1, at=AT,
+                          cursor=first["next_cursor"])
+        assert [r["name"] for r in rest["locations"]] == ["Denver"] and rest["next_cursor"] is None
+        assert rest["locations"][0]["next_due_on"] == "2026-11-05" and first["locations"][0]["next_due_on"] is None
+        office = FR.records(c, OWNER, kind="location", equal={"kind": "office"}, at=AT)["locations"]
+        assert [r["name"] for r in office] == ["Office"]
+
+
+def test_location_lists_narrow_by_customer_and_page(books):
+    with books.transaction() as c:
+        acme = _made(c, "contact_create", {"name": "Acme Retail", "kind": "customer"}, "contact_id")
+        bolt = _made(c, "contact_create", {"name": "Bolt & Co", "kind": "customer"}, "contact_id")
+        _made(c, "location_create", {"name": "Acme Denver", "customer_id": acme}, "location_id")
+        _made(c, "location_create", {"name": "Acme Boise", "customer_id": acme}, "location_id")
+        _made(c, "location_create", {"name": "Bolt Yard", "customer_id": bolt}, "location_id")
+        _made(c, "location_create", {"name": "Plain"}, "location_id")
+        first = FR.records(c, OWNER, kind="location", equal={"customer_id": acme}, limit=1, at=AT)
+        assert [r["name"] for r in first["locations"]] == ["Acme Boise"] and first["next_cursor"]
+        rest = FR.records(c, OWNER, kind="location", equal={"customer_id": acme}, limit=1, cursor=first["next_cursor"],
+                          at=AT)
+        assert [r["name"] for r in rest["locations"]] == ["Acme Denver"] and rest["next_cursor"] is None
+
+
+def test_item_lists_narrow_by_kind_and_page(books):
+    with books.transaction() as c:
+        for name in ("Ann Consult", "Bea Consult"):
+            _made(c, "item_create", {"name": name, "kind": "service"}, "item_id")
+        _made(c, "item_create", {"name": "Cog", "kind": "raw_material"}, "item_id")
+        first = FR.records(c, OWNER, kind="item", equal={"kind": "service"}, limit=1, at=AT)
+        assert [r["name"] for r in first["items"]] == ["Ann Consult"] and first["next_cursor"]
+        rest = FR.records(c, OWNER, kind="item", equal={"kind": "service"}, limit=1, cursor=first["next_cursor"], at=AT)
+        assert [r["name"] for r in rest["items"]] == ["Bea Consult"] and rest["next_cursor"] is None
+        raw = FR.records(c, OWNER, kind="item", equal={"kind": "raw_material"}, at=AT)["items"]
+        assert [r["name"] for r in raw] == ["Cog"]
+
+
+def test_project_lists_narrow_by_status_and_page(books):
+    with books.transaction() as c:
+        ids = {name: _made(c, "project_create", {"name": name}, "project_id") for name in ("Job 1", "Job 2", "Job 3")}
+        closed = act(c, OWNER, "project_update", {"project_id": ids["Job 2"], "status": "closed"})
+        assert closed.status == "committed", closed.reason
+        first = FR.records(c, OWNER, kind="project", equal={"status": "open"}, limit=1, at=AT)
+        assert [r["name"] for r in first["projects"]] == ["Job 1"] and first["next_cursor"]
+        rest = FR.records(c, OWNER, kind="project", equal={"status": "open"}, limit=1, at=AT,
+                          cursor=first["next_cursor"])
+        assert [r["name"] for r in rest["projects"]] == ["Job 3"] and rest["next_cursor"] is None
+        done = FR.records(c, OWNER, kind="project", equal={"status": "closed"}, at=AT)["projects"]
+        assert [r["name"] for r in done] == ["Job 2"]
+
+
+def test_project_lists_narrow_by_customer_and_page(books):
+    with books.transaction() as c:
+        acme = _made(c, "contact_create", {"name": "Acme Retail", "kind": "customer"}, "contact_id")
+        bolt = _made(c, "contact_create", {"name": "Bolt & Co", "kind": "customer"}, "contact_id")
+        _made(c, "project_create", {"name": "Acme Job A", "customer_id": acme}, "project_id")
+        _made(c, "project_create", {"name": "Acme Job B", "customer_id": acme}, "project_id")
+        _made(c, "project_create", {"name": "Bolt Job", "customer_id": bolt}, "project_id")
+        first = FR.records(c, OWNER, kind="project", equal={"customer_id": acme}, limit=1, at=AT)
+        assert [r["name"] for r in first["projects"]] == ["Acme Job A"] and first["next_cursor"]
+        rest = FR.records(c, OWNER, kind="project", equal={"customer_id": acme}, limit=1, cursor=first["next_cursor"],
+                          at=AT)
+        assert [r["name"] for r in rest["projects"]] == ["Acme Job B"] and rest["next_cursor"] is None
+
+
+def test_a_teammate_without_a_finance_view_narrows_the_locations_by_customer(books):
+    with books.transaction() as c:
+        acme = _made(c, "contact_create", {"name": "Acme Retail", "kind": "customer"}, "contact_id")
+        bolt = _made(c, "contact_create", {"name": "Bolt & Co", "kind": "customer"}, "contact_id")
+        _made(c, "location_create", {"name": "Acme Denver", "customer_id": acme}, "location_id")
+        _made(c, "location_create", {"name": "Acme Boise", "customer_id": acme}, "location_id")
+        _made(c, "location_create", {"name": "Bolt Yard", "customer_id": bolt}, "location_id")
+        assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
+        first = FR.records(c, "human:eve", kind="location", equal={"customer_id": acme}, limit=1, at=AT)
+        assert [r["name"] for r in first["locations"]] == ["Acme Boise"] and first["next_cursor"]
+        assert first["locations"][0]["customer_name"] == "Acme Retail"
+        rest = FR.records(c, "human:eve", kind="location", equal={"customer_id": acme}, limit=1,
+                          cursor=first["next_cursor"], at=AT)
+        assert [r["name"] for r in rest["locations"]] == ["Acme Denver"] and rest["next_cursor"] is None

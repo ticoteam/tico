@@ -1536,7 +1536,8 @@ STABLE.extend([
     ("/api/v2/estimates/{estimate_id}", "get", "Finance", "getEstimate",
      "One estimate with its lines; each line says whether it is taxable", "Estimate"),
     ("/api/v2/locations", "get", "Finance", "listLocations",
-     "Locations by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
+     "Locations by name; q searches names, archived hides them (default), shows only them or both; kind and "
+     "customer_id narrow the list; each row's next_due_on is its earliest open due day or null; with a cursor",
      "Locations"),
     ("/api/v2/locations/{location_id}", "get", "Finance", "getLocation",
      "One location, archived or not", "LocationOne"),
@@ -1548,12 +1549,14 @@ STABLE.extend([
      "One due date, archived or not, with its days newest first and the task that carried each", "DueDateOne"),
     ("/api/v2/items", "get", "Finance", "listItems",
      "Products and services by name or sku; q searches both, archived hides them (default), shows only them or both; "
-     "with a cursor. An item's accounts show to viewers who see them; its price shows with its income account",
+     "kind narrows to one kind; with a cursor. An item's accounts show to viewers who see them; its price shows with "
+     "its income account",
      "Items"),
     ("/api/v2/items/{item_id}", "get", "Finance", "getItem",
      "One product or service, archived or not; its accounts show to viewers who see them", "ItemOne"),
     ("/api/v2/projects", "get", "Finance", "listProjects",
-     "Projects by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
+     "Projects by name; q searches names, archived hides them (default), shows only them or both; status and "
+     "customer_id narrow the list; with a cursor",
      "Projects"),
     ("/api/v2/projects/{project_id}", "get", "Finance", "getProject",
      "One project, archived or not", "ProjectOne"),
@@ -1816,11 +1819,12 @@ SCHEMAS.update({
     "DueDay": obj({"due_on": "s", "completed_at": "n", "completed_by_id": "n", "task_id": "n"},
                   required=["due_on"]),
     "Location": obj({"id": "s", "name": "s", "kind": "s", "parent_id": "n", "address": "o", "archived_at": "n",
-                     "customer_id": "n", "customer_name": "n"}, required=["id", "name", "kind", "address"]),
+                     "customer_id": "n", "customer_name": "n", "next_due_on": "n"},
+                    required=["id", "name", "kind", "address"]),
     "Items": obj({"items": items(ref("Item")), "next_cursor": "n"}, required=["items", "next_cursor"]),
     "ItemOne": obj({"item": ref("Item")}, required=["item"]),
     "Item": obj({"id": "s", "name": "s", "sku": "s", "kind": {"type": "string", "enum": [
-        "service", "inventory", "non_inventory", "bundle", "category"]}, "unit": "s",
+        "service", "inventory", "non_inventory", "bundle", "category", "raw_material", "assembly"]}, "unit": "s",
         "price": {"type": ["integer", "null"]}, "currency": "s", "archived_at": "n", "income_account_id": "n",
         "expense_account_id": "n", "asset_account_id": "n"},
         required=["id", "name", "sku", "kind", "unit", "currency"]),

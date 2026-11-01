@@ -302,13 +302,18 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/locations")
     def finance_locations(request: Request, q: str = Query("", max_length=100),
                           archived: Literal["hide", "only", "all"] = "hide",
+                          kind: Literal["store", "office", "warehouse", "plant", "customer_site", "vehicle",
+                                        "other"] | None = None,
+                          customer_id: str | None = Query(None, max_length=80),
                           cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
                           view_as: str | None = None):
         """Locations by name then id; `q` searches names, and `archived` hides the archived ones (the default), shows
-        only them, or shows both. `next_cursor` pages."""
+        only them, or shows both. `kind` and `customer_id` narrow the list, and each row's `next_due_on` is its earliest
+        open due day, or null. `next_cursor` pages."""
         actor = as_viewer(request, view_as)
+        equal = {name: value for name, value in (("kind", kind), ("customer_id", customer_id)) if value}
         return read(lambda c: finance_reads.records(c, actor, kind="location", q=q, archived=archived, cursor=cursor,
-                                                    limit=limit))
+                                                    limit=limit, equal=equal))
 
     @app.get("/api/v2/locations/{location_id}")
     def finance_location(request: Request, location_id: ID, view_as: str | None = None):
@@ -340,13 +345,15 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/items")
     def finance_items(request: Request, q: str = Query("", max_length=100),
                       archived: Literal["hide", "only", "all"] = "hide",
+                      kind: Literal["service", "inventory", "non_inventory", "bundle", "category", "raw_material",
+                                    "assembly"] | None = None,
                       cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
                       view_as: str | None = None):
         """Products and services by name or sku; `archived` hides the archived ones (the default), shows only them, or
-        shows both. `next_cursor` pages."""
+        shows both. `kind` narrows the list to one kind. `next_cursor` pages."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.records(c, actor, kind="item", q=q, archived=archived, cursor=cursor,
-                                                    limit=limit))
+                                                    limit=limit, equal={"kind": kind} if kind else None))
 
     @app.get("/api/v2/items/{item_id}")
     def finance_item(request: Request, item_id: ID, view_as: str | None = None):
@@ -357,13 +364,16 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/projects")
     def finance_projects(request: Request, q: str = Query("", max_length=100),
                          archived: Literal["hide", "only", "all"] = "hide",
+                         status: Literal["open", "closed"] | None = None,
+                         customer_id: str | None = Query(None, max_length=80),
                          cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
                          view_as: str | None = None):
-        """Projects by name; `archived` hides the archived ones (the default), shows only them, or shows both.
-        `next_cursor` pages."""
+        """Projects by name; `archived` hides the archived ones (the default), shows only them, or shows both. `status`
+        and `customer_id` narrow the list. `next_cursor` pages."""
         actor = as_viewer(request, view_as)
+        equal = {name: value for name, value in (("status", status), ("customer_id", customer_id)) if value}
         return read(lambda c: finance_reads.records(c, actor, kind="project", q=q, archived=archived, cursor=cursor,
-                                                    limit=limit))
+                                                    limit=limit, equal=equal))
 
     @app.get("/api/v2/projects/{project_id}")
     def finance_project(request: Request, project_id: ID, view_as: str | None = None):
