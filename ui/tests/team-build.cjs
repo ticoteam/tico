@@ -12,8 +12,8 @@ const SHOTS = process.env.TB_SHOTS || '';
 const group = {id: 'engineering', name: 'Engineering', parent: '', org_parent: '', order: 0};
 const item = (template, name, match = '') => ({template, name, icon: '', department: 'engineering', line: 'Works on the team.',
   tags: [], owns: [], prerequisites: [], match, source: 'template'});
-const cloud = {id: 'devin', name: 'Devin', maker: 'Cognition', site: 'devin.ai', line: 'A cloud agent.', supported: false,
-  connect_id: null, source: 'cloud', template: '', icon: '', department: '', tags: [], owns: [], prerequisites: [], match: ''};
+const agent = (id, name, supported) => ({id, name, maker: '', site: '', line: 'A cloud agent.', supported,
+  connect_id: supported ? id : null, source: 'cloud', template: '', icon: '', department: '', tags: [], owns: [], prerequisites: [], match: ''});
 const suggestion = () => ({team: 'engineering', department: 'engineering', roles: [
   {role: 'Head of Engineering', pick: item('engineering-lead', 'Engineering Lead'), alternatives: [], on_team: true, checked: false,
     bot: {slug: 'ana-eng-lead', name: 'Rhea', icon: ''}},
@@ -23,7 +23,8 @@ const suggestion = () => ({team: 'engineering', department: 'engineering', roles
   {role: 'Developer advocate', pick: item('developer-advocate', 'Developer Advocate'),
     alternatives: [item('software-architect', 'Software Architect', 'good'), item('docs-writer', 'Docs Writer')],
     on_team: false, checked: false},
-  {role: 'Second pair of hands', pick: cloud, alternatives: [], on_team: false, checked: false},
+  {role: 'Second pair of hands', pick: agent('claude', 'Claude Code', true),
+    alternatives: [agent('codex', 'Codex', true), agent('devin', 'Devin', false)], on_team: false, checked: false},
 ]});
 // The briefing changes and the recommender now suggests Software Architect for DevOps, which the Security role already holds.
 const reranked = () => ({...suggestion(), roles: suggestion().roles.map((role, i) => i !== 2 ? role
@@ -130,10 +131,25 @@ async function scenario(browser, {name, viewport, theme}) {
   const hireButton = page.locator('#team-build-dialog .tb-hire');
   assert.equal(await count(), 2);                                                    // the two checked defaults
   assert.equal(await hireButton.isDisabled(), false);
-  // Request hands the cloud agent to the Cloud agents page with this team, so its seat lands here.
-  await page.evaluate(() => { window.cloudAgentRequest = (pick, options) => { window.__cloudRequest = {name: pick.name, team: options.team}; }; });
-  await page.locator('#team-build-dialog [data-card="4"] [data-tb-request]').click();
-  assert.deepEqual(await page.evaluate(() => window.__cloudRequest), {name: 'Devin', team: 'engineering'});
+  // The cloud agent Tico connects is the default and says Add; either link hands it to the Cloud agents page with this
+  // team, which adds it as a bot or files the request, so it lands here.
+  const cloudLink = page.locator('#team-build-dialog [data-card="4"] [data-tb-request]');
+  await page.evaluate(() => { window.cloudAgentRequest = (pick, options) => { window.__cloudRequest = {name: pick.name, supported: pick.supported, team: options.team}; }; });
+  assert.equal(await cloudLink.innerText(), 'Add');
+  await cloudLink.click();
+  assert.deepEqual(await page.evaluate(() => window.__cloudRequest), {name: 'Claude Code', supported: true, team: 'engineering'});
+  // Change offers the other agents; picking one Tico does not connect makes the link Request, and the role stays unpicked.
+  await page.locator('#team-build-dialog [data-card="4"] [data-tb-change]').click();
+  assert.deepEqual(await alts(4), ['Codex', 'Devin']);
+  await page.locator('#team-build-dialog [data-tb-alt="4:1"]').click();
+  assert.equal(await page.locator('#team-build-dialog [data-card="4"] .tb-pick-name').innerText(), 'Devin');
+  assert.equal(await cloudLink.innerText(), 'Request');
+  assert.deepEqual(await alts(4), ['Codex', 'Claude Code']);
+  assert.ok(await page.locator('#team-build-dialog [data-card="4"] .tb-check').isDisabled());
+  assert.equal(await count(), 2);
+  assert.deepEqual(await sharedTemplates(), {offered: [], twice: []});
+  await cloudLink.click();
+  assert.deepEqual(await page.evaluate(() => window.__cloudRequest), {name: 'Devin', supported: false, team: 'engineering'});
   // Change opens that role's alternatives; picking one swaps it in and picks the role.
   await page.locator('#team-build-dialog [data-card="1"] [data-tb-change]').click();
   assert.equal(await page.locator('#team-build-dialog [data-card="1"] [data-tb-change]').getAttribute('aria-expanded'), 'true');
@@ -156,6 +172,7 @@ async function scenario(browser, {name, viewport, theme}) {
   assert.equal(calls.filter(c => c[0] === 'suggest').at(-1)[1].briefing, 'A Rust API and a React app on AWS');
   await page.waitForFunction(() => document.querySelector('#team-build-dialog .tb-dot')?.dataset.state === 'done');
   assert.equal(await page.locator('#team-build-dialog [data-card="1"] .tb-pick-name').innerText(), 'Software Architect');
+  assert.equal(await page.locator('#team-build-dialog [data-card="4"] .tb-pick-name').innerText(), 'Devin');
   assert.equal(await count(), 3);
   // DevOps, which the re-ranked briefing gave Software Architect, takes its first free offer: a template is never sent twice.
   assert.deepEqual(await sharedTemplates(), {offered: [], twice: []});
