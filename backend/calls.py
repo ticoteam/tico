@@ -19,7 +19,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, wait
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Request
 from pydantic import Field
@@ -44,6 +44,14 @@ DRAIN_SECONDS = 150          # the longest a call's end waits for its last clips
 CALL_LIST_BYTES = 262_144    # as the audit list: a page stays under 256 KB (backend/audit_log.py)
 START_GRACE_SECONDS = 120    # a call whose room never appeared this long after it started has failed to start
 
+# A Gateway that does not answer at a call's end leaves its action items owed. The sweep tries again: the first retry
+# two minutes on, each wait twice the last, never more than an hour. A day after the first failure the call says so in
+# its thread, once, and gives up on them.
+ACTION_ITEMS_RETRY_SECONDS = 60
+ACTION_ITEMS_RETRY_MAX_SECONDS = 3600
+ACTION_ITEMS_GIVE_UP_SECONDS = 24 * 3600
+HOLDS_LIMIT = 20          # a call's holds, as its connector sees them: a page, not an archive
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS calls(
  id TEXT PRIMARY KEY,
@@ -60,11 +68,24 @@ CREATE TABLE IF NOT EXISTS calls(
  transcript_posted_at TEXT,
  action_items_posted_at TEXT,
  finalized_at TEXT,
+ wrapped_up_at TEXT,
+ action_items_failed_at TEXT,
+ action_items_attempts INTEGER NOT NULL DEFAULT 0,
+ action_items_retry_at TEXT,
+ action_items_given_up_at TEXT,
  speak_replies INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS calls_thread ON calls(thread_id, started_at);
 CREATE INDEX IF NOT EXISTS calls_state ON calls(state);
+CREATE TABLE IF NOT EXISTS call_holds(
+ id TEXT PRIMARY KEY,
+ call_id TEXT NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL CHECK (kind IN ('transcript','action_items')),
+ reason TEXT NOT NULL,
+ detail TEXT NOT NULL,
+ created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS call_holds_call ON call_holds(call_id);
 CREATE TABLE IF NOT EXISTS call_participants(
  call_id TEXT NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
  actor TEXT NOT NULL,
@@ -87,6 +108,11 @@ def ensure(c):
     # the meeting row the privacy checks already have: they run inside the SQL endpoint, which may not read this table.
     _column(c, "live_meetings", "thread_id", "TEXT")
     _column(c, "calls", "finalized_at", "TEXT")
+    _column(c, "calls", "wrapped_up_at", "TEXT")
+    _column(c, "calls", "action_items_failed_at", "TEXT")
+    _column(c, "calls", "action_items_attempts", "INTEGER NOT NULL DEFAULT 0")
+    _column(c, "calls", "action_items_retry_at", "TEXT")
+    _column(c, "calls", "action_items_given_up_at", "TEXT")
     _column(c, "call_participants", "media_removed_at", "TEXT")
 
 
@@ -178,6 +204,16 @@ def _participant(c, call_id, actor):
     return dict(row) if row else None
 
 
+def _stamp(moment):
+    """A moment in the format every stored time uses (hubdb.now)."""
+    return moment.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _seconds_since(stamp):
+    started = datetime.fromisoformat(stamp.rstrip("Z")).replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - started).total_seconds()
+
+
 def _started_long_ago(started_at):
     started = datetime.fromisoformat(started_at.rstrip("Z")).replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - started).total_seconds() > START_GRACE_SECONDS
@@ -222,10 +258,14 @@ class Calls:
         bots = [r["bot"] for r in c.execute(
             "SELECT bot FROM live_meeting_bots WHERE meeting_id=? ORDER BY bot LIMIT ?",
             (row["live_meeting_id"], PARTICIPANT_LIMIT)) if self._sees(c, who, f"bot:{r['bot']}")]
+        holds = [dict(r) for r in c.execute(
+            "SELECT kind,reason,detail,created_at FROM call_holds WHERE call_id=? ORDER BY created_at LIMIT ?",
+            (call_id, HOLDS_LIMIT))] if who.actor == row["connector_actor"] else []
         return {"id": row["id"], "thread_id": row["thread_id"], "title": row["title"], "state": row["state"],
                 "connector": row["connector_actor"], "meeting_id": row["live_meeting_id"],
                 "started_at": row["started_at"], "ended_at": row["ended_at"], "end_reason": row["end_reason"],
-                "participants": people, "bots": bots, "speak_replies": bool(row["speak_replies"])}
+                "participants": people, "bots": bots, "speak_replies": bool(row["speak_replies"]),
+                "holds": holds}
 
     def _sees(self, c, who, target):
         try:
@@ -346,6 +386,19 @@ class Calls:
         if row["state"] == "ended":
             return self.view(c, call_id, who)
         self.finish(c, call_id, "ended_by_connector", by=who.actor)
+        return self.view(c, call_id, who)
+
+    def retry_action_items(self, c, who, call_id):
+        """The connector asks again for action items the Gateway could not make. Nothing is drafted here: the call is
+        open to the sweep once more, so the Gateway is never called inside the request."""
+        row = self._connector(c, who, call_id)
+        if row["state"] != "ended":
+            raise Problem("call_live", "The call is still live: its action items are made once it ends", 409)
+        if row["action_items_posted_at"]:
+            return self.view(c, call_id, who)
+        c.execute("UPDATE calls SET action_items_failed_at=NULL,action_items_attempts=0,action_items_retry_at=NULL,"
+                  "action_items_given_up_at=NULL,finalized_at=NULL,updated_at=? WHERE id=?", (H.now(), call_id))
+        self._record(c, who.actor, call_id, row["thread_id"], "call.action_items_retry", {})
         return self.view(c, call_id, who)
 
     def finish(self, c, call_id, reason, by=None):
@@ -515,27 +568,31 @@ class Calls:
 
     def after_end(self, call_id):
         """What an ended call still owes: its room closed, its last windows, its transcript and its action items in the
-        thread. Returns False while the room is still open, so the sweep closes it later; once everything is done the call
+        thread. Returns False while any of that is pending, so the sweep comes back to it; once it is all settled the call
         is marked finalized and nothing here runs again."""
         with self.store.read() as c:
             row = _call(c, call_id)
         if row["finalized_at"]:
             return True
-        if self.media is not None:
+        if row["wrapped_up_at"] is None:
+            if self.media is not None:
+                try:
+                    self.media.stop_recorder(call_id)
+                    self.media.end_room(row["room_name"])
+                except call_media.MediaUnavailable:
+                    log.warning("A call ended, but the media server did not confirm the room closed")
+                    return False
+            self.drain(call_id)
             try:
-                self.media.stop_recorder(call_id)
-                self.media.end_room(row["room_name"])
-            except call_media.MediaUnavailable:
-                log.warning("A call ended, but the media server did not confirm the room closed")
-                return False
-        self.drain(call_id)
-        try:
-            live_meetings._run_windows(self.app, row["live_meeting_id"], final=True)
-        except Exception as exc:
-            from .batch_work import report
-            report("calls_final_windows", call_id, exc, logger="tico.calls")
-        self.post_transcript(call_id)
-        self.post_action_items(call_id)
+                live_meetings._run_windows(self.app, row["live_meeting_id"], final=True)
+            except Exception as exc:
+                from .batch_work import report
+                report("calls_final_windows", call_id, exc, logger="tico.calls")
+            self.post_transcript(call_id)
+            with self.store.transaction() as c:
+                c.execute("UPDATE calls SET wrapped_up_at=? WHERE id=? AND wrapped_up_at IS NULL", (H.now(), call_id))
+        if not self.post_action_items(call_id):
+            return False
         with self.store.transaction() as c:
             c.execute("UPDATE calls SET finalized_at=? WHERE id=? AND finalized_at IS NULL", (H.now(), call_id))
         return True
@@ -550,7 +607,7 @@ class Calls:
 
     def post_transcript(self, call_id):
         """The call's transcript, bounded, as one message in its thread, with the meeting it came from. Once only. A
-        connector who can no longer post in the thread leaves it unposted, and the report says so."""
+        thread that refuses the post leaves it unposted: that refusal is a hold the connector sees, and it is final."""
         try:
             with self.store.transaction() as c:
                 row = _call(c, call_id)
@@ -573,38 +630,92 @@ class Calls:
         except Problem as exc:
             from .batch_work import report
             report("calls_transcript", call_id, exc, logger="tico.calls")
+            self._hold(call_id, "transcript", exc)
 
     def post_action_items(self, call_id):
-        """Action items drafted from the transcript, as one message in the thread, once. A Gateway that does not answer
-        leaves the transcript as the call's record, and no items are posted."""
+        """Action items drafted from the transcript, as one message in the thread, once. Returns False while they are still
+        owed: the Gateway did not answer, and the sweep tries again later (_action_items_failed). A call with no speech, or
+        with no Gateway set up, owes none."""
         with self.store.read() as c:
             row = _call(c, call_id)
-            if row["action_items_posted_at"]:
-                return
+            if row["action_items_posted_at"] or row["action_items_given_up_at"]:
+                return True
+            if row["action_items_retry_at"] and row["action_items_retry_at"] > H.now():
+                return False
             rows = [{"t": _clock(r["start_ms"]), "speaker": r["speaker"], "text": r["text"]} for r in c.execute(
                 "SELECT start_ms,speaker,text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq",
                 (row["live_meeting_id"],))]
             key, base, _fingerprint = gateway_connection.target(c, self.app.state.vault, self.store.settings)
             model = recorder_relay.chat_model(c, self.store.settings)
         if not rows or not key:
-            return
+            return True
         try:
             items = call_items.draft(base, key, model, rows)
         except call_items.ItemsUnavailable as exc:
             log.warning("A call's action items were not drafted: %s", exc)
-            return
+            return self._action_items_failed(call_id)
         listed = "\n".join(f"- {item['title']}" for item in items) or "No action items were found."
         body = f"Action items: {row['title']}\n{listed}"
         try:
             with self.store.transaction() as c:
                 row = _call(c, call_id)
                 if row["action_items_posted_at"]:
-                    return
+                    return True
                 self._post_in_thread(c, row, body)
-                c.execute("UPDATE calls SET action_items_posted_at=? WHERE id=?", (H.now(), call_id))
+                c.execute("UPDATE calls SET action_items_posted_at=?,action_items_retry_at=NULL,updated_at=? "
+                          "WHERE id=?", (H.now(), H.now(), call_id))
         except Problem as exc:
             from .batch_work import report
             report("calls_action_items", call_id, exc, logger="tico.calls")
+            self._hold(call_id, "action_items", exc)
+        return True
+
+    def _action_items_failed(self, call_id):
+        """The Gateway did not answer: the items stay owed, the next try waits longer than the last, and a day after the first
+        failure the call gives up on them (_give_up). Returns False while they are still owed."""
+        now = H.now()
+        with self.store.transaction() as c:
+            row = _call(c, call_id)
+            failed_at = row["action_items_failed_at"] or now
+            if _seconds_since(failed_at) < ACTION_ITEMS_GIVE_UP_SECONDS:
+                attempts = row["action_items_attempts"] + 1
+                wait = min(ACTION_ITEMS_RETRY_MAX_SECONDS, ACTION_ITEMS_RETRY_SECONDS * 2 ** attempts)
+                retry_at = _stamp(datetime.now(timezone.utc) + timedelta(seconds=wait))
+                c.execute("UPDATE calls SET action_items_failed_at=?,action_items_attempts=?,action_items_retry_at=?,"
+                          "updated_at=? WHERE id=?", (failed_at, attempts, retry_at, now, call_id))
+                return False
+        self._give_up(call_id)
+        return True
+
+    def _give_up(self, call_id):
+        """Say once in the thread that the action items could not be made, and how to ask again. A thread that refuses even
+        that line leaves a hold, as any refused post does."""
+        with self.store.read() as c:
+            title = _call(c, call_id)["title"]
+        body = (f"Action items for {title} could not be made: the Gateway did not answer for a day. The connector "
+                f"can retry them with `hub call retry {call_id}` or POST /api/v2/calls/{call_id}/action-items/retry.")
+        try:
+            with self.store.transaction() as c:
+                row = _call(c, call_id)
+                self._post_in_thread(c, row, body)
+                self._record(c, row["connector_actor"], call_id, row["thread_id"], "call.action_items_given_up", {})
+        except Problem as exc:
+            from .batch_work import report
+            report("calls_action_items", call_id, exc, logger="tico.calls")
+            self._hold(call_id, "action_items", exc)
+        with self.store.transaction() as c:
+            c.execute("UPDATE calls SET action_items_given_up_at=?,updated_at=? WHERE id=?",
+                      (H.now(), H.now(), call_id))
+
+    def _hold(self, call_id, kind, exc):
+        """A post the thread refused: a hold the call's connector sees on the call, and an audit row. It is final, since the
+        thread's own rule said no, so nothing retries it."""
+        with self.store.transaction() as c:
+            row = _call(c, call_id)
+            c.execute("INSERT INTO call_holds(id,call_id,kind,reason,detail,created_at) VALUES(?,?,?,?,?,?)",
+                      (str(uuid.uuid4()), call_id, kind, exc.code, exc.detail, H.now()))
+            self._record(c, row["connector_actor"], call_id, row["thread_id"], "call.post_refused",
+                         {"post": kind, "reason": exc.code})
 
     # --- the sweep: access that ended, bots whose attacher lost the thread, LiveKit drops, and a LiveKit that restarted
 
@@ -797,6 +908,11 @@ def install_calls(app, store, auth, write):
         result = write(request, body, lambda c: calls.end(c, who, call_id))
         calls.after_end(call_id)
         return result
+
+    @app.post("/api/v2/calls/{call_id}/action-items/retry")
+    def retry_call_action_items(request: Request, call_id: str, body: Empty):
+        who = request.state.identity
+        return write(request, body, lambda c: calls.retry_action_items(c, who, call_id))
 
     @app.post("/api/v2/calls/{call_id}/bots")
     def attach_call_bots(request: Request, call_id: str, body: CallBots):

@@ -101,7 +101,7 @@ EMPTY = (
     "fin_recipients", "fin_payments", "fin_transfers", "fin_provider_users", "fin_card_saves",
     # Calls: a live call's room and recorder are on the source's LiveKit, so the copy holds no live call. Its
     # transcripts and action items are thread messages, kept with the history.
-    "calls", "call_participants",
+    "calls", "call_participants", "call_holds",
 )
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",

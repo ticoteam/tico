@@ -44,8 +44,13 @@ speech is not built (see Not built).
    - `Action items: <title>` with one `- ` line per item, or `No action items were found.`. The items are drafted
      from the transcript on the install's meeting model through the Gateway. The drafting is a server port of the
      Recorder's prompt and rule (an item stands only when its quote is in the transcript word for word; at most 5),
-     in `backend/call_items.py`. If the Gateway does not answer, no action items message is posted and the transcript
-     stays the call's record.
+     in `backend/call_items.py`. If the Gateway does not answer, the items stay owed. The sweep tries again, each wait
+     longer than the last (two minutes, doubling, up to an hour). A day after the first failure the thread gets one
+     line, `Action items for <title> could not be made`, with the retry route, and the call gives up on them. The
+     connector can ask again (`POST /api/v2/calls/{call_id}/action-items/retry`), and the sweep makes them on its next
+     pass.
+   A thread that refuses one of these posts is final: nothing retries it. The call records the refusal in its audit log
+   and in its `holds` list (`kind`, `reason`, `created_at`), which only its connector sees.
    Tasks are still made by hand from the action items.
 7. **Restarts.** A Tico restart brings the recorder back for each live call from the database. A live call whose media
    session is gone when the sweep looks ends with `end_reason: media_lost`, and the transcript so far is kept. A call
@@ -79,21 +84,25 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 | --- | --- |
 | `GET /api/v2/threads/{thread_id}/calls` | The thread's calls, newest first. `limit` (1-50) and `before` page through them. A page also stays under 256 KB; `next_before` is the cursor for the next page, `null` at the end |
 | `POST /api/v2/threads/{thread_id}/calls` | Start a call. Body: `title` (optional), `speak_replies` (optional, default false) |
-| `GET /api/v2/calls/{call_id}` | One call: state, connector, people, bots, `speak_replies`, how it ended |
+| `GET /api/v2/calls/{call_id}` | One call: state, connector, people, bots, `speak_replies`, how it ended, and `holds` (the connector only: posts the thread refused at the end) |
 | `POST /api/v2/calls/{call_id}/join` | Join. Returns `url`, `token` and `expires_in` (300) |
 | `POST /api/v2/calls/{call_id}/token` | A fresh token while joined |
 | `POST /api/v2/calls/{call_id}/leave` | Leave |
 | `POST /api/v2/calls/{call_id}/end` | End (the connector) |
+| `POST /api/v2/calls/{call_id}/action-items/retry` | Ask again for action items the Gateway could not make (the connector, after the call ended) |
 | `POST /api/v2/calls/{call_id}/bots` | Attach bots. Body: `bots`, 1 to 10 slugs |
 | `DELETE /api/v2/calls/{call_id}/bots/{bot}` | Detach a bot |
 
-The same operations are `hub call list|start|show|join|token|leave|end` and `hub call bot add|remove` in the `hub`
-CLI, and `hub_call_list`, `hub_call_show`, `hub_call_start`, `hub_call_join`, `hub_call_token`, `hub_call_leave`,
-`hub_call_end`, `hub_call_bot_add` and `hub_call_bot_remove` over MCP. The OpenAPI operations are `listCalls`,
-`startCall`, `getCall`, `joinCall`, `refreshCallToken`, `leaveCall`, `endCall`, `attachCallBots` and `detachCallBot`.
+The same operations are `hub call list|start|show|join|token|leave|end|retry` and `hub call bot add|remove` in the
+`hub` CLI, and `hub_call_list`, `hub_call_show`, `hub_call_start`, `hub_call_join`, `hub_call_token`, `hub_call_leave`,
+`hub_call_end`, `hub_call_retry`, `hub_call_bot_add` and `hub_call_bot_remove` over MCP. The OpenAPI operations are
+`listCalls`, `startCall`, `getCall`, `joinCall`, `refreshCallToken`, `leaveCall`, `endCall`, `retryCallActionItems`,
+`attachCallBots` and `detachCallBot`.
 
 Changes are written to the change log on the `threads` topic: `call.started`, `call.joined`, `call.left`,
-`call.ended`, `call.bot_attached`, `call.bot_detached` and `call.participant_removed`. Each has an audit row. The live
+`call.ended`, `call.bot_attached`, `call.bot_detached`, `call.participant_removed`, `call.post_refused`,
+`call.action_items_given_up` and `call.action_items_retry`. Each has an audit row. A refusal's event tells the thread's
+readers that a post was refused, not what it said. The live
 event stream sends them with `GET /api/v2/events?topics=threads`, and only to people who can read the call's thread.
 A call's view lists only the people and bots the viewer may see (the teammate See level), and a person always sees
 their own place in it.
@@ -148,6 +157,3 @@ a built image.
   through TURN and TLS, several calls at once, a LiveKit restart in the middle of a call, and the real Gateway.
 - **Bot replies need a runner.** A reply is a run of the bot's runner job. A bot whose runner does not take private
   meeting turns waits, and the meeting says so, until that runner is updated.
-- **Connector access.** The transcript and action items are posted as the connector. If the thread refuses that post when
-  the call ends (the connector can no longer write there), the post is not made, the error report says so, and nothing
-  retries it. Action items are drafted once, when the call ends. If the Gateway does not answer then, none are posted.
