@@ -206,22 +206,24 @@ def test_a_seat_cannot_be_closed_or_renamed_while_its_request_is_being_filed(env
     assert answer["r"].json()["title"] == "Support lead"
 
 
-def test_the_line_is_checked_again_when_the_ticket_is_kept(environment, hq, monkeypatch):
+def test_a_request_tico_accepted_is_kept_even_if_the_line_changed_meanwhile(environment, hq, monkeypatch):
+    """Once Tico has the request, refusing to keep it would leave a request at Tico this install cannot track or cancel.
+    The line is checked when the request is reserved, and the kept request stays cancellable."""
     api = environment()
     seat = ask(api, "seats", {"title": "Support lead"})
     real, checks = lifecycle.placement, []
 
     def placement(auth, c, who, reports_to, seat_id=""):
         checks.append(seat_id)
-        if len(checks) > 1:      # the ticket is being kept: the line no longer answers to this person
+        if len(checks) > 1:      # anything after the reservation: the line no longer answers to this person
             raise Problem("forbidden", "You may add or change seats only under yourself or someone below you", 403)
         return real(auth, c, who, reports_to, seat_id)
 
     monkeypatch.setattr(lifecycle, "placement", placement)
-    ask(api, f"seats/{seat['id']}/request-agent", {"agent": "copilot"}, expected=403)
+    kept = ask(api, f"seats/{seat['id']}/request-agent", {"agent": "copilot"})
     monkeypatch.undo()
-    [kept] = [s for s in seats(api) if s["id"] == seat["id"]]
-    assert kept["agent"] == "" and kept["request_state"] == ""
+    assert checks == [seat["id"]] and kept["request_state"] == "requested" and len(filed(hq)) == 1
+    assert ask(api, f"seats/{seat['id']}/cancel-request", {})["request_state"] == "cancelled"
 
 
 def test_a_person_cannot_place_a_request_under_someone_else_and_nothing_is_filed(environment, hq, monkeypatch):
@@ -621,3 +623,26 @@ def test_a_seat_only_unmatched_templates_rank_for_refuses_the_add(environment, h
     before = bot_count(api)
     assert ask(api, "cloud-agents/claude/add", {"seat_id": seat["id"]}, expected=409)["error"]["code"] == "template"
     assert bot_count(api) == before and [s["id"] for s in seats(api)] == [seat["id"]]
+
+
+def test_a_request_for_a_seat_with_no_team_under_a_teamed_bot_asks_that_teams_rule(environment, hq):
+    api = environment(catalog_dir=SHIPPED)
+    team = ask(api, "groups", {"name": "Engineering"})["id"]
+    quinn = as_person(api, "quinn")
+    lead_seat = ask(api, "seats", {"title": "Engineer", "team": team, "reports_to": "human:quinn"})
+    manager = ask(api, "cloud-agents/claude/add", {"seat_id": lead_seat["id"]})["bot"]
+    seat = ask(api, "seats", {"title": "Engineer", "reports_to": manager})
+    assert ask(api, f"seats/{seat['id']}/request-agent", {"agent": "devin"}, headers=quinn,
+               expected=403)["error"]["code"] == "forbidden"
+    assert ask(api, "cloud-agents/devin/request", {"reports_to": manager}, headers=quinn,
+               expected=403)["error"]["code"] == "forbidden"
+    assert filed(hq) == []
+
+
+def test_a_seat_under_an_unfilled_seat_waits_for_its_manager_before_an_add(environment, hq):
+    api = environment(catalog_dir=SHIPPED)
+    head = ask(api, "seats", {"title": "Head of Engineering"})
+    seat = ask(api, "seats", {"title": "Engineer", "reports_to": "seat:" + head["id"]})
+    before = bot_count(api)
+    assert ask(api, "cloud-agents/codex/add", {"seat_id": seat["id"]}, expected=409)["error"]["code"] == "manager_seat"
+    assert bot_count(api) == before

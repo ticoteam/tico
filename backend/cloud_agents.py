@@ -188,14 +188,16 @@ def _reserve_in(c, auth, who, agent, digested, key, seat_id, reports_to, team, f
         _recover_stale(c, seat_id)
         row = lifecycle.seat(c, seat_id)
         lifecycle.refuse_if_requested(row)
-        if row["team"]:
-            Groups.may_add(c, auth, who, row["team"])   # the agent joins the seat's team when it connects
-        lifecycle.placement(auth, c, who, row["reports_to"], seat_id)
+        placed = lifecycle.placement(auth, c, who, row["reports_to"], seat_id)
+        joined = _joins(c, row, placed)
+        if joined:
+            Groups.may_add(c, auth, who, joined)        # the agent joins this team when it connects
         kept, made = seat_id, 0
     else:
-        if team:
-            Groups.may_add(c, auth, who, team)          # a new seat in this team, which the agent joins
         placed = lifecycle.placement(auth, c, who, reports_to)
+        joined = _joins(c, {"team": team}, placed)
+        if joined:
+            Groups.may_add(c, auth, who, joined)        # a new seat the agent joins this team from
         kept = lifecycle.create_seat(auth, c, who, agent["name"], "", placed, team)["id"]
         made = 1
     waiting = _first_task(c, who, first_task)
@@ -294,15 +296,15 @@ def _request(request, store, auth, settings, who, agent_id, *, name="", first_ta
     reservation = value
 
     def keep(c, ticket_id):
-        """Inside the transaction that keeps Tico's ticket: the reserved seat becomes requested. The line is checked again,
-        since a person may have lost their place while the ticket was sent; a failure here releases the reservation."""
+        """Inside the transaction that keeps Tico's ticket: the reserved seat becomes requested. Tico has accepted the
+        request by now, so it is kept even if the person lost their place meanwhile (an owner can still cancel it): a
+        refusal here would leave a request at Tico that this install could no longer track or cancel."""
         held = c.execute("SELECT * FROM seat_requests WHERE id=? AND state='filing'", (reservation,)).fetchone()
         if not held:
             raise Problem("filing", "This request was released before Tico answered", 409)
         row = lifecycle.seat(c, held["seat_id"])
         if row["request_state"] != lifecycle.FILING:
             raise Problem("filing", "This request was released before Tico answered", 409)
-        lifecycle.placement(auth, c, who, row["reports_to"], row["id"])
         c.execute("UPDATE seats SET request_state=?,request_ticket=? WHERE id=?", (STEPS[0], ticket_id, row["id"]))
         c.execute("UPDATE seat_requests SET state='filed',ticket_id=? WHERE id=?", (ticket_id, reservation))
         H.event(c, who.actor, "seat.requested", row["id"], {"agent": agent["id"], "ticket": ticket_id})
@@ -415,6 +417,9 @@ def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
     row = lifecycle.seat(c, seat_id)
     lifecycle.refuse_if_requested(row)
     placed = lifecycle.placement(auth, c, who, row["reports_to"], seat_id)
+    if str(row["reports_to"] or "").startswith(lifecycle.SEAT_PREFIX):
+        # A bot cannot report to a seat, and filling the seat above later would leave this bot under the wrong manager.
+        raise Problem("manager_seat", "Fill the seat this one reports to first", 409)
     team = _joins(c, row, placed)
     if team:
         Groups.may_add(c, auth, who, team)          # the bot joins this team: the rule every add to a team obeys
