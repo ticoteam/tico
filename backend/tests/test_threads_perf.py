@@ -119,7 +119,8 @@ def test_a_round_reads_for_each_stream_what_its_own_read_would_for_every_filter(
     for token in ("ana-test", "ben-test", "cara-test"):
         person = who(api, token)
         check = lambda: None
-        polls = [(person, after, arguments, check) for arguments in filters]
+        hydrated = E.Hydrated()              # shared text, here and in the round before: it must read the same
+        polls = [(person, after, {**arguments, "shared": hydrated}, check) for arguments in filters]
         for arguments, got in zip(filters, round_of(api, *polls)):
             assert not isinstance(got, Exception), got
             alone = lone_read(api, person, after, **arguments)
@@ -192,3 +193,25 @@ def test_a_refused_sign_in_ends_only_that_stream_and_a_stream_that_left_is_skipp
                                     (ana, after, topics, lambda: None))
     assert isinstance(first, Problem)
     assert said in {d["id"] for _, _, d in second[0]} and said in {d["id"] for _, _, d in third[0]}
+
+
+def test_shared_event_text_keeps_each_readers_own_actor_and_address(api):  # noqa: F811
+    after = cursor(api)
+    room = new_thread(api, title="Launch")
+    plain = say(api, room["id"], "No file here")["id"]
+    carrying = say(api, room["id"], "A file here")["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET refs_json=? WHERE id=?", ('{"attachments":[{"name":"plan.txt"}]}', carrying))
+    seen = []
+
+    def visuals(c, who, messages):               # what gets each reader's own address: only a message with a file
+        seen.extend(m["id"] for m in messages)
+    shared = E.Hydrated()
+    got = lone_read(api, who(api, "ben-test"), after, topics=("messages",), visuals=visuals, shared=shared)
+    assert {d["id"] for _, _, d in got[0]} >= {plain, carrying}
+    assert carrying in seen and plain not in seen
+    row = {"seq": 7, "at": "2026-11-01T00:00:00Z"}
+    event = E._SameForAll(room["id"], {"root_id": room["id"]}, {"id": plain}, {})
+    shown, hidden = event.event(row, "bot:acme", shared), event.event(row, None, shared)
+    assert shown["actor"] == "bot:acme" and hidden["actor"] is None and shown.encoded != hidden.encoded
+    assert event.event(row, "bot:acme", shared) is shown

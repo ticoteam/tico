@@ -1042,6 +1042,18 @@ class Hydrated:
     def __init__(self):
         self._lock = threading.Lock()
         self._entries = {}
+        self._events = {}
+
+    def event(self, key, build):
+        """The event `key` names (_SameForAll), built once. Readers must not change it."""
+        found = self._events.get(key)
+        if found is None:
+            found = build()
+            with self._lock:
+                self._events[key] = found
+                while len(self._events) > self.SIZE:
+                    self._events.pop(next(iter(self._events)))
+        return found
 
     def get(self, keys):
         with self._lock:
@@ -1081,6 +1093,33 @@ def _stored_messages(c, rows, shared=None):
     return {subject: found[(subject, seq)] for subject, seq in keys}
 
 
+class _SameForAll:
+    """A readable message's event, which reads the same for everyone it may be sent to: this viewer has been decided
+    (`_messages`), so what is shared is the text, keyed by all that it holds. A message with a file is not one of
+    these: its visuals carry each reader's own address."""
+    __slots__ = ("cid", "place", "message", "refs")
+
+    def __init__(self, cid, place, message, refs):
+        self.cid, self.place, self.message, self.refs = cid, place, message, refs
+
+    def build(self, row, actor):
+        return _event(row, actor, {"id": self.message["id"], "conversation_id": self.cid, **self.place,
+                                   "message": {**self.message, "refs": self.refs, "thread_id": self.cid,
+                                               "root_id": self.place["root_id"]}})
+
+    def event(self, row, actor, shared):
+        if shared is None:
+            return self.build(row, actor)
+        return shared.event((row["seq"], row["at"], self.message["id"], self.cid, self.place["root_id"], actor),
+                            lambda: self.build(row, actor))
+
+
+def _event(row, actor, entry):
+    data = _Data({"seq": row["seq"], "actor": actor, "at": row["at"], **entry})
+    data.encoded = encode(data)
+    return data
+
+
 def _messages(view, rows, shared=None):
     c, privacy = view.c, view.privacy
     last = {}
@@ -1113,9 +1152,12 @@ def _messages(view, rows, shared=None):
         place = {"thread_id": cid, "root_id": conversation.get("root_id") or cid,
                  "message_seq": message.get("seq"), "revision": message.get("revision") or 0}
         if threads.message_readable(c, view.reader, message, thread_checked=True):
-            out.append((row, {"id": subject, "conversation_id": cid, **place,
-                              "message": {**message, "refs": refs, "thread_id": cid,
-                                          "root_id": place["root_id"]}}))
+            if isinstance(refs, dict) and refs.get("attachments"):
+                out.append((row, {"id": subject, "conversation_id": cid, **place,
+                                  "message": {**message, "refs": refs, "thread_id": cid,
+                                              "root_id": place["root_id"]}}))
+            else:
+                out.append((row, _SameForAll(cid, place, message, refs)))
         elif (message.get("deleted_at") and not threads.legacy_hidden(c, view.reader, message)
               and _readable_before_deletion(view, dict(message))):
             out.append((row, {"id": subject, "conversation_id": cid, **place, "deleted": True}))
@@ -1414,7 +1456,7 @@ def read_in(c, snapshot, auth, who, after, *, topics=TOPICS, conversations=(), b
     if by_topic.get("messages"):
         found = _messages(view, by_topic["messages"], shared)
         if visuals:                 # a visual on a new message carries this reader's own address (backend/visuals.py)
-            visuals(c, who, [e["message"] for _, e in found if "message" in e])
+            visuals(c, who, [e["message"] for _, e in found if not isinstance(e, _SameForAll) and "message" in e])
         picked += [("messages", r, e) for r, e in found]
     if by_topic.get("runs"):
         picked += [("runs", r, e) for r, e in _runs(view, by_topic["runs"])]
@@ -1427,9 +1469,8 @@ def read_in(c, snapshot, auth, who, after, *, topics=TOPICS, conversations=(), b
     events, size = [], 0
     for topic, row, entry in sorted(picked, key=lambda item: item[1]["seq"]):
         actor = None if view.hidden_actor(row["actor"]) else row["actor"]
-        data = _Data({"seq": row["seq"], "actor": actor, "at": row["at"], **entry})
         # The first event always goes, however large; the rest wait for the next read once the budget is spent.
-        data.encoded = encode(data)
+        data = entry.event(row, actor, shared) if isinstance(entry, _SameForAll) else _event(row, actor, entry)
         size += len(data.encoded)
         if events and size > READ_BYTES:
             return events, events[-1][0], False, True

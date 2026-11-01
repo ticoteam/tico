@@ -164,6 +164,8 @@ def serve():
         setattr(importlib.import_module(module), attr, type(getattr(importlib.import_module(module), attr))(value))
     with tempfile.TemporaryDirectory(prefix="threads-benchmark-") as directory:
         generator, server, thread, port, app = boot(directory)
+        if os.environ.get("BENCH_SWITCH"):                 # seconds: the interpreter lock's switch interval, for one run
+            sys.setswitchinterval(float(os.environ["BENCH_SWITCH"]))
         profile = Profile(sys.modules["backend.store"]) if os.environ.get("BENCH_PROFILE") else None
         print(json.dumps({"port": port, "db": str(app.state.store.settings.db_path)}), flush=True)
         sys.stdin.read()                                   # the load generator closes stdin when the run ends
@@ -257,11 +259,12 @@ def slow_consumer(port, token, query, state, stop):
         state["error"] = repr(error)
 
 
-def writer(port, token, path, tag, seconds, rate, state):
-    """Posts at `rate` a second for `seconds`; each message carries its send time for the viewers to measure."""
+def writer(port, token, path, tag, seconds, rate, state, phase=0.0):
+    """Posts at `rate` a second for `seconds`; each message carries its send time for the viewers to measure. `phase`
+    (a share of the period) spreads the writers over it: people do not all press send at the same instant."""
     state.update({"writes": [], "ok": 0, "statuses": {}, "error": None})
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
-    period, end, next_at, n = 1 / rate, time.time() + seconds, time.time(), 0
+    period, end, next_at, n = 1 / rate, time.time() + seconds, time.time() + phase / rate, 0
     while time.time() < end:
         time.sleep(max(0, next_at - time.time()))
         next_at += period
@@ -393,7 +396,7 @@ def scenario(args, port, db):
     room_writers = [{} for _ in range(args.writers)]
     big_writer = {}
     threads = [start(writer, port, people[i % len(people)], post_path, f"{room[:8]}-{i}", args.seconds, args.rate,
-                     state) for i, state in enumerate(room_writers)]
+                     state, i / len(room_writers)) for i, state in enumerate(room_writers)]
     if big_path:
         threads.append(start(writer, port, "ana-test", big_path, "big", args.seconds, args.rate, big_writer))
 
