@@ -82,8 +82,13 @@ Control operations, under the same lease and sequence rules:
   sends `{"op": "open", "id", "host", "port", "ticket"}` down the exit's link and returns the bot
   computer's ticket. Both tickets are one-use.
 - `exit_close` closes the tunnels of a `bot` and/or an `exit`, with a `reason`.
-- `heartbeat` also takes `exit_ack` and returns `tunnels`: closed-tunnel reports (`id`, `exit`,
-  `runner_id`, `bot`, `host`, `day`, `bytes`, `code`), at most 256, retried until acknowledged.
+- `heartbeat` also takes `exit_ack` and returns `exit_usage`, one batch (`id`, `seq`, `rows` of `exit`,
+  `runner_id`, `bot`, `host`, `day`, `bytes`, `tunnels`; at most 2,048 rows) resent until its `id` is
+  acknowledged, and `exit_backlog`, the rows not yet acknowledged. `seq` grows by one per batch within
+  a relay `boot`: Python records a batch only above the highest `seq` it recorded for that boot.
+- `stop` closes every socket (counting the open tunnels' last bytes) and returns `exit_backlog`. While
+  that is above zero the lease stays for heartbeats only, and ends with the heartbeat that finds
+  nothing left; anything left when the lease lapses waits for the next one.
 
 Both ends must connect within 15 seconds or the tunnel closes (`exit_no_answer` when the exit did
 not). The exit's first message may be a short text status (`{"ok": true}` or `{"ok": false,

@@ -217,14 +217,14 @@ def test_the_owner_sees_what_went_through_per_day_and_old_days_go(api, relay):
     rid = caras["runner_id"]
     old = "2000-01-01"
     row = {"exit": rid, "runner_id": "bot-computer", "day": BE.today(), "bot": "ops"}
-    batch = {"id": "b1", "rows": [{**row, "host": "WWW.acme.example", "bytes": 700, "tunnels": 0},  # still open
+    batch = {"id": "b1", "seq": 1, "rows": [{**row, "host": "WWW.acme.example", "bytes": 700, "tunnels": 0},  # still open
                                   {**row, "host": "www.acme.example", "bytes": 300, "tunnels": 2},
                                   {**row, "host": "cdn.acme.example", "bytes": 5, "tunnels": 1},
                                   {**row, "day": old, "host": "www.acme.example", "bytes": 9, "tunnels": 1},
                                   {"exit": rid, "bot": "ops"}]}                              # malformed: skipped
     for _ in range(2):          # the relay resends a batch until acknowledged: recorded once
         with api.app.state.store.transaction() as c:
-            assert BE.record_batch(c, batch) == "b1"
+            assert BE.record_batch(c, "boot-1", batch) == "b1"
     get(api, f"computers/{rid}/browser-exit/usage", token="ben-test")                       # an admin
     as_member(api, "ben@acme.example")
     get(api, f"computers/{rid}/browser-exit/usage", token="ben-test", expected=403)
@@ -235,6 +235,27 @@ def test_the_owner_sees_what_went_through_per_day_and_old_days_go(api, relay):
     with api.app.state.store.transaction() as c:
         BE.prune(c)
         assert not c.execute("SELECT 1 FROM browser_exit_usage WHERE day=?", (old,)).fetchone()
+
+
+def test_a_usage_batch_resent_after_a_long_outage_is_recorded_once(api, relay):
+    caras, _ = laptop(api)
+    rid = caras["runner_id"]
+    row = {"exit": rid, "runner_id": "bot-computer", "day": BE.today(), "bot": "ops", "host": "www.acme.example",
+           "tunnels": 0}
+    first, second = {"id": "b1", "seq": 1, "rows": [{**row, "bytes": 100}]}, {"id": "b2", "seq": 2, "rows": [
+        {**row, "bytes": 50}]}
+
+    def send(boot, batch):
+        with api.app.state.store.transaction() as c:
+            return BE.record_batch(c, boot, batch)
+    assert send("boot-1", first) == "b1"
+    with api.app.state.store.transaction() as c:
+        BE.prune(c)                                             # an hourly prune, days of them: the mark stays
+    assert send("boot-1", first) == "b1"                        # its acknowledgement was lost, days ago
+    assert send("boot-1", second) == "b2"
+    assert send("boot-2", {**first, "id": "c1"}) == "c1"        # a restarted relay numbers from 1 again
+    with api.app.state.store.read() as c:
+        assert BE.used(c, rid) == 250
 
 
 def _bot_generation(api, bot):

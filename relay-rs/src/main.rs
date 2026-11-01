@@ -95,6 +95,9 @@ struct Hub {
     screens: HashMap<String, Screen>,
     reports: BTreeMap<String, Report>,
     exits: exit::Exits,
+    /// Python sent `stop` with browser-exit usage still unacknowledged: its lease stays for heartbeats only until it
+    /// has collected that usage (or the lease lapses), so the last bytes before a stop aren't lost.
+    stopping: bool,
 }
 impl Hub {
     fn new() -> Self {
@@ -108,6 +111,7 @@ impl Hub {
             screens: HashMap::new(),
             reports: BTreeMap::new(),
             exits: exit::Exits::default(),
+            stopping: false,
         }
     }
     fn valid(&self, lease: &str) -> bool {
@@ -146,6 +150,7 @@ impl Hub {
         {
             self.close_all(Close::new(1012, "permission lease expired"));
             self.lease = None;
+            self.stopping = false;
         }
         let stale = self
             .screens
@@ -237,6 +242,7 @@ async fn start(
     hub.sequence = 0;
     hub.reply = None;
     hub.challenge = id();
+    hub.stopping = false;
     hub.lease = Some((body.lease, Instant::now()));
     Ok(Json(json!({"boot": hub.boot})))
 }
@@ -325,11 +331,18 @@ async fn command(
         return Err(error(StatusCode::CONFLICT, "stale control sequence"));
     }
     let sequence = body.sequence;
+    if hub.stopping && !matches!(body.action, Action::Heartbeat { .. } | Action::Stop) {
+        return Err(error(StatusCode::CONFLICT, "relay control stopping"));
+    }
     let answer = match body.action {
         Action::Stop => {
+            // Closing the tunnels counts their last bytes; the lease ends once Python has collected them.
             hub.close_all(Close::new(1012, "server stopped"));
-            hub.lease = None;
-            json!({})
+            hub.stopping = !hub.exits.drained();
+            if !hub.stopping {
+                hub.lease = None;
+            }
+            json!({"exit_backlog": hub.exits.backlog()})
         }
         Action::Heartbeat { ack, exit_ack } => {
             if ack.len() > 256 || exit_ack.len() > exit::REPORT_BATCH {
@@ -341,8 +354,13 @@ async fn command(
             hub.exits.acknowledge(&exit_ack);
             hub.lease.as_mut().unwrap().1 = Instant::now();
             let usage = hub.exits.usage_batch();
-            json!({"reports": hub.reports.values().take(256).collect::<Vec<_>>(),
-                   "exit_usage": usage})
+            let answer = json!({"reports": hub.reports.values().take(256).collect::<Vec<_>>(),
+                   "exit_usage": usage, "exit_backlog": hub.exits.backlog()});
+            if hub.stopping && usage.is_none() {
+                hub.stopping = false;
+                hub.lease = None;
+            }
+            answer
         }
         Action::ExitPolicy { runner_id, policy } => {
             if runner_id.is_empty()

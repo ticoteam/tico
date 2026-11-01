@@ -289,7 +289,7 @@ class RemoteRegistry:
                 return
         with self.lock:
             answer = self._command("heartbeat", ack=self.acks, exit_ack=self.exit_acks)
-            reports, usage = answer["reports"], answer.get("exit_usage")
+            reports, usage, boot = answer["reports"], answer.get("exit_usage"), self.boot
             self.acks, self.exit_acks = [], []
         # Never take the store lock while holding the control lock: admission takes them in the other order.
         from . import browser_exit
@@ -297,7 +297,7 @@ class RemoteRegistry:
         with self.store.transaction() as c:
             for report in reports:
                 self._record(c, report)
-            recorded = browser_exit.record_batch(c, usage)
+            recorded = browser_exit.record_batch(c, boot, usage)
             if prune:
                 browser_exit.prune(c)
         if prune:
@@ -321,15 +321,33 @@ class RemoteRegistry:
                 except TimeoutError:
                     pass
         finally:
-            def shutdown():
-                with self.lock:
-                    if self.healthy:
-                        self._command("stop")
             try:
-                await asyncio.to_thread(shutdown)
+                await asyncio.to_thread(self.stop_and_drain)
             except Problem:
                 pass
             self.http.close()
+
+    def stop_and_drain(self, deadline=5.0):
+        """Stop: the relay closes every socket, which counts the open tunnels' last bytes, and keeps the lease for
+        heartbeats until Python has collected the browser-exit usage it holds. Collected here until none is left or
+        the deadline passes; what's left stays in the relay for the next lease."""
+        from . import browser_exit
+        with self.lock:
+            if not self.healthy:
+                return
+            answer = self._command("stop")
+        until = time.monotonic() + deadline
+        while (answer.get("exit_usage") or answer.get("exit_backlog")) and time.monotonic() < until:
+            with self.lock:
+                answer = self._command("heartbeat", ack=[], exit_ack=self.exit_acks)
+                usage, boot, self.exit_acks = answer.get("exit_usage"), self.boot, []
+            if usage:
+                with self.store.transaction() as c:
+                    recorded = browser_exit.record_batch(c, boot, usage)
+                with self.lock:
+                    if recorded:
+                        self.exit_acks.append(recorded)
+        self.healthy = False
 
 
 def reconcile_sessions(store, lease=""):

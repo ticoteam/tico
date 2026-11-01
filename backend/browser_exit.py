@@ -173,22 +173,29 @@ def record(c, rows):
                   "tunnels=tunnels+excluded.tunnels", (rid, day, bot, host, n, tunnels))
 
 
-def record_batch(c, batch):
-    """Record one of the relay's usage batches, once: it resends a batch until acknowledged, and an acknowledgement
-    can be lost. Returns the id to acknowledge, or None."""
+def record_batch(c, boot, batch):
+    """Record one of the relay's usage batches, once: it resends a batch until acknowledged, however long that takes,
+    and an acknowledgement can be lost. Each batch of a relay boot has the next sequence number, so a batch at or below
+    the boot's mark was recorded already; the mark moves in the same transaction as the rows. Returns the id to
+    acknowledge, or None."""
     if not isinstance(batch, dict) or not isinstance(batch.get("id"), str) or not 0 < len(batch["id"]) <= 64:
         return None
-    if c.execute("INSERT OR IGNORE INTO browser_exit_batches(id,at) VALUES(?,?)", (batch["id"], H.now())).rowcount:
+    seq = batch.get("seq")
+    if not isinstance(boot, str) or not 0 < len(boot) <= 64 or type(seq) is not int or seq < 1:
+        return None
+    mark = c.execute("SELECT seq FROM browser_exit_marks WHERE boot=?", (boot,)).fetchone()
+    if not mark or seq > mark[0]:
         record(c, batch.get("rows") if isinstance(batch.get("rows"), list) else [])
+        c.execute("INSERT INTO browser_exit_marks(boot,seq) VALUES(?,?) ON CONFLICT(boot) DO UPDATE SET seq=excluded.seq",
+                  (boot, seq))
     return batch["id"]
 
 
 def prune(c):
-    """Drop days past retention, and batch ids no relay still resends."""
+    """Drop days past retention."""
     now = datetime.now(timezone.utc)
     c.execute("DELETE FROM browser_exit_usage WHERE day<?",
               ((now - timedelta(days=RETENTION_DAYS)).strftime("%Y-%m-%d"),))
-    c.execute("DELETE FROM browser_exit_batches WHERE at<?", ((now - timedelta(days=2)).isoformat(),))
 
 
 def authorize_link(store, auth, execution, body):

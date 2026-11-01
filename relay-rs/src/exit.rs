@@ -50,6 +50,9 @@ const TUNNELS_PER_EXIT: usize = 256;
 const USAGE_ROWS: usize = 16384;
 pub(super) const FRAME: usize = 1 << 20;
 pub(super) const REPORT_BATCH: usize = 256;
+/// Rows per usage batch: a full backlog (USAGE_ROWS) goes in 8 heartbeats, so a stopping Python collects it in well
+/// under its drain deadline.
+const BATCH_ROWS: usize = 2048;
 
 /// What an exit computer's owner allows: Python's durable choice, with the generation that fences older grants.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -83,6 +86,9 @@ pub(super) struct UsageRow {
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct UsageBatch {
     pub id: String,
+    /// One more than the last batch's, within this relay's boot: Python records a batch only above the highest it has
+    /// recorded for the boot, so a batch resent after any outage is never counted twice.
+    pub seq: u64,
     pub rows: Vec<UsageRow>,
 }
 
@@ -155,6 +161,7 @@ pub(super) struct Exits {
     /// Bytes and closed tunnels not yet in a batch, each on the UTC day it happened.
     usage: BTreeMap<UsageKey, (u64, u64)>,
     batch: Option<UsageBatch>,
+    seq: u64,
     serial: u64,
     /// The day to count on instead of the clock's (tests).
     #[cfg(test)]
@@ -459,7 +466,7 @@ impl Exits {
             let keys = self
                 .usage
                 .keys()
-                .take(REPORT_BATCH)
+                .take(BATCH_ROWS)
                 .cloned()
                 .collect::<Vec<_>>();
             let rows = keys
@@ -478,7 +485,12 @@ impl Exits {
                     }
                 })
                 .collect();
-            self.batch = Some(UsageBatch { id: id(), rows });
+            self.seq += 1;
+            self.batch = Some(UsageBatch {
+                id: id(),
+                seq: self.seq,
+                rows,
+            });
         }
         self.batch.clone()
     }
@@ -486,6 +498,11 @@ impl Exits {
     /// Whether every byte counted has reached Python.
     pub(super) fn drained(&self) -> bool {
         self.usage.is_empty() && self.batch.is_none()
+    }
+
+    /// Rows not yet acknowledged by Python.
+    pub(super) fn backlog(&self) -> usize {
+        self.usage.len() + self.batch.as_ref().map_or(0, |b| b.rows.len())
     }
 
     #[cfg(test)]
@@ -955,7 +972,12 @@ mod tests {
         exits.acknowledge(std::slice::from_ref(&first.id));
         let second = exits.usage_batch().unwrap();
         assert_ne!(second.id, first.id);
-        assert_eq!(second.rows[0].bytes, 5);
+        assert_eq!(
+            (first.seq, second.seq),
+            (1, 2),
+            "Python's mark for this boot moves past each"
+        );
+        assert_eq!((second.rows[0].bytes, exits.backlog()), (5, 1));
         exits.acknowledge(&[second.id]);
         assert!(exits.drained() && exits.usage_batch().is_none());
         // A new Python lease keeps the day's count: the cap is not refilled.
