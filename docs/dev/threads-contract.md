@@ -124,8 +124,8 @@ CREATE TABLE IF NOT EXISTS message_deliveries (
   attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT, error TEXT,
   delivered_at TEXT, read_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE (message_id, recipient));
-CREATE INDEX IF NOT EXISTS message_deliveries_inbox ON message_deliveries(recipient, created_at)
-  WHERE state IN ('pending','delivered');
+CREATE INDEX IF NOT EXISTS message_deliveries_waiting ON message_deliveries(recipient, created_at)
+  WHERE state IN ('pending','delivered','capped','held');
 CREATE INDEX IF NOT EXISTS message_deliveries_capped ON message_deliveries(root_id, created_at) WHERE state='capped';
 CREATE INDEX IF NOT EXISTS message_deliveries_loop ON message_deliveries(root_id, created_at)
   WHERE cause='bot' AND recipient LIKE 'bot:%' AND mode IN ('steer','queue');

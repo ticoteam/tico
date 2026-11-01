@@ -20,8 +20,9 @@ def session_task(attempt):
 
 def session_key(config, attempt):
     """The provider thread this turn continues (clients/sessions.py), read from a claimed attempt."""
-    return sessions.session_key(config, attempt.get("bot"), session_task(attempt),
-                                (attempt.get("conversation") or {}).get("id"))
+    conv = attempt.get("conversation") or {}
+    return sessions.session_key(config, attempt.get("bot"), session_task(attempt), conv.get("id"),
+                                conv.get("root_id"), conv.get("audience_class"))
 
 
 def lane(config, attempt):
