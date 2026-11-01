@@ -10,7 +10,7 @@ declared_as: |
   - service: slack
     identity: the company workspace
     can: [read]                     # add `post` to write to channels and DM people
-    channels: [marketing]           # optional read allow-list; omit only for broad roles
+    channels: [marketing]           # optional: read these too, on top of the channels that list this bot as a reader
     dms: false                      # optional: refuse the shared DM inbox
     env: SLACK_BOT_TOKEN
 writes: allowed
