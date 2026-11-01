@@ -283,6 +283,7 @@
     if (m.duration_ms) meta.push(esc(length(m.duration_ms)));
     let html = `<div class="column"><input class="title-input" data-model="title" data-enter="rename" data-blur="rename" spellcheck="false" ${m.title_editable ? '' : 'disabled'} aria-label="Title">`;
     html += `<div class="meta">${meta.join('<span class="sep"></span>')}<span class="sep"></span>${visibility(m)}`;
+    if (m.live_url) html += `<span class="sep"></span><button class="link" data-act="open-url" data-url="${esc(m.live_url)}">Open in Tico</button>`;
     html += `</div>`;
     if (m.sync_error) html += `<div class="notice">${icon('alert')}<span class="grow selectable">${esc(m.sync_error)}</span></div>`;
     for (const note of m.setup) html += `<div class="notice">${icon('alert')}<span class="grow">${esc(note)}</span>${S.page === 'meeting' ? `<button class="link" data-act="settings">Settings</button>` : ''}</div>`;
@@ -736,7 +737,7 @@
       return html + `<div class="vis"><span class="grow">Which Tico?</span></div>` + p.orgs.map((o) => `<button class="menu-item" data-act="people-org" data-id="${esc(o.id)}">${icon('globe')}<span class="grow">${esc(o.name)}</span></button>`).join('');
     }
     if (p.org) {
-      const label = p.team ? `Everyone in ${esc(p.org)} can see it` : `Private in ${esc(p.org)}`;
+      const label = p.team ? `Everyone signed in to ${esc(p.org)} can see this meeting as it happens` : 'Only you and people you add in Tico can see this meeting';
       const button = `<button class="btn small" data-act="set-team" data-team="${!p.team}" ${p.can_share ? '' : 'disabled'} title="${esc(p.blocked)}">${p.team ? 'Make private' : 'Make public'}</button>`;
       html += `<div class="vis">${icon(p.team ? 'globe' : 'lock')}<span class="grow">${label}</span>${button}</div>`;
     }

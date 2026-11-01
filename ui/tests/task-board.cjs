@@ -549,8 +549,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
 
     // A long name makes the same 40-character key the server saves, shown live under Advanced (C2).
     const newTag = async () => {
-      await page.goto('http://tico-ui.test/#/settings');
-      await page.locator('[data-settings-tab="tasks"]').click();
+      await page.goto('http://tico-ui.test/#/settings/tasks');
       const form = page.locator('#settings-tags [data-tag-create]');
       await form.waitFor();
       await form.locator('.tag-advanced > summary').click();
@@ -582,13 +581,15 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     // The starter creates only on click and handles a key another person creates while the list is open.
     tags.splice(tags.findIndex(tag => tag.key === 'release-checklist'), 1);
     const settingsTags = async () => {
-      await page.goto('http://tico-ui.test/#/settings');
-      await page.locator('[data-settings-tab="tasks"]').click();
+      // The Tasks tab is remembered. Clicking it again starts a second tag-list render that
+      // can replace the starter button between pointer down and pointer up.
+      await page.goto('http://tico-ui.test/#/settings/tasks');
       await page.locator('#settings-tags [data-release-starter]').waitFor();
     };
     await settingsTags();
     assert.equal(tags.some(tag => tag.key === 'release-checklist'), false, 'opening Tags does not seed the starter');
     await page.locator('#settings-tags [data-release-starter]').click();
+    await page.waitForURL('**/#/tag/release-checklist');
     await page.locator('[data-tag-notes] input').nth(3).waitFor();
     const starter = tags.find(tag => tag.key === 'release-checklist');
     assert.equal(starter.label, 'release');
@@ -598,12 +599,14 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await settingsTags();
     raceStarter = true;
     await page.locator('#settings-tags [data-release-starter]').click();
+    await page.waitForURL('**/#/tag/release-checklist');
     await page.locator('[data-tag-notes] input:checked').waitFor();
     assert.equal(await page.locator('[data-tag-heading]').innerText(), 'Existing release');
     assert.equal(await page.locator('.page-tags [data-tag-create]').count(), 0, 'an existing non-template key is opened as it is');
     await settingsTags();
     const afterRace = posted.length;
     await page.locator('#settings-tags [data-release-starter]').click();
+    await page.waitForURL('**/#/tag/release-checklist');
     await page.locator('[data-tag-notes] input:checked').waitFor();
     assert.equal(posted.length, afterRace);
     assert.deepEqual(errors, []);

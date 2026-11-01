@@ -62,6 +62,24 @@ class Org:
                 out |= self.below(team.id)
         return frozenset(out)
 
+    def reports(self, actor: str) -> frozenset[str]:
+        """Everyone who reports to `actor`, directly or not: with `led_by`, what a manager's default covers."""
+        under: dict[str, list[str]] = {}
+        for mate, boss in self.reports_to.items():
+            under.setdefault(boss, []).append(mate)
+        found: set[str] = set()
+        todo = [actor]
+        while todo:
+            for mate in under.get(todo.pop(), []):
+                if mate != actor and mate not in found:
+                    found.add(mate)
+                    todo.append(mate)
+        return frozenset(found)
+
+    def manages(self, actor: str) -> bool:
+        """Whether `actor` is a manager: leads a team or has anyone reporting to them."""
+        return bool(self.led_by(actor) or self.reports(actor))
+
     def members(self, teams: frozenset[str]) -> frozenset[str]:
         return frozenset(actor for actor, team in self.team_of.items() if team in teams)
 

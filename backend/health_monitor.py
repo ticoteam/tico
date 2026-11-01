@@ -905,7 +905,7 @@ def report(c_factory, support, auth, settings, who, key):
     bundle = diagnostics.build(store, settings, auth, owner, support.census)
     attachment = support.previews.keep(owner.actor, bundle)
     ticket = support.file(owner, SupportTicket(message=message, include_ids=True, diagnostics=attachment),
-                          "health:" + row["signature"])
+                          "health:" + row["signature"], source="health_monitor")
     with store.transaction() as c:
         c.execute("INSERT INTO health_reports(signature,ticket_id,created_at,reported_occurrences) VALUES(?,?,?,?) "
                   "ON CONFLICT(signature) DO UPDATE SET ticket_id=excluded.ticket_id",

@@ -3,10 +3,13 @@ and the KPI tree. Examples use Acme, a home-cleaning company."""
 
 import sqlite3
 
+import pytest
+
 from backend import growth as G
 from backend import hubdb as H
 from backend.tests.test_api import api, get, headers, post, put  # noqa: F401
 from backend.tests.test_company import bot
+from backend.tests.test_market_spend import defined
 
 
 def patch(api, path, body, token="ana-test", expected=200):
@@ -266,7 +269,7 @@ def test_a_kpi_says_whether_the_caller_may_edit_it_and_an_unreadable_one_has_no_
 
 # ----------------------------------------------------------------------------- migration
 def test_migration_applies_on_an_empty_file_and_on_one_at_the_previous_version(tmp_path):
-    for start in (0, H.MIGRATIONS.index(H.GROWTH_SCHEMA)):
+    for start in (0, H.MIGRATIONS.index(H.GROWTH_SCHEMA), len(H.MIGRATIONS)):
         conn = sqlite3.connect(tmp_path / f"db{start}.sqlite", isolation_level=None)
         conn.row_factory = sqlite3.Row
         if start:
@@ -288,6 +291,184 @@ def test_migration_applies_on_an_empty_file_and_on_one_at_the_previous_version(t
             raise AssertionError("two Unknown rows for one month")
         except sqlite3.IntegrityError:
             pass
+        # One segment's share of the same month is its own row, once.
+        conn.execute("INSERT INTO growth_cohorts (id, month, segment_id, updated_at) VALUES ('c','2026-10','s1','x')")
+        try:
+            conn.execute("INSERT INTO growth_cohorts (id, month, segment_id, updated_at) VALUES ('d','2026-10','s1','x')")
+            raise AssertionError("two rows for one segment's month")
+        except sqlite3.IntegrityError:
+            pass
+
+
+def test_migration_starts_segments_the_graph_already_marks_us_or_next(tmp_path):
+    start = len(H.MIGRATIONS)
+    conn = sqlite3.connect(tmp_path / "db.sqlite", isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    for i, script in enumerate(H.MIGRATIONS[:start]):
+        if i == 23:
+            H.migrate_task_privacy(conn)
+        elif i == 30:
+            H.TR.migrate(conn)
+        else:
+            H._apply(conn, script)
+    conn.execute(f"PRAGMA user_version={start}")
+    for sid, props in (("segment/homes", "{}"), ("segment/offices", '{"next": true}'), ("segment/hotels", "{}")):
+        conn.execute("INSERT INTO market_entities (id, type, name, properties, status, created_at, created_by, updated_at) "
+                     "VALUES (?, 'segment', ?, ?, 'active', 'x', 'x', 'x')", (sid, sid.split("/")[1].title(), props))
+    conn.execute("INSERT INTO market_edges (id, src, rel, dst, created_at, created_by, updated_at) VALUES "
+                 "('e1','company/self','operates_in','segment/homes','x','x','x')")
+    conn.execute("INSERT INTO market_edges (id, src, rel, dst, until, created_at, created_by, updated_at) VALUES "
+                 "('e2','company/self','operates_in','segment/hotels','2020-01-01','x','x','x')")   # ended: not Us
+    H.migrate(conn)
+    rows = {r["segment_id"]: r["status"] for r in conn.execute("SELECT segment_id, status FROM growth_segments")}
+    assert rows == {"segment/homes": "serving", "segment/offices": "next"}
+
+
+def test_a_file_that_already_ran_the_segments_step_as_user_version_72_opens_and_keeps_its_rows(tmp_path):
+    """A release before the migration files ran this as hubdb's step 72. Such a file opens, keeps a person's choices
+    (a segment dropped from the graph's start stays dropped) and is not seeded again; one step newer is refused."""
+    path = tmp_path / "hub.sqlite"
+    conn = sqlite3.connect(path, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    H.migrate(conn)
+    conn.execute("INSERT INTO market_entities (id, type, name, properties, status, created_at, created_by, updated_at) "
+                 "VALUES ('segment/homes', 'segment', 'Homes', '{\"next\": true}', 'active', 'x', 'x', 'x')")
+    conn.execute("INSERT INTO growth_segments (id, segment_id, status, created_at, updated_at) "
+                 "VALUES ('kept', 'segment/homes', 'dropped', 'x', 'x')")
+    conn.execute("INSERT INTO growth_cohorts (id, month, segment_id, updated_at) VALUES ('c','2026-10','s1','x')")
+    conn.execute("DROP TABLE schema_migrations")      # as that release left it: no migration files recorded
+    conn.execute("PRAGMA user_version=72")
+    conn.close()
+    from backend import migrations
+    migrations.preflight(path)
+    conn = sqlite3.connect(path, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    H.migrate(conn)
+    assert [tuple(r) for r in conn.execute("SELECT id, status FROM growth_segments")] == [("kept", "dropped")]
+    assert conn.execute("SELECT segment_id FROM growth_cohorts WHERE id='c'").fetchone()[0] == "s1"
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 72
+    conn.execute("PRAGMA user_version=73")
+    conn.close()
+    with pytest.raises(migrations.MigrationError, match="newer than this code"):
+        migrations.preflight(path)
+
+
+# ----------------------------------------------------------------------------- segments
+def statuses(api):
+    return {s["name"]: s["status"] for s in get(api, "growth/segments")["segments"]}
+
+
+def where_we_play(api):
+    seen = get(api, "market/spend")["segments"]
+    return sorted(s["name"] for s in seen if s["self"]), sorted(s["name"] for s in seen if s["next"])
+
+
+def test_segments_by_name_status_and_where_we_play_follow_each_other(api):
+    first, second, sub = defined(api)             # Screening, Payments, Credit checks
+    homes = post(api, "growth/segments", {"name": "screening", "status": "serving", "motion": "self_serve",
+                                          "who_buys": "Small landlords", "deal_size": "$40/mo"})["segment"]
+    assert homes["segment_id"] == first and homes["name"] == "Screening"        # found by name, not made again
+    made = post(api, "growth/segments", {"name": "Property managers", "status": "serving"})["segment"]
+    assert made["segment_id"] == "segment/property-managers"
+    post(api, "growth/segments", {"segment_id": second, "status": "next"})
+    post(api, "growth/segments", {"segment_id": sub, "status": "testing"})
+    post(api, "growth/segments", {"name": "Screening"}, expected=409)
+    post(api, "growth/segments", {"status": "testing"}, expected=422)
+    listed = get(api, "growth/segments", token="cara-test")
+    assert [s["status"] for s in listed["segments"]] == ["serving", "serving", "testing", "next"]
+    assert listed["may_edit"] is False and get(api, "growth/segments")["may_edit"] is True
+    # Several Us: Where we play shows both serving segments, and the new one sits under the market's root.
+    assert where_we_play(api) == (["Property managers", "Screening"], ["Payments"])
+    # A status change moves the graph; a click on the Strategy page moves Growth.
+    patch(api, f"growth/segments/{second}", {"status": "serving"})
+    assert where_we_play(api) == (["Payments", "Property managers", "Screening"], [])
+    patch(api, f"growth/segments/{homes['id']}", {"status": "dropped"})
+    assert where_we_play(api)[0] == ["Payments", "Property managers"]
+    post(api, "market/segments/target", {"id": sub, "target": "next"})
+    post(api, "market/segments/target", {"id": first, "target": "ours"})
+    assert statuses(api) == {"Screening": "serving", "Property managers": "serving", "Payments": "serving",
+                             "Credit checks": "next"}
+    patch(api, f"growth/segments/{sub}", {"status": "testing"})
+    assert where_we_play(api)[1] == []
+    # Removing a segment on the Strategy page drops its Growth row.
+    post(api, "market/segments/remove", {"id": second})
+    assert statuses(api)["Payments"] == "dropped"
+
+
+def test_segment_permissions(api):
+    defined(api)
+    ops = bot(api, "ops")
+    post(api, "growth/segments", {"name": "Screening", "status": "serving"}, token=ops, expected=403)
+    post(api, "growth/segments", {"name": "Screening", "status": "testing"}, token="cara-test", expected=403)
+    tested = post(api, "growth/segments", {"name": "Screening", "status": "testing", "why": "Cheap to reach"},
+                  token=ops)["segment"]
+    assert tested["status"] == "testing" and tested["why"] == "Cheap to reach"
+    changed = patch(api, f"growth/segments/{tested['id']}", {"who_buys": "Landlords with 1-5 units",
+                                                              "deal_size": "$30/mo"}, token=ops)["segment"]
+    assert (changed["who_buys"], changed["deal_size"]) == ("Landlords with 1-5 units", "$30/mo")
+    patch(api, f"growth/segments/{tested['id']}", {"status": "serving"}, token=ops, expected=403)
+    patch(api, f"growth/segments/{tested['id']}", {"motion": "local"}, token=ops, expected=403)
+    patch(api, f"growth/segments/{tested['id']}", {"why": "x"}, token="cara-test", expected=403)
+    patch(api, f"growth/segments/{tested['id']}", {"status": "serving"}, token="ben-test")
+    # A bot never adds a segment over one Where we play already marks Us or Next.
+    post(api, "market/segments/target", {"id": "segment/payments", "target": "next"})
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM growth_segments WHERE segment_id='segment/payments'")
+    post(api, "growth/segments", {"segment_id": "segment/payments", "status": "testing"}, token=ops, expected=403)
+    patch(api, "growth/segments/nope", {"why": "x"}, expected=404)
+
+
+def test_channels_ideas_and_cohorts_name_segments_and_economics_splits_by_one(api):
+    defined(api)
+    put(api, "growth/settings", {"revenue_month": 90, "margin_pct": 40})
+    homes = post(api, "growth/segments", {"name": "Screening", "status": "serving"})["segment"]
+    pms = post(api, "growth/segments", {"name": "Payments", "status": "testing"})["segment"]
+    channel = add_channel(api, segments=[homes["id"], "segment/payments"])
+    assert channel["segments"] == [homes["id"], pms["id"]]
+    post(api, "growth/channels", {"slug": "nope", "name": "Nope", "segments": ["segment/none"]}, expected=404)
+    assert patch(api, "growth/channels/google-search", {"segments": [pms["id"]]})["segments"] == [pms["id"]]
+    assert get(api, "growth/channels")["channels"][0]["segments"] == [pms["id"]]
+    idea = post(api, "growth/ideas", {"title": "Landlord webinar", "segments": [pms["id"]]})["idea"]
+    other = post(api, "growth/ideas", {"title": "Screening ad", "segments": [homes["segment_id"]]})["idea"]
+    assert idea["segments"] == [pms["id"]]
+    assert [i["task_id"] for i in get(api, f"growth/ideas?segment={pms['id']}")["ideas"]] == [idea["task_id"]]
+    assert patch(api, f"growth/ideas/{other['task_id']}", {"segments": []})["idea"]["segments"] == []
+    listed = {s["id"]: s for s in get(api, "growth/segments")["segments"]}
+    assert listed[pms["id"]]["channels"] == ["google-search"] and listed[pms["id"]]["ideas"] == 1
+    # One channel's October, split by segment: each segment's numbers apart, and both added up without one.
+    put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-10", "segment_id": homes["id"],
+                                "spend": 2000, "new_customers": 40, "kept_d30": 80})
+    put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-10", "segment_id": "segment/payments",
+                                "spend": 1000, "new_customers": 10, "kept_d30": 60})
+    put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-10", "segment_id": homes["id"],
+                                "new_customers": 50})                                 # the same row again
+    assert len(get(api, "growth/cohorts")["cohorts"]) == 2
+    assert [c["segment_id"] for c in get(api, f"growth/cohorts?segment={pms['id']}")["cohorts"]] == [pms["id"]]
+    one = get(api, f"growth/economics?segment={homes['id']}")
+    assert one["segment"] == homes["id"] and one["rows"][0]["cac"] == 40.0 and one["total"]["new_customers"] == 50
+    # A segment's own channels without its numbers, and Unknown, stay on its table, blank.
+    add_channel(api, slug="referrals", name="Referrals", segments=[homes["id"]])
+    add_channel(api, slug="flyers", name="Flyers")                                     # not this segment's
+    one = get(api, f"growth/economics?segment={homes['id']}")
+    assert [r["channel"] for r in one["rows"]] == ["google-search", "referrals", "unknown"]
+    assert one["rows"][1]["new_customers"] is None and one["rows"][2]["cac"] is None
+    assert one["total"]["new_customers"] == 50
+    every = get(api, "growth/economics")
+    assert [r["channel"] for r in every["rows"]] == ["google-search"]
+    assert every["rows"][0]["spend"] == 3000 and every["rows"][0]["new_customers"] == 60 and every["rows"][0]["cac"] == 50.0
+    assert every["total"]["cac"] == 50.0
+    get(api, "growth/economics?segment=nope", expected=404)
+    assert {s["id"]: s["new_customers_last_month"] for s in get(api, "growth/segments")["segments"]} == \
+        {homes["id"]: 50, pms["id"]: 10}
+    # A channel's row with no segment is its whole month; segment rows beside it are a breakdown, not more.
+    for seg_id, spend, new in ((None, 1000, 100), (homes["id"], 600, 60), (pms["id"], 400, 40)):
+        put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-09", "segment_id": seg_id,
+                                    "spend": spend, "new_customers": new})
+    whole = get(api, "growth/economics?month=2026-09")
+    assert [(r["spend"], r["new_customers"]) for r in whole["rows"] if r["channel"] == "google-search"] == [(1000, 100)]
+    assert whole["total"]["new_customers"] == 100 and whole["total"]["spend"] == 1000
+    part = get(api, f"growth/economics?month=2026-09&segment={homes['id']}")
+    assert (part["rows"][0]["spend"], part["rows"][0]["new_customers"]) == (600, 60)
 
 
 def test_a_member_cannot_move_the_north_star_off_a_kpi_they_may_not_edit_nor_read_a_hidden_one(api):

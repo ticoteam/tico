@@ -27,8 +27,11 @@ from .store import Problem
 KINDS = ("brand", "gtm")
 SECTIONS = {
     "brand": ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples"),
-    "gtm": ("motion", "buyer", "wishes", "playbooks"),
+    "gtm": ("motion", "buyer", "playbooks"),
 }
+# Sections that were removed: a row written before the removal still holds them, so reads drop them. Writes that
+# name one get the same 422 as any unknown section.
+RETIRED = {"gtm": ("wishes",)}
 BODIES = {"brand": M.BrandBody, "gtm": M.GtmBody}
 TITLES = {"brand": "brand", "gtm": "go-to-market"}
 SUMMARY_MAX = 300
@@ -55,12 +58,20 @@ def published(c, kind, n=None):
                  (n,) if n is not None else ())
     if not row:
         return None
-    return {"n": row["n"], "body": _loads(row["body"], {}) or {}, "note": row["note"],
+    return {"n": row["n"], "body": _body(kind, _loads(row["body"], {})), "note": row["note"],
             "published_by": row["published_by"], "published_at": row["published_at"]}
 
 
 def _draft_row(c, kind):
     return H._one(c, f"SELECT * FROM {kind}_drafts WHERE id=1")
+
+
+def _body(kind, value):
+    """A stored body as read: its sections, without the retired ones."""
+    body = dict(value) if isinstance(value, dict) else {}
+    for name in RETIRED.get(kind, ()):
+        body.pop(name, None)
+    return body
 
 
 def draft(c, kind, current=None):
@@ -69,6 +80,7 @@ def draft(c, kind, current=None):
     body = _loads(row["body"]) if row else None
     if not isinstance(body, dict):
         return None
+    body = _body(kind, body)
     base = (current or {}).get("body") or {}
     changed = [s for s in SECTIONS[kind] if body.get(s) != base.get(s)]
     return {"body": body, "revision": row["revision"], "updated_by": row["updated_by"], "updated_at": row["updated_at"],
@@ -146,10 +158,26 @@ def summary_text(c, kind, current=None, hidden=None):
         if who:
             deal = _clip(buyer.get("deal_size"), 50, first=True)
             parts.append(_end("Buyer: " + who.rstrip(".") + (f", {deal}" if deal else "")))
+        parts += _segments_line(c)
         parts += _north_star_line(c, hidden)
         parts += _channels_line(c)
     text = " ".join(parts)
     return text if len(text) <= SUMMARY_MAX else text[:SUMMARY_MAX - 1].rstrip() + "…"
+
+
+SEGMENTS_CHARS = 100
+
+
+def _segments_line(c):
+    """The Growth segments served and tested, as `Segments: serving A, B; testing C.`, cut at a word boundary."""
+    rows = H._rows(c.execute("SELECT g.status, coalesce(e.name, g.segment_id) AS name FROM growth_segments g "
+                             "LEFT JOIN market_entities e ON e.id=g.segment_id WHERE g.status IN ('serving','testing') "
+                             "ORDER BY g.sort, name COLLATE NOCASE"))
+    groups = [f"{status} " + ", ".join(r["name"] for r in rows if r["status"] == status)
+              for status in ("serving", "testing") if any(r["status"] == status for r in rows)]
+    if not groups:
+        return []
+    return [_end(_clip("Segments: " + "; ".join(groups), SEGMENTS_CHARS))]
 
 
 def _channels_line(c):
@@ -210,6 +238,7 @@ def merge(c, kind, actor, sections, revision=None):
     body = _loads(row["body"]) if row else None
     if not isinstance(body, dict):
         body = dict((published(c, kind) or {}).get("body") or {})
+    body = _body(kind, body)
     for name, value in (sections or {}).items():
         if value is None:
             body.pop(name, None)
@@ -291,8 +320,9 @@ def proposal_error(c, kind, payload):
 
 def apply_proposal(c, kind, actor, payload):
     """A confirmed proposal, merged into the draft as the admin who confirmed it. Never published."""
-    merge(c, kind, actor, payload.get("sections") or {})
-    return {"sections": sorted(payload.get("sections") or {}), "draft": True}
+    sections = _body(kind, payload.get("sections"))   # a proposal filed before a section was retired
+    merge(c, kind, actor, sections)
+    return {"sections": sorted(sections), "draft": True}
 
 
 def kind_of_proposal(proposal_kind):

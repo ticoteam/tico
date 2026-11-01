@@ -157,6 +157,10 @@
     {
       "name": "Model subscriptions",
       "description": "The company's saved model logins and keys, given to computers per runtime. A value is sent only to add or reconnect one; no answer carries it."
+    },
+    {
+      "name": "Memory tidy",
+      "description": "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
     }
   ],
   "paths": {
@@ -8369,7 +8373,7 @@
     },
     "/api/v2/finance/access": {
       "get": {
-        "summary": "Who can see what in Finance: teams, each teammate's default, grants and rights, private lines, the defaults",
+        "summary": "Who can see what in Finance: teams, each teammate's default, grants and rights, whether the caller may grant them more (may_grant), private lines, the defaults",
         "operationId": "getFinanceAccess",
         "responses": {
           "200": {
@@ -8661,7 +8665,7 @@
     },
     "/api/v2/finance/bills": {
       "get": {
-        "summary": "Bills the caller sees (payables: a view grant or finance.ap), newest first, filtered by status (comma-separated, or unpaid), vendor, dates, aging bucket and a search, with the open total by aging bucket and a cursor",
+        "summary": "Bills the caller sees (payables: a view grant or finance.ap), newest first, filtered by status (comma-separated, or unpaid), vendor, dates, aging bucket or late, and a search, with the open total by aging bucket and a cursor; order=paid_on lists the last paid first",
         "operationId": "listFinanceBills",
         "parameters": [
           {
@@ -8764,6 +8768,30 @@
                 }
               ],
               "title": "Aging"
+            }
+          },
+          {
+            "name": "late",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Late"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "date",
+                "paid_on"
+              ],
+              "type": "string",
+              "default": "date",
+              "title": "Order"
             }
           },
           {
@@ -10005,6 +10033,16 @@
             }
           },
           {
+            "name": "late",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Late"
+            }
+          },
+          {
             "name": "cursor",
             "in": "query",
             "required": false,
@@ -10159,7 +10197,7 @@
     },
     "/api/v2/finance/lines/{account_id}": {
       "get": {
-        "summary": "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's projection, as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). The owner may pass view_as",
+        "summary": "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's projection (next_month; by vendor, team and teammate in next_by, named in next_labels), as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). Rows past top_n fold into one Other row keyed \" other\", and the group with none is keyed \" unattributed\". The owner may pass view_as",
         "operationId": "getFinanceLine",
         "parameters": [
           {
@@ -11152,7 +11190,7 @@
     },
     "/api/v2/finance/reports/{kind}": {
       "get": {
-        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row",
+        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
         "operationId": "getFinanceReport",
         "parameters": [
           {
@@ -18621,6 +18659,170 @@
         },
         "tags": [
           "Meetings"
+        ]
+      }
+    },
+    "/api/v2/memory-tidy/cards": {
+      "get": {
+        "summary": "The named reviewer\u2019s open cards; diffs are fetched on opening a card. Human and bot reviewers.",
+        "operationId": "listMemoryTidyCards",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryTidyCards"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Memory tidy"
+        ]
+      }
+    },
+    "/api/v2/memory-tidy/cards/{ident}": {
+      "get": {
+        "summary": "A named reviewer\u2019s card with its checked diff, including after both pass tasks close.",
+        "operationId": "getMemoryTidyCard",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryTidyCardResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Memory tidy"
+        ]
+      }
+    },
+    "/api/v2/memory-tidy/cards/{ident}/decide": {
+      "post": {
+        "summary": "Discard an open card without repository changes. Keep returns 409 until its separate implementation is available.",
+        "operationId": "decideMemoryTidyCard",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryTidyDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryTidyCardResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Memory tidy"
         ]
       }
     },
@@ -38553,6 +38755,12 @@
                     "none"
                   ]
                 },
+                "default_team": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "grants": {
                   "type": "array",
                   "items": {
@@ -38568,12 +38776,17 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "may_grant": {
+                  "type": "boolean"
                 }
               },
               "required": [
                 "default",
+                "default_team",
                 "grants",
                 "kind",
+                "may_grant",
                 "reports_to",
                 "rights",
                 "team",
@@ -40143,6 +40356,34 @@
             "type": "integer"
           },
           "payment_link": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "account": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "split": {
+            "type": "boolean"
+          },
+          "team": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paid_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paid_by": {
             "type": [
               "string",
               "null"
@@ -46417,6 +46658,160 @@
         ],
         "additionalProperties": true
       },
+      "MemoryTidyCard": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "memory_tidy"
+            ]
+          },
+          "bot": {
+            "type": "string"
+          },
+          "reviewer": {
+            "type": "string"
+          },
+          "requester": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "memory_commit": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "cost_usd": {
+            "type": "number",
+            "description": "Filing-ledger list-price estimate, including subscription usage."
+          },
+          "diary": {
+            "type": "string"
+          },
+          "diff": {
+            "type": "string",
+            "description": "Checked unified diff; present on detail reads and decisions, omitted from lists."
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "withdrawn",
+              "discarded",
+              "kept"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "keep_available": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bot",
+          "cost_usd",
+          "created_at",
+          "diary",
+          "expires_at",
+          "id",
+          "keep_available",
+          "kind",
+          "memory_commit",
+          "model",
+          "reason",
+          "requester",
+          "reviewer",
+          "status",
+          "title"
+        ],
+        "additionalProperties": true
+      },
+      "MemoryTidyCardResult": {
+        "type": "object",
+        "properties": {
+          "card": {
+            "$ref": "#/components/schemas/MemoryTidyCard"
+          }
+        },
+        "required": [
+          "card"
+        ],
+        "additionalProperties": true
+      },
+      "MemoryTidyCards": {
+        "type": "object",
+        "properties": {
+          "cards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemoryTidyCard"
+            }
+          }
+        },
+        "required": [
+          "cards"
+        ],
+        "additionalProperties": true
+      },
+      "MemoryTidyDecision": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "keep",
+              "discard"
+            ],
+            "title": "Decision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "title": "MemoryTidyDecision"
+      },
+      "MemoryTidyPilot": {
+        "properties": {
+          "bot": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Bot"
+          },
+          "model": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Model"
+          },
+          "effort": {
+            "type": "string",
+            "const": "low",
+            "title": "Effort",
+            "default": "low"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bot",
+          "model"
+        ],
+        "title": "MemoryTidyPilot"
+      },
       "Message": {
         "type": "object",
         "properties": {
@@ -52485,6 +52880,21 @@
       },
       "SystemRoutineUpdate": {
         "properties": {
+          "pilots": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MemoryTidyPilot"
+                },
+                "type": "array",
+                "maxItems": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pilots"
+          },
           "on": {
             "anyOf": [
               {

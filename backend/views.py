@@ -1211,7 +1211,7 @@ def yes_no_ask(text):
 def need_of(item):
     """The group a Needs you card goes in (NEED_GROUPS)."""
     kind = item.get("kind")
-    if kind == "stale":
+    if kind in ("stale", "memory_tidy"):
         return "decide"         # Accept or Skip, row by row
     if kind == "setup":
         return "connect"        # sign in to a provider (backend/models_preset.py)
@@ -1761,6 +1761,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 item["title"] = "Send this to Tico support?"
                 item["support"] = {"to": hq_url().split("://", 1)[-1].split("/", 1)[0]}
             items.append(item)
+    from . import memory_tidy_cards
+    items.extend(memory_tidy_cards.cards_for(c, who.actor))
     from . import stale_review
     stale = stale_review.card(c, who.actor) if H.is_human(who.actor) else None
     if stale:

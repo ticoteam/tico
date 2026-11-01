@@ -17,6 +17,22 @@ FAILING_HOURS = 24
 ORDER = {HIGH: 0, MEDIUM: 1, LOW: 2}
 
 
+PAUSE_REASON_SQL = "SELECT reason FROM bot_status_history WHERE bot=? AND state='paused' ORDER BY since DESC, rowid DESC LIMIT 1"
+
+
+def prime_pause_reasons(c, bots):
+    """Each bot's latest pause reason, in one read for every bot (per 500). Outside a snapshot nothing is kept."""
+    from .read_cache import cache, prime
+    if cache(c) is None:
+        return
+    for part in H.chunks(sorted(set(bots))):
+        marks = ",".join("?" * len(part))
+        latest = {r["bot"]: r for r in c.execute(
+            "SELECT bot,reason FROM (SELECT bot,reason,row_number() OVER (PARTITION BY bot ORDER BY since DESC, rowid DESC) AS n "
+            f"FROM bot_status_history WHERE state='paused' AND bot IN ({marks})) WHERE n=1", part)}
+        prime(c, PAUSE_REASON_SQL, {(s,): latest.get(s) for s in part})
+
+
 def check(c, who, auth, settings):
     online = {r["id"] for r in _online_runners(c)}
     seen = auth.bot_accesses(c, who)
@@ -36,6 +52,7 @@ def check(c, who, auth, settings):
                        "text": text, "fix": fix})
 
     from .agents import external_harness
+    from .read_cache import one
     from . import events, views
     bots = c.execute("SELECT b.id,b.slug,b.display_name,b.state,b.created_at,bc.onboarding_state FROM bots b "
                      "JOIN bot_config bc ON bc.bot=b.id WHERE b.state<>'archived' ORDER BY b.slug").fetchall()
@@ -44,6 +61,13 @@ def check(c, who, auth, settings):
     views.prime_machines(c, ids)
     events.prime_bot_rows(c, ids)
     usage_limits.prime_own(c, ids)
+    # The tool listing of every active or paused bot (bot_tools.listing) and each paused bot's last pause reason,
+    # read together rather than once per bot.
+    from .repositories import Reads
+    listed = [bot["id"] for bot in bots if bot["state"] in ("active", "paused")]
+    bot_tools.prime_state(c, listed)
+    reads = Reads(c, listed)
+    prime_pause_reasons(c, [bot["id"] for bot in bots if bot["state"] == "paused"])
     for bot in bots:
         slug, bid = bot["slug"], bot["id"]
         if not (seen.get(bid) or {}).get("see"):
@@ -57,8 +81,7 @@ def check(c, who, auth, settings):
             if (bot["created_at"] or "") < stuck_before:
                 add(bot, "stuck_setup", MEDIUM, f"{name} is still being set up.", f"hub bot go-live {slug}")
         elif state == "paused":
-            reason = (c.execute("SELECT reason FROM bot_status_history WHERE bot=? AND state='paused' ORDER BY since DESC LIMIT 1",
-                                (bid,)).fetchone() or {"reason": ""})["reason"] or ""
+            reason = (one(c, PAUSE_REASON_SQL, (bid,)) or {"reason": ""})["reason"] or ""
             if "limit" in reason.lower():
                 add(bot, "paused_over_limit", HIGH, f"{name} is paused: it went over a limit.", f"hub bot resume {slug}")
             else:
@@ -100,7 +123,7 @@ def check(c, who, auth, settings):
                 f"hub run list {slug} --since 24h")
         if state in ("active", "paused"):
             try:
-                tools = bot_tools.listing(c, settings, bid)["tools"]
+                tools = bot_tools.listing(c, settings, bid, reads=reads)["tools"]
             except Exception:
                 tools = []
             for tool in tools:

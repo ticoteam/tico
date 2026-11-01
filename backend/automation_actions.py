@@ -369,7 +369,7 @@ def _post_update(c, auto, run_id, args, values):
         from types import SimpleNamespace
         from . import market_briefing as MB
         title, body = _briefing(text, args.get("title"))
-        out["briefing"] = MB.post(c, SimpleNamespace(actor=author), MB.this_week(), title, body, [], source=source)["week"]
+        out["briefing"] = MB.post(c, SimpleNamespace(actor=author), MB.this_week(), title, body, None, source=source)["week"]
         text = _pointer(c, poster, title)
     if "updates" in to:
         # A warned step's text leads with its warn line (_warned_args): it goes on after the writing checks.

@@ -71,6 +71,7 @@ COPY --from=dockercli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/
 COPY LICENSE NOTICE /usr/share/doc/tico/
 COPY licenses/Apache-2.0.txt /usr/share/doc/tico/licenses/
 COPY docker/updater.py /usr/local/bin/tico-updater
+COPY docker/runner-memory.sh /usr/local/bin/tico-runner-memory
 ARG TICO_VERSION=dev
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 LABEL org.opencontainers.image.version=${TICO_VERSION} \

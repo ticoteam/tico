@@ -28,6 +28,9 @@ For each channel, and for the Unknown row, set the month (`YYYY-MM`) once:
 - **Retention** at day 90 or 180 is blank (leave the flag out) until the cohort is that old. Do not write 0.
 - **Quality** is `actual` only when every number came from a source you read; otherwise `estimate`, and say which.
 - Bot cost is what the channel's bot work cost Tico this month, from Tico's usage report for the month.
+- **Segments**: when the source can tell customers' segments apart (`hub growth segment list`), set one row per segment
+  with `--segment <id>`. Spend goes on a segment's row only when the source ties it to that segment; the rest stays on
+  the channel's row without `--segment`.
 
 ## 2. Read the economics
 

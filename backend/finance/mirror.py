@@ -1851,6 +1851,9 @@ def _payment_planner(kind: str) -> handlers.Planner:
                 raise invalid(f"that row has {free} left to apply")
             day = V.opt_day(p, "date") or str(feed["txn_date"])
             money = SK.get(ctx.c, "fin_money_accounts", str(feed["money_account_id"]))
+            if money is not None and documents.may_wait(ctx, feed, money):
+                raise FinanceError(CONFLICT, "that row may be a payment already marked paid that waits for its bank "
+                                             "row; link it with feed_match")
             bank_id = str(money["account_id"] or "") if money is not None else ""
         elif "money_account_id" in p:
             money = SK.get(ctx.c, "fin_money_accounts", V.text(p, "money_account_id", 80))

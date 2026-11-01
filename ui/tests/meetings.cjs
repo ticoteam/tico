@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {replay: recorderLiveSharing} = require('../../recorder/tests/live-sharing.cjs');
 
 const ago = hours => new Date(Date.now() - hours * 36e5).toISOString();
 const meeting = (id, title, source, hours, extra = {}) => ({id, title, source, kind: 'meeting', status: 'done', started_at: ago(hours),
@@ -218,6 +219,8 @@ async function shot(page, name) {
         await context.close();
       }
     }
+    // The native window's shared-meeting entry point belongs to this hosted meeting flow too.
+    await recorderLiveSharing(browser);
     console.log('meetings ok: 4 browser scenarios, including permissions, historical data and mixed-version setup');
   } finally {
     await browser.close();

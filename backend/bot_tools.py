@@ -252,12 +252,39 @@ def agent_report(c, bot, tools):
     reconcile(c, {bot: raw}, complete=True)
 
 
+STATE_CONFIG_SQL = "SELECT config,repo FROM bot_config WHERE bot=?"
+STATE_RUNNER_SQL = "SELECT r.label,r.last_seen_at,r.revoked_at,r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?"
+REQUESTS_SQL = "SELECT * FROM bot_tool_requests WHERE bot=? AND state='pending' ORDER BY created_at,id"
+
+
+def prime_state(c, bots):
+    """Each bot's configuration, computer and pending tool requests, read together for every bot's listing (per 500
+    bots, not three reads per bot). Outside a snapshot nothing is kept."""
+    from .read_cache import cache, prime, prime_rows
+    if cache(c) is None:
+        return
+    for part in H.chunks(sorted(set(bots))):
+        marks = ",".join("?" * len(part))
+        configs = {r["bot"]: r for r in c.execute(
+            f"SELECT bot,config,repo FROM bot_config WHERE bot IN ({marks})", part)}
+        prime(c, STATE_CONFIG_SQL, {(s,): configs.get(s) for s in part})
+        runners = {r["bot"]: r for r in c.execute(
+            "SELECT a.bot,r.label,r.last_seen_at,r.revoked_at,r.readiness FROM assignments a "
+            f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({marks})", part)}
+        prime(c, STATE_RUNNER_SQL, {(s,): runners.get(s) for s in part})
+        requests = {}
+        for r in c.execute(f"SELECT * FROM bot_tool_requests WHERE bot IN ({marks}) AND state='pending' "
+                           "ORDER BY created_at,id", part):
+            requests.setdefault(r["bot"], []).append(r)
+        prime_rows(c, REQUESTS_SQL, {(s,): requests.get(s, ()) for s in part})
+
+
 def _state(c, settings, bot):
-    row = c.execute("SELECT config,repo FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    from .read_cache import one
+    row = one(c, STATE_CONFIG_SQL, (bot,))
     config = H._json(row["config"], {}) if row else {}
     config = config if isinstance(config, dict) else {}
-    runner = c.execute("SELECT r.label,r.last_seen_at,r.revoked_at,r.readiness FROM assignments a "
-                       "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (bot,)).fetchone()
+    runner = one(c, STATE_RUNNER_SQL, (bot,))
     readiness = readiness_document(runner["readiness"]) if runner else {}
     report = (readiness.get("bots") or {}).get(bot)
     report = report if isinstance(report, dict) else {}
@@ -275,8 +302,8 @@ def _state(c, settings, bot):
 
 
 def _requests(c, bot):
-    return [dict(row, entry=H._json(row["entry"], {}) or {}) for row in c.execute(
-        "SELECT * FROM bot_tool_requests WHERE bot=? AND state='pending' ORDER BY created_at,id", (bot,))]
+    from .read_cache import rows
+    return [dict(row, entry=H._json(row["entry"], {}) or {}) for row in rows(c, REQUESTS_SQL, (bot,))]
 
 
 def _pending_tool(request):
@@ -290,8 +317,9 @@ def _pending_tool(request):
             **({"kind": "mcp", "mcp": _mcp_view(entry["mcp"])} if _mcp_view(entry.get("mcp")) else {})}
 
 
-def listing(c, settings, bot):
-    """Everything the row shows for one bot, from records this server already holds."""
+def listing(c, settings, bot, reads=None):
+    """Everything the row shows for one bot, from records this server already holds. `reads` (a repositories.Reads
+    covering `bot`) when the caller lists many bots."""
     slug = (H.bot(c, bot) or {}).get("slug") or bot
     state = _state(c, settings, bot)
     runner, report, label = state["runner"], state["report"], state["label"]
@@ -348,7 +376,7 @@ def listing(c, settings, bot):
     from .github_app import repo_of
     own = repo_of(state['row']['repo'] if state['row'] else '', settings.github_owner)
     org = app_row['org'] if app_row else settings.github_owner or (own.split('/')[0] if own else '')
-    extras = access(c, bot, org)['effective'] if state['row'] else []
+    extras = access(c, bot, org, reads=reads)['effective'] if state['row'] else []
     represented = {str(tool.get("scope", {}).get("repo") or tool.get("identity") or "").lower()
                    for tool in tools + declared if tool["service"].lower() in ("github", "github-app")}
     for index, grant in enumerate(extras):

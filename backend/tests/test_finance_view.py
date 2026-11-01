@@ -1,12 +1,15 @@
 """View access: managers never see another department (seeded property test), payroll shows only as whole closed runs
 so no day, range or own line isolates a bonus, grants lapse with their grantor's authority, writes check every tag,
-and moving an account needs company-wide view. Plus the P&L's revenue sign."""
+and moving an account needs company-wide view. Managers see their reports' expenses with no team to lead. Plus the
+P&L's revenue sign."""
+import json
 import random
 
 from backend.finance import actions as FA
 from backend.finance import reads as FR
-from backend.tests.test_finance_fixtures import (AT, OWNER, account, act, books, finance_template, set_lead,  # noqa: F401
-                                                 spend, store)
+from backend.finance import tab as FT
+from backend.tests.test_finance_fixtures import (AT, GROUPS, OWNER, PEOPLE, account, act, books,  # noqa: F401
+                                                 finance_template, set_lead, spend, store)
 
 TEAMS = {"human:ben": "eng", "human:cara": "web", "human:eve": "web", "human:fay": "web", "human:dan": "sales",
          "human:gus": "sales", "bot:coder": "web", "bot:seller": "sales"}
@@ -25,7 +28,7 @@ def test_managers_see_only_their_teams_and_members_only_their_own(books):
             posted.append((team, mate, amount))
         for viewer, teams in SEES.items():
             got = FR.expenses(c, viewer, "2026-10-01", "2026-10-31", "team", top_n=50, at=AT)
-            assert {r["key"] for r in got["rows"]} <= teams | {"other"}
+            assert {r["key"] for r in got["rows"]} <= teams | {FR.OTHER}
             assert got["total"] == sum(a for t, m, a in posted if t in teams or m == viewer)
             assert FR.expenses(c, viewer, "2026-10-01", "2026-10-31", "team", team="sales" if viewer != "human:dan"
                                else "web", at=AT)["total"] == 0
@@ -34,12 +37,58 @@ def test_managers_see_only_their_teams_and_members_only_their_own(books):
         assert mine["total"] == sum(a for t, m, a in posted if m == "human:eve")
         everyone = FR.expenses(c, OWNER, "2026-10-01", "2026-10-31", "team", top_n=2, at=AT)
         assert everyone["total"] == sum(a for _, _, a in posted)
-        assert any(r["key"] == "unattributed" for r in FR.expenses(c, OWNER, "2026-10-01", "2026-10-31", "team",
+        assert any(r["key"] == FR.NONE for r in FR.expenses(c, OWNER, "2026-10-01", "2026-10-31", "team",
                                                                     top_n=10, at=AT)["rows"])
         assert everyone["rows"][-1]["label"].startswith("Other · ")
         assert FR.pnl(c, "human:cara", "2026-10-01", "2026-10-31", at=AT)["income"] == [0]
         revenue = [r for r in FR.pnl(c, "human:cara", "2026-10-01", "2026-10-31", at=AT)["rows"] if r["type"] == "income"]
         assert revenue == []
+
+
+def _org(c, people, groups):
+    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
+              (json.dumps({"people": people, "org_groups": groups, "default_user": "ana"}),))
+
+
+def test_managers_see_everyone_who_reports_to_them_without_leading_a_team(books):
+    no_leads = {k: {n: v for n, v in g.items() if n != "lead"} for k, g in GROUPS.items()}
+    with books.transaction() as c:
+        _org(c, PEOPLE, no_leads)
+        for mate, amount in (("human:cara", 100), ("human:eve", 200), ("human:fay", 400), ("bot:coder", 800),
+                             ("human:gus", 1_600), ("human:ben", 3_200)):
+            spend(c, "6100", amount, team=TEAMS.get(mate, "eng"), teammate=mate)
+        spend(c, "6100", 6_400, team="web")                 # a team's line with no teammate on it: nobody's report
+        assert FR.expenses(c, "human:ben", by="team", at=AT)["total"] == 3_200 + 100 + 200 + 400 + 800   # indirect too
+        assert FR.expenses(c, "human:cara", by="team", at=AT)["total"] == 100 + 200 + 400 + 800
+        assert FR.expenses(c, "human:eve", by="team", at=AT)["total"] == 200
+        acc = FT.access(c, OWNER, at=AT)
+        default = {r["teammate"]: r["default"] for r in acc["teammates"]}
+        assert default["human:ben"] == default["human:cara"] == default["human:dan"] == "team_expenses"
+        assert default["human:eve"] == "own_expenses"
+        assert {r["teammate"] for r in FT.access(c, "human:cara", at=AT)["teammates"]} == \
+            {"human:cara", "human:eve", "human:fay", "bot:coder"}
+        # A manager grants to a report; not to someone else's.
+        assert act(c, "human:cara", "view_grant", {"subject": "human:eve", "what": "expenses", "whose": "own"}).status \
+            == "committed"
+        assert act(c, "human:cara", "view_grant", {"subject": "human:gus", "what": "expenses", "whose": "own"}).code \
+            == "denied"
+        # Reporting lines change: the view follows on the next read.
+        _org(c, [{**p, "reports_to": "dan"} if p["id"] == "eve" else p for p in PEOPLE], no_leads)
+        assert FR.expenses(c, "human:cara", by="team", at=AT)["total"] == 100 + 400 + 800
+        assert FR.expenses(c, "human:dan", by="team", at=AT)["total"] == 1_600 + 200
+
+
+def test_a_reports_payroll_stays_private_from_their_manager(books):
+    with books.transaction() as c:
+        _org(c, PEOPLE, {k: {n: v for n, v in g.items() if n != "lead"} for k, g in GROUPS.items()})
+        pay = str(act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                                   "parent_id": account(c, "6000")}).result["account_id"])
+        assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
+        spend(c, "6200", 9_000, teammate="human:eve")
+        spend(c, "6100", 500, teammate="human:eve")
+        got = FR.expenses(c, "human:cara", by="teammate", at=AT)
+        assert got["total"] == 500 and got["excluded"]
+        assert FR.expenses(c, "human:eve", by="teammate", at=AT)["total"] == 9_500
 
 
 PAY = {"human:ben": 11_000, "human:cara": 12_000, "human:eve": 13_000, "human:fay": 14_000, "human:dan": 15_000,
@@ -142,7 +191,7 @@ def test_own_lines_never_sit_beside_the_department_cell(books):
         assert dept["excluded"] and dept["total"] == 5_000 + run       # her own bonus is not added in
         mine = FR.expenses(c, "human:fay", "2026-09-01", "2026-09-30", "teammate", at=AT)
         assert {r["key"]: r["amount"] for r in mine["rows"]} == {"human:fay": PAY["human:fay"] + 50_000,
-                                                                 "unattributed": 5_000}
+                                                                 FR.NONE: 5_000}
 
 
 def test_managers_get_their_department_cell_only_when_they_cover_it(books):
@@ -277,3 +326,30 @@ def test_a_hidden_payroll_row_shows_no_budget_either(books):
                       at=AT)["rows"]
         (row,) = [r for r in rows if r["account_id"] == pay]
         assert row["private"] and row["budget"] is None and row["actual"] is None
+
+
+def test_a_managers_report_with_no_team_shows_under_no_team(books):
+    with books.transaction() as c:
+        _org(c, PEOPLE + [{"id": "hal", "email": "hal@acme.example", "reports_to": "cara"}], GROUPS)
+        spend(c, "6100", 700, teammate="human:hal")
+        spend(c, "6100", 100, team="web", teammate="human:eve")
+        for by in ("team", "department"):
+            rows = {r["key"]: r for r in FR.expenses(c, "human:cara", by=by, at=AT)["rows"]}
+            assert rows["no_team"]["amount"] == 700 and FR.NONE not in rows
+        assert FR.expenses(c, "human:cara", by="teammate", at=AT)["total"] == 800
+        line = FR.line_detail(c, "human:cara", account(c, "6100"), "2026-10-01", "2026-10-31", at=AT)
+        assert {r["key"]: r["amount"] for r in line["by_team"]} == {"web": 100, "no_team": 700}
+
+
+def test_access_says_where_the_viewer_may_grant(books):
+    with books.transaction() as c:
+        def may(viewer):
+            return {r["teammate"]: r["may_grant"] for r in FT.access(c, viewer, at=AT)["teammates"]}
+        assert may(OWNER)["human:gus"] and not may(OWNER)[OWNER]
+        mine = may("human:cara")
+        assert mine["human:eve"] and mine["bot:coder"] and not mine["human:cara"]
+        assert act(c, OWNER, "view_defaults_set", {"manager": "own_expenses", "member": "own_expenses"}).status \
+            == "committed"
+        assert not any(may("human:cara").values())
+        assert act(c, "human:cara", "view_grant", {"subject": "human:eve", "what": "expenses", "whose": "own"}).code \
+            == "denied"

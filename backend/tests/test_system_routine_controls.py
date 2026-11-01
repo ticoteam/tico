@@ -19,7 +19,7 @@ from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
 SIX = {"stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-       "engineering_exceptions", "bookkeeper_check"}   # six, the Task Manager's report, engineering exceptions, books
+       "engineering_exceptions", "bookkeeper_check", "memory_tidy"}   # six, the Task Manager's report, engineering exceptions, books
 
 
 def rows(api, token="ana-test"):

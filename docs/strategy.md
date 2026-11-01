@@ -30,11 +30,11 @@ The page is cards, in this order: the summary on top; **Where we play** beside t
 **Related news**; then the sections. The owner edits each in place; a × on hover (always shown on a touch screen)
 removes a thing.
 
-- **Brand and GTM.** Two cards beside the Summary: the Brand strip (name, positioning, colours, voice, never-say) and the
-  Go-to-market card (motion, buyer, channels, North Star and target). Each opens its full page, is versioned on its own,
-  and is published by the owner. See [Growth](growth.md#brand-and-gtm-cards).
-- **Growth.** The Growth tab (`#/strategy/growth`) beside Market: ideas, tests, verdicts, channel economics and the
-  frameworks. See [Growth](growth.md).
+- **Brand.** The Brand strip (name, positioning, colours, voice, never-say) opens the brand book, which is versioned on
+  its own and published by the owner. See [Growth](growth.md#brand-and-gtm-cards).
+- **Growth.** Its own section under Strategy in the sidebar (`#/growth`; the old `#/strategy/growth` and
+  `#/strategy/gtm` addresses redirect): ideas, buyers and go-to-market, channel economics, sources, tests and verdicts.
+  The KPI views (Tree, Loops, Journey) are on the Goals tab. See [Growth](growth.md).
 - **Summary.** At most 400 characters, drafted from the bets and edited by the owner. It is the one line on top and the
   text every bot gets in its run context.
 - **Vision.** Stored, not shown on the page. The Goals page reads it from here and, when it is empty, reads the
@@ -54,11 +54,17 @@ removes a thing.
   - `cites`: the market entities or pages the bet rests on (optional);
   - `status`: `proposed`, `active` or `retired`. A retired bet keeps its goals.
 - **Where we play.** The market's segments by spend ([Librarian](librarian.md#market-spend)), a sized segment inside
-  its sized parent, unsized ones as plain tiles. The segment the team plays in is **Us** (filled) and the one it means
-  to enter next is **Next** (outlined); a click on a segment makes it Us, then Next, then neither, one of each. × removes
-  a segment (its sub-segments move up to its parent) and **Add a segment** adds one by name (defining the market
-  first, as "<company> market", when there is none). These are the market graph's own rows: Us is `company/self`
-  `operates_in` the segment, Next is `next: true` on the segment, as the company file's import writes them.
+  its sized parent, unsized ones as plain tiles. A segment the team plays in is **Us** (filled) and one it means to
+  enter next is **Next** (outlined); a click on a segment makes it Us, then Next, then neither, and several segments
+  may be each. × removes a segment (its sub-segments move up to its parent) and **Add a segment** adds one by name
+  (defining the market first, as "<company> market", when there is none). These are the market graph's own rows: Us is
+  `company/self` `operates_in` the segment, Next is `next: true` on the segment, as the company file's import writes
+  them. They mirror the [Growth buyers](growth.md#buyers): Us is a serving segment and Next a next one, and a
+  change on either page shows on the other. A write straight to the graph (the market routes, an import) moves the
+  Growth segment too: Us makes it serving, Next next, and losing both drops a serving or next one. A segment merged
+  into another hands it its Growth segment (or folds into the one it has, keeping the stronger status, with its
+  channels, ideas and cohorts). Only a person marks Us or Next here; a removed segment loses its Next, so adding it
+  again does not bring it back.
 - **Competitors.** Every company or product with a current `competes_with` edge to `company/self`, as chips that link
   to their sites. × ends those edges (the company stays in the graph); **Add a competitor or its site** finds the
   company the graph has by that name or domain, or makes it, and adds the edge.
@@ -284,8 +290,8 @@ Every command has an MCP tool of the same name and arguments (`hub_strategy_show
 | `GET /strategy/versions`, `/strategy/versions/{n}` | any reader | the list, newest first; one version |
 | `GET /strategy/diff?from=&to=` | any reader | `{fields: [{key, from, to}], bets: {added, retired, changed}}`, keyed by bet id and status |
 | `POST /strategy/bets`, `/strategy/bets/{id}` | the owner only | create; partial update including `rank` and `status`; at most seven active, at most 30 not retired; `rules_out` and `wrong_if` optional |
-| `POST /market/segments/target` | the owner or the Librarian | `{id, target: ours\|next\|none}`: the segment becomes Us (ending `company/self`'s other `operates_in` edges into segments) or Next (clearing the flag elsewhere), or neither; answers `{id, ours, next}` |
-| `POST /market/segments/remove` | the owner or the Librarian | `{id}`: retires the segment and moves its sub-segments up to its parent; not the root |
+| `POST /market/segments/target` | the owner (a bot, the Librarian too, gets 403) | `{id, target: ours\|next\|none}`: the segment becomes Us, Next or neither, other segments unchanged; its Growth segment becomes serving, next or (for neither) dropped, a testing one staying testing; answers `{id, ours, next}` |
+| `POST /market/segments/remove` | the owner or the Librarian | `{id}`: retires the segment (its Next cleared, its Growth segment dropped) and moves its sub-segments up to its parent; not the root |
 | `GET /market/competitors` | any reader | `{competitors: [{id, name, url}]}`, by name |
 | `POST /market/competitors` | the owner or the Librarian | `{name}`: a name or a site; answers `{competitor}` |
 | `POST /market/competitors/remove` | the owner or the Librarian | `{id}`: ends its `competes_with` edges; 404 if it is not one |

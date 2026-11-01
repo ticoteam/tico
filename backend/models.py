@@ -2509,9 +2509,16 @@ class Empty(Contract):
     pass
 
 
+class MemoryTidyPilot(Contract):
+    bot: str = Field(min_length=1, max_length=100)
+    model: str = Field(min_length=1, max_length=100)
+    effort: Literal["low"] = "low"
+
+
 class SystemRoutineUpdate(Contract):
     """One system routine's switch, schedule preset or daily time (backend/system_routines.py); only what is sent
     changes."""
+    pilots: list[MemoryTidyPilot] | None = Field(default=None, max_length=3)
     on: bool | None = None
     preset: Literal["15m", "hourly", "4h", "daily", "business"] | None = None
     at: str | None = Field(default=None, max_length=5)
@@ -2976,16 +2983,9 @@ class GtmBuyer(Contract):
     objections: list[S300] = Field(default_factory=list, max_length=30)
 
 
-class GtmWish(Contract):
-    text: S300
-    scope: S80 = ""
-    level: Literal["block", "warn", "setting"] = "warn"
-
-
 class GtmBody(Contract):
     motion: GtmMotion | None = None
     buyer: GtmBuyer | None = None
-    wishes: list[GtmWish] | None = Field(default=None, max_length=50)
     playbooks: list[S80] | None = Field(default=None, max_length=30)
 
 
@@ -3017,6 +3017,7 @@ class GrowthChannelCreate(Contract):
     guardrail_kpi_id: str | None = Field(default=None, max_length=200)
     guardrail_max: float | None = None
     sort: int = 0
+    segments: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=20)
 
 
 class GrowthChannelUpdate(Contract):
@@ -3030,6 +3031,7 @@ class GrowthChannelUpdate(Contract):
     guardrail_kpi_id: str | None = Field(default=None, max_length=200)
     guardrail_max: float | None = None
     sort: int | None = None
+    segments: list[Annotated[str, Field(max_length=200)]] | None = Field(default=None, max_length=20)
 
 
 class GrowthSourceCreate(Contract):
@@ -3061,6 +3063,7 @@ class GrowthIdeaCreate(Contract):
     bet_id: str | None = Field(default=None, max_length=200)
     kpi_id: str | None = Field(default=None, max_length=200)
     channels: list[Annotated[str, Field(max_length=40)]] = Field(default_factory=list, max_length=10)
+    segments: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=20)
     ice_i: IceScore | None = None
     ice_c: IceScore | None = None
     ice_e: IceScore | None = None
@@ -3079,6 +3082,7 @@ class GrowthIdeaUpdate(Contract):
     kpi_id: str | None = Field(default=None, max_length=200)
     judged_kpi_id: str | None = Field(default=None, max_length=200)
     channels: list[Annotated[str, Field(max_length=40)]] | None = Field(default=None, max_length=10)
+    segments: list[Annotated[str, Field(max_length=200)]] | None = Field(default=None, max_length=20)
     source_kind: IdeaSource | None = None
     source_ref: str | None = Field(default=None, max_length=500)
     test_from: str | None = Field(default=None, max_length=40)
@@ -3116,6 +3120,7 @@ class GrowthIdeaVerdict(Contract):
 
 class GrowthCohortSet(Contract):
     channel: str | None = Field(default=None, max_length=40)       # a channel slug; "unknown" or null is Unknown
+    segment_id: str | None = Field(default=None, max_length=200)   # a growth segment or its market segment; null: not split
     month: Annotated[str, Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")]
     spend: float | None = Field(default=None, ge=0)
     bot_cost: float | None = Field(default=None, ge=0)
@@ -3127,6 +3132,32 @@ class GrowthCohortSet(Contract):
     margin_pct: float | None = Field(default=None, ge=0, le=100)
     quality: Literal["actual", "estimate"] | None = None
     sources: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=300)]] | None = None
+
+
+SegmentStatus = Literal["serving", "testing", "next", "dropped"]
+
+
+class GrowthSegmentCreate(Contract):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    segment_id: str | None = Field(default=None, min_length=1, max_length=200)
+    status: SegmentStatus = "testing"
+    motion: Motion | None = None
+    who_buys: str = Field(default="", max_length=300)
+    deal_size: str = Field(default="", max_length=80)
+    why: str = Field(default="", max_length=1000)
+    owner_ref: str | None = Field(default=None, max_length=200)
+    sort: int = 0
+
+
+class GrowthSegmentUpdate(Contract):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    status: SegmentStatus | None = None
+    motion: Motion | None = None
+    who_buys: str | None = Field(default=None, max_length=300)
+    deal_size: str | None = Field(default=None, max_length=80)
+    why: str | None = Field(default=None, max_length=1000)
+    owner_ref: str | None = Field(default=None, max_length=200)
+    sort: int | None = None
 
 
 class GrowthSettingsUpdate(Contract):

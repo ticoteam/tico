@@ -40,6 +40,9 @@ from .. import hubdb as H
 DIRECTORY = Path(__file__).parent
 # The oldest user_version this server opens. Below it the schema is one this code's migrations do not bring up to date.
 MIN_BRIDGE_USER_VERSION = 71
+# The newest user_version a release wrote before hubdb's list ended at 71: step 72 is now 0030_growth_segments, guarded
+# for a file that already ran it. This server opens such a file as it is; the number never grows.
+NEWEST_USER_VERSION = 72
 # The newest cloud_migrations version Store.initialize writes; tests/test_migrations.py keeps it in step with store.py.
 CLOUD_VERSION = 75
 # A legacy row has no file to hash, so its checksum says so.
@@ -108,7 +111,7 @@ def _legacy_known(version):
     """A legacy row is known when it names a version this code reaches, not a newer one."""
     user, cloud = LEGACY_USER.fullmatch(version), LEGACY_CLOUD.fullmatch(version)
     if user:
-        return int(user.group(1)) <= len(H.MIGRATIONS)
+        return int(user.group(1)) <= NEWEST_USER_VERSION
     if cloud:
         return int(cloud.group(1)) <= CLOUD_VERSION
     return False
@@ -142,9 +145,9 @@ def preflight(path, *, adopt_legacy=False, directory=None):
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if "schema_migrations" in tables:
             _verify(conn.execute("SELECT version, checksum FROM schema_migrations").fetchall(), files(directory))
-        if version > len(H.MIGRATIONS):
+        if version > NEWEST_USER_VERSION:
             raise MigrationError(f"This database is at schema version {version}, newer than this code "
-                                 f"({len(H.MIGRATIONS)}). Run a newer Tico.")
+                                 f"({NEWEST_USER_VERSION}). Run a newer Tico.")
         if version < MIN_BRIDGE_USER_VERSION and not adopt_legacy:
             if version == 0 and not {"cloud_migrations", "schema_migrations"} & tables:
                 # No Tico history: a new file that some module touched first (hubdb.connect builds it), or one this

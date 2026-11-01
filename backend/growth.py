@@ -9,12 +9,18 @@ monthly cohorts per channel and the unit economics they add up to.
   serve, ICE scores, the test (dates, change, stop rule) and the verdict. Creating one goes through the ordinary task
   path (app.task_create), so history, notices and idempotency are a task's. A terminal verdict closes the task and
   emits `growth.verdict`.
-- Cohorts (`growth_cohorts`): one row per channel per month (no channel is Unknown) with spend, bot cost, new
-  customers and the share kept at 30, 90 and 180 days. `economics` turns them into CAC, LTV and payback.
+- Segments (`growth_segments`): who the company sells to. Each is a market `segment` entity (its name and place live in
+  the market graph) with a status (serving, testing, next, dropped), a motion, a buyer, a deal size and a why. Serving
+  and next mirror Where we play on the Strategy page (strategy_market.set_status keeps both in step). Channels and
+  ideas name the segments they reach.
+- Cohorts (`growth_cohorts`): one row per channel per month (no channel is Unknown), optionally per segment, with
+  spend, bot cost, new customers and the share kept at 30, 90 and 180 days. `economics` turns them into CAC, LTV and
+  payback: for one segment its rows, else every row, a channel's segments added together.
 - The KPI tree is four columns on `kpis` (parent, growth role, funnel stage, loop): at most one North Star.
 
-Who may: everyone signed in reads. The owner and admins (people) write channels, sources and settings; the bot that
-owns a channel may change its why, stage and budget; any bot or admin records cohorts. Anyone files an idea; its
+Who may: everyone signed in reads. The owner and admins (people) write channels, sources, segments and settings; the
+bot that owns a channel may change its why, stage and budget; any bot may add a testing segment and change a segment's
+why, buyer and deal size; any bot or admin records cohorts. Anyone files an idea; its
 assignee, its creator or an admin edits and scores it; its assignee or an admin starts its test and gives the verdict.
 """
 import json
@@ -24,7 +30,10 @@ from datetime import datetime, timedelta, timezone
 from fastapi import Request
 
 from . import hubdb as H
+from . import market as MK
+from . import market_spend as MS
 from . import models as M
+from . import strategy_market as SM
 from .brand_gtm import admin
 from .store import Problem
 
@@ -56,6 +65,13 @@ CHANNEL_FIELDS = ("id", "slug", "name", "track", "stage", "owner_ref", "budget_m
                   "guardrail_kpi_id", "guardrail_max", "sort", "retired_at")
 SOURCE_FIELDS = ("id", "truth_for", "system", "reach_kind", "reach_ref", "may", "owner_ref", "retired_at")
 OWNER_PATCH = {"why", "stage", "budget_month"}       # what the bot that owns a channel may change
+SEGMENT_FIELDS = ("id", "segment_id", "status", "motion", "who_buys", "deal_size", "why", "owner_ref", "sort")
+SEGMENT_ORDER = ("serving", "testing", "next", "dropped")
+BOT_SEGMENT_PATCH = {"why", "who_buys", "deal_size"}  # what any bot may change on a segment
+SEGMENTS_MAX = 200
+# Segments in the page's order (growth_segments as s, its market entity as e): by status, then sort, then name.
+_SEGMENT_SORT = ("CASE s.status " + " ".join(f"WHEN '{st}' THEN {i}" for i, st in enumerate(SEGMENT_ORDER))
+                 + " END, s.sort, coalesce(e.name, s.segment_id) COLLATE NOCASE, s.id")
 
 
 def ensure(c):
@@ -138,9 +154,16 @@ def economics_row(cohort, settings):
 
 
 def economics_total(cohorts, settings):
-    """Every channel together: spend, bot cost and customers summed; retention, revenue and profit per customer-month
+    """Every channel together (see `aggregate`)."""
+    total = aggregate(cohorts, settings)
+    return {**economics_row({**total, "channel": "all"}, settings), "channel": None, "name": "All channels",
+            "track": None}
+
+
+def aggregate(cohorts, settings):
+    """Cohorts as one: spend, bot cost and customers summed; retention, revenue and profit per customer-month
     (revenue x margin, each cohort's own) weighted by new customers. The margin shown is that profit over that revenue,
-    so a high-revenue low-margin cohort never lends its revenue to another's margin."""
+    so a high-revenue low-margin cohort never lends its revenue to another's margin. Unknown rows add no spend."""
     def value(c, key, fallback):
         return c.get(key) if c.get(key) is not None else fallback
 
@@ -159,7 +182,7 @@ def economics_total(cohorts, settings):
         return round(sum(values), 2) if values else None
 
     paid = [c for c in cohorts if c.get("channel") is not None]
-    total = {"channel": "all", "spend": summed("spend", paid), "bot_cost": summed("bot_cost", paid),
+    total = {"spend": summed("spend", paid), "bot_cost": summed("bot_cost", paid),
              "new_customers": summed("new_customers", cohorts), "kept_d30": weighted("kept_d30"),
              "kept_d90": weighted("kept_d90"), "kept_d180": weighted("kept_d180"),
              "revenue_month": weighted("revenue_month", settings.get("revenue_month")), "profit_month": weighted(profit),
@@ -168,7 +191,7 @@ def economics_total(cohorts, settings):
         total["new_customers"] = int(total["new_customers"])
     revenue, per_month = total["revenue_month"], total["profit_month"]
     total["margin_pct"] = round(per_month / revenue * 100, 2) if revenue and per_month is not None else None
-    return {**economics_row(total, settings), "channel": None, "name": "All channels", "track": None}
+    return total
 
 
 # ----------------------------------------------------------------------------- reads
@@ -179,13 +202,31 @@ def settings(c):
             "framework": row.get("framework") or ""}
 
 
-def channel_view(row):
-    return {k: row.get(k) for k in CHANNEL_FIELDS}
+def channel_view(row, segments=()):
+    return {**{k: row.get(k) for k in CHANNEL_FIELDS}, "segments": list(segments)}
+
+
+def _segments_of(c, table, key, ids):
+    """{channel or idea id: [growth segment id]} from a join table, in the segments' order."""
+    if not ids:
+        return {}
+    out = {}
+    for r in c.execute(f"SELECT j.{key}, j.segment_row_id FROM {table} j JOIN growth_segments s ON s.id=j.segment_row_id "
+                       f"LEFT JOIN market_entities e ON e.id=s.segment_id WHERE j.{key} IN ({','.join('?' * len(ids))}) "
+                       f"ORDER BY {_SEGMENT_SORT}", list(ids)):
+        out.setdefault(r[0], []).append(r[1])
+    return out
+
+
+def channel_full(c, row):
+    return channel_view(row, _segments_of(c, "growth_channel_segments", "channel_id", [row["id"]]).get(row["id"], []))
 
 
 def channels(c, include_retired=False):
     sql = "SELECT * FROM growth_channels" + ("" if include_retired else " WHERE retired_at IS NULL")
-    return [channel_view(r) for r in H._rows(c.execute(sql + " ORDER BY sort, name COLLATE NOCASE"))]
+    rows = H._rows(c.execute(sql + " ORDER BY sort, name COLLATE NOCASE"))
+    segs = _segments_of(c, "growth_channel_segments", "channel_id", [r["id"] for r in rows])
+    return [channel_view(r, segs.get(r["id"], [])) for r in rows]
 
 
 def channel(c, slug):
@@ -255,6 +296,7 @@ def idea_views(c, rows, who=None, hidden=()):
         f"SELECT rel.to_task, count(*), sum(t.status IN ('done','closed')) FROM task_relations rel "
         f"JOIN tasks t ON t.id=rel.from_task WHERE rel.kind='parent' AND rel.to_task IN ({marks}) GROUP BY rel.to_task",
         ids)}
+    segs = _segments_of(c, "growth_idea_segments", "task_id", ids)
     bets = _bet_titles(c, who, sorted({r["bet_id"] for r in rows if r.get("bet_id")}))
     kpi_marks = sorted({r[k] for r in rows for k in ("kpi_id", "judged_kpi_id") if r[k]})
     kpi_names = {r["id"]: r["name"] for r in H._rows(c.execute(
@@ -270,6 +312,7 @@ def idea_views(c, rows, who=None, hidden=()):
             "bet_id": r["bet_id"], "bet_title": bets.get(r["bet_id"]), "kpi_id": r["kpi_id"],
             "kpi_name": kpi_names.get(r["kpi_id"]), "judged_kpi_id": r["judged_kpi_id"],
             "judged_kpi_name": kpi_names.get(r["judged_kpi_id"]), "channels": slugs.get(tid, []),
+            "segments": segs.get(tid, []),
             "ice_i": r["ice_i"], "ice_c": r["ice_c"], "ice_e": r["ice_e"], "ice": _ice(r), "status": r["status"],
             **{k: r[k] for k in ("source_kind", "source_ref", "test_from", "test_to", "change", "stop_if", "min_events",
                                  "audience", "external_ref", "result", "learning", "bet_effect", "confidence",
@@ -279,8 +322,15 @@ def idea_views(c, rows, who=None, hidden=()):
     return out
 
 
-def ideas(c, auth, who, status=None, bet_id=None, channel_slug=None, kpi_id=None, q=None, limit=IDEAS_PAGE):
+def ideas(c, auth, who, status=None, bet_id=None, channel_slug=None, kpi_id=None, q=None, limit=IDEAS_PAGE,
+          segment=None):
     where, args = [_visible(auth, c, who)], []
+    if segment:
+        found = segment_row(c, segment)
+        if not found:
+            return []
+        where.append("g.task_id IN (SELECT task_id FROM growth_idea_segments WHERE segment_row_id=?)")
+        args.append(found["id"])
     if status:
         where.append("g.status=?")
         args.append(status)
@@ -319,8 +369,9 @@ def idea(c, auth, who, task_id):
 
 def _cohort_view(row, slugs):
     return {"id": row["id"], "channel": slugs.get(row["channel_id"]) if row["channel_id"] else None,
-            "month": row["month"], **{k: row[k] for k in ("spend", "bot_cost", "new_customers", "kept_d30", "kept_d90",
-                                                          "kept_d180", "revenue_month", "margin_pct", "quality")},
+            "segment_id": row.get("segment_id"), "month": row["month"],
+            **{k: row[k] for k in ("spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "kept_d180",
+                                   "revenue_month", "margin_pct", "quality")},
             "sources": json.loads(row["sources"] or "{}"), "updated_by": row["updated_by"],
             "updated_at": row["updated_at"]}
 
@@ -329,8 +380,14 @@ def _slugs(c):
     return {r[0]: r[1] for r in c.execute("SELECT id, slug FROM growth_channels")}
 
 
-def cohorts(c, channel_slug=None, month=None, limit=COHORTS_PAGE):
+def cohorts(c, channel_slug=None, month=None, limit=COHORTS_PAGE, segment=None):
     where, args = [], []
+    if segment:
+        found = segment_row(c, segment)
+        if not found:
+            return []
+        where.append("segment_id=?")
+        args.append(found["id"])
     if channel_slug:
         if channel_slug == UNKNOWN:
             where.append("channel_id IS NULL")
@@ -346,8 +403,48 @@ def cohorts(c, channel_slug=None, month=None, limit=COHORTS_PAGE):
     limit = max(1, min(int(limit or COHORTS_PAGE), COHORTS_MAX))
     slugs = _slugs(c)
     rows = H._rows(c.execute("SELECT * FROM growth_cohorts" + (" WHERE " + " AND ".join(where) if where else "")
-                             + " ORDER BY month DESC, channel_id IS NULL, channel_id LIMIT ?", args + [limit]))
+                             + " ORDER BY month DESC, channel_id IS NULL, channel_id, segment_id IS NOT NULL, segment_id "
+                             "LIMIT ?", args + [limit]))
     return [_cohort_view(r, slugs) for r in rows]
+
+
+def segment_row(c, ref):
+    """A growth segment by its own id or its market segment's id."""
+    if not ref:
+        return None
+    return H._one(c, "SELECT * FROM growth_segments WHERE id=? OR segment_id=? ORDER BY id=? DESC LIMIT 1",
+                  (ref, ref, ref))
+
+
+def segments(c, auth=None, who=None):
+    """Every segment, serving first, then testing, next and dropped, each by sort then name: its market name, the
+    active channels that reach it, how many ideas the reader may see target it, and the new customers its cohorts
+    counted in the latest month any cohort has."""
+    rows = H._rows(c.execute(
+        f"SELECT s.*, e.name FROM growth_segments s LEFT JOIN market_entities e ON e.id=s.segment_id "
+        f"ORDER BY {_SEGMENT_SORT} LIMIT ?", (SEGMENTS_MAX,)))
+    chips = {}
+    for r in c.execute("SELECT cs.segment_row_id, ch.slug FROM growth_channel_segments cs JOIN growth_channels ch "
+                       "ON ch.id=cs.channel_id WHERE ch.retired_at IS NULL ORDER BY ch.sort, ch.name COLLATE NOCASE"):
+        chips.setdefault(r[0], []).append(r[1])
+    visible = _visible(auth, c, who) if auth is not None else "1"
+    counts = {r[0]: r[1] for r in c.execute(
+        f"SELECT s.segment_row_id, count(*) FROM growth_idea_segments s JOIN growth_ideas g ON g.task_id=s.task_id "
+        f"WHERE {visible} GROUP BY s.segment_row_id")}
+    month = (H._one(c, "SELECT max(month) AS m FROM growth_cohorts") or {}).get("m")
+    new = {r[0]: r[1] for r in c.execute(
+        "SELECT segment_id, sum(new_customers) FROM growth_cohorts WHERE month=? AND segment_id IS NOT NULL "
+        "GROUP BY segment_id", (month,))} if month else {}
+    return [{**{k: r.get(k) for k in SEGMENT_FIELDS}, "name": r.get("name") or r["segment_id"],
+             "channels": chips.get(r["id"], []), "ideas": counts.get(r["id"], 0),
+             "new_customers_last_month": new.get(r["id"])} for r in rows]
+
+
+def segment(c, ref, auth=None, who=None):
+    row = segment_row(c, ref)
+    if not row:
+        raise Problem("not_found", f"No segment {ref}", 404)
+    return next(s for s in segments(c, auth, who) if s["id"] == row["id"])
 
 
 def _latest_value(c, kpi_id):
@@ -372,21 +469,50 @@ def guardrails(c, hidden=()):
     return out
 
 
-def economics(c, month=None, hidden=()):
-    months = [r[0] for r in c.execute("SELECT DISTINCT month FROM growth_cohorts ORDER BY month DESC")]
+def economics(c, month=None, hidden=(), segment=None):
+    """One month by channel. With `segment` (a growth segment id or its market segment id) only that segment's rows.
+    Without, one row a channel: its row with no segment, which is the channel's whole month when it has one (the
+    segment rows beside it are a breakdown), else its segment rows added together."""
+    seg = None
+    if segment:
+        seg = segment_row(c, segment)
+        if not seg:
+            raise Problem("not_found", f"No segment {segment}", 404)
+    months = [r[0] for r in c.execute("SELECT DISTINCT month FROM growth_cohorts" + (" WHERE segment_id=?" if seg else "")
+                                      + " ORDER BY month DESC", (seg["id"],) if seg else ())]
     month = month or (months[0] if months else None)
     conf = settings(c)
     by_slug = {r["slug"]: r for r in H._rows(c.execute("SELECT * FROM growth_channels"))}
-    rows, inputs = [], []
-    for cohort in (cohorts(c, month=month) if month else []):
-        ch = by_slug.get(cohort["channel"]) if cohort["channel"] else None
-        inputs.append(cohort)
-        rows.append({"channel": cohort["channel"] or UNKNOWN, "name": ch["name"] if ch else "Unknown",
+    rows, inputs, groups = [], [], {}
+    for cohort in (cohorts(c, month=month, limit=COHORTS_MAX, segment=seg["id"] if seg else None) if month else []):
+        groups.setdefault(cohort["channel"], []).append(cohort)
+    for slug, group in groups.items():
+        whole = [g for g in group if not g.get("segment_id")]
+        group = whole or group
+        inputs += group
+        ch = by_slug.get(slug) if slug else None
+        if len(group) > 1:
+            sources = {}
+            for g in group:
+                sources.update(g.get("sources") or {})
+            cohort = {**aggregate(group, conf), "channel": slug, "sources": sources}
+        else:
+            cohort = group[0]
+        rows.append({"channel": slug or UNKNOWN, "name": ch["name"] if ch else "Unknown",
                      "track": ch["track"] if ch else None, **economics_row(cohort, conf)})
-    if not rows:
+    blank = {k: None for k in ("spend", "bot_cost", "new_customers", "cac", "kept_d30", "kept_d90", "kept_d180",
+                               "expected_months", "ltv", "ltv_cac", "payback_months", "quality")}
+    if seg:
+        # One segment's view keeps its own channels and Unknown, each blank until it has numbers for the month.
+        linked = {r[0] for r in c.execute("SELECT channel_id FROM growth_channel_segments WHERE segment_row_id=?",
+                                          (seg["id"],))}
+        shown = {r["channel"] for r in rows}
+        rows += [{"channel": ch["slug"], "name": ch["name"], "track": ch["track"], **blank, "sources": {}}
+                 for ch in by_slug.values() if ch["id"] in linked and not ch.get("retired_at") and ch["slug"] not in shown]
+        if UNKNOWN not in shown:
+            rows.append({"channel": UNKNOWN, "name": "Unknown", "track": None, **blank, "sources": {}})
+    elif not rows:
         # A month with no numbers yet still lists every active channel and Unknown, each blank, for the first entry.
-        blank = {k: None for k in ("spend", "bot_cost", "new_customers", "cac", "kept_d30", "kept_d90", "kept_d180",
-                                   "expected_months", "ltv", "ltv_cac", "payback_months", "quality")}
         rows = [{"channel": ch["slug"], "name": ch["name"], "track": ch["track"], **blank, "sources": {}}
                 for ch in by_slug.values() if not ch.get("retired_at")]
         rows.append({"channel": UNKNOWN, "name": "Unknown", "track": None, **blank, "sources": {}})
@@ -394,7 +520,7 @@ def economics(c, month=None, hidden=()):
     total = economics_total(inputs, conf)
     if not inputs:
         total["quality"] = None
-    return {"month": month, "months": months, "settings": conf, "rows": rows,
+    return {"month": month, "months": months, "segment": seg["id"] if seg else None, "settings": conf, "rows": rows,
             "total": total, "guardrails": guardrails(c, hidden)}
 
 
@@ -521,9 +647,11 @@ def channel_create(c, actor, body):
            "source_id": _source_ref(c, body.source_id), "why": body.why,
            "guardrail_kpi_id": _kpi_ref(c, body.guardrail_kpi_id, "guardrail_kpi_id"),
            "guardrail_max": body.guardrail_max, "sort": body.sort, "created_at": H.now()}
+    seg_ids = _segment_ids(c, body.segments)
     c.execute(f"INSERT INTO growth_channels ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})", list(row.values()))
+    _link(c, "growth_channel_segments", "channel_id", row["id"], seg_ids)
     H.event(c, actor, "growth.channel.create", row["id"], {"slug": body.slug})
-    return channel_view(channel(c, body.slug))
+    return channel_full(c, channel(c, body.slug))
 
 
 def channel_update(c, actor, slug, fields):
@@ -540,12 +668,18 @@ def channel_update(c, actor, slug, fields):
     for required in ("name", "track", "stage", "why", "sort"):
         if required in fields and fields[required] is None:
             raise Problem("validation", f"{required} cannot be cleared", 422)
+    if "segments" in fields:
+        seg_ids = _segment_ids(c, fields.pop("segments") or [])
+        before = _segments_of(c, "growth_channel_segments", "channel_id", [row["id"]]).get(row["id"], [])
+        if sorted(before) != sorted(seg_ids):
+            _link(c, "growth_channel_segments", "channel_id", row["id"], seg_ids)
+            H.event(c, actor, "growth.channel.update", row["id"], {"slug": slug, "segments": seg_ids})
     changed = {k: v for k, v in fields.items() if row.get(k) != v}
     if changed:
         c.execute(f"UPDATE growth_channels SET {', '.join(k + '=?' for k in changed)} WHERE id=?",
                   list(changed.values()) + [row["id"]])
         H.event(c, actor, "growth.channel.update", row["id"], {"slug": slug, **changed})
-    return channel_view(channel(c, slug))
+    return channel_full(c, channel(c, slug))
 
 
 def channel_retire(c, actor, slug):
@@ -556,7 +690,7 @@ def channel_retire(c, actor, slug):
     if not row["retired_at"]:
         c.execute("UPDATE growth_channels SET retired_at=? WHERE id=?", (H.now(), row["id"]))
         H.event(c, actor, "growth.channel.retire", row["id"], {"slug": slug})
-    return channel_view(channel(c, slug))
+    return channel_full(c, channel(c, slug))
 
 
 def source_create(c, actor, body):
@@ -598,6 +732,90 @@ def _channel_ids(c, slugs):
     return out
 
 
+def _segment_ids(c, refs):
+    """Growth segment ids for growth segment or market segment ids; an unknown one is a 404."""
+    out = []
+    for ref in dict.fromkeys(refs or []):
+        row = segment_row(c, ref)
+        if not row:
+            raise Problem("not_found", f"No segment {ref}", 404)
+        out.append(row["id"])
+    return list(dict.fromkeys(out))
+
+
+def _link(c, table, key, owner, seg_ids):
+    c.execute(f"DELETE FROM {table} WHERE {key}=?", (owner,))
+    c.executemany(f"INSERT OR IGNORE INTO {table} ({key}, segment_row_id) VALUES (?,?)", [(owner, s) for s in seg_ids])
+
+
+def _market_segment(c, actor, name, company=""):
+    """The market segment by that name or alias, else a new one under the market's root (defining the market as
+    "<company> market" first, as the Strategy page's Add a segment does). A removed one by that name comes back."""
+    name = " ".join(str(name or "").split())
+    found = [r for r in MK._resolve_existing(c, name, [], {}) if r["type"] == "segment" and r["status"] == "active"]
+    exact = [r for r in found if r["name"].lower() == name.lower()]
+    if exact or found:
+        return (exact or found)[0]["id"]
+    held = MK.entity(c, "segment/" + MK.slug(name))
+    if held and held["type"] == "segment" and held["status"] == "active":
+        return held["id"]
+    if not (MS.definition(c) or {}).get("root"):
+        MS.set_definition(c, actor, {"root_name": (company or "Our company") + " market"})
+    return MS.add_segment(c, actor, name)["id"]
+
+
+def segment_create(c, actor, body, company="", bot=False):
+    """A growth segment for a market segment named or given by id. A bot adds only a testing one, and never over a
+    segment the market graph already marks Us or Next."""
+    H._writer(c, actor)
+    if bool(body.name) == bool(body.segment_id):
+        raise Problem("validation", "Give a name or a segment_id", 422)
+    if body.segment_id:
+        sid = SM._segment(c, body.segment_id)["id"]
+    else:
+        sid = _market_segment(c, actor, body.name, company)
+    if SM.growth_row(c, sid):
+        raise Problem("conflict", f"{sid} is already a growth segment", 409, extra={"segment_id": sid})
+    if bot and SM.placed(c, sid):
+        raise Problem("forbidden", f"{sid} is already Us or Next on the Strategy page; an admin sets its status", 403)
+    row = SM.set_status(c, actor, sid, body.status, company, growth=True)
+    fields = {"motion": body.motion, "who_buys": body.who_buys or None, "deal_size": body.deal_size or None,
+              "why": body.why, "owner_ref": _owner_ref(c, body.owner_ref), "sort": body.sort}
+    c.execute(f"UPDATE growth_segments SET {', '.join(k + '=?' for k in fields)} WHERE id=?",
+              list(fields.values()) + [row["id"]])
+    return row["id"]
+
+
+def segment_update(c, actor, ref, fields, company=""):
+    H._writer(c, actor)
+    row = segment_row(c, ref)
+    if not row:
+        raise Problem("not_found", f"No segment {ref}", 404)
+    for required in ("status", "why", "sort"):
+        if required in fields and fields[required] is None:
+            raise Problem("validation", f"{required} cannot be cleared", 422)
+    if "owner_ref" in fields:
+        fields["owner_ref"] = _owner_ref(c, fields["owner_ref"])
+    for key in ("who_buys", "deal_size"):
+        if key in fields and not fields[key]:
+            fields[key] = None
+    name = fields.pop("name", None)
+    if name and name != (MK.entity(c, row["segment_id"]) or {}).get("name"):
+        MK.update_entity(c, actor, row["segment_id"], name=name, evidence_ids=SM._evidence(c, actor, growth=True))
+        H.event(c, actor, "growth.segment.update", row["id"], {"name": name})
+    status = fields.pop("status", None)
+    if status:
+        SM.set_status(c, actor, row["segment_id"], status, company, growth=True)
+    changed = {k: v for k, v in fields.items() if row.get(k) != v}
+    if changed:
+        changed.update(updated_at=H.now(), updated_by=actor)
+        c.execute(f"UPDATE growth_segments SET {', '.join(k + '=?' for k in changed)} WHERE id=?",
+                  list(changed.values()) + [row["id"]])
+        H.event(c, actor, "growth.segment.update", row["id"],
+                {k: v for k, v in changed.items() if k not in ("updated_at", "updated_by")})
+    return row["id"]
+
+
 def _bet_ref(c, value):
     if value in (None, ""):
         return None
@@ -613,6 +831,7 @@ def idea_create(c, auth, who, body, task_create):
         raise Problem("conflict", "The team's own task types already use the names Idea and Growth idea", 409)
     bet_id, kpi_id = _bet_ref(c, body.bet_id), _kpi_ref(c, body.kpi_id, "kpi_id")
     channel_ids = _channel_ids(c, body.channels)
+    seg_ids = _segment_ids(c, body.segments)
     relations = [M.TaskRelationRef(task=body.follow_up_of, kind="follow_up")] if body.follow_up_of else []
     task_body = body.body or body.hypothesis or body.title
     made = task_create(c, who, M.TaskCreate(title=body.title, body=task_body, owner=body.assignee or who.actor,
@@ -633,6 +852,7 @@ def idea_create(c, auth, who, body, task_create):
                body.source_kind, body.source_ref, now, now))
     c.executemany("INSERT OR IGNORE INTO growth_idea_channels (task_id, channel_id) VALUES (?,?)",
                   [(task_id, cid) for cid in channel_ids])
+    _link(c, "growth_idea_segments", "task_id", task_id, seg_ids)
     H.event(c, who.actor, "growth.idea.create", task_id, {"title": body.title})
     return task_id
 
@@ -674,6 +894,10 @@ def idea_update(c, auth, who, task_id, body):
         c.execute("DELETE FROM growth_idea_channels WHERE task_id=?", (row["task_id"],))
         c.executemany("INSERT INTO growth_idea_channels (task_id, channel_id) VALUES (?,?)",
                       [(row["task_id"], cid) for cid in ids])
+    if "segments" in fields:
+        seg_ids = _segment_ids(c, fields.pop("segments") or [])
+        _link(c, "growth_idea_segments", "task_id", row["task_id"], seg_ids)
+        H.event(c, who.actor, "growth.idea.update", row["task_id"], {"segments": seg_ids})
     if "bet_id" in fields:
         fields["bet_id"] = _bet_ref(c, fields["bet_id"])
     for key in ("kpi_id", "judged_kpi_id"):
@@ -776,9 +1000,10 @@ def cohort_set(c, actor, body):
         if not found:
             raise Problem("not_found", f"No channel {slug}", 404)
         channel_id = found["id"]
-    row = H._one(c, "SELECT * FROM growth_cohorts WHERE coalesce(channel_id,'')=? AND month=?",
-                 (channel_id or "", body.month))
-    fields = {k: getattr(body, k) for k in body.model_fields_set if k not in ("channel", "month", "sources")}
+    segment_id = _segment_ids(c, [body.segment_id])[0] if body.segment_id else None
+    row = H._one(c, "SELECT * FROM growth_cohorts WHERE coalesce(channel_id,'')=? AND month=? AND coalesce(segment_id,'')=?",
+                 (channel_id or "", body.month, segment_id or ""))
+    fields = {k: getattr(body, k) for k in body.model_fields_set if k not in ("channel", "month", "sources", "segment_id")}
     if "quality" in fields and fields["quality"] is None:
         fields["quality"] = "actual"
     sources = dict(json.loads(row["sources"] or "{}")) if row else {}
@@ -795,10 +1020,11 @@ def cohort_set(c, actor, body):
         cid = row["id"]
     else:
         cid = H.new_id()
-        fields.update(id=cid, channel_id=channel_id, month=body.month)
+        fields.update(id=cid, channel_id=channel_id, month=body.month, segment_id=segment_id)
         c.execute(f"INSERT INTO growth_cohorts ({', '.join(fields)}) VALUES ({', '.join('?' * len(fields))})",
                   list(fields.values()))
-    H.event(c, actor, "growth.cohort.set", cid, {"channel": slug or UNKNOWN, "month": body.month})
+    H.event(c, actor, "growth.cohort.set", cid, {"channel": slug or UNKNOWN, "month": body.month,
+                                                  **({"segment_id": segment_id} if segment_id else {})})
     return _cohort_view(H._one(c, "SELECT * FROM growth_cohorts WHERE id=?", (cid,)), _slugs(c))
 
 
@@ -854,6 +1080,9 @@ def install(app, store, auth, mutate, task_create):
         if not admin(auth, who):
             raise Problem("forbidden", f"Only the owner or an admin {what}", 403)
 
+    def company():
+        return str(getattr(store.settings, "company_name", "") or "").strip()
+
     @app.get("/api/v2/growth/channels")
     def growth_channels(request: Request, include_retired: bool = False):
         """The channels, by sort then name. `may_edit`: the caller adds and changes any channel (owner or admin)."""
@@ -868,9 +1097,9 @@ def install(app, store, auth, mutate, task_create):
         reader(request.state.identity)
         with store.read() as c:
             row = channel(c, slug)
-        if not row:
-            raise Problem("not_found", f"No channel {slug}", 404)
-        return channel_view(row)
+            if not row:
+                raise Problem("not_found", f"No channel {slug}", 404)
+            return channel_full(c, row)
 
     @app.post("/api/v2/growth/channels")
     def growth_channel_add(request: Request, body: M.GrowthChannelCreate):
@@ -910,6 +1139,52 @@ def install(app, store, auth, mutate, task_create):
         def work(c):
             editor(who, "retires a channel")
             return channel_retire(c, who.actor, slug)
+        return mutate(request, body, work)
+
+    @app.get("/api/v2/growth/segments")
+    def growth_segments(request: Request):
+        """Who the company sells to: serving, testing, next, then dropped. `may_edit`: the caller sets any field and
+        status (owner or admin); a bot adds testing segments and changes why, who_buys and deal_size."""
+        who = request.state.identity
+        reader(who)
+        with store.read() as c:
+            return {"segments": segments(c, auth, who), "may_edit": admin(auth, who)}
+
+    @app.post("/api/v2/growth/segments")
+    def growth_segment_add(request: Request, body: M.GrowthSegmentCreate):
+        """Owner or admin: a segment by market segment name (found by name or alias, else made) or id, any status.
+        A bot: a testing one."""
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            if not admin(auth, who):
+                if who.role != "bot":
+                    raise Problem("forbidden", "Only the owner, an admin or a bot adds a segment", 403)
+                if body.status != "testing":
+                    raise Problem("forbidden", "A bot adds a segment to test (status testing); an admin sets serving, "
+                                  "next and dropped", 403)
+            rid = segment_create(c, who.actor, body, company(), bot=not admin(auth, who))
+            return {"segment": segment(c, rid, auth, who)}
+        return mutate(request, body, work)
+
+    @app.patch("/api/v2/growth/segments/{sid:path}")
+    def growth_segment_update(request: Request, sid: str, body: M.GrowthSegmentUpdate):
+        """Owner or admin: any field, status included (serving and next move Where we play on the Strategy page). Any
+        bot: why, who_buys and deal_size. `sid` is the growth segment id or its market segment id."""
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            fields = {k: getattr(body, k) for k in body.model_fields_set}
+            if not admin(auth, who):
+                if who.role != "bot":
+                    raise Problem("forbidden", "Only the owner, an admin or a bot changes a segment", 403)
+                if set(fields) - BOT_SEGMENT_PATCH:
+                    raise Problem("forbidden", "A bot changes a segment's why, who_buys and deal_size; an admin "
+                                  "changes the rest", 403)
+            rid = segment_update(c, who.actor, sid, fields, company())
+            return {"segment": segment(c, rid, auth, who)}
         return mutate(request, body, work)
 
     @app.get("/api/v2/growth/sources")
@@ -954,12 +1229,12 @@ def install(app, store, auth, mutate, task_create):
     @app.get("/api/v2/growth/ideas")
     def growth_ideas(request: Request, status: str | None = None, bet_id: str | None = None,
                      channel: str | None = None, kpi_id: str | None = None, q: str | None = None,
-                     limit: int = IDEAS_PAGE):
-        """Ideas the caller may read, newest first, at most `limit` (500)."""
+                     limit: int = IDEAS_PAGE, segment: str | None = None):
+        """Ideas the caller may read, newest first, at most `limit` (500). `segment`: those that target it."""
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            return {"ideas": ideas(c, auth, who, status, bet_id, channel, kpi_id, q, limit)}
+            return {"ideas": ideas(c, auth, who, status, bet_id, channel, kpi_id, q, limit, segment)}
 
     @app.post("/api/v2/growth/ideas")
     def growth_idea_create(request: Request, body: M.GrowthIdeaCreate):
@@ -1003,15 +1278,16 @@ def install(app, store, auth, mutate, task_create):
 
     @app.get("/api/v2/growth/cohorts")
     def growth_cohorts(request: Request, channel: str | None = None, month: str | None = None,
-                       limit: int = COHORTS_PAGE):
-        """Monthly cohorts, newest month first; `channel=unknown` is the Unknown row."""
+                       limit: int = COHORTS_PAGE, segment: str | None = None):
+        """Monthly cohorts, newest month first; `channel=unknown` is the Unknown row, `segment` one segment's rows."""
         reader(request.state.identity)
         with store.read() as c:
-            return {"cohorts": cohorts(c, channel, month, limit)}
+            return {"cohorts": cohorts(c, channel, month, limit, segment)}
 
     @app.put("/api/v2/growth/cohorts")
     def growth_cohort_set(request: Request, body: M.GrowthCohortSet):
-        """Owner, admin or any bot: one channel's month, created or updated; only the fields sent change."""
+        """Owner, admin or any bot: one channel's month (or one segment's share of it), created or updated; only the
+        fields sent change."""
         who = request.state.identity
 
         def work(c):
@@ -1022,12 +1298,13 @@ def install(app, store, auth, mutate, task_create):
         return mutate(request, body, work)
 
     @app.get("/api/v2/growth/economics")
-    def growth_economics(request: Request, month: str | None = None):
-        """CAC, LTV and payback per channel for one month (the latest by default), the total and the guardrails."""
+    def growth_economics(request: Request, month: str | None = None, segment: str | None = None):
+        """CAC, LTV and payback per channel for one month (the latest by default), the total and the guardrails.
+        `segment`: only that segment's cohorts."""
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            return economics(c, month, _hidden_owners(c, auth, who))
+            return economics(c, month, _hidden_owners(c, auth, who), segment)
 
     @app.get("/api/v2/growth/settings")
     def growth_settings(request: Request):

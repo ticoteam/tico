@@ -65,7 +65,7 @@ function finHref(path, params = {}) {
 }
 
 // ----------------------------------------------------------------- the sidebar
-// Finance shows in the rail once Finance is set up and the viewer sees something in it; it sits under Strategy.
+// Finance shows in the rail once Finance is set up and the viewer sees something in it; it sits under Strategy and Growth.
 function finNavSync() {
   const nav = $('#side .side-scroll'); if (!nav) return;
   const link = nav.querySelector('a[data-nav="finance"]');
@@ -74,7 +74,7 @@ function finNavSync() {
   const a = Object.assign(document.createElement('a'), {className: 'nav-link', href: FIN_ROUTE,
     innerHTML: '<span class="nav-icon" aria-hidden="true">account_balance_wallet</span>Finance'});
   a.dataset.nav = 'finance';
-  const after = nav.querySelector('a[data-nav="strategy"]');
+  const after = nav.querySelector('a[data-nav="growth"]') || nav.querySelector('a[data-nav="strategy"]');
   if (after) after.after(a); else nav.prepend(a);
   renderTree();
 }
@@ -151,15 +151,32 @@ function finParseCents(text) {
   if (!/^\d+(\.\d{1,2})?$/.test(t)) return null;
   return Math.round(Number(t) * 100);
 }
-// bot:<slug>, human:<id>, a team id, "unattributed".
+// The group with no vendor, team or teammate (backend/finance/reads.py NONE): no real key starts with a space.
+const FIN_NONE = ' unattributed';
+// bot:<id>, human:<id>, a team id, or FIN_NONE.
 function finWho(ref) {
   const s = String(ref || '');
-  if (!s || s === 'unattributed') return 'Unattributed';
+  if (!s || s === FIN_NONE) return 'Unattributed';
   if (s.startsWith('bot:')) return botDisplayName(s.slice(4));
   if (s.startsWith('human:')) return personDisplay(s.slice(6));
   return s;
 }
-const finTeamName = id => ((FIN?.acc || FIN_ACCESS)?.teams || []).find(t => t.id === id)?.name || id || '';
+const finTeamName = id => ((FIN?.acc || FIN_ACCESS)?.teams || []).find(t => t.id === id)?.name
+  || (S.orgGroups || []).find(g => g.id === id)?.name || id || '';
+// The teams directly under `id` ('' for the top, which takes in teams whose parent isn't shown), in the org chart's
+// order (S.orgGroups), then by name.
+function finTeamKids(teams, id) {
+  const rank = t => (S.orgGroups || []).find(g => g.id === t.id)?.order ?? 1e9;
+  return teams.filter(t => (t.parent || '') === (id || '') || (!id && t.parent && !teams.some(x => x.id === t.parent)))
+    .sort((a, b) => rank(a) - rank(b) || String(a.name).localeCompare(String(b.name)));
+}
+// A built-in helper (the Assistant, BotOps, Strategy Bot, Librarian, Task Manager, Bookkeeper, Health Monitor…; ui/app/sidebar.js
+// isHelperBot): listed together as Helpers, after the org chart.
+function finHelper(actor) {
+  if (!String(actor || '').startsWith('bot:')) return false;
+  const id = actor.slice(4), e = (S.emps || []).find(x => x.id === id);
+  return e ? isHelperBot(e) : isBuiltInBot(id);
+}
 const finAvatar = (ref, size = 18) => String(ref || '').startsWith('bot:') ? avatar(ref.slice(4), size)
   : personAvatar((S.people || []).find(p => p.id === String(ref).slice(6)) || {name: finWho(ref)}, size);
 

@@ -497,7 +497,7 @@ Already constrained by a CHECK in the base schema (values unchanged on this bran
 - `live_meetings.state`: live, paused, ended.
 - `meeting_items.status`: proposed, pushed, dismissed.
 - `org_rules.status`: suggested, active, retired. `org_rule_holds.state`: held, sent, kept.
-- `growth_channels.stage`, `growth_ideas.status`: the Growth module's stages and statuses.
+- `growth_channels.stage`, `growth_ideas.status`: the Growth module's stages and statuses. `growth_segments.status`: serving, testing, next, dropped.
 - `fin_cards.status`: active, frozen, **cancelled**. Left as is (cards are not in the stable set).
 - `fin_actions.status`, `fin_bills.status`, `fin_invoices.status`, `fin_entries.status`, `fin_holds.status`, `fin_outbox.status`
   (pending, sent, failed, withheld), `fin_feed_txns.status`, `fin_periods.status`, `fin_reconciliations.status`,
@@ -514,7 +514,7 @@ Without a CHECK (not constrained here; values are whatever the code writes):
   `seats.request_state`, `seat_requests.state`, `service_jobs.state`, `slack_events.state`, `slack_posts.state`,
   `worktree_waits.state`, `check_waits.state`, `calendar_actions.status`, `intake_items.status`, `support_tickets.status`,
   `rule_suggestions.status`, `runner_versions.update_state`, `runner_harness_actions.state`, `update_queue.state`,
-  `mail_items.state`, `mail_items.status`, `market_*.status`, `inbound_inboxes.state`, `bills_inbound.state`,
+  `mail_items.state`, `mail_items.status`, `market_*.status`, `memory_tidy_cards.status`, `inbound_inboxes.state`, `bills_inbound.state`,
   `learning_runs.status`, `lens_runs.status`, `listen_runs.status`, `flight_slow.status`, `redesign_migrations.state`,
   `task_trash.status`, `assistant_actions.status`, `automation_mail_actions.state`, `ask_ingest_items.outcome`,
   `batches.state`, `turns.outcome`, `schedule_occurrences.outcome`, `stale_suggestions.verdict`, `stall_triage.outcome`,

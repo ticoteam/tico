@@ -796,6 +796,9 @@ def test_a_strategy_block_imports_as_an_unconfirmed_draft_with_its_market_watche
                  (sizes["segment/bim"]["evidence_ids"],))
     assert cited == [{"source_url": "https://example.com/bim"}]
     assert '"next": true' in rows(api, "SELECT properties FROM market_entities WHERE id='segment/bim'")[0]["properties"]
+    # The Growth segments start as Where we play shows them.
+    assert {(r["segment_id"], r["status"]) for r in rows(api, "SELECT segment_id, status FROM growth_segments")} == {
+        ("segment/schedules", "serving"), ("segment/bim", "next")}
     # Rival sites are watched; the posts wait as new insights for the Librarian's curate.
     assert {(r["entity_id"], r["url"], r["kind"]) for r in rows(api, "SELECT * FROM market_watches WHERE active=1")} == {
         ("company/trestle", "https://example.com/trestle", "home"),

@@ -5,7 +5,7 @@
 // HQ's word on a cloud company: `cloud_access` on GET /api/status (every page's poll), GET /api/v2/cloud-access, and
 // the `cloud` of any 402 `locked`. Off cloud it is null and nothing here shows. Frozen (out of credit): a strip over
 // every page, "Out of credit · Add credit"; everything else stays usable. Locked (trial over, or unpaid): the whole page
-// is Pay to continue, with Download your data for the owner (Settings › General's Download all files). While either
+// is Pay to continue, with Download your files for the owner (Settings › General's Download all files). While either
 // shows, the state is read every 30 s, so paying opens the app by itself; leaving a lock reloads the page, since what
 // was open behind it was refused while it lasted.
 let CLOUD_ACCESS = null, CLOUD_TIMER = 0, CLOUD_SHOWN = 'open', CLOUD_ROLE = null;

@@ -336,7 +336,7 @@ def test_a_support_session_keeps_to_hq_s_documented_access_contract(environment,
     secret = held["secret"]
     assert TICKET_ID.fullmatch(tid)
     filed, (method, path, query, sent_secret, body) = hq.calls()
-    assert filed == ("POST", "/v1/support", "", None, {"message": "Bots stopped"})
+    assert filed == ("POST", "/v1/support", "", None, {"message": "Bots stopped", "source": "person"})
     assert (method, path, query, sent_secret) == ("POST", f"/v1/support/{tid}/access", "", secret)
     assert set(body) == {"tier", "expires_at"} and body["tier"] == "app"
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", body["expires_at"])

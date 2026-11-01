@@ -1672,7 +1672,7 @@ def kpi_log(api, args):
 @tool("hub_proposal_create", "Propose a change you may not make yourself, for the owner to confirm: clearer "
       "goal wording (goal_wording: payload title/body), a KPI for a goal (goal_kpi: payload kpi or kpi_id, and "
       "target), a new definition (kpi_definition), a target (kpi_target: payload is the target fields), or a "
-      "flag (flag: payload issue vague|duplicate|unmeasured), or, where the Strategy Bot "
+      "flag (flag: payload issue vague|duplicate), or, where the Strategy Bot "
       "is on, a goal's Why (goal_why: "
       "payload why, one line tying the goal to the company's vision), or, "
       "from the Strategy Bot at level 2 or 3, a red or "
@@ -1860,7 +1860,7 @@ def strategy_bet_retire(api, args):
 # ----------------------------------------------------------------------------- brand, go-to-market, growth
 PAGE_TITLES = {"brand": "brand", "gtm": "go-to-market"}
 BRAND_SECTIONS = ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
-GTM_SECTIONS = ("motion", "buyer", "wishes", "playbooks")
+GTM_SECTIONS = ("motion", "buyer", "playbooks")
 
 
 def _page_show(api, kind, args):
@@ -1946,6 +1946,15 @@ def gtm_sources(api, args):
     return api.get("growth/sources", include_retired="true" if args.get("include_retired") else None)
 
 
+_SEGMENTS = {"type": "array", "items": {"type": "string"},
+             "description": "Growth segment ids or market segment ids (hub growth segment list); [] clears"}
+
+
+def _segment_refs(values):
+    """Segment refs as sent; an empty string (`--segment ""`) clears."""
+    return [v for v in values if v] if values is not None else None
+
+
 CHANNEL_PROPS = {
     "name": _s("What people call it: Google Search"),
     "track": {"type": "string", "enum": ["performance", "brand"], "description": "Judged by CAC, or by reach"},
@@ -1956,13 +1965,16 @@ CHANNEL_PROPS = {
     "why": _s("Why we use it, in a line"),
     "guardrail_kpi_id": _s("A KPI that must stay under guardrail_max"),
     "guardrail_max": {"type": "number"},
-    "sort": {"type": "integer"}}
+    "sort": {"type": "integer"},
+    "segments": _SEGMENTS}
 
 
 def _channel_body(api, args, keys):
     body = {k: args[k] for k in keys if k in CHANNEL_PROPS and k != "owner" and args.get(k) is not None}
     if args.get("owner") is not None:
         body["owner_ref"] = _target(api, args["owner"]) if args["owner"] else None
+    if "segments" in body:
+        body["segments"] = _segment_refs(body["segments"])
     return body
 
 
@@ -1997,6 +2009,54 @@ def growth_channel_update(api, args):
       {"slug": _s("Channel slug")}, required=("slug",), writes=True)
 def growth_channel_retire(api, args):
     return _as_person(api).post(f"growth/channels/{args['slug']}/retire", {}, key=_key(args))
+
+
+SEGMENT_STATUSES = ["serving", "testing", "next", "dropped"]
+MOTIONS = ["self_serve", "sales_led", "partner", "marketplace", "local", "community", "ecommerce"]
+SEGMENT_PROPS = {
+    "status": {"type": "string", "enum": SEGMENT_STATUSES,
+               "description": "serving (Us on the Strategy page), testing, next (Next there) or dropped"},
+    "motion": {"type": "string", "enum": MOTIONS, "description": "How this segment buys"},
+    "who_buys": _s("Who signs or pays in this segment"),
+    "deal_size": _s("A typical deal or monthly spend: $40/month"),
+    "why": _s("Why this segment, in a line"),
+    "owner": _s("Who answers for it: me, a bot slug or a person id; \"\" clears"),
+    "sort": {"type": "integer"}}
+
+
+def _segment_body(api, args):
+    body = {k: args[k] for k in ("name", *SEGMENT_PROPS) if k != "owner" and args.get(k) is not None}
+    if args.get("owner") is not None:
+        body["owner_ref"] = _target(api, args["owner"]) if args["owner"] else None
+    return body
+
+
+@tool("hub_growth_segment_list", "Who the company sells to: each segment's status (serving, testing, next, dropped), "
+      "motion, buyer, deal size, why, the channels that reach it, its idea count and last month's new customers.", {})
+def growth_segment_list(api, args):
+    return api.get("growth/segments")
+
+
+@tool("hub_growth_segment_create", "Add a customer segment by name (the market segment of that name or alias, else a "
+      "new one) or by market segment id. Owner or admin: any status; a bot adds one to test (status testing). Serving "
+      "and next show as Us and Next on the Strategy page.",
+      {"name": _s("The segment: Property managers"), "segment_id": _s("Or a market segment id: segment/..."),
+       **SEGMENT_PROPS}, writes=True)
+def growth_segment_create(api, args):
+    body = _segment_body(api, args)
+    if args.get("segment_id"):
+        body["segment_id"] = args["segment_id"]
+    body.setdefault("status", "testing")
+    return _as_person(api).post("growth/segments", body, key=_key(args))["segment"]
+
+
+@tool("hub_growth_segment_update", "Change a segment, only the fields sent. Owner or admin: any field, status "
+      "included; a bot: why, who_buys and deal_size.",
+      {"id": _s("The segment's id or its market segment id"), "name": _s("A new name for the market segment"),
+       **SEGMENT_PROPS}, required=("id",), writes=True)
+def growth_segment_update(api, args):
+    return _as_person(api).patch("growth/segments/" + quote(args["id"], safe="/"), _segment_body(api, args),
+                                 key=_key(args))["segment"]
 
 
 SOURCE_PROPS = {
@@ -2047,6 +2107,7 @@ IDEA_PROPS = {
     "bet_id": _s("The strategy bet it tests (hub strategy show lists them)"),
     "kpi_id": _s("The KPI it should move"),
     "channels": {"type": "array", "items": {"type": "string"}, "description": "Channel slugs"},
+    "segments": _SEGMENTS,
     "source_kind": {"type": "string", "enum": IDEA_SOURCES, "description": "Where the idea came from"},
     "source_ref": _s("A link or id for that source")}
 
@@ -2064,6 +2125,8 @@ IDEA_PROPS = {
 def growth_idea_create(api, args):
     keys = ("title", *IDEA_PROPS, "ice_i", "ice_c", "ice_e", "follow_up_of", "body")
     body = {k: args[k] for k in keys if args.get(k) not in (None, [])}
+    if "segments" in body:
+        body["segments"] = _segment_refs(body["segments"])
     if args.get("assignee"):
         body["assignee"] = _target(api, args["assignee"])
     return _as_person(api).post("growth/ideas", body, key=_key(args))["idea"]
@@ -2072,10 +2135,11 @@ def growth_idea_create(api, args):
 @tool("hub_growth_idea_list", "Growth ideas you may see, best ICE first, with status, bet, KPI, channels and verdict.",
       {"status": {"type": "string", "enum": ["idea", "testing", "won", "lost", "inconclusive", "dropped", "paused"]},
        "bet_id": _s("Only ideas testing this bet"), "channel": _s("Only ideas on this channel slug"),
-       "kpi_id": _s("Only ideas for this KPI"), "q": _s("Words in the title or hypothesis"),
-       "limit": {"type": "integer", "default": 200, "maximum": 500}})
+       "kpi_id": _s("Only ideas for this KPI"), "segment": _s("Only ideas that target this segment"),
+       "q": _s("Words in the title or hypothesis"), "limit": {"type": "integer", "default": 200, "maximum": 500}})
 def growth_idea_list(api, args):
-    return api.get("growth/ideas", **{k: args.get(k) for k in ("status", "bet_id", "channel", "kpi_id", "q", "limit")})
+    return api.get("growth/ideas", **{k: args.get(k) for k in ("status", "bet_id", "channel", "kpi_id", "segment", "q",
+                                                               "limit")})
 
 
 @tool("hub_growth_idea_show", "One growth idea whole: its test plan, verdict, follow-ups and subtasks.",
@@ -2095,6 +2159,8 @@ def growth_idea_update(api, args):
     keys = ("title", *IDEA_PROPS, "judged_kpi_id", "test_from", "test_to", "change", "stop_if", "min_events",
             "audience", "external_ref")
     body = {k: args[k] for k in keys if args.get(k) is not None}
+    if "segments" in body:
+        body["segments"] = _segment_refs(body["segments"])
     return _as_person(api).patch("growth/ideas/" + args["id"], body, key=_key(args))["idea"]
 
 
@@ -2142,15 +2208,17 @@ COHORT_FIELDS = ("spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "
 
 @tool("hub_growth_cohort_list", "Monthly cohorts by channel: spend, bot cost, new customers, % kept at 30/90/180 "
       "days, revenue and margin.",
-      {"channel": _s("A channel slug, or unknown"), "month": _s("YYYY-MM"),
+      {"channel": _s("A channel slug, or unknown"), "month": _s("YYYY-MM"), "segment": _s("Only this segment's rows"),
        "limit": {"type": "integer", "default": 500, "maximum": 2000}})
 def growth_cohort_list(api, args):
-    return api.get("growth/cohorts", channel=args.get("channel"), month=args.get("month"), limit=args.get("limit"))
+    return api.get("growth/cohorts", channel=args.get("channel"), month=args.get("month"), segment=args.get("segment"),
+                   limit=args.get("limit"))
 
 
 @tool("hub_growth_cohort_set", "Set one channel's numbers for one month, only the fields sent (any bot or an admin). "
-      "Use channel unknown for customers no channel claims.",
+      "Use channel unknown for customers no channel claims; segment_id records one segment's share of the month.",
       {"channel": _s("A channel slug, or unknown"), "month": _s("YYYY-MM"),
+       "segment_id": _s("A segment id or market segment id; omit for the whole channel"),
        "spend": {"type": "number"}, "bot_cost": {"type": "number"},
        "new_customers": {"type": "integer", "minimum": 0},
        "kept_d30": {"type": "number", "description": "% kept after 30 days"},
@@ -2164,6 +2232,7 @@ def growth_cohort_list(api, args):
       required=("channel", "month"), writes=True)
 def growth_cohort_set(api, args):
     body = {"channel": args["channel"], "month": args["month"],
+            **({"segment_id": args["segment_id"]} if args.get("segment_id") else {}),
             **{k: args[k] for k in COHORT_FIELDS if args.get(k) is not None}}
     sources = dict(args.get("sources") or {})
     for pair in args.get("source") or []:
@@ -2177,10 +2246,11 @@ def growth_cohort_set(api, args):
 
 
 @tool("hub_growth_economics", "Unit economics by channel for a month: CAC (spend plus bot cost per new customer), "
-      "expected months kept, LTV and LTV:CAC, with the total and the Unknown row.",
-      {"month": _s("YYYY-MM; default the latest with numbers")})
+      "expected months kept, LTV and LTV:CAC, with the total and the Unknown row. segment: only that segment's "
+      "cohorts.",
+      {"month": _s("YYYY-MM; default the latest with numbers"), "segment": _s("A segment id or market segment id")})
 def growth_economics(api, args):
-    return api.get("growth/economics", month=args.get("month"))
+    return api.get("growth/economics", month=args.get("month"), segment=args.get("segment"))
 
 
 @tool("hub_growth_week", "The growth week: tests running and due, verdicts in the last week, guardrails over their "
@@ -5096,7 +5166,8 @@ def message_redact(api, args):
       "product answered, the bot and the version. No secrets, no other people's details.",
       {"message": _s("What happened and what is missing, in plain words")}, required=("message",), writes=True)
 def support_file(api, args):
-    return _as_person(api).post("support/tickets", {"message": "[BotOps] " + args["message"], "include_ids": True}, key=_key(args))
+    return _as_person(api).post("support/tickets", {"message": "[BotOps] " + args["message"], "include_ids": True,
+                                                    "source": "botops"}, key=_key(args))
 
 
 
@@ -6364,6 +6435,8 @@ def mail_read(api,args):
 # read fresh from the books. A result is cut to about 4k tokens, or up to about 16k when the call asks for a bigger
 # `limit` or `top_n`; rows that do not fit fold into one "Other · n" row, and search and inbox carry on by cursor.
 FINANCE_CHARS = 16000            # about 4k tokens
+FIN_OTHER = " other"             # an "Other · n" row's key, as backend/finance/reads.py OTHER: no real key starts
+                                 # with a space, so a vendor named Other stays its own row
 FINANCE_MAX_CHARS = 64000        # about 16k tokens
 FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close"]
 FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
@@ -6410,7 +6483,7 @@ def _fin_fit(result, key, budget):
 
 def _fin_other(rows, **more):
     """One "Other · n" row for `rows`: their count and the sum of each amount (column lists add up item by item)."""
-    out = {"key": "other", "label": f"Other · {len(rows)}", "count": len(rows)}
+    out = {"key": FIN_OTHER, "label": f"Other · {len(rows)}", "count": len(rows)}
     for row in rows:
         for k, v in (row.items() if isinstance(row, dict) else ()):
             if k in ("key", "label", "count") or k in _FIN_NOT_ADDED or k.endswith("_pct"):
@@ -6457,7 +6530,7 @@ def _fin_fold(result, budget):
         for step in path[:-1]:
             parent = parent[step]
         rows = parent[path[-1]]
-        tail = rows[-1] if isinstance(rows[-1], dict) and rows[-1].get("key") == "other" else None
+        tail = rows[-1] if isinstance(rows[-1], dict) and rows[-1].get("key") == FIN_OTHER else None
         body = rows[:-1] if tail else rows
         over = _fin_size(result) - budget
         keep, cut = len(body), 0
@@ -6493,7 +6566,7 @@ def _fin_shrink(value, text, items):
         kept = [_fin_shrink(x, text, items) for x in value[:items]]
         rest = value[items:]
         if all(isinstance(x, dict) for x in rest):
-            count = sum(int(x.get("count") or 1) if x.get("key") == "other" else 1 for x in rest)
+            count = sum(int(x.get("count") or 1) if x.get("key") == FIN_OTHER else 1 for x in rest)
             other = _fin_other([{k: v for k, v in x.items() if k not in ("key", "label", "count")} for x in rest])
             other.update(label=f"Other · {count}", count=count)
             return kept + [_fin_shrink(other, text, items)]
@@ -6537,7 +6610,7 @@ def _fin_paged(api, path, query, key, budget):
     if n >= asked:
         return _fin_guard(result, budget, key)
     smaller = api.get(path, **{**query, "limit": n})
-    smaller[key] = list(smaller.get(key) or []) + [{"key": "other", "label": f"Other · {asked - n}", "count": asked - n,
+    smaller[key] = list(smaller.get(key) or []) + [{"key": FIN_OTHER, "label": f"Other · {asked - n}", "count": asked - n,
                                                     "next": "page on with next_cursor"}]
     return _fin_guard(smaller, budget, key)
 
@@ -6573,7 +6646,7 @@ def finance_search(api, args):
         for row in rest:
             name = str(row.get("kind") or row.get("source") or "row")
             kinds[name] = kinds.get(name, 0) + 1
-        result["results"] = rows[:n] + [{"key": "other", "label": f"Other · {len(rest)}", "count": len(rest),
+        result["results"] = rows[:n] + [{"key": FIN_OTHER, "label": f"Other · {len(rest)}", "count": len(rest),
                                          "kinds": kinds, "next": "name a kind to page through it"}]
     return _fin_guard(result, budget, "results")
 

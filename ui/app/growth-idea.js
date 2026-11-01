@@ -1,5 +1,5 @@
 /* ui/app/growth-idea.js — The Idea panel at the top of an Idea task (growth spec §4.4): hypothesis, prediction, bet,
-   metric and channels; ICE (1–10 each, POST /api/v2/growth/ideas/{id}/score); the test (Start test, POST .../start)
+   metric, channels and buyers; ICE (1–10 each, POST /api/v2/growth/ideas/{id}/score); the test (Start test, POST .../start)
    and the verdict (POST .../verdict); the idea it follows up and the ones it waits on. The subtasks stay the task's
    own tree. Drawn only when GET /api/v2/growth/ideas/{id} answers; the server decides who may change it, and the
    controls show to the owner and to whoever holds the task.
@@ -70,6 +70,7 @@ function growthIdeaDraw(slot) {
   slot.innerHTML = `<div class="gi-head"><span class="gr-k">Idea</span>${grStatus(i.status)}${ice}<span class="spacer"></span>${actions}</div>
     <dl class="br-dl gi-dl">${dl([['Hypothesis', i.hypothesis], ['Prediction', i.prediction], ['Bet', bet ? `${bet.n} · ${bet.statement}` : i.bet_title],
       ['Metric', kpi ? `${kpi.name} ${grKpiVal(kpi)}` : kpiName || ''], ['Channels', (i.channels || []).map(s => `<span class="gr-tag">${esc(grChanName(refs.channels, s))}</span>`).join(''), true],
+      ['Buyers', gsTags(refs.segments, i.segments), true],
       ['Follow-up of', i.follow_up_of ? link(i.follow_up_of) : '', true], ['Waits on', (i.depends_on || []).map(link).join(', '), true]])}</dl>${test}${verdict}`;
   slot.hidden = false;
   growthIdeaOneBody(slot);

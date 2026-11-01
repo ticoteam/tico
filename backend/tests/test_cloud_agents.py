@@ -71,8 +71,8 @@ def test_requesting_an_agent_puts_a_seat_on_the_chart_and_files_one_ticket_witho
     assert seat["id"] in [s["id"] for s in seats(api)]
     [ticket] = filed(hq)
     assert "Devin" in ticket["message"] and ticket["kind"] == "feedback"
-    # The company's install and version stay at home: the request goes as the message alone.
-    assert set(ticket) == {"message", "kind"}
+    # The company's install and version stay at home: the request goes as the message, its kind and who filed it.
+    assert set(ticket) == {"message", "kind", "source"} and ticket["source"] == "person"
 
 
 def test_the_first_task_waits_on_the_seat_as_a_task_its_person_owns_and_never_reaches_tico(environment, hq):

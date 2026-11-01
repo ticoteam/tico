@@ -226,7 +226,7 @@ def test_a_changed_applied_file_refuses_to_boot(tmp_path, monkeypatch):
         boot(path)
 
 
-@pytest.mark.parametrize("version", ["0099_from_the_future", f"legacy_user_version_{len(H.MIGRATIONS) + 1}"])
+@pytest.mark.parametrize("version", ["0099_from_the_future", f"legacy_user_version_{migrations.NEWEST_USER_VERSION + 1}"])
 def test_a_database_with_a_migration_this_code_does_not_know_is_refused_untouched(tmp_path, version):
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:

@@ -49,6 +49,7 @@ backend/market_briefing.py:2
 backend/market_watch.py:3
 backend/meetings_schema.py:39
 backend/memory_history.py:5
+backend/memory_tidy_cards.py:4
 backend/message_links.py:10
 backend/milestone_waits.py:4
 backend/model_subscriptions.py:5

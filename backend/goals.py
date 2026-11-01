@@ -43,7 +43,7 @@ SOURCES = ("measured", "estimate")        # legacy names of a reading's quality;
 # brand_draft, gtm_draft: sections for the brand or GTM draft from any bot, an admin's to confirm (backend/brand_gtm.py).
 PROPOSALS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery",
              "strategy_draft", "strategy_realign", "brand_draft", "gtm_draft")
-FLAGS = ("vague", "duplicate", "unmeasured")
+FLAGS = ("vague", "duplicate")
 
 
 # ----------------------------------------------------------------------------- reads

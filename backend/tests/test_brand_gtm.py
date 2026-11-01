@@ -1,6 +1,8 @@
 """The brand and go-to-market pages (backend/brand_gtm.py): admins write a draft and publish numbered versions, bots
 propose, and the brand check finds avoided words, wrong names and never-made claims. Examples use Acme."""
 
+import json
+
 from backend import brand_gtm as B
 from backend.tests.test_api import api, get, post, put  # noqa: F401
 from backend.tests.test_company import bot
@@ -91,6 +93,16 @@ def test_bots_propose_members_read_only_published_and_admins_confirm(api):
     gtm = get(api, "gtm")
     assert gtm["published"] is None and gtm["draft"]["body"]["motion"] == {"primary": "local", "secondary": "self_serve"}
 
+    # A proposal filed before wishes were retired still confirms; the wishes are dropped.
+    old = post(api, "goal-proposals", {"kind": "gtm_draft", "reason": "Old", "payload": {
+        "sections": {"playbooks": ["Referrals"]}}}, token=ops)["proposal"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE goal_proposals SET payload=? WHERE id=?", (json.dumps(
+            {"sections": {"playbooks": ["Referrals"], "wishes": [{"text": "No cold SMS"}]}}), old["id"]))
+    post(api, f"goal-proposals/{old['id']}/decide", {"decision": "confirm"}, token="ben-test")
+    body = get(api, "gtm")["draft"]["body"]
+    assert body["playbooks"] == ["Referrals"] and "wishes" not in body
+
 
 def test_publish_emits_the_event_and_gtm_summary_names_motion_and_channels(api):
     draft(api, "gtm", {"motion": {"primary": "local"}, "buyer": {"who_buys": "Homeowners", "deal_size": "$90/month"}})
@@ -130,6 +142,50 @@ def test_summary_keeps_north_star_and_channels_when_a_field_is_long(api):
     # The block word leads; the words that would overflow the part are dropped, not cut.
     assert listed[0] == "cheap" and 1 < len(listed) < len(avoid)
     assert all(item in avoid for item in listed)
+
+
+def test_gtm_summary_names_served_and_tested_segments_after_the_buyer_within_the_cap(api, monkeypatch):
+    draft(api, "gtm", {"motion": {"primary": "local"}, "buyer": {"who_buys": "Homeowners", "deal_size": "$90/month"}})
+    post(api, "gtm/publish", {"note": "First"})
+    names = {"Homeowners": "serving", "Rental owners": "serving", "Property managers": "testing",
+             "Offices": "next", "Hotels": "dropped"}
+    for name, status in names.items():
+        post(api, "growth/segments", {"name": name, "status": status})
+    text = get(api, "gtm/summary")["text"]
+    assert "Buyer: Homeowners, $90/month. Segments: serving Homeowners, Rental owners; testing Property managers." \
+        in text
+    assert "Offices" not in text and "Hotels" not in text
+    for i in range(12):
+        post(api, "growth/segments", {"name": f"Long-tail landlord segment number {i}", "status": "testing"})
+    text = get(api, "gtm/summary")["text"]
+    shown = "Segments: " + text.split("Segments: ")[1].split("…")[0]
+    assert len(text) <= B.SUMMARY_MAX and len(shown) < B.SEGMENTS_CHARS
+    monkeypatch.setattr(B, "SEGMENTS_CHARS", 10_000)
+    with api.app.state.store.read() as c:
+        full = B._segments_line(c)[0]
+    assert full.startswith(shown) and full[len(shown)] in " ,;"                   # cut at a word, never inside one
+
+
+def test_a_row_written_with_the_removed_wishes_section_reads_without_it(api):
+    """Rows saved before the wishes section was removed still hold it: reads drop it, the summary never names it, and a
+    write goes through as it would on a row that never had it."""
+    draft(api, "gtm", {"motion": {"primary": "local"}, "buyer": {"who_buys": "Homeowners"}})
+    post(api, "gtm/publish", {"note": "First"})
+    legacy = {"motion": {"primary": "local"}, "buyer": {"who_buys": "Homeowners"},
+              "wishes": [{"text": "No cold SMS", "level": "block"}]}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE gtm_versions SET body=? WHERE n=1", (json.dumps(legacy),))
+        c.execute("UPDATE gtm_drafts SET body=?, revision=revision+1 WHERE id=1", (json.dumps(legacy),))
+    page = get(api, "gtm")
+    assert page["published"]["body"] == {"motion": {"primary": "local"}, "buyer": {"who_buys": "Homeowners"}}
+    assert page["draft"]["body"] == page["published"]["body"] and page["draft"]["changed"] == []
+    assert get(api, "gtm/versions/1")["body"] == page["published"]["body"]
+    assert "No cold SMS" not in get(api, "gtm/summary")["text"]
+    draft(api, "gtm", {"wishes": []}, expected=422)
+    draft(api, "gtm", {"playbooks": ["Outbound list"]})
+    post(api, "gtm/publish", {"note": "Playbooks"})
+    published = get(api, "gtm/versions/2")["body"]
+    assert set(published) == {"motion", "buyer", "playbooks"} and published["playbooks"] == ["Outbound list"]
 
 
 def test_clip_keeps_abbreviations_and_whole_words():
@@ -196,6 +252,17 @@ def test_the_hub_tools_reach_every_brand_gtm_and_growth_route(api):
     err, _ = ok("hub_growth_cohort_set", {"channel": "google-search", "month": "2026-10", "spend": 3400,
                                          "bot_cost": 260, "new_customers": 71, "source": ["spend=Google Ads"]})
     assert not err and ok("hub_growth_economics", {"month": "2026-10"})[1]["rows"][0]["cac"]
+    err, seg = ok("hub_growth_segment_create", {"name": "Property managers", "status": "serving", "motion": "sales_led"})
+    assert not err and seg["status"] == "serving" and seg["segment_id"] == "segment/property-managers"
+    assert ok("hub_growth_segment_update", {"id": seg["segment_id"], "deal_size": "$400/month"})[1]["deal_size"] \
+        == "$400/month"
+    assert ok("hub_growth_segment_list")[1]["segments"][0]["motion"] == "sales_led"
+    assert ok("hub_growth_channel_update", {"slug": "google-search", "segments": [seg["id"]]})[1]["segments"] == [seg["id"]]
+    assert not ok("hub_growth_cohort_set", {"channel": "google-search", "month": "2026-10", "segment_id": seg["id"],
+                                            "new_customers": 5})[0]
+    assert ok("hub_growth_economics", {"segment": seg["id"]})[1]["total"]["new_customers"] == 5
+    assert ok("hub_growth_cohort_list", {"segment": seg["id"]})[1]["cohorts"][0]["new_customers"] == 5
+    assert ok("hub_growth_idea_list", {"segment": seg["id"]})[1]["ideas"] == []
     assert not ok("hub_growth_settings", {"set": ["revenue_month=90", "margin_pct=40"]})[0]
     assert ok("hub_growth_settings")[1]["revenue_month"] == 90
     for name in ("hub_growth_week", "hub_growth_evidence", "hub_growth_working", "hub_growth_kpis",

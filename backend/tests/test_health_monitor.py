@@ -126,7 +126,7 @@ def test_a_finding_wakes_it_once_is_filed_once_without_task_text_and_a_repeat_go
     assert r.status_code == 200, r.text
     (request,) = hq.seen
     sent = json.loads(request.content)
-    assert set(sent) == {"message", "version", "install_id", "diagnostics"}
+    assert set(sent) == {"message", "version", "install_id", "diagnostics", "source"} and sent["source"] == "health_monitor"
     assert "Signature: hm-" in sent["message"] and SECRET_TASK not in request.content.decode()
     assert CANARY not in sent["message"] and runner["runner_id"] not in sent["message"]
     with api.app.state.store.read() as c:                                 # the owner's ticket, not the bot's
@@ -143,6 +143,8 @@ def test_a_finding_wakes_it_once_is_filed_once_without_task_text_and_a_repeat_go
     assert repeat["comment"] and len(hq.tickets) == 1
     (ticket,) = hq.tickets.values()
     assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (3 times)"]
+    seen_again = [x for x in hq.seen if x.url.path.endswith("/messages")][-1]
+    assert set(json.loads(seen_again.content)) == {"message"}      # "Seen again" is a message: it names no source
     with api.app.state.store.transaction() as c:          # a day since its last wake no longer wakes it again
         c.execute("UPDATE health_findings SET last_woke_at=? WHERE key=?", (H.shift(H.now(), hours=-25), key))
     runner_errors(api, runner, [])
@@ -365,6 +367,7 @@ def test_a_repeat_goes_on_the_ticket_of_the_person_who_approved_it(environment, 
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE approvals SET decision='approved', decided_by='human:riley' WHERE id=?", (approval,))
     api.app.state.support.file_approved(Identity("bot:" + health_monitor.SLUG, "bot"), approval)
+    assert json.loads(hq.seen[-1].content)["source"] == "health_monitor"     # approved by a person, still the monitor's
     runner_errors(api, runner, [])
     scan(api)
     runner_errors(api, runner, STREAM)

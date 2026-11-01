@@ -1270,6 +1270,10 @@ def growth_text(fn, result):
             return f"No hits against brand v{result.get('n', 0)}." if result.get("n") else "No brand published yet."
         return "\n".join(f"{h['level']}: {h['kind']} \"{h['match']}\" at {h['index']}" + (f" ({h['rule']})" if h.get("rule") else "")
                          for h in hits)
+    if fn == "growth segment list":
+        return _table(result.get("segments") or [], [("id", "id"), ("name", "name"), ("status", "status"),
+                      ("motion", "motion"), ("buyer", "who_buys"), ("deal", "deal_size"),
+                      ("channels", lambda r: ", ".join(r.get("channels") or [])), ("ideas", "ideas")])
     if fn in ("growth channel list",):
         return _table(result.get("channels") or [], [("slug", "slug"), ("name", "name"), ("stage", "stage"),
                       ("track", "track"), ("owner", "owner_ref"), ("budget/mo", "budget_month")])
@@ -1283,7 +1287,9 @@ def growth_text(fn, result):
                       ("title", "title"), ("assignee", "assignee")])
     if fn == "growth economics":
         rows = list(result.get("rows") or []) + ([result["total"]] if result.get("total") else [])
-        return f"Month: {result.get('month') or 'none yet'}\n" + _table(rows, [
+        head = f"Month: {result.get('month') or 'none yet'}"
+        head += f"  Segment: {result['segment']}" if result.get("segment") else ""
+        return head + "\n" + _table(rows, [
             ("channel", "name"), ("spend", "spend"), ("bot", "bot_cost"), ("new", "new_customers"), ("CAC", "cac"),
             ("months", "expected_months"), ("LTV", "ltv"), ("LTV:CAC", "ltv_cac"), ("payback", "payback_months")])
     if fn == "growth cohort list":

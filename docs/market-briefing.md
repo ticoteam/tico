@@ -22,7 +22,7 @@ The hub makes two built-in automations for the Librarian (see Automations):
 
 - **Market briefing**: daily at 07:00 team time. The Librarian's turn writes the briefing (a one-line title, then a
   bullet per point); the run's `post_update` step, `{"to": ["market", "updates"]}`, posts it as this week's briefing
-  and adds one line pointing at it to the Librarian's daily update. A daily briefing replaces the week's.
+  and adds one line pointing at it to the Librarian's daily update. A daily briefing replaces the week's title and page; the items the Librarian tagged that week (`hub market briefing post --items-file`), and the bets they touch, stay.
 - **Market listening · <destination>**: one per listening destination the Librarian receives. Each match is a
   Librarian turn; the turn changes the graph through the market routes, never the match itself.
 

@@ -720,7 +720,9 @@ def seen(ctx: Ctx, who: str, row: Any) -> bool:
 
 def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Move a feed row to a line and tags (reverse and post again), or ignore it. A row a done reconciliation
-    cleared, or one side of a transfer, stays as it is."""
+    cleared, or one side of a transfer, stays as it is. A row that marked payments may be waiting for is not posted
+    here either: that would be a second bank line beside the payments' own (feed_match links it). Ignoring posts
+    nothing, so it is allowed."""
     V.only(p, ("feed_id", "account_id", "tags", "ignore"))
     row = SK.get(ctx.c, "fin_feed_txns", V.text(p, "feed_id", 80))
     if row is None or not seen(ctx, who, row):
@@ -747,6 +749,9 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                     facts={"amount": abs(amount), "counterparty": str(row["counterparty"])})
     if row["pending"]:
         raise FinanceError(CONFLICT, "that row is still pending at the bank")
+    if money is not None and documents.may_wait(ctx, row, money):
+        raise FinanceError(CONFLICT, "that row may be a payment already marked paid that waits for its bank row; "
+                                     "link it with feed_match")
     account = ctx.accounts.get(V.text(p, "account_id", 80))
     if account is None or not account.active:
         raise FinanceError(NOT_FOUND, "no such account")

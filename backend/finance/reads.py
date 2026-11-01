@@ -37,8 +37,14 @@ from .store import budgets as SB
 from .store import ledger as SL
 from .store import ap as SAP
 from .store import raw_totals as SR
+from .store import tico as ST
 
 UNATTRIBUTED = "Unattributed"
+# Reserved row keys. Every real key is stripped (V.opt_text, L.name_key, SAP.vendor_key), so none starts with a space:
+# a vendor named Other or Unattributed is its own row, never one of these.
+OTHER = " other"                  # the folded "Other · n" row
+NONE = " unattributed"            # the group with no vendor, team or teammate (No vendor / Unattributed)
+NO_TEAM = "no_team"                # a teammate's spend with no team on it: the No team group, not Unattributed
 GROUPS = ("department", "team", "teammate", "bot", "person", "vendor", "account")
 MAX_TOP = 200
 Row = dict[str, object]
@@ -142,7 +148,7 @@ def _cap(rows: list[Row], top_n: int) -> list[Row]:
     if len(rows) <= top_n:
         return rows
     rest = rows[top_n:]
-    return rows[:top_n] + [{"key": "other", "label": f"Other · {len(rest)}", "amount":
+    return rows[:top_n] + [{"key": OTHER, "label": f"Other · {len(rest)}", "amount":
                             sum(int(str(r["amount"])) for r in rest), "count": len(rest)}]
 
 
@@ -164,7 +170,7 @@ def _fold_pnl(out: Row, top_n: int) -> Row:
         for r in rest:
             for n, v in enumerate(cast(list[int], r["actual"] or [])):
                 actual[n] += v
-        shown.append({"key": "other", "label": f"Other · {len(rest)}", "type": type_, "account_id": None,
+        shown.append({"key": OTHER, "label": f"Other · {len(rest)}", "type": type_, "account_id": None,
                       "section": None, "private": False, "actual": actual, "total": sum(actual), "budget": None,
                       "projection": None, "count": len(rest)})
     return {**out, "rows": shown, "rows_total": len(rows)}
@@ -469,11 +475,12 @@ def _side_panel(s: _Seen, spent: Mapping[str, int], tops: list[B.Budget], versio
 
 # ------------------------------------------------------------------------------------------------ expenses
 def _key(s: _Seen, cell: VW.Cell, by: str) -> str | None:
-    """The group a cell falls in; "" is Unattributed; None leaves it out (a person's line in a by-bot read)."""
-    if by == "department":
-        return s.ctx.org.department(cell.team) if cell.team else ""
-    if by == "team":
-        return cell.team
+    """The group a cell falls in; "" is Unattributed (no team and no teammate); NO_TEAM is a teammate's spend with no
+    team; None leaves it out (a person's line in a by-bot read)."""
+    if by in ("department", "team"):
+        if not cell.team:
+            return NO_TEAM if cell.teammate else ""
+        return s.ctx.org.department(cell.team) if by == "department" else cell.team
     if by == "teammate":
         return cell.teammate
     if by == "bot":
@@ -495,6 +502,8 @@ def _label(s: _Seen, key: str, by: str) -> str:
     if not key:
         return UNATTRIBUTED if by != "vendor" else "No vendor"
     if by in ("department", "team"):
+        if key == NO_TEAM:
+            return "No team"
         team = s.ctx.org.teams.get(key)
         return team.name if team else key
     if by == "account":
@@ -533,7 +542,7 @@ def _grouped(s: _Seen, a: date, z: date, by: str, account_id: str | None, team: 
             continue
         sums[key] = sums.get(key, 0) + cell.amount
     labels = _labels(s, sums, by)
-    rows: list[Row] = [{"key": k or "unattributed", "label": labels[k], "amount": v} for k, v in sums.items()]
+    rows: list[Row] = [{"key": k or NONE, "label": labels[k], "amount": v} for k, v in sums.items()]
     return {"by": by, "start": a.isoformat(), "end": z.isoformat(), "rows": _cap(rows, top_n),
             "total": sum(sums.values()), "excluded": sup.excluded, "hidden": _hidden_labels(s, sup.hidden),
             "view_version": s.view.version}
@@ -558,16 +567,51 @@ def spend_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = No
 
 
 # ------------------------------------------------------------------------------------------------ one line
-def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
-    """The line's projection for the month after this one, as far as the viewer sees it and within the org filter
-    (projections are by line, team and teammate; there are none by vendor). Each team and teammate with no stored
-    projection for that month gets its own default from posted history. None on a private line without its detail."""
+_RowKey = tuple[str, str, str, str]        # a breakdown row's history: line, vendor, team, teammate
+
+
+def _largest_remainder(amount: int, weights: Mapping[_RowKey, int]) -> dict[_RowKey, int]:
+    """`amount` split over positive weights to the cent: each key's floor share, then the cents left one each to the
+    largest remainders, ties to the smallest key (never the order the keys came in)."""
+    total = sum(weights.values())
+    parts = {k: amount * w // total for k, w in weights.items()}
+    left = amount - sum(parts.values())                 # 0 <= left < len(weights): floors only fall short
+    for k in sorted(weights, key=lambda k: (-(amount * weights[k] % total), k))[:left]:
+        parts[k] += 1
+    return parts
+
+
+@dataclass(frozen=True)
+class _Atom:
+    """One piece of next month's projection: a saved projection's scope, or a default for a team and teammate (or the
+    whole line, `whole`, when nothing is saved on it)."""
+    account_id: str
+    team: str
+    teammate: str
+    amount: int
+    method: str
+    whole: bool = False
+    saved: bool = False
+
+    def covers(self, cell: VW.Cell) -> bool:
+        if cell.account_id != self.account_id:
+            return False
+        if self.whole:
+            return True
+        if self.saved:                      # a saved projection covers its scope (`_covered`)
+            return _covered([(self.team, self.teammate)], cell.team or "", cell.teammate or "")
+        return (cell.team or "", cell.teammate or "") == (self.team, self.teammate)
+
+
+def _next_atoms(s: _Seen, ids: Sequence[str], f: _Filter | None) -> tuple[date, list[_Atom]] | None:
+    """Next month and the pieces its projection adds up from (the saved projections the viewer sees within the filter,
+    then a default for each scope none covers); None on a private line without its detail. The line's projection and
+    its breakdown both sum these, so they agree to the cent."""
     nxt = dates.month_end(dates.day(s.ctx.today)) + timedelta(days=1)
     month = nxt.isoformat()[:7]
     if any(i in s.private and i not in s.view.full_detail for i in ids):
-        return {"month": month, "projection": None, "projection_method": None}
-    total, found = 0, False
-    methods: set[str] = set()
+        return None
+    atoms: list[_Atom] = []
     stored: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for r in SB.projections(s.ctx.c, s.ctx.book.id, month, month):
         account = s.ctx.accounts.get(r["account_id"])
@@ -575,15 +619,92 @@ def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
                 not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}) or \
                 (f is not None and f.any and not f.keeps(str(r["team"] or ""), str(r["teammate"] or ""))):
             continue
-        stored.setdefault((account.id, month), []).append((str(r["team"] or ""), str(r["teammate"] or "")))
-        methods.add(str(r["method"]))
-        total, found = total + int(r["amount"]), True
+        team, mate = str(r["team"] or ""), str(r["teammate"] or "")
+        stored.setdefault((account.id, month), []).append((team, mate))
+        atoms.append(_Atom(account.id, team, mate, int(r["amount"]), str(r["method"]), saved=True))
     for (account_id, _, team, teammate), (amount, method) in _defaults(s, ids, [nxt], "accrual", f, stored).items():
-        if _covered(stored.get((account_id, month), []), team, teammate):
+        scopes = stored.get((account_id, month), [])
+        if _covered(scopes, team, teammate):
             continue
-        methods.add(method)
-        total, found = total + amount, True
-    return {"month": month, "projection": total if found else None, "projection_method": _method(methods)}
+        atoms.append(_Atom(account_id, team, teammate, amount, method, whole=not scopes))
+    return nxt, atoms
+
+
+def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
+    """The line's projection for the month after this one, as far as the viewer sees it and within the org filter
+    (projections are by line, team and teammate; there are none by vendor). Each team and teammate with no stored
+    projection for that month gets its own default from posted history. None on a private line without its detail."""
+    got = _next_atoms(s, ids, f)
+    if got is None:
+        nxt = dates.month_end(dates.day(s.ctx.today)) + timedelta(days=1)
+        return {"month": nxt.isoformat()[:7], "projection": None, "projection_method": None}
+    nxt, atoms = got
+    return {"month": nxt.isoformat()[:7], "projection": sum(a.amount for a in atoms) if atoms else None,
+            "projection_method": _method({a.method for a in atoms})}
+
+
+def _next_by(s: _Seen, ids: Sequence[str], f: _Filter, vendor: str | None) -> dict[str, dict[str, int]]:
+    """Next month's projection for each vendor, team and teammate of a line (`by` -> key -> amount), split as the
+    drill-down's rows are (`_key`, NONE for none). It shares out the same pieces as the line's projection
+    (`_next_atoms`: saved projections, §4.4, and each line's own default method), so each column adds up to it: a
+    piece goes over the vendor / team / teammate rows of the history it covers, weighted by each row's own default,
+    equally when none has one, and to the piece's own team and teammate (Unattributed or No team) when it covers no
+    history. Amounts are split with the remainder of the rounding on the largest share, never lost. `vendor` keeps
+    that vendor's share. Empty on a private line without its detail."""
+    got = _next_atoms(s, ids, f) if ids else None
+    if got is None:
+        return {}
+    nxt, atoms = got
+    today = dates.day(s.ctx.today)
+    cur = today.replace(day=1)
+    first = dates.add_months(cur, -PJ.TREND_MONTHS)
+    recent_from = today - timedelta(days=PJ.RATE_DAYS - 1)
+    days = dates.days(nxt, dates.month_end(nxt))
+    lines = sorted({a.account_id for a in atoms})
+    cells = _cells(s, first, today, lines, "accrual")
+    if f.any:
+        cells = [x for x in cells if f.keeps(x.team, x.teammate)]
+    sup = _suppress(s, cells, f.narrow(s.ctx.org), first, today)
+    shown = [x for x in sup.cells if x.account_id not in sup.hidden]
+    monthly: dict[_RowKey, list[int]] = {}
+    recent: dict[_RowKey, int] = {}
+    for cell in shown:
+        k = (cell.account_id, cell.vendor or "", cell.team or "", cell.teammate or "")
+        amount = (-1 if s.ctx.accounts[cell.account_id].type == "income" else 1) * cell.amount
+        day = dates.day(cell.day)
+        monthly.setdefault(k, [0] * PJ.TREND_MONTHS)
+        recent[k] = recent.get(k, 0) + (amount if day >= recent_from else 0)
+        if day < cur:
+            monthly[k][(day.year - first.year) * 12 + day.month - first.month] += amount
+    def weight(k: _RowKey) -> int:
+        account = s.ctx.accounts[k[0]]
+        return PJ.estimate(PJ.default_method(account.type, account.subtype), monthly[k], recent[k], days, 2) or 0
+
+    out: dict[str, dict[str, int]] = {"vendor": {}, "team": {}, "teammate": {}}
+    for atom in atoms:
+        mine = sorted({(x.account_id, x.vendor or "", x.team or "", x.teammate or "") for x in shown if atom.covers(x)})
+        weights = {k: max(0, weight(k)) for k in mine}
+        if not any(weights.values()):
+            weights = dict.fromkeys(mine, 1)
+        if not weights:
+            weights = {(atom.account_id, "", atom.team, atom.teammate): 1}
+        parts = _largest_remainder(atom.amount, weights)
+        for (i, v, team, mate), amount in parts.items():
+            if vendor is not None and v != vendor:
+                continue
+            cell = VW.Cell(account_id=i, day="", team=team, teammate=mate, vendor=v, amount=0)
+            for by in out:
+                key = _key(s, cell, by) or NONE
+                out[by][key] = out[by].get(key, 0) + amount
+    return out
+
+
+def _next_labels(s: _Seen, keys: Iterable[str], by: str) -> dict[str, str]:
+    """Each next_by key's label, as the breakdown rows have them (NONE is the group with none), so a row
+    that only has a projection is named too."""
+    raw = {k: "" if k == NONE else k for k in keys}
+    labels = _labels(s, set(raw.values()), by)
+    return {k: labels[r] for k, r in raw.items()}
 
 
 def _months(a: date, z: date) -> list[date]:
@@ -696,7 +817,8 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
                 who: str = "both", unattributed: bool = False) -> Row:
     """One line's spend by vendor, team and teammate, and its entries. With `vendor` ("" for lines with none) every
     breakdown, the entries and how they were paid are that vendor's; `teams`, `teammates`, `who` and `unattributed`
-    filter it as the P&L's expenses view does. `next_month` is the line's projection (within the org filter).
+    filter it as the P&L's expenses view does. `next_month` is the line's projection (within the org filter), and
+    `next_by` each vendor's, team's and teammate's default for that month.
 
     Private totals come only from whole cohorts: a vendor filter is always narrow (so a payroll cell is never rebuilt
     from a caller-picked subset and recovered by subtraction), and an org filter is narrow as the P&L's is."""
@@ -742,13 +864,15 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
     sees_vendor = (account_id not in whole_hidden and bool(whole_cells)) or s.view.payables or s.view.everything
     if contact is not None and (str(contact["book_id"]) != s.ctx.book.id or not sees_vendor):
         contact = None
+    next_by = _next_by(s, now_ids, f, vendor)
     out: Row = {"account": {"id": account.id, "code": account.code, "name": account.name, "type": account.type},
                 "start": a.isoformat(), "end": z.isoformat(), "view_version": s.view.version,
                 "total": None if account_id in whole_hidden else sum(x.amount for x in whole_cells),
                 "excluded": excluded, "hidden": _hidden_labels(s, hidden),
                 "vendor": vendor, "filter": {"teams": list(f.teams), "teammates": list(f.teammates), "who": f.who,
                                              "unattributed": f.unattributed},
-                "next_month": _next_month(s, now_ids, f),
+                "next_month": _next_month(s, now_ids, f), "next_by": next_by,
+                "next_labels": {by: _next_labels(s, keys, by) for by, keys in next_by.items()},
                 "seats": contact["seats"] if contact is not None else None,
                 "renewal_on": (contact["renewal_on"] or None) if contact is not None else None}
     for by in ("vendor", "team", "teammate"):
@@ -759,7 +883,7 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
                 continue
             sums[key] = sums.get(key, 0) + cell.amount
         labels = _labels(s, sums, by)
-        out["by_" + by] = _cap([{"key": k or "unattributed", "label": labels[k], "amount": v}
+        out["by_" + by] = _cap([{"key": k or NONE, "label": labels[k], "amount": v}
                                 for k, v in sums.items()], top_n)
     entries: list[Row] = []
     more = False
@@ -1102,7 +1226,7 @@ def _aging_report(c: sqlite3.Connection, viewer: str, kind: str, top_n: int, at:
     shown = ranked[:top_n]
     if len(ranked) > top_n:
         rest = ranked[top_n:]
-        shown.append({"key": "other", "label": f"Other · {len(rest)}",
+        shown.append({"key": OTHER, "label": f"Other · {len(rest)}",
                       **{b: sum(cast(int, x[b]) for x in rest) for b in AP.AGING},
                       "total": sum(cast(int, x["total"]) for x in rest)})
     return {"as_of": today.isoformat(), "buckets": list(AP.AGING), "rows": shown, "totals": totals,
@@ -1560,7 +1684,7 @@ def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str
             pass
         for row in rows:
             payee = str(row.get("label") or "")
-            if not payee or row.get("key") in ("", "unattributed"):
+            if not payee or row.get("key") in ("", NONE):
                 continue
             series.setdefault(payee, [0] * len(months))[index] += int(cast(int, row.get("amount") or 0))
     found += W.unusual_spend(series, months[-1][0])
@@ -1586,6 +1710,7 @@ def view_version(c: sqlite3.Connection) -> int:
 balance_sheet = tab.balance_sheet
 cards = tab.cards
 sources = tab.sources
+gateway_connected = ST.gateway_connected       # whether Sources shows the Gateway with no entries yet
 access = tab.access
 view_as = tab.view_as
 # Money out and controls (finance/tab_money.py).

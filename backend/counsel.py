@@ -337,11 +337,11 @@ def prepare(store, auth, who, blobs, body):
     return found
 
 
-def _open_read(c, who, file_id, number):
-    """The task of this person's read of this version, if nobody has closed it: an identical re-read returns it."""
+def _open_read(c, who, file_id, number, source_id):
+    """The open task for this person, file version and source; identical re-reads return it."""
     row = c.execute("SELECT r.task_id FROM rule_reads r JOIN tasks t ON t.id=r.task_id WHERE r.file_id=? AND r.version=? "
-                    "AND r.requested_by=? AND t.closed_at IS NULL AND t.status NOT IN ('done','closed','declined')",
-                    (file_id, number, who.actor)).fetchone()
+                    "AND r.requested_by=? AND r.source_id=? AND t.closed_at IS NULL AND t.status NOT IN ('done','closed','declined')",
+                    (file_id, number, who.actor, source_id)).fetchone()
     return row["task_id"] if row else None
 
 
@@ -374,9 +374,9 @@ def read(c, auth, who, files, blobs, body, found):
         plan = _link_plan(c, who, body.url, text)
         file_id, number = plan["id"], plan["number"]
     who_hint = suggested_who(c, source["name"])
-    open_task = _open_read(c, who, file_id, number)
+    open_task = _open_read(c, who, file_id, number, source["id"])
     if open_task:
-        # Asked again while the last task for this version is open: the same task, no second one (people re-read
+        # Asked again while the last task for this version and source is open: the same task, no second one (people re-read
         # on purpose only once it is closed).
         return _receipt(source, file_id, number, title, who_hint, cut, verdict["action"], open_task, existing=True)
     hint = (f"Departments holding this From's access: {', '.join(who_hint['groups'])}" if who_hint["groups"]
@@ -402,7 +402,9 @@ def read(c, auth, who, files, blobs, body, found):
     if verdict["action"] == "warn":
         lines = [screening.warning_line(verdict), "", *lines]
     labels = [*(["truncated"] if cut else []), *(["held"] if verdict["action"] == "hold" else [])]
-    task = _task(c, who, f"Read document (file {file_id} v{number})", "\n".join(lines), labels=labels)
+    # Task creation also deduplicates by title, so keep its identity source-specific.
+    task = _task(c, who, f"Read document (file {file_id} v{number}; source {source['id']})",
+                 "\n".join(lines), labels=labels)
     if plan:
         _store_link(c, blobs, files, plan, task["id"], text, title)
     H.event(c, who.actor, "rules.read_requested", file_id, {"source": source["id"], "version": number,

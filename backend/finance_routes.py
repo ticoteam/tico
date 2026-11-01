@@ -174,7 +174,8 @@ def install(app, store, auth, mutate):
         """Every source of the books, grouped with counts; mapping, sync and access per source. Owner-only unless
         granted."""
         actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.sources(c, actor, group=group))
+        return read(lambda c: finance_reads.sources(c, actor, group=group,
+                                                    gateway=finance_reads.gateway_connected(c, store.settings)))
 
     @app.get("/api/v2/finance/webhook-deliveries")
     def finance_webhook_deliveries(request: Request, limit: int = Query(20, ge=1, le=100)):
@@ -243,14 +244,17 @@ def install(app, store, auth, mutate):
     def finance_bills(request: Request, status: str | None = Query(None, max_length=80),
                       vendor_id: str | None = Query(None, max_length=80), q: str = Query("", max_length=100),
                       start: str | None = Query(None, pattern=DAY), end: str | None = Query(None, pattern=DAY),
-                      aging: Aging | None = None,
+                      aging: Aging | None = None, late: bool = False,
+                      order: Literal["date", "paid_on"] = "date",
                       cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
                       view_as: str | None = None):
         """Bills the caller sees (payables), newest first, with the open total by aging bucket. `status` takes
-        draft|open|scheduled|paid|void|unpaid, comma-separated."""
+        draft|open|scheduled|paid|void|unpaid, comma-separated; `late` keeps those past due; `order` paid_on puts the
+        last paid first."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.bills(c, actor, status=status, vendor_id=vendor_id, q=q, start=start,
-                                                  end=end, aging=aging, cursor=cursor, limit=limit))
+                                                  end=end, aging=aging, late=late, order=order, cursor=cursor,
+                                                  limit=limit))
 
     @app.get("/api/v2/finance/bills/{bill_id}")
     def finance_bill(request: Request, bill_id: ID, view_as: str | None = None):
@@ -262,14 +266,15 @@ def install(app, store, auth, mutate):
     def finance_invoices(request: Request, status: str | None = Query(None, max_length=80),
                          customer_id: str | None = Query(None, max_length=80), q: str = Query("", max_length=100),
                          start: str | None = Query(None, pattern=DAY), end: str | None = Query(None, pattern=DAY),
-                      aging: Aging | None = None,
+                         aging: Aging | None = None, late: bool = False,
                          cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
                          view_as: str | None = None):
         """Invoices the caller sees (receivables), newest first, with the open total by aging bucket. `status` takes
-        draft|sent|partial|paid|void|unpaid, comma-separated."""
+        draft|sent|partial|paid|void|unpaid, comma-separated; `late` keeps those past due."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.invoices(c, actor, status=status, customer_id=customer_id, q=q,
-                                                     start=start, end=end, aging=aging, cursor=cursor, limit=limit))
+                                                     start=start, end=end, aging=aging, late=late, cursor=cursor,
+                                                     limit=limit))
 
     @app.get("/api/v2/finance/invoices/{invoice_id}")
     def finance_invoice(request: Request, invoice_id: ID, view_as: str | None = None):
