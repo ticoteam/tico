@@ -939,7 +939,9 @@ def parser():
     s.add_argument("id")
     s.set_defaults(fn="file delete")
     s = files.add_parser("approved", help="exit 0 when a person approved this exact version on a review question, "
-                                          "1 when not, 2 on bad input")
+                                          "1 when not (its JSON answer says \"approved\": false), 2 on bad input. "
+                                          "A failed call exits 1 or 2 with an error answer: check the answer, not only "
+                                          "the code")
     s.add_argument("target", help="a path in this checkout (its bytes now), or FILE[@N] (the current version without @N)")
     s.add_argument("--by", help="whose verdicts count: human (default), any, or bot:SLUG")
     s.set_defaults(fn="file approved")

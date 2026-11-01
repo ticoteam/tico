@@ -1,7 +1,8 @@
 """The Video Producer's pipeline script (templates/catalog/video-producer/software/pipeline.py) with `hub` stubbed: a
 stage waits for its mover's approval of each file, the owner is found from pipeline.yaml or the command, a self-moved
-stage runs until its project budget (plus any raise the owner approved) and is done on its `.done` file, and a file is
-used only when it is approved or its stage is self-moved."""
+stage runs until its project budget (plus any raise the owner approved) and is done on its `.done` file, a file is
+used only when it is approved or its stage is self-moved, and a failed `hub file approved` stops the pipeline instead of
+reading as pending."""
 import importlib.machinery
 import importlib.util
 import json
@@ -147,6 +148,79 @@ def test_a_bot_mover_is_approved_by_that_bot_and_the_hand_off_says_how_to_review
     assert hand_off.splitlines()[0] == "1. hub file publish projects/launch/script/intro.md"
     assert "<FILE@N>" in hand_off and "hub file review <FILE@N> --approve|--changes --task <this task>" in hand_off
     assert "projects/launch/script/intro.md" not in hand_off.split("\n", 1)[1].replace("intro.md: <FILE@N>", "")
+
+
+APPROVED = (0, json.dumps({"approved": True, "by": "Ana"}), "")
+NOT_APPROVED = (1, json.dumps({"approved": False, "by": None, "verdict": None}), "")
+TRACEBACK = ("Traceback (most recent call last):\n  File \"clients/hubcli.py\", line 3383, in <module>\n"
+             "    sys.exit(main(sys.argv[1:]))\n"
+             "TypeError: Client.get() got multiple values for argument 'path'\n")
+
+
+def hub_file_approved(monkeypatch, answers):
+    """The real approval() against a fake `hub file approved`: answers maps a file's repo path to (exit, stdout, stderr)."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        code, out, err = answers[command[3]]
+        return SimpleNamespace(returncode=code, stdout=out, stderr=err)
+
+    monkeypatch.setattr(pipeline, "approval", REAL_APPROVAL)
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    return calls
+
+
+def test_exit_0_is_approved_and_the_pipeline_moves_on(repo, monkeypatch):
+    brief = put(repo, "brief", "brief.md")
+    script = put(repo, "script", "intro.md")
+    hub_file_approved(monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": APPROVED})
+    assert REAL_APPROVAL(brief) == (True, {"approved": True, "by": "Ana"})
+    assert pipeline.next_step(repo.project, cfg(repo), owner="Ana Lee").startswith("waiting: make the storyboard files")
+    assert pipeline.gate(script) == 0
+
+
+def test_the_hubs_not_approved_answer_is_pending_and_asks_for_review(repo, monkeypatch):
+    put(repo, "brief", "brief.md")
+    script = put(repo, "script", "intro.md")
+    hub_file_approved(monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": NOT_APPROVED})
+    assert REAL_APPROVAL(script) == (False, {})
+    step = pipeline.next_step(repo.project, cfg(repo), task="T-1", owner="Ana Lee")
+    assert step.startswith("hub task question 'Approve the script files for launch?' --on 'Ana Lee' --parent T-1")
+    assert "--review projects/launch/script/intro.md" in step
+    assert pipeline.gate(script) == 1
+
+
+@pytest.mark.parametrize("code, stdout, stderr", [
+    (1, "", TRACEBACK),                                                                        # a crash: traceback only
+    (1, json.dumps({"error": "TypeError: Client.get() got multiple values"}), ""),            # an unexpected exception
+    (1, json.dumps({"error": "unavailable", "retryable": True, "operation_id": "op-1",         # Tico unreachable
+                    "detail": "Tico could not confirm this request"}), ""),
+    (2, json.dumps({"error": "validation", "retryable": False, "detail": "--by is human"}), ""),  # bad input
+    (2, "", "usage: hub file approved TARGET"),
+    (7, "", "something unexpected"),
+])
+def test_a_failed_hub_call_is_an_error_not_a_pending_file(repo, monkeypatch, code, stdout, stderr):
+    put(repo, "brief", "brief.md")
+    script = put(repo, "script", "intro.md")
+    hub_file_approved(monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": (code, stdout, stderr)})
+    with pytest.raises(pipeline.Problem) as caught:
+        pipeline.next_step(repo.project, cfg(repo), task="T-1", owner="Ana Lee")
+    assert f"hub file approved exited {code}" in str(caught.value)
+    assert (stderr or stdout).strip()[-40:] in str(caught.value)
+    with pytest.raises(pipeline.Problem):
+        pipeline.gate(script)
+
+
+def test_a_crash_shows_the_stderr_tail_in_the_error_and_stops_the_command(repo, monkeypatch, capsys):
+    put(repo, "brief", "brief.md")
+    put(repo, "script", "intro.md")
+    hub_file_approved(monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": (1, "", TRACEBACK)})
+    assert pipeline.main(["next", str(repo.project), "--task", "T-1", "--owner", "Ana Lee"]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("error: hub file approved exited 1 for projects/launch/script/intro.md")
+    assert "TypeError: Client.get() got multiple values for argument 'path'" in captured.err
 
 
 def test_gate_lets_a_file_through_only_when_approved_or_self_moved(repo):
