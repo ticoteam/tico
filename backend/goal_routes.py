@@ -1292,8 +1292,8 @@ def install(app, store, auth, mutate, settings):
                 # Naming a North Star moves the role off the old one, so the caller must be able to change that too.
                 for old in H._rows(c.execute("SELECT * FROM kpis WHERE growth_role='north_star' AND id<>?", (kid,))):
                     if not kpi_editable(c, who, old):
-                        raise Problem("forbidden", f"The North Star is {old['name']}; its owner or someone above "
-                                      "them moves the role", 403)
+                        raise Problem("forbidden", "Only whoever may change the current North Star KPI moves "
+                                      "the role", 403)
             fields = body.model_dump(exclude={"owner", *growth.KPI_FIELDS})
             G.kpi_edit(c, who.actor, kid, fields, owner)
             growth.kpi_fields(c, who.actor, kid, {k: getattr(body, k) for k in growth.KPI_FIELDS

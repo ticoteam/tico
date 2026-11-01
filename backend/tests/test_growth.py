@@ -279,7 +279,8 @@ def test_a_member_cannot_move_the_north_star_off_a_kpi_they_may_not_edit_nor_rea
     own = post(api, "kpis", {"name": "Cara's signups"})["kpi"]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE kpis SET owner='human:cara' WHERE id=?", (own["id"],))
-    post(api, f"kpis/{own['id']}", {"growth_role": "north_star"}, token="cara-test", expected=403)
+    refused = post(api, f"kpis/{own['id']}", {"growth_role": "north_star"}, token="cara-test", expected=403)
+    assert "Active customers" not in str(refused)
     roles = {k["id"]: k["growth_role"] for k in get(api, "growth/kpis")["kpis"]}
     assert roles[company["id"]] == "north_star" and roles[own["id"]] is None
     # A bot's North Star is named only to those who may read that bot (the fixture restricts inbox to Ana).
