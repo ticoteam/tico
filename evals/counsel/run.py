@@ -12,8 +12,8 @@ text Counsel reads). On demand only: never in CI.
     python3 evals/counsel/run.py --url http://127.0.0.1:18300 --owner-token <owner API token> [--only slug,slug]
         Run the real thing on a running dev install with a Counsel bot: each document is attached to a task of the owner's
         (a person's upload into Files) and added through POST /api/v2/rules/read, as the Add document dialog adds it; each
-        waits for Counsel's run to end (--wait seconds, 900 by default), and its From's suggestions are read back, every
-        page, then scored.
+        waits for Counsel's run to end (--wait seconds, 3600 by default: the run's own limit), and its From's suggestions
+        are read back, every page, then scored.
 
 Scoring, per document:
 - a suggestion is "in the document" when its quote is in the text; otherwise it counts as quote-not-in-source;
@@ -83,8 +83,8 @@ def self_check(docs):
         for key in ("url", "fetched_at", "from", "expected"):
             if key not in meta:
                 problems.append(f"{slug}: no {key}")
-        if not 3 <= len(meta.get("expected", [])) <= 10:
-            problems.append(f"{slug}: {len(meta.get('expected', []))} expected obligations (3 to 10)")
+        if len(meta.get("expected", [])) < 3:
+            problems.append(f"{slug}: {len(meta.get('expected', []))} expected obligations (at least 3)")
         for group, items in (("expected", meta.get("expected", [])), ("not_ours", meta.get("not_ours", []))):
             for item in items:
                 if not all(k in item for k in ("text", "quote", "section", "who_hint")):
@@ -145,7 +145,7 @@ def table(rows):
 FINISHED = ("done", "closed", "declined")
 
 
-def live(docs, url, token, only, wait=900):
+def live(docs, url, token, only, wait=3600):
     """Each document as a person adds it in the app, then read back as Counsel's suggestions.
 
     A person puts a document in Files by attaching it to a task (the task's Files +, POST /tasks/{id}/files): one task of
@@ -228,7 +228,7 @@ def main(argv):
     parser.add_argument("--url", help="a running dev install, for a live run")
     parser.add_argument("--owner-token", help="the owner's API token (Settings > Computers)")
     parser.add_argument("--only", default="", help="comma-separated document slugs")
-    parser.add_argument("--wait", type=int, default=900, help="seconds to wait for Counsel's run on each document")
+    parser.add_argument("--wait", type=int, default=3600, help="seconds to wait for Counsel's run on each document")
     parser.add_argument("--no-write", action="store_true", help="print the table without writing results.md")
     args = parser.parse_args(argv)
     docs = load_docs()

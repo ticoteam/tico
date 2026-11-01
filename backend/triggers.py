@@ -541,6 +541,17 @@ def _route(c, found, delivery, type_, via, body, headers, auth):
     shown = content + (f"\nThe rest: hub trigger delivery {trigger_id} {delivery} --part 2" if cut else "")
     payload = _payload_of(body)
     fired = []
+    if effective_preset(found) == "stripe_finance":
+        # Stripe's balance events are Finance's alone (backend/finance/stripe_sync.py): kept once by event id, a
+        # doorbell only, never shown to rules.
+        from .finance import actions as finance
+        kept = finance.stripe_delivery(c, payload if isinstance(payload, dict) else {})
+        return fired, [{"outcome": "finance", "target": "finance", "ok": True, "detail": "kept" if kept else "seen"}]
+    if effective_preset(found) in ("intuit", "xero"):
+        # QuickBooks and Xero events are Finance's too (spec §3.4, §10): kept once by event id for the books worker.
+        from .finance import books_sync
+        status = books_sync.delivery(c, effective_preset(found), payload if isinstance(payload, dict) else {})
+        return fired, [{"outcome": "finance", "target": "finance", "ok": status != "refused", "detail": status}]
     if finance_owned(found):
         # Finance's calls (its bank's events, backend/finance/sync.py) are Finance's alone: kept once by event id, never
         # shown to rules.

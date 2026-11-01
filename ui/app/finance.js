@@ -104,7 +104,8 @@ function finBooksReturn() {
   setTimeout(() => route(), 0);   // draw the cleaned address (this runs inside a route draw)
 }
 const FIN_BOOKS_WHY = {access_denied: 'access denied', not_connected: 'connect again', vault_write_failed: 'sign-in not saved',
-  no_refresh_token: 'connect again', gateway_refused: 'try again', bad_answer: 'try again', unknown: 'try again'};
+  no_refresh_token: 'connect again', gateway_refused: 'try again', bad_answer: 'try again', unknown: 'try again',
+  connected_elsewhere: 'already connected elsewhere'};
 
 // A narrow viewer's figures leave payroll out (§7.5): a read (or row) with `excluded` says so, as the P&L's totals do.
 const finExcl = x => x?.excluded ? ' excl. payroll' : '';

@@ -320,7 +320,7 @@ def _newer(items, known, seen):
     return out
 
 
-def _get(http, url, **params):
+def _get(http, url, /, **params):
     r = http.get(url, params=params or None, headers={"Accept": "application/json", "User-Agent": "tico-update-feed"})
     if r.status_code != 200:
         raise httpx.HTTPError("status %s" % r.status_code)

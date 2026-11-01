@@ -50,6 +50,10 @@ def test_migration_65_adds_phase_1_to_an_install_from_64(store):
     with store.transaction() as c:
         c.execute("DELETE FROM cloud_migrations WHERE version=65")
         c.execute("DROP TABLE fin_payments")
+        # Migration 69 adds the Stripe indexes on raw_json, which an install from 64 does not have; SQLite will not
+        # drop a column an index names.
+        c.execute("DROP INDEX IF EXISTS fin_feed_txns_stripe_link")
+        c.execute("DROP INDEX IF EXISTS fin_feed_txns_stripe_source")
         c.execute("ALTER TABLE fin_feed_txns DROP COLUMN raw_json")
     store.initialize(seed_market=False)
     with store.read() as c:
@@ -224,3 +228,20 @@ def test_a_lines_role_is_recorded_where_tico_puts_it_kept_by_its_reversal_and_ne
         assert roles(done["entry_id"]) == roles(back.result["entry_id"]) == [(0, "money"), (1, "")]
         forged = act(c, OWNER, "journal", {"date": "2026-10-04", "lines": [{**lines[0], "role": "money"}, lines[1]]})
         assert forged.status != "committed" and forged.code == "invalid"
+
+
+def test_migration_74_adds_the_mirror_columns_and_credit_refunds_to_an_install_from_68(store):
+    with store.transaction() as c:
+        c.execute("DELETE FROM cloud_migrations WHERE version=74")
+        c.execute("DROP TABLE fin_credit_refunds")
+        c.execute("ALTER TABLE fin_outbox DROP COLUMN unknown")
+        c.execute("ALTER TABLE fin_lines DROP COLUMN external_line")
+        c.execute("ALTER TABLE fin_bill_lines DROP COLUMN external_line")
+        c.execute("ALTER TABLE fin_invoice_lines DROP COLUMN external_line")
+    store.initialize(seed_market=False)
+    with store.read() as c:
+        assert c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_credit_refunds'").fetchone()
+        for table, column in (("fin_outbox", "unknown"), ("fin_lines", "external_line"),
+                              ("fin_bill_lines", "external_line"), ("fin_invoice_lines", "external_line")):
+            assert column in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+        assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=74").fetchone()[0] == 1

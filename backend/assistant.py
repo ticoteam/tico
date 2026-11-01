@@ -1198,7 +1198,7 @@ class Internal:
                                         params={k: v for k, v in (params or {}).items() if v is not None},
                                         headers=headers)
 
-    async def get(self, path, **params):
+    async def get(self, path, /, **params):
         try:
             response = await self.call("GET", path, params=params)
             return response.json() if response.status_code == 200 else None

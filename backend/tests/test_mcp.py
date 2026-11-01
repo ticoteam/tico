@@ -562,3 +562,12 @@ def test_a_raw_body_and_a_json_body_are_one_or_the_other():
     with pytest.raises(ValueError):
         InProcessApi(None, None, "Bearer unused", "http://testserver").request(
             "POST", "/api/v2/files/uploads", body={"name": "plan.md"}, raw=b"# Plan")
+
+
+def test_a_query_field_named_path_reaches_the_query_string(api, door):
+    """`get(path, **query)` takes the URL path positionally, so a query field may be called `path` (`hub file approved
+    <path>` asks file-approvals that way). The server answers from the query: no file has these bytes, so not approved,
+    with the digest echoed back. A path it did not receive would be a 422 instead."""
+    _, _, attempt = setup_attempt(api)
+    answer = door(attempt["token"]).get("file-approvals", path="reports/pipeline.md", digest="0" * 64)
+    assert answer["approved"] is False and answer["digest"] == "0" * 64

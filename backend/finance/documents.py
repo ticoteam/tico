@@ -327,10 +327,14 @@ def _attach_files(p: V.Payload) -> list[str]:
 
 def _facts(kind: str, contact: Any, lines: Sequence[AP.DocLine], ctx: Ctx, **more: object) -> Result:
     codes = sorted({ctx.accounts[x.account_id].code for x in lines if x.account_id in ctx.accounts})
-    tags: dict[str, object] = {}
+    seen: dict[str, list[str]] = {}
     for x in lines:
         for k, v in x.tags.items():
-            tags.setdefault(f"tags.{k}", v)
+            values = seen.setdefault(f"tags.{k}", [])
+            if v not in values:
+                values.append(v)
+    # Every line's value of a tag counts: a rule on a tag matches a document with any line carrying that value.
+    tags: dict[str, object] = {k: vs[0] if len(vs) == 1 else sorted(vs) for k, vs in seen.items()}
     return {"amount": sum(x.amount for x in lines), "counterparty": str(contact["name"]),
             f"{CONTACT_OF[kind]}.id": str(contact["id"]), "accounts": codes, **tags, **more}
 
@@ -691,15 +695,17 @@ def invoice_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 # ------------------------------------------------------------------------------------------------ settlements
 def settle(ctx: Ctx, kind: str, doc_id: str, *, amount: int, day: str, from_kind: str, from_id: str, entry_id: str,
-           action_id: str = "", by: str = SYSTEM) -> str:
+           action_id: str = "", by: str = SYSTEM, cash: bool = True) -> str:
     """Link money to a document: its paid amount and status move, and the cash view takes the lines' share of it on
     `day` (or the first open day, when that month is closed, as its entry posts). An invoice is paid once received
-    plus written off covers it."""
+    plus written off covers it. `cash=False` moves the document without moving the cash view (a credit note applied to
+    it: no money changed hands)."""
     from .banking import open_day
     doc = _doc(ctx, kind, doc_id)
     before = int(doc["amount_paid"])
     after = before + amount
-    _cash(ctx, kind, doc, before, after, open_day(ctx, day))
+    if cash and from_kind != "credit":          # a credit applied moves no cash, whoever applies it
+        _cash(ctx, kind, doc, before, after, open_day(ctx, day))
     sid = SAP.insert(ctx.c, "fin_settlements", {
         "book_id": ctx.book.id, "from_kind": from_kind, "from_id": from_id, "to_kind": kind, "to_id": doc_id,
         "amount": amount, "settled_on": day, "entry_id": entry_id or None, "action_id": action_id or None,
@@ -719,6 +725,11 @@ def _status(kind: str, doc: Any, paid: int) -> str:
     return was if was in AP.OPEN_BILL else "scheduled" if doc["pay_on"] else "open"
 
 
+def status_of(kind: str, doc: Any, paid: int) -> str:
+    """A document's status once `paid` is settled against it (what a mirrored document takes from its settlements)."""
+    return _status(kind, doc, paid)
+
+
 def _cash(ctx: Ctx, kind: str, doc: Any, before: int, after: int, day: str) -> None:
     lines = doc_lines_of(ctx, kind, str(doc["id"]))
     contact = str(doc[f"{CONTACT_OF[kind]}_id"])
@@ -729,9 +740,10 @@ def _cash(ctx: Ctx, kind: str, doc: Any, before: int, after: int, day: str) -> N
                           SIGN[kind] * share)
 
 
-def unsettle(ctx: Ctx, s: Any, by: str = SYSTEM) -> None:
+def unsettle(ctx: Ctx, s: Any, by: str = SYSTEM, *, cash: bool = True) -> None:
     """Undo one settlement (its money left, or its feed row changed): the document owes it again and the cash view
-    gives the share back on the day it took it (or today, when that month is closed)."""
+    gives the share back on the day it took it (or today, when that month is closed). `cash=False` undoes a settlement
+    that never moved the cash view (see settle)."""
     from .banking import open_day
     kind = str(s["to_kind"])
     doc = _doc(ctx, kind, str(s["to_id"]))
@@ -740,7 +752,8 @@ def unsettle(ctx: Ctx, s: Any, by: str = SYSTEM) -> None:
     if SAP.update(ctx.c, "fin_settlements", str(s["id"]), {"voided_at": ctx.at, "voided_by": by},
                   "voided_at IS NULL") != 1:
         return
-    _cash(ctx, kind, doc, before, after, open_day(ctx, str(s["settled_on"])))
+    if cash and str(s["from_kind"]) != "credit":
+        _cash(ctx, kind, doc, before, after, open_day(ctx, str(s["settled_on"])))
     status = _status(kind, doc, after)
     if kind == "bill" and status == "scheduled" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is None:
         status = "open"
@@ -926,6 +939,11 @@ def _same_name(counterparty: str, name: str) -> bool:
     return bool(a and b) and (a == b or (min(len(a), len(b)) >= NAME_MIN and (a in b or b in a)))
 
 
+def named(counterparty: str, docs: Sequence[Any]) -> list[Any]:
+    """The documents whose contact the counterparty names (no counterparty names none)."""
+    return [d for d in docs if _same_name(counterparty, str(d["contact_name"] or ""))]
+
+
 OWING_MOST = 50             # open documents owing a row's exact amount looked at; with more, the row is unclear
 
 
@@ -956,14 +974,17 @@ def _named(counterparty: str, name: str) -> bool:
 ASK = "ask"                 # expected_match: the row may pay a marked payment, but which is unclear; a person picks
 
 
-def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> str:
+def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, *, posted: F.FeedTxn | None = None,
+                   fees: Sequence[dict[str, object]] = ()) -> str:
     """Link a new settled row to a payment marked paid from its money account that waits for it (same direction and
     amount, marked within MATCH_DAYS of the row): the row takes that entry, nothing new posts, and the settlement now
     comes from the row (so a bank change or cancellation makes the document owe it again). None of that amount: a set
     of two or more payments to one contact that sums to it (several bills in one transfer), whose entries become one.
-    The contact's name only breaks a tie (a bank often names the rail, not the vendor). "linked"; ASK when candidates
-    exist but no single one (the row stays new, never posting a second money line, and a person picks); "" when
-    nothing waits, and the row posts as usual."""
+    The contact's name only breaks a tie (a bank often names the rail, not the vendor). `posted` is the balance the row
+    posts when it differs from the amount matched (a Stripe sale matches its gross and posts its net), and `fees` are
+    the lines beyond the payments; with either, the row's entry is its own. "linked"; ASK when candidates exist but no
+    single one (the row stays new, never posting a second money line, and a person picks); "" when nothing waits, and
+    the row posts as usual."""
     kind = "bill" if t.amount < 0 else "invoice"
     start, end = _window(t.txn_date)
     exact, cut = _waiting(ctx, kind, money, abs(t.amount), start, end)
@@ -981,20 +1002,22 @@ def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> str:
         group = _pick(sets, t.counterparty)
     if group is None:
         return ASK
-    _link(ctx, row, money, t, group)
+    _link(ctx, row, money, posted or t, group, fees)
     return "linked"
 
 
-def _link(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any]) -> str:
-    """The row is the bank side of these waiting payments: one takes its entry as it is; several are replaced by
-    one entry for the row (the bank moves once). Each settlement now comes from the row. The row's entry id."""
+def _link(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any],
+          fees: Sequence[dict[str, object]] = ()) -> str:
+    """The row is the bank side of these waiting payments: one takes its entry as it is; several, or one with fees
+    beyond the payment, are replaced by one entry for the row (the bank moves once). Each settlement now comes from the
+    row. The row's entry id."""
     from .banking import mark_posted
     fid = str(row["id"])
-    if len(group) == 1:
+    if len(group) == 1 and not fees:
         mark_posted(ctx, [fid], str(group[0]["entry_id"]))
         SAP.update(ctx.c, "fin_settlements", str(group[0]["id"]), {"from_kind": "feed", "from_id": fid})
         return str(group[0]["entry_id"])
-    return _post_combined(ctx, row, money, t, group)
+    return _post_combined(ctx, row, money, t, group, fees)
 
 
 def _pick(sets: Sequence[list[Any]], counterparty: str) -> list[Any] | None:
@@ -1044,9 +1067,11 @@ def _combined(waiting: Sequence[Any], amount: int) -> tuple[list[list[Any]], boo
     return found, False
 
 
-def _post_combined(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any]) -> str:
-    """One row paying several documents marked paid from its account: their entries are reversed and the row posts
-    one entry for them all (the bank moves once), and each settlement now comes from the row."""
+def _post_combined(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any],
+                   fees: Sequence[dict[str, object]] = ()) -> str:
+    """One row paying the documents marked paid from its account (several, or one with the fees it carries): their
+    entries are reversed and the row posts one entry for them all, with `fees`, and the bank moves once. Each settlement
+    now comes from the row."""
     from .banking import mark_posted, open_day, post_row
     gl = ctx.accounts.get(str(money["account_id"] or ""))
     if gl is None:
@@ -1059,10 +1084,10 @@ def _post_combined(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence
     # shows the bank moving twice; `banking._unchanged` keeps that day when the row comes again.
     day = max([open_day(ctx, t.txn_date), *(open_day(ctx, str(e["entry_date"])) for e in entries)])
     for entry in entries:
-        posting.reverse(ctx, str(entry["id"]), day=day, memo="its bank row came, paying several at once", by=SYSTEM)
+        posting.reverse(ctx, str(entry["id"]), day=day, memo="its bank row came", by=SYSTEM)
     lines: list[dict[str, object]] = [{"account_id": ctl.id, "amount": SIGN[kind] * int(s["amount"]), "tags": {},
                                        "contact_id": str(s["contact_id"] or "")} for s in group]
-    entry_id = post_row(ctx, fid, t, lines, gl.id, [], day=day)
+    entry_id = post_row(ctx, fid, t, [*lines, *fees], gl.id, [], day=day)
     mark_posted(ctx, [fid], entry_id)
     for s in group:
         SAP.update(ctx.c, "fin_settlements", str(s["id"]), {"from_kind": "feed", "from_id": fid, "entry_id": entry_id})
@@ -1086,19 +1111,22 @@ def expected_for(ctx: Ctx, who: str, row: Any) -> tuple[list[Any], bool]:
 
 
 def _candidates(ctx: Ctx, who: str, row: Any, money: Any, ids: Sequence[str] = ()) -> tuple[list[Any], bool]:
-    """`expected_for` uncapped (only `ids` when given), and whether more waited than were looked at."""
+    """`expected_for` uncapped (only `ids` when given), and whether more waited than were looked at. A provider's fee
+    comes out of what the row carries, so the payments may add up to its gross."""
+    from .banking import provider_fee
     kind = "bill" if int(row["amount"]) < 0 else "invoice"
     start, end = _window(str(row["txn_date"]))
+    gross = abs(int(row["amount"])) + provider_fee(row, money)
     waiting, cut = _waiting(ctx, kind, money, 0, start, end, ids)
-    return [s for s in waiting if int(s["amount"]) <= abs(int(row["amount"]))
+    return [s for s in waiting if int(s["amount"]) <= gross
             and _sees_doc(ctx, who, kind, _doc(ctx, kind, str(s["to_id"])))], cut
 
 
 def feed_match(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Link a settled bank row to the payments marked paid it is the bank side of (the ones the automatic match could
     not tell apart): exactly as that match does, so the bank moves once and nothing new is expensed. The payments'
-    amounts add up to the row's; the documents are ones the asker sees and may record payments on."""
-    from .banking import seen
+    amounts add up to the row's gross (its amount and any provider fee); the documents are ones the asker sees and may record payments on."""
+    from .banking import provider_fee, provider_fee_line, seen
     V.only(p, ("feed_id", "settlement_ids"))
     row = SK.get(ctx.c, "fin_feed_txns", V.text(p, "feed_id", 80))
     if row is None or not seen(ctx, who, row):
@@ -1120,14 +1148,16 @@ def feed_match(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(NOT_FOUND, "no such payment waiting for this row in your view")
     if len({str(s["contact_id"] or "") for s in group}) > 1:
         raise invalid("one row pays one contact's payments")
+    gross = abs(int(row["amount"])) + provider_fee(row, money)
     total = sum(int(s["amount"]) for s in group)
-    if total != abs(int(row["amount"])):
-        raise invalid(f"those payments add up to {total}, the row to {abs(int(row['amount']))}")
+    if total != gross:
+        raise invalid(f"those payments add up to {total}, the row to {gross}")
     docs = [str(s["to_id"]) for s in group]
 
     def apply(aid: str) -> Result:
         fresh = SK.get(ctx.c, "fin_feed_txns", str(row["id"]))
-        entry = _link(ctx, fresh, money, _row_txn(fresh), group)
+        fee = provider_fee_line(ctx, fresh, money)
+        entry = _link(ctx, fresh, money, _row_txn(fresh), group, [] if fee is None else [fee])
         return {"feed_id": str(row["id"]), "entry_id": entry, "settlement_ids": ids, f"{kind}_ids": docs}
     names = ", ".join(f"{kind} {SAP.get(ctx.c, SAP.DOCS[kind][0], d)['number'] or d}" for d in docs)
     return Plan(K.default_gate(ctx.org, who, "feed_match"),
@@ -1159,7 +1189,11 @@ def clearing(ctx: Ctx, who: str) -> L.Account:
 
 
 def feed_paid(ctx: Ctx, row: Any, kind: str, doc: Any, entry_id: str) -> None:
-    """A feed row the books posted straight to AP or AR (match_feed) settles its document."""
+    """A feed row the books posted straight to AP or AR (match_feed) settles its document. A Stripe row never gets
+    here: its sale settles on its gross through stripe_post, so one that did is refused, not settled at its net."""
+    money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
+    if money is not None and str(money["kind"]) == "stripe":
+        raise invalid("a Stripe sale settles through its own posting, on its gross")
     settle(ctx, kind, str(doc["id"]), amount=abs(int(row["amount"])), day=str(row["txn_date"]), from_kind="feed",
            from_id=str(row["id"]), entry_id=entry_id)
 
@@ -1225,11 +1259,11 @@ def _unapplied(ctx: Ctx, row: Any, ctl: str, sign: int, contact: str) -> int:
 
 
 def _from_feed(ctx: Ctx, kind: str, doc: Any, row: Any, amount: int) -> str:
-    """Post what a feed row paying a document needs. A row not yet in the books posts whole to AP or AR (any amount
-    beyond this document stays there, for the next one it pays). A posted row uses what it already put in AP or AR for
+    """Post what a feed row paying a document needs. A row not yet in the books posts its gross to AP or AR, with any
+    provider fee as its own line (any amount beyond this document stays there, for the next one it pays). A posted row uses what it already put in AP or AR for
     the contact first, then moves the rest from the lines it hit to AP or AR (and whatever it left on the automatic
     default, unapplied there), in an entry beside its own (the bank line is never touched, so a reconciled row works too)."""
-    from .banking import feed_line, fresh_source, mark_posted, open_day, post_row
+    from .banking import feed_line, fresh_source, mark_posted, open_day, post_row, provider_fee, provider_fee_line
     ctl = control(ctx, kind)
     contact = str(doc[f"{CONTACT_OF[kind]}_id"])
     fid = str(row["id"])
@@ -1241,7 +1275,13 @@ def _from_feed(ctx: Ctx, kind: str, doc: Any, row: Any, amount: int) -> str:
         t = _row_txn(row)
         # A card charge left unposted (it may pay one of many bills) keeps its authorization: it settles here.
         holds = [str(row["hold_id"])] if row["hold_id"] and t.amount < 0 else []
-        entry = post_row(ctx, fid, t, [feed_line(ctl.id, -t.amount, {}, contact)], gl.id, holds)
+        # A provider's fee comes out of the gross before the row arrives: the document settles the gross, and the fee
+        # is its own expense line, the same as an automatic match posts it.
+        lines = [feed_line(ctl.id, -(t.amount + provider_fee(row, money)), {}, contact)]
+        fee = provider_fee_line(ctx, row, money)
+        if fee is not None:
+            lines.append(fee)
+        entry = post_row(ctx, fid, t, lines, gl.id, holds)
         mark_posted(ctx, [fid], entry)
         if holds:
             from .banking import card_used
@@ -1337,7 +1377,10 @@ def _pay(kind: str) -> Any:
                 raise FinanceError(CONFLICT, "that row is a Finance payment; it settles its own bill")
             if row["entry_id"] and len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1:
                 raise FinanceError(CONFLICT, "that row is a transfer between your own accounts")
-            free = abs(int(row["amount"])) - SAP.settled_from(ctx.c, "feed", str(row["id"]))
+            from .banking import provider_fee
+            row_money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
+            gross = abs(int(row["amount"])) + (provider_fee(row, row_money) if row_money is not None else 0)
+            free = gross - SAP.settled_from(ctx.c, "feed", str(row["id"]))
             if amount > free:
                 raise invalid(f"that row has {free} left to apply")
             day = V.opt_day(p, "date") or str(row["txn_date"])
@@ -1488,6 +1531,13 @@ def watch(ctx: Ctx) -> int:
                    f"{vendor['renewal_on']}:{stage}")
             n += 1
     return n
+
+
+# The rules the mirror's document planners share with the native ones (mirror.py takes the same checks, then queues the
+# write to the provider instead of posting here).
+doc_of, contact_of, left_of, need_status = _doc, _contact, _left, _need_status
+sees_doc, doc_facts = _sees_doc, _facts
+resolve_lines, next_number, money_of = _resolve, _next_number, _money
 
 
 PLANNERS = {"contact_create": contact_create, "contact_update": contact_update, "bill_create": bill_create,

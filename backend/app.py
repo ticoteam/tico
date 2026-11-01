@@ -368,6 +368,9 @@ def create_app(settings=None):
             # Finance's bank worker (backend/finance/sync.py): Mercury balances, feed, payments and card writes; a
             # rehearsal copy reads nothing and records its writes as withheld.
             finance.banking_start(store, app.state.vault, rehearsal=settings.rehearsal)
+            # Finance's books worker (backend/finance/books_sync.py): QuickBooks writes out, backfill and change feed.
+            from .finance import books_sync
+            books_sync.start(store, app.state.vault, settings, rehearsal=settings.rehearsal)
         # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
         # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
@@ -465,6 +468,8 @@ def create_app(settings=None):
                 await asyncio.to_thread(webhook_delivery.stop)
                 await asyncio.to_thread(finance.gateway_stop)
                 await asyncio.to_thread(finance.banking_stop)
+                from .finance import books_sync as books_worker
+                await asyncio.to_thread(books_worker.stop)
             telemetry.close()
 
     app = FastAPI(title=settings.app_name + " API", version="2.0.0", lifespan=lifespan,

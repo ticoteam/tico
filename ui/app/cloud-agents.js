@@ -234,4 +234,9 @@
     requestDialog(agent, {team, reports_to: head});
   };
   window.cloudAgentsSeat = seatPage;
+  // An applicant row's Hire for a cloud agent (ui/app/recruit.js): added in the seat, or requested for it.
+  window.cloudAgentHire = function cloudAgentHire(agent, seatId) {
+    if (!agent) return;
+    (agent.supported ? addDialog : requestDialog)(agent, {seat: seatId});
+  };
 })();

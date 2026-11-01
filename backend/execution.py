@@ -3518,6 +3518,9 @@ class Execution:
         # (backend/run_backoff.py). An older runner ignores it, fails the same way, and the next run starts anew.
         if run_backoff.take_compact(c, row["bot"], conv["id"], aid):
             config = {**config, "compact_first": True}
+        # A stateless bot (Counsel): its runner starts each task fresh, reads and keeps no memory (hubdb.stateless).
+        if H.stateless(followed):
+            config = {**config, "stateless": True}
         gateway_connection.hand_out(c, aid, config)
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `hub conversation show` when it wants to. The
@@ -4920,7 +4923,10 @@ class Execution:
             checkpoint_task = H.task(c, turn_task_id) if turn_task_id else None
         if checkpoint_task:
             bot_config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
-            own = sessions.session_key(json.loads(bot_config[0]) if bot_config else {}, row["bot"],
+            # The followed config, as the turn's runner keyed it (a branch's session keys come from its original).
+            from .shared_bots import follow
+            followed_config = follow(c, row["bot"], json.loads(bot_config[0]) if bot_config else {})
+            own = sessions.session_key(followed_config, row["bot"],
                                        checkpoint_task["id"], conv["id"]) == "task:" + checkpoint_task["id"]
             # Only a turn in the task's own session leaves a checkpoint: a shared bot thread carries
             # other tasks. And a session that once took in another private task may carry it in every

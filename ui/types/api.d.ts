@@ -1359,6 +1359,7 @@ export type FinanceConnectionRequest = {
   approver_email?: string | null;
   credential_id: string;
   name?: string | null;
+  provider?: "mercury" | "stripe";
   server_ip?: string | null;
   token_creator_email?: string | null;
 };

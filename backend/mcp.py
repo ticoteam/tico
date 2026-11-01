@@ -160,7 +160,7 @@ class InProcessApi:
             raise ApiProblem("file_integrity", "Tico file response failed its size or integrity check", 502)
         return data
 
-    def get(self, path, **query):
+    def get(self, path, /, **query):
         return self._run("GET", path, query={k: v for k, v in query.items() if v is not None})
 
     def post(self, path, body=None, key=None):
