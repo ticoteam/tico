@@ -109,7 +109,7 @@ class Daemon:
 
     def __init__(self, module, monkeypatch, hang):
         import subprocess
-        self.module, self.hang, self.calls, self.expired = module, hang, [], subprocess.TimeoutExpired
+        self.module, self.hang, self.calls, self.expired = module, hang, [], module.Stalled
         monkeypatch.setattr(module, "docker_run", self.run)
         monkeypatch.setattr(module, "pinned_services", lambda version: [])
         monkeypatch.setattr(module, "POLL_SECONDS", 0)
@@ -143,7 +143,7 @@ class Moby:
     def __init__(self, module, monkeypatch, hang, lag=3, healthy_tags=("v0.1.0",)):
         import subprocess
         self.module, self.hang, self.lag, self.healthy_tags = module, hang, lag, healthy_tags
-        self.expired, self.calls, self.n = subprocess.TimeoutExpired, [], 0
+        self.expired, self.calls, self.n = module.Stalled, [], 0
         self.containers = {"c1": {"tag": "v0.1.0", "running": True}}   # what the update starts from
         self.pending = []      # [container id, calls until it lands]: accepted stops nobody waited for
         self.idle_recreates = 0   # answered recreates that change nothing (a daemon that has not caught up)
@@ -254,7 +254,8 @@ def test_a_switch_that_runs_over_holds_work_until_docker_confirms_the_old_versio
     docker = Moby(updater, monkeypatch, lambda argv, tag, n: "up" in argv and tag == "v0.2.0")
     updater.update("v0.2.0")
     assert updater.status["state"] == "rolled_back", updater.status
-    assert "did not finish within" in updater.status["message"] and "Docker then confirmed the runner on v0.1.0" in updater.status["message"]
+    assert "Starting the new runner exceeded 600 seconds" in updater.status["message"]
+    assert "Docker then confirmed the runner on v0.1.0" in updater.status["message"]
     assert docker.ended == [("rolled_back", [])]                     # no accepted stop left that could land
     assert [c["tag"] for c in docker.containers.values() if c["running"]] == ["v0.1.0"]
     assert {state for _, state in docker.stopped} <= {"restarting", "uncertain"}
@@ -394,7 +395,7 @@ def test_a_runner_that_cannot_be_read_is_not_updated_and_says_so(monkeypatch, tm
     docker = Daemon(updater, monkeypatch, lambda argv, tag: argv[:2] == ["docker", "inspect"])
     updater.update("v0.2.0")
     assert updater.status["state"] == "failed" and updater.status["to"] == "v0.2.0"
-    assert updater.status["message"].startswith("Not updated: could not read the running runner")
+    assert updater.status["message"] == "Not updated: Reading the running server exceeded 60 seconds."
     assert not [argv for argv, _, _ in docker.calls if "pull" in argv or "up" in argv]
 
 
@@ -409,7 +410,7 @@ def test_a_compose_call_that_runs_over_is_killed_and_cannot_finish_later(monkeyp
     (bin_dir / "docker").write_text(f"#!/bin/sh\n(sleep 0.5; touch {marker}) &\nwait\n")
     (bin_dir / "docker").chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
-    with pytest.raises(RuntimeError, match="did not finish within"):
+    with pytest.raises(RuntimeError, match="A Docker call exceeded 0.1 seconds"):
         updater.compose("up", "-d", "runner", timeout=0.1)
     time.sleep(0.8)
     assert not marker.exists()
