@@ -139,6 +139,30 @@ def test_removing_the_bots_computer_fences_a_grant_read_before_it(api, relay):
     assert relay.fenced == [("ops", "computer removed")]
 
 
+def test_a_bot_with_an_exit_waits_for_a_runner_that_browses_through_it(api, relay):
+    """An older runner would ignore the exit and browse from its own address: none of the bot's work goes to it."""
+    from backend import health
+    from backend.tests.test_api import claim
+    from backend.tests.test_claim_refusals import health_admin, held
+    caras, server = laptop(api)
+    share(api, caras["runner_id"])
+    post(api, "bots/ops/browser-exit", {"runner_id": caras["runner_id"]})
+    post(api, "chat/ops", {"text": "Look up the synthetic fixture"})
+
+    def heartbeat(capabilities):
+        post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"ops": True},
+                                        "capabilities": capabilities}, token=server["token"])
+    heartbeat([])
+    rows, _ = held(api, server)
+    assert [r["reason"] for r in rows] == ["browser_exit_update"]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 0
+        [row] = health._stuck(c, rows, set(), health_admin(api), True)
+    assert "Office server" in row["why"], row
+    heartbeat([BE.CAPABILITY])
+    assert claim(api, server, "ops")["browser_exit"]["runner_id"] == caras["runner_id"]
+
+
 def test_every_tunnel_fails_closed_with_words_that_name_the_exit(api, relay):
     caras, server = laptop(api)
     rid = caras["runner_id"]

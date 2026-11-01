@@ -32,6 +32,10 @@ RETENTION_DAYS = 30
 USAGE_PAGE, USAGE_PAGE_MAX = 200, 500
 PORTS = (80, 443)
 LINK_PATH = "/api/v2/runners/me/browser-exit/ws"
+# A runner that advertises this runs a bot's turns through its browser exit (runner-rs/src/browser_exit.rs). Any other
+# runner would ignore the exit and browse from its own address, so a bot with an exit waits for an updated runner
+# (execution.claim_refusal `browser_exit_update`).
+CAPABILITY = "browser_exit_v1"
 _HOST = re.compile(r"[A-Za-z0-9._-]{1,253}|[0-9A-Fa-f:.]{2,45}")
 
 

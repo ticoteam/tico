@@ -1731,6 +1731,8 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
     from .subscriptions import login_upgrade
     if login_upgrade(runner, ready, bot=bot):
         return "login_upgrade", None
+    if browser_exit.CAPABILITY not in _capability_set(runner["capabilities_json"]) and browser_exit.bot_exit(c, bot):
+        return "browser_exit_update", None
     record = providers.load(c, settings)
     filled = providers.fill(record, config)
     # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).

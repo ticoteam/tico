@@ -315,7 +315,8 @@ What the sharing computer allows:
 
 When the computer is offline, stops sharing with the bot, was removed or reached its cap, the bot's browser connection
 fails, and the proxy's answer says why ("Ana's MacBook is offline"; also at the `TICO_BROWSER_PROXY` address in a
-browser). It never falls back to going out directly. Changing a bot's
+browser). It never falls back to going out directly. On a computer whose runner is too old for this, the bot's work waits
+("Update Office server to use Browse through"). Changing a bot's
 **Browse through**, or turning sharing off, closes the connections already open.
 
 The day's total on the pop-up opens to a table of what went through: day, bot, site and bytes, kept 30 days. The
