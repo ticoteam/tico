@@ -38,7 +38,7 @@ import weakref
 from clients import judge as J
 from .call_slots import NEUTRAL, REFUSED, Calls
 from .judge import audit_detail, daily_cap, over_spend_cap, server_engine, used_today
-from .store import H
+from .store import H, Problem
 
 LOG = logging.getLogger("tico.ask_ingest")
 QUESTION_SET = "person-ask-ingest"
@@ -63,6 +63,12 @@ DEFAULTS = {"mode": REHEARSAL, "budget": 10, "chores_budget": 5, "criteria": [
 THROUGH, HANDS, FYI, SENT_BACK, MERGED, FAILED_OPEN = "through", "hands", "fyi", "sent_back", "merged", "failed_open"
 OFF_PLATE = (FYI, SENT_BACK, MERGED)
 DECISION, CHORE, STATUS, OWN_WORK, SETUP = "decision", "chore", "status", "own_work", "setup"
+# A judged call with no item row carries a named reason, one `ask_ingest.unrecorded` event on the call: `joined` (a
+# blocker's repeat joined an open ask), `held` (the rule check held the write), `target` (sent to someone else than the
+# verdict's person), `not_applied` (the write did not put the item on the person), `folded` (a question folded into an
+# open one), `refused` (the write raised: a refusal), `error` (it raised otherwise). A replay's call is `replay`.
+UNRECORDED = "ask_ingest.unrecorded"
+REPLAY = "replay"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ask_ingest_settings(
@@ -476,6 +482,74 @@ def record(c, verdict, decided, ref, message_id=None):
         H.event(c, H.KEEPER, "decision.outcome", verdict["call"],
                 {"label": QUESTION_SET, "verdict": decided["would"],
                  "action": decided["outcome"] if decided["mode"] == ON else "rehearsal"})
+
+
+def skipped(c, verdict, why):
+    """A judged item that lands no row (a repeat that joined an open ask, a write held or sent elsewhere): its judge call
+    is named `why`, so the readout reconciles it. A verdict with no call judged nothing, so it needs no reason."""
+    if verdict and verdict.get("call"):
+        H.event(c, H.KEEPER, UNRECORDED, verdict["call"], {"label": QUESTION_SET, "why": why})
+
+
+def judged(store, verdicts, run):
+    """`run()`, the write these verdicts (one, a list, or None) were judged for. A write that raises lands no row, so each
+    of its calls is named: `refused` for a refusal (a Problem or a Refused), `error` otherwise. The naming is its own
+    transaction, so it outlives the write's rollback; the error then goes on as it was."""
+    try:
+        return run()
+    except Exception as exc:
+        why = "refused" if isinstance(exc, (Problem, H.Refused)) else "error"
+        judged_calls = [v for v in (verdicts if isinstance(verdicts, list) else [verdicts]) if v and v.get("call")]
+        if judged_calls:
+            with store.transaction() as c:
+                for verdict in judged_calls:
+                    skipped(c, verdict, why)
+        raise
+
+
+def _in_chunks(ids, size=500):
+    ids = list(ids)
+    for n in range(0, len(ids), size):
+        yield ids[n:n + size]
+
+
+def reconcile(c, start, end):
+    """The window's judge calls on the question set, each one accounted for: `landed` (an item row carries its call),
+    a named reason (`replay`, or the `ask_ingest.unrecorded` reason on it), or `unexplained` (neither: a gap to find).
+    `no_call` counts item rows the gate wrote with no call (busy, breaker, no decision model). By construction
+    calls == landed + sum(reasons) + unexplained."""
+    found = H._rows(c.execute("SELECT id, detail_json FROM events WHERE action='judge.call' AND target LIKE ? "
+                              "AND ts>=? AND ts<?", (f"{QUESTION_SET}@%", start, end)))
+    modes = {}
+    for row in found:
+        try:
+            modes[row["id"]] = (json.loads(row["detail_json"] or "{}") or {}).get("mode")
+        except (TypeError, ValueError, AttributeError):
+            modes[row["id"]] = None
+    rows, why = set(), {}
+    for chunk in _in_chunks(modes):
+        marks = ",".join("?" * len(chunk))
+        rows |= {r[0] for r in c.execute(f"SELECT call_id FROM ask_ingest_items WHERE call_id IN ({marks})", chunk)}
+        for r in c.execute(f"SELECT target, detail_json FROM events WHERE action=? AND target IN ({marks})",
+                           (UNRECORDED, *chunk)):
+            try:
+                why.setdefault(r[0], (json.loads(r[1] or "{}") or {}).get("why") or "unknown")
+            except (TypeError, ValueError, AttributeError):
+                why.setdefault(r[0], "unknown")
+    out = {"calls": len(modes), "landed": 0, "reasons": {}, "unexplained": 0, "no_call": c.execute(
+        "SELECT COUNT(*) FROM ask_ingest_items WHERE created>=? AND created<? AND call_id IS NULL",
+        (start, end)).fetchone()[0]}
+    for call_id, mode in modes.items():
+        if call_id in rows:
+            out["landed"] += 1
+            continue
+        named = why.get(call_id) or (REPLAY if mode == "replay" else None)
+        if named:
+            out["reasons"][named] = out["reasons"].get(named, 0) + 1
+        else:
+            out["unexplained"] += 1
+    out["reasons"] = dict(sorted(out["reasons"].items()))
+    return out
 
 
 def on_reply(c, actor, task_id, text):
