@@ -1163,7 +1163,8 @@ pub fn shared_transcript(store: &Store, record: &Recording, recording: bool) -> 
             json!({"speaker":line.speaker,"me":line.speaker == "Me","start_ms":line.start_ms,
                 "paragraphs":[line.text],"partial":false,"streamed":false,"seq":line.seq,
                 "edited":line.edited,"removed":removed,
-                "editable":open && line.acknowledged && !removed})
+                // A removed line stays editable, so a removal can be undone.
+                "editable":open && line.acknowledged})
         })
         .collect();
     if let Ok(turns) = crate::stream::live_turns(store, &record.id) {
