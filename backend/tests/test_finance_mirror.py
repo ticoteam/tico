@@ -1409,7 +1409,7 @@ def test_wages_paid_through_a_quickbooks_payroll_liability_hide_their_bank_row_f
         assert c.execute("SELECT status FROM fin_feed_txns").fetchone()[0] == "matched"
 
 
-def test_a_payroll_liability_stays_off_the_balance_sheet_for_a_viewer_without_its_detail(books):
+def test_a_payroll_liability_balance_shows_on_the_sheet_but_its_entries_do_not_without_detail(books):
     fake = FakeBooks()
     _chart(fake)
     base = {"SyncToken": "1", "Active": True}
@@ -1428,15 +1428,12 @@ def test_a_payroll_liability_stays_off_the_balance_sheet_for_a_viewer_without_it
     with books.transaction() as c:
         assert act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "balance_sheet"}).status == "committed"
     with books.read() as c:
-        def lines(who: str, day: str) -> list[tuple[str, int]]:
-            sheet = FR.balance_sheet(c, who, as_of=day, at=AT)
-            return [(str(r["code"]), int(r["balance"])) for kind in ("assets", "liabilities", "equity")
-                    for r in sheet[kind]]
-        assert ("2150", 123456) in lines(OWNER, "2026-10-06")          # the owner sees the balance the pay run leaves
-        assert all(code != "2150" for code, _ in lines("human:cara", "2026-10-06"))
-        sheet = FR.balance_sheet(c, "human:cara", as_of="2026-10-06", at=AT)
-        assert sheet["scoped"] is True                                   # no net income line that would reveal it
-        assert all(amount != 123456 for _, amount in lines("human:cara", "2026-10-06"))
+        def line(who: str) -> dict[str, Any]:
+            sheet = FR.balance_sheet(c, who, as_of="2026-10-06", at=AT)
+            return next(r for kind in ("assets", "liabilities", "equity") for r in sheet[kind] if r["code"] == "2150")
+        owner, cara = line(OWNER), line("human:cara")
+        assert owner["balance"] == cara["balance"] == 123456     # a balance sheet grant sees whole balances (§7.5)
+        assert owner["entry_sources"] and cara["entry_sources"] == [] and cara["sources"] == []   # no line detail
 
 
 _TEAM_RULE = {

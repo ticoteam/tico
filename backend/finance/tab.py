@@ -91,7 +91,9 @@ def imported_months(c: sqlite3.Connection, ctx: Ctx, view: VW.View, first: str, 
 def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, at: str | None = None) -> Row:
     """Assets, liabilities and equity on a day (today by default), each line with what makes it up: the money accounts
     mapped to it and the kinds of entry posted to it. Owner-only unless granted; a line grant shows that whole line.
-    Equity includes the P&L's running total so the sheet balances; it shows only with the whole balance sheet."""
+    Equity includes the P&L's running total so the sheet balances; it shows only with the whole balance sheet. A private
+    account's balance shows to whoever sees the sheet (spec §7.5), but what is posted to it
+    shows only with its detail."""
     ctx = load(c, at)
     day = dates.day(as_of or ctx.today).isoformat()
     closed = CL.frozen(ctx, day[:7])
@@ -99,19 +101,15 @@ def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, 
     if closed is not None:
         ctx = closed
     view = ctx.view(viewer)
-    granted = view.everything or view.balance_sheet
-    if not granted and not view.bs_lines:
+    whole = view.everything or view.balance_sheet
+    if not whole and not view.bs_lines:
         raise denied("the balance sheet is the owner's unless granted")
-    # A private account (payroll by person) shows only to who has its full detail: its balance moves with each pay run,
-    # so one run's amount would show on it. A sheet that leaves one out is scoped, since its net income would show what
-    # the line holds.
     cut = set(private_cut(ctx, view))
-    lines = [a for a in ctx.accounts.values() if a.type not in PNL_TYPES and (granted or a.id in view.bs_lines)]
-    shown = [a for a in lines if a.id not in cut]
-    whole = granted and len(shown) == len(lines)
+    shown = [a for a in ctx.accounts.values() if a.type not in PNL_TYPES and (whole or a.id in view.bs_lines)]
     sums = SK.balances(c, ctx.book.id, day, [a.id for a in shown])
-    kinds = SK.sources_by_account(c, ctx.book.id, day, [a.id for a in shown])
-    money = [r for r in SK.money_accounts(c, ctx.book.id) if str(r["account_id"] or "") in {a.id for a in shown}]
+    detail = [a.id for a in shown if a.id not in cut]
+    kinds = SK.sources_by_account(c, ctx.book.id, day, detail)
+    money = [r for r in SK.money_accounts(c, ctx.book.id) if str(r["account_id"] or "") in set(detail)]
     owed: dict[str, tuple[int, int]] = {}
     for r in SK.live_payments(c, ctx.book.id):          # what is on its way out, as far as this viewer sees payments
         if payment_seen(ctx, view, cut, r):
