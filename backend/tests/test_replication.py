@@ -4,6 +4,7 @@ import os
 import sqlite3
 import subprocess
 import textwrap
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,9 +18,9 @@ ENTRYPOINT = ROOT / "docker/entrypoint.sh"
 
 
 class FakeS3:
-    """Just the calls S3Mirror makes, over a dict."""
+    """Just the calls S3Mirror makes, over a dict. `modified` dates an object; the default is an old date."""
     def __init__(self):
-        self.objects = {}
+        self.objects, self.modified = {}, {}
 
     def get_paginator(self, name):
         assert name == "list_objects_v2"
@@ -27,7 +28,8 @@ class FakeS3:
 
         class Pages:
             def paginate(self, Bucket, Prefix):
-                yield {"Contents": [{"Key": k, "LastModified": datetime(2026, 5, 1, tzinfo=timezone.utc)}
+                old = datetime(2026, 5, 1, tzinfo=timezone.utc)
+                yield {"Contents": [{"Key": k, "LastModified": outer.modified.get(k, old)}
                                     for k in sorted(outer.objects) if k.startswith(Prefix)]}
         return Pages()
 
@@ -486,6 +488,78 @@ def test_the_backup_status_lists_only_the_newest_level(tmp_path):
     (tmp_path / "0000/new.ltx").write_text("x")
     os.utime(tmp_path / "0000/new.ltx", (50, 50))
     assert local.newest(replication.DB_LEVELS) == 50
+
+
+def add_copy(kind, store, level, seconds_ago=0, replica=""):
+    """A replica file at a Litestream level (0000/ on S3, ltx/0 in a file replica), dated that long ago. `store` is the
+    FakeS3 or the backup folder; `replica` is the folder of the replica under the backup location."""
+    when = time.time() - seconds_ago
+    if kind == "s3":
+        key = "/".join(part for part in ("tico", replica, f"{level:04d}", f"{seconds_ago}.ltx") if part)
+        store.objects[key] = b""
+        store.modified[key] = datetime.fromtimestamp(when, timezone.utc)
+    else:
+        path = store / replica / f"ltx/{level}" / f"{seconds_ago}.ltx"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+        os.utime(path, (when, when))
+
+
+@pytest.mark.parametrize("kind", ["local", "s3"])
+def test_a_recent_copy_is_level_zero_then_level_one_and_snapshots_never_count(tmp_path, kind):
+    fake = FakeS3()
+    store = fake if kind == "s3" else tmp_path / "backups"
+    mirror = replication.S3Mirror(fake, "bucket", "tico") if kind == "s3" else replication.LocalMirror(store)
+    now = time.time()
+    add_copy(kind, store, 9, seconds_ago=60)        # a daily snapshot, however new, is not a copy
+    assert mirror.newest(replication.FRESH_LEVELS) is None
+    add_copy(kind, store, 1, seconds_ago=120)       # level 1 counts while level 0 is empty
+    assert mirror.newest(replication.FRESH_LEVELS) == pytest.approx(now - 120, abs=5)
+    add_copy(kind, store, 0, seconds_ago=30)        # and level 0 wins whenever it has a file
+    assert mirror.newest(replication.FRESH_LEVELS) == pytest.approx(now - 30, abs=5)
+
+
+@pytest.mark.parametrize("kind", ["local", "s3"])
+def test_the_freshness_listing_reads_only_the_replica_folder_it_is_given(tmp_path, kind):
+    fake = FakeS3()
+    store = fake if kind == "s3" else tmp_path / "backups"
+    mirror = replication.S3Mirror(fake, "bucket", "tico") if kind == "s3" else replication.LocalMirror(store)
+    now, generation = time.time(), "gen-20261101T000000Z"
+    add_copy(kind, store, 0, seconds_ago=30)
+    assert mirror.newest(replication.FRESH_LEVELS, replica=generation) is None
+    add_copy(kind, store, 0, seconds_ago=10, replica=generation)
+    assert mirror.newest(replication.FRESH_LEVELS, replica=generation) == pytest.approx(now - 10, abs=5)
+    assert mirror.newest(replication.FRESH_LEVELS) == pytest.approx(now - 30, abs=5)
+
+
+def test_the_status_says_null_and_why_when_only_snapshots_reached_the_backup_location(tmp_path):
+    env = key_env(tmp_path)
+    add_copy("local", tmp_path / "backups", 9, seconds_ago=60)
+    replication.loop(env, sleep=lambda s: None, rounds=1)
+    stuck = replication.status(env)
+    assert stuck["last_replicated_at"] is None and stuck["reason"] == replication.NO_RECENT_COPY
+    add_copy("local", tmp_path / "backups", 0, seconds_ago=5)
+    replication.loop(env, sleep=lambda s: None, rounds=1)
+    fresh = replication.status(env)
+    assert fresh["last_replicated_at"] and fresh["reason"] is None
+
+
+def test_the_status_counts_the_local_level_zero_files_by_name(tmp_path):
+    env = key_env(tmp_path)
+    level = replication.litestream_state_dir(tmp_path / "data" / "hub.sqlite") / "ltx" / "0"
+    level.mkdir(parents=True)
+    for txid in (1, 2, 3):
+        (level / f"{txid:016x}-{txid:016x}.ltx").write_bytes(b"x")
+    assert replication.unsent_files(tmp_path / "data" / "hub.sqlite") == 3
+    assert replication.unsent_files(tmp_path / "nowhere" / "hub.sqlite") == 0
+    replication.loop(env, sleep=lambda s: None, rounds=1)
+    assert replication.status(env)["unsent_files"] == 3
+
+
+@pytest.mark.parametrize(("value", "seconds"), [(None, 60), ("30s", 30), ("10m", 600), ("2h", 60)])
+def test_the_sync_interval_is_read_the_way_the_entrypoint_reads_it(value, seconds):
+    env = {} if value is None else {"TICO_BACKUP_SYNC_INTERVAL": value}
+    assert replication.sync_interval_seconds(env) == seconds
 
 
 class Listing:

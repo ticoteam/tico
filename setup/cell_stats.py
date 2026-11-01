@@ -792,17 +792,21 @@ def db_block(box: Box, root: Path, slug: str, cache: dict, now: float, server: s
 
 def backup_block(box: Box, pid: int | None, now: float) -> dict | None:
     """The newest copy in the replica, as the server's own backup loop last saw it (/tmp/tico-backup-status.json in the
-    server container, read through /proc/<pid>/root: no docker exec)."""
+    server container, read through /proc/<pid>/root: no docker exec). `unsent_files` is the local pile-up. With no copy
+    from level 0 or 1 `age_s` is null and `stale` is true: a stuck backup, not an unknown one."""
     if not pid:
         return None
     try:
         saved = json.loads(safe_read(box.path(f"proc/{int(pid)}/root"), STATUS_FILE, 65536, cap=65536))
     except (OSError, ValueError):
         return None
-    at = parse_iso(saved.get("last_replicated_at")) if isinstance(saved, dict) else None
-    if at is None:
+    if not isinstance(saved, dict):
         return None
-    return {"age_s": max(0, int(now - at)), "detail": "litestream"}
+    unsent = saved.get("unsent_files") if isinstance(saved.get("unsent_files"), int) else None
+    at = parse_iso(saved.get("last_replicated_at"))
+    if at is None:
+        return {"age_s": None, "stale": True, "unsent_files": unsent, "detail": "litestream"}
+    return {"age_s": max(0, int(now - at)), "unsent_files": unsent, "detail": "litestream"}
 
 
 FLIGHT = "data/flight"      # under the company's folder

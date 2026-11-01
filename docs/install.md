@@ -1041,8 +1041,11 @@ Backups are on from the first start. Inside the server container, Litestream cop
 | `TICO_BACKUP=off` | nowhere | nothing |
 
 Without a bucket the server logs a warning at start and every hour, and the config payload
-(`GET /api/v2/config`) carries `backup: {mode, last_replicated_at, target_kind, warning}` with `mode` one of
-`remote`, `local-only` or `off`, so the app can show it to the owner. Point it at a bucket when you can:
+(`GET /api/v2/config`) carries `backup: {mode, last_replicated_at, reason, unsent_files, target_kind, warning}` with
+`mode` one of `remote`, `local-only` or `off`, so the app can show it to the owner. Health warns when the newest copy is
+older than the longer of 10 minutes and 10 sync intervals, and marks it bad past the longer of an hour and that. It
+reports a stuck backup when more than 1,000 files pile up in Litestream's local level-0 folder (`unsent_files`); restart
+the server first. Point it at a bucket when you can:
 
 ```
 TICO_BACKUP_URL=s3://my-bucket/tico

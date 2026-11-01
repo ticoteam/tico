@@ -269,7 +269,7 @@ def test_a_snapshot_from_proc_docker_and_the_volume(box):
     assert {c["role"] for c in b["containers"]} == {"server", "updater"}
     assert b["db"]["size_mb"] > 0 and b["db"]["wal_mb"] is not None and b["db"]["freelist_pct"] > 0
     assert b["db"]["files_mb"] == 1.5
-    assert b["backup"] == {"age_s": 9, "detail": "litestream"}
+    assert b["backup"] == {"age_s": 9, "unsent_files": None, "detail": "litestream"}
     f = b["flight"]
     assert f["window_s"] == 300
     assert f["requests"]["count"] == 204 and f["requests"]["errors_5xx"] == 1
@@ -291,6 +291,16 @@ def test_a_snapshot_from_proc_docker_and_the_volume(box):
     assert s["flight"]["requests"]["count"] == 0
     text = json.dumps(snap)
     assert "secret probe output" not in text and "ann@example.com" not in text
+
+
+def test_a_backup_with_no_recent_copy_is_stale_and_its_pile_up_is_counted(box):
+    root = box.path("proc/4300/root/tmp")
+    root.mkdir(parents=True)
+    (root / "tico-backup-status.json").write_text(json.dumps(
+        {"last_replicated_at": None, "reason": "stuck", "unsent_files": 27914}))
+    assert cs.backup_block(box, 4300, NOW) == {"age_s": None, "stale": True, "unsent_files": 27914, "detail": "litestream"}
+    (root / "tico-backup-status.json").write_text(json.dumps({"last_replicated_at": "2026-10-30T11:59:51Z"}))
+    assert cs.backup_block(box, 4300, NOW) == {"age_s": 9, "unsent_files": None, "detail": "litestream"}
 
 
 def test_docker_runs_once_for_every_company_and_never_reads_the_environment(box):
