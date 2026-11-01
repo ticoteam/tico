@@ -25,7 +25,6 @@ from pydantic import Field
 
 from . import listening as L
 from . import outcome_stats
-from . import rooms
 from . import task_privacy as privacy
 from .privacy_index import ReadIndex
 from .bot_access import q, qlist
@@ -253,23 +252,15 @@ def guarded(c, auth, who, inner, function, columns=None):
     def bots_visible(column):
         return f"{column} NOT IN {qlist(hidden)}" if hidden else "1"
 
-    if bot:
-        conversations = (f"id IN (SELECT conversation_id FROM {inner('attempt_conversations')} "
-                         f"WHERE attempt_id={q(who.attempt_id)}) "
-                         "OR (kind='task' AND task_id IS NOT NULL AND task_id IN (SELECT id FROM tasks))")
-    else:
-        visible = [row["slug"] for row in H.bots(c) if row["slug"] not in hidden]
-        member = rooms.shared_member_bots(c, auth, who.actor, visible)
-        shared = [slug for slug in visible if slug in member]
-        room_bot = ("COALESCE(NULLIF(substr(room_key,1,instr(room_key||':',':')-1),''),"
-                    "(SELECT substr(value,5) FROM json_each(participants_json) WHERE value LIKE 'bot:%' LIMIT 1))")
-        first_human = "(SELECT value FROM json_each(participants_json) WHERE value LIKE 'human:%' LIMIT 1)"
-        participant = "1" if owner else f"EXISTS (SELECT 1 FROM json_each(participants_json) WHERE value={me})"
-        conversations = (f"CASE COALESCE(scope,'direct') WHEN 'personal' THEN COALESCE(owner_actor,{first_human})={me} "
-                         f"WHEN 'shared' THEN {room_bot} IN {qlist(shared)} ELSE {participant} END "
-                         # A task's own room is read by whoever may read the task (auth.conversation).
-                         "OR (kind='task' AND task_id IS NOT NULL)")
-        conversations = f"({conversations}) OR " + function("meeting_room") + "(id)"
+    # Who reads a thread is C1 (backend/threads.py), the same rule Auth.conversation asks in Python.
+    from . import threads
+    viewer = threads.Viewer(auth, who)
+    conversations = threads.readable_sql(
+        c, viewer, "", inner=inner, tasks="SELECT id FROM tasks",
+        meeting=lambda cid: function("meeting_room") + f"({cid})",
+        conversation=lambda cid: function("conversation") + f"({cid})")
+    # A message migrated from a shared bot room keeps that room's readers (threads.message_sql).
+    legacy_messages = threads.message_sql(c, viewer, "")
     tasks = auth.task_sql(c, who, delegations=inner("task_delegations"), unreadable=hidden)
     # Evaluate provenance only for candidate rows, never scan unrelated content first.
     msg_gate = function("message") + "(id,conversation_id,refs_json,in_reply_to)"
@@ -287,9 +278,6 @@ def guarded(c, auth, who, inner, function, columns=None):
                  function("blob") + "(v.blob_id) OR (v.attempt_id IS NOT NULL AND NOT " +
                  function("attempt") + "(v.attempt_id))))")
 
-    # Even an attempt's retained conversation grant must pass the current task gate.
-    conversations = (f"({conversations}) AND (task_id IS NULL OR kind<>'task' OR task_id IN (SELECT id FROM tasks)) AND "
-                     + function("conversation") + "(id)")
     by_task = "task_id IN (SELECT id FROM tasks)"
     # Correlate large history tables by primary key. An IN subquery materializes
     # every readable message/job/attempt before even a LIMIT 1 can return.
@@ -336,7 +324,12 @@ def guarded(c, auth, who, inner, function, columns=None):
         "conversations": conversations,
         # Rooms are the small authorization set, unlike message/run history.
         # Build their id set once rather than re-evaluate the room view per message.
-        "messages": "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND " + msg_gate,
+        "messages": ("conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND "
+                     + legacy_messages + " AND " + msg_gate),
+        # Thread membership and follows are read with their thread; mentions with their message.
+        "thread_members": "thread_id IN (SELECT id FROM conversations)",
+        "thread_followers": "thread_id IN (SELECT id FROM conversations)",
+        "message_mentions": "EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)",
         "tasks": tasks,
         "tags": tag_gate, "task_tags": by_task,
         "task_events": by_task + " AND " + content_gate(("old", "new", "note")), "task_delegations": by_task,
