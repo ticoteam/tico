@@ -421,3 +421,25 @@ def test_an_envelope_seen_twice_is_refused_the_second_time(make_side, hq):
     drive(a)
     assert texts(a, tid) == ["once"]
     assert sorted(outcomes(a, b, envelope_id)) == ["applied", "replay"]
+
+
+# ----------------------------------------------------------------------------- the CLI and the MCP tools
+PEER_COMMANDS = {
+    ("list",): "peer list", ("key",): "peer key", ("rotate-key",): "peer rotate-key",
+    ("request", "gi_" + "a" * 24): "peer request",
+    ("approve", "fp_x"): "peer approve", ("pause", "fp_x"): "peer pause", ("resume", "fp_x"): "peer resume",
+    ("revoke", "fp_x"): "peer revoke",
+    ("share", "t-1", "gi_" + "a" * 24): "peer share", ("unshare", "t-1", "gi_" + "a" * 24): "peer unshare",
+}
+
+
+def test_every_federation_command_parses_and_has_its_mcp_tool():
+    from clients import hubcli, hubtools, remotecli
+    parser = hubcli.parser()
+    for argv, fn in PEER_COMMANDS.items():
+        args = hubcli.parse(parser, ["peer", *argv])
+        assert args.fn == fn
+        assert remotecli.tool_name(fn) in hubtools.BY_NAME
+    writes = {name for name in hubtools.BY_NAME if name.startswith("hub_peer_")}
+    assert writes == {remotecli.tool_name(fn) for fn in PEER_COMMANDS.values()}
+    assert all(hubtools.BY_NAME[name]["writes"] for name in writes - {"hub_peer_list"})
