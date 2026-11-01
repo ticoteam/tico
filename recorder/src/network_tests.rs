@@ -1588,7 +1588,7 @@ fn item_send_requires_quote_review_and_filters_the_surrounding_transcript() {
             Ok(())
         })
         .unwrap();
-    let who = json!({"actor":"human:fixture","name":"Fixture"});
+    let who = json!({"actor":"human:test","name":"Fixture"});
     let (tico, seen, worker) = server(vec![
         Some(who.clone()),
         Some(who),
@@ -1624,6 +1624,9 @@ fn item_send_requires_quote_review_and_filters_the_surrounding_transcript() {
     .unwrap();
     worker.join().unwrap();
     let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[0].0.starts_with("GET /api/v2/me "));
+    assert!(requests[1].0.starts_with("GET /api/v2/me "));
     let tasks: Vec<_> = requests
         .iter()
         .filter(|r| r.0.starts_with("POST /api/v2/tasks "))
@@ -1648,7 +1651,7 @@ fn item_send_discovers_a_remote_pause_before_export() {
     let store = Store::open(dir.path()).unwrap();
     let record = transcript(&store, "Remote item pause");
     let (tico, seen, worker) = server(vec![
-        Some(json!({"actor":"human:fixture"})),
+        Some(json!({"actor":"human:test"})),
         Some(json!({"state":"paused"})),
     ]);
     store
@@ -1678,6 +1681,14 @@ fn item_send_discovers_a_remote_pause_before_export() {
             .unwrap()
             .iter()
             .all(|r| !r.0.starts_with("POST"))
+    );
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].0.starts_with("GET /api/v2/me "));
+    assert!(
+        requests[1]
+            .0
+            .starts_with("GET /api/v2/live-meetings/live-fixture ")
     );
     assert!(!store.context(&record.id).unwrap().paused_windows.is_empty());
 }
