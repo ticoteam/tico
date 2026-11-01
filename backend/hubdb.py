@@ -2606,7 +2606,7 @@ COUNT_QUARANTINE = re.compile(r"\d+ (?:refused writes|repeated refusals|refusals
 
 # A bot's latest quarantine event, and when it was last quarantined: the statements the readers below run, named so a
 # batch can seed them (prime_quarantines).
-QUARANTINE_DETAIL_SQL = "SELECT detail_json FROM events WHERE action='quarantine' AND target=? ORDER BY ts DESC LIMIT 1"
+QUARANTINE_DETAIL_SQL = "SELECT detail_json FROM events WHERE action='quarantine' AND target=? ORDER BY ts DESC, rowid DESC LIMIT 1"
 QUARANTINE_SINCE_SQL = "SELECT max(ts) AS ts FROM events WHERE action='quarantine' AND target=?"
 
 
@@ -2619,7 +2619,7 @@ def prime_quarantines(conn, slugs):
         marks = ",".join("?" * len(part))
         latest = {r["target"]: r for r in conn.execute(
             "SELECT target, detail_json FROM (SELECT target, detail_json, row_number() OVER (PARTITION BY target "
-            "ORDER BY ts DESC) AS n FROM events WHERE action='quarantine' AND target IN (" + marks + ")) WHERE n=1", part)}
+            "ORDER BY ts DESC, rowid DESC) AS n FROM events WHERE action='quarantine' AND target IN (" + marks + ")) WHERE n=1", part)}
         since = {r["target"]: r["ts"] for r in conn.execute(
             "SELECT target, max(ts) AS ts FROM events WHERE action='quarantine' AND target IN (" + marks + ") GROUP BY target",
             part)}
