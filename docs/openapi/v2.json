@@ -11285,23 +11285,29 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": [
-                "department",
-                "team",
-                "teammate",
-                "bot",
-                "person",
-                "vendor",
-                "account",
-                "place",
-                "class",
-                "project",
-                "place_class",
-                "place_project",
-                "class_project"
+              "anyOf": [
+                {
+                  "enum": [
+                    "department",
+                    "team",
+                    "teammate",
+                    "bot",
+                    "person",
+                    "vendor",
+                    "account",
+                    "place",
+                    "class",
+                    "project",
+                    "place_class",
+                    "place_project",
+                    "class_project"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "type": "string",
-              "default": "vendor",
               "title": "By"
             }
           },

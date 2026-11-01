@@ -324,9 +324,9 @@ def install(app, store, auth, mutate):
                        end: str | None = Query(None, pattern=DAY),
                        period: Literal["day", "week", "month", "quarter", "year"] = "month",
                        basis: Literal["cash", "accrual"] | None = None, compare: Literal["prior"] | None = None,
-                       top_n: int = Query(20, ge=1, le=200), by: Group = "vendor", view_as: str | None = None):
-        """One report cut to the caller's view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging
-        or spend_by. `compare=prior` adds the window before; rows past `top_n` fold into "Other · n"."""
+                       top_n: int = Query(20, ge=1, le=200), by: Group | None = None, view_as: str | None = None):
+        """One report cut to the caller's view: pnl, pnl_by, balance_sheet, cash_flow, budget_vs_actual, ap_aging,
+        ar_aging or spend_by (`by` picks the grouping; pnl_by defaults to place, spend_by to vendor). `compare=prior` adds the window before; rows past `top_n` fold into "Other · n"."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.report(c, actor, kind, start=start, end=end, period=period, basis=basis,
                                                    compare=compare, top_n=top_n, by=by))

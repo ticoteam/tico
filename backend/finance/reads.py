@@ -1223,7 +1223,7 @@ def _cash_flow(c: sqlite3.Connection, viewer: str, a: date, z: date, period: str
 
 def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None = None, end: str | None = None,
            period: str = "month", basis: str | None = None, compare: str | None = None, top_n: int = 20,
-           by: str = "vendor", at: str | None = None) -> Row:
+           by: str | None = None, at: str | None = None) -> Row:
     """One report (§7.1): pnl (accrual or cash), balance_sheet (as of `end`), cash_flow, budget_vs_actual, ap_aging,
     ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|place|class|project or a pair) or pnl_by
     (`by` place|class|project or a pair). `compare=prior` adds the window before it. Payloads are capped: `top_n` rows
@@ -1244,12 +1244,12 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
         if kind == "pnl":
             return _fold_pnl(pnl(c, viewer, p.isoformat(), q.isoformat(), period, basis or ctx.book.basis, at), top)
         if kind == "pnl_by":
-            return pnl_by(c, viewer, by, p.isoformat(), q.isoformat(), basis=basis, top_n=top, at=at)
+            return pnl_by(c, viewer, by or "place", p.isoformat(), q.isoformat(), basis=basis, top_n=top, at=at)
         if kind == "cash_flow":
             return _cash_flow(c, viewer, p, q, period, at)
         if kind == "budget_vs_actual":
             return budget_vs_actual(c, viewer, p.isoformat(), q.isoformat(), period, limit=top, at=at)
-        return spend_by(c, viewer, by, p.isoformat(), q.isoformat(), top_n=top, at=at)
+        return spend_by(c, viewer, by or "vendor", p.isoformat(), q.isoformat(), top_n=top, at=at)
     out: Row = {"kind": kind, **one(a, z)}
     if compare == "prior":
         p, q = _prior(a, z)

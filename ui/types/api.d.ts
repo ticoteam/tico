@@ -5936,7 +5936,7 @@ export type GetFinancePnlResponse = FinancePnl;
 /** GET /api/v2/finance/reports/{kind} */
 export type GetFinanceReportParams = {
   basis?: "cash" | "accrual" | null;
-  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account" | "place" | "class" | "project" | "place_class" | "place_project" | "class_project";
+  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account" | "place" | "class" | "project" | "place_class" | "place_project" | "class_project" | null;
   compare?: "prior" | null;
   end?: string | null;
   kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
