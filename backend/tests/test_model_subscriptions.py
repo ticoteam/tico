@@ -583,10 +583,23 @@ def hold_plan(api, sid, until="2999-01-01T00:00:00.000000Z"):
                               "until": until, "since": H.now(), "error": CLAUDE_LIMIT})
 
 
-def hold_own_login(api, m, until="2999-01-01T00:00:00.000000Z"):
+def hold_own_login(api, m, until="2999-01-01T00:00:00.000000Z", runtime="claude"):
     with api.app.state.store.transaction() as c:
-        login_holds._save(c, {"runner_id": m["runner_id"], "profile": "", "runtime": "claude", "until": until,
+        login_holds._save(c, {"runner_id": m["runner_id"], "profile": "", "runtime": runtime, "until": until,
                               "since": H.now(), "error": CLAUDE_LIMIT})
+
+
+def hold_queued(api, bot="ops", until="2999-01-01T00:00:00.000000Z"):
+    """The bot is limited and its queued work waits until `until`, as a limit with a named reset leaves it."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET held=1,hold_until=?,wake_class='quota-reset' WHERE bot=? AND state='queued'",
+                  (until, bot))
+        H.status_set(c, H.KEEPER, bot, state="limited", focus="Usage limit", reason="test")
+
+
+def queued_until(api, bot="ops"):
+    with api.app.state.store.read() as c:
+        return [tuple(r) for r in c.execute("SELECT held,hold_until FROM jobs WHERE bot=? AND state='queued'", (bot,))]
 
 
 def test_switching_a_computer_to_another_plan_frees_a_bot_limited_on_the_old_one(api):
@@ -703,3 +716,75 @@ def test_removing_the_plan_a_bot_is_limited_on_frees_it_to_the_computers_own_log
     assert status(api)["state"] != "limited" and queued_holds(api) == [(0, "quota-reset")]
     turn = claim(api, m)
     assert turn and turn["bot"] == "ops" and signed_with(api, turn) is None
+
+
+def test_a_switch_re_judges_a_bot_whose_named_fallback_runs_the_runtime_and_keeps_it_held_until_the_fallback_can_run(api):
+    # The bot's primary is Codex, held on its own login; its named fallback is Claude. Switching Claude's plan re-judges
+    # the bot (it runs Claude as its fallback), and it is freed only when that fallback can take the turn.
+    setup(api)
+    company(api)
+    on(api, "ops", "codex", "gpt-6.1-sol")
+    with api.app.state.store.transaction() as c:
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config["fallback"] = {"harness": "claude", "model": "claude-sonnet-5-5"}
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps(config),))
+    plan_a, plan_b = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
+    m = machine(api, signed_in=True)                  # Claude is ready on its own login
+    give(api, m, "claude", plan_a)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    hold_own_login(api, m, runtime="codex")           # the primary is held
+    hold_queued(api)
+    # Plan B is held and the computer's own Claude login is held too: the fallback cannot take the turn, so it stays.
+    hold_plan(api, plan_b)
+    hold_own_login(api, m)
+    give(api, m, "claude", plan_b)
+    assert status(api)["state"] == "limited" and queued_holds(api) == [(1, "quota-reset")]
+    # Plan B taken off and the Claude login free: the fallback runs the turn on the computer's own login, so it is freed.
+    with api.app.state.store.transaction() as c:
+        login_holds.clear(c, m["runner_id"], "", "claude")
+    give(api, m, "claude", None)
+    assert status(api)["state"] != "limited" and queued_holds(api) == [(0, "quota-reset")]
+
+
+def test_a_held_own_login_keeps_the_bot_limited_and_its_job_waits_for_that_login_not_the_replaced_plan(api):
+    from backend import wake_presets
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    plan_a = add(api, name="Plan A")["id"]
+    m = machine(api)
+    limited_on(api, m, plan_a)
+    plan_end, own_end = "2999-01-01T20:00:00.000000Z", "2999-01-01T19:00:00.000000Z"
+    hold_plan(api, plan_a, until=plan_end)
+    hold_queued(api, until=plan_end)
+    hold_own_login(api, m, until=own_end)
+    give(api, m, "claude", None)                      # plan A taken off; the computer's own login is held until 19:00
+    assert status(api)["state"] == "limited" and queued_holds(api) == [(1, "quota-reset")]
+    assert queued_until(api) == [(1, own_end)]
+    with api.app.state.store.transaction() as c:
+        wake_presets.release_quota_resets(c, at="2999-01-01T18:59:59.000000Z")
+    assert queued_until(api) == [(1, own_end)]
+    with api.app.state.store.transaction() as c:
+        wake_presets.release_quota_resets(c, at=own_end)
+    assert queued_until(api) == [(0, own_end)]
+
+
+def test_a_branch_runs_its_originals_runtime_now_not_the_runtime_it_stored(api):
+    # The branch's stored config still says Claude, but it follows its original, which runs Codex now: a Claude plan
+    # switch leaves it alone.
+    setup(api)
+    company(api)
+    on(api, "cpo", "codex", "gpt-6.1-sol")
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    plan_a, plan_b = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
+    m = machine(api, signed_in=True)
+    assign(api, m, "cpo")
+    with api.app.state.store.transaction() as c:      # made a branch of cpo once it is on this computer
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+                  (json.dumps({**config, "shared_from": "cpo"}),))
+    give(api, m, "claude", plan_a)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    hold_queued(api)
+    give(api, m, "claude", plan_b)
+    assert status(api)["state"] == "limited" and queued_holds(api) == [(1, "quota-reset")]
