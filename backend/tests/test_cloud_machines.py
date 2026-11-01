@@ -1323,3 +1323,90 @@ def test_a_runner_still_updating_keeps_its_machine_up_past_the_idle_time(cloud, 
     cloud.at[0] = cloud.row()["active_at"] + CM.UPDATE_STALE + 60   # no report since: a dead runner's last word
     cloud.tick()
     assert cloud.hq.actions()[-1] == "stop"
+
+
+def test_decide_holds_every_stop_but_out_of_credit_while_its_runner_is_updating():
+    """Paused, drained, moved or no bot left: the machine stops, but not under an update still under way."""
+    on = machine_row(state="running", active_at=1000, heartbeat_at=1000)
+    assert CM.decide(on, facts(active=False), 1100, 300) == ("stop", None)
+    assert CM.decide(on, facts(active=False, updating=True), 1100, 300) == ("heartbeat", None)
+    assert CM.decide({**on, "heartbeat_at": 1090}, facts(active=False, updating=True), 1100, 300) == (None, None)
+    # Out of credit HQ stops it itself: holding it would only spend credit there is none of.
+    assert CM.decide(on, facts(frozen=True, updating=True), 1100, 300) == ("stop", "out_of_credit")
+
+
+def test_a_drained_bot_does_not_get_its_machine_stopped_mid_update(cloud, monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    idle(cloud)
+    reported(cloud, computer, "0.5.20", update="updating")
+    draining(cloud, "ops", 1)
+    cloud.hq.calls.clear()
+    cloud.tick(60)
+    assert cloud.hq.actions() == ["heartbeat"]                  # drained, but its runner is mid-update
+    cloud.at[0] += CM.UPDATE_STALE                              # no report since: a dead runner's last word
+    cloud.tick()
+    assert cloud.hq.actions()[-1] == "stop"
+
+
+def ran_since(cloud, release, at):
+    """This server first ran `release` at `at` (epoch seconds), as releases.record_start writes it at startup."""
+    from datetime import datetime, timezone
+    since = datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    with cloud.store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
+                  ("release-history", json.dumps([{"version": "0.5.20", "since": "2026-01-01T00:00:00Z"},
+                                                  {"version": release, "since": since}])))
+
+
+def test_update_wakes_are_spread_per_computer_and_release_and_never_reshuffled():
+    offsets = {CM.spread(f"r{i}", "0.5.21") for i in range(200)}
+    assert all(0 <= o < CM.UPDATE_SPREAD_S for o in offsets) and len(offsets) > 100
+    assert CM.spread("r1", "0.5.21") == CM.spread("r1", "0.5.21")              # a restart moves nothing
+    assert any(CM.spread(f"r{i}", "0.5.21") != CM.spread(f"r{i}", "0.5.22") for i in range(5))
+
+
+def test_an_update_wake_waits_for_its_spread_after_the_release_and_work_does_not(cloud, monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    reported(cloud, computer, "0.5.20")
+    stopped_when_idle(cloud)
+    cloud.at[0] = float(int(cloud.at[0]))
+    offset = CM.spread(computer["runner_id"], "0.5.21")
+    ran_since(cloud, "0.5.21", cloud.at[0] - offset + 30)      # its update wake is due 30 seconds from now
+    assert cloud.tick(10) == [] and cloud.tick(10) == []
+    assert cloud.tick(15) == ["start"] and cloud.row()["wake_key"] == "update:0.5.21"
+    # Work during the spread wakes it at once, as ever; its runner updates once up (it follows this server).
+    stopped_when_idle(cloud)
+    ran_since(cloud, "0.5.22", cloud.at[0] - CM.spread(computer["runner_id"], "0.5.22") + 300)
+    monkeypatch.setenv("TICO_VERSION", "0.5.22")
+    assert cloud.tick(10) == []
+    work(cloud)
+    assert cloud.tick(10) == ["start"] and cloud.row()["wake_key"].startswith("job:")
+
+
+def test_owners_and_admins_delete_a_broken_shared_machine_and_the_next_work_makes_a_new_one(cloud):
+    old = shared_enrolled(cloud, "ops", "finance")
+    post(cloud.api, "cloud-machines/shared", {"size": "large"}, token="ben-test")
+    machine = cloud.row(CM.SHARED)["machine_id"]
+    url = "/api/v2/cloud-machines/shared"
+    assert cloud.api.delete(url, headers=headers("cara-test")).status_code == 403
+    cloud.hq.fail["delete"] = [CM.Refused("unreachable")]
+    assert cloud.api.delete(url, headers=headers("ben-test")).status_code == 502
+    assert cloud.row(CM.SHARED)["machine_id"] == machine                # HQ first: nothing changed, try again
+    delete = cloud.api.delete(url, headers=headers("ben-test"))
+    assert delete.status_code == 200, delete.text
+    assert cloud.hq.calls[-1] == ("delete", machine)
+    shared = cloud.row(CM.SHARED)
+    assert (shared["machine_id"], shared["runner_id"], shared["state"], shared["size"]) == (None, None, "none", "large")
+    with cloud.store.read() as c:
+        assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (old,)).fetchone()["revoked_at"]
+    assert get(cloud.api, "cloud-machines")["shared"]["bots"] == ["finance", "ops"]     # members stay members
+    assert cloud.api.delete(url, headers=headers("ben-test")).status_code == 404
+    # A member's next work makes a fresh one at the company's size, and its members go onto it.
+    cloud.hq.calls.clear()
+    work(cloud, "finance")
+    assert cloud.tick(10) == ["create"] and cloud.hq.calls[-1][1:3] == (CM.SHARED, "large")
+    new = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm",
+                                             "platform": "linux"})["runner_id"]
+    assert placed(cloud)["ops"] == new and placed(cloud)["finance"] == new
