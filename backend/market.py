@@ -588,6 +588,16 @@ def _resolve_existing(conn, name, aliases, external_ids):
             and _keys(item["name"], item["aliases"], item["external_ids"]) & keys]
 
 
+def _growth_follows(conn, actor, segment_id):
+    """A segment's Us edge or Next flag moved: its Growth row follows (backend/strategy_market.py)."""
+    from . import strategy_market
+    strategy_market.follow_graph(conn, actor, segment_id)
+
+
+def _plays_in(row):
+    return row and row["rel"] == "operates_in" and row["src"] == OWN_COMPANY_ID
+
+
 def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, tier=None, summary="",
                   properties=None, last_verified=None, evidence_ids=None, force=False, insight_id=None,
                   entity_id=None):
@@ -676,6 +686,9 @@ def update_entity(conn, actor, entity_id, *, name=None, aliases=None, external_i
     conn.execute(f"UPDATE market_entities SET {', '.join(assignments)}, updated=:updated WHERE id=:id", args)
     if ids and actor != SEED_ACTOR:
         _cite(conn, actor, "entity", entity_id, ids, insight_id)
+    if row["type"] == "segment" and ("status" in changes or (
+            "properties" in changes and bool(changes["properties"].get("next")) != bool(row["properties"].get("next")))):
+        _growth_follows(conn, actor, entity_id)
     return entity(conn, entity_id), events
 
 
@@ -711,6 +724,8 @@ def create_edge(conn, actor, *, src, rel, dst, since=None, until=None, confidenc
     events = [_event(conn, "edge", eid, actor, "created", None, f"{src} {rel} {dst}", insight_id)]
     if ids:
         _cite(conn, actor, "edge", eid, ids, insight_id)
+    if _plays_in(row):
+        _growth_follows(conn, actor, dst)
     return edge(conn, eid), events
 
 
@@ -763,7 +778,10 @@ def update_edge(conn, actor, edge_id, *, since=None, until=None, confidence=None
     conn.execute(f"UPDATE market_edges SET {sets}, updated=:updated WHERE id=:id", args)
     if ids:
         _cite(conn, actor, "edge", edge_id, ids, insight_id)
-    return edge(conn, edge_id), events
+    after = edge(conn, edge_id)
+    if _plays_in(row) or _plays_in(after):
+        _growth_follows(conn, actor, row["dst"])
+    return after, events
 
 
 def merge_entities(conn, actor, entity_id, into_id, insight_id=None):

@@ -27,8 +27,9 @@ alias, and makes one under the market's root when there is none. **Where we play
 a serving segment is Us and a next one is Next, and a click there sets the status here. Several of each are allowed.
 
 Channels and ideas name the segments they reach (`segments`). A cohort may be one segment's share of a channel's month
-(`segment_id`). Economics for one segment (`?segment=`) reads only its rows. Without a segment, every row counts, and a
-channel's rows for several segments are added into one. The GTM summary bots read names the serving and testing
+(`segment_id`). Economics for one segment (`?segment=`) reads only its rows. Without a segment, a channel's row with no segment is
+its whole month when it has one (segment rows beside it are a breakdown, not added again); otherwise its segment rows
+are added into one. The GTM summary bots read names the serving and testing
 segments.
 
 The owner and admins add segments and change any field, status included. A bot adds a `testing` segment and changes a

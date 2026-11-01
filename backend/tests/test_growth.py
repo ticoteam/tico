@@ -429,6 +429,15 @@ def test_channels_ideas_and_cohorts_name_segments_and_economics_splits_by_one(ap
     get(api, "growth/economics?segment=nope", expected=404)
     assert {s["id"]: s["new_customers_last_month"] for s in get(api, "growth/segments")["segments"]} == \
         {homes["id"]: 50, pms["id"]: 10}
+    # A channel's row with no segment is its whole month; segment rows beside it are a breakdown, not more.
+    for seg_id, spend, new in ((None, 1000, 100), (homes["id"], 600, 60), (pms["id"], 400, 40)):
+        put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-09", "segment_id": seg_id,
+                                    "spend": spend, "new_customers": new})
+    whole = get(api, "growth/economics?month=2026-09")
+    assert [(r["spend"], r["new_customers"]) for r in whole["rows"] if r["channel"] == "google-search"] == [(1000, 100)]
+    assert whole["total"]["new_customers"] == 100 and whole["total"]["spend"] == 1000
+    part = get(api, f"growth/economics?month=2026-09&segment={homes['id']}")
+    assert (part["rows"][0]["spend"], part["rows"][0]["new_customers"]) == (600, 60)
 
 
 def test_a_member_cannot_move_the_north_star_off_a_kpi_they_may_not_edit_nor_read_a_hidden_one(api):

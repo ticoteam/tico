@@ -4,8 +4,11 @@ in one click each. They are the market graph's own rows (backend/market.py, back
 - a segment the team plays in (**Us**) is `company/self` `operates_in` it, and one it means to enter next (**Next**)
   is `next: true` on the segment's properties, as the company file's import writes them (backend/company_import.py).
   Several of each. They mirror the Growth segments (backend/growth.py): Us is a segment `serving`, Next one `next`.
-  `set_status` is the one write that keeps both in step, for the Growth routes and for a click here;
-- removing a segment retires it (its Growth row, if any, is dropped); its sub-segments move up to its parent;
+  `set_status` is the one write that keeps both in step, for the Growth routes and for a click here. A write
+  straight to the graph (the market routes, an import) moves the Growth row too (`follow_graph`): Us makes it
+  serving, Next next, and losing both drops a serving or next one. Only people set these: a bot is refused here;
+- removing a segment retires it and clears its Next (its Growth row, if any, is dropped); its sub-segments move up
+  to its parent;
 - a competitor is a company or product with a current `competes_with` edge to `company/self`, either way round.
   Removing one ends those edges (the company stays in the graph); adding one by name or site finds the company the
   graph already has, or makes it, and adds the edge.
@@ -15,6 +18,7 @@ starts today, so a competitor removed and added again is a new edge beside the e
 evidence row: the owner's say-so on this page (or on the Growth page). Only the owner and the Librarian write here
 (`market.require_writer`); the Growth routes check their own rule.
 """
+import contextvars
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Literal
@@ -32,6 +36,8 @@ EVIDENCE = "strategy.page"
 GROWTH_EVIDENCE = "growth.segments"
 STATUSES = ("serving", "testing", "next", "dropped")
 COMPETITORS_MAX = 40
+# Set while `mirror` writes the graph, so `follow_graph` leaves the Growth row to `set_status`.
+_MIRRORING = contextvars.ContextVar("strategy_market_mirroring", default=False)
 SITE = re.compile(r"^(https?://)?([a-z0-9-]+(\.[a-z0-9-]+)+)(:\d+)?(/\S*)?$", re.I)
 
 
@@ -79,6 +85,14 @@ def _segment(c, segment_id):
 def mirror(c, actor, segment_id, status, company="", growth=False):
     """Where we play as a Growth status says: `serving` is Us, `next` is Next, anything else (or None) neither. Only
     what differs is written."""
+    token = _MIRRORING.set(True)
+    try:
+        _mirror(c, actor, segment_id, status, company, growth)
+    finally:
+        _MIRRORING.reset(token)
+
+
+def _mirror(c, actor, segment_id, status, company, growth):
     seg = _segment(c, segment_id)
     ev = None
 
@@ -119,6 +133,27 @@ def set_status(c, actor, segment_id, status, company="", growth=False, create=Tr
     if status not in STATUSES:
         raise Problem("validation", f"status is {'|'.join(STATUSES)}", 422)
     mirror(c, actor, segment_id, status, company, growth)
+    return _put(c, actor, segment_id, status, create)
+
+
+def follow_graph(c, actor, segment_id):
+    """After a write straight to the graph (backend/market.py) touched a segment's Us edge or Next flag: its Growth
+    row follows. Us is serving and Next next (a row is made if none); neither drops a serving or next row and leaves
+    a testing or dropped one."""
+    if _MIRRORING.get():
+        return
+    seg = MK.entity(c, segment_id)
+    if not seg or seg["type"] != "segment":
+        return
+    now = placed(c, segment_id) if seg["status"] == "active" else None
+    row = growth_row(c, segment_id)
+    if now:
+        _put(c, actor, segment_id, now, True)
+    elif row and row["status"] in ("serving", "next"):
+        _put(c, actor, segment_id, "dropped", False)
+
+
+def _put(c, actor, segment_id, status, create):
     row = growth_row(c, segment_id)
     now = H.now()
     if row and row["status"] != status:
@@ -165,12 +200,13 @@ def remove_segment(c, actor, segment_id):
             MK.create_edge(c, actor, src=edge["src"], rel="member_of", dst=parent, since=today, evidence_ids=ev)
     for edge in _current(c, "src=? OR dst=?", (segment_id, segment_id)):
         _end(c, actor, edge, ev)
+    props = MK.entity(c, segment_id)["properties"]
+    if "next" in props:                                  # added again later, it is not Next until someone says so
+        MK.update_entity(c, actor, segment_id, properties={k: v for k, v in props.items() if k != "next"},
+                         evidence_ids=ev)
     MK.retire_entity(c, actor, segment_id)
-    row = growth_row(c, segment_id)
-    if row and row["status"] != "dropped":
-        c.execute("UPDATE growth_segments SET status='dropped', updated_at=?, updated_by=? WHERE id=?",
-                  (H.now(), actor, row["id"]))
-        H.event(c, actor, "growth.segment.update", row["id"], {"segment_id": segment_id, "status": "dropped"})
+    if growth_row(c, segment_id):
+        _put(c, actor, segment_id, "dropped", False)
     return {"id": segment_id, "removed": True}
 
 
@@ -258,6 +294,9 @@ def install(app, store, auth, mutate):
 
         def work(c):
             writer(who)
+            if who.role == "bot":
+                raise Problem("forbidden", "Only a person marks a segment Us or Next; propose it to the owner instead",
+                              403)
             return target(c, who.actor, body.id, body.target, company())
 
         return mutate(request, body, work)

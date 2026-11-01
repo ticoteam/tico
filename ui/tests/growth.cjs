@@ -293,11 +293,11 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await flat(page, `${tag}: Where we play`);
   await snap(page, `${tag}-09b-where-we-play`);
 
-  // Channels narrowed to property managers: only their split-out month counts (2 new against 14 in all).
+  // Channels narrowed to property managers: only their split-out month counts (2 new of the channel's 12; the row with no segment is its whole month).
   await go(page, '#/growth/channels');
   const newCell = () => page.locator('tr:has([data-gc-row="google-ads"]) td').nth(2).innerText();
   await page.locator('[data-gc-seg]').waitFor({timeout: t(10000)});
-  assert.equal((await newCell()).trim(), '14', `${tag}: every row counts with All segments`);
+  assert.equal((await newCell()).trim(), '12', `${tag}: All segments reads the channel's whole month, not it plus its breakdown`);
   await page.locator('[data-gc-seg]').selectOption(segs.pms);
   await page.waitForFunction(() => location.hash.includes('s=') && document.querySelectorAll('tr:has([data-gc-row="google-ads"]) td')[2]?.textContent.trim() === '2',
     null, {timeout: t(10000)}).catch(async () => assert.fail(`${tag}: one segment's numbers (${await newCell()})`));

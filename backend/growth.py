@@ -468,8 +468,9 @@ def guardrails(c, hidden=()):
 
 
 def economics(c, month=None, hidden=(), segment=None):
-    """One month by channel. With `segment` (a growth segment id or its market segment id) only that segment's rows;
-    without, every row, a channel's rows for several segments added together into one."""
+    """One month by channel. With `segment` (a growth segment id or its market segment id) only that segment's rows.
+    Without, one row a channel: its row with no segment, which is the channel's whole month when it has one (the
+    segment rows beside it are a breakdown), else its segment rows added together."""
     seg = None
     if segment:
         seg = segment_row(c, segment)
@@ -482,9 +483,11 @@ def economics(c, month=None, hidden=(), segment=None):
     by_slug = {r["slug"]: r for r in H._rows(c.execute("SELECT * FROM growth_channels"))}
     rows, inputs, groups = [], [], {}
     for cohort in (cohorts(c, month=month, limit=COHORTS_MAX, segment=seg["id"] if seg else None) if month else []):
-        inputs.append(cohort)
         groups.setdefault(cohort["channel"], []).append(cohort)
     for slug, group in groups.items():
+        whole = [g for g in group if not g.get("segment_id")]
+        group = whole or group
+        inputs += group
         ch = by_slug.get(slug) if slug else None
         if len(group) > 1:
             sources = {}
