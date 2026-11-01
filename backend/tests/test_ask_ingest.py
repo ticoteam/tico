@@ -1115,3 +1115,19 @@ def test_a_settings_failure_before_the_verdict_keeps_the_failed_open_record(gate
     assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, "error")
     assert item["ref"] == out["task"]["id"] and item["call_id"] is None
     assert not calls(api) and not model.calls
+
+
+def test_a_settings_read_that_always_fails_still_lands_a_failed_open_row(gate, monkeypatch):
+    """The settings read fails on every call, in preflight and again inside the write: the create still succeeds,
+    and its one row is a failed open with no judge call (Dev 702 QA retest)."""
+    api, model, token = gate
+
+    def always_fails(c, person):
+        raise RuntimeError("settings unreadable")
+    monkeypatch.setattr(A, "settings", always_fails)
+    out = file(api, token)
+    assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    [item] = items(api)
+    assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, "error")
+    assert item["ref"] == out["task"]["id"] and item["call_id"] is None
+    assert not calls(api) and not model.calls
