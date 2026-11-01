@@ -273,16 +273,30 @@ struct Net {
     len: u8,
 }
 
+/// One interface address as getifaddrs reports it: the address, its netmask's length, and the far end of a
+/// point-to-point link.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Iface {
+    addr: IpAddr,
+    len: u8,
+    peer: Option<IpAddr>,
+}
+
 impl Net {
-    /// The on-link scope of an interface address. On IPv6 a home's devices and router have global addresses in the
-    /// same /64 whatever the interface reports, so the scope is never narrower than /64. A prefix shorter than /8 (IPv4)
-    /// or /32 (IPv6), which a tunnel can report, is taken as that, not as the whole internet.
+    fn exact(addr: IpAddr) -> Net {
+        Net { addr, len: if addr.is_ipv4() { 32 } else { 128 } }
+    }
+
+    /// The on-link scope of an interface address. IPv4: its network when that is /16 or narrower; a wider one is a
+    /// tunnel's or a default scope, so only the address itself (private home networks are refused by the registry
+    /// anyway). IPv6: a global address's /64 whatever the netmask says, since a home's devices and router hold public
+    /// addresses in it; any other IPv6 address only itself.
     fn interface(addr: IpAddr, len: u8) -> Net {
-        let len = match addr {
-            IpAddr::V4(_) => len.clamp(8, 32),
-            IpAddr::V6(_) => len.clamp(32, 64),
-        };
-        Net { addr, len }
+        match addr {
+            IpAddr::V4(_) if (16..=32).contains(&len) => Net { addr, len },
+            IpAddr::V6(v6) if v6.segments()[0] & 0xe000 == 0x2000 => Net { addr, len: 64 },
+            _ => Net::exact(addr),
+        }
     }
 
     fn contains(&self, ip: IpAddr) -> bool {
@@ -295,8 +309,8 @@ impl Net {
 }
 
 /// Why `ip` is refused as a neighbour: inside a network one of this computer's interfaces is on (a device at home,
-/// the router's global IPv6 address), or a default gateway. The IPv4 address a NAT64 or 6to4 address reaches counts
-/// too.
+/// the router's global IPv6 address), a point-to-point peer, or a default gateway. The IPv4 address a NAT64 or 6to4
+/// address reaches counts too.
 fn on_link(ip: IpAddr, nets: &[Net]) -> Option<&'static str> {
     let ip = canonical(ip);
     let targets = [Some(ip), carried_v4(ip).map(IpAddr::V4)];
@@ -307,18 +321,26 @@ fn on_link(ip: IpAddr, nets: &[Net]) -> Option<&'static str> {
         .then_some("on this computer's own network")
 }
 
-/// The networks this computer is on: its interfaces' prefixes and its default gateways. Read at every dial, so a
-/// laptop that changes networks is never judged by the old one.
-fn own_networks() -> Vec<Net> {
-    let mut nets = interfaces().into_iter().map(|(addr, len)| Net::interface(canonical(addr), len)).collect::<Vec<_>>();
-    nets.extend(gateways().into_iter().map(|addr| Net { addr, len: if addr.is_ipv4() { 32 } else { 128 } }));
+/// The networks an interface list and gateway list make: each interface's on-link scope, each point-to-point peer
+/// and each gateway, exactly.
+fn networks(ifaces: &[Iface], gateways: &[IpAddr]) -> Vec<Net> {
+    let mut nets = Vec::new();
+    for iface in ifaces {
+        nets.push(Net::interface(canonical(iface.addr), iface.len));
+        nets.extend(iface.peer.map(|peer| Net::exact(canonical(peer))));
+    }
+    nets.extend(gateways.iter().map(|gw| Net::exact(canonical(*gw))));
     nets
 }
 
-/// The default gateways, from the kernel's routing tables on Linux. On macOS they aren't read: an IPv4 gateway is
-/// inside the interface's own network, and an IPv6 router is reached at its link-local address (refused) or at a
-/// global one inside the interface's /64, both covered by `on_link`.
-fn gateways() -> Vec<IpAddr> {
+/// The networks this computer is on, read at every dial so a laptop that changes networks is never judged by the
+/// old one (macOS gateways are at most a minute old).
+async fn own_networks() -> Vec<Net> {
+    networks(&interfaces(), &gateways().await)
+}
+
+/// The default gateways: from the kernel's routing tables on Linux, from `route` on macOS.
+async fn gateways() -> Vec<IpAddr> {
     let mut out = Vec::new();
     if let Ok(table) = std::fs::read_to_string("/proc/net/route") {
         out.extend(gateways_v4(&table));
@@ -326,7 +348,42 @@ fn gateways() -> Vec<IpAddr> {
     if let Ok(table) = std::fs::read_to_string("/proc/net/ipv6_route") {
         out.extend(gateways_v6(&table));
     }
+    if cfg!(target_os = "macos") {
+        out.extend(mac_gateways().await);
+    }
     out
+}
+
+/// How long macOS gateways are kept, so a dial doesn't start a process each time.
+const GATEWAYS_KEPT: Duration = Duration::from_secs(60);
+
+fn mac_gateways_cache() -> &'static Mutex<Option<(Instant, Vec<IpAddr>)>> {
+    static CACHE: OnceLock<Mutex<Option<(Instant, Vec<IpAddr>)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+/// macOS default gateways from `/sbin/route` (absolute path, no shell, empty environment), kept for a minute.
+async fn mac_gateways() -> Vec<IpAddr> {
+    if let Some((at, gws)) = mac_gateways_cache().lock().unwrap().as_ref() {
+        if at.elapsed() < GATEWAYS_KEPT {
+            return gws.clone();
+        }
+    }
+    let mut gws = Vec::new();
+    for args in [&["-n", "get", "default"][..], &["-n", "get", "-inet6", "default"][..]] {
+        let run = tokio::process::Command::new("/sbin/route").args(args).env_clear().kill_on_drop(true).output();
+        if let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(2), run).await {
+            gws.extend(route_gateway(&String::from_utf8_lossy(&out.stdout)));
+        }
+    }
+    *mac_gateways_cache().lock().unwrap() = Some((Instant::now(), gws.clone()));
+    gws
+}
+
+/// The `gateway:` line of `route -n get` output, when it is an address (not `link#N`); an IPv6 zone is dropped.
+fn route_gateway(out: &str) -> Option<IpAddr> {
+    let value = out.lines().find_map(|line| line.trim().strip_prefix("gateway:"))?.trim();
+    value.split('%').next()?.parse().ok()
 }
 
 /// /proc/net/route: `Iface Destination Gateway ...`, each address its network-order bytes printed as a native integer.
@@ -352,11 +409,28 @@ fn gateways_v6(table: &str) -> Vec<IpAddr> {
 
 /// This computer's interface addresses.
 pub fn own_addresses() -> Vec<IpAddr> {
-    interfaces().into_iter().map(|(addr, _)| addr).collect()
+    interfaces().into_iter().map(|iface| iface.addr).collect()
 }
 
-/// Each interface address with its prefix length (from its netmask; full length when there is none).
-fn interfaces() -> Vec<(IpAddr, u8)> {
+/// An IPv4 or IPv6 socket address as an IP, or None for another family or a null pointer.
+///
+/// SAFETY: `sa` is null or points at a sockaddr getifaddrs filled in, at least as long as its family says.
+unsafe fn sockaddr_ip(sa: *const libc::sockaddr) -> Option<IpAddr> {
+    if sa.is_null() {
+        return None;
+    }
+    match (*sa).sa_family as i32 {
+        libc::AF_INET => {
+            Some(IpAddr::V4(Ipv4Addr::from(u32::from_be((*(sa as *const libc::sockaddr_in)).sin_addr.s_addr))))
+        }
+        libc::AF_INET6 => Some(IpAddr::V6(Ipv6Addr::from((*(sa as *const libc::sockaddr_in6)).sin6_addr.s6_addr))),
+        _ => None,
+    }
+}
+
+/// Each interface address with its prefix length (from its netmask; full length when there is none) and, on a
+/// point-to-point link, the peer's address.
+fn interfaces() -> Vec<Iface> {
     let mut out = Vec::new();
     // SAFETY: getifaddrs hands back a list this function walks read-only and frees once.
     unsafe {
@@ -366,30 +440,20 @@ fn interfaces() -> Vec<(IpAddr, u8)> {
         }
         let mut cur = head;
         while !cur.is_null() {
-            let (addr, mask) = ((*cur).ifa_addr, (*cur).ifa_netmask);
-            if !addr.is_null() {
-                match (*addr).sa_family as i32 {
-                    libc::AF_INET => {
-                        let sin = addr as *const libc::sockaddr_in;
-                        let len = if mask.is_null() {
-                            32
-                        } else {
-                            u32::from_be((*(mask as *const libc::sockaddr_in)).sin_addr.s_addr).count_ones() as u8
-                        };
-                        out.push((IpAddr::V4(Ipv4Addr::from(u32::from_be((*sin).sin_addr.s_addr))), len));
-                    }
-                    libc::AF_INET6 => {
-                        let sin6 = addr as *const libc::sockaddr_in6;
-                        let len = if mask.is_null() {
-                            128
-                        } else {
-                            u128::from_be_bytes((*(mask as *const libc::sockaddr_in6)).sin6_addr.s6_addr).count_ones()
-                                as u8
-                        };
-                        out.push((IpAddr::V6(Ipv6Addr::from((*sin6).sin6_addr.s6_addr)), len));
-                    }
-                    _ => {}
-                }
+            if let Some(addr) = sockaddr_ip((*cur).ifa_addr) {
+                let len = match sockaddr_ip((*cur).ifa_netmask) {
+                    Some(IpAddr::V4(mask)) => u32::from(mask).count_ones() as u8,
+                    Some(IpAddr::V6(mask)) => u128::from(mask).count_ones() as u8,
+                    None if addr.is_ipv4() => 32,
+                    None => 128,
+                };
+                #[cfg(any(target_os = "linux", target_os = "android"))]
+                let dst = (*cur).ifa_ifu;
+                #[cfg(not(any(target_os = "linux", target_os = "android")))]
+                let dst = (*cur).ifa_dstaddr;
+                let p2p = (*cur).ifa_flags & libc::IFF_POINTOPOINT as libc::c_uint != 0;
+                let peer = if p2p { sockaddr_ip(dst) } else { None };
+                out.push(Iface { addr, len, peer });
             }
             cur = (*cur).ifa_next;
         }
@@ -420,7 +484,7 @@ pub async fn dial(host: &str, port: u16) -> Result<TcpStream, String> {
         .map_err(|_| format!("{host} did not resolve in time"))?
         .map_err(|_| format!("{host} does not resolve"))?
         .collect();
-    let (deny, nets) = (own_and_seen(), own_networks());
+    let (deny, nets) = (own_and_seen(), own_networks().await);
     let mut why = None;
     let allowed: Vec<SocketAddr> = resolved
         .into_iter()
@@ -1578,12 +1642,18 @@ mod tests {
     #[test]
     fn neighbours_and_the_router_on_the_exits_own_networks_are_refused() {
         let ip = |s: &str| s.parse::<IpAddr>().unwrap();
-        // A home with a public IPv6 /64 (reported as /128, as a temporary address can be) and a public IPv4 /24.
-        let nets = [
-            Net::interface(ip("2a01:4f8:1:2::10"), 128),
-            Net::interface(ip("81.2.69.10"), 24),
-            Net::interface(ip("2a02:1:2::7"), 0),
+        let iface = |addr: &str, len: u8| Iface { addr: ip(addr), len, peer: None };
+        // A home with a public IPv6 /64 (reported as /128, as a temporary address can be) and a public IPv4 /24, plus
+        // tunnels reporting /0 and a /48 that must not widen into whole ranges of the internet.
+        let ifaces = [
+            iface("2a01:4f8:1:2::10", 128),
+            iface("81.2.69.10", 24),
+            iface("192.168.50.2", 0),
+            iface("81.3.0.9", 15),
+            iface("2606:4700:110::2", 0),
+            iface("2a02:1:2::7", 48),
         ];
+        let nets = networks(&ifaces, &[]);
         for refused in [
             "2a01:4f8:1:2::99",
             "2a01:4f8:1:2:aaaa:bbbb:cccc:dddd",
@@ -1592,21 +1662,40 @@ mod tests {
             "81.2.69.200",
             "::ffff:81.2.69.200",
             "64:ff9b::5102:4501",
-            "2a02:1:ffff::1",
+            "81.3.0.9",
+            "2606:4700:110::5",
+            "2a02:1:2::99",
         ] {
             assert_eq!(on_link(ip(refused), &nets), Some("on this computer's own network"), "{refused}");
         }
-        for allowed in ["2a01:4f8:1:3::99", "2606:4700::1111", "81.2.70.1", "93.184.215.14", "64:ff9b::5db8:d70e"] {
+        for allowed in [
+            "2a01:4f8:1:3::99",
+            "2606:4700::1111",
+            "192.0.78.17",
+            "81.3.0.10",
+            "2a02:1:3::1",
+            "81.2.70.1",
+            "93.184.215.14",
+            "64:ff9b::5db8:d70e",
+        ] {
             assert_eq!(on_link(ip(allowed), &nets), None, "{allowed}");
         }
-        // A gateway read from the routing table is refused exactly.
-        let gw = [Net { addr: ip("81.2.68.1"), len: 32 }];
-        assert!(on_link(ip("81.2.68.1"), &gw).is_some());
-        assert_eq!(on_link(ip("81.2.68.2"), &gw), None);
+        // A point-to-point peer and a gateway are refused exactly, in both families.
+        let ifaces = [
+            Iface { addr: ip("100.96.0.2"), len: 32, peer: Some(ip("81.2.71.1")) },
+            Iface { addr: ip("fd00::2"), len: 128, peer: Some(ip("2a03:1::1")) },
+        ];
+        let nets = networks(&ifaces, &[ip("81.2.68.1"), ip("2a04:1::1")]);
+        for refused in ["81.2.71.1", "2a03:1::1", "81.2.68.1", "2a04:1::1"] {
+            assert!(on_link(ip(refused), &nets).is_some(), "{refused}");
+        }
+        for allowed in ["81.2.71.2", "2a03:1::2", "81.2.68.2", "2a04:1::2"] {
+            assert_eq!(on_link(ip(allowed), &nets), None, "{allowed}");
+        }
     }
 
-    #[test]
-    fn the_default_gateways_are_read_from_linuxs_routing_tables() {
+    #[tokio::test]
+    async fn the_default_gateways_are_read_from_the_routing_table() {
         let v4 = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\n\
                   eth0\t00000000\t0145A8C0\t0003\t0\t0\t100\t00000000\n\
                   eth0\t0045A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\n";
@@ -1617,10 +1706,19 @@ mod tests {
                   2a0104f8000100020000000000000000 40 00000000000000000000000000000000 00 \
                   00000000000000000000000000000000 00000100 00000001 00000000 00000001 eth0\n";
         assert_eq!(gateways_v6(v6), vec!["2a01:4f8:1:2::1".parse::<IpAddr>().unwrap()]);
-        // Every interface of this computer is one of its own networks, at least its /64 on IPv6.
-        let nets = own_networks();
-        for (addr, _) in interfaces() {
-            assert!(on_link(addr, &nets).is_some(), "{addr}");
+        // macOS `route -n get default`, for IPv4, IPv6 (zone dropped) and an interface-only route.
+        let mac_v4 = "   route to: default\ndestination: default\n       mask: default\n    gateway: 192.168.1.1\n  \
+                      interface: en0\n      flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>\n";
+        assert_eq!(route_gateway(mac_v4), Some("192.168.1.1".parse().unwrap()));
+        let mac_v6 = "   route to: ::\ndestination: default\n    gateway: fe80::1%en0\n  interface: en0\n";
+        assert_eq!(route_gateway(mac_v6), Some("fe80::1".parse().unwrap()));
+        let mac_link = "   route to: default\ndestination: default\n    gateway: link#14\n  interface: utun3\n";
+        assert_eq!(route_gateway(mac_link), None);
+        assert_eq!(route_gateway("route: writing to routing socket: not in table\n"), None);
+        // Every interface address of this computer is one of its own networks.
+        let nets = own_networks().await;
+        for iface in interfaces() {
+            assert!(on_link(iface.addr, &nets).is_some(), "{}", iface.addr);
         }
     }
 
