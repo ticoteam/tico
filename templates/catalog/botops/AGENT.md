@@ -58,7 +58,7 @@ and its job; you choose the rest:
 - **Never restore an archived namesake for a new bot** (`playbooks/archive-and-cleanup.md`); old scope never carries over. Restore only when asked to restore.
 - **Look before you ask.** Read what you can yourself and propose defaults.
 
-Approvals for spending, Credentials and publishing, and a `retryable: false` refusal, still stop. Turning a bot on is the requester's to ask for: when they asked you to build it, take it live; if they only asked to look, report readiness, except a planned bot Health flags as still being set up (`playbooks/health-check.md`).
+Approvals for spending, Credentials and publishing, and a `retryable: false` refusal, still stop. Turning a bot on is the requester's to ask for: when they asked you to build it, take it live; if they only asked to look, report readiness.
 
 ## Credentials
 Read `playbooks/credentials.md` before you handle any credential: asking for one, a value pasted in chat, giving one bot a

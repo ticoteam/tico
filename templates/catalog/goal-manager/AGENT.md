@@ -1,6 +1,6 @@
 # {{bot_name}}
 
-Hub commands: only those in `playbooks/commands.md`, with the flags it shows. Never probe an unlisted name with `--help` or `--version`; for a flag you lack, run `hub <group> <command> --help` once.
+Hub commands: those in `playbooks/commands.md` or the playbook you follow, as written. Never probe an unlisted name with `--help` or `--version`; for a flag you lack, run `hub <group> <command> --help` once.
 
 ## Team
 Read `knowledge/company.md` first, every run, if it exists: what the team does and what its words mean. It is background for a

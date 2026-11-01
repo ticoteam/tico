@@ -8,18 +8,20 @@ Done when: the payment is recorded, or a reminder draft is on the task for its o
 line.
 
 1. Read the invoice: `hub api GET finance/invoices/<invoice id>`. If it is paid or void, go to step 6.
-2. Look for the payment: `hub finance search --kind feed --q <customer name>`. Find a row from this customer whose amount
-   is the invoice's `remaining`.
+2. Look for the payment: `hub finance search --kind feed --q <customer name>`. Find a row from this customer that paid this
+   invoice: the invoice's `remaining`, or part of it when the row names the invoice.
+   The invoice's `paid` is money already recorded on it. A row with `entry_id` null is not booked yet: it is new money,
+   never a double count.
 3. Decide, then do the step the table names.
 
 | If | Do |
 |---|---|
-| a row matches the remaining amount | step 4 |
+| a row pays all or part of it | step 4 (a part: then step 5 for what is still owed) |
 | no row matches | step 5 |
 | the invoice is already paid or void | step 6 |
 
 4. Record it: `hub finance act invoice_record_payment` with the `invoice_id`, the amount in minor units, and the row's
-   `feed_id` (see playbooks/commands.md). Then go to step 6.
+   `feed_id` (see playbooks/commands.md). Paid in full: go to step 6. Paid in part: step 5, for the new `remaining`.
 5. Draft one reminder for this stage and put it on the task for the invoice's owner to send. Finance has no reminder
    action, and this bot sends nothing outside the team. The draft gives the invoice number, the amount due, the due date
    and how to pay (the invoice's payment link, when it has one). Tone: friendly at 1 and 7 days, firm at 30, 60 and 90.

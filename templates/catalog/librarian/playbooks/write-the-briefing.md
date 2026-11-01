@@ -22,31 +22,29 @@ and the market entity it is about in square brackets:
     - Example Co moved its Pro plan from 29 to 39 a seat (pricing page, Oct 24). [company/example-co]
 
 Group the bullets by what they touch (pricing, product, people, customers). When a bullet's entity is one an active bet
-cites, name the bet in the bullet ("touches the bet on <bet id>"). The reply carries no structured items, so the server
-does not read entity ids or bets from it: the words are for the people who read the page.
+cites, name the bet in the bullet ("touches the bet on <bet id>").
 
 Write down what happened, never what the team should do about it. The bets are the owner's and the Strategy Bot's to
 weigh.
 
-## 3. Write the page and post it
+## 3. Tag the items, then reply with the page
 
-The reply is the page: a one-line title of a few words, then the bullets under their groups. The run posts it. You do
-not call a post command for the daily briefing.
-
-A hand post is only for when a person asks in a task. Its items carry the entity ids the server reads, so it is the way
-a week's briefing is tied to a bet:
+The server works out which bets a briefing touches only from tagged items, never from the words. So when any bullet is
+about a market entity, post the items before you reply:
 
     hub market briefing post --week 2026-W44 --title "<a few words>" --body-file briefing.md --items-file items.json
 
-`--week` is the ISO week of the day you run. The items file is a JSON list of `{"text", "kind", "entity_ids"}`, where
-`kind` is `change` (something a competitor did), `signal` (a customer or channel said it), `theme` (a pattern across
-several) or `size` (a market number). At most 600 characters an item and 20,000 for the page. The next 07:00 run replaces
-the week's briefing, so a hand post holds only until then.
+`--week` is the ISO week of the day you run. `briefing.md` is the page you are about to reply with. The items file is a
+JSON list of `{"text", "kind", "entity_ids"}`, one per bullet: `text` the bullet's sentence, `kind` `change` (something a
+competitor did), `signal` (a customer or channel said it), `theme` (a pattern across several) or `size` (a market number),
+and `entity_ids` every entity it is about, not only the main one. At most 600 characters an item and 20,000 for the page.
+
+Then reply with the page: a one-line title of a few words, then the bullets under their groups. The run posts your reply
+as the week's briefing and keeps the items you tagged. A person who asks for a briefing in a task gets the same post.
 
 ## 4. Finish
 
-Do not message the Strategy Bot about the briefing. The server opens its task only when a briefing's items touch a bet,
-and the daily reply carries none.
+Do not message the Strategy Bot about the briefing: the server opens its task when the items touch a bet.
 
-Done when the run's reply is the page, or the one line when nothing changed, and a hand post was made only if a person
-asked for one.
+Done when: the reply is the page (or the one line when nothing changed), and every bullet about a market entity was
+posted as a tagged item first.

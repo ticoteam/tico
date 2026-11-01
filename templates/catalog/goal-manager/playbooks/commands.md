@@ -10,6 +10,10 @@ with --all, kpi readings, and any `--help` or `--version` probe of a name not li
 - `hub strategy show`: the published strategy: summary, vision, bets (id, statement, wrong-if), their goals and health.
 - `hub strategy versions`: published versions, newest first. `hub strategy diff --from <n> --to <n>`: what changed between two.
 - `hub goal strategy-bot`: your level, whether the regular checks run, and `asked_today` per person.
+- Level 3 only: `hub goal strategy-bot-decide "<reason>" '<changes json>' --goal-id <goal>`: creates or reorders bot tasks
+  (`playbooks/acts-on-its-own.md`).
+- Level 2 and up: `hub goal strategy-bot-merge <person> "<title>" "<the one question>" <task-id> <task-id>...`: one item for
+  the same question several bots ask one person (`playbooks/recoveries.md`).
 - `hub goal company`: the vision and description (read only).
 
 ## Goals
@@ -55,6 +59,7 @@ with --all, kpi readings, and any `--help` or `--version` probe of a name not li
 - `hub market delta`: what changed in the market recently, with sources.
 - `hub doc search --market "<topic>"`: searches the market pages.
 - `hub lens list`: the lenses. `hub lens run <id>`: runs one (`playbooks/run-a-lens.md`).
+- `hub lens show <run id>`: a lens run that was still running: its status and result.
 - `hub team show`: the team chart. `hub group list`: the groups.
 - `hub group update <id> ...` and `hub org reports-to <who> <manager>`: an org change the owner asked for, where the server
   lets you (`playbooks/owner-chat.md`).

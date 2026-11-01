@@ -36,7 +36,7 @@ approver. Use it when unsure, then send the same command without it. A kind's fi
 - `hub finance act bill_create --payload '{"vendor_id":"<vendor id>","number":"<bill number>","bill_date":"<YYYY-MM-DD>","due_date":"<YYYY-MM-DD>","origin":"email","attachments":["<file id>"],"lines":[{"description":"<text>","amount":45000,"account_id":"<account id>"}]}' --operation-id bill-entry:<file id>` — a new draft. Use `terms_days` instead of `due_date` when the file gives terms. `origin` is `email`, `upload` or `manual`. The draft's `bill_id` comes back in `result`.
 - `hub finance act bill_update --payload '{"bill_id":"<bill id>","number":"<bill number>"}' --operation-id bill-update:<bill id>` — a draft only. Send only the fields that are wrong. `lines` replaces every line.
 - `hub finance act bill_approve --payload '{"bill_id":"<bill id>"}' --operation-id bill-approve:<bill id>` — enters a draft, by its own id.
-- `hub finance act bill_schedule --payload '{"bill_id":"<bill id>","pay_on":"<YYYY-MM-DD>","money_account_id":"<money account id>"}' --operation-id bill-due:<bill id>:<stage>` — requests the payment on `pay_on`. Payments of 2,000.00 or more need the owner's approval.
+- `hub finance act bill_schedule --payload '{"bill_id":"<bill id>","pay_on":"<YYYY-MM-DD>","money_account_id":"<money account id>"}' --operation-id bill-due:<bill id>:<stage>` — requests the payment on `pay_on`. The team's Finance rules decide what needs approval; the action's `status` says.
 - `hub finance act payment_create` — the other way in bill-due.md. Fields: `help`.
 
 ## Invoices
@@ -44,7 +44,7 @@ approver. Use it when unsure, then send the same command without it. A kind's fi
 
 ## Month close and reports
 - `hub finance report close --month <YYYY-MM>` — the close checklist: each check with `ok` and `count`, then `ready` and `as_of`.
-- `hub finance report budget_vs_actual --start <first day> --end <last day>` — per budget: `budget` and `actual` by month, `excluded`, `snapshot` (the as-of time).
+- `hub finance report budget_vs_actual --start <first day> --end <last day>` — per budget: `budget` and `actual` by month, `excluded`, `snapshot` (null for an open month; for a closed one its `month` and `restatements` count). The as-of time is when you read it.
 - `hub finance report spend_by --start <first day> --end <last day> --by vendor` — the biggest vendors: `label`, `amount`, `total`.
 - `hub finance act close_period --payload '{"month":"<YYYY-MM>"}' --operation-id close:<YYYY-MM>` — asks to close the month. `month` is its only field; the owner approves.
 - `hub finance report pnl --start <first day> --end <last day> --compare prior` — the P&L with the change from the month before.

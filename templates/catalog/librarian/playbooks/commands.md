@@ -47,7 +47,7 @@ does and what it returns. For any other command, run `hub <group> --help` first.
 - `hub market watch check`: reads the watched pages now.
 - `hub market watch stop <watch id>`: stops one watch. The row is kept.
 - `hub market briefing post --week <YYYY-Www> --title "<title>" --body-file <file.md> [--items-file <items.json>]`:
-  posts the week's briefing by hand. The same week again replaces it. Only when a person asks.
+  posts the week's briefing with its tagged items (`playbooks/write-the-briefing.md`, step 3). The same week again replaces it.
 - `hub market briefing latest`: the newest briefing, with its items and the bets it touches.
 - `hub strategy show`: the published strategy: its bets and what each one cites.
 - `hub lens list --market` and `hub lens run where-to-play --answers-file <file.json>`: the market lenses, and a lens run.

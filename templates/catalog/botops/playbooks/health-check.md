@@ -22,7 +22,7 @@ Do each fix as the human, with their rights. Do not ask first.
 | --- | --- |
 | Not on a computer | `hub bot place <bot>` |
 | Turned on but never finished setting up | `hub bot go-live <bot>` |
-| A planned bot Health says is still being set up | the section below |
+| A planned bot Health says is still being set up | report it as ready to turn on; when they asked you to take it live, the section below |
 | Paused | `hub bot resume <bot>` (unless they paused it on purpose: then say so and ask whether to resume it) |
 | A credential a bot needs | open the card: `playbooks/connect-a-tool.md` |
 | No repository on its computer | Clone the named original repository into the exact path in Health, on that computer, using its person's git access. Follow the steps below. |
@@ -41,6 +41,8 @@ For missing GitHub repository access, use `hub_bot_repos_set` / `hub bot repos` 
 A fix the server refuses for their rights is not a failure: name it in the list with who can do it.
 
 ### A planned bot Health says is still being set up
+
+Only when the requester asked you to take it live (`AGENT.md`: turning a bot on is theirs to ask for).
 
 1. Read `hub bot status history <bot>` first. If its newest reason says a person kept it off, do not turn it on: say so in one line.
 2. Otherwise run `hub bot go-live <bot>` as the requester, and read the answer:
