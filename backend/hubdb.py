@@ -4736,6 +4736,8 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
     _task_link_allowed(conn, actor, row, mover, kind or link_kind(str(url or "")))
+    from .strategy_acts import TASK, person_task
+    person_task(conn, actor, row, f"link {TASK}")          # a person's task stays theirs
     url = str(url or "").strip()
     if kind == "session":
         return _task_session_link(conn, actor, task_id, url, title)
@@ -4975,6 +4977,8 @@ def task_unlink(conn, actor, task_id, link_id, mover=None):
     if not have:
         refuse(conn, actor, "not-found", f"no link {link_id} on {task_id}")
     _task_link_allowed(conn, actor, row, mover, have["kind"])
+    from .strategy_acts import TASK, person_task
+    person_task(conn, actor, row, f"unlink {TASK}")        # a person's task stays theirs
     if have['kind'] == 'worktree' and have.get('state') != 'removed' and 'detail_json' in have:
         detail = json.loads(have.get('detail_json') or '{}')
         detail['delete_requested'] = True

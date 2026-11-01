@@ -166,7 +166,8 @@ At every level, these stay yours, and the server refuses the Strategy Bot each o
 - writing the strategy draft or a bet (it proposes instead);
 - changing a bot's instructions or settings;
 - giving a task to a person, or changing a person's task in any way: editing, moving, handing on, snoozing, filing
-  under another task, making it wait or closing it, even one the Strategy Bot asked for.
+  under another task, making it wait, closing it, linking or unlinking it, or changing who requested it, even one the
+  Strategy Bot asked for.
 
 When it tries one, nothing changes. It becomes an item in your **Needs you** saying what it wanted, why, and that the
 change is yours to make. It also shows in the [Strategy Bot log](#the-strategy-bot-log). It counts toward the 5 a day. When the 5

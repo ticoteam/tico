@@ -394,6 +394,11 @@ def test_the_strategy_bot_never_changes_a_persons_task_at_any_level(api):
         memo = H.task_create(c, STRATEGY_BOT, "Draft the loan memo", "Work it.", "bot:ops", lint=False)["id"]
         unseen = H.task_create(c, "human:ben", "Fire the vendor quietly", "Secret body", "human:ben", private=True,
                                lint=False)["id"]
+    from backend.roadmaps import add_requester
+    with api.app.state.store.transaction() as c:
+        H.task_link(c, OWNER, theirs, "https://example.com/rate-sheet", "Rate sheet")
+        link = c.execute("SELECT id FROM task_links WHERE task_id=?", (theirs,)).fetchone()[0]
+        asker = add_requester(c, theirs, {"name": "Sam"})["id"]
     start = task(api, theirs)
     soon = H.shift(H.now(), days=3)[:10]
     tries = [("", {"title": "Call the bank today", "body": "Take the old rate.", "due": "2099-01-01T00:00:00+00:00"}),
@@ -403,7 +408,12 @@ def test_the_strategy_bot_never_changes_a_persons_task_at_any_level(api):
              ("", {"close": True, "note": "Not needed"}),
              ("/snooze", {"until": soon}),
              ("/relations", {"task": memo, "kind": "parent"}),
-             ("/relations", {"task": memo, "kind": "blocked_by"})]
+             ("/relations", {"task": memo, "kind": "blocked_by"}),
+             ("/links", {"url": "https://example.com/other-sheet"}),
+             ("/links", {"remove": link}),
+             ("/requesters", {"name": "Lee"}),
+             (f"/requesters/{asker}", {"name": "Sam Renamed"}),
+             (f"/requesters/{asker}/delete", {})]
     for n in (1, 2, 3):
         level(api, n)
         for path, body in tries:
@@ -417,6 +427,9 @@ def test_the_strategy_bot_never_changes_a_persons_task_at_any_level(api):
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM task_relations WHERE ? IN (from_task, to_task)", (theirs,)).fetchone()
         assert not c.execute("SELECT 1 FROM refusals WHERE actor=?", (STRATEGY_BOT,)).fetchone()
+        assert c.execute("SELECT COUNT(*) FROM task_links WHERE task_id=?", (theirs,)).fetchone()[0] == 1
+        assert c.execute("SELECT name FROM task_requesters WHERE id=?", (asker,)).fetchone()[0] == "Sam"
+        assert c.execute("SELECT COUNT(*) FROM task_requesters WHERE task_id=?", (theirs,)).fetchone()[0] == 1
     log = get(api, "strategy-bot/log")["items"]
     assert len(log) == 3 * len(tries), log
     assert all((x["kind"], x["state"]) == ("person_task", "proposed") for x in log)
