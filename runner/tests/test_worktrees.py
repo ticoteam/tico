@@ -1379,9 +1379,10 @@ def test_the_advertised_retry_resumes_an_expired_setup_in_place(trees, phase):
     assert git(path, 'symbolic-ref', '--short', 'HEAD') == row['branch']
 
 
-def _merge_in_progress(trees, tmp_path, *, conflicts=('file',), deleted=()):
+def _merge_in_progress(trees, tmp_path, *, conflicts=('file',), deleted=(), copies=()):
     """A task worktree whose merge of main is left in progress. Main changes each `conflicts` name and adds a clean
-    file, `mainonly`; main deletes each `deleted` name. The task's own commit is pushed, so nothing is unpushed."""
+    file, `mainonly`; main deletes each `deleted` name and adds each `copies` name with the content of `other`. The
+    task's own commit is pushed, so nothing is unpushed."""
     workspace, base, remote, row, client = trees
     client.get.return_value['repositories'][0]['setup_command'] = None
     clone = tmp_path / 'main-clone'
@@ -1407,6 +1408,10 @@ def _merge_in_progress(trees, tmp_path, *, conflicts=('file',), deleted=()):
     for name in deleted:
         (clone / name).unlink()
     (clone / 'mainonly').write_text('main only')
+    if copies:
+        (clone / 'other').write_text('other')  # main keeps the task's `other` unchanged, so only the copy is new to it
+    for name in copies:
+        (clone / name).write_text('other')
     subprocess.run(['git', '-C', str(clone), 'add', '-A'], check=True)
     subprocess.run(['git', '-C', str(clone), *identity, 'commit', '-qm', 'Main'], check=True)
     subprocess.run(['git', '-C', str(clone), 'push', '-q', 'origin', 'main'], check=True, capture_output=True)
@@ -1497,3 +1502,71 @@ def test_a_resolution_taking_either_side_beside_a_conflict_is_kept(trees, tmp_pa
     assert (path / 'file').read_text() == kept
     assert git(path, 'show', ':file') == kept
     assert W.wip_branch(row) not in git(remote, 'show-ref', '--heads')
+
+
+def test_a_staged_deletion_paired_with_an_identical_addition_is_kept(trees, tmp_path):
+    """Rename detection would list only the addition and let the abort restore the deleted file."""
+    workspace, base, remote, row, client = trees
+    path = _merge_in_progress(trees, tmp_path, copies=('copy',))
+    git(path, 'rm', '-q', 'other')
+    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
+        W.act(workspace, row, 'remove', os.environ.copy())
+    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
+    assert 'other' not in git(path, 'ls-files').split()
+
+
+def test_a_staged_addition_the_merge_did_not_make_is_kept(trees, tmp_path):
+    workspace, base, remote, row, client = trees
+    path = _merge_in_progress(trees, tmp_path)
+    (path / 'extra').write_text('bot file')
+    git(path, 'add', 'extra')
+    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
+        W.act(workspace, row, 'remove', os.environ.copy())
+    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
+    assert git(path, 'show', ':extra') == 'bot file'
+
+
+def test_an_unstaged_edit_to_a_path_the_merge_changed_is_kept(trees, tmp_path):
+    """The abort refuses such an edit; it must keep the worktree with the same error, not fail generically."""
+    workspace, base, remote, row, client = trees
+    path = _merge_in_progress(trees, tmp_path)
+    (path / 'mainonly').write_text('edited after the merge')
+    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
+        W.act(workspace, row, 'remove', os.environ.copy())
+    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
+    assert (path / 'mainonly').read_text() == 'edited after the merge'
+
+
+def test_every_conflict_resolved_and_staged_with_the_merge_open_is_kept(trees, tmp_path):
+    workspace, base, remote, row, client = trees
+    path = _merge_in_progress(trees, tmp_path, conflicts=('file', 'second'))
+    (path / 'file').write_text('resolved\n')
+    (path / 'second').write_text('resolved\n')
+    git(path, 'add', '-A')
+    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
+        W.act(workspace, row, 'remove', os.environ.copy())
+    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
+
+
+@pytest.mark.parametrize('marker', ['CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply'])
+def test_another_operation_beside_a_merge_is_kept(trees, tmp_path, marker):
+    workspace, base, remote, row, client = trees
+    path = _merge_in_progress(trees, tmp_path)
+    gitdir = Path(git(path, 'rev-parse', '--path-format=absolute', '--git-dir'))
+    if marker.startswith('rebase'):
+        (gitdir / marker).mkdir()
+    else:
+        (gitdir / marker).write_text(git(path, 'rev-parse', 'HEAD') + '\n')
+    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
+        W.act(workspace, row, 'remove', os.environ.copy())
+    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
+
+
+@pytest.mark.parametrize('output, returncode, tree', [
+    ('usage: git merge-tree', 129, ''),
+    ('not a tree\n', 0, ''),
+    ('0123456789abcdef0123456789abcdef01234567\n', 0, '0123456789abcdef0123456789abcdef01234567'),
+    ('0123456789abcdef0123456789abcdef01234567\nCONFLICT (content): file\n', 1, '0123456789abcdef0123456789abcdef01234567'),
+])
+def test_the_merge_result_tree_is_read_only_when_git_wrote_one(output, returncode, tree):
+    assert W._merge_result_tree(subprocess.CompletedProcess([], returncode, output, '')) == tree
