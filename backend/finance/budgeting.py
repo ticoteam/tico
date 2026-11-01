@@ -262,9 +262,10 @@ def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, read: Ne
         allocs = [r for r in allocs if r[:3] != overlay[:3]] + ([overlay] if overlay[3] > 0 else [])
     by_target: dict[str, list[tuple[str, int]]] = {}
     for bid, kind, tid, amount in allocs:
-        b = budgets.get(bid)
-        if b is not None and b.active:
-            by_target.setdefault(f"{kind}:{tid}", []).append((b.id, amount))
+        # An ended budget's allocations still reserve against its parents: its cards keep their Mercury limits until they
+        # are lowered or cancelled (spec 4.4). Only a new set-aside on an ended budget is refused (allocation_plan).
+        if bid in budgets:
+            by_target.setdefault(f"{kind}:{tid}", []).append((bid, amount))
     out: list[tuple[str, str, int]] = []
     for target, rows in by_target.items():
         kind, _, tid = target.partition(":")

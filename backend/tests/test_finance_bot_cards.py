@@ -682,6 +682,21 @@ def test_a_card_on_an_ended_child_budget_is_refused_and_nothing_is_queued(books)
         assert FA.budget_state(c, line, AT).remaining == 10_000
 
 
+def test_ending_a_child_keeps_its_card_reserve_against_the_parent(books):
+    """Eng tools (100.00) has a 50.00 card under Tools (100.00), so Tools has 50.00 left. Ending Eng tools frees nothing:
+    the card keeps its Mercury limit until it is lowered or cancelled. Tools' remaining must not rise."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        line = _budget(c, amount=10_000)
+        eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=line)
+        assert _bot_card(c, eng, "bot:coder", amount=5_000).status == "committed"
+        before = FA.budget_state(c, line, AT).remaining
+        assert before == 5_000
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": False}).status == "committed"
+        assert FA.budget_state(c, line, AT).remaining == before
+
+
 def test_a_warn_budget_at_zero_does_not_hold_a_card_back_from_the_sweep(books):
     fake = FakeMercury()
     budget, _, _ = _world(books, fake)

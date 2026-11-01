@@ -881,12 +881,13 @@ def figure_route(ctx: Ctx, who: str, budget_id: str, card: Any = None, effective
 
 
 def _figure_ids(ctx: Ctx, b: B.Budget) -> list[str]:
-    """The budgets whose figures a fit on `b` reads: `b`, each budget above it, and each of those budgets' active children
-    (a fit reserves what the children hold, and a child's spend and holds sit in its own figure)."""
+    """The budgets whose figures a fit on `b` reads: `b`, each budget above it, and each of those budgets' children (a fit
+    reserves what the children hold, and a child's spend and holds sit in its own figure). An ended child counts too: its
+    allocations still reserve against the parents (budgeting._reserve)."""
     budgets = ctx.budgets()
     out: list[str] = []
     for one in B.chain(budgets, b.id):
-        for bid in (one.id, *(x.id for x in budgets.values() if x.parent_id == one.id and x.active)):
+        for bid in (one.id, *(x.id for x in budgets.values() if x.parent_id == one.id)):
             if bid not in out:
                 out.append(bid)
     return out
