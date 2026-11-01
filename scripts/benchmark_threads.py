@@ -26,6 +26,7 @@ import functools
 import http.client
 import importlib
 import json
+import multiprocessing
 import os
 import platform
 import re
@@ -231,8 +232,13 @@ def slow_consumer(port, token, query, state, stop):
     try:
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=300)
         state["conn"] = conn
-        conn.connect()
+        # Loopback's 64 KB segments dwarf a small buffer: Linux would hold back the window update once reading starts,
+        # and its next probe can be a minute away. Ordinary segments keep the wait the server's, not the kernel's.
+        conn.sock = socket.socket()
+        with contextlib.suppress(OSError):
+            conn.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, 1400)
         conn.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        conn.sock.connect(("127.0.0.1", port))
         conn.request("GET", "/api/v2/events" + query, headers={"Authorization": f"Bearer {token}"})
         response = conn.getresponse()
         state["status"] = response.status
@@ -294,6 +300,57 @@ def start(target, *args):
     return thread
 
 
+class Readers:
+    """The live streams, read in processes of their own: at a busy run they parse tens of thousands of events a second,
+    and in the writers' process their interpreter lock would be counted as the server's write and event latency."""
+
+    PROCESSES = 6
+    FIELDS = ("ready", "ready_seq", "latencies", "reset", "error", "status")
+
+    def __init__(self):
+        context = multiprocessing.get_context("fork")     # before this process has threads
+        self.pipes, self.count = [], 0
+        for _ in range(self.PROCESSES):
+            ours, theirs = context.Pipe()
+            context.Process(target=self._serve, args=(theirs,), daemon=True).start()
+            self.pipes.append(ours)
+
+    @classmethod
+    def _serve(cls, pipe):
+        states = {}
+        while True:
+            command, *rest = pipe.recv()
+            if command == "open":
+                key, port, token, query = rest
+                states[key] = {}
+                start(stream, port, token, query, states[key])
+            elif command == "ready":
+                pipe.send({key: {name: state.get(name) for name in ("ready", "ready_seq", "error")}
+                           for key, state in states.items()})
+            else:
+                for state in states.values():
+                    hang_up(state)
+                pipe.send({key: {**{name: state.get(name) for name in cls.FIELDS}, "delivered": len(state.get("ids", ()))}
+                           for key, state in states.items()})
+                return
+
+    def open(self, port, token, query):
+        key, self.count = self.count, self.count + 1
+        self.pipes[key % len(self.pipes)].send(("open", key, port, token, query))
+        return key
+
+    def _ask(self, command):
+        for pipe in self.pipes:
+            pipe.send((command,))
+        return {key: state for pipe in self.pipes for key, state in pipe.recv().items()}
+
+    def ready(self):
+        return self._ask("ready")
+
+    def close(self):
+        return self._ask("close")
+
+
 def scenario(args, port, db):
     def connect():
         return http.client.HTTPConnection("127.0.0.1", port, timeout=60)
@@ -315,16 +372,19 @@ def scenario(args, port, db):
         scope, post_path, people = f"?conversation={room}", f"/api/v2/conversations/{room}/messages", DM_TOKENS
         big_path = None
 
-    viewers = [{} for _ in range(args.viewers)]
-    for i, state in enumerate(viewers):
-        start(stream, port, people[i % len(people)], scope, state)
+    readers = Readers()
+    viewer_keys = [readers.open(port, people[i % len(people)], scope) for i in range(args.viewers)]
     deadline = time.time() + 60
-    while time.time() < deadline and any(v.get("ready") is None for v in viewers):
+    opened = {}
+    while time.time() < deadline:
+        opened = readers.ready()
+        if len(opened) == args.viewers and all(v["ready"] is not None for v in opened.values()):
+            break
         time.sleep(0.05)
-    subscribed = sum(1 for v in viewers if v.get("ready") is not None)
+    subscribed = sum(1 for v in opened.values() if v["ready"] is not None)
     if subscribed < args.viewers:
         raise SystemExit(f"only {subscribed} of {args.viewers} viewers were ready within 60 seconds")
-    resume = next(v["ready_seq"] for v in viewers if v.get("ready_seq") is not None)
+    resume = next(v["ready_seq"] for v in opened.values() if v["ready_seq"] is not None)
 
     stop, slow = threading.Event(), {}
     start(slow_consumer, port, people[0], scope, slow, stop)
@@ -338,16 +398,19 @@ def scenario(args, port, db):
         threads.append(start(writer, port, "ana-test", big_path, "big", args.seconds, args.rate, big_writer))
 
     time.sleep(args.seconds / 2)                       # a reconnect burst, halfway through the run
-    burst = [{} for _ in range(args.burst)]
-    for i, state in enumerate(burst):
-        start(stream, port, people[i % len(people)], f"{scope}&after={resume}", state)
+    burst_keys = [readers.open(port, people[i % len(people)], f"{scope}&after={resume}") for i in range(args.burst)]
     for thread in threads:
         thread.join()
     stop.set()
     time.sleep(3)
     deadline = time.time() + 60
-    while time.time() < deadline and any(b.get("ready") is None and b.get("error") is None for b in burst):
+    while time.time() < deadline:
+        opened = readers.ready()
+        if all(opened[key]["ready"] is not None or opened[key]["error"] is not None for key in burst_keys):
+            break
         time.sleep(0.05)
+    final = readers.close()
+    viewers, burst = [final[key] for key in viewer_keys], [final[key] for key in burst_keys]
 
     posted_ok = sum(w.get("ok", 0) for w in room_writers)
     statuses = {}
@@ -356,10 +419,8 @@ def scenario(args, port, db):
             statuses[str(code)] = statuses.get(str(code), 0) + count
     write_ms = [x for w in room_writers for x in w.get("writes", [])]
     latencies = [x for v in viewers for x in v.get("latencies", [])]
-    per_viewer = [len(v.get("ids", ())) for v in viewers]
+    per_viewer = [v["delivered"] for v in viewers]
     ready = [b["ready"] for b in burst if b.get("ready") is not None]
-    for state in viewers + burst:
-        hang_up(state)
     deadline = time.time() + SLOW_READ_SECONDS
     while time.time() < deadline and not slow.get("closed") and not slow.get("error"):
         time.sleep(0.05)
