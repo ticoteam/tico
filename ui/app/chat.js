@@ -915,7 +915,6 @@ function v2ChatApply(state, d) {
   // A finished turn may have closed or created tasks: show them now.
   if (wasRunning && !state.live && BOT?.slug === state.slug) {
     if (BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
-    void loadBotChatTasks(BOT.slug);
   }
 }
 // Read the snapshot again: one read at a time, and one more after it when changes arrived meanwhile, so a run

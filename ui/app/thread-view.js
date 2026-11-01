@@ -1,0 +1,685 @@
+/* ui/app/thread-view.js — One thread on screen: its timeline in tree order (each message followed by its sub-thread,
+   indented and quieter, the indent capped at three), its composer, and its live updates. Mounted by the Thread page
+   (#/thread/<id>), a bot's Home and DM, a person's Home and a team's Home. Shapes: docs/dev/threads-contract.md §10.
+   Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
+'use strict';
+
+const THV_VIEWS = new Set();
+const THV_DEPTH_MAX = 3;
+const THV_ACK = '✅';
+let THV_N = 0;
+const thvPath = id => '/v2/threads/' + encodeURIComponent(id);
+const thvHuman = a => String(a || '').startsWith('human:');
+const thvMine = m => !!m && m.from_actor === myActor();
+// Addressed to the viewer: written by a person, sent to them, or naming them. Other bot posts are activity.
+const thvAddressed = m => thvHuman(m?.from_actor) || m?.to_actor === myActor() || (m?.mentions || []).includes(myActor());
+
+// `opts`: {id} a thread, {home: actor} that teammate's Home, or {dm: actor} the viewer's DM with them (made on the
+// first message). {card: true} keeps the list to a box inside a page; {header: false} leaves out the title line.
+function threadMount(host, opts = {}) {
+  const view = {key: ++THV_N, host, opts, id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading',
+                readAt: 0, openSeq: 0, readSent: new Map(), wantRead: new Set(), pending: [], replyTo: '', editing: '',
+                follow: null, gone: false, error: ''};
+  THV_VIEWS.add(view);
+  host.innerHTML = `<section class="thv${opts.card ? ' thv-card' : ''}" data-thv="${view.key}">
+    ${opts.header === false ? '' : '<header class="thv-head"></header>'}
+    <div class="thv-scroll"><button type="button" class="ghost small thv-older" hidden>Earlier</button>
+      <div class="thv-list" role="log" aria-live="polite"></div></div>
+    <button type="button" class="stick-pill thv-unread" hidden>Unread</button>
+    <div class="thv-composer"></div></section>`;
+  view.el = host.querySelector('.thv');
+  thvWire(view);
+  void thvLoad(view);
+  return view;
+}
+function threadUnmount(view) {
+  if (!view || view.gone) return;
+  view.gone = true;
+  view.follow?.();
+  THV_VIEWS.delete(view);
+}
+// Views whose host left the page stop following.
+function thvSweep() { for (const v of THV_VIEWS) if (!v.host.isConnected) threadUnmount(v); }
+
+// ----------------------------------------------------------------- loading
+async function thvResolve(view) {
+  const o = view.opts;
+  if (o.id) return o.id;
+  if (o.home) {
+    const t = await get(thvPath('home/' + o.home), {fresh: true});
+    view.thread = t;
+    return t?.id || '';
+  }
+  if (o.dm) {
+    try {
+      const r = await get('/v2/threads/dm?with=' + encodeURIComponent(o.dm), {fresh: true});
+      const t = r?.thread !== undefined ? r.thread : r;
+      if (t?.id) { view.thread = t; return t.id; }
+    } catch (e) { if (e?.status !== 404) throw e; }
+  }
+  return '';
+}
+function thvSetId(view, id) {
+  if (view.id === id) return;
+  view.follow?.();
+  view.id = id;
+  view.follow = liveFollowThread(id);
+}
+async function thvLoad(view) {
+  try {
+    const id = await thvResolve(view);
+    if (view.gone) return;
+    if (!id) { view.state = 'empty'; thvDraw(view); return; }
+    thvSetId(view, id);
+    const r = await get(thvPath(id) + '/timeline?limit=50', {fresh: true});
+    if (view.gone) return;
+    view.thread = r.thread || view.thread;
+    view.breadcrumb = r.breadcrumb || [];
+    view.messages = r.messages || [];
+    view.next = r.next_cursor || null;
+    view.readAt = Number(view.thread?.me?.last_read_seq) || 0;
+    view.openSeq = thvMaxSeq(view.messages);
+    for (const m of view.messages) if (m.sub_thread?.unread) view.wantRead.add(m.sub_thread.id);
+    view.state = view.messages.length ? 'ready' : 'empty';
+    thvDraw(view, {stick: true});
+    thvMarkRead(view);
+  } catch (e) {
+    if (view.gone) return;
+    view.state = e?.status === 404 ? 'gone' : 'error';
+    view.error = e?.message || '';
+    thvDraw(view);
+  }
+}
+const thvMaxSeq = list => list.reduce((n, m) => Math.max(n, Number(m.seq) || 0), 0);
+// The first page read again after a change the stream could not place; older pages already read stay above it.
+async function thvRefresh(view) {
+  if (view.gone || !view.id) return thvLoad(view);
+  try {
+    const r = await get(thvPath(view.id) + '/timeline?limit=50', {fresh: true});
+    if (view.gone) return;
+    const fresh = r.messages || [], ids = new Set(fresh.map(m => m.id));
+    const first = fresh.find(m => !m.depth)?.seq ?? Infinity;
+    const older = view.messages.filter(m => !ids.has(m.id) && (Number(m.seq) || 0) < first && view.olderRead);
+    view.thread = r.thread || view.thread;
+    view.breadcrumb = r.breadcrumb || view.breadcrumb;
+    view.messages = [...older, ...fresh];
+    if (!view.olderRead) view.next = r.next_cursor || null;
+    view.state = view.messages.length ? 'ready' : 'empty';
+    thvDraw(view, {stick: thvAtBottom(view)});
+    thvMarkRead(view);
+  } catch (e) {
+    if (e?.status === 404) { view.state = 'gone'; thvDraw(view); }
+  }
+}
+async function thvOlder(view, button) {
+  if (!view.next) return;
+  button.disabled = true;
+  const box = view.el.querySelector('.thv-scroll'), from = box.scrollHeight - box.scrollTop;
+  try {
+    const r = await get(thvPath(view.id) + '/timeline?limit=50&cursor=' + encodeURIComponent(view.next), {fresh: true});
+    const have = new Set(view.messages.map(m => m.id));
+    view.messages = [...(r.messages || []).filter(m => !have.has(m.id)), ...view.messages];
+    view.next = r.next_cursor || null;
+    view.olderRead = true;
+    thvDraw(view);
+    box.scrollTop = box.scrollHeight - from;
+  } catch (e) { toast(e.message, true); }
+  button.disabled = false;
+}
+
+// ----------------------------------------------------------------- drawing
+const thvCanPost = view => view.opts.canPost ?? (view.thread ? !!view.thread.me?.can_post : view.state === 'empty' && !!view.opts.dm);
+function thvHeadHTML(view) {
+  const t = view.thread;
+  if (!t) return '';
+  const crumbs = (view.breadcrumb || []).filter(c => c.id !== t.id);
+  const aud = t.audience === 'company' ? 'Company' : t.audience === 'team' ? groupName(t.audience_group_id)
+    : t.audience === 'home' ? 'Home' : threadPrivate(t) ? 'Private' : '';
+  return `${crumbs.length ? `<nav class="thv-crumbs" aria-label="Thread path">${crumbs.map(c =>
+      `<a href="${threadHref(c.id)}">${esc(c.title || 'Thread')}</a>`).join('<span aria-hidden="true">›</span>')}</nav>` : ''}
+    <div class="thv-titleline">${crumbs.length ? `<a class="thv-back" href="${threadHref(crumbs[crumbs.length - 1].id)}" aria-label="Back" title="Back">‹</a>` : ''}
+      ${threadMarkHTML(t, 22)}<h1 class="thv-title">${esc(threadTitle(t))}</h1>
+      ${aud ? `<span class="thv-aud muted">${esc(aud)}</span>` : ''}<span class="spacer"></span>
+      ${!t.parent_id && ['members', 'personal'].includes(t.audience) ? '<button type="button" class="ghost small" data-thv-members>Members</button>' : ''}
+      <button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="menu" aria-expanded="false" aria-label="Thread menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div>`;
+}
+// Hidden rows in a run fold into one: earlier shared history as "Earlier messages", anything else as "Not shown".
+function thvRows(view) {
+  const rows = [];
+  for (const m of view.messages) {
+    if (m.hidden) {
+      const kind = m.earlier || m.legacy ? 'earlier' : 'hidden', last = rows[rows.length - 1];
+      if (last?.fold === kind && last.depth === (m.depth || 0)) { last.n++; continue; }
+      rows.push({fold: kind, n: 1, depth: m.depth || 0, id: m.id});
+      continue;
+    }
+    rows.push({m});
+  }
+  return rows;
+}
+function thvIsNew(view, m) {
+  if (!m.seq || thvMine(m) || m.seq <= view.readAt) return false;
+  // Arriving at the bottom of the thread on screen is not news; a reply arriving in an old sub-thread is.
+  return m.thread_id && m.thread_id !== view.id ? true : m.seq <= view.openSeq;
+}
+function thvWhoHTML(a) {
+  const slug = actorSlug(a), pid = actorPerson(a);
+  if (slug && S.emps.some(e => e.name === slug)) return `<a class="th-who" href="#/bot/${esc(slug)}">${esc(actorName(a))}</a>`;
+  if (pid) return `<a class="th-who" href="#/person/${esc(encodeURIComponent(pid))}">${esc(actorName(a))}</a>`;
+  return `<span class="th-who">${esc(actorName(a) || 'Someone')}</span>`;
+}
+// An update is its own record with its own page: the Home shows a card that opens it, never the update as chat.
+function thvUpdateHTML(m) {
+  const u = m.refs?.update, id = typeof u === 'object' ? u?.id : u;
+  const title = (typeof u === 'object' && u?.title) || v2Firstline(m.body) || 'Update';
+  return `<a class="th-update" href="${UPDATES}?update=${encodeURIComponent(id || '')}"><span class="th-update-k">Update</span>
+    <strong>${esc(title)}</strong></a>`;
+}
+function thvFilesHTML(m) {
+  const lib = (m.refs?.files || []).filter(f => f?.id);
+  return (m.refs?.attachments?.length ? chatAttachmentsHTML(m.refs.attachments, m.id) : '')
+    + (lib.length ? `<div class="chat-files">${lib.map(f => `<button type="button" class="pill th-libfile" data-th-file="${esc(f.id)}" data-name="${esc(f.title || f.name || 'file')}">${esc(f.title || f.name || 'file')}</button>`).join('')}</div>` : '');
+}
+function thvReactionsHTML(m) {
+  const rs = (m.reactions || []).filter(r => r.count > 0);
+  if (!rs.length) return '';
+  return `<div class="th-reacts">${rs.map(r => `<button type="button" class="th-react${r.me ? ' me' : ''}" data-th-react="${esc(r.emoji)}" aria-pressed="${r.me ? 'true' : 'false'}" title="${r.emoji === THV_ACK ? 'Acknowledged' : esc(r.emoji)}">${esc(r.emoji)} <span class="tnum">${r.count}</span></button>`).join('')}</div>`;
+}
+function thvMsgHTML(view, m) {
+  const depth = Math.min(Number(m.depth) || 0, THV_DEPTH_MAX), sub = m.thread_id && m.thread_id !== view.id;
+  const fresh = thvIsNew(view, m), quiet = fresh && !thvAddressed(m);
+  const cls = ['th-msg', sub && 'th-sub', thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted']
+    .filter(Boolean).join(' ');
+  const head = `<div class="th-head">${thvWhoHTML(m.from_actor)}<time title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>${
+    m.edited_at && !m.deleted ? '<span class="th-edited muted">edited</span>' : ''}</div>`;
+  let body;
+  if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
+  else if (view.editing === m.id) body = `<div class="th-edit"><textarea class="th-edit-text" rows="2" aria-label="Edit message">${esc(m.body || '')}</textarea>
+      <div class="th-edit-acts"><button type="button" class="ghost small" data-th-edit-cancel>Cancel</button><button type="button" class="primary small" data-th-edit-save>Save</button></div></div>`;
+  else if (m.kind === 'update' || m.refs?.update) body = thvUpdateHTML(m);
+  else body = `<div class="th-body md">${safeMd(m.body || '', {shortLinks: true})}</div>`;
+  const st = m.sub_thread, more = st?.more ? `<a class="th-more" href="${threadHref(st.id)}" style="--d:${Math.min(depth + 1, THV_DEPTH_MAX)}">${
+    typeof st.more === 'number' ? `${st.more} more ${st.more === 1 ? 'reply' : 'replies'}` : 'More replies'}${st.unread ? ` · <span class="th-more-new">${st.unread} new</span>` : ''}</a>` : '';
+  return `<div class="${cls}" data-mid="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}" style="--d:${depth}">
+    <div class="th-av">${actorAvatar(m.from_actor, sub ? 20 : 28)}</div>
+    <div class="th-main">${head}${body}${m.deleted ? '' : thvFilesHTML(m) + thvReactionsHTML(m)}</div>
+    ${m.deleted || view.editing === m.id ? '' : `<div class="th-acts"><button type="button" class="th-act" data-th-ack aria-label="Acknowledge" title="Acknowledge">${THV_ACK}</button><button type="button" class="th-act" data-th-more aria-haspopup="menu" aria-expanded="false" aria-label="Message menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div>`}
+  </div>${more}`;
+}
+function thvFoldHTML(view, row) {
+  const depth = Math.min(row.depth, THV_DEPTH_MAX);
+  if (row.fold === 'earlier') {
+    const manage = !!view.thread?.me?.can_manage;
+    return `<div class="th-fold th-earlier" style="--d:${depth}" data-mid="${esc(row.id)}"><span>Earlier messages</span>${
+      manage ? '<button type="button" class="linkish" data-th-earlier>Open earlier messages to Read</button>' : ''}</div>`;
+  }
+  return `<div class="th-fold" style="--d:${depth}" data-mid="${esc(row.id)}"><span>Not shown</span></div>`;
+}
+function thvPendingHTML(p) {
+  const depth = Math.min(p.depth || 0, THV_DEPTH_MAX);
+  const text = `<div class="th-body">${esc(p.text)}${p.files?.length ? ` <span class="muted">· ${p.files.length} file${p.files.length === 1 ? '' : 's'}</span>` : ''}</div>`;
+  if (p.state === 'held') {
+    const h = p.held || {}, rules = (h.rules || []).map(r => `<div class="th-held-rule">${esc(r.text)}</div>`).join('');
+    return `<div class="th-msg th-mine th-held" data-pending="${p.key}" style="--d:${depth}"><div class="th-av">${actorAvatar(myActor(), 28)}</div>
+      <div class="th-main"><div class="th-head"><span class="th-who">You</span><span class="th-state">${h.outcome === 'escalated' ? 'Waiting for review' : 'Held'}</span></div>${text}${rules}
+        <div class="th-held-acts"><button type="button" class="ghost small" data-held-edit>Edit</button>${
+          p.canSend ? '<button type="button" class="ghost small" data-held-send>Send anyway</button>' : ''}<button type="button" class="ghost small" data-held-drop>Discard</button></div></div></div>`;
+  }
+  return `<div class="th-msg th-mine th-pending${p.state === 'failed' ? ' th-failed' : ''}" data-pending="${p.key}" style="--d:${depth}"><div class="th-av">${actorAvatar(myActor(), 28)}</div>
+    <div class="th-main"><div class="th-head"><span class="th-who">You</span><span class="th-state" role="status">${p.state === 'failed' ? esc(p.error || 'Not sent') : 'Checking…'}</span></div>${text}
+    ${p.state === 'failed' ? '<div class="th-held-acts"><button type="button" class="ghost small" data-held-edit>Edit</button><button type="button" class="ghost small" data-held-drop>Discard</button></div>' : ''}</div></div>`;
+}
+function thvReplyHTML(view, m) {
+  const depth = Math.min((Number(m.depth) || 0) + 1, THV_DEPTH_MAX);
+  return `<div class="th-reply" style="--d:${depth}" data-reply-to="${esc(m.id)}"><textarea class="th-reply-text" rows="1" aria-label="Reply in sub-thread" placeholder="Reply"></textarea>
+    <button type="button" class="ghost small" data-th-reply-cancel>Cancel</button><button type="button" class="primary small" data-th-reply-send>Reply</button></div>`;
+}
+function thvListHTML(view) {
+  if (view.state === 'loading') return '<div class="th-empty muted">Loading…</div>';
+  if (view.state === 'gone') return '<div class="th-empty muted">Not shown</div>';
+  if (view.state === 'error') return `<div class="th-empty err">${esc(view.error || 'Could not load')}</div>`;
+  const rows = thvRows(view), out = [];
+  // Each pending and held message sits where it will land: after its parent's sub-thread, or at the bottom.
+  const lastIn = new Map();
+  view.messages.forEach((m, i) => { lastIn.set(m.id, i); });
+  const afterParent = new Map();
+  for (const p of view.pending) if (p.parent) {
+    const at = view.messages.findIndex(m => m.id === p.parent);
+    let end = at, d = Number(view.messages[at]?.depth) || 0;
+    while (at >= 0 && end + 1 < view.messages.length && (Number(view.messages[end + 1].depth) || 0) > d) end++;
+    const key = view.messages[end]?.id;
+    if (key) afterParent.set(key, [...(afterParent.get(key) || []), p]);
+  }
+  let replyAt = '';
+  if (view.replyTo) {
+    const at = view.messages.findIndex(m => m.id === view.replyTo);
+    let end = at; const d = Number(view.messages[at]?.depth) || 0;
+    while (at >= 0 && end + 1 < view.messages.length && (Number(view.messages[end + 1].depth) || 0) > d) end++;
+    replyAt = view.messages[end]?.id || '';
+  }
+  for (const row of rows) {
+    out.push(row.fold ? thvFoldHTML(view, row) : thvMsgHTML(view, row.m));
+    const id = row.m?.id || row.id;
+    for (const p of afterParent.get(id) || []) out.push(thvPendingHTML(p));
+    if (replyAt && id === replyAt) out.push(thvReplyHTML(view, view.messages.find(m => m.id === view.replyTo)));
+  }
+  for (const p of view.pending) if (!p.parent) out.push(thvPendingHTML(p));
+  if (!out.length) out.push(`<div class="th-empty muted">${esc(view.opts.empty || 'No messages yet')}</div>`);
+  return out.join('');
+}
+const thvAtBottom = view => { const b = view.el?.querySelector('.thv-scroll'); return !b || b.scrollHeight - b.scrollTop - b.clientHeight < 60; };
+function thvDraw(view, {stick = false} = {}) {
+  if (view.gone) return;
+  if (!view.host.isConnected) { threadUnmount(view); return; }
+  const head = view.el.querySelector('.thv-head');
+  if (head) { const h = thvHeadHTML(view); patchHTML(head, h); head.hidden = !h; }
+  const list = view.el.querySelector('.thv-list'), box = view.el.querySelector('.thv-scroll');
+  const keep = stick || thvAtBottom(view);
+  patchHTML(list, thvListHTML(view));
+  view.el.querySelector('.thv-older').hidden = !view.next;
+  chatThumbsLoad?.(list);
+  const unread = list.querySelector('.th-new');
+  view.el.querySelector('.thv-unread').hidden = !unread || thvVisible(box, unread);
+  thvComposerDraw(view);
+  if (keep) box.scrollTop = box.scrollHeight;
+}
+const thvVisible = (box, el) => { const a = box.getBoundingClientRect(), b = el.getBoundingClientRect(); return b.bottom > a.top && b.top < a.bottom; };
+
+// ----------------------------------------------------------------- read state
+// Up to the last message drawn, per thread drawn: the thread on screen, and each sub-thread that had news.
+function thvMarkRead(view) {
+  if (document.hidden || view.gone || !view.id || !['ready', 'empty'].includes(view.state)) return;
+  const max = new Map();
+  for (const m of view.messages) {
+    if (m.hidden || !m.seq) continue;
+    const tid = m.thread_id || view.id;
+    if (tid !== view.id && !view.wantRead.has(tid)) continue;
+    max.set(tid, Math.max(max.get(tid) || 0, Number(m.seq)));
+  }
+  for (const [tid, seq] of max) {
+    const sent = view.readSent.get(tid) ?? (tid === view.id ? view.readAt : 0);
+    if (seq <= sent) continue;
+    view.readSent.set(tid, seq);
+    view.wantRead.delete(tid);
+    post(thvPath(tid) + '/read', {seq}).catch(() => {});
+    threadsMarkedRead(tid, seq);
+  }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) for (const v of THV_VIEWS) thvMarkRead(v); });
+
+// ----------------------------------------------------------------- live
+// A message changed in a thread on screen: an edit or a delete in place, a new one at the bottom or under its parent's
+// sub-thread; anything the view cannot place reads the first page again.
+function thvApplyMessage(view, d) {
+  const tid = d.thread_id || d.message?.thread_id, inView = tid === view.id || view.messages.some(m => m.thread_id === tid || m.sub_thread?.id === tid);
+  if (!inView && d.root_id !== (view.thread?.root_id || view.id)) return false;
+  const at = view.messages.findIndex(m => m.id === d.id);
+  if (d.deleted) {
+    if (at < 0) return false;
+    view.messages[at] = {...view.messages[at], deleted: true, body: '', revision: d.revision};
+    return true;
+  }
+  const m = d.message;
+  if (!m) { liveSoon('thv:' + view.key, () => thvRefresh(view), 150); return false; }
+  if (at >= 0) {
+    if ((Number(m.revision) || 0) < (Number(view.messages[at].revision) || 0)) return false;
+    view.messages[at] = {...view.messages[at], ...m, depth: view.messages[at].depth, sub_thread: view.messages[at].sub_thread};
+    return true;
+  }
+  view.pending = view.pending.filter(p => p.messageId !== m.id);
+  if (tid === view.id) { view.messages.push({...m, depth: 0}); if (view.state === 'empty') view.state = 'ready'; return true; }
+  const pi = view.messages.findIndex(x => x.sub_thread?.id === tid || (x.id === m.parent_message_id));
+  if (pi < 0) { liveSoon('thv:' + view.key, () => thvRefresh(view), 150); return false; }
+  const parent = view.messages[pi], d0 = Number(parent.depth) || 0;
+  let end = pi;
+  while (end + 1 < view.messages.length && (Number(view.messages[end + 1].depth) || 0) > d0) end++;
+  view.messages.splice(end + 1, 0, {...m, depth: d0 + 1});
+  parent.sub_thread = {...(parent.sub_thread || {id: tid, count: 0}), count: (parent.sub_thread?.count || 0) + 1};
+  if (!thvMine(m)) view.wantRead.add(tid);
+  return true;
+}
+function threadViewsLive(topic, d) {
+  thvSweep();
+  for (const view of THV_VIEWS) {
+    if (topic === 'reset') { liveSoon('thv:' + view.key, () => thvRefresh(view), 150); continue; }
+    if (topic === 'threads') {
+      if (d.thread_id === view.id && d.thread) { view.thread = {...view.thread, ...d.thread}; thvDraw(view); }
+      // Who may read changed, or a sub-thread opened under a message on screen: read again.
+      if ((d.thread_id === view.id && ['audience', 'members'].includes(d.kind)) || (d.kind === 'sub_thread' && view.messages.some(m => m.id === d.thread?.parent_message_id)))
+        liveSoon('thv:' + view.key, () => thvRefresh(view), 150);
+      continue;
+    }
+    if (topic === 'messages' && thvApplyMessage(view, d)) { thvDraw(view); thvMarkRead(view); }
+  }
+}
+liveOn('messages', d => { if (d?.thread_id || d?.message?.thread_id) threadViewsLive('messages', d); });
+
+// ----------------------------------------------------------------- the composer
+function thvComposerDraw(view) {
+  const host = view.el.querySelector('.thv-composer');
+  const can = thvCanPost(view) && !['loading', 'gone', 'error'].includes(view.state);
+  if (!can) { if (host.firstChild) host.innerHTML = ''; host.hidden = true; return; }
+  host.hidden = false;
+  if (view.composer) return;
+  const C = view.composer = {files: [], lib: [], mention: null};
+  host.innerHTML = `<div class="ask thv-ask"><div class="p-pill">
+      <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="Message" placeholder="Message"></textarea>
+      <span class="thv-attach-wrap"><button class="p-attach p-icon" type="button" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-expanded="false">${ICON_CLIP}</button>
+        <div class="p-menu thv-attach-menu" role="menu" hidden><button type="button" role="menuitem" data-attach="upload">Upload</button><button type="button" role="menuitem" data-attach="library">Library file</button></div></span>
+      <input type="file" multiple hidden class="p-file">
+      <button class="p-send p-send-icon" type="button" aria-label="Send" title="Send">${ICON_SEND}</button></div>
+    <div class="p-chips"></div>
+    <div class="p-menu thv-mentions" role="listbox" aria-label="Mention" hidden></div>
+    <div class="thv-lib" hidden></div></div>`;
+  C.el = host.firstElementChild;
+  const box = C.el.querySelector('.p-text'), file = C.el.querySelector('.p-file'), menu = C.el.querySelector('.thv-attach-menu');
+  const grow = () => { box.style.height = 'auto'; box.style.height = Math.min(box.scrollHeight, 160) + 'px'; };
+  box.addEventListener('input', () => { grow(); thvMentionFind(view); });
+  box.addEventListener('keydown', ev => {
+    if (C.mention && thvMentionKey(view, ev)) return;
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && !touchKeyboard()) { ev.preventDefault(); void thvComposerSend(view); }
+  });
+  box.addEventListener('blur', () => setTimeout(() => thvMentionClose(view), 150));
+  C.el.querySelector('.p-send').onclick = () => void thvComposerSend(view);
+  C.el.querySelector('.p-attach').onclick = ev => {
+    const open = menu.hidden;
+    menu.hidden = !open; ev.currentTarget.setAttribute('aria-expanded', String(open));
+  };
+  menu.onclick = ev => {
+    const b = ev.target.closest('[data-attach]'); if (!b) return;
+    menu.hidden = true; C.el.querySelector('.p-attach').setAttribute('aria-expanded', 'false');
+    if (b.dataset.attach === 'upload') file.click(); else void thvLibOpen(view);
+  };
+  file.onchange = () => { C.files.push(...file.files); file.value = ''; thvChips(view); };
+  C.el.querySelector('.p-chips').onclick = ev => {
+    const rm = ev.target.closest('[data-rm]'); if (!rm) return;
+    ev.preventDefault();
+    const [kind, i] = rm.dataset.rm.split(':');
+    (kind === 'lib' ? C.lib : C.files).splice(Number(i), 1);
+    thvChips(view);
+  };
+  thvDropZone(view);
+}
+function thvDropZone(view) {
+  const zone = view.el;
+  zone.addEventListener('dragover', ev => { if (draggingFiles(ev) && view.composer) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; } });
+  zone.addEventListener('drop', ev => {
+    if (!draggingFiles(ev) || !view.composer) return;
+    ev.preventDefault();
+    view.composer.files.push(...ev.dataTransfer.files);
+    thvChips(view);
+  });
+}
+function thvChips(view) {
+  const C = view.composer; if (!C) return;
+  C.el.querySelector('.p-chips').innerHTML = [
+    ...C.files.map((f, i) => `<span>${esc(f.name)} <a href="#" data-rm="file:${i}" aria-label="Remove ${esc(f.name)}">×</a></span>`),
+    ...C.lib.map((f, i) => `<span>${esc(f.title)} <a href="#" data-rm="lib:${i}" aria-label="Remove ${esc(f.title)}">×</a></span>`)].join('');
+}
+// Library files: the newest the viewer may read, filtered as they type.
+async function thvLibOpen(view) {
+  const C = view.composer, pane = C.el.querySelector('.thv-lib');
+  pane.hidden = false;
+  pane.innerHTML = '<input type="search" class="thv-lib-q" placeholder="Find a file" aria-label="Find a file"><div class="thv-lib-list"><div class="muted">Loading…</div></div><button type="button" class="ghost small" data-lib-close>Close</button>';
+  const q = pane.querySelector('.thv-lib-q'), list = pane.querySelector('.thv-lib-list');
+  pane.querySelector('[data-lib-close]').onclick = () => { pane.hidden = true; };
+  let files = [];
+  try { files = ((await get('/v2/files?limit=50', {fresh: true})).files || []).filter(f => f.locator !== 'remote_link' && !f.url && !f.archived); }
+  catch (e) { list.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  const draw = () => {
+    const words = q.value.trim().toLowerCase();
+    const shown = files.filter(f => !words || String(f.title || f.name || '').toLowerCase().includes(words)).slice(0, 20);
+    list.innerHTML = shown.length ? shown.map(f => `<button type="button" class="thv-lib-row" data-lib="${esc(f.id)}">${esc(f.title || f.name || f.id)}</button>`).join('')
+      : '<div class="muted">No files</div>';
+  };
+  q.oninput = draw; draw(); q.focus();
+  list.onclick = ev => {
+    const b = ev.target.closest('[data-lib]'); if (!b) return;
+    const f = files.find(x => x.id === b.dataset.lib);
+    if (f && !C.lib.some(x => x.id === f.id)) C.lib.push({id: f.id, title: f.title || f.name || f.id});
+    pane.hidden = true; thvChips(view);
+    C.el.querySelector('.p-text').focus();
+  };
+}
+
+// ----------------------------------------------------------------- mentions
+// "@" then letters: the teammates whose name or handle starts so. A bot goes in as @slug, a person as their handle.
+function thvMentionPeople() {
+  const bots = shownEmps().filter(e => !e.hidden).map(e => ({key: 'bot:' + e.name, label: e.display_name || e.name, handle: e.name, kind: 'bot'}));
+  const people = (S.people || []).filter(p => p.id && !p.hidden && p.id !== S.me?.id)
+    .map(p => ({key: 'human:' + p.id, label: p.name || p.id, handle: personHandle(p.email || p.id), kind: 'person'}));
+  return [...people, ...bots];
+}
+function thvMentionFind(view) {
+  const C = view.composer, box = C.el.querySelector('.p-text');
+  const before = box.value.slice(0, box.selectionStart || 0), hit = before.match(/(^|\s)@([\w.-]*)$/);
+  if (!hit) { thvMentionClose(view); return; }
+  const word = hit[2].toLowerCase();
+  const matches = thvMentionPeople().filter(p => !word || p.handle.toLowerCase().startsWith(word)
+    || p.label.toLowerCase().split(/\s+/).some(w => w.startsWith(word))).slice(0, 6);
+  if (!matches.length) { thvMentionClose(view); return; }
+  C.mention = {start: before.length - hit[2].length - 1, matches, at: 0};
+  thvMentionDraw(view);
+}
+function thvMentionDraw(view) {
+  const C = view.composer, list = C.el.querySelector('.thv-mentions');
+  list.hidden = false;
+  list.innerHTML = C.mention.matches.map((p, i) => `<button type="button" role="option" aria-selected="${i === C.mention.at}" data-mention="${i}">${actorAvatar(p.key, 18)}<span>${esc(p.label)}</span><span class="muted">@${esc(p.handle)}</span></button>`).join('');
+  list.onmousedown = ev => ev.preventDefault();
+  list.onclick = ev => { const b = ev.target.closest('[data-mention]'); if (b) thvMentionPick(view, Number(b.dataset.mention)); };
+}
+function thvMentionKey(view, ev) {
+  const M = view.composer.mention;
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+    ev.preventDefault();
+    M.at = (M.at + (ev.key === 'ArrowDown' ? 1 : -1) + M.matches.length) % M.matches.length;
+    thvMentionDraw(view); return true;
+  }
+  if (ev.key === 'Enter' || ev.key === 'Tab') { ev.preventDefault(); thvMentionPick(view, M.at); return true; }
+  if (ev.key === 'Escape') { ev.preventDefault(); thvMentionClose(view); return true; }
+  return false;
+}
+function thvMentionPick(view, i) {
+  const C = view.composer, box = C.el.querySelector('.p-text'), M = C.mention, p = M?.matches[i];
+  if (!p) return;
+  const end = box.selectionStart || 0, text = `@${p.handle} `;
+  box.value = box.value.slice(0, M.start) + text + box.value.slice(end);
+  const caret = M.start + text.length;
+  box.setSelectionRange(caret, caret);
+  thvMentionClose(view);
+  box.focus();
+}
+function thvMentionClose(view) {
+  const C = view.composer; if (!C) return;
+  C.mention = null;
+  const list = C.el.querySelector('.thv-mentions'); if (list) list.hidden = true;
+}
+
+// ----------------------------------------------------------------- sending
+async function thvComposerSend(view) {
+  const C = view.composer, box = C.el.querySelector('.p-text');
+  const text = box.value.trim();
+  if (!text && !C.files.length && !C.lib.length) return;
+  const files = C.files.splice(0), lib = C.lib.splice(0);
+  box.value = ''; box.style.height = ''; thvChips(view);
+  await thvSend(view, {text, files, lib});
+}
+// One message out: a "Checking…" row while the rules check runs, then the message, or a held row the author can
+// edit, discard or (when the server allows) send anyway.
+async function thvSend(view, {text, files = [], lib = [], parent = null}) {
+  const p = {key: 'p' + (++THV_N), text, files, lib, parent: parent?.id || '', depth: parent ? (Number(parent.depth) || 0) + 1 : 0, state: 'checking'};
+  view.pending.push(p);
+  thvDraw(view, {stick: !parent});
+  const refs = lib.length ? {files: lib.map(f => ({id: f.id, title: f.title}))} : null;
+  const body = {text, ...(refs ? {refs} : {}), ...(parent ? {parent_message_id: parent.id} : {})};
+  try {
+    let r;
+    if (!view.id && view.opts.dm) {
+      r = await post('/v2/threads/dm', {members: [view.opts.dm], body: text, ...(refs ? {refs} : {})});
+      const t = r?.thread || r;
+      if (t?.id) { view.thread = t; thvSetId(view, t.id); }
+    } else {
+      const tid = parent?.thread_id || view.id;
+      r = files.length ? await thvUpload(thvPath(tid).replace('/v2/', '/v2/uploads/') + '/messages', body, files)
+        : await post(thvPath(tid) + '/messages', body);
+    }
+    if (r?.held) {
+      p.state = 'held'; p.held = r.held;
+      if (r.held.id) get('/v2/rule-holds/' + encodeURIComponent(r.held.id), {fresh: true})
+        .then(h => { if (h?.can_send) { p.canSend = true; p.nonce = h.nonce || ''; thvDraw(view); } }).catch(() => {});
+    } else {
+      view.pending = view.pending.filter(x => x !== p);
+      const m = r?.message || (r?.id && r?.seq !== undefined ? r : null);
+      if (m) thvApplyMessage(view, {id: m.id, thread_id: m.thread_id, root_id: m.root_id, message: m});
+      else void thvRefresh(view);
+      for (const w of r?.warnings || []) if (w.rule === 'mention_outside') toast(`${actorName(w.actor)} is not in this thread`, true);
+    }
+  } catch (e) {
+    p.state = 'failed'; p.error = e.message;
+  }
+  thvDraw(view, {stick: !parent});
+}
+// Files go in one multipart request with the message (the server answers with the message, or a held verdict).
+async function thvUpload(path, body, files) {
+  const fd = new FormData();
+  for (const [k, v] of Object.entries(body)) fd.append(k, typeof v === 'object' ? JSON.stringify(v) : v);
+  files.forEach(f => fd.append('files', f, f.name));
+  const response = await formFetch(API + path, fd, {});
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) { const err = apiFailure(result, response); err.message ||= 'The server did not take the files.'; throw err; }
+  return result;
+}
+
+// ----------------------------------------------------------------- clicks
+function thvWire(view) {
+  const el = view.el;
+  el.querySelector('.thv-older').onclick = ev => void thvOlder(view, ev.currentTarget);
+  el.querySelector('.thv-unread').onclick = ev => {
+    el.querySelector('.th-new')?.scrollIntoView({block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+    ev.currentTarget.hidden = true;
+  };
+  el.querySelector('.thv-scroll').addEventListener('scroll', () => {
+    const pill = el.querySelector('.thv-unread'), first = el.querySelector('.th-new');
+    if (!pill.hidden && first && thvVisible(el.querySelector('.thv-scroll'), first)) pill.hidden = true;
+  }, {passive: true});
+  el.addEventListener('click', ev => void thvClick(view, ev));
+}
+const thvMsgOf = (view, row) => view.messages.find(m => m.id === row?.dataset.mid);
+async function thvClick(view, ev) {
+  const t = ev.target, row = t.closest('.th-msg');
+  const m = thvMsgOf(view, row);
+  if (t.closest('[data-th-file]')) { const b = t.closest('[data-th-file]'); void openFileLink(b.dataset.thFile, b.dataset.name); return; }
+  if (t.closest('[data-thv-members]')) { threadMembersOpen(view); return; }
+  if (t.closest('[data-thv-menu]')) { threadMenuOpen(view, t.closest('[data-thv-menu]')); return; }
+  if (t.closest('[data-th-earlier]')) {
+    const b = t.closest('[data-th-earlier]'); b.disabled = true;
+    try { await post(thvPath(view.id) + '/open-earlier', {}); await thvRefresh(view); }
+    catch (e) { toast(e.message, true); b.disabled = false; }
+    return;
+  }
+  if (t.closest('[data-th-ack]') && m) { await thvReact(view, m, THV_ACK); return; }
+  if (t.closest('[data-th-react]') && m) { await thvReact(view, m, t.closest('[data-th-react]').dataset.thReact); return; }
+  if (t.closest('[data-th-more]') && m) { thvMsgMenu(view, m, t.closest('[data-th-more]')); return; }
+  if (t.closest('[data-th-edit-cancel]')) { view.editing = ''; thvDraw(view); return; }
+  if (t.closest('[data-th-edit-save]') && m) {
+    const text = row.querySelector('.th-edit-text').value.trim();
+    if (!text) return;
+    try {
+      const r = await patch('/v2/messages/' + encodeURIComponent(m.id), {text});
+      Object.assign(m, r?.message || r || {}, {body: (r?.message || r)?.body ?? text});
+      view.editing = ''; thvDraw(view);
+    } catch (e) { toast(e.message, true); }
+    return;
+  }
+  if (t.closest('[data-th-reply-cancel]')) { view.replyTo = ''; thvDraw(view); return; }
+  if (t.closest('[data-th-reply-send]')) {
+    const box = view.el.querySelector('.th-reply-text'), text = box?.value.trim(), parent = view.messages.find(x => x.id === view.replyTo);
+    if (!text || !parent) return;
+    view.replyTo = '';
+    await thvSend(view, {text, parent});
+    return;
+  }
+  const pend = t.closest('[data-pending]');
+  if (pend) {
+    const p = view.pending.find(x => x.key === pend.dataset.pending); if (!p) return;
+    if (t.closest('[data-held-drop]')) { view.pending = view.pending.filter(x => x !== p); thvDraw(view); return; }
+    if (t.closest('[data-held-edit]')) {
+      view.pending = view.pending.filter(x => x !== p);
+      if (p.parent) view.replyTo = p.parent;
+      thvDraw(view);
+      const box = p.parent ? view.el.querySelector('.th-reply-text') : view.composer?.el.querySelector('.p-text');
+      if (box) { box.value = p.text; box.focus(); }
+      if (!p.parent && view.composer) { view.composer.files.push(...p.files); view.composer.lib.push(...p.lib); thvChips(view); }
+      return;
+    }
+    if (t.closest('[data-held-send]')) {
+      const b = t.closest('[data-held-send]'); b.disabled = true;
+      try {
+        await post('/v2/rule-holds/' + encodeURIComponent(p.held.id) + '/send', {nonce: p.nonce || ''});
+        view.pending = view.pending.filter(x => x !== p);
+        await thvRefresh(view);
+      } catch (e) { toast(e.message, true); b.disabled = false; }
+    }
+    return;
+  }
+  // A message in a sub-thread opens that sub-thread, with the path back above it.
+  if (row && m && m.thread_id && m.thread_id !== view.id && !t.closest('a, button, textarea, input, .md img')) {
+    location.hash = threadHref(m.thread_id);
+  }
+}
+async function thvReact(view, m, emoji) {
+  const rs = m.reactions ||= [], r = rs.find(x => x.emoji === emoji), on = !r?.me;
+  // Shown at once; the server's answer (or the stream) settles it.
+  if (r) { r.count += on ? 1 : -1; r.me = on; } else rs.push({emoji, count: 1, me: true});
+  thvDraw(view);
+  try {
+    const path = '/v2/messages/' + encodeURIComponent(m.id) + '/reactions/' + encodeURIComponent(emoji);
+    const back = on ? await put(path, {}) : await writeRequest('DELETE', path);
+    const fresh = back?.reactions || back?.message?.reactions;
+    if (fresh) { m.reactions = fresh; thvDraw(view); }
+  } catch (e) {
+    const x = rs.find(y => y.emoji === emoji);
+    if (x) { x.count += on ? -1 : 1; x.me = !on; }
+    thvDraw(view); toast(e.message, true);
+  }
+}
+// The message menu: reply in its sub-thread, make a task of it, and edit or delete one's own.
+function thvMsgMenu(view, m, button) {
+  thvMenuClose();
+  const can = thvCanPost(view), mine = thvMine(m), sayable = !m.kind || m.kind === 'say';
+  const items = [can && ['reply', 'Reply in sub-thread'], ['task', 'Make task'], mine && sayable && ['edit', 'Edit'], mine && ['delete', 'Delete']].filter(Boolean);
+  thvMenuShow(button, items, async key => {
+    if (key === 'reply') {
+      view.replyTo = m.id; thvDraw(view);
+      view.el.querySelector('.th-reply-text')?.focus();
+    } else if (key === 'task') threadMakeTask(m, view);
+    else if (key === 'edit') { view.editing = m.id; thvDraw(view); view.el.querySelector('.th-edit-text')?.focus(); }
+    else if (key === 'delete') {
+      if (!confirm('Delete this message?')) return;
+      try { await writeRequest('DELETE', '/v2/messages/' + encodeURIComponent(m.id)); Object.assign(m, {deleted: true, body: ''}); thvDraw(view); }
+      catch (e) { toast(e.message, true); }
+    }
+  });
+}
+// One small menu at a time, under the button that opened it; Escape or a click elsewhere closes it.
+let THV_MENU = null;
+function thvMenuShow(button, items, pick) {
+  const menu = document.createElement('div');
+  menu.className = 'p-menu thv-pop'; menu.setAttribute('role', 'menu');
+  menu.innerHTML = items.map(([k, label]) => `<button type="button" role="menuitem" data-k="${esc(k)}">${esc(label)}</button>`).join('');
+  document.body.append(menu);
+  const r = button.getBoundingClientRect();
+  menu.style.top = Math.min(innerHeight - menu.offsetHeight - 8, r.bottom + 4) + 'px';
+  menu.style.left = Math.max(8, Math.min(innerWidth - menu.offsetWidth - 8, r.right - menu.offsetWidth)) + 'px';
+  button.setAttribute('aria-expanded', 'true');
+  THV_MENU = {menu, button};
+  menu.onclick = ev => { const b = ev.target.closest('[data-k]'); if (!b) return; thvMenuClose(); void pick(b.dataset.k); };
+  menu.querySelector('button')?.focus();
+}
+function thvMenuClose() {
+  if (!THV_MENU) return;
+  THV_MENU.menu.remove(); THV_MENU.button.setAttribute('aria-expanded', 'false');
+  THV_MENU = null;
+}
+document.addEventListener('click', ev => { if (THV_MENU && !THV_MENU.menu.contains(ev.target) && !THV_MENU.button.contains(ev.target)) thvMenuClose(); }, true);
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && THV_MENU) { THV_MENU.button.focus(); thvMenuClose(); } });

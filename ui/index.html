@@ -52,6 +52,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/meetings.css">
 <link rel="stylesheet" href="/tico/ui/styles/bot-page.css">
 <link rel="stylesheet" href="/tico/ui/styles/chat.css">
+<link rel="stylesheet" href="/tico/ui/styles/threads.css">
 <link rel="stylesheet" href="/tico/ui/styles/visual-cards.css">
 <link rel="stylesheet" href="/tico/ui/styles/visual-media.css">
 <link rel="stylesheet" href="/tico/ui/styles/chat-goal.css">
@@ -121,6 +122,24 @@
     <a class="nav-link" href="#/strategy" data-nav="strategy"><span class="nav-icon" aria-hidden="true">strategy</span>Strategy</a>
     <a class="nav-link" href="#/meetings" data-nav="meetings"><span class="nav-icon" aria-hidden="true">forum</span>Meetings<span class="nav-badge meet-pending-badge" data-meet-pending hidden></span></a>
     <section class="side-pins" id="nav-pins" aria-labelledby="nav-pins-h" hidden><h2 class="side-pins-h" id="nav-pins-h">Pipelines</h2><ul class="pin-list" id="pin-list"></ul></section>
+    <section class="side-section" id="nav-threads-section" hidden>
+      <div class="nav-row org-head">
+        <button class="section-toggle" type="button" data-section-toggle="threads" aria-expanded="true" aria-controls="nav-threads">
+          <span>Threads</span><span class="section-chev" aria-hidden="true">›</span>
+        </button>
+        <button class="org-history" id="th-new" type="button" title="New thread" aria-label="New thread"><span class="org-plus" aria-hidden="true">+</span></button>
+      </div>
+      <div class="section-body" id="nav-threads" data-section-body="threads"><ul class="th-list" id="th-list"></ul></div>
+    </section>
+    <section class="side-section" id="nav-dms-section" hidden>
+      <div class="nav-row org-head">
+        <button class="section-toggle" type="button" data-section-toggle="dms" aria-expanded="true" aria-controls="nav-dms">
+          <span>DMs</span><span class="section-chev" aria-hidden="true">›</span>
+        </button>
+        <button class="org-history" id="dm-new" type="button" title="New DM" aria-label="New DM"><span class="org-plus" aria-hidden="true">+</span></button>
+      </div>
+      <div class="section-body" id="nav-dms" data-section-body="dms"><ul class="th-list" id="dm-list"></ul></div>
+    </section>
     <section class="side-section">
       <div class="nav-row org-head">
         <button class="section-toggle" type="button" data-section-toggle="organisation" aria-expanded="true" aria-controls="nav-organisation">
@@ -196,6 +215,7 @@
 </section>
 <nav id="mobile-nav" aria-label="Mobile navigation">
   <button class="mobile-nav-item" id="mobile-org" type="button" data-nav="org" aria-label="Switch bot" aria-haspopup="menu" aria-expanded="false" aria-controls="org-fan"><span class="mobile-nav-icon" aria-hidden="true">account_tree</span><span class="mobile-nav-label">Team</span></button>
+  <a class="mobile-nav-item" id="mobile-threads" href="#/threads" data-nav="threads" hidden><span class="mobile-nav-icon" aria-hidden="true">forum</span><span class="mobile-nav-label">Threads</span><span class="nav-badge" hidden></span></a>
   <button class="mobile-nav-item" id="mobile-search" type="button" data-nav="search" aria-label="Search" aria-haspopup="dialog"><span class="mobile-nav-icon" aria-hidden="true">search</span><span class="mobile-nav-label">Search</span></button>
   <button class="mobile-nav-item mobile-ask" id="mobile-ask" type="button" aria-controls="ask-panel" aria-expanded="false"><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="26" style="width:26px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="mobile-nav-icon ask-x" aria-hidden="true">close</span></span><span class="mobile-nav-label ask-label">Ask Tico</span></button>
   <a class="mobile-nav-item" href="#/tasks" data-nav="tasks"><span class="mobile-nav-icon" aria-hidden="true">task_alt</span><span class="mobile-nav-label">Tasks</span></a>
@@ -278,6 +298,9 @@
 <script src="/tico/ui/app/bot-page.js"></script>
 <script src="/tico/ui/app/bot-details.js"></script>
 <script src="/tico/ui/app/bot-conversation.js"></script>
+<script src="/tico/ui/app/threads.js"></script>
+<script src="/tico/ui/app/thread-view.js"></script>
+<script src="/tico/ui/app/threads-page.js"></script>
 <script src="/tico/ui/app/tags.js"></script>
 <script src="/tico/ui/app/tasks.js"></script>
 <script src="/tico/ui/app/task-pipelines.js"></script>

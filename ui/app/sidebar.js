@@ -856,7 +856,8 @@ function renderTree() {
   };
   document.querySelectorAll('[data-nav]').forEach(a => {
     // More is current only for pages the bottom bar does not have its own button for.
-    const mobilePrimary = S.route === OVERVIEW || S.route === OVERVIEW_CAMPUS || S.route === UPDATES || S.route.startsWith(UPDATES + '?') || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap';
+    const mobilePrimary = S.route === OVERVIEW || S.route === OVERVIEW_CAMPUS || S.route === UPDATES || S.route.startsWith(UPDATES + '?') || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap'
+      || S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE);
     const isCurrent = (a.dataset.nav === 'overview' && (S.route === OVERVIEW || S.route === OVERVIEW_CAMPUS)) ||
       (a.dataset.nav === 'welcome' && S.route === WELCOME) ||
       (a.dataset.nav === 'meetings' && (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?'))) ||
@@ -872,6 +873,7 @@ function renderTree() {
       (a.dataset.nav === 'usage' && S.route === '#/usage') ||
       (a.dataset.nav === 'replay' && S.route.startsWith('#/replay')) ||
       (a.dataset.nav === 'updates' && (S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) ||
+      (a.dataset.nav === 'threads' && (S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE))) ||
       (a.dataset.nav === 'more' && !mobilePrimary) ||
       redesignNavCurrent(a.dataset.nav);
     a.classList.toggle('cur', isCurrent);

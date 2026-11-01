@@ -32,7 +32,6 @@ async function refresh(force) {
   renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
   tipRefresh();
   taskBuilderNoticesRefresh();
-  if (BOT?.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
   botAlertDraw();
   if (BOT) botScreenRefresh(BOT.slug);   // the Screen row and header button follow the computer (online, screen offered)
   if (BOT && $('#bot-onboard-host') && ($('#bot-onboard') ? '1' : '') !== (frNeedsSetup(S.emps.find(x => x.name === BOT.slug)) ? '1' : '')) frBotRefresh(BOT.slug);   // the mark clears when the bot says it is set up
@@ -105,7 +104,6 @@ function liveTasksApply(events) {
     if (events.some(d => d.bulk || d.gone || d.task?.owner === me || d.task?.requester === me)) liveThrottle('bot-tasks', () => {
       if (!BOT || BOT.slug !== me.slice(4)) return;
       if (BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
-      if (BOT.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
     });
   }
   if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) {
@@ -137,7 +135,6 @@ function liveWire() {
       renderTree();
       if (OVERVIEW_PAGE) overviewNeedsDraw();
       if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
-      if (BOT && isKeeper(BOT.slug) && BOT.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
       if (BOT && isKeeper(BOT.slug)) botNeedsChanged(BOT.slug);
     }, 200);
   }).catch(() => {}));
