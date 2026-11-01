@@ -10,7 +10,6 @@ let V2C = null;                                   // the live v2 chat; one per v
 const CHAT_CACHE = new Map(), BOT_TASKS_CACHE = new Map();
 function v2ChatStop() {
   if (!V2C) return;
-  try { V2C.es?.close(); } catch {}
   V2C.liveOff?.();
   clearInterval(V2C.poll);
   clearTimeout(V2C.waitTimer);
@@ -43,7 +42,7 @@ const v2RunLive = x => !!x && !['completed', 'cancelled'].includes(x.state);
 async function v2ChatLoad(slug, room = null) {
   v2ChatStop();
   const mode = v2ChatMode(slug);
-  const state = V2C = {slug, mode, conv: null, messages: [], mine: [], live: null, es: null, poll: 0, rendered: false,
+  const state = V2C = {slug, mode, conv: null, messages: [], mine: [], live: null, poll: 0, rendered: false,
                        loaded: false, failed: false, empty: room?.empty || ''};
   const seen = CHAT_CACHE.get(slug);
   if (room) {
@@ -60,7 +59,7 @@ async function v2ChatLoad(slug, room = null) {
   if (V2C !== state) return;
   v2ChatRender(state);
   void chatJumpPending(state);
-  if (S.me?.cloud && state.conv) v2ChatStream(state, true);
+  if (state.conv) v2ChatStream(state, true);
   void chatGoalLoad(state);
   v2BotsLoad(state);
   state.poll = setInterval(async () => {
@@ -70,7 +69,7 @@ async function v2ChatLoad(slug, room = null) {
       await v2ChatFind(state);
       if (V2C !== state) return;
       v2ChatRender(state);
-      if (state.loaded && S.me?.cloud && state.conv) v2ChatStream(state, true);
+      if (state.loaded && state.conv) v2ChatStream(state, true);
       void chatGoalLoad(state);
       return;
     }
@@ -79,11 +78,11 @@ async function v2ChatLoad(slug, room = null) {
       state.listed = false;
       await v2ChatFind(state);
       if (V2C !== state) return;
-      if (state.conv) { v2ChatRender(state); if (S.me?.cloud) v2ChatStream(state, true); void chatGoalLoad(state); } else state.failed = false;
+      if (state.conv) { v2ChatRender(state); v2ChatStream(state, true); void chatGoalLoad(state); } else state.failed = false;
       return;
     }
     // Live events carry every change to this chat (ui/app/live.js); the poll reads it only without them.
-    if (S.me?.cloud && state.liveOff && liveAvailable()) return;
+    if (state.liveOff && liveAvailable()) return;
     v2ChatMessages(state).then(() => v2ChatRender(state));
     void chatGoalLoad(state);
   }, 15000);
@@ -961,85 +960,46 @@ async function v2ChatGoalChanged(state) {
 const CHAT_SOON_MS = 30;
 function v2ChatStream(state, loaded = false) {
   if (!state.conv) return;
-  if (S.me?.cloud) {
-    if (!liveAvailable()) return;                   // the 15 s poll reads it instead
-    const cid = state.conv.id;
-    if (!loaded) liveSoon('chat:' + cid, () => v2ChatSnapshot(state), 120);
-    if (state.liveOff && state.liveCid === cid) return;
-    state.liveOff?.();
-    state.liveCid = cid;
-    const mine = d => d.conversation_id === cid && V2C === state;
-    let down = 0;
-    const offs = [
-      liveFollow(cid),
-      liveOn('messages', d => {
-        if (!mine(d)) return;
-        if (d.goal_id) void v2ChatGoalChanged(state);
+  if (!liveAvailable()) return;                   // the 15 s poll reads it instead
+  const cid = state.conv.id;
+  if (!loaded) liveSoon('chat:' + cid, () => v2ChatSnapshot(state), 120);
+  if (state.liveOff && state.liveCid === cid) return;
+  state.liveOff?.();
+  state.liveCid = cid;
+  const mine = d => d.conversation_id === cid && V2C === state;
+  let down = 0;
+  const offs = [
+    liveFollow(cid),
+    liveOn('messages', d => {
+      if (!mine(d)) return;
+      if (d.goal_id) void v2ChatGoalChanged(state);
+      liveSoon('chat:' + cid, () => v2ChatSnapshot(state), CHAT_SOON_MS);
+    }),
+    // A run's output arrives step by step (hundreds a minute while it works): the snapshot reads again at most every
+    // 0.4 s for the first 10 s of output, so a short reply streams, then every 3 s; never in a hidden tab. A run
+    // starting or ending reads at once.
+    liveOn('runs', d => {
+      if (!mine(d)) return;
+      if (d.output) {
+        const first = state.outputSince ||= Date.now();
+        liveThrottle('chat-output:' + cid, () => { if (V2C === state) void v2ChatSnapshot(state); },
+                     Date.now() - first < 10000 ? 400 : 3000);
+      } else {
+        state.outputSince = 0;
         liveSoon('chat:' + cid, () => v2ChatSnapshot(state), CHAT_SOON_MS);
-      }),
-      // A run's output arrives step by step (hundreds a minute while it works): the snapshot reads again at most every
-      // 0.4 s for the first 10 s of output, so a short reply streams, then every 3 s; never in a hidden tab. A run
-      // starting or ending reads at once.
-      liveOn('runs', d => {
-        if (!mine(d)) return;
-        if (d.output) {
-          const first = state.outputSince ||= Date.now();
-          liveThrottle('chat-output:' + cid, () => { if (V2C === state) void v2ChatSnapshot(state); },
-                       Date.now() - first < 10000 ? 400 : 3000);
-        } else {
-          state.outputSince = 0;
-          liveSoon('chat:' + cid, () => v2ChatSnapshot(state), CHAT_SOON_MS);
-        }
-      }),
-      liveOn('reset', () => { if (V2C === state) void v2ChatSnapshot(state); }),
-      // A stream that stays down for a few seconds (not the moment it takes to reconnect) marks the reply as interrupted;
-      // persisted messages stay on the page meanwhile.
-      liveOn('status', st => {
-        if (V2C !== state) return;
-        clearTimeout(down);
-        if (!st.connected) down = setTimeout(() => { if (V2C === state && state.live && !liveConnected()) { state.live.interrupted = true; v2ChatRender(state); } }, 3000);
-        else if (state.live?.interrupted) void v2ChatSnapshot(state);
-      }),
-    ];
-    state.liveOff = () => { clearTimeout(down); offs.forEach(off => off()); state.liveOff = null; state.liveCid = null; };
-    return;
-  }
-  if (typeof EventSource === 'undefined') return;
-  try { state.es?.close(); } catch {}
-  const es = state.es = new EventSource(`${API}/v2/stream?conversation=${encodeURIComponent(state.conv.id)}`);
-  const stop = () => { try { es.close(); } catch {} if (state.es === es) state.es = null; };
-  es.addEventListener('delta', ev => {
-    if (V2C !== state) return stop();
-    let d = {}; try { d = JSON.parse(ev.data); } catch {}
-    state.live = {text: (state.live?.text || '') + String(d.text || '')};
-    const box = $('#v2-live');
-    if (box && state.live.text) {
-      // The thread's stick follows the reply as it grows, if the reader is at the bottom.
-      box.innerHTML = safeMd(state.live.text, {shortLinks: true});
-      const copy = box.parentElement.querySelector('[data-chat-copy]');
-      if (copy) copy.dataset.chatCopy = state.live.text;
-    } else v2ChatRender(state);
-  });
-  es.addEventListener('goal', ev => {
-    if (V2C !== state) return stop();
-    let d = {}; try { d = JSON.parse(ev.data); } catch {}
-    chatGoalApply(state, d.goal || null);
-  });
-  es.addEventListener('message', ev => {
-    stop();
-    if (V2C !== state) return;
-    let d = {}; try { d = JSON.parse(ev.data); } catch {}
-    if (d.message) state.messages.push(d.message);
-    state.live = null;
-    v2ChatRender(state);
-    void v2Refresh();
-  });
-  es.addEventListener('error', () => {
-    stop();
-    if (V2C !== state) return;
-    state.live = null;
-    v2ChatMessages(state).then(() => v2ChatRender(state));
-  });
+      }
+    }),
+    liveOn('reset', () => { if (V2C === state) void v2ChatSnapshot(state); }),
+    // A stream that stays down for a few seconds (not the moment it takes to reconnect) marks the reply as interrupted;
+    // persisted messages stay on the page meanwhile.
+    liveOn('status', st => {
+      if (V2C !== state) return;
+      clearTimeout(down);
+      if (!st.connected) down = setTimeout(() => { if (V2C === state && state.live && !liveConnected()) { state.live.interrupted = true; v2ChatRender(state); } }, 3000);
+      else if (state.live?.interrupted) void v2ChatSnapshot(state);
+    }),
+  ];
+  state.liveOff = () => { clearTimeout(down); offs.forEach(off => off()); state.liveOff = null; state.liveCid = null; };
 }
 
 const ICON_CHAT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4c-4.7 0-8.5 3.1-8.5 7 0 2 1 3.8 2.6 5.1L5 20.5l4.3-1.6c.9.2 1.8.4 2.7.4 4.7 0 8.5-3.1 8.5-7S16.7 4 12 4z"/></svg>';
