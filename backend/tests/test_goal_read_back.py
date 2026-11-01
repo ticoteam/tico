@@ -511,33 +511,6 @@ def test_read_back_cannot_be_read_or_saved_after_strategy_bot_read_access_is_rev
     assert get(api, "goals/" + row["id"])["goal"]["title"] == "Publish the guide"
 
 
-@pytest.mark.parametrize("hidden_change", ["title", "why", "owner"])
-def test_cited_save_refuses_hidden_conflicts_without_disclosing_or_saving(api, hidden_change):
-    from backend.tests.test_api import restrict
-    strategy_bot(api)
-    row = goal(api, "Publish the guide")
-    r, attempt = turn(api, "coo", "ana-test", "Update the guide")
-    back = read_back(api, attempt, {"kind": "goal_update", "goal_id": row["id"], "title": "Agreed title"})
-    attempt = reply(api, r, attempt, "yes")
-    private = {"title": "Private revised title", "why": "Private revised purpose", "owner": "bot:inbox"}
-    with api.app.state.store.transaction() as c:
-        restrict(c, "inbox" if hidden_change == "owner" else "ops", people=["ana"])
-    # The owner changes the goal after yes, while the Strategy Bot cannot read it.
-    path = "goals/" + row["id"] + ("/why" if hidden_change == "why" else "")
-    post(api, path, {hidden_change: private[hidden_change]})
-    with api.app.state.store.read() as c:
-        before = c.execute("SELECT COUNT(*) FROM goal_events WHERE goal_id=?", (row["id"],)).fetchone()[0]
-    denied = save(api, attempt, back["changes"][0]["steps"][0], expected=403)
-    assert denied["error"]["code"] == "forbidden"
-    assert denied["error"]["detail"] == "The Strategy Bot can't see that bot's goals."
-    assert all(value not in json.dumps(denied) for value in private.values())
-    with api.app.state.store.read() as c:
-        assert G.goal(c, row["id"])[hidden_change] == private[hidden_change]
-        assert G.goal(c, row["id"])["title"] != "Agreed title"
-        assert c.execute("SELECT COUNT(*) FROM goal_events WHERE goal_id=?", (row["id"],)).fetchone()[0] == before
-        assert GR.saves(c, back["message_id"]) == {}
-
-
 def test_stored_read_back_keeps_access_checks_for_the_old_parent_it_named(api):
     from backend.tests.test_api import restrict
     strategy_bot(api)
@@ -624,3 +597,49 @@ def test_conflicts_do_not_name_a_bot_editor_in_stored_read_or_save(api, change_k
     assert "someone" in stored["changes"][0]["reason"] and "someone" in refused["error"]["detail"]
     assert "inbox" not in str(stored) and "inbox" not in str(refused)
     assert get(api, "goals/" + row["id"])["goal"]["title"] != "Publish guide today"
+
+
+@pytest.mark.parametrize("edited", ["title", "why", "owner", "created_owner"])
+def test_revoked_read_back_access_is_checked_before_conflict_details(api, edited):
+    from backend.tests.test_api import restrict
+    strategy_bot(api)
+    r, attempt = turn(api, "coo", "ana-test", "Publish the guide")
+    if edited == "created_owner":
+        change = {"kind": "goal_create", "title": "Publish the guide", "owner": "ops", "why": "Public purpose"}
+    else:
+        row = goal(api, "Publish the guide")
+        change = {"kind": "goal_update", "goal_id": row["id"], "title": "Publish guide today"}
+    back = read_back(api, attempt, change)
+    attempt = reply(api, r, attempt, "yes")
+    steps = back["changes"][0]["steps"]
+    if edited == "created_owner":
+        row = save(api, attempt, steps[0])["goal"]
+        step = {**steps[1], "path": steps[1]["path"].replace(GR.NEW, row["id"])}
+    else:
+        step = steps[0]
+    # Access revocation alone and an accessible edit each passed earlier tests.
+    # Combine them: even a refusal must not reveal the newly private values.
+    with api.app.state.store.transaction() as c:
+        if edited in ("owner", "created_owner"):
+            G.update(c, "human:ana", row["id"], owner="bot:inbox")
+        else:
+            restrict(c, "ops", people=["ana"])
+            if edited == "why":
+                from backend import company
+                company.set_why(c, "human:ana", row["id"], "Private revised words")
+            else:
+                G.update(c, "human:ana", row["id"], title="Private revised words")
+        before = dict(G.goal(c, row["id"]))
+        events = c.execute("SELECT count(*) FROM goal_events WHERE goal_id=?", (row["id"],)).fetchone()[0]
+        saved = c.execute("SELECT count(*) FROM events WHERE action=? AND target=?",
+                          (GR.SAVED, back["message_id"])).fetchone()[0]
+    for denied in (get(api, "goals/read-back/" + back["message_id"], attempt["token"], expected=403),
+                   save(api, attempt, step, expected=403)):
+        assert denied["error"] == {"code": "forbidden", "detail": "The Strategy Bot can't see that bot's goals.",
+                                   "retryable": False}
+        assert "Private revised words" not in str(denied) and "inbox" not in str(denied)
+    with api.app.state.store.read() as c:
+        assert dict(G.goal(c, row["id"])) == before
+        assert c.execute("SELECT count(*) FROM goal_events WHERE goal_id=?", (row["id"],)).fetchone()[0] == events
+        assert c.execute("SELECT count(*) FROM events WHERE action=? AND target=?",
+                         (GR.SAVED, back["message_id"])).fetchone()[0] == saved

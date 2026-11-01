@@ -938,8 +938,8 @@ def install(app, store, auth, mutate, settings):
             back = GR.stored(c, mid)
             if not back or (H.conversation(c, back["conversation_id"]) or {}).get("owner_actor") != who.actor:
                 raise Problem("not_found", "No such read-back", 404)
-            GR.read_back_access_stored(c, auth, back["changes"])
             done = GR.saves(c, mid)
+            GR.read_back_access_stored(c, auth, back["changes"], done)
             yes, why_not = None, ""
             if GR.strategy_turn(who):
                 turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",

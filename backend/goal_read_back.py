@@ -303,8 +303,11 @@ def read_back_owners(c, auth, owners):
             raise Problem("forbidden", "The Strategy Bot can't see that bot's goals.", 403)
 
 
-def read_back_access_stored(c, auth, changes):
+def read_back_access_stored(c, auth, changes, done):
     """Recheck stored steps on read and save: access may have changed since the read-back."""
+    for saved in done.values():
+        if saved.get("goal_id"):
+            read_back_access(c, auth, {"goal_id": saved["goal_id"]})
     for ch in changes:
         read_back_owners(c, auth, ch.get("read_owners") or [])
         for st in ch["steps"]:
@@ -326,8 +329,8 @@ def agreement(c, who, cited, method, path, body, *, auth):
     back, yes, words = answered(c, who, cited)
     # Authorize before inspecting history: conflict details contain current private values.
     # Both middleware and the writer call this gate with their own connection.
-    read_back_access_stored(c, auth, back["changes"])
     done = saves(c, back["id"])
+    read_back_access_stored(c, auth, back["changes"], done)
     sent = canonical(c, path, body, who.actor)
     found = None
     for change in back["changes"]:
