@@ -469,15 +469,18 @@ Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a
 `backend/recruiting.py` does the work; the pages are `ui/app/recruit.js`.
 
 - **The job description.** Leaving the title asks `POST /api/v2/seats/draft` (`{title, team, reports_to}`), which answers
-  at once and stores nothing: the catalog template that best fits the title, composed into one line of summary, "What
-  you'll do" from what it owns and "Works in" from its tools (`source: "catalog"`), or nothing for a title no template fits
-  (`source: "none"`). **Redraft** (`redraft: true`) also asks the team's model for one rewrite, given five seconds; if
+  and stores nothing: the catalog template that is the job the title names (its name shares a word of the work with
+  the title, never only a word of rank or a kind of job such as "Engineer" or "Analyst"; a title ending in a kind of job wants
+  that kind, and a head's title the department's head), composed at once into one line
+  of summary, "What you'll do" from what it owns and "Works in" from its tools (`source: "catalog"`). For a title no
+  template is, such as "Rust engineer", the team's model writes one from the title within five seconds (`source:
+  "model"`), or nothing comes back without a model (`source: "none"`). **Redraft** (`redraft: true`) also asks the team's model for one rewrite, given five seconds; if
   there is no model or it fails, the composed text comes back. A description typed by hand is never replaced by the first
   draft. Anyone who may change the seat edits it later from **Job post** (`PATCH /api/v2/seats/{id}`). Reading is
   `GET /api/v2/seats/{id}`, with `description_by` (`chart` or `person`) and `can_edit`.
 - **Applicants** (`POST /api/v2/seats/{id}/recruit`) answers at once, on this Tico, with no outside service and no trial
   task: up to eight Tico catalog templates matched against the title and description. Each has `match`: `strong` when
-  the template's name shares a word of the work with the title, `good` when it fits at all, else empty; strong ones come
+  the template's name shares a word of the work with the title (not "Engineer" alone), `good` when it fits at all, else empty; strong ones come
   first. Each carries a one-line summary, tags, what it owns and never does, its onboarding questions, what it needs (each
   `connected`, `on_hire` or `not_set`) and the model it suggests among the providers the team has turned on, with the list
   of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never applicants. Each

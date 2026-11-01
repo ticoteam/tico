@@ -46,6 +46,7 @@ def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewr
     assert drafted["source"] == "catalog"
     text = drafted["description"]
     assert "\n\nWhat you'll do\n- " in text and "\n\nWorks in: " in text and not text.startswith("What")
+    monkeypatch.setattr(recruiting, "_rewrite_call", lambda *_: (_ for _ in ()).throw(RuntimeError("no key")))
     assert post(api, "seats/draft", {"title": "Qwxz vrrb"}) == {"description": "", "source": "none"}
     # Nothing is stored: drafting is not posting.
     assert get(api, "seats")["seats"] == []
@@ -80,6 +81,74 @@ def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewr
     assert asked == [("Customer support lead", "")] * 3 + [("Customer support lead", cara)]
     bot = as_bot(api, "coo")
     assert api.post("/api/v2/seats/draft", headers=bot, json={"title": "Customer support lead"}).status_code == 403
+
+
+def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_another_job(api, monkeypatch):
+    """A word of rank or a kind of job ("Engineer", "Analyst") never makes a fit: "Rust engineer" is not the QA Engineer,
+    whose name shares only "Engineer". With no template that is the job, the model writes one from the title alone
+    (no template text to rewrite), under the same bound; with no model, the box stays empty."""
+    asked = []
+    def write(composed, title, boss, deadline):
+        asked.append((composed, title))
+        return "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day"
+    monkeypatch.setattr(recruiting, "_rewrite_call", write)
+    for title in ("Rust engineer", "iOS developer", "Data analyst"):
+        drafted = post(api, "seats/draft", {"title": title})
+        assert drafted == {"description": "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day",
+                           "source": "model"}
+    assert asked == [("", "Rust engineer"), ("", "iOS developer"), ("", "Data analyst")]
+    # A title that is a template's job drafts from that template at once, without the model, two-letter work included.
+    _, cards = recruiting._recruitable(api.app.state.onboarding)
+    for title, template in (("QA engineer", "issue-triage"), ("Security engineer", "security-engineer"),
+                            ("Marketing manager", "marketing-lead"), ("Customer support lead", "support-lead"),
+                            ("Head of People", "people-lead"), ("Developer Advocates", "developer-advocate"),
+                            ("Head of HR", "people-lead"), ("HR generalist", "people-hr"),
+                            ("Head of engineering", "engineering-lead"), ("Director of marketing", "marketing-lead"),
+                            ("Head of Human Resources", "people-lead"), ("Head of Legal Operations", "legal-ops"),
+                            ("Developer relations", "developer-advocate"), ("PR manager", "pr"),
+                            ("VP Engineering", "engineering-lead"), ("Head of Compliance", "compliance"),
+                            ("Head of Customer Success", "customer-success"), ("Account Director", "account-manager"),
+                            ("Human Resources Generalist", "people-hr"), ("Financial Planning Analyst", "spend-watcher"),
+                            ("SRE", "incident-scribe"), ("SDR", "sdr-research"),
+                            ("Site Reliability Manager", "incident-scribe"),
+                            ("Sales Development Specialist", "sdr-research"), ("Public relations manager", "pr"),
+                            ("Senior Software Developer", "pr-reviewer"), ("QA engineer (contract)", "issue-triage"),
+                            ("Security engineer - remote", "security-engineer"),
+                            ("Manager, Engineering", "engineering-manager"), ("Engineer, Security", "security-engineer"),
+                            ("Manager, Customer Success", "customer-success"),
+                            ("VP, Product Marketing", "product-marketing"), ("Sr. Security Engineer", "security-engineer"),
+                            ("Vice President, Product Marketing", "product-marketing"),
+                            ("Manager (Engineering)", "engineering-manager"), ("Analyst (Pricing)", "pricing"),
+                            ("Software Engineer, Security", "security-engineer"),
+                            ("Software Engineer (Security)", "security-engineer"),
+                            ("Software Engineer, Site Reliability", "incident-scribe"),
+                            ("Engineer (QA) - Remote, US", "issue-triage"),
+                            ("Support Representative", "support"), ("Customer Support Rep", "support"),
+                            ("Customer Service Agent", "support"),
+                            ("Director of Revenue Recognition", "revenue-accountant"),
+                            ("Employee Relations Manager", "hr-business-partner")):
+        assert recruiting._best_card(cards, title)["template"] == template, title
+    # A title ending in a kind of job wants that kind: a designer is not the UX Writer, an assistant not the Account
+    # Executive, a machine learning engineer not the Learning and Development Specialist.
+    for title in ("UX designer", "Executive assistant", "Machine learning engineer", "Product designer",
+                  "Accounting manager", "UX Designer (Contract)", "Rust engineer, platform",
+                  "UX Designer II", "UX Designer III"):
+        assert recruiting._best_card(cards, title) is None, title
+    # Every template's own name, and its plural, is that template's job.
+    misses = [card["name"] for card in cards for title in (card["name"], card["name"] + "s")
+              if (recruiting._best_card(cards, title) or {}).get("template") != card["template"]]
+    assert misses == []
+    asked.clear()
+    assert post(api, "seats/draft", {"title": "QA engineer"})["source"] == "catalog" and asked == []
+    monkeypatch.setattr(recruiting, "_rewrite_call", lambda *_: (_ for _ in ()).throw(TimeoutError("slow")))
+    assert post(api, "seats/draft", {"title": "Rust engineer"}) == {"description": "", "source": "none"}
+
+    # Applicants: no template is "strong" for a Rust engineer on "Engineer" alone; the QA Engineer is for a QA engineer.
+    rust = post(api, "seats", {"title": "Rust engineer", "reports_to": "coo"})
+    assert "strong" not in {c["match"] for c in post(api, f"seats/{rust['id']}/recruit", {})["candidates"]}
+    qa = post(api, "seats", {"title": "QA engineer", "reports_to": "coo"})
+    first = post(api, f"seats/{qa['id']}/recruit", {})["candidates"][0]
+    assert first["template"] == "issue-triage" and first["match"] == "strong"
 
 
 def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch):
@@ -225,6 +294,7 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
     for flag in ("rehearsal", "demo"):
         monkeypatch.setattr(api.app.state.onboarding.settings, flag, True)
         assert post(api, "seats/draft", body) == composed
+        assert post(api, "seats/draft", {"title": "Rust engineer"}) == {"description": "", "source": "none"}
         monkeypatch.setattr(api.app.state.onboarding.settings, flag, False)
     assert touched == []
 
