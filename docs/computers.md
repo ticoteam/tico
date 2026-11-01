@@ -216,7 +216,7 @@ computers. Every bot on that computer then runs that tool on it.
   refreshed login is sent back to Tico. Each token in it is masked in what the turn leaves.
 - A usage limit met on a subscription holds it on every computer it is given to until the reset. Meanwhile it is
   passed over: turns there run on the computer's own login, else the Gateway under the company's models choice,
-  else wait.
+  else wait. A bot waiting on the old plan's limit resumes on the new plan at once when a computer is switched to it.
 - If the provider refuses it, it shows **Needs reconnect** and is passed over (the computer's own login, then the
   Gateway) until someone pastes a new value with **Reconnect**. The computer's own login is left alone.
 - A computer on an older runner does not take subscriptions; its bots run as before until it updates.

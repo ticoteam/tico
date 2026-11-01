@@ -363,17 +363,24 @@ def lift_after_connection_change(c, settings, actor, bot):
                  reason="Connection changed")
 
 
+def lift_limited_on_computer(c, settings, actor, runner_id, runtime):
+    """Re-judge each Rate limited bot on this computer whose own turns run `runtime` (lift_after_connection_change).
+    Call it after the computer's sign-in for `runtime` has changed in the database: the re-judge reads the login the
+    bot would use now."""
+    for row in c.execute("SELECT s.bot FROM bot_status s JOIN assignments a ON a.bot=s.bot "
+                         "WHERE s.state='limited' AND a.runner_id=? ORDER BY s.bot", (runner_id,)).fetchall():
+        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row[0],)).fetchone()
+        if providers.bot_choice(c, settings, json.loads(config[0]) if config and config[0] else {})[0] == runtime:
+            lift_after_connection_change(c, settings, actor, row[0])
+
+
 def lift_after_login_switch(c, settings, actor, runner_id, runtime):
     """A computer's login for `runtime` was switched to another account or key: the hold on it was the old account's.
     It ends as Try now does (login_holds.try_now: one probe turn tests the new account), and every bot that was
     Rate limited on it is freed."""
     for key in {k for k in (login_holds.canonical(c, runner_id, "", runtime), "") if k is not None}:
         login_holds.try_now(c, runner_id, key, runtime)
-    for row in c.execute("SELECT s.bot FROM bot_status s JOIN assignments a ON a.bot=s.bot "
-                         "WHERE s.state='limited' AND a.runner_id=?", (runner_id,)).fetchall():
-        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row[0],)).fetchone()
-        if providers.bot_choice(c, settings, json.loads(config[0]) if config and config[0] else {})[0] == runtime:
-            lift_after_connection_change(c, settings, actor, row[0])
+    lift_limited_on_computer(c, settings, actor, runner_id, runtime)
 
 
 # The room messages a claim hands its turn (the runner forwards only what arrived since the session last answered).

@@ -541,3 +541,165 @@ def test_a_computer_with_only_a_codex_subscription_runs_codex_checks_and_their_l
         assert not login_holds.get(c, m["runner_id"], "", "codex")
         # ... and the check keeps its own schedule: it alone is held, the bot is not limited.
         assert H.status(c, "ops")["state"] != "limited" and "on a check" in H.status(c, "ops")["focus"]
+
+
+def limited_on(api, m, sid, bot="ops"):
+    """A turn of `bot` on computer `m`, signed in with subscription `sid`, meets a usage limit that names its reset: the
+    bot is limited and its queued work is held until the reset (`quota-reset`)."""
+    give(api, m, "claude", sid)
+    post(api, f"chat/{bot}", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "limit"}, m["token"])
+    post(api, f"attempts/{turn['id']}/events", {"events": [
+        {"seq": 1, "kind": "error", "payload": {"error": CLAUDE_LIMIT, "limit": True}}]}, m["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
+         m["token"])
+    return turn
+
+
+def status(api, bot="ops"):
+    with api.app.state.store.read() as c:
+        return H.status(c, bot) or {}
+
+
+def queued_holds(api, bot="ops"):
+    with api.app.state.store.read() as c:
+        return [tuple(r) for r in c.execute("SELECT held,wake_class FROM jobs WHERE bot=? AND state='queued' "
+                                            "ORDER BY id", (bot,))]
+
+
+def signed_with(api, turn):
+    """The subscription a turn was handed (its attempt's record), or None for the computer's own login."""
+    with api.app.state.store.read() as c:
+        found = c.execute("SELECT subscription_id FROM attempt_subscriptions WHERE attempt_id=?",
+                          (turn["id"],)).fetchone()
+    return found[0] if found else None
+
+
+def hold_plan(api, sid, until="2999-01-01T00:00:00.000000Z"):
+    """A plan's own usage-limit hold, as a limit met on it elsewhere leaves it."""
+    with api.app.state.store.transaction() as c:
+        login_holds._save(c, {"runner_id": "", "profile": login_holds.subscription_login(sid), "runtime": "claude",
+                              "until": until, "since": H.now(), "error": CLAUDE_LIMIT})
+
+
+def hold_own_login(api, m, until="2999-01-01T00:00:00.000000Z"):
+    with api.app.state.store.transaction() as c:
+        login_holds._save(c, {"runner_id": m["runner_id"], "profile": "", "runtime": "claude", "until": until,
+                              "since": H.now(), "error": CLAUDE_LIMIT})
+
+
+def test_switching_a_computer_to_another_plan_frees_a_bot_limited_on_the_old_one(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    plan_a, plan_b = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
+    m = machine(api)                                     # no login of its own: the held work waits for the reset
+    limited_on(api, m, plan_a)
+    assert status(api)["state"] == "limited" and queued_holds(api) == [(1, "quota-reset")]
+    give(api, m, "claude", plan_b)
+    assert status(api)["state"] != "limited" and queued_holds(api) == [(0, "quota-reset")]
+    turn = claim(api, m)
+    assert turn and turn["bot"] == "ops" and signed_with(api, turn) == plan_b
+
+
+def test_a_new_plan_held_at_its_limit_is_passed_over_so_the_bot_runs_on_the_computers_own_login(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    plan_a, plan_b = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
+    m = machine(api, signed_in=True)
+    limited_on(api, m, plan_a)
+    hold_plan(api, plan_b)
+    give(api, m, "claude", plan_b)
+    # The held plan is passed over (model_subscriptions.in_effect), so the turn runs on the computer's own login.
+    assert status(api)["state"] != "limited" and queued_holds(api) == [(0, "quota-reset")]
+    turn = claim(api, m)
+    assert turn and turn["bot"] == "ops" and signed_with(api, turn) is None
+
+
+def test_a_new_plan_held_at_its_limit_keeps_the_bot_limited_when_the_computers_own_login_is_held_too(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    plan_a, plan_b = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
+    m = machine(api, signed_in=True)
+    limited_on(api, m, plan_a)
+    hold_plan(api, plan_b)
+    hold_own_login(api, m)
+    give(api, m, "claude", plan_b)
+    assert status(api)["state"] == "limited" and queued_holds(api) == [(1, "quota-reset")]
+
+
+def test_a_plan_switch_does_not_end_the_computers_own_login_hold(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    plan_a, plan_b = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
+    m = machine(api)
+    limited_on(api, m, plan_a)
+    own = "2999-01-01T00:00:00.000000Z"
+    hold_own_login(api, m, own)
+    give(api, m, "claude", plan_b)
+    # The bot is freed onto plan B (a plan switch never touches the computer's own login), and that login's hold stands.
+    assert status(api)["state"] != "limited"
+    with api.app.state.store.read() as c:
+        assert login_holds.get(c, m["runner_id"], "", "claude")["until"] == own
+    turn = claim(api, m)
+    assert turn and signed_with(api, turn) == plan_b
+
+
+def test_a_switch_leaves_a_bot_of_another_runtime_on_the_same_computer_alone(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    on(api, "cpo", "codex", "gpt-6.1-sol")
+    plan_a, plan_b = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
+    m = machine(api)
+    assign(api, m, "cpo")
+    limited_on(api, m, plan_a)
+    with api.app.state.store.transaction() as c:
+        H.status_set(c, H.KEEPER, "cpo", state="limited", focus="Usage limit on ChatGPT", reason="test")
+    give(api, m, "claude", plan_b)
+    # Nothing re-judged cpo: its runtime is codex, and it has no hold on its own login to lift it.
+    assert status(api, "cpo")["state"] == "limited" and status(api, "cpo")["focus"] == "Usage limit on ChatGPT"
+    assert status(api)["state"] != "limited"
+
+
+def test_a_new_secret_on_a_held_plan_ends_its_hold_as_try_now_does_and_a_rename_does_not(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    plan_a = add(api, name="Plan A")["id"]
+    m = machine(api)
+    limited_on(api, m, plan_a)
+    assert status(api)["state"] == "limited"
+    post(api, f"model-subscriptions/{plan_a}", {"name": "Plan A renamed"})
+    with api.app.state.store.read() as c:
+        assert login_holds.get(c, "", login_holds.subscription_login(plan_a), "claude")["until"] > H.now()
+    assert status(api)["state"] == "limited"
+    post(api, f"model-subscriptions/{plan_a}", {"secret": OTHER})      # a renewed plan, or another account
+    with api.app.state.store.read() as c:
+        hold = login_holds.get(c, "", login_holds.subscription_login(plan_a), "claude")
+    assert hold["until"] <= H.now() and hold["cut"]
+    assert status(api)["state"] != "limited"
+    turn = claim(api, m)
+    assert turn and signed_with(api, turn) == plan_a
+    with api.app.state.store.read() as c:                 # the one probe turn tests the new value
+        assert login_holds.get(c, "", login_holds.subscription_login(plan_a), "claude")["probe_job"] == turn["job_id"]
+
+
+def test_removing_the_plan_a_bot_is_limited_on_frees_it_to_the_computers_own_login(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    plan_a = add(api, name="Plan A")["id"]
+    m = machine(api, signed_in=True)
+    limited_on(api, m, plan_a)
+    assert status(api)["state"] == "limited"
+    gone = api.delete(f"/api/v2/model-subscriptions/{plan_a}?confirm=1", headers=headers())
+    assert gone.status_code == 200
+    # The computer's row is deleted before the re-judge, so the bot's login is the computer's own, which is free.
+    assert status(api)["state"] != "limited" and queued_holds(api) == [(0, "quota-reset")]
+    turn = claim(api, m)
+    assert turn and turn["bot"] == "ops" and signed_with(api, turn) is None
