@@ -908,33 +908,35 @@ def build_file(name):
 _SECRET = ('.env*', '*.pem', '*.key', 'id_rsa*', 'credentials*', '*.p12')
 
 # Conflict markers with their labels dropped, so git's text and the file compare equal whatever the labels say.
-_MARKER_LABEL = re.compile(r'^(<{7}|\|{7}|>{7})(?: .*)?$', re.M)
+_MARKER_LABEL = re.compile(rb'^(<{7}|\|{7}|>{7})(?: .*)?$', re.M)
 
 
 def _untouched_conflict(path, gitdir, name, env):
-    """True when a conflicted file is still exactly git's own conflicted text for its stages: nothing resolved or edited."""
+    """True when a conflicted file is still exactly git's own conflicted text for its stages: nothing resolved or edited,
+    line endings included. Bytes throughout, so no text decoding or newline translation can make two files look alike."""
     try:
-        text = (path / name).read_text()
-    except (OSError, UnicodeDecodeError):
+        data = (path / name).read_bytes()
+    except OSError:
         return False
     stages = {}
     for stage in ('1', '2', '3'):
-        shown = git(path, 'show', f':{stage}:{name}', env=env, check=False)
+        shown = isolation.run([*safe_git.prefix(path), '-C', str(path), 'show', f':{stage}:{name}'],
+                              env=safe_git.environment(env), capture_output=True, stdin=subprocess.DEVNULL, timeout=120)
         if shown.returncode == 0:
             stages[stage] = shown.stdout
     if '2' not in stages or '3' not in stages:
         return False
     with tempfile.TemporaryDirectory(dir=gitdir) as scratch:
         files = {}
-        for stage, content in stages.items():
+        for stage in ('1', '2', '3'):
             files[stage] = Path(scratch) / ('stage' + stage)
-            files[stage].write_text(content)
-        if '1' not in files:
-            files['1'] = Path(scratch) / 'stage1'
-            files['1'].write_text('')
+            files[stage].write_bytes(stages.get(stage, b''))
+        shaped = _MARKER_LABEL.sub(rb'\1', data)
         for flags in ([], ['--diff3']):
-            merged = git(path, 'merge-file', '-p', *flags, str(files['2']), str(files['1']), str(files['3']), env=env, check=False)
-            if 1 <= merged.returncode <= 127 and _MARKER_LABEL.sub(r'\1', merged.stdout) == _MARKER_LABEL.sub(r'\1', text):
+            merged = isolation.run([*safe_git.prefix(path), '-C', str(path), 'merge-file', '-p', *flags,
+                                    str(files['2']), str(files['1']), str(files['3'])],
+                                   env=safe_git.environment(env), capture_output=True, stdin=subprocess.DEVNULL, timeout=120)
+            if 1 <= merged.returncode <= 127 and _MARKER_LABEL.sub(rb'\1', merged.stdout) == shaped:
                 return True
     return False
 

@@ -1570,3 +1570,14 @@ def test_another_operation_beside_a_merge_is_kept(trees, tmp_path, marker):
 ])
 def test_the_merge_result_tree_is_read_only_when_git_wrote_one(output, returncode, tree):
     assert W._merge_result_tree(subprocess.CompletedProcess([], returncode, output, '')) == tree
+
+
+def test_a_line_ending_only_edit_to_a_conflicted_file_is_kept(trees, tmp_path):
+    """The abort would revert such an edit: the text is git's own, but the bytes are not."""
+    workspace, base, remote, row, client = trees
+    path = _merge_in_progress(trees, tmp_path)
+    (path / 'file').write_bytes((path / 'file').read_bytes().replace(b'\n', b'\r\n'))
+    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
+        W.act(workspace, row, 'remove', os.environ.copy())
+    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
+    assert b'\r\n' in (path / 'file').read_bytes()

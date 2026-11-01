@@ -2166,4 +2166,17 @@ mod tests {
     async fn a_resolution_taking_main_beside_a_conflict_is_kept() {
         resolution_beside_a_conflict_is_kept("--theirs", "main file").await;
     }
+
+    #[tokio::test]
+    async fn a_line_ending_only_edit_to_a_conflicted_file_is_kept() {
+        let folder = temp_folder("crlf");
+        let mut m = merge_in_progress(&folder.0, &["file"], &[]);
+        let bytes = std::fs::read(m.path.join("file")).unwrap();
+        let crlf: Vec<u8> = bytes.iter().flat_map(|&b| if b == b'\n' { vec![b'\r', b'\n'] } else { vec![b] }).collect();
+        std::fs::write(m.path.join("file"), crlf).unwrap();
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert!(std::fs::read(m.path.join("file")).unwrap().windows(2).any(|w| w == b"\r\n"));
+    }
 }
