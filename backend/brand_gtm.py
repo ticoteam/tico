@@ -81,7 +81,8 @@ def versions(c, kind, limit=VERSIONS_SHOWN):
 
 def view(c, kind, editor):
     current = published(c, kind)
-    return {"published": current, "draft": draft(c, kind, current) if editor else None, "versions": versions(c, kind)}
+    return {"published": current, "draft": draft(c, kind, current) if editor else None, "versions": versions(c, kind),
+            "may_edit": bool(editor)}
 
 
 def _names(items, key, limit):

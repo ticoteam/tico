@@ -89,6 +89,13 @@ def test_channel_and_cohort_permissions(api):
     assert get(api, "growth/channels?include_retired=true", token="cara-test")["channels"][0]["retired_at"]
 
 
+def test_lists_and_settings_say_whether_the_caller_may_edit(api):
+    ops = bot(api, "ops")
+    for path in ("growth/channels", "growth/sources", "growth/settings"):
+        assert get(api, path)["may_edit"] is True and get(api, path, token="ben-test")["may_edit"] is True, path
+        assert get(api, path, token="cara-test")["may_edit"] is False and get(api, path, token=ops)["may_edit"] is False
+
+
 def test_sources_list_conflicts_and_only_admins_write(api):
     post(api, "growth/sources", {"truth_for": "Revenue", "system": "Stripe", "reach_kind": "mcp"}, token=bot(api, "ops"),
          expected=403)
@@ -139,11 +146,22 @@ def test_idea_test_and_verdict_close_the_task_and_count_as_bet_evidence(api):
                                                       "change": "10% off Saturdays", "stop_if": "Refunds pass 5%",
                                                       "min_events": 40}, token=ops)["idea"]
     assert (started["status"], started["test_to"], started["min_events"]) == ("testing", "2026-11-14", 40)
+
+    def step():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT s.name FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.id=?",
+                             (tid,)).fetchone()[0]
+    assert step() == "Testing"
     paused = post(api, f"growth/ideas/{tid}/verdict", {"status": "paused"}, token=ops)["idea"]
+    assert step() == "Paused"
     assert paused["verdict_at"] is None and paused["task_status"] != "closed"
     won = post(api, f"growth/ideas/{tid}/verdict", {"status": "won", "result": "Bookings up 14%", "learning": "Price "
                "matters on weekends", "bet_effect": "supports", "confidence": "high"}, token=ops)["idea"]
-    assert won["verdict_by"] == "bot:ops" and won["task_status"] == "closed" and won["bet_title"] == "Homeowners book online"
+    assert step() == "Won"
+    # The bet is live but unpublished: only the owner reads its words (strategy.view's rule).
+    assert won["verdict_by"] == "bot:ops" and won["task_status"] == "closed" and won["bet_title"] is None
+    assert get(api, f"growth/ideas/{tid}")["idea"]["bet_title"] == "Homeowners book online"
+    assert get(api, "growth/evidence", token="cara-test")["bets"][0]["title"] is None
     evidence = get(api, "growth/evidence")["bets"]
     assert evidence == [{"bet_id": "bet1", "title": "Homeowners book online", "supports": {"low": 0, "medium": 0, "high": 1},
                          "weakens": {"low": 0, "medium": 0, "high": 0}, "none": 0, "ideas": [tid]}]
@@ -163,6 +181,39 @@ def test_working_lists_open_subtasks_of_ideas(api):
     items = get(api, "growth/working")["items"]
     assert [(i["task_id"], i["idea_task_id"]) for i in items] == [(sub["id"], made["task_id"])]
     assert get(api, f"growth/ideas/{made['task_id']}")["idea"]["subtasks"] == {"total": 1, "done": 0}
+    # A private idea's visible subtask never names the idea to someone who may not read it.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (made["task_id"],))
+    get(api, f"growth/ideas/{made['task_id']}", token="cara-test", expected=404)
+    items = get(api, "growth/working", token="cara-test")["items"]
+    assert [(i["task_id"], i["idea_task_id"], i["idea_title"]) for i in items] == [(sub["id"], None, None)]
+
+
+def test_the_total_weighs_profit_per_cohort_and_a_hidden_kpis_guardrail_stays_hidden(api):
+    # Rich-but-thin and poor-but-fat cohorts: profit per customer-month is 10 and 9, so 9.5 together, never
+    # the 55 x 50% = 27.5 that averaging revenue and margin apart would invent.
+    rows = [{"channel": "a", "spend": 950, "new_customers": 10, "kept_d30": 80, "revenue_month": 100, "margin_pct": 10},
+            {"channel": "b", "spend": 950, "new_customers": 10, "kept_d30": 80, "revenue_month": 10, "margin_pct": 90}]
+    total = G.economics_total(rows, {})
+    assert total["cac"] == 95.0 and total["payback_months"] == 10.0
+    assert total["ltv"] == round(9.5 * total["expected_months"], 2)
+    kpi = post(api, "kpis", {"name": "Refund rate"})["kpi"]
+    add_channel(api, guardrail_kpi_id=kpi["id"], guardrail_max=5)
+    with api.app.state.store.transaction() as c:
+        assert [g["kpi_id"] for g in G.guardrails(c)] == [kpi["id"]]
+        c.execute("UPDATE kpis SET owner='bot:acme-helper' WHERE id=?", (kpi["id"],))
+        assert G.guardrails(c, {"bot:acme-helper"}) == []
+
+
+def test_week_lists_tests_ending_within_seven_days(api):
+    from datetime import datetime, timedelta, timezone
+    day = lambda n: (datetime.now(timezone.utc) + timedelta(days=n)).strftime("%Y-%m-%d")  # noqa: E731
+    due = {}
+    for n in (5, 10):
+        made = post(api, "growth/ideas", {"title": f"Test ending in {n} days"})["idea"]
+        post(api, f"growth/ideas/{made['task_id']}/start", {"test_to": day(n), "change": "x", "stop_if": "y"})
+        due[n] = made["task_id"]
+    assert [i["task_id"] for i in get(api, "growth/week")["tests_due"]] == [due[5]]
 
 
 # ----------------------------------------------------------------------------- KPI tree

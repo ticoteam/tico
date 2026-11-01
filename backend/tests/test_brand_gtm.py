@@ -26,7 +26,7 @@ def draft(api, kind="brand", sections=None, revision=None, token="ana-test", exp
 
 def test_draft_merges_sections_publish_versions_and_stale_revision_is_409(api):
     empty = get(api, "brand")
-    assert empty == {"published": None, "draft": None, "versions": []}
+    assert empty == {"published": None, "draft": None, "versions": [], "may_edit": True}
     assert get(api, "brand/summary") == {"n": 0, "text": ""}
     saved = draft(api, sections={"positioning": BRAND["positioning"], "voice": BRAND["voice"]}, revision=0)
     assert saved["draft"]["revision"] == 1 and set(saved["draft"]["changed"]) == {"positioning", "voice"}
@@ -60,12 +60,16 @@ def test_bots_propose_members_read_only_published_and_admins_confirm(api):
     draft(api, sections={"positioning": "Mine"}, token="cara-test", expected=403)
     post(api, "brand/publish", {}, token="cara-test", expected=403)
     member = get(api, "brand", token="cara-test")
-    assert member["published"]["n"] == 1 and member["draft"] is None
+    assert member["published"]["n"] == 1 and member["draft"] is None and member["may_edit"] is False
     assert get(api, "brand", token=ops)["draft"] is None
     assert get(api, "brand", token="ben-test")["draft"]["body"]["positioning"] == "Acme cleans homes well"
 
     post(api, "goal-proposals", {"kind": "gtm_draft", "payload": {"sections": {"motion": {"primary": "door"}}}},
          token=ops, expected=422)
+    # Filed under a goal, its unpublished words would show on that goal's page to members.
+    goal = post(api, "goals", {"title": "More bookings", "owner": "ana"})["goal"]
+    assert post(api, "goal-proposals", {"kind": "brand_draft", "goal_id": goal["id"], "payload": {
+        "sections": {"positioning": "Secret"}}}, token=ops, expected=422)["error"]["detail"].startswith("a brand or GTM")
     proposal = post(api, "goal-proposals", {"kind": "gtm_draft", "reason": "Referrals bring most bookings.", "payload": {
         "sections": {"motion": {"primary": "local", "secondary": "self_serve"}}}}, token=ops)["proposal"]
     # The proposal carries unpublished words: admins and the bot that made it read it; a member does not.

@@ -30,7 +30,18 @@ from .store import Problem
 
 IDEA_TYPE = "idea"
 IDEA_TYPE_NAMES = ("Idea", "Growth idea")
-IDEA_STEPS = {"open": "Idea", "doing": "Testing"}
+# The Idea type's steps, in board order: (growth status or task status, step name, task status). The idea's growth
+# status moves its task to the step of the same key; a hand close lands on Closed, ahead of the verdict steps.
+IDEA_STEPS = (("idea", "Idea", "open"), ("testing", "Testing", "doing"), ("paused", "Paused", "waiting"),
+              ("review", "Review", "review"), ("ready", "Ready", "ready"), ("done", "Done", "done"),
+              ("closed", "Closed", "closed"), ("won", "Won", "closed"), ("lost", "Lost", "closed"),
+              ("inconclusive", "Inconclusive", "closed"), ("dropped", "Dropped", "closed"))
+# The first two keep the ids an earlier seed gave them.
+STEP_IDS = {"idea": f"{IDEA_TYPE}-open", "testing": f"{IDEA_TYPE}-doing"}
+
+
+def step_id(key):
+    return STEP_IDS.get(key, f"{IDEA_TYPE}-{key}")
 TERMINAL = ("won", "lost", "inconclusive", "dropped")
 ROLES = ("north_star", "input", "guardrail")
 STAGES = ("reach", "acquire", "activate", "retain", "refer")
@@ -40,6 +51,7 @@ LIFETIME_CAP = 60          # months: a retention curve that never decays still c
 IDEAS_PAGE, IDEAS_MAX = 200, 500
 COHORTS_PAGE, COHORTS_MAX = 500, 2000
 VERDICTS_DAYS = 14
+DUE_DAYS = 7
 CHANNEL_FIELDS = ("id", "slug", "name", "track", "stage", "owner_ref", "budget_month", "source_id", "why",
                   "guardrail_kpi_id", "guardrail_max", "sort", "retired_at")
 SOURCE_FIELDS = ("id", "truth_for", "system", "reach_kind", "reach_ref", "may", "owner_ref", "retired_at")
@@ -47,18 +59,24 @@ OWNER_PATCH = {"why", "stage", "budget_month"}       # what the bot that owns a 
 
 
 def ensure(c):
-    """The built-in Idea task type, once: its own id, named Idea unless a team's own type already has that name."""
-    if H._one(c, "SELECT id FROM task_types WHERE id=?", (IDEA_TYPE,)):
-        return IDEA_TYPE
-    taken = {r[0].lower() for r in c.execute("SELECT name FROM task_types")}
-    name = next((n for n in IDEA_TYPE_NAMES if n.lower() not in taken), None)
-    if not name:
-        return None
-    now = H.now()
-    c.execute("INSERT INTO task_types (id, name, created, updated) VALUES (?,?,?,?)", (IDEA_TYPE, name, now, now))
-    for position, status in enumerate(H.STEP_STATUSES):
-        c.execute("INSERT OR IGNORE INTO task_steps (id, type_id, name, position, status) VALUES (?,?,?,?,?)",
-                  (f"{IDEA_TYPE}-{status}", IDEA_TYPE, IDEA_STEPS.get(status, status.title()), position, status))
+    """The built-in Idea task type and its steps: its own id, named Idea unless a team's own type already has that
+    name. A step missing from an older seed is added; one a team renamed keeps its name."""
+    if not H._one(c, "SELECT id FROM task_types WHERE id=?", (IDEA_TYPE,)):
+        taken = {r[0].lower() for r in c.execute("SELECT name FROM task_types")}
+        name = next((n for n in IDEA_TYPE_NAMES if n.lower() not in taken), None)
+        if not name:
+            return None
+        now = H.now()
+        c.execute("INSERT INTO task_types (id, name, created, updated) VALUES (?,?,?,?)", (IDEA_TYPE, name, now, now))
+    names = {r[0].lower() for r in c.execute("SELECT name FROM task_steps WHERE type_id=?", (IDEA_TYPE,))}
+    have = {r[0] for r in c.execute("SELECT id FROM task_steps WHERE type_id=?", (IDEA_TYPE,))}
+    for position, (key, name, status) in enumerate(IDEA_STEPS):
+        sid = step_id(key)
+        if sid in have:
+            c.execute("UPDATE task_steps SET position=? WHERE id=?", (position, sid))
+        elif name.lower() not in names:
+            c.execute("INSERT INTO task_steps (id, type_id, name, position, status) VALUES (?,?,?,?,?)",
+                      (sid, IDEA_TYPE, name, position, status))
     return IDEA_TYPE
 
 
@@ -105,7 +123,9 @@ def economics_row(cohort, settings):
     cost = (spend or 0) + (bot_cost or 0)
     cac = round(cost / new, 2) if not unknown and new and (spend is not None or bot_cost is not None) else None
     months = expected_months(cohort.get("kept_d30"), cohort.get("kept_d90"), cohort.get("kept_d180"))
-    per_month = revenue * margin / 100 if revenue is not None and margin is not None else None
+    per_month = cohort.get("profit_month")
+    if per_month is None:
+        per_month = revenue * margin / 100 if revenue is not None and margin is not None else None
     ltv = round(per_month * months, 2) if per_month is not None and months is not None and not unknown else None
     return {"spend": spend, "bot_cost": bot_cost, "new_customers": new, "cac": cac,
             "kept_d30": cohort.get("kept_d30"), "kept_d90": cohort.get("kept_d90"), "kept_d180": cohort.get("kept_d180"),
@@ -116,10 +136,18 @@ def economics_row(cohort, settings):
 
 
 def economics_total(cohorts, settings):
-    """Every channel together: spend, bot cost and customers summed; retention, revenue and margin weighted by new
-    customers."""
+    """Every channel together: spend, bot cost and customers summed; retention, revenue and profit per customer-month
+    (revenue x margin, each cohort's own) weighted by new customers. The margin shown is that profit over that revenue,
+    so a high-revenue low-margin cohort never lends its revenue to another's margin."""
+    def value(c, key, fallback):
+        return c.get(key) if c.get(key) is not None else fallback
+
+    def profit(c):
+        revenue, margin = value(c, "revenue_month", settings.get("revenue_month")), value(c, "margin_pct", settings.get("margin_pct"))
+        return revenue * margin / 100 if revenue is not None and margin is not None else None
+
     def weighted(key, fallback=None):
-        pairs = [((c.get(key) if c.get(key) is not None else fallback), c.get("new_customers") or 0) for c in cohorts]
+        pairs = [((key(c) if callable(key) else value(c, key, fallback)), c.get("new_customers") or 0) for c in cohorts]
         pairs = [(v, w) for v, w in pairs if v is not None and w]
         weight = sum(w for _, w in pairs)
         return round(sum(v * w for v, w in pairs) / weight, 2) if weight else None
@@ -132,11 +160,12 @@ def economics_total(cohorts, settings):
     total = {"channel": "all", "spend": summed("spend", paid), "bot_cost": summed("bot_cost", paid),
              "new_customers": summed("new_customers", cohorts), "kept_d30": weighted("kept_d30"),
              "kept_d90": weighted("kept_d90"), "kept_d180": weighted("kept_d180"),
-             "revenue_month": weighted("revenue_month", settings.get("revenue_month")),
-             "margin_pct": weighted("margin_pct", settings.get("margin_pct")),
+             "revenue_month": weighted("revenue_month", settings.get("revenue_month")), "profit_month": weighted(profit),
              "quality": "estimate" if any(c.get("quality") == "estimate" for c in cohorts) else "actual", "sources": {}}
     if total["new_customers"] is not None:
         total["new_customers"] = int(total["new_customers"])
+    revenue, per_month = total["revenue_month"], total["profit_month"]
+    total["margin_pct"] = round(per_month / revenue * 100, 2) if revenue and per_month is not None else None
     return {**economics_row(total, settings), "channel": None, "name": "All channels", "track": None}
 
 
@@ -189,7 +218,20 @@ def _ice(row):
     return round(sum(scores) / 3, 1) if all(s is not None for s in scores) else None
 
 
-def idea_views(c, rows):
+def _bet_titles(c, who, bet_ids):
+    """Bet statements as the reader may see them: the owner reads live bets, everyone else the published version's,
+    so an unpublished bet's words never reach a member or a bot."""
+    if not bet_ids:
+        return {}
+    from . import goal_routes, strategy
+    if who is not None and goal_routes.company_editor(who):
+        return {r[0]: r[1] for r in c.execute(
+            f"SELECT id, statement FROM strategy_bets WHERE id IN ({','.join('?' * len(bet_ids))})", list(bet_ids))}
+    wanted = set(bet_ids)
+    return {b["id"]: b.get("statement") for b in ((strategy.current(c) or {}).get("bets") or []) if b.get("id") in wanted}
+
+
+def idea_views(c, rows, who=None):
     """Ideas as the API shows them, with channels, bet titles, relations and subtask counts read in a few queries."""
     if not rows:
         return []
@@ -211,11 +253,7 @@ def idea_views(c, rows):
         f"SELECT rel.to_task, count(*), sum(t.status IN ('done','closed')) FROM task_relations rel "
         f"JOIN tasks t ON t.id=rel.from_task WHERE rel.kind='parent' AND rel.to_task IN ({marks}) GROUP BY rel.to_task",
         ids)}
-    bet_ids = sorted({r["bet_id"] for r in rows if r.get("bet_id")})
-    bets = {}
-    if bet_ids:
-        bets = {r[0]: r[1] for r in c.execute(
-            f"SELECT id, statement FROM strategy_bets WHERE id IN ({','.join('?' * len(bet_ids))})", bet_ids)}
+    bets = _bet_titles(c, who, sorted({r["bet_id"] for r in rows if r.get("bet_id")}))
     out = []
     for r in rows:
         tid = r["task_id"]
@@ -256,7 +294,7 @@ def ideas(c, auth, who, status=None, bet_id=None, channel_slug=None, kpi_id=None
     limit = max(1, min(int(limit or IDEAS_PAGE), IDEAS_MAX))
     rows = H._rows(c.execute(IDEA_SQL + " WHERE " + " AND ".join(where)
                              + " ORDER BY t.created DESC, g.task_id LIMIT ?", args + [limit]))
-    return idea_views(c, rows)
+    return idea_views(c, rows, who)
 
 
 def idea(c, auth, who, task_id):
@@ -264,7 +302,7 @@ def idea(c, auth, who, task_id):
     rows = H._rows(c.execute(IDEA_SQL + " WHERE g.task_id=? AND " + _visible(auth, c, who), (resolved,)))
     if not rows:
         raise Problem("not_found", "No such idea", 404)
-    return idea_views(c, rows)[0]
+    return idea_views(c, rows, who)[0]
 
 
 def _cohort_view(row, slugs):
@@ -306,11 +344,15 @@ def _latest_value(c, kpi_id):
     return newest
 
 
-def guardrails(c):
+def guardrails(c, hidden=()):
+    """Channels with a guardrail KPI and its latest value. `hidden`: owners whose KPIs the caller may not read
+    (goal_routes._hidden_owners), as GET /growth/kpis; their guardrails are left out."""
     out = []
     for ch in H._rows(c.execute("SELECT * FROM growth_channels WHERE retired_at IS NULL AND guardrail_kpi_id IS NOT NULL "
                                 "AND guardrail_max IS NOT NULL ORDER BY sort, name")):
-        kpi = H._one(c, "SELECT name FROM kpis WHERE id=?", (ch["guardrail_kpi_id"],)) or {}
+        kpi = H._one(c, "SELECT name, owner FROM kpis WHERE id=?", (ch["guardrail_kpi_id"],)) or {}
+        if kpi.get("owner") in hidden:
+            continue
         newest = _latest_value(c, ch["guardrail_kpi_id"])
         value = newest["value"] if newest else None
         out.append({"channel": ch["slug"], "kpi_id": ch["guardrail_kpi_id"], "kpi_name": kpi.get("name"),
@@ -318,7 +360,7 @@ def guardrails(c):
     return out
 
 
-def economics(c, month=None):
+def economics(c, month=None, hidden=()):
     months = [r[0] for r in c.execute("SELECT DISTINCT month FROM growth_cohorts ORDER BY month DESC")]
     month = month or (months[0] if months else None)
     conf = settings(c)
@@ -331,7 +373,7 @@ def economics(c, month=None):
                      "track": ch["track"] if ch else None, **economics_row(cohort, conf)})
     rows.sort(key=lambda r: (r["channel"] == UNKNOWN, (by_slug.get(r["channel"]) or {}).get("sort", 0), r["name"]))
     return {"month": month, "months": months, "settings": conf, "rows": rows,
-            "total": economics_total(inputs, conf), "guardrails": guardrails(c)}
+            "total": economics_total(inputs, conf), "guardrails": guardrails(c, hidden)}
 
 
 def kpis(c, hidden=()):
@@ -366,10 +408,8 @@ def evidence(c, auth, who):
             item[r["bet_effect"]][r["confidence"] or "low"] += 1
         elif r["bet_effect"] == "none":
             item["none"] += 1
-    if by_bet:
-        marks = ",".join("?" * len(by_bet))
-        for r in c.execute(f"SELECT id, statement FROM strategy_bets WHERE id IN ({marks})", list(by_bet)):
-            by_bet[r[0]]["title"] = r[1]
+    for bid, title in _bet_titles(c, who, list(by_bet)).items():
+        by_bet[bid]["title"] = title
     return {"bets": list(by_bet.values())}
 
 
@@ -386,6 +426,15 @@ def working(c, auth, who, limit=200):
         f"WHERE t.status IN ('open','doing','waiting','review','ready') AND t.id IN (SELECT id FROM tasks WHERE {visible}) "
         "AND (rel.to_task IS NOT NULL OR EXISTS (SELECT 1 FROM task_tags tt JOIN tags tg ON tg.id=tt.tag_id "
         "WHERE tt.task_id=t.id AND tg.key LIKE 'channel:%')) ORDER BY t.updated DESC LIMIT ?", (limit,)))
+    parents = sorted({r["idea_task_id"] for r in rows if r["idea_task_id"]})
+    shown = set()
+    if parents:
+        shown = {r[0] for r in c.execute(f"SELECT id FROM tasks WHERE id IN ({','.join('?' * len(parents))}) "
+                                         f"AND ({visible})", parents)}
+    for r in rows:
+        # A visible subtask of a private idea: the idea's id, title and channel stay with the idea.
+        if r["idea_task_id"] and r["idea_task_id"] not in shown:
+            r["idea_task_id"] = r["idea_title"] = None
     first_channel = {}
     ids = [r["idea_task_id"] for r in rows if r["idea_task_id"]]
     if ids:
@@ -399,7 +448,8 @@ def working(c, auth, who, limit=200):
 
 
 def week(c, auth, who, hidden=()):
-    today = _today()
+    # Due: overdue, or ending within the coming week, so the week's plan sees it before the day it ends.
+    due_by = (datetime.now(timezone.utc) + timedelta(days=DUE_DAYS)).strftime("%Y-%m-%d")
     since = (datetime.now(timezone.utc) - timedelta(days=VERDICTS_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
     tree = [k for k in kpis(c, hidden)["kpis"] if k["growth_role"]]
     readings = [{"kpi_id": k["id"], "name": k["name"], "unit": k["unit"], "growth_role": k["growth_role"],
@@ -410,8 +460,8 @@ def week(c, auth, who, hidden=()):
     recent = [i for i in ideas(c, auth, who, limit=IDEAS_MAX) if i["verdict_at"] and i["verdict_at"] >= since]
     recent.sort(key=lambda i: i["verdict_at"], reverse=True)
     return {"readings": readings,
-            "tests_due": [i for i in testing if i["test_to"] and i["test_to"][:10] <= today],
-            "top_ideas": top, "recent_verdicts": recent, "guardrails": [g for g in guardrails(c) if g["breached"]]}
+            "tests_due": [i for i in testing if i["test_to"] and i["test_to"][:10] <= due_by],
+            "top_ideas": top, "recent_verdicts": recent, "guardrails": [g for g in guardrails(c, hidden) if g["breached"]]}
 
 
 # ----------------------------------------------------------------------------- writes
@@ -636,19 +686,40 @@ def idea_start(c, auth, who, task_id, body):
     if body.judged_kpi_id:
         fields["judged_kpi_id"] = _kpi_ref(c, body.judged_kpi_id, "judged_kpi_id")
     _set_idea(c, who.actor, row["task_id"], fields, "growth.idea.start")
+    _step(c, who.actor, row["task_id"], "testing")
     return row["task_id"]
 
 
-def _close(c, actor, task_id, note):
-    """Close the idea's task as the caller, or as Tico when the task rules leave that to its requester."""
-    c.execute("SAVEPOINT growth_idea_close")
+def _as_caller_or_tico(c, write):
+    """Run a task write as the caller, or as Tico when the task rules leave it to someone else: the growth route has
+    already checked that the caller may run this idea."""
+    c.execute("SAVEPOINT growth_idea_task")
     try:
-        H.task_close(c, actor, task_id, note=note, quiet=True)
-        c.execute("RELEASE growth_idea_close")
+        write(None)
+        c.execute("RELEASE growth_idea_task")
     except H.Refused:
-        c.execute("ROLLBACK TO growth_idea_close")
-        c.execute("RELEASE growth_idea_close")
-        H.task_close(c, H.KEEPER, task_id, note=note, quiet=True)
+        c.execute("ROLLBACK TO growth_idea_task")
+        c.execute("RELEASE growth_idea_task")
+        write(H.KEEPER)
+
+
+def _step(c, actor, task_id, key, note=""):
+    """Move the idea's task to the step its growth status names; a step the team deleted leaves the task where it is."""
+    sid = step_id(key)
+    row = H._one(c, "SELECT type_id, step_id FROM tasks WHERE id=?", (task_id,)) or {}
+    if row.get("type_id") != IDEA_TYPE or row.get("step_id") == sid or not H._one(
+            c, "SELECT 1 FROM task_steps WHERE id=?", (sid,)):
+        return
+    _as_caller_or_tico(c, lambda keeper: H.task_update(c, keeper or actor, task_id, step=sid, note=note or None,
+                                                       quiet=True))
+
+
+def _close(c, actor, task_id, note, key):
+    """Close the idea's task on its verdict's step."""
+    have = H._one(c, "SELECT 1 FROM task_steps WHERE id=?", (step_id(key),))
+    row = H._one(c, "SELECT type_id FROM tasks WHERE id=?", (task_id,)) or {}
+    sid = step_id(key) if have and row.get("type_id") == IDEA_TYPE else None
+    _as_caller_or_tico(c, lambda keeper: H.task_close(c, keeper or actor, task_id, note=note, quiet=True, step=sid))
 
 
 def idea_verdict(c, auth, who, task_id, body):
@@ -660,11 +731,14 @@ def idea_verdict(c, auth, who, task_id, body):
     if body.status != "paused":
         fields.update(verdict_at=H.now(), verdict_by=who.actor)
     _set_idea(c, who.actor, row["task_id"], fields, "growth.idea.verdict")
+    if body.status == "paused":
+        _step(c, who.actor, row["task_id"], "paused", "Test paused")
     if body.status in TERMINAL:
         task = H.task(c, row["task_id"]) or {}
-        if task.get("status") not in ("closed", "declined"):
+        if task.get("status") != "declined":
+            # A task already closed by hand still moves to the verdict's step.
             note = f"Verdict: {body.status}" + (f". {body.result}" if body.result else "")
-            _close(c, who.actor, row["task_id"], note[:1000])
+            _close(c, who.actor, row["task_id"], note[:1000], body.status)
         H.hook(c, "growth.verdict", row["task_id"],
                lambda: {"task_id": row["task_id"], "title": row["title"], "status": body.status,
                         "verdict_by": who.actor}, who.actor, revision=0)
@@ -760,10 +834,11 @@ def install(app, store, auth, mutate, task_create):
 
     @app.get("/api/v2/growth/channels")
     def growth_channels(request: Request, include_retired: bool = False):
-        """The channels, by sort then name."""
-        reader(request.state.identity)
+        """The channels, by sort then name. `may_edit`: the caller adds and changes any channel (owner or admin)."""
+        who = request.state.identity
+        reader(who)
         with store.read() as c:
-            return {"channels": channels(c, include_retired)}
+            return {"channels": channels(c, include_retired), "may_edit": admin(auth, who)}
 
     @app.get("/api/v2/growth/channels/{slug}")
     def growth_channel(request: Request, slug: str):
@@ -817,10 +892,12 @@ def install(app, store, auth, mutate, task_create):
 
     @app.get("/api/v2/growth/sources")
     def growth_sources(request: Request, include_retired: bool = False):
-        """Where each number's truth lives, and the things two live sources both claim."""
-        reader(request.state.identity)
+        """Where each number's truth lives, and the things two live sources both claim. `may_edit`: the caller
+        changes sources (owner or admin)."""
+        who = request.state.identity
+        reader(who)
         with store.read() as c:
-            return sources(c, include_retired)
+            return {**sources(c, include_retired), "may_edit": admin(auth, who)}
 
     @app.post("/api/v2/growth/sources")
     def growth_source_add(request: Request, body: M.GrowthSourceCreate):
@@ -925,16 +1002,19 @@ def install(app, store, auth, mutate, task_create):
     @app.get("/api/v2/growth/economics")
     def growth_economics(request: Request, month: str | None = None):
         """CAC, LTV and payback per channel for one month (the latest by default), the total and the guardrails."""
-        reader(request.state.identity)
+        who = request.state.identity
+        reader(who)
         with store.read() as c:
-            return economics(c, month)
+            return economics(c, month, _hidden_owners(c, auth, who))
 
     @app.get("/api/v2/growth/settings")
     def growth_settings(request: Request):
-        """The unit counted, the default revenue and margin, the verdict win rate and the framework."""
-        reader(request.state.identity)
+        """The unit counted, the default revenue and margin, the verdict win rate and the framework. `may_edit`: the
+        caller changes them (owner or admin)."""
+        who = request.state.identity
+        reader(who)
         with store.read() as c:
-            return settings(c)
+            return {**settings(c), "may_edit": admin(auth, who)}
 
     @app.put("/api/v2/growth/settings")
     def growth_settings_update(request: Request, body: M.GrowthSettingsUpdate):

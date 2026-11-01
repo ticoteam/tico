@@ -742,6 +742,9 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
     """What is wrong with a proposal's payload, in a sentence, or None."""
     if kind in ("goal_wording", "goal_kpi", "flag", "goal_why", "recovery") and not goal(conn, goal_id):
         return "name the goal this is about"
+    if kind in ("brand_draft", "gtm_draft") and (goal_id or kpi_id):
+        # A draft page proposal carries unpublished words: never filed under a goal or KPI members read.
+        return "a brand or GTM draft proposal is about the page, not a goal or KPI: leave goal_id and kpi_id out"
     if kind in ("kpi_definition", "kpi_target") and (not kpi_id or not kpi(conn, kpi_id)
                                                       or (kind == "kpi_definition" and K.auto(kpi_id))):
         return "name a KPI this is about (a KPI Tico computes itself has no definition to change)"
