@@ -1,7 +1,7 @@
 // Journey: a meeting import, as Dana. A meeting with a transcript is imported through the API (as the import tool does);
 // it is listed on Meetings by its title, and its review page opens and draws the transcript. Runs on a phone and a desktop.
 const assert = require('node:assert/strict');
-const {journey, open, go, must, assertClean, shot, t} = require('./support/e2e.cjs');
+const {journey, open, go, must, assertClean, drawn, shot, t} = require('./support/e2e.cjs');
 
 const TITLE = 'Beta go/no-go';
 const LINE = 'We agreed to ship the beta on Nov 3 if the review queue stays under six hours.';
@@ -22,8 +22,9 @@ journey('e2e-meetings', async ({hub, browser, phone}) => {
   assertClean(page, `${where}: meetings listed`);
 
   go(page, `#/meetings?meeting=${id}`);
-  await page.locator('#main', {hasText: LINE}).first().waitFor({timeout: t(20000)});
-  const text = await page.locator('#main').innerText();
+  // The transcript is folded under its own heading on the review page: open it, then read the line the page shows.
+  await page.locator('#main details summary', {hasText: /^Transcript/}).first().click({timeout: t(20000)});
+  const text = await drawn(page, '#main', text => text.includes(LINE), `${where}: the review page draws the transcript`);
   assert.match(text, new RegExp(TITLE), `${where}: the review page names the meeting`);
   assertClean(page, `${where}: review page`);
 

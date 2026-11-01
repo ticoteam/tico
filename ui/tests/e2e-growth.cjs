@@ -1,7 +1,7 @@
 // Journey: Growth draws seeded data, as Dana. A channel is added through the API (as the owner adds one); the Growth tab
 // lists it by name. Runs on a phone and a desktop.
 const assert = require('node:assert/strict');
-const {journey, open, must, assertClean, t} = require('./support/e2e.cjs');
+const {journey, open, must, assertClean, drawn} = require('./support/e2e.cjs');
 
 const CHANNEL = 'Search ads';
 
@@ -11,8 +11,7 @@ journey('e2e-growth', async ({hub, browser, phone}) => {
     stage: 'testing', why: 'Pays back fast on small teams.'}, 'add a channel');
 
   const page = await open(browser, hub, 'dana', {phone, hash: '#/strategy/growth/channels'});
-  await page.locator('#main', {hasText: CHANNEL}).first().waitFor({timeout: t(20000)});
-  const text = await page.locator('#main').innerText();
+  const text = await drawn(page, '#main', text => text.includes(CHANNEL), `${where}: the channel is drawn`);
   assert.match(text, new RegExp(CHANNEL), `${where}: the channel is drawn`);
   assertClean(page, `${where}: growth`);
 

@@ -1,7 +1,7 @@
 // Journey: bot files and pages, as Dana. The Engineering Lead's pages and files (the pages seed) show in Library > Files
 // with their titles; a page opens and draws its title, its version and its status line. Runs on a phone and a desktop.
 const assert = require('node:assert/strict');
-const {journey, open, go, call, assertClean, expectError, shot, t, SEEDS} = require('./support/e2e.cjs');
+const {journey, open, go, call, assertClean, drawn, expectError, shot, t, SEEDS} = require('./support/e2e.cjs');
 
 journey('e2e-files-pages', async ({hub, browser, phone}) => {
   const where = phone ? 'phone' : 'desktop';
@@ -25,11 +25,11 @@ journey('e2e-files-pages', async ({hub, browser, phone}) => {
   // The replaced page ("Engineering weekly (old)") is listed too; the current one has the exact title.
   await page.locator('.lf-row', {has: page.locator('.lf-title', {hasText: /^\s*Engineering weekly\s*$/})}).first()
     .locator('.lf-title, a').first().click();
-  const view = page.locator('#pg-view');
-  await view.locator('.pg-status').waitFor({timeout: t(20000)});
-  const status = (await view.locator('.pg-status').innerText()).replace(/\s+/g, ' ').trim();
+  const status = (await drawn(page, '#pg-view .pg-status', text => /v\d+/.test(text), `${where}: the page draws its version`))
+    .replace(/\s+/g, ' ').trim();
   assert.match(status, /v\d+/, `${where}: the page shows its version`);
-  assert.match(await view.innerText(), /Engineering weekly/, `${where}: the page shows its title`);
+  const view = await drawn(page, '#pg-view', text => text.includes('Engineering weekly'), `${where}: the page draws its title`);
+  assert.match(view, /Engineering weekly/, `${where}: the page shows its title`);
   assertClean(page, `${where}: page open`);
   await shot(page, `e2e-page-${where}`);
 

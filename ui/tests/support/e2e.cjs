@@ -113,7 +113,16 @@ async function until(check, what, ms = t(30000)) {
   }
 }
 
+// The text of `selector` once `ready(text)` holds for it, read in the same poll: a list draws row by row and a page can
+// re-render, so a check reads the text the page drew in full, not a snapshot taken when some part of it first appeared.
+async function drawn(page, selector, ready, what) {
+  return until(async () => {
+    const text = await page.locator(selector).innerText().catch(() => '');
+    return ready(text) ? text : null;
+  }, what);
+}
+
 // Journey runner: `pass({hub, browser, phone, tag})` on a phone, then on a desktop, each on a fresh hub.
 const journey = (name, pass, seeds = SEEDS) => run(name, seeds, pass);
 
-module.exports = {journey, open, watch, expectFailure, expectError, assertClean, call, must, go, shot, sideways, t, until, SEEDS};
+module.exports = {journey, open, watch, expectFailure, expectError, assertClean, call, must, go, shot, sideways, t, until, drawn, SEEDS};

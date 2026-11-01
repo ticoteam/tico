@@ -1,7 +1,7 @@
 // Journey: an automation, as Dana. A scheduled automation is made through the API (as the editor saves it); the list shows
 // it; a run-now call fires it, and its run appears in the automation's runs. Runs on a phone and a desktop.
 const assert = require('node:assert/strict');
-const {journey, open, go, must, assertClean, shot, t} = require('./support/e2e.cjs');
+const {journey, open, go, must, assertClean, drawn, shot, t} = require('./support/e2e.cjs');
 
 const NAME = 'Friday status check';
 
@@ -30,9 +30,9 @@ journey('e2e-automations', async ({hub, browser, phone}) => {
   await page.locator('#main', {hasText: NAME}).first().waitFor({timeout: t(20000)});
   // The run is in the Runs tab: its time and its outcome.
   await page.locator('#main button, #main a, #main [role=tab]', {hasText: /^Runs$/}).first().click();
-  await page.waitForFunction(() => /\d{1,2}:\d{2} [AP]M/.test(document.querySelector('#main')?.innerText || ''),
-    null, {timeout: t(20000)});
-  assert.match(await page.locator('#main').innerText(), /Done/, `${where}: the run row shows its outcome`);
+  const text = await drawn(page, '#main', text => /\d{1,2}:\d{2} [AP]M/.test(text) && /Done/.test(text),
+    `${where}: the run row draws its time and outcome`);
+  assert.match(text, /Done/, `${where}: the run row shows its outcome`);
   assertClean(page, `${where}: run drawn`);
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
