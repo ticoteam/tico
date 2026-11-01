@@ -404,9 +404,10 @@ async function connectPlan(browser) {
   assert.equal(data.login.state, 'cancelled');
   // The same for Try again after a failure.
   await page.locator('#subs-add').click();
-  const retrying = page.locator('dialog.subs-dialog[open]');
-  await retrying.locator('input[name=name]').fill('Retried');
-  await retrying.locator('[data-subs-connect]').click();
+  const asking = page.locator('dialog.subs-dialog[open]');
+  await asking.locator('input[name=name]').fill('Retried');
+  await asking.locator('[data-subs-connect]').click();
+  const retrying = page.locator('dialog.model-login[open]');
   await retrying.locator('[data-link]').waitFor();
   Object.assign(data.login, {state: 'failed', url: '', message: 'The sign-in command stopped without signing in'});
   await retrying.locator('[data-retry]').waitFor();
