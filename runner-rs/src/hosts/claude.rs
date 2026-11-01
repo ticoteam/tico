@@ -584,10 +584,13 @@ impl ClaudeHost {
         // `--strict-mcp-config` keeps out the operator's own servers (~/.claude.json, user settings, plugins,
         // claude.ai connectors) (hosts/claude.py _argv).
         if t.settings.shared {
-            argv.extend(["--setting-sources".into(), "project,local".into()]);
+            argv.extend(["--setting-sources".into(), if t.settings.packet_only { "".into() } else { "project,local".into() }]);
         }
         argv.push("--strict-mcp-config".into());
-        if t.settings.packet_only { argv.extend(["--tools".into(), "".into()]); }
+        if t.settings.packet_only {
+            argv.extend(["--tools".into(), "".into(), "--disable-slash-commands".into(),
+                "--settings".into(), "{\"disableAllHooks\":true}".into()]);
+        }
         let project = std::fs::read_to_string(std::path::Path::new(&t.settings.cwd).join(".mcp.json"))
             .ok()
             .and_then(|text| serde_json::from_str::<Value>(&text).ok())
@@ -1550,6 +1553,10 @@ pub fn error_text(result: Option<&Value>, rc: i32, stderr: &str) -> String {
 fn turn_env(settings: &Settings) -> crate::env::Env {
     let mut env: crate::env::Env = if settings.env.is_empty() { std::env::vars().collect() } else { settings.env.clone() };
     env.insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "1".into());
+    if settings.packet_only {
+        env.insert("CLAUDE_CODE_DISABLE_CLAUDE_MDS".into(), "1".into());
+        env.insert("CLAUDE_CODE_DISABLE_CRON".into(), "1".into());
+    }
     // Belt and braces: `--strict-mcp-config` already skips the claude.ai connectors.
     env.insert("ENABLE_CLAUDEAI_MCP_SERVERS".into(), "false".into());
     // The login and the session files live under HOME; a trimmed environment must keep it.
@@ -1567,6 +1574,19 @@ fn turn_env(settings: &Settings) -> crate::env::Env {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packet_turns_keep_the_login_but_drop_memory_hooks_and_tools() {
+        let host = ClaudeHost::new("synthetic", vec!["claude".into()], tokio::sync::mpsc::unbounded_channel().0);
+        let settings = Settings { packet_only: true, shared: true, ..Settings::default() };
+        let thread = host.start_thread(&settings);
+        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), Some("low"));
+        assert!(argv.windows(2).any(|w| w == ["--tools", ""]));
+        assert!(argv.windows(2).any(|w| w == ["--setting-sources", ""]));
+        assert!(argv.contains(&"{\"disableAllHooks\":true}".into()));
+        assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_CLAUDE_MDS"], "1");
+        assert!(!argv.contains(&"--bare".into()), "subscription login must remain available");
+    }
 
     #[tokio::test]
     async fn a_crashed_turn_keeps_stderr_out_of_failure_events() {
