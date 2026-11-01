@@ -187,6 +187,7 @@ function thvIsNew(view, m) {
   return m.thread_id && m.thread_id !== view.id ? true : m.seq <= view.openSeq;
 }
 function thvWhoHTML(a) {
+  if (connectIsGuest(a)) return `<span class="th-who">${connectGuestHTML(a)}</span>`;   // another company's (ui/app/thread-connect.js)
   const slug = actorSlug(a), pid = actorPerson(a);
   if (slug && S.emps.some(e => e.name === slug)) return `<a class="th-who" href="#/bot/${esc(slug)}">${esc(actorName(a))}</a>`;
   if (pid) return `<a class="th-who" href="#/person/${esc(encodeURIComponent(pid))}">${esc(actorName(a))}</a>`;
@@ -218,7 +219,7 @@ function thvMsgHTML(view, m) {
   const fresh = thvIsNew(view, m), quiet = fresh && !thvAddressed(m);
   const cls = ['th-msg', sub && 'th-sub', m.refs?.follow_up && 'th-followup', thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted']
     .filter(Boolean).join(' ');
-  const head = `<div class="th-head">${thvWhoHTML(m.from_actor)}<time title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>${
+  const head = `<div class="th-head">${thvWhoHTML(connectAuthor(m))}<time title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>${
     m.edited_at && !m.deleted ? '<span class="th-edited muted">edited</span>' : ''}</div>`;
   let body;
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
@@ -238,7 +239,7 @@ function thvMsgHTML(view, m) {
   const st = m.sub_thread, more = st?.more ? `<a class="th-more" href="${threadHref(st.id)}" style="--d:${Math.min(depth + 1, THV_DEPTH_MAX)}">${
     typeof st.more === 'number' ? `${st.more} more ${st.more === 1 ? 'reply' : 'replies'}` : 'More replies'}${st.unread ? ` · <span class="th-more-new">${st.unread} new</span>` : ''}</a>` : '';
   return `<div class="${cls}" data-mid="${esc(m.id)}" data-message="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}" style="--d:${depth}">
-    <div class="th-av">${actorAvatar(m.from_actor, sub ? 20 : 28)}</div>
+    <div class="th-av">${actorAvatar(connectAuthor(m), sub ? 20 : 28)}</div>
     <div class="th-main">${head}${body}${m.deleted ? '' : thvFilesHTML(m) + thvReactionsHTML(m)}</div>
     ${m.deleted || view.editing === m.id ? '' : `<div class="th-acts"><button type="button" class="th-act" data-th-ack aria-label="Acknowledge" title="Acknowledge">${THV_ACK}</button><button type="button" class="th-act" data-th-more aria-haspopup="menu" aria-expanded="false" aria-label="Message menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div>`}
   </div>${more}`;
