@@ -1679,7 +1679,7 @@ def kpi_log(api, args):
       "stalled goal's recovery (recovery: payload evidence, options [{label, actions}], pick; actions create, "
       "reorder or settle), or, from any bot at any level, a change to the strategy draft (strategy_draft: payload "
       "summary, vision, sections {serve, sell, know, not, extra: {key: {title, body}}}, bets [{id?, statement, why, "
-      "rules_out, wrong_if, cites, status}], each optional; a bet with an id changes only the fields sent, one "
+      "rules_out, wrong_if, cites, status, ideas}], each optional; a bet with an id changes only the fields sent, one "
       "without is new; source bet_tripped when a tripped bet prompted it; confirmed, the owner's draft and bets "
       "change, nothing is published), or a change to the brand or go-to-market draft (brand_draft, gtm_draft: payload "
       "{sections: {name: value or null}}; confirmed by an admin, merged into the draft, never published). "
