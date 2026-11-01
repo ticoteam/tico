@@ -659,16 +659,17 @@ fn drop_proxy(bot: &str, only: Option<&Arc<Proxy>>) {
 /// another computer, between turns. `asked` is when that heartbeat was sent: a proxy started since then came from a
 /// claim newer than the answer, and stays.
 pub fn keep_proxies(bots: &[String], asked: Instant) {
-    let gone: Vec<(String, Arc<Proxy>)> = proxies()
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|(bot, proxy)| proxy.started < asked && !bots.contains(bot))
-        .map(|(bot, proxy)| (bot.clone(), proxy.clone()))
-        .collect();
+    let gone = stale_proxies(&proxies().lock().unwrap(), bots, asked);
     for (bot, proxy) in gone {
         drop_proxy(&bot, Some(&proxy));
     }
+}
+
+fn stale_proxies(all: &HashMap<String, Arc<Proxy>>, bots: &[String], asked: Instant) -> Vec<(String, Arc<Proxy>)> {
+    all.iter()
+        .filter(|(bot, proxy)| proxy.started < asked && !bots.contains(bot))
+        .map(|(bot, proxy)| (bot.clone(), proxy.clone()))
+        .collect()
 }
 
 fn preferred_port(bot: &str) -> u16 {
@@ -1267,20 +1268,19 @@ mod tests {
             }
         });
         *moved.task.lock().unwrap() = Some(task.abort_handle());
-        let kept = Arc::new(Proxy::new(0, "Cara's MacBook".into()));
-        proxies().lock().unwrap().insert("gc-moved".into(), moved);
-        proxies().lock().unwrap().insert("gc-kept".into(), kept);
+        // Chosen from a map of its own: other tests' proxies share the runner's.
+        let mut all = HashMap::new();
+        all.insert("gc-moved".to_string(), moved.clone());
+        all.insert("gc-kept".to_string(), Arc::new(Proxy::new(0, "Cara's MacBook".into())));
         let asked = Instant::now();
-        let newer = Arc::new(Proxy::new(0, "Cara's MacBook".into()));
-        proxies().lock().unwrap().insert("gc-newer".into(), newer);
-        keep_proxies(&["gc-kept".into()], asked);
-        use std::collections::HashSet;
-        let left = proxies().lock().unwrap().keys().filter(|b| b.starts_with("gc-")).cloned().collect::<HashSet<_>>();
-        assert_eq!(
-            left,
-            HashSet::from(["gc-kept".to_string(), "gc-newer".to_string()]),
-            "a proxy newer than the ask stays"
-        );
+        all.insert("gc-newer".to_string(), Arc::new(Proxy::new(0, "Cara's MacBook".into())));
+        let gone = stale_proxies(&all, &["gc-kept".into()], asked);
+        assert_eq!(gone.iter().map(|(bot, _)| bot.as_str()).collect::<Vec<_>>(), ["gc-moved"], "a newer proxy stays");
+        proxies().lock().unwrap().insert("gc-moved".into(), moved);
+        for (bot, proxy) in gone {
+            drop_proxy(&bot, Some(&proxy));
+        }
+        assert!(!proxies().lock().unwrap().contains_key("gc-moved"));
         let _ = task.await;
         assert!(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_err(), "its port is closed");
     }
