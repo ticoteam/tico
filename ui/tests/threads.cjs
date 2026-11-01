@@ -202,7 +202,7 @@ async function shot(page, name) {
   {
     const {page, seen} = await open(browser, 'bob');
     await page.goto('https://tico-ui.test/#/bot/ops');
-    await page.locator('#btabs').waitFor();
+    await page.locator('#btabs').waitFor({state: 'attached'});   // wide, the top tabs are hidden (Tasks sits beside the thread)
     await page.waitForTimeout(300);
     const tabs = await page.locator('#btabs [data-bt]').evaluateAll(els => els.map(b => b.dataset.bt));
     assert.ok(!tabs.includes('home'), 'no Home without Read: ' + tabs);
