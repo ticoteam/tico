@@ -16,7 +16,7 @@ const helpBubble = (text, attrs = '') => `<span class="rd-help"${attrs ? ' ' + a
 // The rail is rearranged in place, once, not drawn again: the links keep their own badges and handlers (sidebar.js,
 // notices.js).
 let RD_NAV_DONE = false;
-const RD_NAV_ICONS = {automations: 'bolt', library: 'local_library', strategy: 'flag', growth: 'rocket_launch', rules: 'gavel'};
+const RD_NAV_ICONS = {automations: 'bolt', library: 'local_library', strategy: 'flag', growth: 'rocket_launch', rules: 'gavel', operations: 'inventory_2'};
 function redesignNav() {
   const nav = $('#side .side-scroll');
   if (!nav || RD_NAV_DONE) return;
@@ -30,6 +30,7 @@ function redesignNav() {
   };
   const automations = link('automations', RD_AUTOMATIONS, RD_NAV_ICONS.automations, 'Automations');
   const growth = link('growth', GR_ROUTE, RD_NAV_ICONS.growth, 'Growth');   // ui/app/growth-page.js
+  const operations = link('operations', OPS_ROUTE, RD_NAV_ICONS.operations, 'Operations');   // ui/app/operations-page.js
   const library = link('library', DOCS, RD_NAV_ICONS.library, 'Library'); library.classList.add('rd-lib-head');
   // Library's pages fold under it: a chevron beside it, remembered in this browser (rdLibSync).
   const libRow = document.createElement('div'); libRow.className = 'nav-row rd-lib-row';
@@ -55,12 +56,13 @@ function redesignNav() {
   const ruleSubs = document.createElement('div'); ruleSubs.className = 'rd-lib rd-rules'; ruleSubs.id = 'rd-rules';
   ruleSubs.append(...RU_TABS.map(([k, label]) => link('rules-' + k, ruHref(k), 'gavel', label)));
   if (strategyLink) { strategyLink.setAttribute('href', MARKET_ROUTE); strategyLink.querySelector('.nav-icon').textContent = RD_NAV_ICONS.strategy; }
-  const order = [pick('#side-update'), pick('a[data-nav="overview"]'), pick('#nav-welcome'), strategyLink, strategyLink && growth,
+  const order = [pick('#side-update'), pick('a[data-nav="overview"]'), pick('#nav-welcome'), strategyLink, strategyLink && growth, operations,
     pick('a[data-nav="updates"]'), pick('a[data-nav="tasks"]'), automations, libRow, subs,
     rulesRow, ruleSubs, pick('#nav-pins')].filter(Boolean);
   const rest = before.filter(el => !order.includes(el) && !subs.contains(el) && !ruleSubs.contains(el));
   nav.append(...order, ...rest);
   rdLibSync();
+  redesignSections();
   renderTree();   // marks the current page again: Automations and Tools did not exist when the first route drew the rail
 }
 // Library open or folded: what this browser chose, opened while a Library page is showing (a fold there holds until
@@ -108,16 +110,45 @@ function redesignNavCurrent(nav) {
   if (nav === 'files') return rdUnder(r, RD_FILES);
   if (nav === 'strategy') return rdUnder(r, '#/strategy');
   if (nav === 'growth') return rdUnder(r, GR_ROUTE);
+  if (nav === 'operations') return rdUnder(r, OPS_ROUTE);
   if (nav === 'finance') return rdUnder(r, FIN_ROUTE);
   if (nav === 'rules') return rdUnder(r, RULES_ROUTE);
   if (nav.startsWith('rules-')) return rdUnder(r, RULES_ROUTE) && ruTabOf(r) === nav.slice(6);
   return false;
 }
 
+// The company's sidebar choice (plan §5, Settings > General > Sidebar). Display only: a hidden page still opens from a link.
+const RD_SECTIONS = [['strategy', 'Strategy'], ['growth', 'Growth'], ['finance', 'Finance'], ['operations', 'Operations'], ['meetings', 'Meetings']];
+const rdHiddenKeys = () => new Set(Array.isArray(S.config?.hidden_sections) ? S.config.hidden_sections : []);
+// Hiding the parent keeps its tabs' choices; every tab hidden hides the section too.
+function rdSectionsOff() {
+  const keys = rdHiddenKeys(), off = new Set(RD_SECTIONS.map(([k]) => k).filter(k => keys.has(k)));
+  if (OPS_TABS.every(([t]) => keys.has(opsTabKey(t)))) off.add('operations');
+  return off;
+}
+const rdSectionOff = nav => rdSectionsOff().has(nav);
+// Links are hidden by CSS on the rail, not removed: Finance's link comes and goes on its own (finance.js finNavSync).
+function redesignSections() {
+  const nav = $('#side .side-scroll');
+  if (!nav) return;
+  const off = rdSectionsOff(), keys = rdHiddenKeys();
+  nav.dataset.off = [...off].join(' ');
+  const names = [...RD_SECTIONS.filter(([k]) => off.has(k)).map(([, label]) => label),
+    ...(off.has('operations') ? [] : OPS_TABS.filter(([t]) => keys.has(opsTabKey(t))).map(([, label]) => label))];
+  let row = nav.querySelector('.rd-hidden-row');
+  if (!settingsIsAdmin() || !names.length) { row?.remove(); return; }
+  if (!row) {
+    row = Object.assign(document.createElement('a'), {className: 'rd-hidden-row', href: '#/settings/general/settings-sidebar'});
+    nav.append(row);
+  }
+  row.textContent = `Hidden: ${names.join(', ')}`;
+}
+
 // Called by applyConfig (state.js) whenever config is read: boot, and the poll every two minutes.
 window.redesignApply = function redesignApply() {
   document.documentElement.classList.add('redesign');
   redesignNav();
+  redesignSections();
 };
 
 // ----------------------------------------------------------------- routes
@@ -146,6 +177,7 @@ function redesignRoute(r) {
   if (rdUnder(r, RD_ORG)) { pageRdOrg(); return true; }
   if (rdUnder(r, RD_BUDGET)) { pageBudget(); return true; }
   if (rdUnder(r, FIN_ROUTE)) { pageFinance(); return true; }   // ui/app/finance.js
+  if (rdUnder(r, OPS_ROUTE)) { pageOperations(); return true; }   // ui/app/operations-page.js
   if (rdUnder(r, RD_LISTENING)) { pageRdListening(); return true; }
   // Market opens on the latest briefing.
   if (r === MARKET_ROUTE || rdUnder(r, RD_BRIEFING)) { pageRdBriefing(); return true; }
@@ -160,6 +192,8 @@ function redesignAfterRoute() {
   rdLibSync();
   financeStop();
   growthStop();
+  operationsStop();
+  redesignSections();   // who is signed in is known by now: the Hidden row is for admins
   finProbeOnce();   // the Finance link shows once the viewer sees something in Finance
 }
 
