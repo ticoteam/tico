@@ -3,6 +3,10 @@
 Schedule: Mondays at 09:00 team time (routine `pre-payroll-change-summary`), after setup. Budget 35 minutes in a cut-off week, 5 otherwise. The outcome is one
 summary the payroll owner can enter line by line. Nothing is entered.
 
+Inputs: `knowledge/payroll-calendar.md`, the input tasks and files from each owner, the last register and `knowledge/baseline.md`.
+
+Done when: the summary is published to the payroll task, every missing input has an owner and a date, and the task is closed with the change count.
+
 ---
 
 ## 1. Is this a cut-off week?

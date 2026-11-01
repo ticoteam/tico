@@ -24,10 +24,10 @@ the verification and the label.
 1. **A milestone, not a mood.** Every customer who reaches the milestone `knowledge/surfaces.md`
    records is invited. Nobody skipped for seeming unhappy, nobody added for seeming delighted.
    Proposed until the owner writes it: a customer ninety days live with jobs completing in
-   the last thirty.
+   the last thirty. Run `skills/check-a-review-request-for-compliance/SKILL.md` on the batch before it goes anywhere.
 2. **Same reward whatever they write.** One nominal gift card, the same for every reviewer, paid
    by the platform, never conditioned on a rating, never mentioned as a thank-you for a good one.
-   Twenty-five dollars is the going rate.
+   The amount is the one the platform's program page sets, checked and dated in `knowledge/surfaces.md`.
 3. **The platform discloses.** The review carries the platform's incentivized label. The
    invitation says the platform will label it.
 4. **Never a suggestion of what to write, never a mention of stars.**
@@ -50,3 +50,6 @@ site will label it, thanks. The same list goes to the G2 and the Gartner campaig
 Each invitation is a ledger row `kind: invited`, with the surface, the account id and the date.
 The weekly sweep matches new reviews to invitations by date and surface, never by name, and
 reports the response rate and the counts on both pages against the target.
+
+Done when: every invitation in the batch is recorded as `invited`, the compliance check is written with its date,
+and each surface is either sent to or named as blocked.

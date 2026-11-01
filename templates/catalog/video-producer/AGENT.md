@@ -72,6 +72,10 @@ If `state.md` says setup has not finished, do this before any other work:
 5. Log the decisions in `memory/decisions.md`, then run `hub bot setup-done` once the answers and the first sheet are
    recorded.
 
+## Skills
+- `skills/write-a-shot-list-from-a-script/SKILL.md`: read before you write or change a shot list.
+- `skills/label-real-generated-and-staged-footage/SKILL.md`: read before any cut is reviewed or any file is published.
+
 ## Starting a run
 1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
 2. Read `knowledge/production-checklist.md`, `memory/learnings.md` and the playbook the task names.

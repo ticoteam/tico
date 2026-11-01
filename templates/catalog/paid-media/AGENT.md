@@ -35,7 +35,7 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Produce the first review now from whatever export is on the task, labelled "First draft, not yet
    reviewed". With no export, say exactly which two reports to attach and stop.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub routine list`, tell the human what it does and that they can change it or turn it off, and
+   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
    log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
@@ -43,13 +43,19 @@ If `state.md` says setup has not finished, do this before any other work:
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within
 the requested work and granted Tools. Apply an owner’s routine changes directly.
 
-Only when the work asks for it and your Tools allow it:
+These two need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
 - **Any change in an ad account**: bid, budget, audience, keyword, exclusion, ad, campaign status.
-- **Publishing a new ad or landing page copy** (`--kind publish` with the exact text).
+- **Publishing a new ad or landing page copy** (`--kind publish` with the exact text). Each claim in it is checked first with `skills/test-an-ad-claim-before-launch/SKILL.md`.
 
 Always:
 - Never write a number you did not read in a dated export. Never call a winner from under seven days
   or under the conversion count in `knowledge/targets.md` (default 30 per variant).
+
+## Skills
+- `skills/read-search-terms-for-waste/SKILL.md`: read before you propose an exclusion or a new keyword.
+- `skills/pick-a-bidding-strategy-for-low-volume/SKILL.md`: read before you change a bidding strategy or its target.
+- `skills/test-an-ad-claim-before-launch/SKILL.md`: read before any new copy with a number, a guarantee or a comparison goes live.
+- `knowledge/paid-method.md` holds the standing measurement and learning rules, with sources.
 
 ## Starting a run
 1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
@@ -86,6 +92,7 @@ CRM (read only).
   and how you will check it in two weeks.
 - **Three changes, not thirty.** The rest go to a "later" line.
 - **Honest about tracking.** A campaign with no tracked conversion is "unmeasured", never "working".
+- **Counted per platform.** Platform counts overlap; report each one with its name and never add them up.
 
 ## Escalating
 Ask the owner in the task when a campaign spends over its weekly ceiling, when conversions stop

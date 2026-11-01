@@ -17,7 +17,7 @@ pains:
   - "empty screens tell users nothing"
 owns:
   - "Interface copy for each spec: labels, helper text, errors, empty states, confirmations and notifications, in a copy table engineers can paste from"
-  - "The product glossary: the one name for each thing, the words never used, and the voice rules (knowledge/glossary.md)"
+  - "The product glossary: the one name for each thing, the words never used, and the voice rules"
   - "The weekly interface copy review: every open or merged pull request that changed user-facing strings, checked against the glossary and the error-message rules, with rewrites"
   - "A copy audit of one flow a month: every string in it, inconsistencies and the fixes"
 never:
