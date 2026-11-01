@@ -161,7 +161,7 @@ function faceTexture(face) {
   };
   if (face.svg) { img = new Image(); img.decoding = 'async'; img.onload = draw; img.src = face.svg; }
   else if (face.glyph) {
-    symbolsFont ||= new FontFace('Tico Symbols', 'url(/vendor/fonts/material-symbols-outlined.woff2)').load().then(f => { document.fonts.add(f); symbolsReady = true; return f; });
+    symbolsFont ||= new FontFace('Tico Symbols', 'url(/vendor/fonts/material-symbols-outlined.woff2?v=887fa52538ae)').load().then(f => { document.fonts.add(f); symbolsReady = true; return f; });
     symbolsFont.then(draw, () => {});
   }
   draw(); resources.add(tex); faceCache.set(key, tex); return tex;
@@ -641,7 +641,7 @@ function animateLinks() {
 }
 
 // ---------------------------------------------------------------- animation
-let last = 0, frameId = 0, frames = 0, loadingTimer = 0;
+let last = 0, frameId = 0, frames = 0, loadingTimer = 0, paused = false;
 const up = new THREE.Vector3(0, 1.85, 0), tmp = new THREE.Vector3(), stuckColor = new THREE.Color(0xffb547);
 const facing = () => Math.atan2(Math.sin(state.yaw), Math.cos(state.yaw)) * .85;
 function animateCharacter(ch, dt, t, still, inside) {
@@ -689,7 +689,7 @@ function animateCharacter(ch, dt, t, still, inside) {
   if (left) { left.rotation.z = working ? -Math.sin(t * 9 + i + 1.4) * .25 : ch.hop ? -.5 : 0; left.rotation.x = working ? -.6 : 0; }
 }
 function animate(now) {
-  frameId = 0; if (document.hidden) { last = 0; return; } const dt = last ? Math.min(.05, (now - last) / 1000) : .016; last = now;
+  frameId = 0; if (document.hidden || paused) { last = 0; return; } const dt = last ? Math.min(.05, (now - last) / 1000) : .016; last = now;
   // Read the live query: some iframe browsers update matches without delivering a change event.
   const still = reduced.matches;
   state.clock += dt; state.idle += dt; if (!still) state.t += dt; const t = state.t, inside = state.floor !== null;
@@ -728,7 +728,7 @@ function animate(now) {
   if (frames === 2) { $('#loading').classList.add('gone'); loadingTimer = setTimeout(() => $('#loading').hidden = true, 250); document.body.dataset.sceneReady = 'true'; }
   frameId = requestAnimationFrame(animate);
 }
-on(document, 'visibilitychange', () => { if (!document.hidden && !frameId) { last = 0; frameId = requestAnimationFrame(animate); } });
+on(document, 'visibilitychange', () => { if (!document.hidden && !paused && !frameId) { last = 0; frameId = requestAnimationFrame(animate); } });
 
 // ---------------------------------------------------------------- first frame
 const remembered = FLOORS.findIndex(f => f.key === preferences.floorId);
@@ -751,6 +751,9 @@ frameId = requestAnimationFrame(animate);
 return {
   link,
   clearLinks() { while (links.length) dropLink(links[0]); },
+  // Parked while another page of the app shows (bridge.js): the loop stops, and starts again where it was.
+  pause() { paused = true; cancelAnimationFrame(frameId); frameId = 0; },
+  resume() { paused = false; if (!frameId) { last = 0; frameId = requestAnimationFrame(animate); } },
   select(key) { const id = FLOORS.findIndex(f => f.group.key === key); setFloor(id >= 0 ? id : null); },
   update(next) {
     data = next;

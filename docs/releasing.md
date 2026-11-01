@@ -76,14 +76,15 @@ published and files one task, "Release notes for vX.Y.Z", for the Technical Writ
 `docs-writer`) with the release's commit range. The command needs `gh` and a `hub` login that can create tasks.
 The command does not replace the release's publishing approval, evidence checklist or rollout.
 
-Run `publish` in the background while validation runs. Its freeze record retains the candidate, run ID, tag and
-notes task, so the same invocation resumes after interruption without dispatching another gate, retagging or filing a
-second task. If interrupted during dispatch before the run ID was saved, inspect Actions and pass `--run <id>` to
-recover it; mismatched runs refuse. If interrupted while filing the notes task, `publish` refuses rather than file
-another: check the Technical Writer's tasks, and file it by hand if it is missing.
-Retain the record as the release receipt. To start a new freeze after a fix, archive/remove that record explicitly
-(`git rev-parse --git-path tico-release.json` shows it), then freeze current main again. `--state <file>` selects an
-explicit record for either phase. No command resets a freeze or falls back to a different validation automatically.
+Run `publish` in the background while validation runs. A validation run that ends cancelled is rerun by `publish` (same
+run, up to twice); a failed one still refuses. Its freeze record retains the candidate, run ID, tag and notes task, so
+the same invocation resumes after interruption without dispatching another gate, retagging or filing a second task. If
+interrupted during dispatch before the run ID was saved, inspect Actions and pass `--run <id>` to recover it; mismatched
+runs refuse. If interrupted while filing the notes task, `publish` refuses rather than file another: check the Technical
+Writer's tasks, and file it by hand if it is missing. Retain the record as the release receipt. To start a new freeze
+after a fix, archive/remove that record explicitly (`git rev-parse --git-path tico-release.json` shows it), then freeze
+current main again. `--state <file>` selects an explicit record for either phase. No command resets a freeze or falls
+back to a different validation automatically.
 
 ### After freeze
 
@@ -453,6 +454,8 @@ directly and sends no ID.
 | `TICO_TELEMETRY`, `DO_NOT_TRACK` | `off` / `1` stops the count; the check then goes to GitHub |
 | `TICO_VERSION` | The running version, set by the image |
 | `TICO_UPDATER_URL`, `TICO_UPDATER_TOKEN` | An updater service the owner's "Update now" calls |
+| `TICO_UPDATES` | `tico`: Tico updates this server from outside. The app has no "Update now" and says "Tico updates this server"; Tico support's scheduled update is off. Cell companies no longer use it: they have an updater ([cell mode](cell.md#updates)) |
+| `TICO_CELL` | `1`: a Tico Cloud cell company, written by [cell mode](cell.md) |
 
 The updater contract is `POST {TICO_UPDATER_URL}/update` with `{"version": "X.Y.Z"}` and
 `GET {TICO_UPDATER_URL}/status`, which answers `{state, from, to, message}` where `state` is one of

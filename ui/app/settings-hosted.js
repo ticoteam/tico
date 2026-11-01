@@ -56,8 +56,9 @@ async function settingsHostedStart(button) {
 }
 
 // Sleep when idle (backend/sleep_idle.py): a server Tico hosts can stop itself after hours with nothing to do, and its
-// bot computers with it; Tico starts it again for the next routine or a visit. Shown only on a hosted server. Anyone
-// sees it; an owner or an admin changes it (the server says so too).
+// bot computers with it; Tico starts it again for the next routine or a visit. Shown only on a hosted server, and not
+// on a Tico Cloud cell (`managed`: Tico staff set its idle time). Anyone sees it; an owner or an admin changes it
+// (the server says so too).
 const SLEEP_BLOCKERS = {run_queued: 'a run is waiting', run_in_progress: 'a run is going', task_session: 'a task session is waiting',
   runner_job: 'a computer job is running', send_pending: 'a send is waiting', routine_due: 'a routine is due soon'};
 async function renderSettingsSleep() {
@@ -65,7 +66,7 @@ async function renderSettingsSleep() {
   if (!card || !host || formBusy(host)) return;
   let v;
   try { v = (await get('/v2/sleep')).sleep; } catch { card.hidden = true; return; }
-  card.hidden = !v?.hosted;
+  card.hidden = !v?.hosted || !!v.managed;
   if (card.hidden) return;
   const admin = settingsIsAdmin(), off = admin ? '' : ' disabled';
   const hours = [['0', 'Off'], ...Array.from({length: 24}, (_, i) => [String(i + 1), `After ${i + 1} h`])];

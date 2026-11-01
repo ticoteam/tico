@@ -112,7 +112,10 @@ def test_given_a_week_of_use_the_readout_lists_calls_cost_and_answer_spread_per_
     assert out["total"] == {"calls": 21, "jev": 16, "fallback": 2, "failed": 3, "jev_share": round(16 / 21, 4),
                             "cost_usd": 0.082}
     assert out["month"]["cap_usd"] == 50.0 and out["month"]["month"] == NOW.strftime("%Y-%m")
-    spent = 1.082 if at(8)[:7] == NOW.strftime("%Y-%m") else 0.082
+    # The month is the calendar month the readout runs in: the week's calls (all a day ago) count only if that day is
+    # in it, and the call from 8 days ago only if that day is.
+    in_month = lambda days_ago: at(days_ago)[:7] == NOW.strftime("%Y-%m")     # noqa: E731
+    spent = round((0.082 if in_month(1) else 0) + (1.0 if in_month(8) else 0), 3)
     assert out["month"]["spent_usd"] == spent
 
     text = out["text"]

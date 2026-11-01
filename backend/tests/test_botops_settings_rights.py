@@ -1,5 +1,5 @@
 """BotOps changes a team setting with the rights of the person who asked, never its own (docs/permissions.md): the
-release schedule, the Task Manager, quiet task triage, the team's run budget, task types, tags and incoming triggers.
+release schedule, the Task Manager, stalled task check, the team's run budget, task types, tags and incoming triggers.
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """

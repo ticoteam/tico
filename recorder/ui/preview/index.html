@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Tico Recorder · preview</title>
+  <link rel="stylesheet" href="../app/app.css">
+  <!-- Preview only: mock.js stands in for Tauri before the real page script loads. -->
+  <script src="mock.js"></script>
+  <script src="../app/icons.js"></script>
+  <script src="../app/app.js"></script>
+  <style>
+    /* Stand-ins for the macOS traffic lights the real window draws at (18, 22). */
+    .traffic { position: fixed; left: 18px; top: 16px; z-index: 100; display: flex; gap: 8px; pointer-events: none; }
+    .traffic i { width: 12px; height: 12px; border-radius: 6px; background: #ff5f57; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,.2); }
+    .traffic i:nth-child(2) { background: #febc2e; }
+    .traffic i:nth-child(3) { background: #28c840; }
+  </style>
+</head>
+<body>
+  <div class="traffic"><i></i><i></i><i></i></div>
+  <div id="app"></div>
+</body>
+</html>

@@ -5,6 +5,7 @@ from the page's 0.1 in its goals (a measure, unit, direction and numbers in plac
 a bot's `reports_to` set by the visitor or BotOps, the one `first_job`, and an existing agent's department and reason.
 Format 0.3 adds the `strategy` block (after `goals:`) and a goal's `bet`. A plan without a strategy is still written as
 0.2, byte for byte, so its file imports on an app from before 0.3; the reader takes both.
+An employee's or existing agent's optional `team` (the name of its group) is read and written in either format.
 """
 import datetime as dt
 import json
@@ -81,6 +82,8 @@ def to_yaml(draft, created=None):
         L += ["  - id: %s" % word(b["id"]), "    template: %s" % word(b["template"]), "    title: %s" % q(b["title"]),
               "    department: %s" % b["dept"], "    reports_to: %s" % word(D.manager_of(draft, b)),
               "    start: %s" % ("now" if b["start"] else "later"), "    reason: %s" % q(b["reason"])]
+        if b.get("team"):
+            L.append("    team: %s" % q(b["team"]))
         if b["routine"]:
             L.append("    first_routine: %s" % q(b["routine"]))
         if b["tools"]:
@@ -96,6 +99,8 @@ def to_yaml(draft, created=None):
         L += ["  - id: %s" % word(b["id"]), "    runtime: %s" % b["runtime"], "    title: %s" % q(b["title"]),
               "    job: %s" % q(b["about"]), "    department: %s" % b["dept"], "    reason: %s" % q(b["reason"]),
               "    reports_to: %s" % word(D.manager_of(draft, b))]
+        if b.get("team"):
+            L.append("    team: %s" % q(b["team"]))
     L.append("goals:" + ("" if draft["goals"] else " []"))
     for g in draft["goals"]:
         L += ["  - id: %s" % word(g["id"]), "    title: %s" % q(g["title"]),
@@ -172,6 +177,13 @@ def _part(value):
     return value if isinstance(value, dict) else {}
 
 
+def _team(raw):
+    """A bot's `team` as the file names it: trimmed and clipped to LIMITS["team"], "" when absent or blank. A value that
+    is not text is returned as it is, for draft.check to refuse."""
+    team = _str(raw.get("team"))
+    return team.strip()[:D.LIMITS["team"]].strip() if isinstance(team, str) else team
+
+
 def _strategy(raw):
     """The strategy block as the draft keeps it: dates as text, a missing text as "", the rest for D.check to judge."""
     raw = _part(raw)
@@ -237,6 +249,8 @@ def from_yaml(text):
                "existing": False}
         if b.get("first_job"):
             bot["first_job"] = _str(b["first_job"])
+        if _team(b):
+            bot["team"] = _team(b)
         if b.get("held_by"):
             bot["person"] = _str(b["held_by"])
         chosen[bot["id"]] = _str(b.get("reports_to"))
@@ -245,6 +259,8 @@ def from_yaml(text):
         bot = {"id": _str(b.get("id")), "template": None, "title": _str(b.get("title")), "dept": b.get("department"),
                "lead": False, "core": False, "reason": _str(b.get("reason")), "start": True, "routine": "", "tools": [],
                "about": _str(b.get("job")), "runtime": b.get("runtime"), "existing": True}
+        if _team(b):
+            bot["team"] = _team(b)
         chosen[bot["id"]] = _str(b.get("reports_to"))
         draft["bots"].append(bot)
     for g in _rows(doc, "goals"):

@@ -315,6 +315,8 @@ class _Drafts:
             if id not in self.s.drafts_by_id:
                 raise Boom(404, "notFound")
             rec = self.s.drafts_by_id[id]
+            if format == "raw":
+                return {"id": id, "message": {"id": rec["message"]["id"], "raw": rec["message"]["raw"]}}
             return {"id": id, "message": self.s.store[rec["message"]["id"]]}
         return _Req(go)
 

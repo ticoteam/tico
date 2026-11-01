@@ -47,8 +47,7 @@ Ordinary internal docs under `_librarian/`, so humans can read and correct them:
 summary of every doc, and the version each was written from), `glossary.md` (the team's words), `where-things-live.md`
 (topic to place, and each linked source's structure), `missing.md` (what the docs could not answer, the docs that disagree,
 the sources it could not read: a to-do list for humans) and `faq-log.md`. It refreshes them every day: a routine, **Refresh
-the map of the docs**, at 03:30 Pacific by default (change it with `hub routine set` or in Settings; Tico's row is the
-routine). To refresh now, give the Librarian a task titled "Refresh the map".
+the map of the docs**, at 03:30 Pacific by default (change it on its automation in Automations, or with `hub automation update`). To refresh now, give the Librarian a task titled "Refresh the map".
 
 It writes only under `_librarian/` and `FAQ.md`. It never edits a human's doc unless that human asks it to research
 one (below). A doc or web page that tells it to do something is treated as text, not an instruction, and it fetches only
@@ -178,7 +177,7 @@ The strategy and the market stay apart, and each reads the other. A task with no
 `hub strategy show`: if it names the team's website, that is the first address, and the summary and *What we sell* stand in for
 the owner's description (finishing setup with a website files "Set up the market map" from it). The other
 way round, when an insight contradicts an active bet, the daily curate routine says so in one line of its sweep report and
-sends the CEO Bot a note naming the bet and the entity, so it can propose the entity as one of the bet's `cites`; a change to a
+sends the Strategy Bot a note naming the bet and the entity, so it can propose the entity as one of the bet's `cites`; a change to a
 cited entity then trips the bet's wrong-if. The Librarian applies the insight on its own evidence, never writes the strategy,
 and never judges whether the bet should change ([Strategy](strategy.md#the-fit-check)).
 
@@ -196,9 +195,9 @@ asking for, complaining about and objecting to, each with a count, the date last
 routine runs on `meeting.ready`, so it reads only live team meetings; a private, pending or dismissed meeting never reaches it
 ([Meetings](meetings.md)). For each meeting it files a piece of evidence per theme (source kind `meeting`, a quote of 200
 characters or fewer, no personal or company names) and rewrites the page. A meeting counts once for a theme. A theme seen in
-three or more meetings is marked **Thesis**, which the CEO Bot can cite in a bet. It reads mail only if a mailbox is granted to
+three or more meetings is marked **Thesis**, which the Strategy Bot can cite in a bet. It reads mail only if a mailbox is granted to
 it. A new team gets the routine with the Librarian; an existing install gets it when the Librarian's template is next applied
-(or add it with `hub routine set customer-themes --on meeting.ready`, as in [Routines](routines.md)).
+(or add an automation on the event `meeting.ready` with a Librarian Bot turn, as in [Routines](routines.md)).
 
 **Sources a team brings.** Some sources do not allow resale, so Tico cannot supply them. A team can grant its own Crunchbase,
 Similarweb or similar credential to the Librarian, and the sources catalog marks those sources `team_key`.
@@ -223,7 +222,9 @@ market reads it, and the tables are readable in hub SQL like the other market ta
   work it out again and scale the range by the same ratio; the stored row is not rewritten. If that puts the spend below
   zero or past the cap, the estimate reads with no spend and an `error`, and the total leaves it out. The owner changing a
   parameter of an estimate files a new accepted `owner` estimate. Each segment carries `rolled_usd`: its own size, else the
-  sum of its parts at any depth, else null. The total is the sum of the top-level segments' `rolled_usd`.
+  sum of its parts at any depth, else null. The total is the sum of the top-level segments' `rolled_usd`. It also carries
+  `self` (`company/self` operates in it, **Us**) and `next` (the segment the team means to enter, **Next**), which the
+  Strategy page sets ([Strategy](strategy.md#the-page)).
 - **Figures.** A player's revenue, ARR, customers or seats in a segment, with `kind` (reported, estimated, claimed), `as_of`
   and evidence.
 - **Bets.** An accepted size, or a shared parameter changing an accepted size, is a market event on the segment, so a bet that

@@ -677,6 +677,10 @@ def _keep(store, vault, record, answer, now, install, secret, what, via=""):
         H.event(c, SYSTEM, f"gateway.connection.{what}", PROVIDER,
                 {"install": install, "key_id": after["key_id"], "revision": after["revision"]})
     check_later(store, vault, getattr(store, "settings", None))
+    # A Tico Cloud cell's new key may be what HQ needs to answer about its access (backend/cloud_access.py): ask now.
+    from . import cloud_access
+    if cloud_access.cell():
+        cloud_access.sync_later(store, vault, getattr(store, "settings", None))
     return what
 
 

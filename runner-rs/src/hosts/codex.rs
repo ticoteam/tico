@@ -189,6 +189,7 @@ impl CodexHost {
         let mut command = crate::isolation::command_as(self.0.identity, "codex");
         if self.0.identity.is_some() { command.args(["-c", "cli_auth_credentials_store=\"ephemeral\""]); }
         command.arg("app-server").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).env_clear().envs(&self.0.env);
+        super::new_group(&mut command);
         let mut child = command.spawn().map_err(|e| failed(format!("could not start codex app-server: {e}")))?;
         let _stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &self.0.env);
         let stdout = child.stdout.take().ok_or_else(|| failed("codex app-server has no stdout"))?;

@@ -61,7 +61,8 @@ function settingsAllChoices() {
   // Once the owner has chosen providers, only their models are offered (a bot already on another
   // one keeps its own choice in the editor).
   const enabled = SETTINGS_DATA.enabledProviders || [];
-  return (SETTINGS_DATA.models || []).filter(model => !model.deprecated &&
+  // Meeting models (providers.py `meeting`) are picked in Settings' Meeting model select, not as a bot's own model.
+  return (SETTINGS_DATA.models || []).filter(model => !model.deprecated && (!model.meeting || model.id === SETTINGS_KEEP_MODEL) &&
     (!enabled.length || !model.provider || enabled.includes(model.provider) || model.id === SETTINGS_KEEP_MODEL)).flatMap(model =>
     (model.harnesses || [model.runtime]).flatMap(harness =>
       (model.efforts?.length ? model.efforts : [model.default_effort || '']).map(effort => {
@@ -486,15 +487,17 @@ async function settingsSaveTaskModel(e, change, revision, inEditor = false) {
 }
 function settingsMachineSelect(e) {
   if (e.agent) return settingsAgentCell(e);
-  const current = e.machine?.runner_id || '';
-  const machines = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at &&
+  // On Tico Cloud the shared and the bot's own cloud machine are two choices; no cloud machine is offered as a computer.
+  const cloud = e.cloud_machine, current = cloudMachineValue(e) || e.machine?.runner_id || '';
+  const machines = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at && !machine.cloud_machine &&
     (S.me?.role === 'owner' || machine.operator === S.me?.id));
   const unassigned = `Not assigned · ${settingsPersonName(e.operator)}`;
   const currentLabel = e.machine ? `${e.machine.label} · ${settingsPersonName(e.machine.operator)}` : unassigned;
   const seen = e.machine?.last_seen ? `last seen ${ago(e.machine.last_seen)}` : e.machine ? 'waiting for its first heartbeat' : 'register a computer first';
   return `<select class="settings-inline-select" data-bot-machine="${esc(e.name)}" data-current="${esc(current)}"
-    aria-label="Computer for ${esc(e.display_name)}" title="${esc(`${currentLabel} · ${seen}`)}" ${settingsCanManageBot(e) && machines.length ? '' : 'disabled'}>
+    aria-label="Computer for ${esc(e.display_name)}" title="${esc(`${currentLabel} · ${seen}`)}" ${settingsCanManageBot(e) && (machines.length || cloud) ? '' : 'disabled'}>
       ${current ? '' : `<option value="" selected disabled>${esc(unassigned)}</option>`}
+      ${cloud ? cloudMachineOptionsHTML(current) : ''}
       ${machines.map(machine => `<option value="${esc(machine.id)}" ${machine.id === current ? 'selected' : ''}>${esc(machine.label)} · ${esc(settingsPersonName(machine.operator))}</option>`).join('')}
     </select>`;
 }
@@ -503,6 +506,7 @@ function settingsBotProblem(e) {
   if (e.status !== 'active') return '';
   if (e.agent?.synced) return e.online ? '' : 'history not synced';
   if (e.agent) return !e.agent.credential ? 'no credential' : e.online ? '' : 'not reporting';
+  if (cloudMachineOn(e)) return e.cloud_machine.problem || '';
   return !e.machine ? 'no computer' : e.online && e.ready ? '' : e.online ? (e.readiness?.problems?.[0] || 'Computer not ready') : 'offline';
 }
 // Search lasts while the page is open; selection is trimmed to matching manageable bots.
@@ -723,10 +727,10 @@ function renderSettingsBots() {
   };
   const row = e => {
     const problem = settingsBotProblem(e);
-    const badges = `${isBuiltInBot(e.name) ? '<span class="pill" data-built-in>Built-in</span>' : ''}${e.status && e.status !== 'active' ? `<span class="pill ${e.status === 'paused' ? 'waiting' : ''}">${esc(statusWord(e.status))}</span>` : ''}`;
+    const badges = `${isBuiltInBot(e.name) ? '<span class="pill" data-built-in>Built-in</span>' : ''}${botPausedBadge(e.name, true) || (e.status && e.status !== 'active' ? `<span class="pill">${esc(statusWord(e.status))}</span>` : '')}`;
     const model = e.agent ? `<span class="muted" title="${esc(e.agent.model ? `profile's model · ${e.agent.model}` : "the profile's own model")}">${esc(agentKind(e.agent))}</span>` : settingsChoiceCell(e, 'model');
     return `<tr data-settings-bot="${esc(e.name)}"><td class="settings-pick">${pick(e)}</td>
-      <td class="sb-cell-name"><div class="sb-bot">${avatar(e.name, 27, stateOf(e.name))}<div class="sb-text"><div class="sb-line"><a class="sb-name" href="#/bot/${esc(e.name)}">${shownName(e)}</a>${botDisplayName(e.name) !== (e.display_name || e.name) ? `<span class="mono muted">${esc(e.name)}</span>` : ''}${badges}</div>${e.task_flow ? `<small data-task-flow>${e.task_flow.going} of ${e.keep_tasks_going == null ? 'unlimited' : e.keep_tasks_going} tasks going, ${e.task_flow.waiting} waiting to start</small>` : ''}${e.team || problem ? `<small>${e.team ? esc(teamLabel(e.team)) : ''}${e.team && problem ? ' · ' : ''}${problem ? `<span class="sb-problem">${esc(problem)}</span>` : ''}</small>` : ''}${e.name === 'goal-manager' ? settingsCeoChartLine('', true) : ''}</div></div></td>
+      <td class="sb-cell-name"><div class="sb-bot">${avatar(e.name, 27, stateOf(e.name))}<div class="sb-text"><div class="sb-line"><a class="sb-name" href="#/bot/${esc(e.name)}">${shownName(e)}</a>${botDisplayName(e.name) !== (e.display_name || e.name) ? `<span class="mono muted">${esc(e.name)}</span>` : ''}${badges}</div>${e.task_flow ? `<small data-task-flow>${e.task_flow.going} of ${e.keep_tasks_going == null ? 'unlimited' : e.keep_tasks_going} tasks going, ${e.task_flow.waiting} waiting to start</small>` : ''}${e.team || problem ? `<small>${e.team ? esc(teamLabel(e.team)) : ''}${e.team && problem ? ' · ' : ''}${problem ? `<span class="sb-problem">${esc(problem)}</span>` : ''}</small>` : ''}</div></div></td>
       <td class="sb-cell-access" aria-label="Access: ${esc(settingsAccessWord(e))}"><span class="sb-access-label" aria-hidden="true">Access:</span>${settingsAccessCell(e)}</td><td class="sb-cell-model"><div class="sb-model-wrap">${model}${e.agent ? '' : settingsTaskIndicator(e)}</div>${settingsBotSearchMatch(e)}</td>
       <td class="sb-cell-fallback">${e.agent ? '<span class="muted">-</span>' : settingsChoiceCell(e, 'fallback')}</td>
       <td class="sb-cell-owners">${stack(e)}</td><td class="sb-cell-computer">${settingsMachineSelect(e)}</td>
@@ -763,8 +767,6 @@ function renderSettingsBots() {
     (target || el.querySelector('[data-bots-search]'))?.focus();
   };
   el.onclick = event => {
-    const ceoChart = event.target.closest('[data-ceo-chart-toggle]');
-    if (ceoChart) { void settingsCeoChartToggle(ceoChart).then(done => { if (done) redraw('[data-ceo-chart-toggle]'); }); return; }
     const restore = event.target.closest('[data-bot-restore]');
     if (restore) { void settingsRestoreBot(restore.dataset.botRestore, restore); return; }
     const choice = event.target.closest('[data-choice-open]');

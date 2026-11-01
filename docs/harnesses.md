@@ -84,21 +84,56 @@ Meta's Llama models stay on pi through OpenRouter (`llama-4-maverick`, no longer
 Providers with no CLI of their own (DeepSeek, Kimi, Llama, Mistral, and whatever comes next) share one harness that
 takes an API key. Candidates:
 
-- **pi** (already a Tico host, `runner-rs/src/hosts/pi.rs`): one non-interactive process per run (`pi -p --mode json`), a
-  JSON event stream Tico already parses, resumable sessions, read/bash/edit/write/grep tools (the bot reaches Tico
-  with the `hub` CLI over bash), no permission prompts, an npm package, and keys for many providers by environment
-  variable. Tico reaches every model through OpenRouter, so one key covers all of them.
+- **pi** (already a Tico host, `runner-rs/src/hosts/pi.rs`): a long-lived process driven over JSON on stdin and stdout
+  (`pi --mode rpc`), a JSON event stream Tico already parses, resumable sessions, read/bash/edit/write/grep tools, MCP servers (the bot
+  reaches Tico through the hub MCP server and the `hub` CLI over bash), no permission prompts, an npm package, and keys
+  for many providers by environment variable. Tico reaches every model through OpenRouter, so one key covers all of them.
 - **OpenCode**: also capable and widely used, with a large provider list, but it would need a new host adapter and its
   own event format, and ships a per-platform native binary. Nothing in a headless run needs what it adds.
 - **aider**: edits a git repository well, but it is a chat-driven editor, not an agent with a shell; a bot's run
   (read the repo, call Tico, run tests, commit) does not fit.
+
+A pi turn gets the same MCP servers as a Claude Code or Codex turn (the hub, the bot's bot.yaml servers and the
+repository's `.mcp.json`), in the turn's `mcp.json` under its agent folder (`PI_CODING_AGENT_DIR`: `runtime/pi-agent/<bot>`,
+or the turn's own folder for a Tico model). The file is written atomically per turn. pi takes streamable HTTP only, so an
+SSE server is named as not passed. Each tool is declared directly (`exposure: direct`). Secrets stay `${VAR}`, and each
+stdio server's environment names the Gateway key empty so it never inherits it. Built-in MCP arrived in pi 0.99.0
+(2026-09-29); the runner installs the latest pi, but an older pi would ignore `mcp.json` without an error.
+
+**Compact at** applies to a pi turn: the turn's `settings.json` (in the same agent folder) sets pi's
+`compaction.reserveTokens` to the model's context window less the bot's Compact at (`reserve_tokens` in `hosts/pi.rs`,
+kept between pi's default 16,384 and a compaction point of 100,000). The Tico Gateway's models have a 200,000-token window.
+No OpenRouter model's window is known to Tico yet, so those turns keep pi's own compaction. pi's `compaction_end` with a
+result is a compaction: the session's next turn is given the whole prompt. pi can compact between one turn's tool calls,
+where Tico cannot put back what the turn left out, so that turn keeps what it was given until the next one.
+`compact_first` and `/compact` send pi's RPC `compact`, which ends at its `compaction_end`.
+
+One pi process serves a conversation's turns (`persistent_session`). The session id is the thread id, so a process that
+starts again picks up the same session file. A turn is a `prompt` and ends at pi's `agent_settled`. After a turn that
+completed, the runner keeps the process (`Pool` in `hosts/pi.rs`, as many as the runner's capacity, at least 8). It
+stops it after 15 minutes unused, when the runner stops, or when its turn did not complete. pi reads `HUB_TOKEN` from a
+token file of its own (`tico-file:`), which holds the running attempt's token and is blanked between attempts. A turn
+that would start pi differently starts it again on the same session: a different model, a changed environment or granted
+secret (a new GitHub token too), a different agent folder (MCP servers, Compact at). A new effort is pi's
+`set_thinking_level`. A pi that exits fails its turn (`process_exit`); the next turn starts it again on the same
+session. A message sent while a turn runs is pi's `steer` (`steer`): pi writes it in after the turn's current tool
+calls, before its next model call. One steered in after the turn's last model call is sent as a new prompt within the
+same turn. One pi had not yet read when the turn ended is taken back out of its queue and waits for the next turn. A
+pi run as a leased turn user (a Tico model's turn on a Docker runner) is kept with that user and its Gateway relay, for
+the same bot's next turn in the same conversation, which takes them back before it would lease a user of its own. The
+relay keeps its URL and token and gets each attempt's key; between turns it refuses every call, and calls still open
+when the turn ends are cut off. The token file and granted credential files are readable by that user only, and the
+files sit at the same paths every attempt. A turn that finds every turn user busy stops the longest-idle kept pi and
+takes its user. A kept pi's relay is stopped and its user cleaned and returned when the pi goes (idle, eviction, a
+crash, a failed turn, the runner stopping); a pi started again for a changed start keeps both. A new GitHub token
+(the runner and the server hand out a new one about every 15 minutes) still restarts it.
 
 pi is the one that best fits a headless run in a git repository with the least new code. If it stops being
 maintained, replacing the catch-all is a manifest and a host adapter, described below.
 
 ## How providers map to harnesses
 
-The owner enables providers in **Settings > Computers > Models** (`backend/providers.py`). Each provider names its runtime
+The owner enables providers in **Settings > Models** (`backend/providers.py`). Each provider names its runtime
 (the host adapter) and its harness (the manifest). Enabling a provider offers its models; it does not install
 anything. Each computer installs only:
 
@@ -126,14 +161,15 @@ on lookup, and pi's `models.json` names the turn's model for the run. `tico-chea
 and `tico-power-1.0` are the old lineup (`deprecated`, `lineup: old`): no picker offers them, but a bot already on one keeps
 running at its old price. In Settings the Gateway is a harness / provider of its own ("Tico AI Gateway") whose Model control is
 Department, Level, Fast and Version, and the stored model is the id they make. Their provider, `tico`, is never ticked: it is on
-exactly while the **Tico AI Gateway** connection in Settings > Computers > Models has a key (`backend/gateway_connection.py`),
+exactly while the **Tico AI Gateway** connection in Settings > Models has a key (`backend/gateway_connection.py`),
 and OpenRouter's catch-all does not offer them. The key is the one Decide uses; the server's `TICO_GATEWAY_KEY` and
 `TICO_GATEWAY_URL` win over a saved one and show as connected. A saved key is sealed and never read back, only a
 preview of its first and last three characters. What the owner sees and does is in [Tico AI Gateway](ai-gateway.md).
 
 No bot gets the key. For a bot on a Tico model, or whose own fallback is one, the runner fetches it
 (`GET /api/v2/runner-gateway-credentials`, runner only) and starts a relay on 127.0.0.1 for that turn
-(`runner-rs/src/gateway_relay.rs`); the turn gets the relay's URL and a token good for that turn's model calls only, as
+(`runner-rs/src/gateway_relay.rs`); the turn gets the relay's URL and a token good for that turn's model calls only (a
+pi kept between turns keeps both, closed between its turns), as
 `TICOAI_GATEWAY_URL` and `TICOAI_GATEWAY_KEY`. pi reads them through a `tico` provider in the turn's own `models.json`
 (OpenAI chat completions, streamed), in a directory removed when the turn ends. A runner hands out the key only when
 it runs bot code as another user (Tico's Docker runner); elsewhere a Tico model's turn is refused once
@@ -229,7 +265,8 @@ model** for task models keeps each bot's task context length.
 
 If a choice cannot be saved, the row or editor shows the reason. A saved task model that cannot run falls back
 to the bot's own model, with the task context length and any task effort that model takes; the task history records why.
-A review or check subtask keeps its check model.
+A task's own model ([Choosing the model a task runs on](tasks.md#choosing-the-model-a-task-runs-on)) falls back to the
+bot's task model first, then to the bot's own model. A review or check subtask keeps its check model.
 
 #### A warning about a cheaper task model
 
@@ -418,14 +455,15 @@ another bot's home; all turns use the original login in its own home.
 | `tool_events` | The host emits one `tool` event per tool call, so a run with none provably did nothing | No evidence either way |
 | `mcp_transports` / `mcp_unsupported` | The MCP transports a run takes; the reason shown when it takes none | No MCP servers, "it has no MCP support in Tico" |
 | `resume_after_interrupt` | An interrupted thread can be continued | `true`. No longer read: an interrupted session is always kept and resumed ([sessions](sessions.md#checkpoints-and-resume)) |
-| `steer` | A message sent while a turn runs is written into that turn (Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; chat says so and offers Stop and redirect |
-| `persistent_session` | One process per conversation is kept between turns | One process per turn |
+| `steer` | A message sent while a turn runs is written into that turn (Claude Code, Codex and pi; Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; chat says so and offers Stop and redirect |
+| `persistent_session` | One process per conversation is kept between turns (pi, Antigravity) | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |
 | `one_turn_per_login` | Optional queue, disabled for Codex (`false`). A subscription login (its `subscription_marker` in the sign-in detail) runs one turn at a time on the computer: another bot's turn on it waits, or runs on its fallback. A key login is not held | Turns on one login run together |
 | `isolated_user` | Sign-in works from a private home, so on a Docker runner with a turn-user pool each turn leases its own OS user and cannot enter another bot's checkout. Only pi enables it today; Claude Code and Codex await their brokered Docker isolation gate | The turn runs as `bot`; readiness reports it as not isolated |
 | `turn_sign_in` | `claude-oauth` or `codex-external`: a leased turn uses the supervisor-owned, per-login access-token broker. Refresh credentials stay in the original login home; only refresh calls are serialized. Requires `isolated_user` before it affects turns | No subscription broker |
 | `compaction` | The bot's Compact at setting applies | Setting hidden |
+| `compaction_events` | The harness says in its stream when it compacts a session (Claude Code's `compact_boundary`, pi's `compaction_end` with a result), so a resumed turn whose standing instructions and task are unchanged and still in the session gets one line for each instead; after a compaction the next turn gets them in full | Every turn gets the whole prompt |
 | `resume_command` | The local command that resumes a session (the id follows) | `<executable> --resume` |
 | `model_list` | `host`: the host adapter lists the models in readiness; `command`: the CLI lists them (`model_list_args`) | No model list |
 | `readiness` | The runner reports install and sign-in for it | `true`; `false` reports nothing, so checks say unknown |

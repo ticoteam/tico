@@ -125,9 +125,6 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p === '/api/issues') return json([]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
-    if (p === '/api/v2/routines') return json({routines: [
-      {id: 'digest', title: 'Weekly metrics digest', employee: 'analyst', cron: '0 9 * * 1', active: true, enabled: true, next: inDays(3)},
-      {id: 'sweep', title: 'Inbox sweep', employee: 'support', cron: '*/30 * * * *', active: true, enabled: true, next: inDays(0.01)}]});
     if (p === '/api/v2/tasks/labels') return json({labels: [...new Set(tasks.flatMap(x => x.labels))].sort(), tags: []});
     if (p === '/api/v2/task-types') return json({types});
     if (p.startsWith('/api/v2/preferences/')) {
@@ -234,8 +231,9 @@ async function listAndTabs(browser) {
   // Labelled tabs with counts, as a tab list; the count is part of each tab's name, after a comma.
   const tabs = await page.locator('#task-view [role=tab]').evaluateAll(ts => ts.map(t => [t.dataset.view, t.firstChild.textContent, t.querySelector('.cnt')?.textContent ?? null, t.getAttribute('aria-selected')]));
   assert.deepEqual(tabs, [['foryou', 'Needs you', String(NEEDS_YOU), 'false'], ['list', 'Open', String(OPEN_COUNT), 'true'], ['board', 'Board', null, 'false'],
-    ['recurring', 'Routines', '2', 'false'], ['done', 'Done', null, 'false'], ['closed', 'Closed', null, 'false']]);
+    ['done', 'Done', null, 'false'], ['closed', 'Closed', null, 'false']]);
   assert.equal(await page.locator('#task-view [data-view="foryou"]').getAttribute('aria-label'), `Needs you, ${NEEDS_YOU}`);
+  assert.equal(await page.locator('#task-view [data-view="routines"], #task-view [data-view="recurring"]').count(), 0, 'no Routines tab: routines are Automations');
   assert.equal(await page.locator('#task-view').getAttribute('role'), 'tablist');
   // "Needs you", then one "Needs <Name>" per other person a task waits on, "Needs someone", then Waiting and Doing.
   assert.deepEqual((await groupNames(page)).map(s => s.toLowerCase()), ['needs you', 'needs sam', 'needs someone', 'waiting', 'doing']);
@@ -478,7 +476,7 @@ async function typeSelection(browser) {
     await prefHeld;
     return route.fulfill({contentType: 'application/json', body: JSON.stringify({value: {type: 'marketing', view: 'list', views: 2, group: {list: 'owner'}}})});
   });
-  await page.goto('https://tico-ui.test/#/goals');
+  await page.goto('https://tico-ui.test/#/updates');
   const delayedPreferenceRead = page.waitForResponse(response => {
     const url = new URL(response.url());
     return url.pathname === '/api/v2/preferences/tasks.view' && response.request().method() === 'GET';
@@ -623,8 +621,7 @@ async function properties(browser) {
   const rows = await props.locator('.prop').evaluateAll(rs => rs.map(r => [r.querySelector('.prop-k').textContent,
     [...r.querySelectorAll('.prop-txt, .tlabel > [data-tag-key]')].map(x => x.textContent.trim()).join(' ')]));
   assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', 'Everyone'], ['Due', 'Add due date'], ['Tags', 'checkout'],
-    ['Part of', 'Add parent'], ['Wake rules', 'Defaults']]);
-  assert.equal(await props.locator('[data-wake-rules]').getAttribute('href'), '#/settings/rules?task=t-checkout');
+    ['Part of', 'Add parent']]);
   assert.match(await props.locator('[data-prop="status"]').innerText(), /Waiting/);
   // Detail names the status; the status-grouped list uses its heading. "blocked" is a small chip.
   assert.equal(await peek.locator('.tmodal-head .tstatus').innerText(), 'Waiting');
@@ -917,30 +914,69 @@ async function snoozing(browser) {
   console.log('snoozing: ok');
   await page.close();
 }
-async function quietWork(browser) {
-  // Dev 257: a quiet (next-run) task says where it stands: deferred until something (and by which run), eligible for
-  // the bot's next run, or queued with a run of its own. An ordinary task says nothing.
+async function wakeNotes(browser) {
+  // A snooze's note and a wait's note follow the chip's text, escaped, with the full note in the title; no note, no change.
   const base = fixtures().find(x => x.id === 't-digest');
-  const quiet = (id, title, q) => ({...base, id, title, next_run: q.state !== 'queued', quiet: q});
+  const wait = note => ({kind: 'pr_merged', target: 'acme/app#943', label: 'PR #943', url: 'https://github.com/acme/app/pull/943', met: false,
+    sentence: 'waits for PR #943 to merge', ...(note ? {note} : {})});
+  const long = 'Check the deploy finished on <b>staging</b> and the migration ran, then ask Sam to QA the checkout flow';
   const {page, errors} = await open(browser, {extraTasks: [
-    quiet('t-q-deferred', 'Quiet deferred', {state: 'delivered', run: 'edec5d00-0000', at: at(120),
+    {...base, id: 't-noted', title: 'Noted snooze', snoozed_until: inDays(3), snoozed_by: 'human:ana', snoozed_note: long,
+      milestone_waits: [wait('Check the migration')]},
+    {...base, id: 't-bare', title: 'Bare snooze', snoozed_until: inDays(3), snoozed_by: 'human:ana', milestone_waits: [wait()]}]});
+  await page.locator('#task-view [data-view="snoozed"]').click();
+  const chips = async (key, title) => {
+    await page.locator(`#task-body [data-task-key="${key}"] [data-open-task]`).click();
+    await peekTitle(page, title);
+    const snooze = page.locator('#task-peek [data-task-unsnooze]'), milestone = page.locator('#task-peek .tlink.milestone');
+    return {snooze: (await snooze.textContent()).trim(), snoozeTitle: await snooze.getAttribute('title'), milestone: (await milestone.textContent()).trim(),
+      milestoneTitle: await milestone.getAttribute('title'), notes: await page.locator('#task-peek .tchip-note').count(),
+      bold: await page.locator('#task-peek .tmodal-head b').count()};
+  };
+  const day = await page.evaluate(at => snoozeDay({snoozed_until: at}), inDays(3));
+  const noted = await chips('tt-noted', 'Noted snooze');
+  assert.equal(noted.snooze, `Snoozed to ${day} · ${long}`);
+  assert.match(noted.snoozeTitle, new RegExp(` · ${long.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\. Click to bring it back now$`));
+  assert.equal(noted.milestone, 'PR #943 to merge · Check the migration');
+  assert.equal(noted.milestoneTitle, 'waits for PR #943 to merge · Check the migration');
+  assert.equal(noted.notes, 2);
+  assert.equal(noted.bold, 0, 'the note is text, not markup');
+  const clipped = await page.locator('#task-peek [data-task-unsnooze] .tchip-note').evaluate(el => el.scrollWidth > el.clientWidth);
+  assert.ok(clipped, 'a long note is clipped with an ellipsis');
+  await shot(page, 'wake-notes');
+  const bare = await chips('tt-bare', 'Bare snooze');
+  assert.deepEqual(bare, {snooze: `Snoozed to ${day}`, snoozeTitle: bare.snoozeTitle, milestone: 'PR #943 to merge',
+    milestoneTitle: 'waits for PR #943 to merge', notes: 0, bold: 0});
+  assert.doesNotMatch(bare.snoozeTitle, / · /);
+  assert.deepEqual(errors, []);
+  console.log('wake notes: ok');
+  await page.close();
+}
+async function deferredWork(browser) {
+  // Dev 257: a deferred task says where it stands: held until something (and by which run), eligible for the bot's
+  // next run, or queued with a run of its own. An ordinary task says nothing. `quiet` is the field's older name.
+  const base = fixtures().find(x => x.id === 't-digest');
+  const deferred = (id, title, q, field = 'deferred') => ({...base, id, title, next_run: q.state !== 'queued', [field]: q});
+  const {page, errors} = await open(browser, {extraTasks: [
+    deferred('t-q-held', 'Deferred held', {state: 'delivered', run: 'edec5d00-0000', at: at(120),
       resume: {kind: 'task', task: 't-idem'}, words: 'Picked up again after Add idempotency keys to the payments API is done.'}),
-    quiet('t-q-eligible', 'Quiet eligible', {state: 'eligible', words: "The bot's next run carries it."}),
-    quiet('t-q-queued', 'Quiet queued', {state: 'queued', job: 'j1', run: null, words: 'A run of its own is waiting.'})]});
+    deferred('t-q-eligible', 'Deferred eligible', {state: 'eligible', words: "The bot's next run carries it."}),
+    deferred('t-q-queued', 'Deferred queued', {state: 'queued', job: 'j1', run: null, words: 'A run of its own is waiting.'}, 'quiet')]});
   const line = async (key, title) => {
     await page.locator(`[data-task-key="${key}"] .tl-title`).click();
     await peekTitle(page, title);
-    const found = page.locator('#task-peek [data-task-quiet]');
-    return (await found.count()) ? {state: await found.getAttribute('data-task-quiet'), text: (await found.textContent()).trim()} : null;
+    const found = page.locator('#task-peek [data-task-deferred]');
+    return (await found.count()) ? {state: await found.getAttribute('data-task-deferred'), text: (await found.textContent()).trim()} : null;
   };
-  const deferred = await line('tt-q-deferred', 'Quiet deferred');
-  assert.equal(deferred.state, 'deferred');
-  assert.match(deferred.text, /^Quiet work: Deferred Picked up again after Add idempotency keys to the payments API is done\. \(run edec5d00, handed over 2h ago\)$/);
-  assert.deepEqual(await line('tt-q-eligible', 'Quiet eligible'), {state: 'eligible', text: "Quiet work: Eligible The bot's next run carries it."});
-  assert.deepEqual(await line('tt-q-queued', 'Quiet queued'), {state: 'queued', text: 'Quiet work: Queued A run of its own is waiting.'});
-  assert.equal(await line('tt-digest', 'Weekly metrics digest'), null, 'an ordinary task has no quiet line');
+  const held = await line('tt-q-held', 'Deferred held');
+  assert.equal(held.state, 'held');
+  assert.match(held.text, /^Deferred: Held Picked up again after Add idempotency keys to the payments API is done\. \(run edec5d00, handed over 2h ago\)$/);
+  assert.deepEqual(await line('tt-q-eligible', 'Deferred eligible'), {state: 'eligible', text: "Deferred: Eligible The bot's next run carries it."});
+  assert.deepEqual(await line('tt-q-queued', 'Deferred queued'), {state: 'queued', text: 'Deferred: Queued A run of its own is waiting.'},
+    'the older `quiet` field still shows');
+  assert.equal(await line('tt-digest', 'Weekly metrics digest'), null, 'an ordinary task has no deferred line');
   assert.deepEqual(errors, []);
-  console.log('quiet work: ok');
+  console.log('deferred work: ok');
   await page.close();
 }
 async function privateParent(browser) {
@@ -986,11 +1022,8 @@ async function views(browser) {
   assert.deepEqual(await page.locator('#task-body .tl-row > .task-status').evaluateAll(s => s.map(x => x.dataset.status)), ['closed']);
   assert.match(await page.locator('#task-body .tl-age').first().getAttribute('title'), /^Closed /);
   assert.equal(await page.locator('#task-group-wrap').isHidden(), true);
-  await page.locator('#task-view [data-view="recurring"]').click();
-  await page.waitForFunction(() => document.querySelectorAll('.rrow').length === 2);
-  assert.equal(await page.locator('#task-bar').isHidden(), true);
   assert.deepEqual(errors, []);
-  console.log('Needs you, Done, Closed, Recurring: ok');
+  console.log('Needs you, Done, Closed: ok');
   await page.close();
 }
 
@@ -1304,8 +1337,8 @@ async function recheckPhone(browser) {
   // Closing the phone sheet (✕ or Esc) stays on Tasks: no extra step back through history.
   for (const how of ['x', 'esc']) {
     const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/issues'});
-    await page.evaluate(() => { location.hash = '#/goals'; });
-    await page.waitForFunction(() => S.route === '#/goals' && !document.querySelector('.tasks-page'));
+    await page.evaluate(() => { location.hash = '#/updates'; });
+    await page.waitForFunction(() => S.route === '#/updates' && !document.querySelector('.tasks-page'));
     await page.evaluate(() => { location.hash = '#/issues'; });
     await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row'));
     await page.locator('[data-task-key="tt-checkout"] .tl-title').click();
@@ -1399,7 +1432,7 @@ if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, quietWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, wakeNotes, deferredWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

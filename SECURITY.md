@@ -76,6 +76,10 @@ in the same workspace, with the same model sign-ins. The runner delivers only cr
 not the whole environment or `_shared.env`; upgrades automatically grant each bot the shared credentials it already uses.
 This delivery filter is not OS isolation: bot code can still read another bot's files and credentials on that computer. This is a design choice, not a bug: it keeps setup simple and lets
 bots on a team cooperate.
+The same holds for a company model subscription given to a computer (docs/computers.md#company-subscriptions): it is
+handed to the turns of every bot on that computer, in their environment or a Codex home under the runner's state, so
+any bot there could read it. One computer is one trust group; give a subscription only to computers whose bots may all
+use it.
 
 What is separated: the computer's own credential. The runner's registration (`runner.json`) can claim the
 work of any bot assigned to that computer, so code a bot runs must not be able to read it.
@@ -96,6 +100,11 @@ work of any bot assigned to that computer, so code a bot runs must not be able t
   leased user's descendants, removes private state and temporary files, and returns workspace ownership to the
   ordinary bot user before returning the lease. Startup sweeps crash leftovers; failed or incomplete cleanup
   quarantines a UID instead of reusing it. The pool holds up to 64 concurrent leased turns.
+  **Tico cloud machines** (docs/cloud-machines.md) have no leased users: all of one company's bots there run as the
+  machine's one user, with sudo, so they are that company's trust group. Gateway turns run there anyway (readiness
+  says `trust: "cloud_machine"`, never `isolated: true`); the key still stays in the runner's relay, never in a turn's
+  environment or files, and the accepted risk is that the company's own bots on that machine could read it from the
+  runner.
   **Turn users for other harnesses:** a turn on a harness whose manifest sets `isolated_user` (pi, which reads its
   key from the turn's environment) leases a user the same way, with a private HOME, temporary directory and copies of
   its file credentials. Every checkout and worktree root has a group of its own (owner `bot`, mode 0770, and an ACL entry for the runner's
@@ -175,7 +184,7 @@ share a computer (see above).
 
 Team roles are Owner, Admin and Member ([docs/permissions.md](docs/permissions.md)). Members may create bots (up to a limit),
 own them and add coworkers in the team's email domain; admins manage every bot except the built-in ones (the Assistant, BotOps,
-the Librarian and the CEO Bot are the owner's alone), humans and computers; only owners make admins. Admins are credential administrators by default, so a team gets going without the owner:
+the Librarian and the Strategy Bot are the owner's alone), humans and computers; only owners make admins. Admins are credential administrators by default, so a team gets going without the owner:
 the shared credential vault belongs to the owner and the Admins, or to the owner and `TICO_CREDENTIAL_ADMINS` when the server names them, and
 the owner can turn "Admins store credentials" off. Because bots on one computer are not isolated from
 each other (above), a bot a member created goes only on its member's own computer or one an admin has opened to members' bots (never

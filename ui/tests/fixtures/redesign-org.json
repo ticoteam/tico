@@ -1,0 +1,34 @@
+{
+  "me": {"id": "ana", "name": "Ana Silva", "email": "ana@acme.example", "role": "owner", "company_role": "owner", "cloud": true},
+  "people": [
+    {"id": "ana", "name": "Ana Silva", "role": "owner", "org_parent": "", "team": ""},
+    {"id": "ben", "name": "Ben Ortiz", "role": "member", "org_parent": "p:ana", "team": "sales"},
+    {"id": "cara", "name": "Cara Lee", "role": "member", "org_parent": "p:ana", "team": "eng"}
+  ],
+  "employees": [
+    {"name": "coo", "display_name": "Assistant", "org_parent": "", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "botops", "display_name": "BotOps", "org_parent": "", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "librarian", "display_name": "Librarian", "org_parent": "", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "mail-sorter", "display_name": "Mail Sorter", "org_parent": "", "helper": true, "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "goal-manager", "display_name": "Strategy Bot", "role": "Strategy", "org_parent": "p:ana", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "release", "display_name": "Release Manager", "role": "Releases", "org_parent": "p:ana", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "eng-lead", "display_name": "Engineering Lead", "role": "Head of Engineering", "org_parent": "p:ana", "team": "eng", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "builder", "display_name": "Builder", "role": "Engineer", "org_parent": "b:eng-lead", "team": "eng", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "reviewer", "display_name": "Reviewer", "role": "Code review", "org_parent": "b:eng-lead", "team": "eng", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "web-dev", "display_name": "Web Developer", "role": "Front end", "org_parent": "b:eng-lead", "team": "web", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "sales-lead", "display_name": "Sales Lead", "role": "Head of Sales", "org_parent": "p:ana", "team": "sales", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "sdr", "display_name": "SDR", "role": "Outbound", "org_parent": "b:sales-lead", "team": "sales", "host": "keeper", "status": "active", "can_chat": true}
+  ],
+  "org_groups": [
+    {"id": "eng", "name": "Engineering", "parent": "", "org_parent": "", "order": 0},
+    {"id": "web", "name": "Web", "parent": "eng", "org_parent": "", "order": 0},
+    {"id": "sales", "name": "Sales", "parent": "", "org_parent": "", "order": 1},
+    {"id": "outbound", "name": "Outbound", "parent": "sales", "org_parent": "", "order": 0}
+  ],
+  "groups": [
+    {"id": "eng", "name": "Engineering", "parent": "", "lead": "bot:eng-lead", "people": ["cara"], "bots": ["eng-lead", "builder", "reviewer"], "order": 0, "bet_id": null},
+    {"id": "web", "name": "Web", "parent": "eng", "lead": "bot:web-dev", "people": [], "bots": ["web-dev"], "order": 0, "bet_id": null},
+    {"id": "sales", "name": "Sales", "parent": "", "lead": "person:ben", "people": ["ben"], "bots": ["sales-lead", "sdr"], "order": 1, "bet_id": null},
+    {"id": "outbound", "name": "Outbound", "parent": "sales", "lead": "", "people": [], "bots": [], "order": 0, "bet_id": null}
+  ]
+}

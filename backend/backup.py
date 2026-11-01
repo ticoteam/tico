@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 
+from . import hubdb
 from .blobs import Blobs
 from .config import Settings
 
@@ -387,7 +388,7 @@ def compact(database):
     deleted = sweep_idempotency(store)
     # VACUUM writes its temporary image where SQLite keeps temp files: the data volume, not root.
     os.environ.setdefault("SQLITE_TMPDIR", str(database.parent))
-    with closing(sqlite3.connect(database, timeout=30)) as c:
+    with closing(hubdb.leave_wal_for_litestream(sqlite3.connect(database, timeout=30))) as c:
         page_size, free = (c.execute("PRAGMA " + name).fetchone()[0] for name in ("page_size", "freelist_count"))
         free_bytes = free * page_size
         vacuumed = free_bytes > VACUUM_FREE_BYTES or free_bytes * 4 > before

@@ -108,6 +108,7 @@ MEANING = {
     "reviewer_holds_tasks": "A bot with the Reviewer profile owns open tasks that are not review or QA requests.",
     "responder_has_tasks": "A bot with the Responder profile, which takes no tasks, has open tasks.",
     "doer_idle": "A Doer's runs for a week all did nothing: its profile may not fit what it is asked to do.",
+    "org_rules_unchecked": "A fifth or more of today's bot outputs that rules apply to went out without a rule check.",
     **{p[0]: p[4] + "." for p in LOG_PATTERNS},
 }
 # What a Tico bug report says the fix is: one constant per tico-bug check, never a finding's own text.
@@ -330,7 +331,7 @@ def _login_checks(c, settings):
             continue                                  # a removed computer runs nothing more
         login = models_preset.LOGIN_NAMES.get(x["runtime"])
         if (login and models_preset.fallback_row(record) and record.get("auto_fallback")
-                and models_preset.isolated(readiness_document(runners[x["runner_id"]]["readiness_json"]))):
+                and models_preset.runs_gateway(readiness_document(runners[x["runner_id"]]["readiness_json"]))):
             # Under the two Gateway choices the bots there finish on Tico Gateway, last: one plain line.
             out.append(_finding(f"default_login_limited:{x['runner_id']}:{x['runtime']}", "default_login_limited", SETUP,
                                 f"{label}'s {login} login is used up",
@@ -492,7 +493,7 @@ def _bot_checks(c, settings=None):
             continue
         login = models_preset.LOGIN_NAMES.get(providers.bot_choice(c, settings, declared)[0])
         if login and models_preset.fallback_row(record) and record.get("auto_fallback") \
-                and not models_preset.isolated(computer):
+                and not models_preset.runs_gateway(computer):
             out.append(_finding("limited_no_fallback:" + bot, "limited_no_fallback", SETUP,
                                 f"{bot} stopped: its {login} login is used up",
                                 f"{bot} stopped: its {login} login is used up, and no computer here can run Tico "
@@ -573,7 +574,7 @@ def _profile_checks(c):
 def _stop_checks(c):
     """A bot Tico stopped for failed runs or for running away (backend/bot_stops.py): one finding per bot until it is
     released. The signature carries the error class or the window, never the bot."""
-    from . import run_backoff, turn_budgets
+    from . import claim_holds, run_backoff, turn_budgets
     out = []
     for hold in run_backoff.held(c):
         bot, kind = hold["bot"], hold["error_class"] or run_backoff.OTHER
@@ -597,6 +598,31 @@ def _stop_checks(c):
                             f"BotOps: read {name}'s last runs for what keeps waking it, then release it "
                             f"(hub bot release {bot}) or raise its budget (hub bot budget {bot} --{hold['window']} N).",
                             subject=hold["window"], severity=BAD))
+    for hold in claim_holds.held(c):
+        bot = hold["bot"]
+        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        out.append(_finding(f"claim_failed:{bot}", "claim_failed", SETUP,
+                            f"Tico could not start {hold['jobs']} queued run{'s' if hold['jobs'] != 1 else ''} "
+                            f"for {name}",
+                            f"{name} has {hold['jobs']} queued run{'s' if hold['jobs'] != 1 else ''} held, "
+                            f"queued since {str(hold['since'])[:16]} UTC: an error happened while Tico prepared each "
+                            "one to start. "
+                            "Each waits, then Tico tries it again on its own; the wait doubles with each failed try, "
+                            "up to an hour. The server log has the traceback.",
+                            f"BotOps: read the server log for the traceback and fix its cause. To retry the held runs "
+                            f"now, release {name} (hub bot release {bot}); one that fails again is held with a longer "
+                            "wait.",
+                            severity=BAD))
+    for failure in claim_holds.check_failures(c):
+        bot, error = failure["bot"], failure["error"]
+        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        out.append(_finding(f"claim_check:{bot}", "claim_check", SETUP,
+                            f"{name}'s claim check is failing: {error}",
+                            f"Tico could not check {name}'s queued runs for a claim: the check raised {error} at "
+                            f"{str(failure['failed_at'])[:16]} UTC. The claim passes {name} over, so its runs wait "
+                            "while the other bots' runs are unaffected. The server log has the traceback.",
+                            f"Fix the cause in the server log. This finding clears when one of {name}'s runs starts.",
+                            subject=error, severity=BAD))
     return out
 
 
@@ -627,7 +653,7 @@ def _session_checks(c):
 
 
 def _quiet_work_checks(c):
-    """A quiet task handed to a bot's run over two hours ago and not worked since, with no time set to pick it up
+    """A deferred task handed to a bot's run over two hours ago and not worked since, with no time set to pick it up
     (backend/quiet_work.py stale): one finding per bot and task. It names them; it asks no person anything."""
     from . import quiet_work
     out = []
@@ -636,11 +662,11 @@ def _quiet_work_checks(c):
         # A private task's title stays out of a finding other people read; its number or short id names it.
         name = quiet_work._task_name(task) if H.task_private(c, task) else f"{quiet_work._task_name(task)} {task['title']}"
         out.append(_finding(f"quiet_unworked:{bot}:{task['id']}", "quiet_unworked", SETUP,
-                            f"{bot} was handed a quiet task and has not worked it",
+                            f"{bot} was handed a deferred task and has not worked it",
                             f"{bot} was handed the next-run task {name} at {item['since'][:16]} UTC (run "
                             f"{str(item['run'] or '')[:8]}) and has not worked it since, with no time set to pick it "
                             "up again.",
-                            f"{bot}: work it, or say when to pick it up (hub task defer {task['id']} --after <task> | "
+                            f"{bot}: work it, or say when to pick it up (hub task later {task['id']} --after <task> | "
                             "--at <time>). Anyone may press Run now on it to give it a run of its own."))
     return out
 
@@ -667,11 +693,19 @@ def _server_checks(c):
                      BUG_FIX["server_cpu"])]
 
 
+def _org_rule_checks(c, settings):
+    """Rule checks that keep going unchecked (backend/org_rule_check.py): the rules are not being enforced."""
+    from .org_rule_check import health_findings
+    return [_finding(f["key"], f["check_id"], SETUP, f["title"], f["detail"], f["fix"])
+            for f in health_findings(c, settings)]
+
+
 def findings(c, settings):
     """Everything wrong right now, each once by key."""
     out = {}
     for part in (_runner_checks(c, settings), _login_checks(c, settings), _check_hold_checks(c),
-                 _bot_checks(c, settings), _release_approval_checks(c, settings), _server_checks(c)):
+                 _bot_checks(c, settings), _release_approval_checks(c, settings), _server_checks(c),
+                 _org_rule_checks(c, settings)):
         for item in part:
             out.setdefault(item["key"], item)
     return list(out.values())
@@ -700,16 +734,33 @@ def _open_task(c, key):
     return task if task and task["status"] not in ("done", "closed", "declined") else None
 
 
-def scan(c, auth, settings):
-    """One pass. Returns the keys that opened or woke a task; nothing when the Health Monitor is off.
+def check(store, auth, settings):
+    """The scheduler's pass: `scan` in two steps. The findings are read in one read snapshot, outside the write lock,
+    and only the changes are written after it, in a short transaction. Read under the lock, the hourly scan held every
+    runner call for seven seconds on TIDY (12:26 UTC, Oct 29, 2026). Same shape as invariants.sweep."""
+    with store.read() as r:
+        if not active(r):
+            return []
+        found = findings(r, settings)
+    with store.transaction() as c:
+        return apply(c, auth, found)
 
-    Every finding seen counts once a scan. Only a new finding, one whose severity rose, or one back after its task was
-    finished wakes the bot; seeing it again otherwise moves its count and last-seen time and starts no run."""
+
+def scan(c, auth, settings):
+    """One pass in one transaction. Returns the keys that opened or woke a task; nothing when the Health Monitor is off."""
+    if not active(c):
+        return []
+    return apply(c, auth, findings(c, settings))
+
+
+def apply(c, auth, found):
+    """Records what `findings` found and wakes the bot for what is new. Every finding seen counts once a scan. Only a new
+    finding, one whose severity rose, or one back after its task was finished wakes the bot; seeing it again otherwise
+    moves its count and last-seen time and starts no run."""
     if not active(c):
         return []
     from .watchers import deliver
     now, woke = H.now(), []
-    found = findings(c, settings)
     keys = {item["key"] for item in found}
     for item in found:
         row = c.execute("SELECT * FROM health_findings WHERE key=?", (item["key"],)).fetchone()

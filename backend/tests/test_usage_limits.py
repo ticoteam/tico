@@ -80,7 +80,9 @@ def test_who_may_set_a_limit(api):
     put(api, "usage/limits/ops", {"daily_usd": 1}, "ben-test", expected=403)        # not his bot
     put(api, "usage/limits/cpo", {"daily_usd": 5}, "ben-test", expected=403)        # above the company default
     put(api, "usage/limits/cpo", {"daily_usd": 2, "monthly_usd": 40}, "ben-test")   # below it; no default for monthly
-    put(api, "usage/limits/cpo", {}, "ben-test")                                    # empty follows the default
+    put(api, "usage/limits/cpo", {}, "ben-test")                                    # empty changes nothing
+    assert get(api, "usage/limits", "ben-test")["bots"]["cpo"]["daily_usd"] == 2
+    put(api, "usage/limits/cpo", {"daily_usd": None}, "ben-test")                   # cleared, it follows the default
     assert get(api, "usage/limits", "ben-test")["bots"]["cpo"]["daily_usd"] == 3
     put(api, "usage/limits/cpo", {"daily_usd": 2}, "cara-test", expected=403)       # she sees it, does not run it
     put(api, "usage/limits/inbox", {"daily_usd": 2}, "cara-test", expected=404)     # Ana's private bot is not even there
@@ -122,7 +124,7 @@ def groups(api, ops_team):
         c.execute("UPDATE bot_config SET team=? WHERE bot='ops'", (ops_team,))
 
 
-def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_counts_the_hour(api):
+def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_set_before_counts_the_hour(api):
     from datetime import datetime
     from backend import usage_limits
     from backend.tests.test_mcp import call
@@ -138,13 +140,16 @@ def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_cou
     assert not err and "the Engineering group is over its daily limit" in sent["warning"]
     pools = get(api, "usage/limits")["pools"]
     assert pools["groups"]["eng"]["day_spent"] == 5 and pools["groups"]["eng"]["blocked"] == "daily"
-    put(api, "usage/pools/groups/eng", {})                                        # empty removes it
+    put(api, "usage/pools/groups/eng", {"daily_usd": None})                       # nothing left removes it
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM usage_pools WHERE scope='group:eng'").fetchone()[0] == 0
     put(api, "usage/pools/company", {"weekly_usd": 4})
     assert claim(api, r) is None                                                  # the whole team's week is spent too
     assert paused(api)["focus"] == "Paused: the team is over its weekly limit"
     put(api, "usage/pools/company", {"weekly_usd": 400})
     assert claim(api, r) is not None
-    put(api, "usage/limits/ops", {"hourly_usd": 1})
+    with api.app.state.store.transaction() as c:                                  # an hour limit set before the half hour
+        c.execute("INSERT INTO usage_limits(bot, hourly_usd) VALUES('ops', 1)")
     with api.app.state.store.read() as c:
         started = c.execute("SELECT min(started) FROM turns WHERE bot='ops'").fetchone()[0]
         at = datetime.fromisoformat(started[:19]).replace(tzinfo=usage_limits.timezone.utc)
@@ -154,17 +159,18 @@ def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_cou
 
 def test_only_the_owner_and_administrators_set_team_and_group_limits(api):
     groups(api, "eng")
-    put(api, "usage/pools/company", {"hourly_usd": 10}, "ben-test")               # Ben is an administrator
-    put(api, "usage/pools/groups/nope", {"hourly_usd": 10}, expected=404)
+    put(api, "usage/pools/company", {"per_30m_usd": 10}, "ben-test")              # Ben is an administrator
+    put(api, "usage/pools/groups/nope", {"per_30m_usd": 10}, expected=404)
     as_member(api, "ben@acme.example")
-    put(api, "usage/pools/company", {"hourly_usd": 100}, "ben-test", expected=403)
-    put(api, "usage/pools/groups/eng", {"hourly_usd": 1}, "ben-test", expected=403)
+    put(api, "usage/pools/company", {"per_30m_usd": 100}, "ben-test", expected=403)
+    put(api, "usage/pools/groups/eng", {"per_30m_usd": 1}, "ben-test", expected=403)
     assert get(api, "usage/limits", "ben-test")["pools"] is None
-    assert get(api, "usage/limits")["pools"]["company"]["hourly_usd"] == 10
+    assert get(api, "usage/limits")["pools"]["company"]["per_30m_usd"] == 10
 
 
 def test_subscription_runs_count_unless_the_team_turns_that_off(api):
     assert get(api, "usage/limits")["default"]["count_subscription"] is True       # never chosen
     assert put(api, "usage/limits", {"daily_usd": 20, "count_subscription": False})["default"]["count_subscription"] is False
     assert get(api, "usage/limits")["default"]["count_subscription"] is False      # a saved choice stays
-    assert put(api, "usage/limits", {"daily_usd": 20})["default"]["count_subscription"] is True
+    assert put(api, "usage/limits", {"daily_usd": 20})["default"]["count_subscription"] is False   # left out keeps it
+    assert put(api, "usage/limits", {"count_subscription": True})["default"]["count_subscription"] is True

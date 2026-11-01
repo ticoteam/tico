@@ -1,11 +1,11 @@
-"""KPIs and the CEO Bot (backend/kpis.py, backend/goals.py, docs/goals-and-kpis.md): the colour
-arithmetic, a person's override, what the CEO Bot may not do without a confirm, the migration of
+"""KPIs and the Strategy Bot (backend/kpis.py, backend/goals.py, docs/goals-and-kpis.md): the colour
+arithmetic, a person's override, what the Strategy Bot may not do without a confirm, the migration of
 the old KPI rows and the automatic bot KPIs."""
 
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from backend import botkpis, ceo_bot, hubdb, kpis as K
+from backend import botkpis, strategy_bot, hubdb, kpis as K
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
 
@@ -146,7 +146,7 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
     goal, kpi = goal_with_kpi(api)
     logged = log(api, kpi["id"], 52, evidence="https://bi.example/activation", note="September", period_end=H.now())
     with api.app.state.store.transaction() as c:
-        ceo_bot.set_level(c, "human:ana", 2)                  # above Passive, a stale KPI waits in Needs you
+        strategy_bot.set_level(c, "human:ana", 2)                  # above Passive, a stale KPI waits in Needs you
     stale = post(api, "kpis", {"name": "Unreported measure", "owner": "me"})["kpi"]
     assert any(item.get("kpi_id") == stale["id"] for item in get(api, "goals/needs-you")["items"])
     post(api, f"kpis/{stale['id']}/archive", {})
@@ -189,7 +189,7 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
     assert actions[-2:] == ["kpi.archive", "kpi.restore"]
 
 
-def add_ceo_bot(api):
+def add_strategy_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
                   "VALUES('goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
@@ -197,18 +197,19 @@ def add_ceo_bot(api):
 
 
 def owners_chat(api):
-    """A CEO Bot turn in the owner's chat with it: it acts as the owner (backend/assistant.py)."""
-    add_ceo_bot(api)
+    """An Assistant turn in the owner's chat, which is their Assistant like everyone's (backend/assistant.py chat_bot):
+    it acts as the owner, with the Assistant's rights. The Strategy Bot is a helper it hands work to, never this chat."""
+    add_strategy_bot(api)
     machine = runner(api)
-    assign(api, machine, "goal-manager")
-    ready(api, machine, ["goal-manager"])
+    assign(api, machine, "coo")
+    ready(api, machine, ["coo"])
     post(api, "assistant/messages", {"text": "Archive the activation KPI, then bring it back"})
-    return claim(api, machine, "goal-manager")["token"]
+    return claim(api, machine, "coo")["token"]
 
 
 def goals_session(api):
-    """A CEO Bot turn in its goals session, woken by another bot: it acts as itself, never as the owner."""
-    add_ceo_bot(api)
+    """A Strategy Bot turn in its goals session, woken by another bot: it acts as itself, never as the owner."""
+    add_strategy_bot(api)
     machine = runner(api)
     for bot in ("ops", "goal-manager"):
         assign(api, machine, bot)
@@ -228,7 +229,7 @@ def test_only_kpi_owner_or_manager_above_can_archive_and_goal_manager_is_refused
     post(api, f"kpis/{kpi['id']}/restore", {}, token=token, expected=403)
 
 
-def test_in_the_owners_chat_the_ceo_bot_acts_as_the_owner_but_leaves_kpi_archive_and_restore_to_them(api):
+def test_in_the_owners_chat_the_assistant_acts_as_the_owner_but_leaves_kpi_archive_and_restore_to_them(api):
     _, kpi = goal_with_kpi(api, owner="ben", token="ben-test")
     token = owners_chat(api)
     assert get(api, "me", token)["actor"] == "human:ana"
@@ -251,8 +252,8 @@ def test_the_goal_manager_reads_and_writes_facts_but_a_target_needs_the_owners_c
     log(api, kpi["id"], 45, token=token, evidence="https://analytics.example/q/12", period_end=H.now())
     assert goal_of(api, goal["id"], token)["status_source"] == "auto"
     assert post(api, "goals/refresh", {}, token=token)["checked"] >= 1
-    # ...and nothing else: not the target, the definition, a colour, a new KPI or a new link.
-    # A target is refused and becomes a proposal in the owner's Needs you (backend/ceo_acts.py `gate`); the rest are refused.
+    # ...and nothing else: not the target, the definition, a colour, a new KPI or a new link. A target is refused and
+    # becomes a proposal in the owner's Needs you (backend/strategy_acts.py `gate`); the rest are refused.
     post(api, f"goals/{goal['id']}/kpis/{kpi['id']}", {"kind": "improve", "target": 50, "deadline": "2099-01-01"},
          token=token, expected=409)
     for path, body in ((f"kpis/{kpi['id']}", {"definition": "Whatever is easiest to hit"}),

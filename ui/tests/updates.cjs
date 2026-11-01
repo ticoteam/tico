@@ -375,19 +375,24 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     const p = phone.page;
     await p.goto('http://tico-ui.test/#/updates');
     await p.locator('#upd-feed .upd-card').first().waitFor();
-    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Tasks', 'Updates', 'Support', 'More']);
-    const navWidths=await p.locator('#mobile-nav .mobile-nav-item').evaluateAll(items=>items.map(el=>el.getBoundingClientRect().width));
-    assert.equal(navWidths.length,6);
-    assert.ok(Math.max(...navWidths)-Math.min(...navWidths)<1,'six evenly spaced navigation items');
+    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Ask Tico', 'Tasks', 'Updates', 'More']);
+    // Six items; Ask Tico (the Liquid Dot) sits in the middle of the bar, and the items on each side of it share their
+    // side evenly.
+    const nav = () => p.locator('#mobile-nav .mobile-nav-item').evaluateAll(items => items.map(el => { const r = el.getBoundingClientRect(); return {w: r.width, mid: r.left + r.width / 2}; }));
+    const even = list => Math.max(...list.map(i => i.w)) - Math.min(...list.map(i => i.w)) < 1;
+    const items = await nav();
+    assert.equal(items.length, 6);
+    assert.ok(Math.abs(items[2].mid - 195) < 1, `Ask Tico in the middle: ${items[2].mid}`);
+    assert.ok(even(items.slice(0, 2)) && even(items.slice(3)), 'each side spaced evenly');
     // The six fit a 360px phone: no label is cut and the bar does not scroll sideways.
     await p.setViewportSize({width: 360, height: 800});
-    await p.waitForFunction(() => document.querySelector('#mobile-nav .mobile-nav-item').getBoundingClientRect().width < 61);
+    await p.waitForFunction(() => document.querySelector('#mobile-nav').getBoundingClientRect().width <= 360);
     assert.equal(await p.locator('#mobile-nav').evaluate(nav => nav.scrollWidth <= nav.clientWidth &&
       [...nav.querySelectorAll('.mobile-nav-label')].every(l => { const r = l.getBoundingClientRect(), item = l.parentElement.getBoundingClientRect();
         return r.left >= item.left && r.right <= item.right; })), true, 'the bar fits 360px');
     if (shots) await p.screenshot({path: path.join(shots, 'updates-phone-360.png')});
     await p.setViewportSize({width: 390, height: 844});
-    await p.waitForFunction(() => document.querySelector('#mobile-nav .mobile-nav-item').getBoundingClientRect().width > 62);
+    await p.waitForFunction(() => document.querySelector('#mobile-nav').getBoundingClientRect().width > 380);
     assert.equal(await p.locator('#mobile-nav [data-nav="overview"]').count(),0);
     // Day, week, unread and my bots are icons on a phone.
     for (const sel of ['[data-upd-kind="daily"]', '[data-upd-kind="weekly"]', '#upd-mine']) {
@@ -452,6 +457,17 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     assert.equal(await p.locator('.side-scroll [data-nav="overview"]').isVisible(), true, 'Overview remains in More');
     assert.deepEqual(phone.errors, []);
     await p.close();
+
+    // Nothing yet: one short line, with no sentence under it and no Chat with us (Support is the ? in the sidebar).
+    updates = []; pageTwo = null;
+    const none = await open({width: 1280, height: 900});
+    await none.page.goto('http://tico-ui.test/#/updates');
+    const empty = none.page.locator('#upd-feed .upd-empty');
+    await empty.waitFor();
+    assert.equal(await empty.evaluate(el => [...el.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()), 'No updates yet.');
+    assert.equal(await none.page.locator('#main .talk-line, #main [data-chat-with-us]').count(), 0, 'no Chat with us');
+    assert.deepEqual(none.errors, []);
+    await none.page.close();
     console.log('PASS: Updates first in the rail with an unread badge, just the bullets (no title, sections, greeting, day headers or missed list), seen-is-read in one batched request, mark unread without re-sorting, unread first on the next visit, an instant reply that goes to the bot\'s chat, threads, j/k, Daily/Weekly toggle, a week in review as five swipeable slides with KPI lines, cached paint, and on a phone Tasks and Updates in a six-item bottom bar (with Support) that fits 360px, with Tasks also in More.');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

@@ -27,7 +27,8 @@ more than one area. Say why each is ranked where it is, in one clause.
 For the top risks, cases a human can follow without asking: preconditions, steps, the expected result, and
 the negative case (wrong input, expired session, a second click). Keep automated checks to what CI already
 runs; name gaps where a unit or integration test would catch the same thing earlier, as a suggestion for the
-author. Aim for 10 to 25 cases, not 100.
+author. Aim for 10 to 25 cases, not 100. For each automated check you name, say whether it has been seen to fail on the
+broken behaviour; a check never seen to fail is named as unproven.
 
 ## 4. The regression checklist
 
@@ -37,6 +38,8 @@ the product's core flows if it does not exist), plus any flow a recent bug broke
 ## 5. Hand over
 
 Write `reports/test-plans/<release>.md`: headline (the three riskiest changes), the ranked table (change,
-risk, why, cases), the cases, the checklist, and what you could not read. `hub file publish` it, attach it
+risk, why, cases), the cases, the checklist, and what you could not read. A case no one has run is marked not run,
+never passed. Done when every change in the window is in the table or named as not read, each top risk has a
+negative case, and the plan is published and attached to the task. `hub file publish` it, attach it
 to the task, commit, then `hub task update <id> --status done --note`. A human runs the plan and records
 the results; a failed case becomes a proposed issue in your next triage pass.

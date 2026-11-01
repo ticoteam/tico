@@ -371,6 +371,14 @@ struct Inner {
     goal_offsets: HashMap<String, u64>,
     /// This turn's tool calls by `tool_use` id, the bot's own and its subagents'.
     tools: HashMap<String, ToolCall>,
+    /// Threads whose session Claude compacted (a `compact_boundary`) since the runner last asked.
+    compacted: HashSet<String>,
+    /// What a resumed thread's turn gives a missing session restarted as new, in place of its prompt.
+    full_prompts: HashMap<String, String>,
+    /// What a shortened turn's prompt left out, written into the turn if Claude compacts the session during it.
+    refresh: HashMap<String, String>,
+    /// Each thread's context size after its last turn (Host::context_tokens).
+    context: HashMap<String, i64>,
     /// Called each time a turn's pipe has just been published (ordering tests).
     #[cfg(test)]
     pipe_opened: Option<Arc<dyn Fn(&ClaudeHost) + Send + Sync>>,
@@ -539,6 +547,31 @@ impl ClaudeHost {
         self.inner().threads.get(thread_id).and_then(|t| t.session_id.clone())
     }
 
+    /// Whether Claude compacted `thread_id`'s session since this was last asked.
+    pub fn compacted(&self, thread_id: &str) -> bool {
+        self.inner().compacted.remove(thread_id)
+    }
+
+    pub fn context_tokens(&self, thread_id: &str) -> Option<i64> {
+        self.inner().context.remove(thread_id)
+    }
+
+    pub fn full_prompt(&self, thread_id: &str, text: Option<String>) {
+        let mut inner = self.inner();
+        match text {
+            Some(t) => inner.full_prompts.insert(thread_id.into(), t),
+            None => inner.full_prompts.remove(thread_id),
+        };
+    }
+
+    pub fn compaction_refresh(&self, thread_id: &str, text: Option<String>) {
+        let mut inner = self.inner();
+        match text {
+            Some(t) => inner.refresh.insert(thread_id.into(), t),
+            None => inner.refresh.remove(thread_id),
+        };
+    }
+
     pub fn argv(&self, thread_id: &str, t: &Thread, effort: Option<&str>) -> Vec<String> {
         let mut argv = self.0.cmd.clone();
         argv.push("-p".into());
@@ -610,6 +643,9 @@ impl ClaudeHost {
                 c
             }
         };
+        // Claude, or its reaping parent with Claude under it, leads a group of its own: a stop ends what the turn
+        // started too, and a background-wait end, which kills Claude alone, leaves the shells it keeps in that group.
+        super::new_group(&mut command);
         #[cfg(test)]
         if reaping.is_some() {
             command.args(["reap::tests::as_parent", "--exact", "--test-threads=1", "-q"]);
@@ -650,6 +686,7 @@ impl ClaudeHost {
             inner.turn = Some((thread_id.into(), turn.clone()));
             inner.reply.insert(turn.clone(), String::new());
             inner.tools.clear();
+            inner.context.remove(thread_id);
             (child, stderr)
         };
         log(&format!("claude[{}]: turn started pid {}", self.0.bot, child.id().map_or("?".into(), |p| p.to_string())));
@@ -715,7 +752,7 @@ impl ClaudeHost {
         inner.pipe = Some(pipe);
     }
 
-    async fn read_loop(&self, mut child: Child, mut stderr: crate::run_diagnostics::Stderr, tid: String, turn: String, text: String, effort: Option<String>) {
+    async fn read_loop(&self, mut child: Child, mut stderr: crate::run_diagnostics::Stderr, tid: String, turn: String, mut text: String, effort: Option<String>) {
         let mut recovered = false;
         // What a restarted session is told after its prompt: the follow-ups the missing one never read.
         let mut requeued: Vec<String> = vec![];
@@ -874,6 +911,15 @@ impl ClaudeHost {
                     stderr = s;
                     recovered = true;
                     requeued = followups;
+                    // The new session holds none of what the short prompt left out.
+                    let full = {
+                        let mut inner = self.inner();
+                        inner.refresh.remove(&tid);
+                        inner.full_prompts.remove(&tid)
+                    };
+                    if let Some(full) = full {
+                        text = full;
+                    }
                     self.emit(event("diagnostic", Some(&tid), Some(&turn), json!({"text": RESTORING})));
                     continue;
                 }
@@ -1126,6 +1172,18 @@ impl ClaudeHost {
                     p.close_if_done();
                 }
             }
+            "system" if msg["subtype"] == "compact_boundary" => {
+                // Claude summarised the session, manually or on its own: what earlier turns said may be gone. A turn
+                // whose prompt left out what the session already held is given it again at once, after each compaction.
+                let mut inner = self.inner();
+                inner.compacted.insert(tid.into());
+                let running = inner.turn.as_ref().is_some_and(|(t, u)| t == tid && u == turn);
+                if let Some(text) = inner.refresh.get(tid).cloned().filter(|_| running) {
+                    if let Some(p) = inner.pipe.as_mut().filter(|p| p.open && p.limit_at.is_none()) {
+                        p.follow_up(&text);
+                    }
+                }
+            }
             "system" if msg["subtype"] == "init" => {
                 let session = msg["session_id"].as_str().filter(|s| !s.is_empty()).unwrap_or(tid).to_string();
                 if let Some(t) = self.inner().threads.get_mut(tid) {
@@ -1284,7 +1342,16 @@ impl ClaudeHost {
             if !inner.done_turns.insert(turn.into()) {
                 return;
             }
-            (inner.interrupted.contains(turn), inner.usage.remove(turn), reply, limited)
+            let usage = inner.usage.remove(turn);
+            if let Some(u) = usage.as_ref() {
+                // The newest of the bot's own requests is the session's context; without them, the turn's whole usage
+                // is more than it, never less.
+                let last = u.requests.iter().rev().find(|(_, _, main)| *main).map_or(u.input + u.output, |(_, r, _)| r[0] + r[1] + r[2]);
+                if last > 0 {
+                    inner.context.insert(tid.into(), last);
+                }
+            }
+            (inner.interrupted.contains(turn), usage, reply, limited)
         };
         if let Some(u) = usage.as_ref().filter(|u| u.input + u.output > 0) {
             self.emit(event(
@@ -1868,6 +1935,52 @@ mod tests {
         assert!(shell_alive, "the kept shell was killed");
         let stopped = &got.iter().find(|e| e["kind"] == "background_kept").unwrap()["stopped"];
         assert!(stopped.as_array().unwrap().contains(&json!(mcp)), "{stopped}");
+    }
+
+    #[tokio::test]
+    async fn a_stopped_turn_leaves_nothing_it_started_running() {
+        let dir = std::env::temp_dir().join(format!("claude-stop-group-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("claude");
+        // A tool command, and one that ignores SIGTERM (a server that traps it), left running while Claude works.
+        crate::util::write_script(
+            &path,
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) exit 0;; esac\nIFS= read -r line\necho $$ > group.pid\nsleep 900 </dev/null >/dev/null 2>&1 &\necho $! > tool.pid\nsh -c 'trap \"\" TERM; exec sleep 900' </dev/null >/dev/null 2>&1 &\necho $! > deaf.pid\nwhile :; do sleep 1 >/dev/null; done\n",
+        );
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        let thread = host.start_thread(&settings);
+        host.start_turn(&thread, "hello", None).unwrap();
+        let read = |name: &str| std::fs::read_to_string(dir.join(name)).ok().and_then(|s| s.trim().parse::<i32>().ok());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while read("deaf.pid").is_none() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (group, tool, deaf) = (read("group.pid").unwrap(), read("tool.pid").unwrap(), read("deaf.pid").unwrap());
+        // SAFETY: getpgid only reads.
+        assert_eq!(unsafe { libc::getpgid(tool) }, group, "the tool runs in Claude's own group");
+        host.stop().await;
+        let gone = || {
+            // SAFETY: signal 0 only checks whether any process of the group is left.
+            unsafe { libc::kill(-group, 0) == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) }
+        };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !gone() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (tool_alive, deaf_alive, group_gone) = (alive(tool), alive(deaf), gone());
+        // SAFETY: processes this test's fake started.
+        unsafe {
+            libc::kill(tool, libc::SIGKILL);
+            libc::kill(deaf, libc::SIGKILL);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(!tool_alive, "the turn's tool command outlived the stop");
+        assert!(!deaf_alive, "a process ignoring SIGTERM outlived the stop");
+        assert!(group_gone, "something of the turn's group outlived the stop");
     }
 
     type Hook = Box<dyn Fn(&ClaudeHost) + Send + Sync>;

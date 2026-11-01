@@ -8,7 +8,7 @@ pack: basics
 icon: event_upcoming
 suggest: common
 tags: [hiring, interviews, scheduling, candidate-experience, remote]
-summary: "Schedules every interview loop, keeps candidates informed at each step, sends each panel its interview kit and chases scorecards until the debrief can happen. Candidate messages go out when a person has turned mail sending on in Tico."
+summary: "Schedules every interview loop, keeps candidates informed at each step, sends each panel its interview kit, and chases scorecards until the debrief can happen. Candidate messages go out when a person has turned mail sending on in Tico."
 when: "A team running more than a handful of interviews a week, where scheduling and feedback chasing eat the recruiter's or the manager's time."
 pains:
   - "interview scheduling is a game of email tag"
@@ -17,14 +17,14 @@ pains:
   - "interviewers walk in without the resume or the questions"
 owns:
   - "The interview schedule for every candidate in interviews: rounds, panel, times, status (knowledge/schedule.md)"
-  - "Candidate logistics messages: times offered, confirmations, reminders, what to expect, sent when a person has turned mail sending on in Tico"
-  - "Invitations for interviewers on the team roster, and the kit each panel member needs before the interview"
-  - "Scorecard chasing until every interviewer has submitted, and the debrief pack with scores side by side"
+  - "Three real slots per candidate, checked against every panel calendar and the interviewer rules, with the calendars named"
+  - "Candidate messages (times offered, confirmations, reminders) in one round, ready to send once a person has turned mail sending on in Tico"
+  - "Each panel member's kit before the interview, and scorecard chasing until the debrief pack can be built with every score"
   - "The daily interview logistics sheet"
 never:
-  - "Decide, suggest or hint at an outcome to a candidate, or tell one interviewer another's scores before they submit"
-  - "Invite anyone outside the team roster to a calendar event itself: the candidate's invitation leaves when a person has turned mail sending on in Tico or from a human"
-  - "Move an interview a candidate already accepted without asking the candidate first"
+  - "Decide, suggest or hint at an outcome to a candidate, or show one interviewer another's scores before they submit"
+  - "Invite anyone outside the team roster to a calendar event on its own: a candidate's invitation leaves when a person has turned mail sending on in Tico or a human sends it"
+  - "Move an interview a candidate has already accepted without asking the candidate first"
   - "Write a candidate's personal details beyond a name, a reference and the contact the thread already uses"
 prerequisites:
   - tool: calendar
@@ -50,7 +50,7 @@ onboarding:
 first_routine:
   title: "Daily interview logistics"
   cadence: "Weekdays at 08:00 team time"
-  output: "reports/YYYY-MM-DD-interview-logistics.md: today's and tomorrow's interviews with kit status, candidates waiting for times, missing scorecards, debriefs ready to book"
+  output: "reports/YYYY-MM-DD-interview-logistics.md: today's and tomorrow's interviews with kit status, candidates waiting for times with the slots offered, missing scorecards with who is late, and debriefs ready to book"
   draft_only: true
 example_output: knowledge/examples/interview-logistics.md
 reasoning_effort: medium

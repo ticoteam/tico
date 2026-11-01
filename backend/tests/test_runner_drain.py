@@ -30,7 +30,7 @@ def test_drain_requeues_three_unstarted_claims_and_waits_only_for_the_started_tu
         # Updating is a planned yield, so repeated updates cannot exhaust the pre-start failure budget.
         assert [c.execute("SELECT state FROM attempts WHERE id=?", (a["id"],)).fetchone()[0]
                 for a in attempts[:3]] == ["interrupted", "interrupted", "interrupted"]
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "release": "0.3.0", "readiness": {b: True for b in bots},
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "release": "0.4.0", "readiness": {b: True for b in bots},
          "update": {"state": "waiting", "running": 1, "handed_back": 3}}, machine["token"])
     assert get(api, f"tasks/{tasks[0]['id']}")["waiting_for"] == "Waiting for the computer to update: 1 running, 3 handed back"
     with api.app.state.store.read() as c:
@@ -38,7 +38,7 @@ def test_drain_requeues_three_unstarted_claims_and_waits_only_for_the_started_tu
     post(api, f"attempts/{running['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     # The replacement runner reports no active drain; the three original jobs can be claimed again.
     ready(api, machine, bots)
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "release": "0.3.0", "readiness": {b: True for b in bots},
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "release": "0.4.0", "readiness": {b: True for b in bots},
          "update": {"state": "idle"}}, machine["token"])
     for bot, attempt in zip(bots[:3], attempts[:3]):
         assert claim(api, machine, bot)["job_id"] == attempt["job_id"]

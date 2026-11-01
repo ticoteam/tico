@@ -6,9 +6,9 @@
 .bfaces{display:inline-flex;align-items:center;gap:2px}
 .bface{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:50%;background:none;cursor:pointer;opacity:.55;transition:opacity var(--dur) var(--ease)}
 .bface:hover,.bface[aria-pressed="true"]{opacity:1}
-.bface[aria-pressed="true"]{box-shadow:0 0 0 2px var(--accent)}
+.bface[aria-pressed="true"]{box-shadow:0 0 0 2px var(--ink)}
 .bfaces:not(:has([aria-pressed="true"])) .bface{opacity:1}
-.bface:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.bface:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .bfocus svg{flex:none;color:var(--muted)}
 /* a folded run of steps: the empty strip's look, all of it a button */
 .bfold{cursor:pointer}
@@ -17,34 +17,34 @@
 .bfold-open h2{writing-mode:vertical-rl;margin:0;font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);font-weight:600;white-space:nowrap}
 .bfold-open .cnt{font-size:var(--t-sm);color:var(--muted)}
 .bfold-open .cnt:empty{display:none}
-.bfold-open:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:9px}
+.bfold-open:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset);border-radius:9px}
 .bfold-x{display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:4px;background:none;color:var(--muted);cursor:pointer;margin-right:-4px;transform:rotate(90deg)}
 .bfold-x[data-board-fold="finished"]{transform:rotate(-90deg)}
 .bfold-x:hover{color:var(--ink);background:var(--surface2)}
 /* select all in this column, beside its count */
 .bcol-all{display:grid;place-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:4px;background:none;color:var(--muted);cursor:pointer}
 .bcol-all:hover{color:var(--ink);background:var(--surface2)}
-.bcol-all:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.bcol-all:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 /* One safe timing notice on cards, columns and the open ticket; no refused words in task surfaces. */
 .task-builder-notices:empty{display:none}
-.task-builder-notice{font-size:var(--t-sm);line-height:1.5;color:var(--wait-ink);background:var(--wait-bg);border-radius:4px;padding:4px 7px;overflow-wrap:anywhere}
+.task-builder-notice{font-size:var(--t-sm);line-height:var(--lh);color:var(--wait-ink);background:var(--wait-bg);border-radius:4px;padding:4px 7px;overflow-wrap:anywhere}
 .task-builder-notice+.task-builder-notice{margin-top:4px}
 .bcol>.task-builder-notices{margin:0 8px 8px}
 .bcard>.task-builder-notices{margin:4px 0}
 .tmodal-title+.task-builder-notices{margin:0 20px 12px}
 /* what blocks a card, across its top */
-.bcard-blocked{display:flex;align-items:center;gap:4px;width:calc(100% + 18px);margin:-7px -9px 6px;padding:2px 9px;border:0;border-bottom:1px solid color-mix(in srgb,var(--wait) 35%,var(--line));border-radius:7px 7px 0 0;background:var(--wait-bg);color:var(--wait-ink);font:500 var(--t-sm)/1.4 var(--sans);text-align:left}
+.bcard-blocked{display:flex;align-items:center;gap:4px;width:calc(100% + 18px);margin:-7px -9px 6px;padding:2px 9px;border:0;border-bottom:1px solid color-mix(in srgb,var(--wait) 35%,var(--line));border-radius:7px 7px 0 0;background:var(--wait-bg);color:var(--wait-ink);font:500 var(--t-sm)/var(--lh) var(--sans);text-align:left}
 .bcard-blocked span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 button.bcard-blocked{cursor:pointer}
 button.bcard-blocked:hover{text-decoration:underline}
-.bcard-blocked:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.bcard-blocked:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .bcard-blocked+.bcard-cover{margin-top:0;border-radius:0}
 /* carrying a card: it stays dimmed where it was, a copy follows the pointer, a line shows where it lands */
 .board[data-board-drag] .bcard{touch-action:auto}
 .bcard.dragging{opacity:.35}
-.bghost{position:fixed;left:0;top:0;z-index:4000;pointer-events:none;box-shadow:0 10px 28px rgba(0,0,0,.18);border-color:var(--accent);cursor:grabbing}
-.bdrop{flex:none;height:2px;margin:-4px 2px;border-radius:2px;background:var(--accent)}
-.bcol.over{border-color:var(--accent)}
+.bghost{position:fixed;left:0;top:0;z-index:4000;pointer-events:none;box-shadow:0 10px 28px rgba(0,0,0,.18);border-color:var(--ink);cursor:grabbing}
+.bdrop{flex:none;height:2px;margin:-4px 2px;border-radius:2px;background:var(--ink)}
+.bcol.over{border-color:var(--ink)}
 body.board-holding,body.board-holding *{cursor:grabbing!important;user-select:none}
 @media (max-width:760px){
   .bcol.bfold{display:flex;flex:0 0 44px}

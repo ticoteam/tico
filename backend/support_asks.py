@@ -29,6 +29,9 @@ STEPS = {"signed_in": "signing in", "computer": "a computer online", "model": "a
          "first_output": "a first approved output", "first_update": "a first update",
          "strategy": "a published strategy"}
 ASKED_FROM = {"wizard": "the setup wizard", "health": "Health", "bot": "a bot in Needs setup"}
+# (database file, actor) -> the person's first event time, kept once found. The read walks every event of the person
+# (no index has actor then ts): 287 ms a call on TIDY.
+JOINED = {}
 
 
 def setup_snapshot(c, who, settings, auth, github, asked_from="health"):
@@ -71,6 +74,18 @@ def _load(c, who):
     return value if isinstance(value, dict) else {}
 
 
+def _joined(c, actor):
+    path = next((r[2] for r in c.execute("PRAGMA database_list") if r[1] == "main"), "")
+    if (path, actor) not in JOINED:
+        found = c.execute("SELECT min(ts) FROM events WHERE actor=?", (actor,)).fetchone()[0]
+        if not found:
+            return None
+        if len(JOINED) >= 10000:
+            JOINED.clear()
+        JOINED[path, actor] = found
+    return JOINED[path, actor]
+
+
 def feedback_due(c, settings, who):
     """The moment to ask this person about now ({moment, question}), or None. Only the latest moment reached is
     asked: a person away for a month is asked once, not three times."""
@@ -82,8 +97,7 @@ def feedback_due(c, settings, who):
         return None
     # The owner was there from the start. Someone who joined later is asked from their own first action, and not
     # about a first result they never saw.
-    joined = first if who.role == "owner" else c.execute("SELECT min(ts) FROM events WHERE actor=?",
-                                                          (who.actor,)).fetchone()[0]
+    joined = first if who.role == "owner" else _joined(c, who.actor)
     if not joined:
         return None
     moments = MOMENTS if joined <= first else MOMENTS[1:]

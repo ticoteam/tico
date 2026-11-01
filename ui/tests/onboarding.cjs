@@ -399,7 +399,7 @@ function recruitFor({department, briefing, share}) {
     assert.deepEqual(await tilesOn(), ['sales', 'marketing', 'support', 'finance', 'operations', 'product', 'engineering']);
     assert.equal(await page.locator('[data-ob-tile]').count(), 9);
     // The chart is there from the start: the owner on top and each chosen department waiting. Built-in and message bots are not on it.
-    assert.match(await page.locator('#ob-chart [data-oc-ceo]').textContent(), /Ana M\. Rivera\s*CEO/);
+    assert.match(await page.locator('#ob-chart [data-oc-owner]').textContent(), /Ana M\. Rivera\s*CEO/);
     assert.doesNotMatch(await page.locator('#ob-chart').textContent(), /Ace|BotOps|Inbox Manager/);
     assert.equal(await page.locator('#ob-chart .oc-dept.oc-pending').count(), 7);
     await shot(page, 'desktop-3-departments');
@@ -887,7 +887,7 @@ function recruitFor({department, briefing, share}) {
     assert.deepEqual(await status('support'), [1, 'Set up']);                                              // its repository exists
     assert.deepEqual(await status('meeting-notes'), [1, 'Setting up']);                                    // not yet: no Set up
     assert.equal(await page.locator('[data-fr-start=meeting-notes]').count(), 0);
-    assert.deepEqual(await status('content'), [1, 'BotOps is setting it up']);                             // not a starter: BotOps builds it
+    assert.deepEqual(await status('content'), [1, 'Setting it up']);                                         // not a starter: BotOps builds it
     assert.equal(await page.locator('[data-onb-bot=content] a').getAttribute('href'), '#/task/task-content');
     assert.equal(await page.locator('#onb-bots .pill.needs, #onb-bots p').count(), 0);
     // Show me around: the tour, once asked for; Skip is remembered.
@@ -990,6 +990,7 @@ function recruitFor({department, briefing, share}) {
     // ---- Settings -> Bots: the same cards, adding one bot from the catalog.
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=devices]').click();
+    await page.locator('#machine-add-open').click();
     await page.locator('#machine-kind').selectOption('linux');
     assert.equal(await page.locator('#machine-label').inputValue(), "Ana Rivera's server");
     // The first-run enrollment step already checks the Linux server command; keep this distinct Windows installer path.
@@ -998,6 +999,7 @@ function recruitFor({department, briefing, share}) {
     await page.waitForFunction(() => /install-wsl\.ps1/.test(document.querySelector('#machine-enroll-status').textContent));
     assert.match(await page.locator('#machine-enroll-status').textContent(), /irm https:\/\/github\.com\/ticoteam\/tico\/releases\/download\/v0\.2\.0\/install-wsl\.ps1\)\)\) -Url https:\/\/initech\.test -Code 'enroll-code' -Label 'Ana Rivera''s PC' -Name tico-enrollco/);
     await page.locator('#machine-kind').selectOption('mac');
+    await page.keyboard.press('Escape');
     await page.locator('[data-settings-tab=bots]').click();
     await page.locator('#settings-add-catalog:not([disabled])').click();
     await page.locator('#catalog-picker-grid').waitFor();
@@ -1245,7 +1247,7 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await waiting.locator('[data-onb-bot=coo] .onb-bot-actions').textContent().then(text => text.trim()), 'Waiting');
     assert.equal(await waiting.locator('#onb-after > :first-child').first().getAttribute('id'), 'fr-providers');
     await waiting.locator('#fr-providers [data-gs-tab=models]').click();
-    await waiting.locator('#settings-tabs [data-settings-tab=devices][aria-selected=true]').waitFor();   // lands on Computers, where Models is
+    await waiting.locator('#settings-tabs [data-settings-tab=models][aria-selected=true]').waitFor();   // lands on Settings > Models
     CONFIG.local = true;
     await waiting.reload();
     await waiting.goto('https://tico-ui.test/#/welcome');

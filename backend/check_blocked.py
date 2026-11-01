@@ -2,9 +2,9 @@
 
 A check is a subtask of a Dev ticket requesting one of its board's check steps (Review 1, Review 2 or QA on the Dev
 board: backend/step_flow.titled), owned by a bot. It is blocked when it is Waiting or
-waits on an open blocker. Its ticket then shows Blocked (backend/task_blocked.py) with the check's reason, and the
-ticket's builder gets one notice in the ticket's own room per blocked episode, never Head of Engineering. When the
-check works again, or finishes, the ticket goes back to the step it was at.
+waits on an open blocker. Its ticket then shows the hold (backend/task_blocked.py) with the check's reason, and the
+ticket's builder gets one notice in the ticket's own room per blocked episode, never Head of Engineering. The ticket
+stays at its step while held. When the check works again, or finishes, the hold clears and the ticket is where it was.
 """
 import re
 

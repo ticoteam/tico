@@ -1,20 +1,36 @@
 /* ui/styles/goals.css — Goals: tree, editor, KPI panel.
    The cascade runs in the order index.html links these files; keep rules in order. */
-/* goals: one tree, a line per owner (indent guides like the org chart), the goal to the right */
-.gt{--ind:14px;--name-w:230px;list-style:none;margin:0 0 var(--s5);padding:4px 0;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
+/* goals: one tree, a line per owner, hung from its manager like the team list, the goal to the right */
+.gt{--gt-pad:10px;--gt-gpad:10px;--gt-av:20px;--gt-el:12px;--ind:calc(var(--gt-av) / 2 + var(--gt-el) + var(--tree-gap));--name-w:230px;list-style:none;margin:0 0 var(--s5);padding:4px 0;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
 .gt-row,.gt-group{display:grid;grid-template-columns:calc(var(--d,0) * var(--ind)) 28px max(48px,calc(var(--name-w) - var(--d,0) * var(--ind) - 28px)) minmax(0,1fr) auto;
-  grid-template-areas:"ind av name goal kpis";align-items:stretch;min-height:36px;padding:0 10px;font-size:var(--t-base);line-height:1.3}
+  grid-template-areas:"ind av name goal kpis";align-items:stretch;min-height:36px;padding:0 var(--gt-pad);font-size:var(--t-base);line-height:var(--lh-tight)}
 .gt-row{cursor:pointer}.gt-row:hover,.gt-row:focus-visible{background:var(--surface2);outline:none}
-.gt-ind{grid-area:ind;background:repeating-linear-gradient(to right,transparent 0 6px,var(--line) 6px 7px,transparent 7px var(--ind))}
+/* "+" adds a goal for the line's owner (a group's: its lead), shown under a pointer; a phone long-presses the line. */
+.gt-row,.gt-group{position:relative}
+.gt-add{display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);width:24px;height:24px;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font-size:var(--t-md);line-height:var(--lh-none);cursor:pointer}
+.gt-add:hover{border-color:var(--muted);color:var(--ink)}
+@media (hover:hover){.gt-row:hover>.gt-add,.gt-row:focus-within>.gt-add,.gt-group:hover>.gt-add{display:inline-flex}}
+.gt-row>.gt-goal{cursor:pointer}
+.gt-ind{grid-area:ind}
+/* The lines (tree-lines.css), measured from the line's left edge. The rows are one flat list, each with its depth
+   (--d), so goalTreeLines (goals-kpis.js) says which piece each row draws: gt-elbow, from the row's top into its
+   avatar; gt-kids, the stub out of the foot of its own avatar (a group's: its name's left edge); and a gt-rail for
+   each level whose line runs on through it. A level's rail hangs from its manager's avatar, or a group's left edge. */
+.gt-ind,.gt-rail{--gt-px:calc(var(--gt-pad) + var(--gt-av) / 2)}
+.gt-ind.gt-gp,.gt-rail.gt-gp{--gt-px:var(--gt-gpad)}
+.gt-ind{--tree-x:calc(var(--gt-px) + (var(--d) - 1) * var(--ind));--tree-elbow:calc(var(--gt-pad) + var(--d) * var(--ind) - var(--tree-gap) - var(--tree-x));
+  --tree-y:50%;--tree-stub-x:calc(var(--gt-pad) + var(--d) * var(--ind) + var(--gt-av) / 2);--tree-from:calc(var(--tree-y) + var(--gt-av) / 2)}
+.gt-group>.gt-ind{--tree-stub-x:calc(var(--gt-gpad) + var(--d) * var(--ind));
+  --tree-elbow:calc(var(--gt-gpad) + var(--d) * var(--ind) - var(--tree-gap) - var(--tree-x));--tree-from:calc(50% + var(--t-label) / 2)}
+.gt-rail{display:contents;--tree-x:calc(var(--gt-px) + (var(--l) - 1) * var(--ind))}
 .gt-av,.gt-name,.gt-goal,.gt-kpis{display:flex;align-items:center;min-width:0}
 .gt-av{grid-area:av}.gt-name{grid-area:name;padding-right:12px}.gt-goal{grid-area:goal;gap:8px}.gt-kpis{grid-area:kpis;gap:6px;padding-left:12px}
 .gt-name>span,.gt-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gt-co .gt-name{font-weight:600}
-.gt-co-av{width:20px;height:20px;border-radius:5px;background:var(--ink);color:var(--bg);font-size:var(--t-xs);font-weight:700}
+.gt-co-av{width:20px;height:20px;border-radius:5px;background:var(--ink);color:var(--bg);font-size:var(--t-xs);font-weight:600}
 .gt-standing{color:var(--muted)}
-.gt-group{min-height:26px;grid-template-areas:"ind name name name name"}
+.gt-group{min-height:26px;padding-left:var(--gt-gpad);grid-template-areas:"ind name name name name"}
 .gt-group>.gt-name{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
-.gt-sep{padding:12px 10px 4px;margin-top:6px;border-top:1px solid var(--line);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .gt-chip{display:inline-flex;align-items:center;gap:5px;max-width:120px;height:20px;padding:0 7px;border-radius:10px;background:var(--surface2);font-size:var(--t-sm);white-space:nowrap}
 .gt-chip>.tnum{overflow:hidden;text-overflow:ellipsis}
 .gt-row:hover .gt-chip{background:var(--bg)}
@@ -22,12 +38,16 @@
 .gt-kn{display:none;align-items:center;gap:4px;font-size:var(--t-sm);color:var(--muted)}
 .gt-needs{margin:0 0 var(--s3);padding:4px 10px;background:var(--surface);border:1px solid color-mix(in srgb,var(--wait) 45%,var(--line));border-radius:var(--radius)}
 .gt-needs-h{display:flex;align-items:center;gap:8px;height:28px;font-size:var(--t-label);font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps)}
-.gt-needs-h .cnt{font-size:var(--t-xs);padding:0 6px;border-radius:9px;background:var(--wait-bg);color:var(--wait-ink);letter-spacing:0}
+.gt-needs-h .cnt{font-size:var(--t-xs);padding:0 6px;border-radius:9px;background:var(--wait-bg);color:var(--wait-ink);letter-spacing:var(--track-normal)}
 .gt-needs ul{list-style:none;margin:0;padding:0}
 @media (max-width:760px){
-  .gt{--ind:10px;padding:2px 0}
-  .gt-row{grid-template-columns:calc(var(--d,0) * var(--ind)) 26px minmax(0,1fr) auto;grid-template-areas:"ind av name kpis" "ind . goal goal";min-height:44px;padding:0 8px}
+  .gt{--gt-pad:8px;--gt-el:var(--tree-r);--gt-line:22px;padding:2px 0}
+  .gt-row{grid-template-columns:calc(var(--d,0) * var(--ind)) 26px minmax(0,1fr) auto;grid-template-areas:"ind av name kpis" "ind . goal goal";min-height:44px;padding:0 var(--gt-pad)}
   .gt-row.gt-cont{grid-template-areas:"ind . goal kpis"}
+  /* a line with no goal is one row, its avatar in the middle; with one, the avatar's row is a fixed line, for its elbow */
+  .gt-row:not(.gt-cont):not(:has(>.gt-goal)){grid-template-areas:"ind av name kpis"}
+  .gt-row:not(.gt-cont):has(>.gt-goal){grid-template-rows:var(--gt-line) auto}
+  .gt-row:has(>.gt-goal)>.gt-ind{--tree-y:calc(var(--gt-line) / 2)}
   .gt-row>.gt-goal{padding-bottom:6px}.gt-row.gt-cont>.gt-goal{padding-bottom:0}
   .gt-group{grid-template-columns:calc(var(--d,0) * var(--ind)) minmax(0,1fr);grid-template-areas:"ind name"}
   .gt-chip,.gt-kmore{display:none}.gt-kn{display:inline-flex}
@@ -50,13 +70,13 @@
 }
 /* the bot page's Goals card: a goal edited in place */
 .goal-lines{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px;min-width:0}
-.goal-lines li{display:flex;align-items:center;gap:7px;line-height:20px;cursor:pointer;border-radius:4px;padding:0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.goal-lines li:hover{background:var(--surface)}
+.goal-lines li{display:flex;align-items:center;gap:7px;line-height:var(--lh);cursor:pointer;border-radius:4px;padding:0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.goal-lines li:hover{background:var(--surface2)}
 .goal-lines li>span:last-child{overflow:hidden;text-overflow:ellipsis}
 .head-goals{margin-top:6px;font-size:var(--t-base)}.head-goals:empty{display:none}.head-goals li{padding-left:0}.head-goals li:hover{background:var(--surface2)}
 .goal-ed-row{display:flex;align-items:center;gap:4px}
 input.goal-ed-text{flex:1;min-width:0;width:100%;font:inherit;color:var(--ink);background:transparent;border:1px solid transparent;border-radius:4px;padding:2px 6px;margin-left:-6px}
-input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-text:focus{outline:none;border-color:var(--accent);background:var(--bg)}
+input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-text:focus{outline:var(--focus-halo);outline-offset:0;border-color:var(--focus);background:var(--bg)}
 .goal-ed-link{flex:none;width:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center}
 .goal-ed-link .nav-icon{font-size:18px}
 .goal-ed-supports{font-size:var(--t-sm);color:var(--muted)}.goal-ed-supports:empty{display:none}.goal-ed-supports a{color:inherit;text-decoration:underline}
@@ -70,28 +90,21 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gdot{width:9px;height:9px;border-radius:50%;flex:none;display:inline-block;background:var(--idle)}
 .gdot.green{background:var(--ok)}.gdot.yellow{background:var(--wait)}.gdot.red{background:var(--fail)}
 .gdot.none{background:transparent;border:1.5px solid var(--idle)}
-.goal-note{font-size:var(--t-sm);line-height:1.4;color:var(--muted);margin:-4px 0 6px 19px;overflow-wrap:anywhere}
+.goal-note{font-size:var(--t-sm);line-height:var(--lh);color:var(--muted);margin:-4px 0 6px 19px;overflow-wrap:anywhere}
 .goal-note b{font-weight:600}.goal-suggest{margin-top:-2px}
 /* a goal's Why: one line tying it to the company's vision; none is a quiet note, not an error */
-.goal-why{font-size:var(--t-sm);line-height:1.4;margin:-2px 0 6px 19px;overflow-wrap:anywhere}
+.goal-why{font-size:var(--t-sm);line-height:var(--lh);margin:-2px 0 6px 19px;overflow-wrap:anywhere}
 .goal-why-k{font-weight:600;color:var(--muted)}.goal-why-none{color:var(--muted);font-style:italic}
 .goal-why .linkish{font-size:var(--t-sm);font-style:normal}
 .goal-why-prop{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 8px 19px;padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius);font-size:var(--t-sm)}
 .goal-why-ed{display:flex;gap:8px;align-items:center;margin:0 0 8px 19px}.goal-why-ed input{flex:1 1 auto;min-width:0}
-/* the strategy, one line at the top of Goals */
-.gst{display:flex;align-items:baseline;gap:8px;min-width:0;margin:0 0 var(--s3);padding:7px 12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);color:var(--ink);font-size:var(--t-base);text-decoration:none}
-.gst:hover{background:var(--surface2);text-decoration:none}
-.gst-k{flex:none;font-weight:600}
-.gst-sum{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
-.gst-sum::before{content:"· ";color:var(--muted)}
-.gst-go{color:var(--accent)}
 .goal-bet-line{display:flex;align-items:center;gap:8px;min-width:0;margin:-2px 0 6px 19px;font-size:var(--t-sm)}
 .goal-bet-chip{flex:none;display:inline-flex;align-items:center;height:22px;padding:0 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface2);color:var(--ink);font-weight:600;text-decoration:none}
-.goal-bet-chip:hover{border-color:var(--accent);text-decoration:none}
+.goal-bet-chip:hover{border-color:var(--muted);text-decoration:none}
 .goal-bet-st{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--g7)}
 @media (max-width:760px){.goal-why-prop{flex-direction:column;align-items:stretch}.goal-why-ed{flex-wrap:wrap}}
 .kpi-lines{list-style:none;margin:0 0 4px 19px;padding:0}
-.kpi-line{display:flex;align-items:center;gap:10px;min-height:32px;padding:3px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;font-size:var(--t-base);line-height:1.35}
+.kpi-line{display:flex;align-items:center;gap:10px;min-height:32px;padding:3px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;font-size:var(--t-base);line-height:var(--lh)}
 .kpi-archived-more{padding:3px 6px;font-size:var(--t-sm)}
 .kpi-line:hover,.need-row:hover{background:var(--surface2)}
 .kpi-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -105,7 +118,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .goal-colour-row input{box-sizing:border-box;width:100%;height:36px;padding:0 9px;font-size:var(--t-md)}
 .goal-f textarea{box-sizing:border-box;width:100%;padding:7px 9px;font:inherit;font-size:var(--t-md);resize:vertical}
 .goal-form [hidden],.kpi-panel [hidden]{display:none!important}
-.need-row{display:flex;align-items:center;gap:10px;min-height:32px;padding:4px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;font-size:var(--t-base);line-height:1.3}
+.need-row{display:flex;align-items:center;gap:10px;min-height:32px;padding:4px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;font-size:var(--t-base);line-height:var(--lh-tight)}
 .need-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .need-task{margin-left:auto;flex:none;font-size:var(--t-sm)}
 .gt-needs .kpi-prop{padding:4px 0;font-size:var(--t-base)}.gt-needs .kpi-prop-main{flex-direction:row;flex-wrap:wrap;align-items:baseline;gap:0 8px}.gt-needs .kpi-prop-do button{height:28px}
@@ -115,6 +128,10 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gt-needs .rec-opts{margin:4px 0 0;padding-left:20px;list-style:decimal;display:flex;flex-direction:column;gap:6px}.gt-needs .rec-acts{margin:2px 0 4px;padding-left:16px;list-style:disc;font-size:var(--t-sm)}.gt-needs .rec-opts button{height:28px}
 .kpi-prop-do{display:flex;gap:8px;flex:none}.kpi-prop-do button{height:34px;padding-top:0;padding-bottom:0}
 .kpi-props{list-style:none;margin:0;padding:0}
+/* After "No, leave it": one line asking why, a one-line box and Send (ui/goals-kpis.js propLeftHtml). */
+.kpi-prop-left{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;width:100%}.kpi-prop-left-k{color:var(--muted)}
+.kpi-prop-left input{flex:1 1 220px;min-width:0;box-sizing:border-box;height:30px;padding:0 9px;font:inherit}.kpi-prop-left button{height:30px}
+.kpi-prop-left-err{flex-basis:100%;font-size:var(--t-sm);overflow-wrap:anywhere}
 .kpi-panel{width:min(600px,calc(100vw - 24px))}
 .kpi-panel .tmodal-body{max-height:calc(88vh - 56px)}
 /* the owner's panel: a sheet on the right (the bottom on a phone) */
@@ -122,9 +139,9 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gpanel[open]{display:flex}
 .gpanel .tmodal-head{padding-bottom:10px;border-bottom:1px solid var(--line)}
 .gpanel .tmodal-body{flex:1;max-height:none;padding-top:4px}
-.gp-who{display:flex;align-items:center;gap:8px;min-width:0;font-size:var(--t-lg);font-weight:600;color:var(--ink)}
+.gp-who{display:flex;align-items:center;gap:8px;min-width:0;font-size:var(--t-lg);font-weight:600;color:var(--ink);letter-spacing:var(--track-tight)}
 .gp-who>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.gp-back{font-size:18px;line-height:1}
+.gp-back{font-size:18px;line-height:var(--lh-none)}
 .gp-goals{list-style:none;margin:0;padding:0}
 .gp-goal{padding:8px 0;border-top:1px solid var(--line)}.gp-goal:first-child{border-top:0}
 .gp-goal>.goal-form{margin:4px 0 10px}
@@ -132,7 +149,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gp-signal{border:0;margin:0;padding:0;min-width:0}.gp-signal legend{padding:0;margin-bottom:4px;font-size:var(--t-sm);color:var(--muted)}
 .gp-signal-row{display:flex;flex-wrap:wrap;gap:4px var(--s3)}.gp-signal-row label{display:inline-flex;align-items:center;gap:6px;cursor:pointer}.gp-signal-row input{margin:0}
 .gp-update .gp-update-note,.gp-update .err{margin:0;font-size:var(--t-sm)}
-.gp-gline{display:flex;align-items:center;gap:10px;width:calc(100% + 12px);margin:0 -6px;padding:6px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-md);font-weight:600;text-align:left;cursor:pointer}
+.gp-gline{display:flex;align-items:center;gap:10px;width:calc(100% + 12px);margin:0 -6px;padding:6px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-md);font-weight:600;text-align:left;cursor:pointer;letter-spacing:var(--track-snug)}
 .gp-gline:hover{background:var(--surface2)}
 .gp-goal .kpi-check,.gp-goal .kpi-props,.gp-goal>.linkish{margin-left:19px}
 .gp-goal>.linkish{font-size:var(--t-sm)}
@@ -146,19 +163,19 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .goal-fin-head{display:flex;align-items:center;gap:8px}
 .goal-fin-line{flex:1;min-width:0;display:flex;align-items:baseline;gap:8px;background:none;border:0;padding:4px 0;text-align:left;color:inherit;font:inherit;cursor:pointer}
 .goal-fin-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.goal-fin-what{flex:none;font-size:12px;padding:0 6px;border:1px solid var(--line);border-radius:999px}
-.goal-fin-when{flex:none;font-size:12px}
+.goal-fin-what{flex:none;font-size:var(--t-sm);padding:0 6px;border:1px solid var(--line);border-radius:999px}
+.goal-fin-when{flex:none;font-size:var(--t-sm)}
 .goal-fin-detail{padding:4px 0 8px 8px}
 .goal-fin-kpis,.goal-fin-history{list-style:none;margin:2px 0 6px;padding:0}
 .goal-fin-kpis li{display:flex;align-items:center;gap:6px}
-.goal-fin-history li{font-size:12px}
+.goal-fin-history li{font-size:var(--t-sm)}
 .goal-reopen{margin:4px 0 8px}
 .gp-history-list{margin-top:4px}
 .gp-history-list .kpi-lines{margin-left:0}
 .kpi-archived{padding:8px 10px;border-radius:6px;background:var(--surface2);color:var(--muted);font-size:var(--t-sm)}
 .kpi-add [data-new],.kpi-add [data-target]{display:grid;gap:var(--s3)}
-.kpi-ptitle{display:flex;align-items:center;gap:8px;min-width:0;font-size:var(--t-lg)}.kpi-ptitle .who{font-size:var(--t-lg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.kpi-big{font-size:var(--t-xl);font-weight:600;letter-spacing:-.01em}.kpi-why{font-size:var(--t-sm);margin-top:2px}
+.kpi-ptitle{display:flex;align-items:center;gap:8px;min-width:0;font-size:var(--t-lg)}.kpi-ptitle .who{font-size:var(--t-lg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:var(--track-tight)}
+.kpi-big{font-size:var(--t-xl);font-weight:600;letter-spacing:var(--track-tight)}.kpi-why{font-size:var(--t-sm);margin-top:2px}
 .kchart{display:block;width:100%;height:auto;margin:10px 0 4px}
 .kc-axis{stroke:var(--line)}.kc-line{fill:none;stroke:var(--accent);stroke-width:1.6;stroke-linejoin:round}.kc-dot{fill:var(--accent)}
 .kc-pace{stroke:var(--muted);stroke-width:1.2;stroke-dasharray:4 3}.kc-band{fill:var(--ok-bg)}.kc-t{fill:var(--muted);font-size:var(--t-2xs)}
@@ -181,6 +198,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
   .gp-goal>.linkish{margin-left:13px}
   .need-row{min-height:44px}.need-text{white-space:normal;overflow-wrap:anywhere}
   .kpi-prop{flex-direction:column;align-items:stretch}.kpi-prop-do button{flex:1;height:44px}
+  .kpi-prop-left input,.kpi-prop-left button{height:44px;font-size:16px}
   .goal-colour-row{grid-template-columns:1fr}.goal-colour-row input{height:44px;font-size:16px}
   .goal-f textarea{font-size:16px}
   .gp-actions .ghost{flex:1;height:44px}.gp-gline{min-height:44px}
@@ -190,57 +208,14 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
   .kpi-r{padding:9px 0}.kpi-by{margin-left:0}
 }
 
-/* Goals: the tree is the page and the CEO Bot a right rail running the page's full height beside it, like a
-   bot page's (chat.css #main.bot-split-layout, bot-page.css .rail-sec); each column scrolls on its own. Narrower,
-   one column: the tree, then the CEO Bot under it. */
 #goal-body{max-width:1180px}
-@media (min-width:1100px){
-  #main.goals-layout{max-width:none;display:grid;grid-template-columns:minmax(0,1fr) var(--rail-right);padding:0;height:100%;overflow:hidden}
-  body:has(#main.goals-layout) #topbar:not(:has(#app-nudge:not([hidden]))){display:none}
-  #main.goals-layout>.goals-main{min-width:0;min-height:0;overflow-y:auto;padding:18px var(--s4) 60px 28px}   /* 18px: where every other page starts */
-  #main.goals-layout>.gm-rail{display:flex;flex-direction:column;min-width:0;min-height:0;overflow-y:auto;overscroll-behavior:contain;border-left:1px solid var(--line);padding:6px 0 var(--s4)}
-  .gm-rail>.rail-sec{padding-left:14px;padding-right:12px}
-  .gm-rail>.gm-chat{flex:1;min-height:180px}
-  .gm-rail .gm-thread{flex:1;max-height:none;min-height:0}
-  .gm-rail .gm-form{margin-top:auto}
-}
-.gm-rail{font-size:var(--t-base);line-height:1.4}
-@media (max-width:1099px){
-  .gm-rail{margin:var(--s4) 0 0;padding:2px 14px 6px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
-}
-.gm-head{display:flex;align-items:center;gap:8px;min-height:24px}
-.gm-head h2{font-size:var(--t-md);margin:0}
-.gm-head a{margin-left:auto;font-size:var(--t-sm);white-space:nowrap;color:var(--accent-quiet)}
-.gm-head a:hover{color:var(--accent)}
-.gm-what{margin:2px 0 0;color:var(--muted);font-size:var(--t-sm)}
-.gm-routines{list-style:none;margin:0;padding:0;display:grid;gap:3px}
-.gm-routines li{display:flex;align-items:flex-start;gap:6px;min-width:0;overflow-wrap:anywhere}
-.gm-routines .nav-icon{flex:none;font-size:16px;line-height:18px;color:var(--muted)}
-.gm-last{margin:6px 0 0;color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
-.gm-last:empty{display:none}
-.gm-chat{display:flex;flex-direction:column;justify-content:flex-start;gap:6px;min-width:0}
-.gm-chat>.rail-h{margin:0}
-.gm-thread{display:flex;flex-direction:column;min-height:100px;max-height:55vh;overflow-y:auto;overscroll-behavior:contain;overflow-wrap:anywhere;padding-right:4px}
-.gm-thread .conv-run.chat{border:0;padding:6px 0}
-.gm-thread .conv-run-head{display:none}
-.gm-thread .bubble{margin:0}
-.gm-thread .bubble.you{border:0}
-.gm-thread .bubble.bot.reply{background:transparent;border-radius:0}
-.gm-thread [data-gm-live]{min-width:0}
-.gm-starters{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto}
-.gm-starters button{font-size:var(--t-sm)}
-.gm-form{min-width:0}
-.gm-form .ask{margin:0}
-.gm-form .p-chips:empty{display:none}
-.gm-chat .err{margin:0;font-size:var(--t-sm)}
-.gm-on{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0}
 /* Strategy proposals in Needs you (ui/goals-kpis.js strategyDraftPropHtml, strategyRealignPropHtml): a compact list of
    what changes, or one row per goal with its Keep / Retire / Move to. */
 .kpi-prop.strat-prop{align-items:flex-start}
 .gt-needs .strat-prop .kpi-prop-main,.strat-prop .kpi-prop-main{flex:1 1 auto;flex-direction:column;align-items:stretch;gap:4px}
 .strat-prop-open{margin-left:6px;font-size:var(--t-sm)}
 .strat-prop-list,.strat-realign{list-style:none;margin:2px 0;padding:0;display:grid;gap:4px}
-.strat-prop-list li{display:grid;grid-template-columns:128px minmax(0,1fr);gap:8px;font-size:var(--t-base);line-height:1.4;overflow-wrap:anywhere}
+.strat-prop-list li{display:grid;grid-template-columns:128px minmax(0,1fr);gap:8px;font-size:var(--t-base);line-height:var(--lh);overflow-wrap:anywhere}
 .strat-prop-k{color:var(--muted);font-size:var(--t-sm);font-weight:600}
 .strat-prop-wrong{display:block;font-size:var(--t-sm)}
 .strat-realign-goal{display:flex;align-items:center;gap:12px;min-width:0;padding:4px 0}
@@ -262,11 +237,27 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .kpi-prop-warn{font-size:var(--t-sm)}.kpi-prop-warn::before{content:'';display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:var(--wait);vertical-align:1px}
 .kpi-prop-line{margin:0 0 4px;font-size:var(--t-sm);flex-basis:100%}
 .kpi-prop-do:has(.kpi-prop-line){flex-wrap:wrap;max-width:280px}
-.kpi-prop-set{margin-top:4px;font-size:var(--t-base)}.kpi-prop-set summary{cursor:pointer;color:var(--accent,inherit);width:max-content}
+.kpi-prop-set{margin-top:4px;font-size:var(--t-base)}.kpi-prop-set summary{cursor:pointer;color:var(--link);width:max-content}
 .kpi-prop-tf{margin-top:6px;display:grid;gap:var(--s2,8px)}
-.prop-np{display:grid;gap:2px;margin:2px 0;font-size:var(--t-base);line-height:1.4}
+.prop-np{display:grid;gap:2px;margin:2px 0;font-size:var(--t-base);line-height:var(--lh)}
 .prop-np-row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px}
 .prop-np-k{color:var(--muted);font-size:var(--t-sm)}.prop-np-v{overflow-wrap:anywhere;white-space:pre-line}
 .prop-np-label{margin-top:4px;font-weight:600;font-size:var(--t-sm)}
 .prop-np-clamp .prop-np-v{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 .prop-np>.linkish{justify-self:start;font-size:var(--t-sm)}
+
+/* One goal in the sheet (ui/app/goals.js goalSheetOpen): the owner's panel's frame, a side panel or a phone's sheet. */
+.gsheet .gs-h{margin:0;font-size:var(--t-md);font-weight:600;letter-spacing:var(--track-snug)}
+.gsheet .tmodal-head{gap:8px}
+.gsheet .goal-form{max-width:none}
+.goal-measure{grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,1.2fr)}
+.goal-measure input{min-width:0}
+#main.rd-goals #goal-new{white-space:nowrap}
+@media (max-width:760px){
+  .goal-measure{grid-template-columns:1fr 1fr}.goal-measure .goal-metric{grid-column:1 / -1}
+  .gsheet .goal-fs:not(.goal-measure){grid-template-columns:1fr}
+  .gsheet .goal-f input,.gsheet .goal-f select{height:44px;font-size:16px}
+  .gsheet .goal-actions button{min-height:44px}
+  #main.rd-goals .rd-strat-head h1{flex:1 1 0}
+  #main.rd-goals .rd-strat-head .strat-actions{order:1;flex:none}
+}

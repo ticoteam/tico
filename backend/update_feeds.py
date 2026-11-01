@@ -141,7 +141,7 @@ def subscribe(c, bot, before, after):
 
 # --- feed text -------------------------------------------------------------------------------------------------
 
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f​-‏‪-‮⁦-⁩]")
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
 _SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,79}")         # used with fullmatch: `$` would let a trailing newline in
 _REVISION = re.compile(r"[0-9a-f]{40}")
 
@@ -320,7 +320,7 @@ def _newer(items, known, seen):
     return out
 
 
-def _get(http, url, **params):
+def _get(http, url, /, **params):
     r = http.get(url, params=params or None, headers={"Accept": "application/json", "User-Agent": "tico-update-feed"})
     if r.status_code != 200:
         raise httpx.HTTPError("status %s" % r.status_code)

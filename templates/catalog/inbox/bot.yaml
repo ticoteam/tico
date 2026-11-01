@@ -20,7 +20,7 @@ outbound_send: false
 forward_to: []
 
 # The first routine is declared but not armed (`enabled: false`). The bot arms it with
-# `hub routine update <id> --enable` when Setup starts; setup-done allows normal work.
+# `hub automation update <id> --enable` when Setup starts; setup-done allows normal work.
 # `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 # A second or third pass a day is a routine the bot adds after a week of a brief the human reads.
 routines:

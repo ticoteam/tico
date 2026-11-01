@@ -1,26 +1,22 @@
-"""Routines: the server's table of recurring work, and what happens when one is due.
+"""Routines are automations now (backend/automations.py). What is left here:
 
-A routine is one row in `schedules`: a bot, a time (a cron) or a hub event, a title, and the
-text the bot receives. People and bots write rows through the API (`hub routine ...`); the
-scheduler reads them. Nothing else defines a routine: not a file in the bot's repository, not
-a Git branch. When one is due the hub opens a task for the bot with that text, and the bot
-takes it from there like any other task.
-"""
+- `create`, `row`, `update` and `remove` for what Tico still seeds the old way (a template's first routines, the
+  Librarian's market routines, the fleet's task sweep, the Strategy Bot's passes): `create` writes the `schedules` row
+  and, once the install's cutover ran, moves it to a schedule or event automation in the same write
+  (backend/redesign_migration.py `adopt`). `row`, `update` and `remove` of a moved routine read and change its
+  automation (on/off; removing deletes it). Nothing fires a `schedules` row any more.
+- `no_input`: why a built-in routine's occurrence has nothing to work on; a converted routine's automation skips it.
+- The message bots' mailboxes (`message_bot_mailboxes` and friends), which mail and the converter read."""
 import json
 import re
 from datetime import datetime, timezone
 
 from clients.manifest import tools_of
 from clients.routines import DEFAULT_ZONE, validate_schedules
-from . import people as P, task_privacy as privacy, templating
-from .harnesses import SYNCED_SQL
-from .profiles import TAKES_NONE_SQL
-from .statuses import PARKED_SQL, is_parked
+from . import people as P
 from .scheduler import next_due, stamp
 from .store import H, Problem, encode
 
-OCCURRENCE_LIMIT = 50
-TEMPLATE_GROWTH = 4096      # characters a routine's text may gain from its {{placeholders}}
 DEFAULT_TEXT = "Run this scheduled routine."
 # Every active bot looks at its own open tasks once a day, staggered across
 # 08:00-09:59 America/Los_Angeles by slug so the fleet does not wake at once.
@@ -59,11 +55,37 @@ def require_trigger(c, event):
         raise ValueError(f"No trigger {event[len(triggers.EVENT):]}; add it in Settings > Webhooks first")
 
 
+def _moved(c, sid):
+    """The automation a routine moved to: (True, its row or None), or (False, None) for a routine not moved yet."""
+    from . import redesign_migration
+    if not redesign_migration.holds(c, "routine", sid):
+        return False, None
+    found = c.execute("SELECT m.automation, a.* FROM redesign_migrated m LEFT JOIN automations a ON a.id=m.automation "
+                      "WHERE m.kind='routine' AND m.id=?", (sid,)).fetchone()
+    return True, (found if found and found["automation"] and found["id"] else None)
+
+
 def row(c, sid):
+    """One routine. A moved one reads as its automation: on/off, deleted with it, `automation` its id. One the cutover
+    kept back (it could not move) reads as None: nothing runs it."""
     found = c.execute("SELECT s.*,coalesce(sc.timezone,?) AS timezone,coalesce(sc.enabled,1) AS enabled "
                       "FROM schedules s LEFT JOIN schedule_config sc ON sc.schedule_id=s.id WHERE s.id=?",
                       (DEFAULT_ZONE, sid)).fetchone()
-    return dict(found) if found else None
+    if not found:
+        return None
+    moved, auto = _moved(c, sid)
+    if not moved:
+        return dict(found)
+    if not auto:
+        return None
+    return {**dict(found), "enabled": int(auto["enabled"]), "deleted_at": auto["deleted_at"], "automation": auto["id"],
+            "next_due": auto["next_due"]}
+
+
+def _set_moved(c, actor, auto, enabled):
+    from . import automations
+    before = automations.flow_of(auto)
+    automations._save(c, actor, auto["id"], {**before, "enabled": bool(enabled)}, before, via="routine")
 
 
 def create(c, actor, bot, fields, *, key=None, at=None):
@@ -71,13 +93,16 @@ def create(c, actor, bot, fields, *, key=None, at=None):
     again updates it in place (a bot that sets up its own routines every turn makes one)."""
     at = _clock(at)
     entry = validate(fields)
-    from . import ceo_acts
-    ceo_acts.gate(c, actor, "cost", f"add a routine for {bot}: {entry['title']}")   # more runs cost more: the owner's
+    from . import strategy_acts
+    # more runs cost more: the owner's
+    strategy_acts.gate(c, actor, "cost", f"add a routine for {bot}: {entry['title']}")
     require_trigger(c, entry["on"])
     H._takes_tasks(c, actor, "bot:" + bot, routine=True)        # every run of a routine is a task
     if key is not None:
         existing = c.execute("SELECT id FROM schedules WHERE bot=? AND routine_key=?", (bot, key)).fetchone()
         if existing:
+            if _moved(c, existing["id"])[0]:
+                return row(c, existing["id"])      # moved to an automation: a re-seed must not bring it back
             return update(c, actor, existing["id"], {**fields, "enabled": fields.get("enabled", True)},
                           at=at, restore=True)
     sid = bot + ":" + (key or H.new_id()[:12])
@@ -90,6 +115,8 @@ def create(c, actor, bot, fields, *, key=None, at=None):
     c.execute("INSERT INTO schedule_config(schedule_id,timezone,enabled) VALUES(?,?,?)",
               (sid, entry["timezone"], 1 if fields.get("enabled", True) else 0))
     H.event(c, actor, "routine.created", sid, {"bot": bot, "cron": entry["cron"], "on": entry["on"]})
+    from . import redesign_migration
+    redesign_migration.adopt(c, "routine", sid)        # after the cutover: an automation at once
     return row(c, sid)
 
 
@@ -97,6 +124,17 @@ def update(c, actor, sid, changes, *, at=None, restore=False):
     """Change what a routine says or when it runs. A cadence change moves the next fire from
     now; a text change reaches the next occurrence and never a task already opened."""
     at = _clock(at)
+    moved, auto = _moved(c, sid)
+    if moved:
+        # Moved: only on/off reaches its automation (its words and time are edited there).
+        if not auto or (auto["deleted_at"] and not restore):
+            raise Problem("not_found", "Routine not found", 404)
+        if changes.get("enabled") is not None and bool(changes["enabled"]) != bool(auto["enabled"]):
+            if changes["enabled"]:
+                from . import strategy_acts
+                strategy_acts.gate(c, actor, "cost", f"start the automation \"{auto['name']}\"")
+            _set_moved(c, actor, auto, changes["enabled"])        # its `routine.updated` event comes with it
+        return row(c, sid)
     current = row(c, sid)
     if not current or (current["deleted_at"] and not restore):
         raise Problem("not_found", "Routine not found", 404)
@@ -113,8 +151,8 @@ def update(c, actor, sid, changes, *, at=None, restore=False):
     # A new cadence or a routine started again can cost more: the owner's. Pausing it or rewording it costs nothing more.
     if any(changes.get(k) is not None for k in ("cron", "on", "timezone")) or restore and current["deleted_at"] \
             or changes.get("enabled") and not current["enabled"]:
-        from . import ceo_acts
-        ceo_acts.gate(c, actor, "cost", f"change when {current['bot']}'s routine \"{current['title']}\" runs")
+        from . import strategy_acts
+        strategy_acts.gate(c, actor, "cost", f"change when {current['bot']}'s routine \"{current['title']}\" runs")
     if (entry["on"] or None) != current["event_name"]:
         require_trigger(c, entry["on"])
     now = stamp(at)
@@ -135,151 +173,34 @@ def update(c, actor, sid, changes, *, at=None, restore=False):
 
 
 def remove(c, actor, sid, *, at=None):
-    """Delete a routine. Its history stays; a task it opened that nobody has claimed closes."""
+    """Delete a routine (a moved one: its automation). Its history stays."""
     at = _clock(at)
+    now = stamp(at)
+    moved, auto = _moved(c, sid)
+    if moved:
+        if auto and not auto["deleted_at"]:
+            c.execute("UPDATE automations SET deleted_at=?, enabled=0 WHERE id=?", (now, auto["id"]))
+            H.event(c, actor, "routine.deleted", sid, {"automation": auto["id"]})
+        return row(c, sid)
     current = row(c, sid)
     if not current:
         return None
-    now = stamp(at)
     c.execute("UPDATE schedules SET deleted_at=?,updated_at=?,next_due=NULL WHERE id=?", (now, now, sid))
-    cancel_unclaimed(c, sid)
     H.event(c, actor, "routine.deleted", sid, {"bot": current["bot"]})
     return row(c, sid)
-
-
-def cancel_unclaimed(c, sid):
-    _close_unclaimed(c, c.execute("SELECT DISTINCT t.* FROM tasks t JOIN schedule_occurrences o ON o.task_id=t.id "
-                                  "WHERE o.schedule_id=? AND t.status='open'", (sid,)).fetchall(),
-                     "Routine removed before execution.")
-
-
-PAUSED_NOTE = "Bot paused before this routine ran; its routines fire again on schedule once it resumes."
-
-
-def hold_for_paused_bot(c, bot):
-    """A paused bot's routine runs nobody has started are closed, so a long pause does not leave a
-    backlog that all runs at once on resume. Only timed runs the bot still holds: a person's direct work
-    and a person's Run now stay queued for the bot, an event run carries one-off content (a meeting's notes)
-    that is never announced again, and a run handed to another bot is that bot's. Each routine keeps its own
-    enabled flag, so resuming restores exactly the ones that were on. Returns the closed task ids."""
-    found = c.execute("SELECT DISTINCT t.* FROM tasks t JOIN schedule_occurrences o ON o.task_id=t.id "
-                      "JOIN schedules s ON s.id=o.schedule_id WHERE s.bot=? AND t.owner=? AND t.status='open' "
-                      "AND s.event_name IS NULL AND o.occurrence NOT LIKE 'manual:%'",
-                      (bot, H.bot_actor(bot))).fetchall()
-    return _close_unclaimed(c, found, PAUSED_NOTE)
-
-
-def _close_unclaimed(c, tasks, note):
-    closed = []
-    for task in tasks:
-        # Primary jobs, additional turn inputs and carried work all count as claimed.
-        claimed = c.execute(
-            "SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE {H.MESSAGE_TASK_SQL}=? AND (EXISTS "
-            "(SELECT 1 FROM jobs j JOIN attempts a ON a.job_id=j.id WHERE j.message_id=m.id) OR EXISTS "
-            "(SELECT 1 FROM attempt_inputs i WHERE i.message_id=m.id)) LIMIT 1", (task['id'],)).fetchone()
-        carried = task['carried_by'] or c.execute(
-            "SELECT 1 FROM events e JOIN json_each(e.detail_json,'$.tasks') v "
-            "WHERE e.action='task.next-run.carried' AND v.value=? LIMIT 1", (task['id'],)).fetchone()
-        if claimed or carried:
-            continue
-        H.task_close(c, H.KEEPER, task['id'], note)
-        closed.append(task['id'])
-        c.execute('UPDATE tasks SET version=version+1 WHERE id=?', (task['id'],))
-        task_messages = ("SELECT m.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                         f"WHERE {H.MESSAGE_TASK_SQL}=?")
-        c.execute("UPDATE jobs SET state='completed' WHERE state='queued' AND message_id IN (" + task_messages + ")",
-                  (task['id'],))
-        # Includes the close notice, so the outbox does not wake this removed work.
-        c.execute("UPDATE messages SET delivered_at=? WHERE id IN (" + task_messages + ") AND to_actor LIKE 'bot:%' "
-                  "AND delivered_at IS NULL", (H.now(), task["id"]))
-    return closed
-
-
-def latest_task(c, sid):
-    """The most recent unfinished run; completed history stays Done when the next run opens."""
-    return c.execute("SELECT t.id,t.status FROM schedule_occurrences o JOIN tasks t ON t.id=o.task_id "
-                     "WHERE o.schedule_id=? AND t.status IN ('open','doing','waiting','review','ready') "
-                     "ORDER BY o.occurrence DESC LIMIT 1", (sid,)).fetchone()
 
 
 def no_input(c, settings, schedule, local):
     """Why a built-in routine's run would have nothing to work on, or None: such a run is skipped rather than
     opening a task its bot can only close."""
-    from . import ceo_bot, market
-    if held := ceo_bot.held_routine(c, schedule):
-        return held                 # the CEO Bot's KPI pass, while the owner has its regular checks off
+    from . import strategy_bot, market
+    if held := strategy_bot.held_routine(c, schedule):
+        return held                 # the Strategy Bot's KPI pass, while the owner has its regular checks off
     # Only the routine as shipped: a team that changed its text may have given it other work.
     if (schedule["bot"] == market.CURATOR.split(":", 1)[1] and schedule["routine_key"] == "curate-the-market"
             and (schedule["playbook"] or "").strip() == market.CURATE_TEXT.strip()):
         return market.nothing_to_curate(c, settings, local)
     return None
-
-
-def open_task(c, auth, schedule, heading, body, now, trigger="schedule", sweep=False):
-    """`sweep` marks a timed run's wake, which the bot's wake preset may space out (backend/wake_presets.py);
-    a run someone asked for, or one an event fired, wakes the bot at once."""
-    owner = "bot:" + schedule["bot"]
-    conversation_id = None
-    if auth is not None:
-        from . import rooms
-        conversation_id = rooms.task_conversation_id(c, auth, owner, H.KEEPER)
-    # Its wake is the routine's: a schedule, an event or Run now, never a status change.
-    task = H.task_create(c, H.KEEPER, heading[:300], body, owner, deduplicate=False,
-                         conversation_id=conversation_id, wake_refs={"sweep": schedule["id"]} if sweep else None,
-                         trigger=trigger, trigger_source=schedule["id"])
-    c.execute("UPDATE schedules SET last_fired=? WHERE id=?", (now, schedule["id"]))
-    return task
-
-
-def emit(c, kind, subject, payload=None, *, title=None, content="", at=None, auth=None, values=None):
-    """Something happened in the hub; every routine that runs `on:` it gets one task.
-
-    `subject` is the thing's id (a recording, say): the pair (routine, event, subject) is an
-    occurrence, and `schedule_occurrences` makes it fire once however often the event is
-    re-emitted. The task body is the routine's text, then the event's facts, then `content`
-    (the thing itself, as a delivery task carries a meeting's notes), so the bot has everything
-    in the one task it may read. The producer decides what is shareable before calling.
-    `values`: what a routine's text may read as `{{path}}` (backend/templating.py), as `{{payload.order}}`,
-    `{{type}}` and `{{trigger.name}}` for a webhook. A text without a placeholder is used as it is; one with
-    placeholders grows by at most TEMPLATE_GROWTH characters.
-    Caller owns the transaction. Returns the ids of the tasks it opened.
-    """
-    now = stamp(_clock(at))
-    # A routine may be written with any spelling of the event (the catalog name or an older one), and the producers
-    # emit one of them (meetings emit both of its names): all of them reach it, once per subject.
-    from . import event_catalog
-    names = event_catalog.spellings(kind)
-    canonical = names[0]
-    facts = {"event": kind, "subject": subject, **{k: v for k, v in (payload or {}).items() if v not in (None, "")}}
-    content = ("\n\n" + content.strip()) if content and content.strip() else ""
-    fired = []
-    rows = c.execute("SELECT s.* FROM schedules s JOIN bots b ON b.slug=s.bot LEFT JOIN schedule_config sc ON sc.schedule_id=s.id "
-                     "WHERE s.event_name IN (" + ",".join("?" * len(names)) + ") AND b.state='active' AND coalesce(sc.enabled,1)=1 AND s.deleted_at IS NULL "
-                     "AND NOT EXISTS(SELECT 1 FROM bot_config bc WHERE bc.bot=s.bot "
-                     "AND coalesce(json_extract(bc.config_json,'$.shared_from'),'')<>'') "
-                     # a bot synced in from another platform never sees a task (hubdb._takes_tasks)
-                     "AND NOT EXISTS(SELECT 1 FROM bot_config xc WHERE xc.bot=s.bot "
-                     "AND (json_extract(xc.config_json,'$.harness') IN (" + SYNCED_SQL + ") OR " + TAKES_NONE_SQL.format(a="xc") + ")) "
-                     # an onboarding bot runs no routines until a person above it marks onboarding complete
-                     "AND NOT EXISTS(SELECT 1 FROM bot_config pc WHERE pc.bot=s.bot AND pc.onboarding_state IN " + PARKED_SQL + ") "
-                     "ORDER BY s.id", names).fetchall()
-    for schedule in rows:
-        occurrence = f"{canonical}:{subject}"
-        # Rows an earlier release wrote are keyed by the spelling that was emitted.
-        if c.execute("SELECT 1 FROM schedule_occurrences WHERE schedule_id=? AND occurrence IN ("
-                     + ",".join("?" * len(names)) + ")", (schedule["id"], *[f"{n}:{subject}" for n in names])).fetchone():
-            continue
-        playbook = schedule["playbook"] or "Handle this event."
-        if values and "{{" in playbook:
-            playbook = templating.render(playbook, values, cap=len(playbook) + TEMPLATE_GROWTH)
-        body = playbook.rstrip() + "\n\n" + "\n".join(f"{k}: {v}" for k, v in facts.items()) + content
-        heading = f"{schedule['title']}: {title}" if title else schedule["title"]
-        task = open_task(c, auth, schedule, heading, body, now)
-        c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)", (schedule["id"], occurrence, task["id"], "event"))
-        H.event(c, H.KEEPER, "schedule.event", schedule["id"], {"event": kind, "subject": subject, "task": task["id"]})
-        fired.append(task["id"])
-    return fired
 
 
 def _roster(c):
@@ -426,103 +347,6 @@ def inbox_of(bot, config, roster):
                 for addr in P.mailboxes_below(person["id"], roster):
                     add(addr)
     return {"mailboxes": mailboxes, "org_read": org_read}
-
-
-def _inboxes(c, bots):
-    if not bots:
-        return {}
-    roster = _roster(c)
-    wanted = tuple(bots)
-    marks = ",".join("?" * len(wanted))
-    configs = {found["bot"]: json.loads(found["config_json"] or "{}")
-               for found in c.execute(f"SELECT bot,config_json FROM bot_config WHERE bot IN ({marks})", wanted)}
-    return {bot: inbox_of(bot, configs.get(bot) or {}, roster) for bot in bots}
-
-
-def _outcome(raw, event=False):
-    if raw == "coalesced_into_existing_task":
-        return "coalesced"
-    if raw == "event" or (event and raw == "created"):
-        return "event"
-    return raw or "created"
-
-
-def occurrences(c, schedule_id, limit=OCCURRENCE_LIMIT, *, who, auth):
-    """Recent firings of one routine, joined to the task and its latest attempt."""
-    try:
-        limit = int(limit)
-    except (TypeError, ValueError):
-        limit = OCCURRENCE_LIMIT
-    limit = max(1, min(limit, OCCURRENCE_LIMIT))
-    schedule = c.execute("SELECT event_name FROM schedules WHERE id=?", (schedule_id,)).fetchone()
-    event = bool(schedule and schedule["event_name"])
-    rows = c.execute(
-        "SELECT o.occurrence,o.outcome,o.task_id,t.status,t.title "
-        "FROM schedule_occurrences o LEFT JOIN tasks t ON t.id=o.task_id WHERE o.schedule_id=? "
-        f"AND (o.task_id IS NULL OR ({auth.task_sql(c, who)})) "
-        "ORDER BY o.occurrence DESC LIMIT ?",
-        (schedule_id, limit)).fetchall()
-    ids = list(dict.fromkeys(found["task_id"] for found in rows if found["task_id"]))
-    attempts = {}
-    if ids:
-        marks = ",".join("?" * len(ids))
-        for attempt in c.execute(
-                f"SELECT {H.MESSAGE_TASK_SQL} AS task_id,a.id,a.started,a.finished,a.state "
-                "FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
-                f"JOIN conversations cv ON cv.id=m.conversation_id WHERE {H.MESSAGE_TASK_SQL} IN ({marks}) "
-                "ORDER BY a.created DESC", ids):
-            if privacy.attempt_readable(c, privacy.actor(who), attempt["id"]):
-                attempts.setdefault(attempt["task_id"], dict(attempt))
-    result = []
-    for found in rows:
-        attempt = attempts.get(found["task_id"]) or {}
-        why = None
-        if found["outcome"] == "skipped":
-            # A run skipped for want of input opened no task; its reason is on its occurrence event.
-            why = c.execute("SELECT json_extract(detail_json,'$.reason') FROM events WHERE action='schedule.occurrence' "
-                            "AND target=? AND json_extract(detail_json,'$.occurrence')=? ORDER BY rowid DESC LIMIT 1",
-                            (schedule_id, found["occurrence"])).fetchone()
-            why = why[0] if why else None
-        started, finished = H.parse_ts(attempt.get("started")), H.parse_ts(attempt.get("finished"))
-        duration = max(0, round((finished - started).total_seconds())) if started and finished else None
-        result.append({
-            "occurrence": found["occurrence"], "outcome": _outcome(found["outcome"], event),
-            "task_id": found["task_id"], "status": found["status"] or None, "title": found["title"] or None,
-            "started": attempt.get("started"), "finished": attempt.get("finished"),
-            "duration_s": duration, "exit": attempt.get("state"), **({"reason": why} if why else {})})
-    return result
-
-
-def listing(c, bot=None, include_deleted=False, summary=False):
-    """`summary` drops the text: the overview and employee views only need the schedule, not
-    hundreds of KB of prose."""
-    rows = c.execute('SELECT s.*,b.state,coalesce(sc.timezone,?) AS timezone,coalesce(sc.enabled,1) AS enabled,'
-                     'bc.onboarding_state FROM schedules s JOIN bots b ON b.slug=s.bot '
-                     'LEFT JOIN schedule_config sc ON sc.schedule_id=s.id LEFT JOIN bot_config bc ON bc.bot=s.bot '
-                     'WHERE (? IS NULL OR s.bot=?) AND (? OR s.deleted_at IS NULL) ORDER BY s.title,s.id',
-                     (DEFAULT_ZONE, bot, bot, include_deleted)).fetchall()
-    inboxes = _inboxes(c, {found["bot"] for found in rows})
-    result = []
-    for found in rows:
-        # Why an enabled routine is not firing because of its bot, not its own switch: the routine
-        # stays enabled and fires again once the bot is active and set up.
-        held = None
-        if found['enabled'] and not found['deleted_at']:
-            held = (found['state'] if found['state'] != 'active'
-                    else 'needs_setup' if is_parked(found['onboarding_state']) else None)
-        value = {'id': found['id'], 'bot': found['bot'], 'employee': found['bot'], 'key': found['routine_key'],
-                 'title': found['title'], 'cron': found['cron'] or '', 'on': found['event_name'] or '',
-                 'kind': 'event' if found['event_name'] else 'cron', 'timezone': found['timezone'],
-                 'enabled': bool(found['enabled']), 'text': found['playbook'] or '',
-                 'last_fired': found['last_fired'], 'next_due': found['next_due'], 'next': found['next_due'],
-                 'deleted_at': found['deleted_at'], 'updated_at': found['updated_at'],
-                 'inbox': inboxes.get(found['bot']) or {'mailboxes': [], 'org_read': False},
-                 'held_by_bot': held,
-                 'active': bool(found['enabled']) and not found['deleted_at'] and not held}
-        if summary:
-            value.pop('text', None)
-        result.append(value)
-    return result
 
 
 def retire_open_tasks_checks(c, at=None):

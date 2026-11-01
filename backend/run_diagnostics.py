@@ -2,6 +2,7 @@
 import json
 import re
 
+from .rows import AttemptRow
 from .store import H
 
 STALL_MINUTES = 5
@@ -36,7 +37,7 @@ def touch(c, aid, kind=None, payload=None):
         c.execute('UPDATE attempt_diagnostics SET heartbeat_at=?,stalled_at=NULL WHERE attempt_id=?', (H.now(), aid))
 
 
-def keep_stderr(c, row, text):
+def keep_stderr(c, row: AttemptRow, text):
     ensure(c, row['id'])
     if (row['finished'] and row['finished'] < H.shift(H.now(), days=-7) or
             c.execute('SELECT 1 FROM attempt_capture_drops WHERE attempt_id=?', (row['id'],)).fetchone()):
@@ -49,7 +50,7 @@ def keep_stderr(c, row, text):
     return {'kept': True, 'bytes': len(value.encode())}
 
 
-def reason(c, row, outcome, summary=''):
+def reason(c, row: AttemptRow, outcome, summary=''):
     if row['stop_requested'] and outcome != 'completed':
         from .quarantine_stops import stopped_by
         # A quarantine's Stop reads as the quarantine, never as a lost computer or the keeper (Dev 573).

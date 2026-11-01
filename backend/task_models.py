@@ -7,20 +7,22 @@ record can carry only a task effort, only a task context length (`compact_at`), 
 are cleared the same way). Effort is checked against the model that runs: the task model's own at save, and on a
 fallback or an empty model, the model that actually runs (`_fits`). Chat with the bot, and a bot on `session: bot`,
 never changes. A turn that carries a task in its own session (clients/sessions.py, a `task:` key) gets them.
-A check subtask keeps its check model (backend/check_models.py) and the task context length. A task model that cannot
-run here (retired, its provider off, not installed or not signed in on its computer) never holds or fails the turn: it
-runs on the bot's own model, with the task context length and any task effort that model takes, and the run and the
-task say so. Each turn's choice is kept on its attempt (`model_json`) for its run history (usage_records.ran_on).
-A config with no model, effort or context length is the same as the bot."""
+A task's own model (backend/task_run_models.py) comes before the bot's task model, and a check subtask's check model
+(backend/check_models.py) before both; the task context length applies to all of them. A task model that cannot
+run here (retired, its provider off, not installed or not signed in on its computer) never holds or fails the turn:
+the next one in that order runs, and the bot's own model runs last, with the task context length and any task effort
+that model takes, and the run and the task say so. Each turn's choice is kept on its attempt (`model_json`) for its
+run history (usage_records.ran_on). A config with no model, effort or context length is the same as the bot."""
 import json
 
 from clients import sessions
 
 from . import hubdb as H
 from . import providers
+from . import task_run_models
 from .harnesses import runtime_of
 from .readiness import can_run
-from .store import readiness_document
+from .store import Problem, readiness_document
 
 KEY = "task_model"
 
@@ -56,6 +58,50 @@ def of(config):
 def _context(value):
     """A task context length in tokens, or None when unset (the same as the bot's Compact at)."""
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def refuse_retired(choice):
+    """A retired model stays in the catalog for bots already on it; nothing new may pick it."""
+    if choice.get("deprecated"):
+        raise Problem("model", f"{choice['label']} is retired; choose a current model", 422)
+
+
+def harness_of(choice, requested=None, current=None):
+    """The harness a model runs on: the one named (it must run the model), else `current` when it still does, else the
+    model's first."""
+    supported = tuple(choice.get("harnesses") or (choice.get("runtime"),))
+    value = str(requested or "").strip().lower()
+    if requested is not None and value not in supported:
+        raise Problem("harness", "Choose a harness that can run that model", 422)
+    current = str(current or "").strip().lower()
+    return value or (current if current in supported else (supported[0] if supported else ""))
+
+
+def effort_of(choice, requested=None, current=None):
+    """The reasoning effort a model runs at: the one named (it must be one the model takes), else `current` when it
+    still is one, else the model's default."""
+    supported = tuple(choice.get("efforts") or ())
+    value = str(requested or "").strip().lower()
+    if requested is not None and value not in supported:
+        raise Problem("effort", "Choose an effort supported by that model", 422)
+    current = str(current or "").strip().lower()
+    return value or (current if current in supported else choice.get("default_effort") or "")
+
+
+def choice_of(model, effort=None, harness=None, current=None):
+    """A task's model as a request names it, {harness, model, reasoning_effort, runtime}, checked the way a bot's task
+    model is: the model is in the catalog and not retired, the harness runs it, and the effort is one it takes (the
+    model's default when none is named). `current` is the choice a change keeps what it does not name, while the model
+    stays the same. Raises Problem."""
+    row = providers.MODEL_BY_ID.get(model)
+    if not row:
+        raise Problem("model", "Choose one of the supported models", 422)
+    refuse_retired(row)
+    keep = current if current and current.get("model") == row["id"] else {}
+    harness = harness_of(row, harness, keep.get("harness"))
+    return {"harness": harness, "model": row["id"],
+            "reasoning_effort": effort_of(row, effort, keep.get("reasoning_effort")),
+            "runtime": runtime_of(harness) or row["runtime"]}
 
 
 def _fits(model, effort):
@@ -242,22 +288,30 @@ def _effort_on(model, effort):
 
 def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, runner_id, job_id=None, check=None):
     """(config, record) for a claimed turn. `record` is None for a turn the task settings do not cover; otherwise it
-    says what the turn was handed and why: `task` (the task model, or the bot's own model with the task effort or
-    context length), `fallback` (the task model could not run; the bot's own model ran), or `check` (a check subtask
-    kept its check model over the task model). `effort` and `compact_at` in the record are what was applied."""
+    says what the turn was handed and why: `task` (a task model, or the bot's own model with the task effort or
+    context length), `fallback` (a task model could not run; the next one, or the bot's own model, ran), or `check` (a
+    check subtask kept its check model over the task's models). `effort` and `compact_at` in the record are what was
+    applied. The task's own model is tried first, then the bot's task model, then the bot's own model."""
     tasks = stored(followed)
-    if not tasks or not task_keyed(followed, bot, task_id, session_task_id, conversation_id):
+    mine = task_run_models.of(c, task_id) if task_id else None
+    if not (tasks or mine) or not task_keyed(followed, bot, task_id, session_task_id, conversation_id):
         return followed, None
     choice = of(followed)
-    compact_at = tasks["compact_at"]
+    compact_at = tasks["compact_at"] if tasks else None
+    if mine:
+        # Saved with its effort checked against its model; a model that has moved on since does not take it.
+        mine = {**mine, "compact_at": compact_at,
+                "reasoning_effort": mine["reasoning_effort"] if _fits(mine["model"], mine["reasoning_effort"]) else ""}
     if check:
         out = _turn(followed, compact_at=compact_at)
-        if not choice:
+        over = (f"the task's model {label(mine)}" if mine else f"the bot's task model {label(choice)}") \
+            if mine or choice else ""
+        if not over:
             return out, None
-        return out, {"source": "check", "asked": _asked(choice), "effort": "", "compact_at": compact_at,
-                     "note": f"Kept the check model ({check['runtime']}:{check['model']}) over the bot's task "
-                             f"model {label(choice)}{_context_said(compact_at)}"}
-    if not choice:
+        return out, {"source": "check", "asked": _asked(mine or choice), "effort": "", "compact_at": compact_at,
+                     "note": f"Kept the check model ({check['runtime']}:{check['model']}) over {over}"
+                             f"{_context_said(compact_at)}"}
+    if not mine and not choice:
         # The bot's own model runs the task, with its task effort when that model takes it. The task model field goes
         # off this turn: there is no other model to switch to, and the runner reads that field as one.
         own = providers.bot_choice(c, settings, followed)[1]
@@ -269,33 +323,60 @@ def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, 
         note += f" (task effort {dropped} is not one {own or 'its model'} takes)" if dropped else ""
         return out, {"source": "task", "asked": {"model": "", "reasoning_effort": tasks["reasoning_effort"]},
                      "effort": applied, "compact_at": compact_at, "note": note}
-    asked = _asked(choice)
-    why = why_not(c, settings, bot, choice, runner_id, job_id)
-    if why:
-        own_model = providers.bot_choice(c, settings, followed)[1]
-        own = own_model or "the bot's own model"
-        bot_effort = followed.get("reasoning_effort") or ""
-        applied, dropped = _effort_on(own_model, choice["reasoning_effort"])
-        at = f" at task effort {applied}" if applied else (f" ({bot_effort})" if bot_effort else "")
-        note = (f"Ran on the bot's model {own}{at}{_context_said(compact_at)}: task model {label(choice)} could not "
-                f"run ({why})")
-        note += f" (task effort {dropped} is not one {own} takes)" if dropped else ""
-        # A provider thread on the bot's runtime can predate task-model turns on another runtime. Each fallback
-        # starts fresh from the task checkpoint rather than resuming that incomplete history. This flag is only
-        # handed to this turn; it is never stored in the bot's configuration.
-        out = _turn(followed, applied, compact_at)
-        ran_effort = applied or bot_effort
-        return {**out, "task_model_fallback": True}, {"source": "fallback", "asked": asked, "why": why,
-                          "effort": applied, "compact_at": compact_at,
-                          "ran": f"{own}{f' ({ran_effort})' if ran_effort else ''}", "note": note}
-    record = {"source": "task", "asked": asked, "effort": choice["reasoning_effort"], "compact_at": compact_at,
-              "note": f"Ran on the bot's task model {label(choice)}{_context_said(compact_at)}"}
-    own = providers.bot_choice(c, settings, followed)[1]
-    if below_minimum(own, choice) and stakes(c, settings, bot):
+    failed = []
+    for cand in [x for x in (mine, choice) if x]:
+        why = why_not(c, settings, bot, cand, runner_id, job_id)
+        if not why:
+            return _on_task_model(c, settings, bot, followed, cand, cand is mine, compact_at, failed)
+        failed.append((cand, why))
+    return _on_own_model(c, settings, followed, failed, compact_at)
+
+
+def _on_task_model(c, settings, bot, followed, choice, own, compact_at, failed):
+    """The turn on a task model that can run: the task's own, or the bot's task model after the task's own could not."""
+    named = "the task's model" if own else "the bot's task model"
+    note = f"Ran on {named} {label(choice)}{_context_said(compact_at)}"
+    record = {"source": "task", "asked": _asked(choice), "effort": choice["reasoning_effort"], "compact_at": compact_at,
+              "note": note}
+    if failed:
+        # Its run says the task's own model could not run, and what ran instead; the task says so once (handed).
+        record.update(source="fallback", asked=_asked(failed[0][0]), why="; ".join(why for _, why in failed),
+                      ran=label(choice), ran_model=_asked(choice),
+                      note=f"{note}: " + "; ".join(f"task model {label(cand)} could not run ({why})"
+                                                  for cand, why in failed))
+        # As for the bot's own model below: a provider thread on the bot's runtime can predate this turn's model, so the
+        # runner starts the turn in a side session from the task checkpoint instead of resuming that thread.
+        return {**apply(followed, choice), "task_model_fallback": True}, record
+    bot_model = providers.bot_choice(c, settings, followed)[1]
+    if below_minimum(bot_model, choice) and stakes(c, settings, bot):
         # Below the minimum for what this bot does: it runs all the same, and the run says so (task 7a9b30d4).
         record.update(below_minimum=True, note=f"{record['note']}, below the minimum for this bot: a cheaper model "
-                                               f"than its own {own} on a bot that sends, spends, publishes or writes")
+                                               f"than its own {bot_model} on a bot that sends, spends, publishes or "
+                                               "writes")
     return apply(followed, choice), record
+
+
+def _on_own_model(c, settings, followed, failed, compact_at):
+    """The bot's own model runs the turn after every task model failed to run, with the task effort that model takes."""
+    first = failed[0][0]
+    own_model = providers.bot_choice(c, settings, followed)[1]
+    own = own_model or "the bot's own model"
+    bot_effort = followed.get("reasoning_effort") or ""
+    applied, dropped = _effort_on(own_model, first["reasoning_effort"])
+    at = f" at task effort {applied}" if applied else (f" ({bot_effort})" if bot_effort else "")
+    note = (f"Ran on the bot's model {own}{at}{_context_said(compact_at)}: "
+            + "; ".join(f"task model {label(cand)} could not run ({why})" for cand, why in failed))
+    note += f" (task effort {dropped} is not one {own} takes)" if dropped else ""
+    # A provider thread on the bot's runtime can predate task-model turns on another runtime. Each fallback
+    # starts fresh from the task checkpoint rather than resuming that incomplete history. This flag is only
+    # handed to this turn; it is never stored in the bot's configuration.
+    out = _turn(followed, applied, compact_at)
+    ran_effort = applied or bot_effort
+    return {**out, "task_model_fallback": True}, {"source": "fallback", "asked": _asked(first),
+                                                  "why": "; ".join(why for _, why in failed),
+                                                  "effort": applied, "compact_at": compact_at,
+                                                  "ran": f"{own}{f' ({ran_effort})' if ran_effort else ''}",
+                                                  "note": note}
 
 
 def _asked(choice):
@@ -317,11 +398,23 @@ def handed(c, attempt_id, task_id, record):
                       record.get("ran") or label(record["asked"]), record["note"])
 
 
-def handed_out(c, attempt_id):
-    """The task model the claim handed this attempt, {runtime, model, ...}, or None when it ran on another. A task with
-    only an effort or context length runs on the bot's own model, so it is None too."""
+def _record(c, attempt_id):
     row = c.execute("SELECT model_json FROM attempts WHERE id=?", (attempt_id,)).fetchone()
     record = H._json(row[0]) if row and row[0] else None
-    if not isinstance(record, dict) or record.get("source") != "task" or not (record.get("asked") or {}).get("model"):
-        return None
-    return record["asked"]
+    return record if isinstance(record, dict) else None
+
+
+def handed_out(c, attempt_id):
+    """The task model the claim handed this attempt, {runtime, model, ...}, or None when it ran on another. A task with
+    only an effort or context length runs on the bot's own model, so it is None too. A fallback that ran on the bot's
+    task model names that model (`ran_model`)."""
+    record = _record(c, attempt_id)
+    ran = (record or {}).get("ran_model") or ((record or {}).get("asked") if (record or {}).get("source") == "task"
+                                              else None)
+    return ran if isinstance(ran, dict) and ran.get("model") else None
+
+
+def off_bot_model(c, attempt_id):
+    """Whether the attempt ran on a task model or a check model rather than the bot's own: then the bot's own model
+    being moved says nothing about the turn (execution.ran_another_model)."""
+    return (_record(c, attempt_id) or {}).get("source") == "check" or bool(handed_out(c, attempt_id))

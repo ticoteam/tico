@@ -277,15 +277,21 @@ def cursor():
 
 
 def pi():
-    sys.stdin.read()
-    text = probe(None)
-    message = {"role": "assistant", "content": [{"type": "text", "text": text}], "stopReason": "stop",
-               "usage": {"input": 1, "output": 1, "totalTokens": 2}}
-    say({"type": "session", "version": 3, "id": str(uuid.uuid4()), "cwd": os.getcwd()})
-    say({"type": "agent_start"})
-    say({"type": "message_end", "message": message})
-    say({"type": "turn_end", "message": message, "toolResults": []})
-    say({"type": "agent_end", "messages": []})
+    # `pi --mode rpc`: one process per thread, a command per line, a response to each; a prompt's run ends at agent_settled
+    for msg in lines():
+        reply = {"type": "response", "id": msg.get("id"), "command": msg.get("type"), "success": True}
+        if msg.get("type") != "prompt":
+            say(reply)
+            continue
+        say({**reply, "data": {"disposition": "started"}})
+        text = probe(None)
+        message = {"role": "assistant", "content": [{"type": "text", "text": text}], "stopReason": "stop",
+                   "usage": {"input": 1, "output": 1, "totalTokens": 2}}
+        say({"type": "agent_start"})
+        say({"type": "message_end", "message": message})
+        say({"type": "turn_end", "message": message, "toolResults": []})
+        say({"type": "agent_end", "messages": []})
+        say({"type": "agent_settled", "aborted": False})
 
 
 def grok():

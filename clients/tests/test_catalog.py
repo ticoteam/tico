@@ -168,8 +168,8 @@ class StarterBots(unittest.TestCase):
             self.assertNotIn("approval_required", card, f"{where}: sending uses outbound_send")
             manifest = yaml.safe_load((folder / "bot.yaml").read_text())
             self.assertIs(manifest["outbound_send"], False, where)
-            routines = validate_schedules(manifest["routines"], lambda rel: (folder / rel).read_text())
-            self.assertTrue(routines and all(r["enabled"] is False for r in routines), where)
+            routines = validate_schedules(manifest.get("routines") or [], lambda rel: (folder / rel).read_text())
+            self.assertTrue(all(r["enabled"] is False for r in routines), where)     # a bot with no routines has none to arm
             for access in manifest["tools"]:
                 self.assertFalse({"send", "write", "modify", "delete"} & set(access.get("can", [])), where)
 

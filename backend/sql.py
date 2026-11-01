@@ -41,7 +41,7 @@ TABLE_FUNCTIONS = {"json_each", "json_tree"}
 SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_attempt",
                                 "slack_ts", "created", "updated"}}
 # Columns nobody reads through SQL. Tables not named in `guarded` (credentials, credential_keys,
-# credential_grants, idempotency, runners, enrollments, session_epochs, bot_session_epochs, settings_changes,
+# credential_grants, credential_uses, idempotency, runners, enrollments, session_epochs, bot_session_epochs, settings_changes,
 # backup_verified_blobs, _litestream_*, sqlite_* except sqlite_master) are denied outright.
 HIDDEN = {"task_requesters": {"token_hash"}, "bots": {"token_hash", "cwd", "thread_id"}, "attempts": {"token_hash"},
           "service_jobs": {"token_hash"}}
@@ -52,6 +52,29 @@ MASKED = {"bot_control": {"claim_task": "CASE WHEN source.claim_task IS NULL THE
                                         "WHEN source.claim_task IN (SELECT id FROM tasks) THEN source.claim_task "
                                         "ELSE '' END"}}
 DENIED_FUNCTIONS = {"load_extension"}
+
+
+def unsettled_watched(c, inner):
+    """The ids of the live runs of bots org rules apply to, as a subquery over the inner attempts view, or "" when no
+    rule watches a bot: their reply text stays out until it is checked and delivered, as their room, steps, log, events
+    and capture keep it (backend/org_rule_check.py hides_run). A late result filed against an expired run included."""
+    from .org_rule_check import UNSETTLED, watched_bots
+    watched = watched_bots(c)
+    return (f"SELECT id FROM {inner('attempts')} WHERE bot IN {qlist(watched)} AND state IN {qlist(UNSETTLED)}"
+            if watched else "")
+
+
+def live_masks(unsettled):
+    """MASKED for one request: a watched live run's reply-bearing columns read NULL (its result's `text` alone is
+    removed, so the rest of the result stays readable); every other column of the run reads as it is."""
+    if not unsettled:
+        return {}
+    hidden = lambda column: f"CASE WHEN source.id IN ({unsettled}) THEN NULL ELSE source.{column} END"  # noqa: E731
+    return {"attempts": {"final_text": hidden("final_text"),
+                         "result_json": f"CASE WHEN source.id NOT IN ({unsettled}) THEN source.result_json "
+                                        "WHEN json_valid(source.result_json) THEN json_remove(source.result_json,'$.text') "
+                                        "ELSE NULL END"},
+            "turns": {"summary": hidden("summary")}}
 # Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}`, the
 # caller's own filtered view of each, and `{all_table}`, its unfiltered inner view). A total adds up only rows the
 # caller may read: a bucket of one run would otherwise tell them that run exists, what it cost and whether it acted.
@@ -235,8 +258,9 @@ def guarded(c, auth, who, inner, function, columns=None):
                          f"WHERE attempt_id={q(who.attempt_id)}) "
                          "OR (kind='task' AND task_id IS NOT NULL AND task_id IN (SELECT id FROM tasks))")
     else:
-        shared = [row["slug"] for row in H.bots(c) if row["slug"] not in hidden
-                  and rooms.shared_member(c, auth, who.actor, row["slug"])]
+        visible = [row["slug"] for row in H.bots(c) if row["slug"] not in hidden]
+        member = rooms.shared_member_bots(c, auth, who.actor, visible)
+        shared = [slug for slug in visible if slug in member]
         room_bot = ("COALESCE(NULLIF(substr(room_key,1,instr(room_key||':',':')-1),''),"
                     "(SELECT substr(value,5) FROM json_each(participants_json) WHERE value LIKE 'bot:%' LIMIT 1))")
         first_human = "(SELECT value FROM json_each(participants_json) WHERE value LIKE 'human:%' LIMIT 1)"
@@ -274,6 +298,9 @@ def guarded(c, auth, who, inner, function, columns=None):
     by_attempt = "EXISTS (SELECT 1 FROM attempts readable WHERE readable.id=source.attempt_id)"
     by_job = "EXISTS (SELECT 1 FROM jobs readable WHERE readable.id=source.job_id)"
     by_meeting = "meeting_id IN (SELECT id FROM meetings)"
+    # A live run of a bot org rules apply to keeps its reply text out until it is checked and delivered (live_masks
+    # hides its reply columns): its tool steps stay readable.
+    unsettled = unsettled_watched(c, inner)
     mine = f"actor={me}" if bot else "1"
     person = H.actor_id(who.actor)
     # Meetings are the company's; typed notes are their owner's (backend/media.py). A private
@@ -326,10 +353,11 @@ def guarded(c, auth, who, inner, function, columns=None):
         "schedule_config": by_schedule, "schedule_occurrences": f"{by_schedule} AND (task_id IS NULL OR {by_task})",
         "turns": f"{bots_visible('bot')} AND (message_id IS NULL OR {by_message}) AND "
                  f"(task_id IS NULL OR {by_task}) AND " + attempt_gate,
-        "deltas": "turn_id IN (SELECT id FROM turns)",
+        "deltas": "turn_id IN (SELECT id FROM turns)" + (f" AND turn_id NOT IN ({unsettled})" if unsettled else ""),
         "jobs": f"{bots_visible('bot')} AND {by_message}",
         "attempts": by_job + " AND " + attempt_gate, "job_recovery": by_job + " AND " + by_attempt,
-        "attempt_events": by_attempt + " AND " + content_gate(("payload_json",)),
+        "attempt_events": by_attempt + " AND " + content_gate(("payload_json",)) + (
+            f" AND NOT (kind IN ('delta','message') AND attempt_id IN ({unsettled}))" if unsettled else ""),
         "attempt_inputs": by_attempt, "attempt_conversations": by_attempt,
         "bot_transition_checkpoints": "conversation_id IN (SELECT id FROM conversations)",
         "task_types": "1", "task_steps": "1",
@@ -345,7 +373,8 @@ def guarded(c, auth, who, inner, function, columns=None):
         # A strategy proposal carries the unpublished draft or every affected goal's title (goal_routes.strategy_visible):
         # the owner's, and the bot's that proposed it.
         "goal_proposals": "(goal_id IS NULL OR goal_id IN (SELECT id FROM goals)) AND " + (
-            "1" if owner else f"(kind NOT IN ('strategy_draft','strategy_realign') OR proposed_by={me})"),
+            "1" if owner else f"(kind NOT IN ('strategy_draft','strategy_realign','brand_draft','gtm_draft') "
+                              f"OR proposed_by={me})"),
         "goal_asks": "task_id IN (SELECT id FROM tasks)",
         # The company's Vision and Description and their history: everyone's to read, like the company's goals.
         "company_profile": "id IS NOT NULL", "company_events": "id IS NOT NULL",
@@ -612,6 +641,15 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             def read_cache(self):
                 return conn.read_cache
 
+            # The store's shared row cache (row_clock.parties and access rows). This connection only reads and never
+            # publishes, so it shares rows at the clock its own snapshot reads, like a pooled read connection does.
+            row_cache = getattr(c, "row_cache", None)
+            write_transaction = False
+
+            @property
+            def provenance_changes(self):
+                return conn.total_changes
+
             @property
             def in_transaction(self):
                 return conn.in_transaction
@@ -660,8 +698,9 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 2000)
         tables = materialize(conn, index, tables, inner, function, private)
         conn.set_progress_handler(None, 0)
+        masks = {**MASKED, **live_masks(unsettled_watched(conn, inner))}
         for table, (predicate, _) in tables.items():
-            masked = MASKED.get(table, {})
+            masked = masks.get(table, {})
             projection = ",".join(f'({masked[name]}) AS "{name}"' if name in masked else f'source."{name}"'
                                   for name in exposed[table]) if masked else "*"
             conn.execute(f'CREATE TEMP VIEW "{table}" AS SELECT {projection} FROM {inner(table)} AS source WHERE {predicate}')

@@ -39,6 +39,7 @@ FIELDS = {
     "isolated_user": (bool, False),
     "turn_sign_in": (str, ""),
     "compaction": (bool, False),
+    "compaction_events": (bool, False),
     "resume_command": (str, ""),
     "model_list": (str, ""),
     "model_list_args": (list, []),

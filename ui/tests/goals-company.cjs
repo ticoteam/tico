@@ -1,7 +1,7 @@
-// The Strategy line at the top of Goals and each goal's Why line (ui/goals-kpis.js goalStrategyHtml, goalWhyHtml): with no
-// published strategy the owner gets a link to write it on Strategy and anyone else gets nothing; once published everyone
-// reads its version and summary, linking to Strategy. A goal with no Why says "Not tied to the vision"; the CEO Bot's
-// proposal is accepted as it is or edited, and an Accept on a line the CEO Bot has since replaced is refused and shows
+// No Strategy line at the top of Goals (Strategy is a tab of its own), and each goal's Why line (ui/goals-kpis.js
+// goalWhyHtml). A goal with no Why says "Not tied to the vision"; the Strategy Bot's
+// proposal is accepted as it is or edited, and an Accept on a line the Strategy Bot has since replaced is refused and
+// shows
 // the new one. At level 2 a recovery in Needs you is approved one option at a time.
 // Fixtures only.
 const {chromium} = require('playwright');
@@ -12,7 +12,7 @@ const {unrouted} = require('./support/routes.cjs');
 
 const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
-  bot('goal-manager', 'CEO Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
+  bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
 
 async function open(browser, {role = 'owner', strategy = null, needs = []} = {}) {
   const server = {};
@@ -72,7 +72,8 @@ async function open(browser, {role = 'owner', strategy = null, needs = []} = {})
   await page.locator('#goal-tree .gt-row').first().waitFor();
   return {page, errors, posted, state, server};
 }
-// The CEO Bot proposes a new line for a goal: a new proposal, and the one waiting is closed (backend/goals.py propose).
+// The Strategy Bot proposes a new line for a goal: a new proposal, and the one waiting is closed (backend/goals.py
+// propose).
 function replaceWhy(state, goalId, why) {
   for (const p of state.proposals) if (p.goal_id === goalId && p.kind === 'goal_why' && p.status === 'pending') p.status = 'rejected';
   const p = {...state.proposals.find(x => x.goal_id === goalId), id: 'p-why-' + state.proposals.length, payload: {why}, status: 'pending'};
@@ -80,7 +81,7 @@ function replaceWhy(state, goalId, why) {
   return p;
 }
 const panelFor = async (page, owner) => {
-  await page.locator(`#goal-tree .gt-row[data-owner="${owner}"]`).first().click();
+  await page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont) .gt-name`).click();
   await page.locator('#goal-panel[open] .gp-body').waitFor();
   return page.locator('#goal-panel');
 };
@@ -88,21 +89,17 @@ const panelFor = async (page, owner) => {
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    // No strategy yet: the owner gets one line linking to Strategy, above the goals; a member gets nothing.
+    // Goals is a Strategy tab: no Strategy line above the goals, with or without a strategy.
     {
       const {page, errors} = await open(browser);
-      const line = page.locator('#goal-strategy');
-      assert.match(await line.innerText(), /^No strategy yet\s*·?\s*Write it$/);
-      assert.equal(await line.getAttribute('href'), '#/strategy');
-      assert.ok(await page.evaluate(() => Boolean(document.getElementById('goal-strategy').compareDocumentPosition(document.getElementById('goal-tree')) & Node.DOCUMENT_POSITION_FOLLOWING)),
-        'the Strategy line is above the goals');
+      assert.equal(await page.locator('#goal-strategy').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Published: an admin or a member reads its version and summary; a member sees the CEO Bot's proposal with no buttons.
+    // A member sees the Strategy Bot's proposal with no buttons.
     for (const role of ['admin', 'member']) {
       const {page, errors} = await open(browser, {role, strategy: {n: 3, summary: 'Every small landlord runs their rentals on Tico.', bets: []}});
-      assert.match(await page.locator('#goal-strategy').innerText(), /^Strategy v3\s*·?\s*Every small landlord runs their rentals on Tico\.$/);
+      assert.equal(await page.locator('#goal-strategy').count(), 0);
       if (role === 'member') {
         const panel = await panelFor(page, 'company');
         assert.equal(await panel.locator('[data-why-prop] [data-why-accept]').count(), 0);
@@ -118,7 +115,7 @@ const panelFor = async (page, owner) => {
       const why = panel.locator('[data-why="g-top"]');
       assert.equal(await why.innerText(), 'Not tied to the vision', 'a note, not an error, and no Write button while a proposal waits');
       assert.equal(await why.locator('.err').count(), 0);
-      assert.match(await panel.locator('[data-why-prop="p-why"]').innerText(), /CEO Bot proposes More rentals is the vision's first step\./);
+      assert.match(await panel.locator('[data-why-prop="p-why"]').innerText(), /Strategy Bot proposes More rentals is the vision's first step\./);
       assert.equal(await panel.locator('.kpi-props [data-proposal="p-why"]').count(), 0, 'shown once, as the Why line');
       // Edit, then accept as edited.
       await panel.locator('[data-why-prop="p-why"] [data-why-edit]').click();
@@ -154,7 +151,7 @@ const panelFor = async (page, owner) => {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // The owner reads one line; the CEO Bot replaces it before they click. Accept on the first is refused (nothing
+    // The owner reads one line; the Strategy Bot replaces it before they click. Accept on the first is refused (nothing
     // is saved as them) and the panel shows the line now waiting, which they accept; an edit typed against the old
     // line keeps their words when it is refused.
     {
@@ -185,13 +182,13 @@ const panelFor = async (page, owner) => {
     // Needs you (backend/goal_asks.py): the vision ask and the bundled Why ask read as themselves, not as empty KPI
     // rows; the vision row takes the owner to Strategy, a goal in the Why row opens its panel at that goal.
     {
-      const needs = [{kind: 'vision', task: {id: 't-vision', title: 'Tell your CEO Bot what this company is for', status: 'open'}},
+      const needs = [{kind: 'vision', task: {id: 't-vision', title: 'Say what this company is for', status: 'open'}},
         {kind: 'why', goals: [{goal_id: 'g-top', goal_title: 'Grow rentals 30%', why: 'x'}, {goal_id: 'g-cmo', goal_title: 'Double organic signups', why: 'y'}],
          task: {id: 't-why', title: 'These goals need a Why line', status: 'open'}}];
       const {page, errors} = await open(browser, {needs});
       const rows = page.locator('#goal-needs li');
       assert.equal(await rows.count(), 2);
-      assert.match(await rows.nth(0).innerText(), /^Tell your CEO Bot what this company is for/);
+      assert.match(await rows.nth(0).innerText(), /^Say what this company is for/);
       assert.match(await rows.nth(1).innerText(), /These goals need a Why line: Grow rentals 30%, Double organic signups/);
       assert.equal(await page.locator('#goal-needs [data-kpi]').count(), 0);
       await rows.nth(1).locator('[data-need-why-goal="g-cmo"]').waitFor();
@@ -205,7 +202,8 @@ const panelFor = async (page, owner) => {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Level 2 (spec test 8): the CEO Bot's recovery for a red goal shows its evidence, each option in plain words with
+    // Level 2 (spec test 8): the Strategy Bot's recovery for a red goal shows its evidence, each option in plain words
+    // with
     // its pick marked and what can't happen now; Approve on an option sends exactly that option.
     {
       const recovery = {id: 'p-rec', kind: 'recovery', goal_id: 'g-cmo', kpi_id: null, status: 'pending', reason: 'Red two weeks running.',
@@ -221,7 +219,7 @@ const panelFor = async (page, owner) => {
       const text = await row.innerText();
       assert.match(text, /A recovery · Double organic signups/);
       assert.match(text, /Signups 40 against 120\./);
-      assert.match(text, /Push SEO first · the CEO Bot's pick/);
+      assert.match(text, /Push SEO first · recommended/);
       assert.match(text, /Head of Marketing is paused right now; this part would come back to you/);
       assert.equal(await row.locator('[data-option="1"]').getAttribute('class'), 'primary');
       await Promise.all([page.waitForResponse(r => r.url().endsWith('/proposals/p-rec/decide')), row.locator('[data-option="0"]').click()]);

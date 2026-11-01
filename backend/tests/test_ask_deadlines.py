@@ -125,3 +125,20 @@ def test_a_bot_puts_its_default_on_a_question_and_a_past_or_far_deadline_is_refu
                     "if_no_answer": {"do": "Yes", "kind": "reversible", "by": "2099-01-02T00:00:00Z"}},
                     token=attempt["token"])
     assert err and "more than 14 days" in str(out)
+
+
+def test_a_due_routine_occurrence_survives_the_sweep_and_an_ordinary_handed_task_does_not(api):
+    # A bot hands Ana a task; it is past the team's days. A due-date routine's occurrence she owns is the same kind of
+    # task, but its day is its deadline, so the sweep leaves it open whoever owns it now.
+    old = H.shift(H.now(), days=-(ask_deadlines.EXPIRE_DAYS + 5))
+    with api.app.state.store.transaction() as c:
+        plain = H.task_create(c, "bot:ops", "Send the form", "x", "human:ana", lint=False)
+        occurrence = H.task_create(c, "bot:ops", "Payroll", "x", "human:ana", lint=False,
+                                   occurrence="auto_1:2026-01-02")
+        for task in (plain, occurrence):
+            c.execute("UPDATE tasks SET created=? WHERE id=?", (old, task["id"]))
+        done = ask_deadlines.sweep(c)
+    assert done["closed"] == [plain["id"]]
+    with api.app.state.store.read() as c:
+        assert H.task(c, occurrence["id"])["status"] == "open"
+        assert H.task(c, occurrence["id"])["occurrence"] == "auto_1:2026-01-02"

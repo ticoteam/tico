@@ -12,7 +12,13 @@ from . import profiles
 FOLLOWED = ("model", "runtime", "harness", "reasoning_effort", "compact_at",
             "session", "subtask_session", "task_goal", "review_model", "fallback",
             "task_model",
-            "max_run_minutes", "bot_contact", "private_tasks_default")
+            "max_run_minutes", "bot_contact", "private_tasks_default", "stateless")
+
+
+def _as_followed(original):
+    """The original's config as a branch takes it. FOLLOWED copies only what the original states, so an original that is
+    stateless by its template (hubdb.stateless) is marked stateless here, and its branches stay stateless too."""
+    return {**original, "stateless": True} if H.stateless(original) else original
 
 
 def _json(value):
@@ -36,7 +42,9 @@ def source_of(config):
 
 def follow(c, bot, config, rows=None):
     """A branch's config with the original's behaviour in it; any other bot's config as it is.
-    `rows(slug)` answers from bot_config rows already read (backend/bot_rows.py)."""
+    `rows(slug)` answers from bot_config rows already read (backend/bot_rows.py). A stateless bot's config carries
+    `stateless` whether or not its template is in the row (H.with_stateless)."""
+    config = H.with_stateless(config)
     source = source_of(config)
     if not source:
         return config
@@ -47,6 +55,7 @@ def follow(c, bot, config, rows=None):
         original = declared(c, source)
     if not original:
         return config
+    original = _as_followed(original)
     merged = dict(config)
     for key in FOLLOWED:
         if key in original:
@@ -76,6 +85,13 @@ def refuse_copy(c, bot):
     if source:
         raise Problem("shared_copy", f"{bot} is a branch of {source} and follows it; "
                       f"change {source} instead", 409)
+
+
+def model_bot(c, bot):
+    """The bot whose model decides who may choose a model its tasks run on: a branch's is its original's, since it
+    follows the original's model (FOLLOWED). Its tasks' own choices are still the task's, so only the rights come from
+    the original."""
+    return source_of(declared(c, bot)) or bot
 
 
 def copy_slug(source, person):
@@ -130,7 +146,7 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
                   "host": "keeper", "tasks": "hub", "thread_mode": "personal",
                   "shared_from": source, "model_managed_by": "cloud"}
         profiles.apply(config, profiles.DOER, {})
-        config.update({key: original[key] for key in FOLLOWED if key in original})
+        config.update({key: value for key, value in _as_followed(original).items() if key in FOLLOWED})
         team = settings_admin._team(c, slug, config)
         now = H.now()
         c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
@@ -303,4 +319,6 @@ def retire_assignments(c):
                 except H.Refused:
                     pass
             c.execute("UPDATE tasks SET owner=?,updated=? WHERE id=?", (owner, H.now(), task_id))
+            from . import task_run_models
+            task_run_models.moved(c, H.KEEPER, task_id)
             H._wake(c, H.task(c, task_id), owner, f"Open: {title}", {"news": "assignment"})
