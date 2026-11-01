@@ -48,7 +48,7 @@ MEMORY_HOLD = 'computer busy: memory'
 NOT_REPORTING = 'computer not reporting'
 
 
-def computer_hold(c, runner_id, now=None):
+def computer_hold(c, runner_id, now=None, status=None):
     """Why this computer holds a bot's new start, as (wait reason, words for people), or None. Diagnostics on only.
 
     - Sustained CPU or memory overload (performance.load_status): "computer busy", as before.
@@ -58,9 +58,10 @@ def computer_hold(c, runner_id, now=None):
       the state its newest sample set (performance.ingest), so the queue does not flap.
     A person's own message skips this at each caller, as it skips the overload hold."""
     from .performance import MEM_HOLD_AT, MEM_HOLD_CLEAR, load_status, on
-    if not on(c, runner_id):
-        return None
-    status = load_status(c, runner_id, now)
+    if status is None:
+        if not on(c, runner_id):
+            return None
+        status = load_status(c, runner_id, now)
     latest = status['latest_sample']
     if latest is None:
         return None
@@ -258,15 +259,17 @@ def summary(c, runner_id, settings, default=None, *, classify=True):
                  lambda: _summaries(c, (runner_id,), settings, default, classify)[runner_id])
 
 
-def summaries(c, runner_ids, settings, default=None):
+def summaries(c, runner_ids, settings, default=None, *, classify=True):
     """`summary` for many computers in two scans. Each computer's counts are the ones `summary` would build
-    on its own, including the same claim refusal for each queued bot."""
+    on its own, including the same claim refusal for each queued bot (unless `classify=False`, as `summary`)."""
     from .read_cache import value
     ids = tuple(sorted({rid for rid in runner_ids if rid}))
-    return value(c, ("start_summaries", ids), lambda: _summaries(c, ids, settings, default))
+    return value(c, ("start_summaries", ids, bool(classify)),
+                 lambda: _summaries(c, ids, settings, default, classify))
 
 
 def _summaries(c, runner_ids, settings, default=None, classify=True):
+    from . import performance
     out: dict[str, dict[str, Any]] = {rid: dict(running=0, starting=0, waiting=0, queued=0,
                                                 start_seconds=START_SECONDS) for rid in runner_ids}
     groups = {rid: {} for rid in runner_ids}
@@ -296,6 +299,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
     from .execution import claim_refusal
     from .store import readiness_document
     runners = {row['id']: row for row in c.execute(f"SELECT * FROM runners WHERE id IN ({marks})", runner_ids)}
+    statuses = performance.load_statuses(c, runner_ids)
     holds = {}      # a computer's hold, asked once and only for a computer with queued work
     reasons = {'cooling_off': 'quota', 'limit': 'spending limit', 'not_ready': 'computer readiness',
                'readiness_unknown': 'computer readiness', 'sign_in_rejected': 'sign-in',
@@ -315,7 +319,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
             why = reasons.get(refused, 'pre-start requirements') if refused else ''
         if not why:
             if rid not in holds:
-                holds[rid] = computer_hold(c, rid)
+                holds[rid] = computer_hold(c, rid, status=statuses[rid])
             why = holds[rid][0] if holds[rid] else ''
         if why:
             add(rid, why, row['n'], row['oldest'])

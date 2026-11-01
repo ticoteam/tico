@@ -2604,9 +2604,31 @@ QUARANTINE_COOLDOWN_S = 3600
 COUNT_QUARANTINE = re.compile(r"\d+ (?:refused writes|repeated refusals|refusals) today")   # the first: before #287
 
 
+# A bot's latest quarantine event, and when it was last quarantined: the statements the readers below run, named so a
+# batch can seed them (prime_quarantines).
+QUARANTINE_DETAIL_SQL = "SELECT detail_json FROM events WHERE action='quarantine' AND target=? ORDER BY ts DESC, rowid DESC LIMIT 1"
+QUARANTINE_SINCE_SQL = "SELECT max(ts) AS ts FROM events WHERE action='quarantine' AND target=?"
+
+
+def prime_quarantines(conn, slugs):
+    """The latest quarantine event and last quarantine time of every bot in `slugs`, in two reads for all of them
+    (per 500 bots): a loop of explanations then reads none of them again. Outside a snapshot nothing is kept."""
+    from .read_cache import prime
+    actors = sorted({bot_actor(s) for s in slugs if s})
+    for part in chunks(actors):
+        marks = ",".join("?" * len(part))
+        latest = {r["target"]: r for r in conn.execute(
+            "SELECT target, detail_json FROM (SELECT target, detail_json, row_number() OVER (PARTITION BY target "
+            "ORDER BY ts DESC, rowid DESC) AS n FROM events WHERE action='quarantine' AND target IN (" + marks + ")) WHERE n=1", part)}
+        since = {r["target"]: r["ts"] for r in conn.execute(
+            "SELECT target, max(ts) AS ts FROM events WHERE action='quarantine' AND target IN (" + marks + ") GROUP BY target",
+            part)}
+        prime(conn, QUARANTINE_DETAIL_SQL, {(a,): latest.get(a) for a in part})
+        prime(conn, QUARANTINE_SINCE_SQL, {(a,): {"ts": since.get(a)} for a in part})
+
+
 def quarantine_reason(conn, slug):
-    row = _one(conn, "SELECT detail_json FROM events WHERE action='quarantine' AND target=? "
-                     "ORDER BY ts DESC LIMIT 1", (bot_actor(slug),))
+    row = _one(conn, QUARANTINE_DETAIL_SQL, (bot_actor(slug),))
     return ((_json(row["detail_json"], {}) or {}) if row else {}).get("reason") or ""
 
 
@@ -2622,8 +2644,7 @@ LEGACY_ESCAPE = re.compile(r"escape: the (.+?) (?:payload )?reaches outside the 
 def quarantine_review(conn, slug):
     """What a person resuming an escape quarantine reads: what was being written (`what`), what the check
     matched (`found`), the refused words with credential values masked (`preview`) and the task (`task`)."""
-    row = _one(conn, "SELECT detail_json FROM events WHERE action='quarantine' AND target=? "
-                     "ORDER BY ts DESC LIMIT 1", (bot_actor(slug),))
+    row = _one(conn, QUARANTINE_DETAIL_SQL, (bot_actor(slug),))
     detail = (_json(row["detail_json"], {}) or {}) if row else {}
     if detail.get("review"):
         return detail["review"]
@@ -2636,8 +2657,7 @@ def quarantine_review(conn, slug):
 
 def quarantine_resumes(conn, slug):
     """Since when a bot is quarantined, whether it lifts by itself (a refusal count), and when (`resumes_at`)."""
-    since = _one(conn, "SELECT max(ts) AS ts FROM events WHERE action='quarantine' AND target=?",
-                 (bot_actor(slug),))["ts"]
+    since = _one(conn, QUARANTINE_SINCE_SQL, (bot_actor(slug),))["ts"]
     auto = not quarantine_is_escape(conn, slug)
     return {"since": since, "auto": auto,
             "resumes_at": shift(since, seconds=QUARANTINE_COOLDOWN_S) if auto and since else None}
@@ -2684,8 +2704,7 @@ def quarantine_lifted_note(conn, slug):
     """When a quarantine lifts (the cooldown, or a person or BotOps clearing it), a quiet note for the bot's next
     run: the refusal that stopped it and not to retry it. While quarantined nobody could tell it why, and a bot
     back from a cooldown retried the same refused write."""
-    row = _one(conn, "SELECT detail_json FROM events WHERE action='quarantine' AND target=? "
-                     "ORDER BY ts DESC LIMIT 1", (bot_actor(slug),))
+    row = _one(conn, QUARANTINE_DETAIL_SQL, (bot_actor(slug),))
     detail = (_json(row["detail_json"], {}) or {}) if row else {}
     review, refused = quarantine_review(conn, slug) or {}, detail.get("refusal") or {}
     if review.get("what"):
