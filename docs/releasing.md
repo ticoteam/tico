@@ -6,7 +6,7 @@ builds nothing: it takes that run's runner binaries and image digests, builds th
 GitHub release. Running installations look for that release to show
 "New version" in the sidebar. A release is not held for its notes: the release command tags the validated commit,
 and once the release is published it files one task for the Technical Writer to write that version's section of
-[CHANGELOG.md](../CHANGELOG.md). The installed `CHANGELOG.md` supplies the in-app, API and MCP product changelog,
+[CHANGELOG.md](../CHANGELOG.md). The installed `CHANGELOG.md` and `docs/history/` supply the in-app, API and MCP product changelog,
 so a release's notes reach users with the next build that contains them. No separate product announcement is required.
 Don't edit CHANGELOG.md in a PR. The notes land as a CHANGELOG-only pull request that needs review at its final head,
 and each notes commit needs a `Changelog-Release: vX.Y.Z` trailer for each version section it changes; preserve the
@@ -330,6 +330,9 @@ hosted gate.
    `git tag vX.Y.Z <validated-commit> && git push origin vX.Y.Z`.
 3. Once the release is published, file the Technical Writer's notes task. The notes go in `CHANGELOG.md` under
    `## [X.Y.Z] - YYYY-MM-DD`, below a fresh empty `## [Unreleased]`, with the link references at the bottom updated.
+   `CHANGELOG.md` keeps only the current minor. When a new minor starts, move the previous minor's sections and their
+   link references to `docs/history/CHANGELOG-<minor>.md` (one file per minor), and keep the one-line pointer to them
+   last in `CHANGELOG.md`, after the link references.
 
 The workflow then:
 

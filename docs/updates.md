@@ -19,7 +19,7 @@ A new company starts caught up: when the owner completes Finish setup, every rel
 read for them, so a fresh install shows no count on **What's new**. Later releases count as usual, everyone else keeps
 their own read status, and completing setup a second time changes nothing.
 
-Release entries come directly from the installed `CHANGELOG.md`. They work offline and require
+Release entries come directly from the installed `CHANGELOG.md` and `docs/history/` (the older minors). They work offline and require
 neither a Git checkout nor manual announcement posting. Unreleased notes and releases newer than
 the running server are excluded. The owner can still publish team product announcements.
 

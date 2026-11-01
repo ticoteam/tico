@@ -13,7 +13,7 @@ from backend.store import H
 from backend.tests.test_api import api, headers  # noqa: F401
 from backend.tests.test_mcp import call, rpc
 from backend.tests.test_openapi_v2 import conforms
-from scripts.changelog_notes import section
+from scripts.changelog_notes import first_notes, section
 
 ROOT = Path(__file__).resolve().parents[2]
 # Shipped notes corrected on purpose after their tag (a renamed bot, a moved docs anchor) are compared with the
@@ -64,6 +64,49 @@ def test_prerelease_notes_cli_uses_matching_base_and_refuses_missing_notes(tmp_p
     assert candidate.returncode == 0 and candidate.stdout == "- This release.\n" and not candidate.stderr
     missing = extract("v1.2.4-rc.1")
     assert missing.returncode != 0 and not missing.stdout and "has no notes" in missing.stderr
+
+
+def test_a_line_after_the_link_references_is_not_part_of_the_last_release():
+    # The pointer to docs/history sits after the link references at the bottom of CHANGELOG.md.
+    text = ("## [0.4.0] - 2026-10-02\n- Kept.\n\n[0.4.0]: https://github.com/ticoteam/tico/compare/v0.3.75...v0.4.0\n\n"
+            "Older releases: [0.3](docs/history/CHANGELOG-0.3.md).\n")
+    assert section(text, "v0.4.0") == "- Kept."
+
+
+def test_release_list_reads_older_minors_from_docs_history(monkeypatch, tmp_path):
+    monkeypatch.setenv("TICO_VERSION", "0.4.1")
+    monkeypatch.setattr(releases, "ROOT", tmp_path)
+    (tmp_path / "docs" / "history").mkdir(parents=True)
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\n## [0.4.1] - 2026-10-02\n- Current.\n\n"
+                                           "[0.4.1]: https://github.com/ticoteam/tico/compare/v0.4.0...v0.4.1\n\n"
+                                           "Older releases: [0.3](docs/history/CHANGELOG-0.3.md).\n")
+    (tmp_path / "docs" / "history" / "CHANGELOG-0.2.md").write_text("# Changelog 0.2\n\n## 0.2.0 - 2026-09-29\n- Two.\n")
+    (tmp_path / "docs" / "history" / "CHANGELOG-0.3.md").write_text(
+        "# Changelog 0.3\n\n## [0.3.10] - 2026-10-02\n- Ten.\n\n## [0.3.9] - 2026-10-02\n- Nine.\n")
+    entries = changelog.release_entries()
+    assert [entry["version"] for entry in entries] == ["0.4.1", "0.3.10", "0.3.9", "0.2.0"]
+    assert entries[1]["bullets"] == ["Ten."]
+
+
+def test_released_edits_reads_a_section_moved_to_docs_history_against_its_tag(tmp_path):
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@acme.example", *args],
+                              capture_output=True, text=True, check=True).stdout
+    shipped = "## [0.3.5] - 2026-10-02\n- Five.\n"
+    link = "\n[0.3.5]: https://github.com/acme/app/compare/v0.3.4...v0.3.5\n"
+    git("init", "-q", "-b", "main")
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\n" + shipped + link)
+    git("add", "CHANGELOG.md")
+    git("commit", "-qm", "Ship 0.3.5")
+    git("tag", "v0.3.5")
+    (tmp_path / "docs" / "history").mkdir(parents=True)
+    (tmp_path / "docs" / "history" / "CHANGELOG-0.3.md").write_text("# Changelog 0.3\n\n" + shipped + link)
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\nOlder releases: [0.3](docs/history/CHANGELOG-0.3.md).\n")
+    git("add", "-A")
+    git("commit", "-qm", "Move 0.3 notes")
+    assert released_edits(tmp_path) == []
+    (tmp_path / "docs" / "history" / "CHANGELOG-0.3.md").write_text("# Changelog 0.3\n\n## [0.3.5] - 2026-10-02\n- Five, reworded.\n" + link)
+    assert released_edits(tmp_path) == ["0.3.5"]
 
 
 def test_bundled_history_api_and_mcp(api, monkeypatch, tmp_path):
@@ -136,8 +179,9 @@ def released_edits(root):
     test_pr_changelog_lines_stay_under_unreleased instead.
     """
     git = lambda *args, **kw: subprocess.run(["git", "-C", str(root), *args], capture_output=True, **kw)
-    text = (root / "CHANGELOG.md").read_text()
-    here = set(re.findall(r"^## \[?(\d+\.\d+\.\d+)\b", text, re.M))  # the oldest headings have no brackets
+    files = [root / "CHANGELOG.md", *sorted((root / "docs" / "history").glob("CHANGELOG-*.md"))]
+    texts = [path.read_text() for path in files]
+    here = set(re.findall(r"^## \[?(\d+\.\d+\.\d+)\b", "\n".join(texts), re.M))  # the oldest headings have no brackets
     tags = git("tag", "--list", "v[0-9]*").stdout.decode().split()
     refs = "".join(REVISED.get(t[1:], "refs/tags/" + t) + ":CHANGELOG.md\n" for t in tags)
     out = git("cat-file", "--batch", input=refs.encode()).stdout
@@ -153,7 +197,7 @@ def released_edits(root):
                 first = added.stdout.decode().split()[:1]
                 if first:
                     shipped = section(git("show", f"{first[0]}:CHANGELOG.md").stdout.decode(), tag[1:])
-            if tag[1:] in here and section(text, tag[1:]) != shipped:
+            if tag[1:] in here and first_notes(texts, tag[1:]) != shipped:
                 edited.append(tag[1:])
     return edited if read else None
 

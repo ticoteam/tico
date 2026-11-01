@@ -41,18 +41,27 @@ def parse_notes(text):
 
 
 def release_entries():
-    path = releases.ROOT / "CHANGELOG.md"
-    try:
-        stat = path.stat()
-        rows = _notes(str(path), stat.st_mtime_ns, stat.st_size)
-    except OSError:
-        rows = []
+    rows = []
+    for path in _note_files():
+        try:
+            stat = path.stat()
+            rows += _notes(str(path), stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            continue
     current = releases.parse(releases.version())
     # A rollback or pinned installation never announces features from a later release.
     return [dict(row) for row in rows if current is None or releases.parse(row["version"]) <= current]
 
 
-@lru_cache(maxsize=2)
+def _note_files():
+    """CHANGELOG.md (the current minor), then docs/history/CHANGELOG-<minor>.md newest minor first."""
+    def minor(path):
+        return releases.parse(path.stem.removeprefix("CHANGELOG-") + ".0") or ()
+    history = sorted((releases.ROOT / "docs" / "history").glob("CHANGELOG-*.md"), key=minor, reverse=True)
+    return [releases.ROOT / "CHANGELOG.md", *history]
+
+
+@lru_cache(maxsize=8)
 def _notes(path, mtime_ns, size):
     with open(path) as handle:
         return parse_notes(handle.read())
