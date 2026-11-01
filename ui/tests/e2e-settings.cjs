@@ -6,13 +6,14 @@ const {journey, open, go, assertClean, expectFailure, t} = require('./support/e2
 journey('e2e-settings', async ({hub, browser, phone}) => {
   const where = phone ? 'phone' : 'desktop';
   const page = await open(browser, hub, 'dana', {phone, hash: '#/settings/people'});
+  // No team icon is set on the scenario install, so the icon request Settings makes (when its icon control is drawn, on
+  // whichever tab loads first) is answered 404 ("No team icon is set"). Expected on every tab of this journey.
+  expectFailure(page, 404, '^/api/v2/team/icon$', 'GET');
   await page.locator('#main', {hasText: 'Omar'}).waitFor({timeout: t(20000)});
   let text = await page.locator('#main').innerText();
   for (const name of ['Dana', 'Omar', 'Priya', 'Gina']) assert.match(text, new RegExp(name), `${where}: people tab names ${name}`);
   assertClean(page, `${where}: people`);
 
-  // No team icon is set on the scenario install, so the page's icon request is answered 404 ("No team icon is set").
-  expectFailure(page, 404, '^/api/v2/team/icon$', 'GET');
   go(page, '#/settings/bots');
   await page.locator('#main', {hasText: 'engineering-lead'}).waitFor({timeout: t(20000)});
   text = await page.locator('#main').innerText();
