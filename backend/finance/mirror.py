@@ -2461,12 +2461,15 @@ PLANNERS: dict[str, handlers.Planner] = {"mirror_start": mirror_start, "mirror_s
 
 
 # ------------------------------------------------------------------------------------------------ documents out
-_PER_TRANSACTION = (("location", "location"), ("project", "job"))
+# What QuickBooks takes once per transaction, as the writer sends it: a location on every document's header; a job on
+# an invoice's or estimate's header (its customer). A bill or purchase order takes a job on each line instead.
+_ONE_LOCATION = (("location", "location"),)
+_ONE_LOCATION_AND_JOB = (("location", "location"), ("project", "job"))
 
 
-def _one_per_transaction(lines: list, keys: tuple[tuple[str, str], ...] = _PER_TRANSACTION) -> None:
-    """QuickBooks takes one location and one job per transaction. Lines that name more than one of either are refused
-    at plan time, before anything is queued for the provider."""
+def _one_per_transaction(lines: list, keys: tuple[tuple[str, str], ...]) -> None:
+    """Lines that name more than one location (or job, where the header takes one) are refused at plan time, before
+    anything is queued for the provider."""
     for tag, what in keys:
         if len({dict(x.tags).get(tag, "") for x in lines} - {""}) > 1:
             raise invalid(f"the lines name more than one {what}; QuickBooks takes one per transaction")
@@ -2499,7 +2502,7 @@ def _create_planner(kind: str) -> handlers.Planner:
             raw, _ = PU.link_bill_lines(ctx, who, str(contact["id"]), raw)
         lines, _ = documents.resolve_lines(ctx, who, kind, contact, raw)
         if _provider(ctx) == "quickbooks":
-            _one_per_transaction(lines)
+            _one_per_transaction(lines, _ONE_LOCATION if kind == "bill" else _ONE_LOCATION_AND_JOB)
         total = sum(x.amount for x in lines)
         body = {"party": str(contact["id"]), "number": number, "day": day, "due": due or "",
                 "memo": V.opt_text(p, "memo", 500) or "",
@@ -2697,7 +2700,8 @@ def _order_planner(kind: str) -> handlers.Planner:
             raise invalid("say which account each line posts to")
         if len({dict(x.tags).get("location", "") for x in lines} - {""}) > 1:
             raise invalid(f"a {word} is in one location: its lines name the same one")
-        _one_per_transaction(lines, (("project", "job"),))
+        if not po:
+            _one_per_transaction(lines, (("project", "job"),))
         number = V.opt_text(p, "number", 80) or SP.next_number(ctx.c, table, ctx.book.id, prefix)
         if SP.number_taken(ctx.c, table, ctx.book.id, number):
             raise FinanceError(CONFLICT, f"{word} {number} exists")
