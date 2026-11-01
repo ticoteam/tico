@@ -121,8 +121,8 @@ TABLES = (
     "revision INTEGER NOT NULL DEFAULT 0, carrier_id TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT, "
     "error TEXT, delivered_at TEXT, read_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
     "UNIQUE (message_id, recipient))",
-    "CREATE INDEX IF NOT EXISTS message_deliveries_inbox ON message_deliveries(recipient, created_at) "
-    "WHERE state IN ('pending','delivered')",
+    "CREATE INDEX IF NOT EXISTS message_deliveries_waiting ON message_deliveries(recipient, created_at) "
+    "WHERE state IN ('pending','delivered','capped','held')",
     "CREATE INDEX IF NOT EXISTS message_deliveries_capped ON message_deliveries(root_id, created_at) "
     "WHERE state='capped'",
     "CREATE INDEX IF NOT EXISTS message_deliveries_loop ON message_deliveries(root_id, created_at) "
@@ -258,6 +258,7 @@ def ensure(c):
             continue
         c.execute(f"DROP TRIGGER IF EXISTS {name}")
         c.execute(sql)
+    c.execute("DROP INDEX IF EXISTS message_deliveries_inbox")     # replaced by message_deliveries_waiting
     for name in ("messages_seq", "messages_origin"):    # unique in an early build of this branch
         found = c.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (name,)).fetchone()
         if found and "UNIQUE" in str(found[0]).upper():
