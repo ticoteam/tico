@@ -107,7 +107,7 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("people"), words="invite person"),
     S("people.member_bot_limit", "Member bot limit", PEOPLE + " > Team rules", "admin", "confirm", "PUT",
       "access/limits", "member_bot_limit", "int", _card("people"), "access#limits.member_bot_limit"),
-    S("people.person.role", "A person's role", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}", "role",
+    S("people.person.role", "A person's role", PEOPLE, "owner", "confirm", "POST", "access/humans/{person}", "role",
       "choice:member|admin", _card("people"), words="admin member role"),
     S("people.person.sign_in", "A person may sign in", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}",
       "sign_in", card=_card("people")),
@@ -306,10 +306,13 @@ ENTRIES = TEAM_RULES + [
       "triggers/{id}/delete", value="json", card=_card("webhooks", "incoming")),
     S("webhooks.gateway.wake", "Gateway wake", HOOKS + " > Gateway", "creator", "confirm", "POST",
       "triggers/{id}/relay/wake", "wake", card=_card("webhooks", "gateway")),
-    S("hooks.wake_url", "Gateway wake URL", HOOKS + " > Gateway", "owner", "confirm", "PUT", "hooks/wake-url", "url",
-      "text", _card("webhooks", "gateway")),
-    S("webhooks.outgoing.create", "New outgoing webhook", HOOKS + " > Outgoing", "anyone", "confirm", "POST", "webhooks",
-      value="json", card=_card("webhooks", "outgoing")),
+    # Both answer with a signing secret shown only then, which a Confirm card's tap never shows (it keeps the status).
+    S("hooks.wake_url", "Gateway wake URL", HOOKS + " > Gateway", "owner", "person", "PUT", "hooks/wake-url", "url",
+      "text", _card("webhooks", "gateway"),
+      why="Setting the Gateway wake URL shows its signing secret once, in Settings"),
+    S("webhooks.outgoing.create", "New outgoing webhook", HOOKS + " > Outgoing", "anyone", "person", "POST", "webhooks",
+      value="json", card=_card("webhooks", "outgoing"),
+      why="A new outgoing webhook shows its signing secret once, in Settings"),
     S("webhooks.outgoing", "Outgoing webhook", HOOKS + " > Outgoing", "creator", "confirm", "POST", "webhooks/{id}/update",
       value="json", card=_card("webhooks", "outgoing")),
     # Listening
@@ -360,14 +363,9 @@ ENTRIES = TEAM_RULES + [
 ]
 
 # Confirm entries whose route BotOps can't yet put on a Confirm card (backend/assistant.py valid_operation): a person
-# changes them in Settings until it can, rather than BotOps changing them at once.
-NO_CARD_YET = ("assistant.on", "privacy.usage_count.reset", "company.server_connection.remove", "storage.s3.remove",
-               "storage.move", "people.person.delete", "me.tokens.revoke", "team.turn_levels",
-               "bot.budget", "strategy.checks", "strategy.level",
-               "repos.product.create", "hooks.wake_url", "webhooks.outgoing.create",
-               "listening.destination", "listening.destination.remove", "roadmap.public",
-               "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd",
-               "bot.cloud_machine", "cloud.shared_machine", "mail.address.order")
+# changes them in Settings until it can, rather than BotOps changing them at once. None now: each has a card, or is a
+# person's because it shows a secret once (the wake URL, a new outgoing webhook).
+NO_CARD_YET = ()
 _NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
 ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY) if e.confirm_when else
             replace(e, kind="person", why=e.name + _NO_CARD_WHY)) if e.key in NO_CARD_YET else e for e in ENTRIES]

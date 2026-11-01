@@ -11,6 +11,8 @@ hubdb._set_status and hubdb.approval_request); this sweep catches the rest:
    (hubdb.ACCEPTANCE_ASK_SQL).
 4. The keeper's old "no progress" questions to people are superseded: a stuck task goes to BotOps now, never to a person
    (hubdb._report_stuck). None are asked any more, so this closes the ones open when that shipped, once.
+5. A Confirm card asked of someone for another person (backend/settings_asks.py) that nobody tapped within a day
+   expires: its request is declined and the asker told.
 """
 
 from . import hubdb as H
@@ -56,4 +58,5 @@ def sweep(conn, at=None):
                                  if r["status"] in ENDED else "an old no-progress question")
             H._recount(conn, r["from_actor"])
             asks.append(r["id"])
-    return {"stale": stale, "ended": ended, "asks": asks}
+    from . import settings_asks
+    return {"stale": stale, "ended": ended, "asks": asks, "cards": settings_asks.sweep(conn, at)}

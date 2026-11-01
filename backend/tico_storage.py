@@ -898,10 +898,10 @@ def install(app, store, auth):
     # Where pages and SVG on the company's address may be framed: the app's own address (`landed`).
     blobs.visual_ancestors = ancestors(settings)
 
-    def owner(request):
+    def owner(request, tap=False):
         who = request.state.identity
         auth.domain(who)
-        require_owner(who)
+        require_owner(who, tap)
         return who
 
     @app.post("/api/v2/system/storage/tico/check")
@@ -924,7 +924,7 @@ def install(app, store, auth):
     def storage_move(request: Request, body: Move):
         """Copy every file and every version into the place new files go to; each copy is checked before it counts,
         and nothing is deleted where it was."""
-        who = owner(request)
+        who = owner(request, tap=True)
         if settings.rehearsal or settings.demo:
             raise Problem("rehearsal", "Files can't be moved in a rehearsal or the demo", 409)
         start_move(store, blobs, who, body.expect_bytes)

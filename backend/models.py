@@ -2541,6 +2541,14 @@ class SettingsPlan(Contract):
     id: str | None = Field(default=None, max_length=200)
 
 
+class SettingsAsk(SettingsPlan):
+    """Ask a person who may change a settings catalogue entry to change it (backend/settings_asks.py): the value and
+    target as for a plan, `to` a person's id to ask (else an admin, or the owner for the owner's settings), and an
+    optional `note` from the asker shown on the request."""
+    to: str | None = Field(default=None, max_length=200)
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class ReleaseNow(Contract):
     """Ask the Release Manager to release what is at Pending Release now; `note` goes in its task."""
     note: str | None = Field(default=None, max_length=1000)

@@ -4196,6 +4196,22 @@ def settings_set(api, args):
             "value": shown["value"] if "value" in shown else planned["value"]}
 
 
+@tool("hub_settings_ask", "Ask someone who can: for a setting the person may not change (`hub_settings_set` "
+      "refused it, naming who may), on their yes to \"Shall I ask an admin?\". One person who may (`to`, else an "
+      "admin, or the owner for the owner's settings) gets the setting's Confirm card in their BotOps chat and a "
+      "request on their list; only their tap changes it, with their rights. The person is told in the chat they asked "
+      "from when it is confirmed or declined. The Assistant cites the person's words (`on_behalf_of`). Refused when "
+      "they may change it themselves, or for a person-only one.",
+      {"key": _s("The setting's key"), "value": {"description": "The new value, as for `hub_settings_set`"},
+       **SETTING_TARGET, "to": _s("The person's id to ask; leave out for an admin who may (the owner for the owner's)"),
+       "note": _s("A line for them from the asker, shown on the request"), "on_behalf_of": ASKED},
+      required=("key", "value"), writes=True)
+def settings_ask(api, args):
+    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
+    body = {"value": args["value"], **_setting_query(args), **{k: args[k] for k in ("to", "note") if args.get(k)}}
+    return who.post("settings/catalog/" + quote(args["key"], safe="") + "/ask", body, key=_key(args))
+
+
 @tool("hub_bot_place", "Put a bot on a computer, as the person who asked you: the one named (label or id), or the best one that "
       "takes it (the only computer, else the least busy that accepts it). Safe to repeat. A computer that does not take "
       "members' bots is a Confirm card for an admin.",

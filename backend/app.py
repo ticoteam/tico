@@ -60,6 +60,7 @@ from . import fast_json
 from . import names as actor_names
 from .openapi_v2 import STABLE as STABLE_ROUTES
 from .route_renames import old_paths as old_route_paths
+from . import settings_catalog
 from . import updates
 from .files import raw_media
 from clients import gateway as gateway_client
@@ -494,6 +495,12 @@ def create_app(settings=None):
     app.state.observability = telemetry
     app.state.census = census
 
+    def raw_who_may(c, request, acting):
+        """The catalogue's who-may line for a setting's write its route refused this person (settings_catalog)."""
+        return settings_catalog.raw_refusal(c, auth, acting, request.method, request.url.path,
+                                            botops_act.parse_body(getattr(request, "_body", b"")),
+                                            settings.public_url)
+
     @app.exception_handler(Problem)
     async def problem_handler(request, exc):
         if getattr(exc, "payload", None) is not None:
@@ -517,10 +524,27 @@ def create_app(settings=None):
                 with store.read() as c:
                     names = actor_names.lookup(c, [acting.actor] + (["bot:" + parts[4]] if parts[3:4] == ["bots"]
                                                                      and len(parts) > 4 else []))
-                return botops_act.fix(request.url.path, exc.code, exc.status, acting, names, settings.public_url)
+                hint = botops_act.fix(request.url.path, exc.code, exc.status, acting, names, settings.public_url)
+                if (hint and hint["fix"].startswith(botops_act.ROLE_FIX) and exc.code == "forbidden"
+                        and H.is_human(acting.actor)):
+                    # A setting's own route said no to a person it isn't theirs to change: rather than "ask an owner
+                    # or admin", who may, as `hub settings` says it.
+                    with store.read() as c:
+                        hint = raw_who_may(c, request, acting) or hint
+                return hint
             found = await asyncio.get_running_loop().run_in_executor(None, hint)
             if found:
                 exc.extra = {**getattr(exc, "extra", {}), **found}
+        acting = getattr(request.state, "identity", None)
+        if (exc.status == 403 and exc.code == "forbidden" and getattr(acting, "via", None) == "assistant"
+                and H.is_human(acting.actor) and "fix" not in getattr(exc, "extra", {})):
+            # The person's Assistant wrote for them and the setting's route said no: who may, as `hub settings` says.
+            def assistant_who_may():
+                with store.read() as c:
+                    return raw_who_may(c, request, acting)
+            said = await asyncio.get_running_loop().run_in_executor(None, assistant_who_may)
+            if said:
+                exc.extra = {**getattr(exc, "extra", {}), **said}
         if getattr(exc, "extra", None) and str(exc.extra.get("link") or "").startswith("#/"):
             exc.extra = absolute_link(exc.extra, settings.public_url)
         return JSONResponse({"error": {"code": exc.code, "detail": exc.detail,
@@ -5078,6 +5102,10 @@ def create_app(settings=None):
             who = request.state.identity
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
+            if who.via == "botops" and not who.confirmed:
+                # BotOps acting for a person unlinks only on that person's own tap (a Confirm card).
+                return app.state.botops_propose(c, who, "DELETE", f"/api/v2/tasks/{tid}/links/{link_id}", {},
+                                                "Remove a link from “" + H.task(c, task_id)["title"] + "”")
             H.task_unlink(c, who.actor, task_id, link_id, mover=mover(c, who))
             return {"links": H.task_links(c, task_id)}
         return mutate(request, M.Empty(), work)
@@ -5224,6 +5252,11 @@ def create_app(settings=None):
         def work(c):
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
+            if who.via == "botops" and not who.confirmed and (body.remove or body.url):
+                # BotOps acting for a person adds or removes a link only on that person's own tap (a Confirm card).
+                what = ("Remove a link from " if body.remove else "Add a link to ") + "“" + H.task(c, task_id)["title"] + "”"
+                return app.state.botops_propose(c, who, "POST", f"/api/v2/tasks/{tid}/links",
+                                                body.model_dump(exclude_none=True), what)
             if body.remove:
                 H.task_unlink(c, who.actor, task_id, body.remove, mover=mover(c, who))
             elif body.url:
@@ -6108,7 +6141,11 @@ def create_app(settings=None):
         if not path or not botops_act.card_for_person(method, path, body, rules, lowers,
                                                        force_confirm=gateway_key_address_change or bool(moved)):
             return None
-        # Told at once, not handed a card that fails on the tap.
+        # Told at once, not handed a card that fails on the tap: first in the catalogue's words, which know whose a
+        # trigger, webhook or computer is (backend/settings_catalog.py).
+        said = settings_catalog.raw_refusal(c, auth, acting, method, path, body, settings.public_url)
+        if said:
+            raise Problem("forbidden", said["fix"], 403, extra=said)
         who_may = ("the owner" if botops_act.owner_only(method, path, body) and acting.role != "owner"
                    else "an owner or an admin" if botops_act.admin_only(method, path) and acting.role != "owner"
                    and not auth.bot_admin(acting) else "")
