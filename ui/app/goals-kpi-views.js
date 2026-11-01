@@ -18,6 +18,12 @@ function gkvTree(kpis, rootId) {
   walk(rootId, 0);
   return out;
 }
+// After every route (growthStop): off Goals, forget the views and shut a KPI's dialog, so it can't save over another page.
+function gkvStop(route) {
+  if (!GKV || rdUnder(route, goalsBase())) return;
+  GKV = null;
+  document.querySelectorAll('dialog.gr-dlg').forEach(d => d.close());
+}
 // Mounts the views in `host` (pageGoals); hidden until there is a KPI to show.
 function goalsKpiViews(host) {
   let view = 'tree';

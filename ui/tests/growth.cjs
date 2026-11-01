@@ -415,6 +415,13 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await pd.locator('[name="loop_step"]').fill('1');
   await pd.locator('[type=submit]').click();
   await pd.waitFor({state: 'detached', timeout: t(10000)}).catch(async () => assert.fail(`${tag}: the place saved (${await pd.locator('[data-error]').innerText()})`));
+  // Leaving Goals shuts an open KPI dialog, so it can't save over another page.
+  await kpis.locator(`[data-kpi-place="${refs.inpId}"]`).click();
+  await pd.waitFor({timeout: t(5000)});
+  await page.evaluate(() => { location.hash = '#/tasks'; });
+  await pd.waitFor({state: 'detached', timeout: t(10000)});
+  await page.evaluate(() => { location.hash = '#/strategy/goals'; });
+  await kpis.locator('[data-gr-seg="gkv"]').waitFor({timeout: t(15000)});
   await kpis.locator('[data-gr-seg="gkv"] [data-v="loops"]').click();
   await kpis.locator('.gkv-loop .gkv-k').waitFor({timeout: t(10000)});
   await flat(page, `${tag}: Goals, Loops`);

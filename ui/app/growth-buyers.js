@@ -159,7 +159,8 @@ function gtmEdit(state) {
     const note = v('note');
     if (!note) throw new Error('What changed');
     const primary = v('primary'), secondary = v('secondary');
-    const next = {...buyer, who_uses: v('who_uses'), cycle: v('cycle'), objections: grLines(form.elements.objections.value)};
+    // Fields this form doesn't show (who buys, deal size) come from the latest read, so a retry after a 409 keeps them.
+    const next = {...(gtBody(d).buyer || {}), who_uses: v('who_uses'), cycle: v('cycle'), objections: grLines(form.elements.objections.value)};
     const plays = v('playbooks').split(',').map(s => s.trim()).filter(Boolean);
     const sections = {motion: primary ? {primary, secondary: secondary && secondary !== primary ? secondary : null} : null,
       buyer: Object.values(next).some(x => Array.isArray(x) ? x.length : x) ? next : null, playbooks: plays.length ? plays : null};

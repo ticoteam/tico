@@ -215,6 +215,7 @@ const grTools = (tools = '') => tools ? `<div class="gr-crumbs"><span class="spa
 // another (each page's reads check that its own state is still the open one).
 window.growthStop = function growthStop() {
   const r = S.route || '';
+  gkvStop(r);
   const offGrowth = !rdUnder(r, GR_ROUTE), offBrand = !rdUnder(r, BRAND_ROUTE);
   if (!(GR && offGrowth) && !(BR && offBrand)) return;
   GR_LOAD++;
