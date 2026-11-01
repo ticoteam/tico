@@ -501,3 +501,111 @@ def test_search_finds_due_dates_by_name_and_hides_archived_ones_unless_asked(boo
     assert [(r["kind"], r["label"]) for r in found["results"]] == [("due_date", "Permit renewal")]  # type: ignore[index]
     assert [r["name"] for r in listed["due_dates"]] == ["Permit renewal"]  # type: ignore[index]
     assert [r["name"] for r in archived["due_dates"]] == ["Old permit"]  # type: ignore[index]
+
+
+# ------------------------------------------------- Codex review: early completions, hand-offs, dates from long ago
+NOV1 = "2026-11-01T12:00:00.000000Z"
+
+
+def test_completing_a_chain_early_moves_it_on_from_the_occurrence_not_onto_it(books):
+    """Every 7 days, due Nov 8, completed Nov 1: a week on from the completion is Nov 8 itself, already done, and the chain
+    would stop. It counts from the occurrence instead: Nov 15. A fixed weekly date completed early keeps the rest open."""
+    with books.transaction() as c:
+        chain = _due(c, "location", _location(c, "Acme Early Chain"), name="Early chain", assignee="bot:coder",
+                     repeats="every_days", every=7, starts_on="2026-11-08", at=NOV1)
+        fixed = _due(c, "location", _location(c, "Acme Early Fixed"), name="Early fixed", assignee="bot:coder",
+                     repeats="weekly", starts_on="2026-11-08", at=NOV1)
+    assert _complete(books, chain, "2026-11-08", at=NOV1)["next_due_on"] == "2026-11-15"
+    assert _next(books, chain, NOV1) == "2026-11-15"
+    assert _complete(books, chain, "2026-11-15", at="2026-11-15T12:00:00.000000Z")["next_due_on"] == "2026-11-22"
+    _complete(books, fixed, "2026-11-08", at=NOV1)
+    assert _next(books, fixed, NOV1) == "2026-11-15"
+
+
+def test_an_early_monthly_chain_completion_counts_from_the_occurrence_too(books):
+    oct1 = "2026-10-01T12:00:00.000000Z"
+    with books.transaction() as c:
+        chain = _due(c, "location", _location(c, "Acme Early Months"), name="Early months", assignee="bot:coder",
+                     repeats="every_months", every=1, starts_on="2026-11-08", at=oct1)
+    # done on Oct 1 for Nov 8: a month on from that is Nov 1, before the occurrence, so the month counts from Nov 8
+    assert _complete(books, chain, "2026-11-08", at=oct1)["next_due_on"] == "2026-12-08"
+    assert _next(books, chain, oct1) == "2026-12-08"
+
+
+def test_reopening_an_early_completion_puts_the_chain_back_on_its_occurrence(books):
+    with books.transaction() as c:
+        chain = _due(c, "location", _location(c, "Acme Early Reopen"), name="Early reopen", assignee="bot:coder",
+                     repeats="every_days", every=7, starts_on="2026-11-08", at=NOV1)
+    _complete(books, chain, "2026-11-08", at=NOV1)
+    assert _next(books, chain, NOV1) == "2026-11-15"
+    with books.transaction() as c:
+        back = act(c, OWNER, "due_date_occurrence_reopen", {"due_date_id": chain, "due_on": "2026-11-08"}, at=NOV1)
+    assert back.status == "committed" and back.result["reopened"] is True
+    assert _next(books, chain, NOV1) == "2026-11-08"
+
+
+def test_reassigning_a_due_date_moves_its_open_task_to_the_new_assignee(books):
+    with books.transaction() as c:
+        due = _due(c, "location", _location(c, "Acme Handoff Store"), name="Handoff check", assignee="bot:coder")
+    _tick(books)
+    [task] = _tasks(books, "bot:coder")
+    with books.transaction() as c:
+        moved = act(c, OWNER, "due_date_update", {"due_date_id": due, "assignee_id": "human:eve"})
+    assert moved.status == "committed", moved.reason
+    with books.read() as c:
+        owner = c.execute("SELECT owner FROM tasks WHERE id=?", (task["id"],)).fetchone()[0]
+        owner_events = c.execute("SELECT COUNT(*) FROM task_events WHERE task_id=? AND field='owner'",
+                                 (task["id"],)).fetchone()[0]
+    assert owner == "human:eve" and owner_events >= 1, "the hand-off is in the task's history"
+    assert _tasks(books, "bot:coder") == []
+    assert _tick(books, later(1))["tasks"] == [], "the open task is eve's: nothing new for coder or for eve"
+    with books.transaction() as c:
+        assert act(c, "bot:coder", "due_date_occurrence_complete",
+                   {"due_date_id": due, "due_on": DAY}).status == "denied", "the old assignee lost the work"
+    with books.transaction() as c:
+        done = act(c, "human:eve", "due_date_occurrence_complete", {"due_date_id": due, "due_on": DAY})
+    assert done.status == "committed" and done.approval_id is None, done.reason
+
+
+def test_reassigning_one_due_date_off_a_shared_task_closes_it_and_the_next_pass_opens_each(books):
+    with books.transaction() as c:
+        moving = _due(c, "location", _location(c, "Acme Moving Store"), name="Moving check", assignee="bot:coder")
+        _due(c, "location", _location(c, "Acme Staying Store"), name="Staying check", assignee="bot:coder")
+    _tick(books)
+    [shared] = _tasks(books, "bot:coder")
+    assert shared["title"] == "Due dates: 2 due"
+    with books.transaction() as c:
+        assert act(c, OWNER, "due_date_update", {"due_date_id": moving,
+                                                 "assignee_id": "human:eve"}).status == "committed"
+    with books.read() as c:
+        status, note = c.execute("SELECT status, note FROM tasks WHERE id=?", (shared["id"],)).fetchone()
+    assert status == "closed" and "Moving check is now assigned to human:eve." in str(note)
+    result = _tick(books, later(1))
+    assert sorted(t["occurrences"] for t in result["tasks"]) == [1, 1]
+    [coder] = [t for t in _tasks(books, "bot:coder") if t["id"] != shared["id"]]
+    [eve] = _tasks(books, "human:eve")
+    assert "Staying check" in coder["body"] and "Moving check" not in coder["body"]
+    assert "Moving check" in eve["body"] and "Staying check" not in eve["body"]
+
+
+def test_a_weekly_date_from_1900_still_opens_and_moves_on_in_2026(books):
+    """The walk over occurrences used to stop after 5,000 steps, about 1995 for a weekly date from 1900, and then looked
+    finished for good. It now starts from the day the date was made, found by arithmetic."""
+    with books.transaction() as c:
+        due = _due(c, "location", _location(c, "Acme Ancient Weekly"), name="Ancient weekly", assignee="bot:coder",
+                   repeats="weekly", starts_on="1900-01-01")
+    assert [t["occurrences"] for t in _tick(books)["tasks"]] == [1]
+    day = date.fromisoformat(_next(books, due))
+    assert date(2026, 10, 15) - timedelta(days=7) < day <= date(2026, 10, 15)
+    assert (day - date(1900, 1, 1)).days % 7 == 0
+    _complete(books, due, day.isoformat())
+    assert date.fromisoformat(_next(books, due)) == day + timedelta(days=7)
+
+
+def test_a_monthly_date_from_1500_is_found_and_completed_in_2026(books):
+    with books.transaction() as c:
+        due = _due(c, "location", _location(c, "Acme Old Monthly"), name="Old monthly", assignee="bot:coder",
+                   repeats="monthly", starts_on="1500-03-15")
+    assert [t["occurrences"] for t in _tick(books)["tasks"]] == [1]
+    _complete(books, due, DAY)
+    assert _next(books, due) == "2026-11-15"

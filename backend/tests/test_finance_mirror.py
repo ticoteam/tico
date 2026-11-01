@@ -1258,6 +1258,12 @@ def test_a_parked_refund_keeps_the_credit_it_refunds_when_it_is_decoded_again():
     assert M.decode(M.encode(refund)).refund_of == "CreditNote:cn-1"
 
 
+def test_a_provider_order_keeps_its_tax_when_it_is_decoded_again():
+    order = M.Order(M.Ext("Estimate", "41", "1"), "Customer:4", "EST-41", "2026-10-06", 9150,
+                    (M.EntryLine("Account:3", 9000, item="Item:5", key="2"),), status="sent", tax=150)
+    assert M.decode(json.loads(json.dumps(M.encode(order)))) == order
+
+
 def test_a_payment_clears_the_payable_account_its_bill_posted_against(books):
     fake = FakeBooks()
     _chart(fake)

@@ -1525,7 +1525,7 @@ STABLE.extend([
      "overdue invoices, budgets near their limit, failed syncs and months ready to close, with counts and a cursor",
      "FinanceInbox"),
     ("/api/v2/finance/reports/{kind}", "get", "Finance", "getFinanceReport",
-     "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or "
+     "pnl (cash or accrual), pnl_by_account (by=location|project and id: that record's row by account), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or "
      "revenue_by_item (posted invoices by the item each line names; receivables view), cut to the caller's view; "
      "compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the "
      "group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
@@ -1799,7 +1799,7 @@ SCHEMAS.update({
         "budget_near_limit", "sync_failed", "period_ready"]}, "id": "s", "label": "s"})),
         "counts": {"type": "object", "additionalProperties": {"type": "integer"}}, "more": items({"type": "string"}),
         "next_cursor": "n", "currency": "s", "view_version": "i"}),
-    "FinanceReportOf": obj({"kind": {"type": "string", "enum": ["pnl", "pnl_by", "balance_sheet", "cash_flow",
+    "FinanceReportOf": obj({"kind": {"type": "string", "enum": ["pnl", "pnl_by", "pnl_by_account", "balance_sheet", "cash_flow",
                                                                  "budget_vs_actual", "ap_aging", "ar_aging",
                                                                  "spend_by", "revenue_by_item"]},
                             "prior": {"type": "object", "additionalProperties": True}}, required=["kind"]),
@@ -1843,14 +1843,15 @@ SCHEMAS.update({
     "DueDay": obj({"due_on": "s", "completed_at": "n", "completed_by_id": "n", "task_id": "n"},
                   required=["due_on"]),
     "Location": obj({"id": "s", "name": "s", "kind": "s", "parent_id": "n", "address": "o", "archived_at": "n",
-                     "customer_id": "n", "customer_name": "n", "next_due_on": "n"},
+                     "customer_id": "n", "customer_name": "n", "next_due_on": "n", "in_books": "b"},
                     required=["id", "name", "kind", "address"]),
     "Items": obj({"items": items(ref("Item")), "next_cursor": "n"}, required=["items", "next_cursor"]),
     "ItemOne": obj({"item": ref("Item")}, required=["item"]),
     "Item": obj({"id": "s", "name": "s", "sku": "s", "kind": {"type": "string", "enum": [
         "service", "inventory", "non_inventory", "bundle", "category", "raw_material", "assembly"]}, "unit": "s",
         "price": {"type": ["integer", "null"]}, "currency": "s", "archived_at": "n", "income_account_id": "n",
-        "expense_account_id": "n", "asset_account_id": "n"},
+        "expense_account_id": "n", "asset_account_id": "n", "quantity_on_hand": {"type": ["number", "null"]},
+        "quantity_synced_at": "n"},
         required=["id", "name", "sku", "kind", "unit", "currency"]),
     "Projects": obj({"projects": items(ref("Project")), "next_cursor": "n"}, required=["projects", "next_cursor"]),
     "ProjectOne": obj({"project": ref("Project")}, required=["project"]),

@@ -710,6 +710,9 @@ def invoice_body(body: Mapping[str, Any], income: Mapping[str, str]) -> dict[str
         out["DocNumber"] = str(body["number"])
     if body.get("due"):
         out["DueDate"] = str(body["due"])
+    if body.get("tax"):
+        # The invoice's sales tax as TxnTaxDetail.TotalTax, the field the import reads it from.
+        out["TxnTaxDetail"] = {"TotalTax": decimal_text(int(body["tax"]))}
     if body.get("linked_estimate"):
         out["LinkedTxn"] = [{"TxnId": str(body["linked_estimate"]), "TxnType": "Estimate"}]
     return out

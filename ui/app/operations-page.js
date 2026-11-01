@@ -99,8 +99,8 @@ async function opsRefs(fresh = false) {
 
 // ----------------------------------------------------------------- the columns
 const OPS_COLS = {
-  locations: () => [['Name', r => opsNameCell(r)], ['Kind', r => esc(opsLabel(OPS_LOCATION_KINDS, r.kind))], ['Customer', r => esc(opsCustomerName(r))],
-    ['City, State', r => esc([r.address?.city, r.address?.state].filter(Boolean).join(', '))], ['Source', opsSourceIcon]],
+  locations: state => [['Name', r => opsNameCell(r)], ['Kind', r => esc(opsLabel(OPS_LOCATION_KINDS, r.kind))], ['Customer', r => esc(opsCustomerName(r))],
+    ['City, State', r => esc([r.address?.city, r.address?.state].filter(Boolean).join(', '))], ...(state.rows.some(r => r.in_books != null) ? [['In books', r => r.in_books == null ? '' : r.in_books ? 'Yes' : 'No']] : []), ['Source', opsSourceIcon]],
   // On hand shows once a row carries it.
   items: state => [['Name', r => opsNameCell(r)], ['SKU', r => esc(r.sku || '')], ['Kind', r => esc(opsLabel(OPS_ITEM_KINDS, r.kind))],
     ['Price', r => opsMoney(r), 'ops-n'],

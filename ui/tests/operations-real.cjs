@@ -52,6 +52,21 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
     const est = await api('dana', 'POST', '/v2/finance/actions', {kind: 'estimate_create', payload: {customer_id: customer.id, estimate_date: '2026-10-06', number: 'EST-77',
       lines: [{account_id: income.id, amount: 12000, description: 'Coil swap', tags: {location: betaSite.id}}]}});
     assert.equal(est.body.status, 'committed', JSON.stringify(est.body));
+    const finAct = async (kind, payload) => {
+      const out = await api('dana', 'POST', '/v2/finance/actions', {kind, payload});
+      assert.equal(out.body.status, 'committed', kind + ' ' + JSON.stringify(out.body));
+      return out.body.result;
+    };
+    const chart = (await api('dana', 'GET', '/v2/finance/chart?for=journal')).body.accounts;
+    const bank = chart.find(a => a.number === '1000'), costs = chart.find(a => a.type === 'expense' && a.parent_id);
+    const vendor = (await finAct('contact_create', {name: 'Gamma Supply', kind: 'vendor'})).contact_id;
+    await finAct('po_create', {vendor_id: vendor, po_date: '2026-10-06', number: 'PO-77', lines: [{account_id: costs.id, amount: 5000, tags: {location: betaSite.id}}]});
+    const inv = await finAct('invoice_create', {customer_id: customer.id, invoice_date: '2026-10-06', number: 'INV-77', lines: [{account_id: income.id, amount: 9000, tags: {location: betaSite.id}}]});
+    await finAct('invoice_send', {invoice_id: inv.invoice_id});
+    // Two lines on the project, for its P&L by account.
+    const job = (await api('dana', 'GET', '/v2/projects?q=North')).body.projects[0];
+    await finAct('journal', {date: '2026-10-06', memo: 'Job sale', lines: [{account_id: income.id, amount: -30000, tags: {project: job.id}}, {account_id: bank.id, amount: 30000}]});
+    await finAct('journal', {date: '2026-10-06', memo: 'Job cost', lines: [{account_id: costs.id, amount: 7000, tags: {project: job.id}}, {account_id: bank.id, amount: -7000}]});
 
     // The owner: each tab's server filters, and the panels' links.
     {
@@ -72,9 +87,12 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       await page.locator('[data-ops-pnl]').waitFor();
       assert.equal(await page.locator('[data-ops-pnl]').getAttribute('href'), '#/finance/pnl?split=location');
       await shot(page, 'real-desktop-location-panel');
-      assert.equal(await page.locator('#ops-panel').getByText('EST-77').count(), 0, 'only the site it was tagged to');
+      for (const doc of ['EST-77', 'PO-77', 'INV-77']) assert.equal(await page.locator('#ops-panel').getByText(doc).count(), 0, doc + ': only the site it was tagged to');
+      assert.equal(await page.locator('th', {hasText: 'In books'}).count(), 0, 'a native book has no In books column');
+      assert.doesNotMatch(await page.locator('#ops-panel .ops-facts').innerText(), /In books/);
       await page.locator('#ops-table').getByText('Beta Foods Site').click();
-      await page.locator('#ops-panel').getByText('EST-77').waitFor({timeout: t(15000)});
+      for (const doc of ['EST-77', 'PO-77', 'INV-77']) await page.locator('#ops-panel').getByText(doc).waitFor({timeout: t(15000)});
+      await shot(page, 'real-desktop-location-docs');
 
       await go(page, '#/operations/items');
       await tabReady(page, 'items');
@@ -97,6 +115,9 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       await page.locator('#ops-table').getByText('North Store refit').click();
       await page.locator('[data-ops-pnl]').waitFor();
       assert.equal(await page.locator('[data-ops-pnl]').getAttribute('href'), '#/finance/pnl?split=project');
+      const accounts = await page.locator('[data-ops-pnl-accounts]').innerText();
+      assert.ok(accounts.includes(income.name) && accounts.includes(costs.name), accounts);
+      assert.match(accounts, /\$300/);
       await shot(page, 'real-desktop-project-panel');
 
       await go(page, '#/operations/equipment');
@@ -184,6 +205,12 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       for (const want of ['Beta Foods Site', 'Rooftop unit 3', 'Filter change', 'Fire inspection']) assert.ok(text.includes(want), want);
       assert.ok(!text.includes('EST-77'), 'H7a: the estimate stays out');
       await shot(page, 'real-desktop-customer-panel-teammate');
+      await go(page, '#/operations/projects');
+      await tabReady(page, 'projects');
+      await page.locator('#ops-table').getByText('North Store refit').click();
+      await page.locator('#ops-panel h2', {hasText: 'North Store refit'}).waitFor({timeout: t(20000)});
+      await page.waitForTimeout(800);
+      assert.equal(await page.locator('[data-ops-pnl-accounts]').count(), 0, 'no accounts for a viewer with no data');
       // Back to the location it names, then the customer's name again, on a phone.
       await page.context().close();
       const phone = await pageAs(browser, hub, 'priya', {phone: true});
@@ -197,8 +224,7 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
 
     // H7: the bot saves the plate as a Library file and files equipment_create with it; the owner sees the photo on the approval.
     {
-      // equipment_create takes a Library file its asker can read (backend/files.py readable_by), so the bot saves the plate there.
-      assert.equal((await api('dana', 'POST', '/v2/finance/actions', {kind: 'right_grant', payload: {teammate: 'bot:engineering-lead', right: 'finance.records'}})).body.status, 'committed');
+      // No finance.records: a real bot's equipment_create asks the owner (K.authority). The plate is a Library file it can read.
       const up = await fetch(hub.url + '/api/v2/files/uploads?name=plate.png&title=Data%20plate&scope=bot', {method: 'POST', body: PNG,
         headers: {Authorization: 'Bearer ' + hub.tokens['engineering-lead'], 'Content-Type': 'image/png', 'Idempotency-Key': 'ops-photo-file'}});
       const file = await up.json();

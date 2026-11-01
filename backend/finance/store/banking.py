@@ -727,6 +727,14 @@ def record_write_open(c: sqlite3.Connection, op: str, local_id: str) -> bool:
     return False
 
 
+def record_writes_open(c: sqlite3.Connection, op: str, local_ids: Iterable[str]) -> set[str]:
+    """Which of these records have a write as record_write_open means it, in one read, for a page of them."""
+    wanted = set(local_ids)
+    named = (loads(row[0]).get("local_id") for row in c.execute(
+        "SELECT payload_json FROM fin_outbox WHERE op=? AND NOT (status='sent' OR (status='failed' AND unknown=0))", (op,)))
+    return wanted & {str(x) for x in named if x}
+
+
 def record_write_pending(c: sqlite3.Connection, op: str, local_id: str) -> Any:
     """The newest write of this op for a shared record that is still pending (waiting, claimed, or to be tried again),
     or None. A change made to the record joins that write while it still waits to be claimed."""

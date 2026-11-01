@@ -8,6 +8,8 @@ ONE task per teammate listing them all, so a teammate with forty of them is woke
   gone, opens nothing further (H10c).
 - An assignee that is missing or cannot take work (archived, paused) gets one Needs-you item for the install owner, naming
   all its due dates, until it is fixed. The occurrences stay open, so nothing is dropped.
+- Reassigning a due date hands its open task to the new assignee (reassign); a task that cannot move closes with a note,
+  and the next pass opens its occurrences again. No open task stays under the old assignee.
 """
 import json
 from datetime import datetime, timedelta, timezone
@@ -129,6 +131,35 @@ def _notify(c: Any, held: dict[str, Any]) -> str | None:
     body = (f"{n} due date(s) are assigned to {held['assignee']}, which {held['why']}. Their occurrences stay open. "
             "Give them an active teammate (due_date_update) and the next pass opens their tasks.\n\n" + listed + more)
     return TI.needs_you(c, owner, title, body)
+
+
+def reassign(c: Any, due_date_id: str, new_actor: str, name: str) -> dict[str, list[str]]:
+    """Hand a due date's open tasks to its new assignee; due_date_update calls this when the assignee changes. An open task
+    whose open occurrences all belong to this due date moves to the new assignee through the task path, so its history shows
+    the hand-off. A task that also carries another due date's open work, or that the task path refuses to move, closes with
+    a note instead: its occurrences then have no open task, and the next pass opens each for whoever it is assigned to. No
+    open task is left under the old assignee. Writes only through the hub's task calls."""
+    note = f"{name} is now assigned to {new_actor}."
+    moved: list[str] = []
+    closed: list[str] = []
+    rows = c.execute("SELECT DISTINCT task_id FROM due_date_occurrences WHERE due_date_id=? AND task_id IS NOT NULL "
+                     "AND completed_at IS NULL", (due_date_id,)).fetchall()
+    for (task_id,) in rows:
+        task = str(task_id)
+        if not _task_open(c, task):
+            continue
+        others = c.execute("SELECT COUNT(*) FROM due_date_occurrences WHERE task_id=? AND due_date_id<>? "
+                           "AND completed_at IS NULL", (task, due_date_id)).fetchone()[0]
+        if not others:
+            try:
+                H.task_update(c, H.KEEPER, task, owner=new_actor, note=note)
+                moved.append(task)
+                continue
+            except H.Refused:
+                pass
+        H.task_close(c, H.KEEPER, task, note=note)
+        closed.append(task)
+    return {"moved": moved, "closed": closed}
 
 
 def tick(c: Any, at: datetime) -> dict[str, Any] | None:

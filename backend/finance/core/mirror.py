@@ -373,7 +373,7 @@ def decode(d: Mapping[str, Any]) -> Record:
                     str(d.get("quantity", "")))
     if kind == "Order":
         return Order(ext, str(d["party"]), str(d["number"]), str(d["day"]), int(d["total"]), _lines(d["lines"]),
-                     str(d.get("memo", "")), str(d.get("status", "")))
+                     str(d.get("memo", "")), str(d.get("status", "")), int(d.get("tax", 0)))
     if kind == "Location":
         return Location(ext, str(d["name"]), bool(d.get("active", True)))
     if kind == "Dimension":
