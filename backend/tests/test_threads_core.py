@@ -116,6 +116,43 @@ def test_a_held_post_writes_no_message_and_no_delivery(world, monkeypatch):
     assert seen["replay"]["thread_id"] == tid and seen["replay"]["body"] == "The price is $10"
 
 
+def test_a_held_first_message_makes_no_thread_sub_thread_or_dm(world, monkeypatch):
+    store, auth, who = world
+    with store.transaction() as c:
+        owner = threads.viewer(auth, owner_of(c, auth))
+        member = next(a for a in people(who) if a != owner.actor)
+        tid = threads.create(c, owner, title="Parent", audience="members", members=[member])["id"]
+        parent = threads.post(c, owner, tid, "Start here")
+    seen = []
+    verdict = {"held": {"id": "hold-1", "rule": "No prices"}}
+    monkeypatch.setattr(org_rule_check, "apply", lambda c, v, p=None, r=None, **_: seen.append(r) or verdict)
+
+    def rows(c):
+        return (c.execute("SELECT COUNT(*) FROM conversations").fetchone()[0],
+                c.execute("SELECT COUNT(*) FROM messages").fetchone()[0])
+
+    checked = {"outcome": "broken"}
+    with store.transaction() as c:
+        before = rows(c)
+        assert threads.post(c, owner, tid, "$10", parent_message_id=parent["id"], checked=checked) == verdict
+        assert threads.post(c, owner, None, "$10", checked=checked,
+                            start={"title": "New", "audience": "members", "members": [member]}) == verdict
+        assert threads.post(c, owner, None, "$10", checked=checked, start={"dm": [member]}) == verdict
+        assert rows(c) == before, "a held first message makes nothing"
+    assert seen[0]["thread_id"] == tid and seen[0]["parent_message_id"] == parent["id"]
+    assert seen[1]["thread_id"] is None and seen[1]["start"]["title"] == "New"
+    assert seen[2]["start"] == {"dm": [member]}
+    # The replay (Send anyway, checked=None) makes the thread and writes the message in one go.
+    with store.transaction() as c:
+        sub = threads.post(c, owner, seen[0]["thread_id"], seen[0]["body"], parent_message_id=parent["id"])
+        dm = threads.post(c, owner, None, seen[2]["body"], start=seen[2]["start"])
+        again = threads.post(c, owner, None, "again", start={"dm": [member]})
+        sub_row = threads.thread_row(c, sub["conversation_id"])
+        assert sub_row["parent_message_id"] == parent["id"]
+        assert threads.audience_of(threads.thread_row(c, dm["conversation_id"])) == "personal"
+        assert again["conversation_id"] == dm["conversation_id"], "a DM start reuses the open DM"
+
+
 def test_a_warned_post_writes_the_warned_text(world, monkeypatch):
     store, auth, who = world
     monkeypatch.setattr(org_rule_check, "apply", lambda c, v, p=None, r=None, **_: {"warn": "Warning: careful."})
