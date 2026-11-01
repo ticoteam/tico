@@ -101,6 +101,7 @@ def _name_words(text):
     for full, short in SHORT:
         text = re.sub(rf"\b{full}\b", lambda found, short=short: f"{short} {found.group(0)}", text)
     text = re.sub(r"\baccounting\b", "bookkeeping", text)      # the books, not a client account ("Account Manager")
+    text = re.sub(r"\bcustomer service\b", "support customer service", text)     # the Support Agent's work
     words = re.findall(r"[a-z0-9]+", text)
     return [(_name_stem(word), word) for word in words if len(word) > 1 and word not in NAME_STOP]
 
@@ -120,6 +121,11 @@ def _kind(title):
     # A rep is a representative, and a developer the same kind of job as an engineer (the catalog names engineers).
     return {"rep": "representative", "reps": "representative", "developer": "engineer",
             "developers": "engineer"}.get(words[-1]) or _name_stem(words[-1])
+
+
+# Kinds of job that are one job: a Support Representative is the Support Agent.
+SAME_KIND = {stem: {_name_stem("agent"), _name_stem("representative")} for stem in (_name_stem("agent"),
+                                                                                    _name_stem("representative"))}
 
 
 def _work(title):
@@ -180,7 +186,7 @@ def _best_card(cards, title, team=""):
     heads, kind = bool({word for _, word in _name_words(title)} & HEAD_WORDS), _kind(title)
     for card in cards:
         name = {stem for stem, _ in _name_words(card["name"])}
-        if kind and kind not in name:
+        if kind and not SAME_KIND.get(kind, {kind}) & name:
             continue                        # a designer is not the UX Writer, an engineer not a specialist
         if heads and card.get("lead"):
             # A head's title names the field it heads, which the head's card may not: "Head of HR" is the Head of
