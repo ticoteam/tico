@@ -1,7 +1,7 @@
 # Growth
 
 Growth is how the team finds customers and learns what works. It is its own section in the sidebar, under Strategy
-(`#/growth`; tabs Overview, This week, Channels, Learning and Go-to-market). Tico keeps the bets, the channels, the
+(`#/growth`; tabs Overview, Segments, This week, Channels, Learning and Go-to-market). Tico keeps the bets, the channels, the
 ideas, the tests, the verdicts and the economics. The tools (CRM, ad accounts, email) stay where they are and Tico reads
 their numbers.
 
@@ -10,6 +10,29 @@ way to reach customers. An idea is one test of one belief on one channel. A verd
 learning goes back into the bet.
 
 Examples use Acme, a home-cleaning company. Its bet 1 is "Half the price of other cleaners".
+
+## Segments
+
+A segment is a group of customers the company sells to, such as homeowners or property managers. **Segments**
+(`#/growth/segments`) lists them by status:
+
+- `serving`: the company sells to them now;
+- `testing`: a candidate the team is trying out;
+- `next`: the one to enter after;
+- `dropped`: no longer pursued.
+
+Each segment has a motion (the same choices as the GTM card), who buys, the deal size, a why and an owner. Its name and
+place live in the market graph as a `segment` entity. Adding a segment by name uses the market segment of that name or
+alias, and makes one under the market's root when there is none. **Where we play** on the Strategy page follows Growth:
+a serving segment is Us and a next one is Next, and a click there sets the status here. Several of each are allowed.
+
+Channels and ideas name the segments they reach (`segments`). A cohort may be one segment's share of a channel's month
+(`segment_id`). Economics for one segment (`?segment=`) reads only its rows. Without a segment, every row counts, and a
+channel's rows for several segments are added into one. The GTM summary bots read names the serving and testing
+segments.
+
+The owner and admins add segments and change any field, status included. A bot adds a `testing` segment and changes a
+segment's why, who buys and deal size.
 
 ## The Idea
 
@@ -22,6 +45,7 @@ history, `blocked_by`) works on an idea the same way.
 | `prediction` | A number, on a KPI, by a date. Example: "Price-request bookings 22% to 30% in four weeks." |
 | `bet_id`, `kpi_id` | The bet it serves, and the KPI it moves |
 | `channels` | One or more channel slugs. An idea across three channels is counted once, not split |
+| `segments` | The segments it targets |
 | `ice_i`, `ice_c`, `ice_e` | Impact, confidence and ease, 1 to 10 each. `ice` is the average, to one decimal |
 | `source_kind`, `source_ref` | Where the signal came from: `strategy`, `competitor`, `listening`, `peec`, `lost_test`, `person` or `other` |
 | `test_from`, `test_to`, `change`, `stop_if`, `min_events`, `judged_kpi_id`, `audience` | The test, once it starts |
@@ -115,7 +139,8 @@ itself, and the two growth routines by its onboarding playbook (step 6, `hub aut
 
 On the 3rd, the Growth Lead writes the month's report as a Page:
 
-1. Enters each channel's cohort for the month (`hub growth cohort set`), from the sources.
+1. Enters each channel's cohort for the month (`hub growth cohort set`), from the sources, one per segment
+   (`--segment`) when the source can tell them apart.
 2. Reads the economics for the month.
 3. Writes the top line, the channel table with its method, what was learned, which bets are working, and next month.
 4. Asks one question for any budget or stage change.
@@ -151,14 +176,17 @@ hub gtm show   [--section wishes] | summary | sources     hub gtm draft --sectio
 Every command has an MCP tool with the same name and arguments (`growth_idea_create`, `brand_check`, `gtm_show`, and so on).
 
 ```
-hub growth channel list | show SLUG | add | update SLUG | retire SLUG
+hub growth segment list | create --name N|--segment-id ID [--status S] [--motion M] [--who-buys T] [--deal-size T]
+                   [--why T] [--owner O] | update ID
+hub growth channel list | show SLUG | add | update SLUG | retire SLUG      (add, update: --segment ID, repeatable)
 hub growth source  list | add | update ID | retire ID
-hub growth idea    create | list | show ID | update ID | score ID --i N --c N --e N
+hub growth idea    create | list [--segment ID] | show ID | update ID | score ID --i N --c N --e N
                    | start ID --to DATE --change T --stop-if R [--from D] [--min-events N] [--judged-kpi ID] [--audience A]
                    | verdict ID --status won|lost|inconclusive|dropped|paused [--result R] [--learning L] [--bet-effect E] [--confidence C]
-hub growth cohort  list | set --channel SLUG|unknown --month YYYY-MM [--spend N] [--bot-cost N] [--new N] [--d30 N] [--d90 N]
-                   [--d180 N] [--revenue N] [--margin N] [--quality actual|estimate] [--source FIELD=TEXT]
-hub growth economics [--month M] | week | evidence | working | kpis | settings [--set k=v]
+hub growth cohort  list [--segment ID] | set --channel SLUG|unknown --month YYYY-MM [--segment ID] [--spend N] [--bot-cost N]
+                   [--new N] [--d30 N] [--d90 N] [--d180 N] [--revenue N] [--margin N] [--quality actual|estimate]
+                   [--source FIELD=TEXT]
+hub growth economics [--month M] [--segment ID] | week | evidence | working | kpis | settings [--set k=v]
 hub kpi update ID --parent P --role north_star|input|guardrail --stage S --loop NAME:STEP
 ```
 
@@ -168,11 +196,11 @@ The API is under `/api/v2/growth`, `/api/v2/brand` and `/api/v2/gtm`.
 
 | | Read | Propose | Write |
 |---|---|---|---|
-| Owner and admins | everything | none needed | everything, including publishing Brand and GTM, channels, sources and settings |
+| Owner and admins | everything | none needed | everything, including publishing Brand and GTM, segments, channels, sources and settings |
 | Brand Manager, Strategy Bot | published Brand and GTM | Brand and GTM changes | nothing |
 | Growth Lead | everything | none | ideas it owns, scores, verdicts and cohorts |
 | Channel owner bot | published Brand and GTM; its channel | none | its channel's `why`, stage and budget; its measurements as KPI readings; its own ideas and subtasks |
-| Any other bot, person, or external agent with hub access | published Brand and GTM | ideas (filed as `idea`) | its own ideas only |
+| Any other bot, person, or external agent with hub access | published Brand and GTM | ideas (filed as `idea`) | its own ideas only; a bot also adds testing segments and edits a segment's why, buyer and deal size |
 
 Brand and GTM are read by anyone with hub access, bots and external agents included. A change to either is the owner's to
 publish: a bot proposes it, and the owner confirms.
