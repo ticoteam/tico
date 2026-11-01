@@ -7,7 +7,7 @@ org-rule check (backend/org_rule_check.py) outside the write, as a message does,
 anyway as `thread_message`. Every list is paged and byte-capped by the service function that makes it.
 """
 
-from fastapi import Request
+from fastapi import Query, Request
 from pydantic import BaseModel, Field
 
 from . import org_rule_check, thread_search, threads
@@ -76,6 +76,25 @@ def _recipients(c, thread_id, to):
     return sorted(a for a in out if a)
 
 
+def _read_or_404(c, v, target):
+    """Read on a teammate, or the same 404 whether they are missing or the viewer may not read them. A missing teammate
+    passes this check and fails in threads.home with the same 404, so the two never differ."""
+    from . import teammate_access
+    try:
+        levels = teammate_access.levels_for(c, v.who, target, auth=v.auth)
+    except (ValueError, KeyError):
+        raise Problem("not_found", "Unknown teammate", 404)
+    if not levels["read"]:
+        raise Problem("not_found", "Unknown teammate", 404)
+
+
+def _home_owner(target):
+    """The owner actor a Home is keyed by (`person:` reads as `human:`), as threads.home takes it."""
+    from . import teammate_access
+    kind, ident = teammate_access.parse_target(target)
+    return f"{kind}:{ident}"
+
+
 def install(app, store, auth, mutate, rule_check):
     def check(who, thread_id, body):
         """The org-rule check of one bot post, outside the write (a person's post is not checked)."""
@@ -106,6 +125,25 @@ def install(app, store, auth, mutate, rule_check):
             v = threads.viewer(auth, request.state.identity)
             return thread_search.search(c, q, thread_sql=threads.readable_sql(c, v, "cv"),
                                         message_sql=threads.message_sql(c, v, "m"), limit=limit or 20, before=before)
+
+    @app.get("/api/v2/threads/home")
+    def home_thread(request: Request, actor: str):
+        """A teammate's Home (`actor` = bot:<slug>, human:<id> or group:<id>), made on first use. The viewer needs Read on
+        that teammate; without it, or when the teammate does not exist, the answer is the same 404."""
+        v = threads.viewer(auth, request.state.identity)
+        with store.transaction() as c:
+            _read_or_404(c, v, actor)
+            row = threads.home(c, _home_owner(actor))
+            return threads.get(c, v, row["id"])
+
+    @app.get("/api/v2/threads/dm")
+    def dm_thread(request: Request, peer: str = Query(..., alias="with")):
+        """My DM with `with`: the open one with exactly us two, or a new one. It needs Write on them (the reply-back rule
+        applies): 404 when I cannot see them, 403 naming Write when I can see them but may not message them."""
+        v = threads.viewer(auth, request.state.identity)
+        with store.transaction() as c:
+            threads._require_write(c, v, peer)
+            return threads.dm(c, v, [peer])
 
     @app.get("/api/v2/threads/{thread_id}")
     def get_thread(request: Request, thread_id: str):

@@ -225,6 +225,8 @@ def test_the_thread_answers_match_the_live_ones(api):
     thread_id = created["id"]
     call("listThreads", "get", "/api/v2/threads")
     call("getThread", "get", f"/api/v2/threads/{thread_id}", who="ben-test")
+    call("getThreadHome", "get", "/api/v2/threads/home", params={"actor": "human:ben"})
+    call("openThreadDm", "get", "/api/v2/threads/dm", params={"with": "human:ben"})
     call("getThreadTimeline", "get", f"/api/v2/threads/{thread_id}/timeline", who="ben-test")
     call("listThreadMembers", "get", f"/api/v2/threads/{thread_id}/members")
     call("searchThreads", "get", "/api/v2/threads/search", who="ben-test", params={"q": "budget"})
