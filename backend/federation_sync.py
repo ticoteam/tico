@@ -611,7 +611,8 @@ def refuse(c, to, payload, reason):
 
 def on_refusal(c, me, sender, payload):
     """A receiver refused a message this install sent, or relayed. The author's own install posts the quiet note to the
-    local author; a refusal from another install is passed on to the install the message came from."""
+    local author, unless that person can no longer read the thread (then nothing is posted and the outcome is
+    `refused`); a refusal from another install is passed on to the install the message came from."""
     origin = payload.get("origin_id")
     if not isinstance(origin, str) or not origin:
         return "invalid"
@@ -621,7 +622,10 @@ def on_refusal(c, me, sender, payload):
     reason = str(payload.get("reason") or "")
     author_install = E.install_of(row["author"])
     if author_install == me:
-        T.post_notice(c, row["thread_id"], REASON_NOTES.get(reason, REASON_NOTES["rules"]), row["author"].rsplit("@", 1)[0])
+        author = row["author"].rsplit("@", 1)[0]
+        if not T.can_read(c, row["thread_id"], author):      # they can no longer read the thread: nobody to tell
+            return "refused"
+        T.post_notice(c, row["thread_id"], REASON_NOTES.get(reason, REASON_NOTES["rules"]), author)
         return "applied"
     if author_install and author_install != sender:
         queue(c, recipient=author_install, kind="refusal",

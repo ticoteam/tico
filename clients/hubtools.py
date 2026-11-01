@@ -3497,6 +3497,15 @@ def peer_unshare(api, args):
                                           f"{quote(str(args['install']), safe='')}", None, _key(args))
 
 
+@tool("hub_peer_add_reader", "Let a person on this install read a shared copy of a thread. Until an admin adds them, "
+      "only the accepting admin reads a copy. Owner only.",
+      {"thread": _s("The thread's id on this install (a shared copy)"), "actor": _s("The person, as human:<name>")},
+      required=("thread", "actor"), writes=True)
+def peer_add_reader(api, args):
+    return api.post(f"federation/threads/{quote(str(args['thread']), safe='')}/readers", {"actor": args["actor"]},
+                    key=_key(args))
+
+
 TRIGGER = {"id": _s("The trigger's id from hub_trigger_list")}
 
 

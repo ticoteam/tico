@@ -30,8 +30,8 @@ The peer gets the thread from that moment, not its history. Messages, edits and 
 `hub peer unshare <thread> <install>` removes an install. It gets the removal and nothing after it.
 
 On the receiving install, a shared thread is a replica. Only the accepting admin can read it at first. Other local people
-get a 404 until an admin adds them: `POST /api/v2/federation/threads/{thread_id}/readers` with `{"actor": "human:<name>"}`
-(owner only).
+get a 404 until an admin adds them: `hub peer add-reader <thread> human:<name>`, or
+`POST /api/v2/federation/threads/{thread_id}/readers` with `{"actor": "human:<name>"}` (owner only).
 
 ## Pause, resume, revoke, rotate
 
@@ -54,7 +54,7 @@ get a 404 until an admin adds them: `POST /api/v2/federation/threads/{thread_id}
 | `hub peer revoke <peering>` | `hub_peer_revoke` | `POST /peerings/{id}/revoke` |
 | `hub peer share <thread> <install>` | `hub_peer_share` | `POST /threads/{id}/installs` |
 | `hub peer unshare <thread> <install>` | `hub_peer_unshare` | `DELETE /threads/{id}/installs/{install}` |
-| (none) | (none) | `POST /threads/{id}/readers` (a local person may read a replica) |
+| `hub peer add-reader <thread> <actor>` | `hub_peer_add_reader` | `POST /threads/{id}/readers` |
 
 Every route is owner only. Each write records an audit row and a change event, like the other owner settings.
 
@@ -72,8 +72,11 @@ Every route is owner only. Each write records an audit row and a change event, l
   receiving install. Each duplicate (origin id and revision) is written once.
 - **Rules.** A message from another install goes through inbound screening and the org rules, as its remote author.
   A message the rules block is written nowhere. The receiving install sends back a refusal.
+  Outbound is covered by the normal write check: a local member's post passes the org rule check in `threads.post`
+  before it is stored, so it is checked before it can replicate.
 - **Refusals.** A receiver that refuses a message (rules, namespace or unknown thread) sends a signed refusal to the
   install that sent it. That install posts a quiet note to the message's author in the thread, like a held message's note.
+  If the author can no longer read the thread, nothing is posted and the refusal is recorded as `refused`.
 - **Order.** The home numbers each shared thread's messages (`home_seq`). A replica applies them in that order. An edit
   or delete for a message the replica does not have yet waits for a catch-up. A catch-up asks the home for everything
   after the last `home_seq` the replica applied.
@@ -99,7 +102,6 @@ Treat HQ as a relay you trust for delivery, not as a place a shared thread is ke
 
 ## Not in this version
 
-- Outbound org rules on a home's own members are not applied. Only inbound screening and the rules on carried messages run.
 - A later member's manager cannot read a replica yet. Only the accepting admin and the people an admin adds can.
 - A refusal is passed on one hop only.
 - A held federated message has no "send anyway". It stays held.

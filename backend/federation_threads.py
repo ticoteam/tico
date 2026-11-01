@@ -49,6 +49,11 @@ def set_guests(c, thread_id, install, actors):
     return len(wanted ^ have)
 
 
+def can_read(c, thread_id, actor):
+    """Whether a local person may read a thread here, by core's own audience rule."""
+    return CORE.audience_has(c, thread_id, actor)
+
+
 def add_reader(c, thread_id, actor):
     """A local person the accepting admin adds to a thread on this install. Core checks the person exists."""
     return CORE.add_member(c, "keeper", thread_id, actor)

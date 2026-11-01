@@ -440,6 +440,7 @@ PEER_COMMANDS = {
     ("approve", "fp_x"): "peer approve", ("pause", "fp_x"): "peer pause", ("resume", "fp_x"): "peer resume",
     ("revoke", "fp_x"): "peer revoke",
     ("share", "t-1", "gi_" + "a" * 24): "peer share", ("unshare", "t-1", "gi_" + "a" * 24): "peer unshare",
+    ("add-reader", "t-1", "human:ben"): "peer add-reader",
 }
 
 
@@ -600,3 +601,26 @@ def test_each_side_sees_the_company_its_peer_gave_and_guests_carry_theirs(make_s
     assert {"install": b.id, "company": "Beta Co"} in [{"install": m["install"], "company": m["company"]} for m in home["members"]]
     replica = next(t for t in status(b)["threads"] if t["thread_id"] == there)
     assert {"actor": f"human:ben@{a.id}", "company": "Alpha Co"} in replica["guests"]
+
+
+def test_a_refusal_for_an_author_who_can_no_longer_read_is_recorded_refused_and_no_note_is_posted(make_side, hq, monkeypatch):
+    real_apply = OR.apply
+
+    def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None):
+        if "BLOCKED" in str(payload or ""):
+            return {"held": {"id": "hold"}}
+        return real_apply(c, verdict, payload, replay, tell, obj_now)
+
+    monkeypatch.setattr(OR, "apply", apply)
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    reader(a, tid, "human:ben")
+    share(a, tid, b)
+    drive(a, b)
+    say(a, tid, "BLOCKED: ben's draft", who="human:ben")
+    with a.app.state.store.transaction() as c:
+        CORE.remove_member(c, "keeper", tid, "human:ben")          # ben can no longer read the thread when the refusal lands
+    drive(a, b, rounds=4)
+    assert "refused" in receipts(a, b)
+    assert rows(a, "SELECT COUNT(*) FROM messages WHERE conversation_id=? AND kind='notice'", (tid,)) == [(0,)]

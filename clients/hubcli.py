@@ -339,6 +339,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            approve it, the kill switch, resume it, or end it
     hub peer share|unshare <thread> <install>
                                            give an active peer a thread you own, or take an install out of one
+    hub peer add-reader <thread> <actor>   let a person here read a shared copy of a thread (an admin adds them)
     hub trigger list                       webhooks people and bots made; an automation runs on one
     hub trigger create <name> [--id X]     make one; the address (with its secret) is shown once
     hub trigger show <id>                  address, settings, 24-hour counts, automations
@@ -2537,6 +2538,10 @@ def parser():
     s.add_argument("thread", help="the thread's id")
     s.add_argument("install", help="the other install's id")
     s.set_defaults(fn="peer unshare")
+    s = peer.add_parser("add-reader", help="let a person on this install read a shared copy of a thread")
+    s.add_argument("thread", help="the thread's id on this install (a shared copy)")
+    s.add_argument("actor", help="the person, as human:<name>")
+    s.set_defaults(fn="peer add-reader")
     trigger = sub.add_parser("trigger", help="webhooks that start automations (Settings > Webhooks)").add_subparsers(dest="sub")
     s = trigger.add_parser("list")
     s.set_defaults(fn="trigger list")
