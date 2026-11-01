@@ -13,7 +13,8 @@ live in the private ticoteam/tico-services repository.
 | `GET /v1/stats` | The public aggregate of that count | Nothing |
 | (in `GET /v1/latest`) | Tico's short messages for given versions and its known issues by version, the same lists for every install ([Messages, known issues and fixed-in notices](#messages-known-issues-and-fixed-in-notices)) | Nothing from installs |
 | `POST /v1/recruit` | Bot suggestions for one group while a team builds its team chart ([Finish setup](onboarding.md#the-team-builder)) | Nothing |
-| `GET /v1/onboarding/health`, `POST /v1/onboarding/event` | The setup page on tico.team: whether the assistant can answer, and the page's download count ([below](#the-setup-page-v1onboarding)) | With counts switched on, one row of counts per planning session; no text |
+| `GET /v1/onboarding/health`, `POST /v1/onboarding/event` | The setup page on tico.dev/setup: whether the assistant can answer, and the page's download count ([below](#the-setup-page-v1onboarding)) | With counts switched on, one row of counts per planning session; no text |
+| `PUT`, `GET /v1/onboarding/draft`, `POST /v1/onboarding/turn` | The setup page's saved draft and its chat, while the header says Connected to Tico ([below](#the-setup-page-v1onboarding)) | The draft and the chat's text for 30 days after the draft's last update, unless claimed by a hosted sign-up; see PRIVACY.md |
 | `/v1/support/...`, `/v1/staff/...` | Support tickets ([routes](telemetry.md#support-tickets), [support.md](support.md#what-is-sent-and-kept)) and support access, below | The tickets; access sessions and their request log |
 | `GET /healthz` | Liveness | Nothing |
 
@@ -77,12 +78,11 @@ scrubber for setup-website attachments); `--out DIR --check` exits 1 when DIR is
 
 ## The setup page: `/v1/onboarding`
 
-The page at [tico.team/setup](https://tico.team/setup) calls these from the visitor's browser. The
-assistant that answers there comes later; these routes work without it, so the page's download count can be measured
-in the browser alone first.
+The page at [tico.dev/setup](https://tico.dev/setup) calls these from the visitor's browser. The assistant answers
+there while the page's header says Connected to Tico; the draft and chat routes are kept only while connected.
 
 ```
-GET  /v1/onboarding/health -> 200 {"ok": false}       (true once the assistant can answer)
+GET  /v1/onboarding/health -> 200 {"ok": true|false}     (true when the assistant can answer)
 POST /v1/onboarding/event  {"session_id": "<random id>", "kind": "download"}
                            {"session_id": "<random id>", "kind": "message"}
                            {"session_id": "<random id>", "kind": "step", "step": 2}
@@ -100,10 +100,16 @@ GET  /v1/staff/onboarding?days=14   (staff key) -> {"counting": bool, "days": [{
 - **What is kept.** With `HQ_ONBOARDING_COUNTS=on`, one row per session in `onboarding_sessions`: a salted hash of the
   session id (the salt is in the database, so a restart keeps the row), the first UTC day, the furthest step, whether
   the file was downloaded, how many messages the visitor sent (a count, sent once per message by the page), and the
-  turns and cost the assistant adds. No message text and no address; the table has no
-  column for them. Off (the default), no visitor data is written. At most 20,000 new sessions a day are counted. Rows go 13
-  months after their day, with the daily purge, which also runs at start. PRIVACY.md says the same in the page's words.
-- **Browsers.** Only the origins in `HQ_ONBOARDING_ORIGINS` (comma-separated, default `https://tico.team`) get
+  turns and cost the assistant adds. No message text and no address; the table has no column for them. Off (the default),
+  no visitor data is written. At most 20,000 new sessions a day are counted. Rows go 13 months after their day, with the
+  daily purge, which also runs at start.
+- **The draft and chat.** While the page's header says Connected to Tico, the page saves its draft with `PUT /v1/onboarding/draft`
+  2 seconds after each change and on each step change. Once a draft is saved, each chat turn is kept with it (what the visitor
+  typed and the reply, key-scrubbed) in `onboarding_drafts` and `onboarding_draft_events`, with no address. Unclaimed drafts and
+  their events are deleted 30 days after their last update, by the daily purge; a draft claimed by a hosted sign-up is kept with
+  its account. Staff read them with a staff key (`GET /v1/staff/onboarding/drafts`, `GET /v1/staff/onboarding/drafts/{id}`).
+  `HQ_ONBOARDING_DRAFTS=off` keeps none of it. PRIVACY.md's setup page section says the same.
+- **Browsers.** Only the origins in `HQ_ONBOARDING_ORIGINS` (comma-separated, default `https://tico.dev` and the legacy `https://tico.team`) get
   `Access-Control-Allow-Origin` back, on every answer under `/v1/onboarding`, including HQ's `429`, so the page can read
   it. A preflight (`OPTIONS`) for `GET` or `POST` with at most `Content-Type` is answered `204` before the request limit and
   is not counted against it. Staff routes send no CORS headers.

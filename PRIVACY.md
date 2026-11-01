@@ -166,19 +166,33 @@ Your answers are saved in your own database with the rest of setup, so the bots 
 
 ## The setup page on tico.team
 
-[tico.team/setup](https://tico.team/setup) helps you plan your AI team before you install anything. It runs in your
+[tico.team/setup](https://tico.team/setup) (served from tico.dev) helps you plan your AI team before you install anything. It runs in your
 browser and calls Tico HQ at `https://updates.tico.team/v1/onboarding`. No install is involved, and nothing here comes
 from or goes to a Tico server you run.
 
+The page's "What we keep" panel says what is kept. This section says the same in full. Saving is not something you opt in to.
+
+### Connected or not
+
+The page's header says **Connected to Tico** while Tico's setup chat is on. Only then does the page send your chat messages and
+your plan to Tico's servers, and save your draft there. Otherwise they stay in your browser, and the page plans there alone.
+A copy of your plan stays in your browser either way.
+
 ### What is sent
 
-- `GET /v1/onboarding/health`: whether Tico's assistant can answer. Nothing is sent with it. Until the assistant
-  launches it answers `{"ok": false}`, and the page plans in your browser.
-- `POST /v1/onboarding/turn`, only while Tico's assistant is on: your message, the tab you are on and your plan, with the
-  chat's last 8 turns, which HQ sends through OpenRouter to the chat's model (Inception Mercury 3 by default) for the
-  answer, with data collection denied and zero retention; key-shaped text is removed first, and HQ keeps none of it and
-  logs no text.
-- `POST /v1/onboarding/event`, when you send a message or download your company file, and nothing else:
+- `GET /v1/onboarding/health`: whether Tico's assistant can answer. Nothing is sent with it.
+- `POST /v1/onboarding/turn`, while connected: your message, the tab you are on and your plan, with the chat's last 8 turns,
+  which HQ sends through OpenRouter to the chat's model (Inception Mercury 3 by default) for the answer, with data collection
+  denied and zero retention. Key-shaped text is removed first. HQ logs no text.
+- `PUT /v1/onboarding/draft`, while connected: the page's whole draft (the plan it has built so far: company name, website
+  address, description, bots, people, goals and strategy), and the step you are on. The page sends it 2 seconds after each
+  change and on each step change.
+- `GET /v1/onboarding/draft`: the page asks for the draft saved for its visit, to come back to it after its browser storage
+  is cleared. It returns only the draft saved for that visit.
+- `POST /v1/onboarding/site`, `POST /v1/onboarding/strategy` and `POST /v1/onboarding/goals`: your website address and
+  description, which Tico's servers read to suggest a name and business type, draft a strategy and search the market, and
+  the plan the goals are drafted from. The pages Tico reads from your website are not kept.
+- `POST /v1/onboarding/event`, when you send a message, download your company file or reach a step, and nothing else:
 
 ```
 {"session_id": "3f6c1a2e-9b7d-4c58-9a10-2d4e8b7f5a63", "kind": "download"}
@@ -189,12 +203,15 @@ from or goes to a Tico server you run.
 | `session_id` | A random ID the page makes for this planning session (8 to 64 letters, digits, `-` or `_`). One shaped like a key or token is refused before anything is done with it |
 | `kind` | `message` (that you sent one; not what it said), `download`, or `step` with `step`, a number from 0 to 9 for how far you got |
 
-No message text, plan, company name, email address or cookie. Only `https://tico.team` may call these routes from a page.
+The event carries no message text, plan, company name, email address or cookie.
+
+The page's browser rules: only `https://tico.dev` and the older `https://tico.team` may call these routes from a page.
 
 ### What HQ keeps
 
-What we keep: counts for each session: steps reached, whether the file was downloaded, how many turns, and what the
-session cost. No message text.
+There are two kinds of record, with different rules.
+
+**Counts** (only when HQ is told to keep them, `HQ_ONBOARDING_COUNTS=on`):
 
 | Column | Value |
 |---|---|
@@ -203,16 +220,25 @@ session cost. No message text.
 | `step` | the furthest step reached |
 | `downloaded` | whether the company file was downloaded |
 | `messages` | how many messages you sent; never what they said |
-| `turns`, `cost_micro_usd` | how many turns the assistant answered, and what they cost; zero until the assistant launches |
+| `turns`, `cost_micro_usd` | how many turns the assistant answered, and what they cost |
 
-- **Counts are off unless HQ is told to keep them** (`HQ_ONBOARDING_COUNTS=on`). While off, HQ answers the same and
-  stores nothing.
-- **No message text is stored anywhere**, and the table has no column for it. Keys and passwords are never stored, in
-  any form: a session ID shaped like one is refused before it is hashed.
-- **No IP addresses are stored or logged.** HQ uses the address in memory only, as a salted hash, for the same limit
-  of 60 requests an hour as every other route.
-- **Retention:** a session row is deleted 13 months after its day, by the daily job.
-- The Tico team reads daily totals only (sessions, sessions with 2 or more messages, how many of those downloaded the file, downloads, cost), never a session's row.
+- **Counts are off unless HQ is told to keep them.** While off, HQ answers the same and stores no counts.
+- **Counts hold no message text.** Text is kept only in the draft and chat, below.
+- **Retention:** a count row is deleted 13 months after its day, by the daily job.
+
+**Your draft and the chat** (kept while connected, for 30 days after the draft's last update):
+
+- **Draft.** The latest plan the page saved for your visit. Each save replaces the one before. It is kept under a salted hash of the visit's ID, never the ID itself.
+- **Chat.** Once a draft is saved, each chat turn is kept with it: what you typed and the reply, with key-shaped text removed. A turn the assistant could not answer is kept with no reply.
+- **Events.** For that visit: the steps you reached, which parts of the plan changed at each save (names only), the outcome of the strategy jobs, and how the visit ended (download, hosted sign-up or copied install).
+- **Who can read it.** Tico staff with a staff key can read a visit's draft and its events. The Tico team's daily totals, above, never show a visit's text.
+- **Retention:** an unclaimed draft and its events are deleted 30 days after the draft's last update, by the daily job.
+- **If you sign up.** A draft claimed by a hosted sign-up is kept with that account, not deleted by this rule.
+- **Off switch.** `HQ_ONBOARDING_DRAFTS=off` keeps no draft and no chat: the page's saves still get a 204 and nothing is kept.
+
+**Keys and passwords** you paste are never stored, in any form, not even in the saved chat: a session ID shaped like one is refused before it is hashed, and key-shaped text is removed before anything is kept. Please don't paste them; you connect tools on your own install.
+
+- **No IP addresses are stored or logged.** HQ uses the address in memory only, as a salted hash, for the request limits every other route has.
 
 ## Ask Tico, the chat on tico.team
 
@@ -374,7 +400,7 @@ or kept, and the page says so when one was. HQ keeps the email, the tab, the mod
 the note and plan apart from it as an attachment marked Untrusted public input. The visit's id is used in memory only, as a
 salted hash, to allow one ticket per visit (an id shaped like a key is refused, never hashed); HQ also allows 3 a day per address and per email address, and a daily total
 (`HQ_SETUP_TICKETS_DAILY_CAP`, 50 by default). It is a support ticket like the others: kept until someone deletes it, as
-below, not with the setup page's 7-day conversation log. The answer is a link to the request's page, with its secret after
+below, not with the setup page's draft and chat, which are deleted 30 days after their last update. The answer is a link to the request's page, with its secret after
 the `#`, where the team's reply shows and where the visitor can answer or delete it.
 
 **What HQ keeps**, per ticket: those fields (the diagnostics with the ticket, to a limit of 256 KB, shown to the Tico team only), a hash of a secret that only your Tico holds (it lets your Tico read this ticket's replies
