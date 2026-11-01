@@ -7,8 +7,8 @@ vault's data key (CredentialCipher.seal, context `model_subscription:<id>`), nev
 event or an idempotency receipt (saves go through Vault.change, which keeps only a keyed fingerprint).
 
 A computer (runner) is given at most one subscription per runtime (`computer_subscriptions`); one subscription may be
-given to many computers. A bot does not pick one: it runs on its computer, and a turn signs in, for its runtime and its
-named fallback's, with
+given to many computers. A bot does not pick one: it runs on its computer, and a turn signs in, for its runtime, its
+named fallback and eligible automatic fallbacks, with
 
   1. the computer's subscription for that runtime, unless it needs reconnecting (then it is passed over),
   2. else the login signed in on that computer (as before),
@@ -18,7 +18,11 @@ named fallback's, with
 Changing a computer's subscription for a runtime (giving, switching, taking it off) or removing a subscription in use
 stops that computer's live runs on that runtime and puts their work back in the queue (quarantine_stops.restart), and
 every session of that runtime on that computer starts fresh (`_restart`): nothing begun on the old login is resumed on
-the new one. The page confirms first (409 `confirm_restart` with the counts).
+the new one. Automatic fallback candidates alone do not fence a bot's primary conversations: fallback session keys
+already name the subscription home. Runners with activation support fetch an automatic candidate's value only
+when that runtime is about to start. Until then its login can change without stopping the primary. Older runners
+receive values up front, so those runs still stop on a login change to revoke their cached value. The page confirms
+first (409 `confirm_restart` with the counts).
 
 Usage limits: a subscription is one login wherever it runs, so a limit met on it holds it on every computer it is given
 to until the reset (login_holds `sub:<id>`). While held it is passed over like one that needs reconnecting: turns there
@@ -60,6 +64,7 @@ from .models import Contract, ID
 from .store import Problem
 
 CAPABILITY = "model_subscriptions_v1"
+ACTIVATION_CAPABILITY = "model_subscription_activation_v1"
 STATUSES = ("new", "working", "needs_reconnect")
 MAX_SUBSCRIPTIONS = 200
 MAX_VALUE = 64 * 1024
@@ -95,6 +100,8 @@ CREATE TABLE IF NOT EXISTS attempt_subscriptions(
  attempt_id TEXT NOT NULL, runtime TEXT NOT NULL, subscription_id TEXT NOT NULL, revision INTEGER NOT NULL,
  PRIMARY KEY(attempt_id, runtime));
 CREATE INDEX IF NOT EXISTS attempt_subscriptions_sub ON attempt_subscriptions(subscription_id);
+CREATE TABLE IF NOT EXISTS pending_subscription_fallbacks(
+ attempt_id TEXT NOT NULL, runtime TEXT NOT NULL, PRIMARY KEY(attempt_id, runtime));
 """
 
 
@@ -246,10 +253,9 @@ def in_effect(c, runner_id, runtime):
     return sub if runner_takes(runner) else None
 
 
-def turn_runtimes(config):
-    """The subscription runtimes a turn on `config` (runtime and model filled in) may use: its own and its named
-    fallback's, for the CLI harness of that runtime only. Not a Tico model (the Gateway signs that in) and not a bot
-    delivered through a desktop app."""
+def turn_runtimes(config, record=None):
+    """Subscription runtimes this turn may use, including the company's automatic fallbacks when `record` is given.
+    Gateway models and desktop delivery never use these credentials."""
     from .gateway_connection import is_tico
     from .harnesses import runtime_of
     config = config if isinstance(config, dict) else {}
@@ -259,20 +265,23 @@ def turn_runtimes(config):
     fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
     if fallback.get("harness") and not fallback.get("off") and not is_tico(fallback.get("model")):
         out.append(runtime_of(fallback["harness"]))
+    if record is not None and not fallback.get("off"):
+        from . import providers
+        from .harnesses import harness_caps
+        # Like the runner's limited_config, ignore a named model on the same spent login.
+        same_login = (fallback.get("model") and runtime_of(fallback.get("harness") or "") == config.get("runtime")
+                      and harness_caps(config.get("harness"), config.get("runtime")).get("api_keys") != "bot"
+                      and harness_caps(fallback.get("harness")).get("api_keys") != "bot")
+        if not fallback.get("harness") or same_login:
+            out.extend(r["runtime"] for r in providers.default_fallbacks(record)
+                       if not is_tico(r["model"]))
     return [r for r in dict.fromkeys(out) if r in RUNTIMES]
 
 
 def covered_runtimes(c, runner, config):
     """{runtime: kind} the computer's subscriptions sign in for a bot on `config` there: a covered runtime needs no
     sign-in on that computer, for the bot's readiness and the claim's check."""
-    if not runner or not _given(c):
-        return {}
-    out = {}
-    for runtime in turn_runtimes(config):
-        sub = in_effect(c, runner["id"], runtime)
-        if sub:
-            out[runtime] = sub["kind"]
-    return out
+    return {item["runtime"]: item["subscription"]["kind"] for item in for_claim(c, runner, config)}
 
 
 def covered(ready, runtimes):
@@ -369,13 +378,17 @@ def _restart_line(c, runner_id, runtime):
 
 def _live(c, runner_id, runtime):
     """The live attempts on this computer a change of its `runtime` sign-in stops: those handed that runtime (not a
-    Tico model, which the Gateway signs in) or handed a subscription for it (a fallback's)."""
+    Tico model, which the Gateway signs in) or already sent a subscription value for it (a fallback's). An unactivated
+    automatic candidate has no value to revoke and leaves the primary running."""
     from .gateway_connection import is_tico
     out = []
     for a in c.execute("SELECT a.* FROM attempts a WHERE a.runner_id=? AND a.state IN ('leased','running') "
                        "AND a.stop_requested IS NULL ORDER BY a.created", (runner_id,)).fetchall():
         own = a["handed_runtime"] == runtime and not is_tico(a["handed_model"])
-        if own or handed(c, a["id"], runtime):
+        given = handed(c, a["id"], runtime)
+        pending = c.execute("SELECT 1 FROM pending_subscription_fallbacks WHERE attempt_id=? AND runtime=?",
+                            (a["id"], runtime)).fetchone()
+        if own or (given and not pending):
             out.append(a)
     return out
 
@@ -389,6 +402,7 @@ def _bots(c, settings, runner_id, runtime):
     for r in c.execute("SELECT a.bot,b.config_json FROM assignments a JOIN bot_config b ON b.bot=a.bot "
                        "WHERE a.runner_id=? ORDER BY a.bot", (runner_id,)).fetchall():
         config = providers.fill(record, follow(c, r["bot"], json.loads(r["config_json"] or "{}")))
+        # Automatic candidates must not reset unrelated primary conversations; their session keys bind the login.
         if runtime in turn_runtimes(config):
             out.append(r["bot"])
     return out
@@ -583,14 +597,23 @@ def give(c, settings, who, body):
 
 # ------------------------------------------------------------------------------------------------ claim and run
 def for_claim(c, runner, config):
-    """The subscriptions a claimed turn on this computer runs on: [{runtime, subscription}]."""
+    """The subscriptions a claimed turn may use, with automatic candidates limited to installed runtimes."""
     if not runner or not _given(c):
         return []
+    from . import providers
+    from .read_cache import one
+    from .store import readiness_document
+    own = turn_runtimes(config)
+    row = one(c, "SELECT readiness_json FROM runners WHERE id=?", (runner["id"],))
+    ready = readiness_document(row["readiness_json"]) if row else {}
     out = []
-    for runtime in turn_runtimes(config):
+    for runtime in turn_runtimes(config, providers.load(c)):
+        if runtime not in own and ((ready.get("runtimes") or {}).get(runtime) or {}).get("installed") is not True:
+            continue          # a subscription authenticates a CLI; it cannot install one
         sub = in_effect(c, runner["id"], runtime)
         if sub:
-            out.append({"runtime": runtime, "subscription": sub})
+            lazy = runtime not in own and ACTIVATION_CAPABILITY in (H._json(runner["capabilities_json"], []) or [])
+            out.append({"runtime": runtime, "subscription": sub, "activate": lazy})
     return out
 
 
@@ -601,17 +624,23 @@ def hand_out(c, attempt_id, chosen):
         sub = item["subscription"]
         c.execute("INSERT OR REPLACE INTO attempt_subscriptions(attempt_id,runtime,subscription_id,revision) "
                   "VALUES(?,?,?,?)", (attempt_id, item["runtime"], sub["id"], sub["revision"]))
+        if item.get("activate"):
+            c.execute("INSERT OR IGNORE INTO pending_subscription_fallbacks(attempt_id,runtime) VALUES(?,?)",
+                      (attempt_id, item["runtime"]))
         spec = KINDS[sub["kind"]]
-        out.append({"id": sub["id"], "runtime": item["runtime"], "kind": sub["kind"], "name": sub["name"],
+        out.append({**({"activate": True} if item.get("activate") else {}),
+                    "id": sub["id"], "runtime": item["runtime"], "kind": sub["kind"], "name": sub["name"],
                     "revision": sub["revision"], "billing": spec["billing"], "source": "computer",
                     **({"env": spec["env"]} if spec.get("env") else {"file": spec["file"]})})
     return out
 
 
-def run_values(c, vault, who):
+def run_values(c, vault, who, subscription_runtime=None):
     """What `GET credential-runtime` adds for the bot run `who`: each subscription its claim handed it, with its value.
     Only the run's own attempt, only while it is live, only while its computer is still given that subscription, and
-    only the revision it was handed. A reconnect or a take-off stops every live run given it (`_restart`): such a run
+    only the revision it was handed. Automatic candidates on capable runners are metadata until requested by
+    `subscription_runtime`; delivering the value atomically activates the restart fence. A reconnect or a take-off
+    stops every live run already sent that value (`_restart`): such a run
     gets nothing and ends. A run still going whose subscription moved on was moved by a refresh (`refreshed`, the same
     account): it gets the refreshed value and its record moves with it, so its home, its write-back and its verdict
     agree."""
@@ -624,10 +653,21 @@ def run_values(c, vault, who):
     out = []
     for given in c.execute("SELECT * FROM attempt_subscriptions WHERE attempt_id=? ORDER BY runtime",
                            (who.attempt_id,)).fetchall():
+        pending = c.execute("SELECT 1 FROM pending_subscription_fallbacks WHERE attempt_id=? AND runtime=?",
+                            (who.attempt_id, given["runtime"])).fetchone()
+        if pending and subscription_runtime != given["runtime"]:
+            continue
         sub = row(c, given["subscription_id"])
         if (not sub or sub["status"] == "needs_reconnect"
                 or not still_given(c, attempt["runner_id"], given["runtime"], sub["id"])):
             continue
+        if pending:
+            # Serialized with give/reconnect/remove: once a value leaves, a later change must stop this run.
+            effective = in_effect(c, attempt["runner_id"], given["runtime"])
+            if attempt["stop_requested"] or not effective or effective["id"] != sub["id"]:
+                continue
+            c.execute("DELETE FROM pending_subscription_fallbacks WHERE attempt_id=? AND runtime=?",
+                      (who.attempt_id, given["runtime"]))
         if sub["revision"] != given["revision"]:
             if attempt["stop_requested"]:
                 continue        # stopped (a reconnect restarts its runs): it ends without the newer value
@@ -653,7 +693,9 @@ def refreshed(c, vault, who, body):
         raise Problem("forbidden", "Only a registered computer may send this", 403)
     given = c.execute("SELECT s.runtime,s.revision,a.state,a.lease_until,a.stop_requested FROM attempt_subscriptions s "
                       "JOIN attempts a ON a.id=s.attempt_id WHERE s.attempt_id=? AND s.subscription_id=? "
-                      "AND a.runner_id=?", (body.attempt, body.subscription, who.runner_id)).fetchone()
+                      "AND a.runner_id=? AND NOT EXISTS (SELECT 1 FROM pending_subscription_fallbacks p "
+                      "WHERE p.attempt_id=s.attempt_id AND p.runtime=s.runtime)",
+                      (body.attempt, body.subscription, who.runner_id)).fetchone()
     sub = row(c, body.subscription)
     if not given or not sub or sub["kind"] != "codex_login":
         raise Problem("forbidden", "That run was not handed this subscription on this computer", 403)

@@ -58,8 +58,10 @@ class Stream:
         self.status = self.response.status
         self.events = queue.Queue()
         self.seen = []
+        self.reader = None
         if self.status == 200:
-            threading.Thread(target=self._read, daemon=True).start()
+            self.reader = threading.Thread(target=self._read, daemon=True)
+            self.reader.start()
         else:
             self.body = json.loads(self.response.read() or b"{}")
 
@@ -114,6 +116,11 @@ class Stream:
             self.response.fp.raw._sock.shutdown(socket.SHUT_RDWR)
         except (AttributeError, OSError):
             pass
+        # shutdown wakes the reader; it owns the response until it exits. Closing underneath it races http.client.
+        if self.reader:
+            self.reader.join(timeout=5)
+            assert not self.reader.is_alive(), "stream reader did not stop after shutdown"
+        self.response.close()
         self.conn.close()
 
 

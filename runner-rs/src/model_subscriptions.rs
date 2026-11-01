@@ -2,7 +2,8 @@
 //! from `credential-runtime` next to its granted credentials, so it reaches whichever computer runs the turn and never
 //! the bot's repository.
 //!
-//! A turn may be handed two, its runtime's and its fallback's; each process gets only its own (`start`). An
+//! A turn may use its primary, named fallback and automatic candidates. Automatic values are fetched only at the
+//! hop boundary (`activate`); each process gets only its own (`start`). An
 //! environment subscription (`env`: a Claude setup-token as CLAUDE_CODE_OAUTH_TOKEN, an Anthropic key) is set in that
 //! process's environment, and the runtime's other sign-in variables are taken out of the turn's so the CLI cannot
 //! prefer one of them (Claude Code ranks ANTHROPIC_API_KEY above the token). The computer's own key for that runtime is
@@ -174,6 +175,41 @@ pub fn apply(state_dir: &Path, items: &Value, env: &mut Env, values: &mut Vec<St
         out.push(delivered);
     }
     out
+}
+
+/// An automatic candidate is claim metadata until this runner asks for its value at the hop boundary.
+pub fn pending(attempt: &Value, runtime: &str) -> bool {
+    attempt["subscriptions"].as_array().into_iter().flatten()
+        .any(|s| s["activate"] == true && s["runtime"].as_str() == Some(runtime))
+}
+
+pub fn available(delivered: &[Delivered], attempt: &Value, runtime: &str) -> bool {
+    for_runtime(delivered, runtime).is_some() || pending(attempt, runtime)
+}
+
+/// Fetch only immediately before the automatic runtime starts. The server serializes this delivery with login
+/// changes: a removed/held/rejected login yields no value; after delivery a change stops this attempt.
+/// Older servers send no `activate` metadata, so their original up-front delivery path stays in use.
+pub async fn activate(url: &str, token: &str, state_dir: &Path, attempt: &Value, runtime: &str,
+                      env: &mut Env) -> Result<(Vec<Delivered>, Vec<String>), String> {
+    let expected = attempt["subscriptions"].as_array().into_iter().flatten()
+        .find(|s| s["activate"] == true && s["runtime"].as_str() == Some(runtime))
+        .ok_or("No automatic subscription candidate")?;
+    // Runtime names originate in claim metadata, but still must not become arbitrary query text.
+    if !safe_id(runtime) { return Err("Invalid subscription runtime".into()); }
+    let client = crate::client::Client::new(url, token, 15, 1)?;
+    let response = client.get(&format!("credential-runtime?subscription_runtime={runtime}")).await
+        .map_err(|_| "Could not activate automatic subscription")?;
+    // A rolled-back server can return values without clearing the pending fence. Do not start on them.
+    if response["subscription_activated"] != true {
+        return Err("Server did not activate automatic subscription".into());
+    }
+    let items: Vec<Value> = response["subscriptions"].as_array().into_iter().flatten()
+        .filter(|s| s["runtime"] == expected["runtime"] && s["id"] == expected["id"]).cloned().collect();
+    let mut secrets = vec![];
+    let got = apply(state_dir, &json!(items), env, &mut secrets, &mut BTreeSet::new());
+    if got.is_empty() { return Err("Automatic subscription is no longer available".into()); }
+    Ok((got, secrets))
 }
 
 /// Sign `runtime` in, and only it, in `env`, the environment of its process about to start: the other runtimes'
@@ -495,6 +531,15 @@ mod tests {
         assert_eq!(env["CLAUDE_CODE_OAUTH_TOKEN"], token);
         assert_eq!(env["CODEX_HOME"], "/computer/.codex", "Claude's process was pointed at the fallback's home");
         assert!(!file.exists(), "the fallback's login was in place while only Claude ran");
+        // No local login and no named fallback: the handed subscription wins before Gateway.
+        let config = json!({"runtime": "claude", "harness": "claude", "model": "claude-sonnet-5-5"});
+        let choices = vec![json!({"runtime": "codex", "model": "gpt-6.1-sol"}),
+                           json!({"runtime": "pi", "model": "tico-mid-1.0"})];
+        let ready = |rt: &str| for_runtime(&got, rt).is_some();
+        let chosen = crate::fallback::default_choice(&config, &choices, &env, ready).unwrap();
+        assert_eq!(chosen.runtime, "codex");
+        assert!(chosen.default);
+        assert!(crate::fallback::default_choice(&config, &choices, &env, |_| false).is_none());
         // The hop: its environment is copied from the turn's; it gets the Codex home and loses Claude's token.
         let mut hop = env.clone();
         start(&mut got, "codex", &mut hop);
@@ -519,6 +564,49 @@ mod tests {
         assert_eq!(hop["CLAUDE_CODE_OAUTH_TOKEN"], token);
         assert!(finish(&mut got).is_empty(), "a home let go is not let go twice");
         std::fs::remove_dir_all(&state).unwrap();
+    }
+
+    #[tokio::test]
+    async fn automatic_candidates_fetch_only_at_the_hop_and_removed_values_never_start() {
+        let state = dir();
+        let attempt = json!({"subscriptions": [{"id":"auto-login", "runtime":"codex", "activate":true}]});
+        let mut env = Env::new();
+        let injected_runtime = "runtime&other=value";
+        let injected = json!({"subscriptions": [{"id":"auto-login", "runtime":injected_runtime, "activate":true}]});
+        assert_eq!(activate("http://127.0.0.1:1", "run-token", &state, &injected, injected_runtime, &mut env)
+            .await.unwrap_err(), "Invalid subscription runtime");
+        let config = json!({"runtime":"claude", "harness":"claude", "model":"primary"});
+        let choices = vec![json!({"runtime":"codex", "harness":"codex", "model":"fallback"})];
+        let choice = crate::fallback::default_choice(&config, &choices, &env, |rt| available(&[], &attempt, rt)).unwrap();
+        assert_eq!(choice.runtime, "codex");
+        assert!(!state.join("subscriptions/auto-login/codex/auth.json").exists());
+        let reply = json!({"subscription_activated": true, "subscriptions": [
+            {"id":"auto-login", "runtime":"codex", "kind":"codex_login", "file":"auth.json", "revision":2,
+             "value":"{\"tokens\":{\"refresh_token\":\"synthetic-long-refresh-token\"}}"},
+            {"id":"primary-login", "runtime":"claude", "env":"CLAUDE_CODE_OAUTH_TOKEN", "value":"primary-secret"}
+        ]}).to_string();
+        let (url, seen) = crate::client::tests::serve(vec![(200, Box::leak(reply.clone().into_boxed_str()))]).await;
+        let (mut given, secrets) = activate(&url, "run-token", &state, &attempt, "codex", &mut env).await.unwrap();
+        assert_eq!(given.len(), 1);
+        assert_eq!(given[0].revision, 2);
+        assert!(secrets.iter().any(|s| s == "synthetic-long-refresh-token"));
+        assert!(!env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
+        assert!(!given[0].file.as_ref().unwrap().exists(), "fetching never places the file");
+        assert!(seen.lock().unwrap()[0].contains("credential-runtime?subscription_runtime=codex"));
+        start(&mut given, "codex", &mut env);
+        assert!(given[0].file.as_ref().unwrap().exists());
+        finish(&mut given);
+        let (url, _) = crate::client::tests::serve(vec![(200, "{\"credentials\":[]}")]).await;
+        assert!(activate(&url, "run-token", &state, &attempt, "codex", &mut env).await.is_err());
+        let mut rolled_back: Value = serde_json::from_str(&reply).unwrap();
+        rolled_back.as_object_mut().unwrap().remove("subscription_activated");
+        let (url, _) = crate::client::tests::serve(vec![(200, Box::leak(rolled_back.to_string().into_boxed_str()))]).await;
+        assert!(activate(&url, "run-token", &state, &attempt, "codex", &mut env).await.is_err(),
+                "a rolled-back server must not bypass the activation fence");
+        let old_server = json!({"subscriptions":[{"id":"auto-login", "runtime":"codex"}]});
+        assert!(!pending(&old_server, "codex"));
+        assert!(available(&given, &old_server, "codex"), "old server up-front values stay usable");
+        std::fs::remove_dir_all(state).unwrap();
     }
 
     #[tokio::test]
