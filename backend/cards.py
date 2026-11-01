@@ -306,17 +306,34 @@ def needs_attention(ctx, s):
 
 
 def thread_rows(ctx, limit):
-    """The reader's unread threads as the sidebar lists them (`GET /threads`, docs/dev/threads-contract.md), newest
-    first: [{id, title, unread, attention, updated}]. Until the threads store is on this install there are none."""
-    return []
+    """The reader's threads with something new, from core's sidebar (`threads.sidebar`, docs/dev/threads-contract.md
+    §10), most recent first: [{id, title, unread, activity, updated}]. The sidebar lists only threads the reader may
+    read. An install without the threads store yet has none."""
+    try:
+        from . import threads
+    except ImportError:
+        return []
+    if not hasattr(threads, "sidebar"):
+        return []
+    viewer = threads.viewer(ctx.auth, ctx.who)
+    data = threads.sidebar(ctx.c, viewer, limit=50)
+    rows = []
+    for t in (data.get("attention") or []) + (data.get("threads") or []) + (data.get("dms") or []):
+        me = t.get("me") or {}
+        if t.get("id") and (me.get("unread") or me.get("activity")) and t["id"] not in {r["id"] for r in rows}:
+            rows.append({"id": t["id"], "title": t.get("title") or "", "unread": int(me.get("unread") or 0),
+                         "activity": bool(me.get("activity")), "updated": t.get("last_message_at"),
+                         "seq": t.get("last_seq") or 0})
+    rows.sort(key=lambda r: (r["unread"] > 0, r["seq"]), reverse=True)
+    return [{k: v for k, v in r.items() if k != "seq"} for r in rows[:limit]]
 
 
 def unread_threads(ctx, s):
     """Threads with something for the reader: a human message or one addressed to them (bot activity is not unread)."""
     if ctx.who.role not in ("owner", "human", "bot"):
         return None
-    rows = thread_rows(ctx, s["count"])
-    return {"count": len(rows), "threads": rows[:s["count"]]}
+    rows = thread_rows(ctx, 50)
+    return {"count": sum(1 for r in rows if r["unread"]), "threads": rows[:s["count"]]}
 
 
 OPEN_STATUSES = H.ACTIVE_STATUSES

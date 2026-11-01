@@ -44,7 +44,7 @@ grid is one column.
 | Automation runs | Runs in the last 24 hours, failures first | team |
 | Latest pages | The newest current [pages](pages.md): not archived or replaced | team, count (1 to 10) |
 | Needs attention | The reader's own Needs you: count and top five | none |
-| Unread threads | Threads with a human message or one addressed to the reader | count (1 to 10) |
+| Unread threads | Threads with something new for the reader: unread (a human message or one addressed to them) first, then bot activity | count (1 to 10) |
 | My tasks | Open tasks the reader owns, the soonest due first | count (1 to 10) |
 | Updates | The newest updates the reader may read, and how many are unread | count (1 to 10) |
 

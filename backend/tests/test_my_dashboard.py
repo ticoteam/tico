@@ -99,3 +99,28 @@ def test_a_bot_has_no_my_dashboard_and_an_unknown_person_is_no_place(api):
     place(api, "person:nobody", expected=404)
     with api.app.state.store.read() as c:
         assert H.human(c, "cara")
+
+
+def test_unread_threads_reads_cores_sidebar_and_only_what_has_something_new(api, monkeypatch):
+    """The card reads `threads.sidebar` (docs/dev/threads-contract.md §10), which lists only readable threads."""
+    import sys
+    import types
+    seen = []
+    fake = types.ModuleType("backend.threads")
+    fake.viewer = lambda auth, who: who
+    def sidebar(c, viewer, cursor=None, limit=50):
+        seen.append(viewer.actor)
+        me = lambda unread, activity=False: {"unread": unread, "activity": activity}   # noqa: E731
+        return {"attention": [{"id": "th-a", "title": "Launch", "last_seq": 9, "last_message_at": "2026-11-01T10:00:00Z",
+                               "me": me(2)}],
+                "threads": [{"id": "th-a", "title": "Launch", "last_seq": 9, "me": me(2)},
+                            {"id": "th-b", "title": "Pricing", "last_seq": 12, "me": me(0, True)},
+                            {"id": "th-c", "title": "Read already", "last_seq": 3, "me": me(0)}],
+                "dms": [{"id": "dm-1", "title": "Ana", "last_seq": 5, "me": me(1)}], "next_cursor": None}
+    fake.sidebar = sidebar
+    monkeypatch.setitem(sys.modules, "backend.threads", fake)
+    cards = {p["card"]["template"]: p["card"] for p in place(api, "person:me", "cara-test")["pins"]}
+    data = cards["unread_threads"]["data"]
+    assert [t["id"] for t in data["threads"]] == ["th-a", "dm-1", "th-b"]          # unread first, then activity
+    assert data["count"] == 2 and data["threads"][0]["unread"] == 2 and data["threads"][2]["activity"] is True
+    assert seen == ["human:cara"]
