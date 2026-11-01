@@ -733,6 +733,19 @@ export type CardList = {
   next: string | null;
 };
 
+export type CatchUp = {
+  scope?: string;
+};
+
+export type CatchUpResult = {
+  left_out: number;
+  messages: number;
+  posted?: Record<string, unknown>;
+  scope: string;
+  thread_id: string;
+  words?: string;
+};
+
 export type ChangelogEntry = {
   area: string;
   bullets: Array<string>;
@@ -3114,6 +3127,7 @@ export type PersonUpdate = {
   goals?: string | null;
   left?: boolean | null;
   notes?: string | null;
+  notify_browser?: boolean | null;
   notify_slack_bot_messages?: boolean | null;
   notify_slack_task_done?: boolean | null;
   on_behalf_of?: string | null;
@@ -5428,6 +5442,14 @@ export type CancelSeatRequestParams = {
 };
 export type CancelSeatRequestBody = never;
 export type CancelSeatRequestResponse = SeatCancelled;
+
+/** POST /api/v2/threads/{thread_id}/catch-up */
+export type CatchUpThreadParams = {
+  "Idempotency-Key": string;
+  thread_id: string;
+};
+export type CatchUpThreadBody = CatchUp;
+export type CatchUpThreadResponse = CatchUpResult;
 
 /** POST /api/v2/model-subscriptions/{sid} */
 export type ChangeModelSubscriptionParams = {

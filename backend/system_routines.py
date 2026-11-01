@@ -147,6 +147,8 @@ ACTIONS = {
     "turns_finding": ("keep one Health finding per busy-turns incident and hand what it cannot fix to BotOps",
                       ("health", "turns", "incident", "botops", "busy")),
     "wake_stalled": ("wake the bot on a task nothing is moving", ("stalled", "wake", "tasks")),
+    "nudge_asks": ("nudge a person once in their thread when a bot's ask to them stays unanswered for a day",
+                   ("ask", "follow up", "nudge", "remind", "thread", "unanswered")),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
     "unstrand": ("send bot tasks waiting on nothing back to work", ("waiting", "tasks")),
     "ask_to_task": ("turn a bot's plain ask to a person into a small task", ("ask", "tasks")),
@@ -229,6 +231,10 @@ JOBS = [
         REMINDERS, "Hourly", 3600, control=True, then=("go_ahead",)),
     Job("approval_expiry", "Approval expiry", "Takes approvals and asks nobody will act on out of Needs you.",
         REMINDERS, "Hourly", 3600, then=("expire_approvals",)),
+    Job("thread_followups", "Follow-ups",
+        "Nudges a person once, in their thread, when a bot's ask to them stays unanswered for a day. Plain code: no "
+        "model is called, and nothing to nudge is a quiet run.",
+        REMINDERS, "Every 15 minutes", 900, then=("nudge_asks",)),
     Job("still_needed", "Unanswered questions",
         "On weekday mornings, sends questions unanswered for two business days back to their bots.",
         REMINDERS, "Hourly", 3600, then=("resend_questions",)),
@@ -338,7 +344,7 @@ CONTROLS = {
 
 QUICK_KEYS = ("still_wanted", "kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
               "engineering_exceptions", "bookkeeper_check", "bookkeeper_watch",
-              "bookkeeper_rules_digest")   # last runs read by backend/scheduler.py (QUICK and FIXED)
+              "bookkeeper_rules_digest", "thread_followups")   # last runs read by backend/scheduler.py (QUICK and FIXED)
 
 
 def zone():

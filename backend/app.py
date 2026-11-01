@@ -2645,6 +2645,8 @@ def create_app(settings=None):
                     row = {**row, "notify_slack_bot_messages": body.notify_slack_bot_messages}
                 if body.update_draft is not None:
                     row = {**row, "update_draft": body.update_draft}
+                if body.notify_browser is not None:
+                    row = {**row, "notify_browser": body.notify_browser}
                 if body.slack_muted_bots is not None:
                     row = {**row, "slack_muted_bots": list(dict.fromkeys(body.slack_muted_bots))}
                 if body.reports_to is not None:
@@ -2664,6 +2666,7 @@ def create_app(settings=None):
                                                               "github": body.github is not None,
                                                               "notify_slack_bot_messages": body.notify_slack_bot_messages,
                                                               "update_draft": body.update_draft,
+                                                              "notify_browser": body.notify_browser,
                                                               "slack_muted_bots": body.slack_muted_bots,
                                                               "reports_to": body.reports_to, "left": bool(body.left)})
                 if caller is not who:
@@ -7982,6 +7985,8 @@ def create_app(settings=None):
     from .judge import install_judge
     install_judge(app, store, auth)
     ask_ingest.install(app, store, auth)
+    from . import thread_catchup
+    thread_catchup.install(app, store, auth, mutate)
     from . import stale_review
     stale_review.install(app, store, auth, mutate)
     from . import system_routines

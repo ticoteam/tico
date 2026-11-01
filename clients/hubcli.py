@@ -15,6 +15,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub message list                       what waits for you
     hub message mark-read <message-id>     an external agent's own delivery
     hub message redact <message-id> [--label L]   take a secret (read from stdin) out of a message
+    hub thread catchup <thread-id> [--thread-only]
+                                           what is new in a thread and its sub-threads you may read, summarized into
+                                           your Assistant DM (the newest 40 messages; nothing new posts nothing)
     hub conversation show <conversation-id> [--before MSG] [--since TIME]
                                            what was said in a conversation: the newest 200, oldest
                                            first; has_more says there is an older page, --before
@@ -940,7 +943,12 @@ def parser():
     s.add_argument("--since", help="only messages sent after this time (ISO 8601)")
     s.set_defaults(fn="conversation show")
 
-    thread = sub.add_parser("thread", help="threads: list yours, read one, post, reply in a sub-thread, follow, search").add_subparsers(dest="sub")
+    thread = sub.add_parser("thread", help="threads: list yours, read one, post, reply in a sub-thread, follow, search, catch up").add_subparsers(dest="sub")
+    s = thread.add_parser("catchup", help="summarize what is new in a thread into your Assistant DM")
+    s.add_argument("thread_id")
+    s.add_argument("--thread-only", dest="scope", action="store_const", const="thread", default="subtree",
+                   help="this thread only, not its sub-threads")
+    s.set_defaults(fn="thread catchup")
     s = thread.add_parser("list", help="your threads: needs attention first, then unread, then recent; DMs apart")
     thread_page_flags(s)
     s.set_defaults(fn="thread list")

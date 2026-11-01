@@ -22565,7 +22565,7 @@
     },
     "/api/v2/rule-holds/{hold_id}": {
       "get": {
-        "summary": "One held output as its reader sees it: the author reads the writes they made, a person or a bot; the reviewer reads the rest",
+        "summary": "One held output as its reader sees it: the author reads the writes they made, a person or a bot; the reviewer and the person a bot reports to read the rest",
         "operationId": "getRuleHold",
         "parameters": [
           {
@@ -22822,7 +22822,7 @@
     },
     "/api/v2/rule-holds/{hold_id}/withdraw": {
       "post": {
-        "summary": "The author takes a held write back to edit and resend it; nothing is sent",
+        "summary": "The author takes a held write back to edit and resend it, or the person a bot reports to withdraws its post; nothing is sent",
         "operationId": "withdrawRuleHold",
         "parameters": [
           {
@@ -30832,6 +30832,77 @@
         ]
       }
     },
+    "/api/v2/threads/{thread_id}/catch-up": {
+      "post": {
+        "summary": "What is new in a thread (scope subtree: its sub-threads too) that you may read, summarized and posted to your Assistant DM; the newest 40 messages at most. Nothing new posts nothing",
+        "operationId": "catchUpThread",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatchUp"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatchUpResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Conversations"
+        ]
+      }
+    },
     "/api/v2/threads/{thread_id}/follow": {
       "put": {
         "summary": "Follow a thread so its messages reach the viewer (`notify`: live or digest)",
@@ -38738,6 +38809,49 @@
         "required": [
           "cards",
           "next"
+        ],
+        "additionalProperties": true
+      },
+      "CatchUp": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "maxLength": 10,
+            "title": "Scope",
+            "default": "subtree"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "CatchUp"
+      },
+      "CatchUpResult": {
+        "type": "object",
+        "properties": {
+          "thread_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "integer"
+          },
+          "left_out": {
+            "type": "integer"
+          },
+          "posted": {
+            "type": "object"
+          },
+          "words": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "left_out",
+          "messages",
+          "scope",
+          "thread_id"
         ],
         "additionalProperties": true
       },
@@ -50470,6 +50584,17 @@
               }
             ],
             "title": "Update Draft"
+          },
+          "notify_browser": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notify Browser"
           },
           "slack_muted_bots": {
             "anyOf": [

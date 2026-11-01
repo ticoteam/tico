@@ -1033,7 +1033,10 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
 PRESSING_DAYS = 3
 DECISIVE_DAYS = 1
 # A bot's task set waiting on the person blocks that bot just as its question does.
-KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "declined": 2, "stale": 3, "task": 3, "report": 4}
+KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "declined": 2, "stale": 3, "task": 3, "report": 4,
+             # Thread items (backend/thread_attention.py): an ask, a held message or a paused thread blocks a bot; a
+             # mention or an unread DM is a person's to read.
+             "thread_ask": 1, "thread_held": 1, "thread_capped": 1, "thread_mention": 2, "thread_dm": 2}
 # A card whose bot has not yet said plainly what it needs (`ask_missing`) waits at the very bottom: there is nothing
 # for the person to do on it until the bot restates it (backend/restate_asks.py asks it to).
 
@@ -1217,6 +1220,12 @@ def need_of(item):
         return "decide"         # Accept or Skip, row by row
     if kind == "setup":
         return "connect"        # sign in to a provider (backend/models_preset.py)
+    if kind == "thread_ask":
+        return "decide"         # a thread's question to the person, answered in the thread
+    if kind == "thread_held":
+        return "review"         # a message held for review (backend/org_rule_check.py)
+    if kind in ("thread_mention", "thread_dm", "thread_capped"):
+        return "do"             # read or answer in the thread
     if item.get("reconnect"):
         return "connect"        # an account or credential a bot's task stopped on (backend/reconnects.py)
     if kind == "approval":
@@ -1775,6 +1784,11 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         setup = models_preset.card(c)
         if setup:
             items.append(setup)
+    if H.is_human(who.actor):
+        # The thread items (backend/thread_attention.py); an ask Needs you already lists as a loose ask is not listed twice.
+        from . import thread_attention
+        listed = {it["message_id"] for it in items if it.get("message_id")}
+        items.extend(thread_attention.items(c, auth, who, skip=listed))
     items = fold_reconnects(fold_related(items, c, who.actor))
     if count_only:
         return items

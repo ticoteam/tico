@@ -288,7 +288,8 @@ ahead of time so it doesn't try.
     The owner or an admin can read, keep or send any hold whose reviewer is missing or gone, and the review task's
     hold list shows it to them.
   - The held output lives in its own `org_rule_holds` row (operation, payload, author, destinations, rules, verdict),
-    readable only by the author bot and the reviewer. It is never a message or task row: an undelivered message is
+    readable by the author bot, the reviewer and the person it is held for (who may withdraw it, not release it). It is
+    never a message or task row: an undelivered message is
     what inboxes and the mailbox loop read. Send anyway submits the hold's one-shot server nonce: the normal write
     runs once, as the bot, with `bot_access` and ask ingest, but Decide isn't asked again for that exact payload. A
     changed payload or a newer rule version is a new check. A held automation step whose automation now acts as

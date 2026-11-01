@@ -66,7 +66,7 @@ def test_only_the_owner_of_an_assistant_room_reads_or_posts_in_it(api):
     assert ana["available"] and ana["room_id"] and ana["room_id"] != ben["room_id"]
     assert room(api, "ana-test")["room_id"] == ana["room_id"]          # one room each, however often asked
     say(api, "My private question about the launch", "ana-test", expected=200)
-    # Not the other person, and not the company owner either.
+    # Not the other person, and not the company owner either. C1 hides a room it cannot read: 404, never 403.
     get(api, f"conversations/{ana['room_id']}/messages", "ben-test", expected=404)
     get(api, f"conversations/{ben['room_id']}/messages", "ana-test", expected=404)
     post(api, "messages", {"to": "coo", "text": "Injected", "conversation_id": ana["room_id"]}, token="ben-test",
@@ -546,7 +546,7 @@ def test_clear_my_queue_declines_and_answers_in_bulk_and_never_approves(api):
         assert answers.get(q["ask"]) == "human:ben" and q["her_ask"] not in answers
     # Others' items stay as they were, whatever is cited.
     asked(api, "approvals/" + q["hers"], decline, token, "turn", expected=403)
-    asked(api, f"messages/{q['her_ask']}/answer", {"text": "Blue"}, token, "turn", expected=404)
+    asked(api, f"messages/{q['her_ask']}/answer", {"text": "Blue"}, token, "turn", expected=404)   # C1: 404
     assert decision(api, q["hers"]) is None and decision(api, q["merge"]) is None
 
 

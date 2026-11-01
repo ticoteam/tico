@@ -1138,6 +1138,8 @@ class Store:
             from . import system_routines as _system_routines
             c.executescript(_system_routines.SCHEMA)
             _system_routines.ensure(c)
+            from . import thread_followups as _thread_followups
+            _thread_followups.ensure(c)
             from . import task_rules as _task_rules
             c.executescript(_task_rules.SCHEMA)
             from . import audit_log as _audit_log

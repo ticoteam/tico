@@ -53,6 +53,8 @@ async function ruleHoldRedraw(slot, id, card) {
 function ruleHoldHTML(h) {
   const [word, cls] = RH_OUTCOME[h.outcome] || RH_OUTCOME.blocked;
   const rules = (h.rules || []).map(r => `<div class="rh-rule">${esc(r.text)}</div>`).join('');
+  // The reviewer releases or keeps a hold. Its author takes it back to edit and resend; the person a bot's hold is held
+  // for may only withdraw it (it stays blocked).
   const reviewer = !!h.nonce || h.can_send;
   const decided = h.state === 'sent' ? `Sent anyway${h.decided_by ? ' by ' + esc(actorLabel(h.decided_by)) : ''}`
     : h.state === 'kept' ? `Kept blocked${h.decided_by ? ' by ' + esc(actorLabel(h.decided_by)) : ''}` : '';
@@ -67,7 +69,8 @@ function ruleHoldHTML(h) {
       ${rule ? `<a class="ghost small rh-btn" href="${esc(ruHref(rule.kind, {rule: rule.id}))}">Edit rule</a>` : ''}
       ${h.can_send ? `<button class="ghost small" type="button" data-hold-send="${esc(h.nonce || '')}">Send anyway</button>` : ''}
       <span class="spacer"></span><button class="primary small" type="button" data-hold-keep>Keep blocked</button></div>`
-      : h.can_withdraw ? `<div class="rh-acts"><span class="spacer"></span><button class="primary small" type="button" data-hold-edit>Edit and resend</button></div>` : ''}
+      : h.can_withdraw ? `<div class="rh-acts"><span class="spacer"></span><button class="primary small" type="button" data-hold-edit>${
+        String(h.author || '').startsWith('human:') ? 'Edit and resend' : 'Withdraw'}</button></div>` : ''}
     <p class="rh-err" role="status" hidden></p>
   </article>`;
 }
@@ -127,7 +130,8 @@ function ruleChatWire(state, thread) {
   ruleHoldsWire(thread, state.conv?.id, (card, hid, path) => {
     const hold = (state.holds || []).find(h => h.id === hid);
     state.holds = (state.holds || []).filter(h => h.id !== hid);
-    if (path === 'withdraw' && hold?.text && !hold.text_cut) ruleRestoreDraft(state.slug, hold.text);
+    if (path === 'withdraw' && String(hold?.author || '').startsWith('human:') && hold?.text && !hold.text_cut)
+      ruleRestoreDraft(state.slug, hold.text);
     if (V2C === state) v2ChatRender(state);
   });
 }

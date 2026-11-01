@@ -633,6 +633,9 @@ STABLE = [
      "business) or its daily time", "SystemRoutineUpdate"),
     ("/api/v2/system-routines/{key}/run", "post", "Health", "runSystemRoutine",
      "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running", None),
+    ("/api/v2/threads/{thread_id}/catch-up", "post", "Conversations", "catchUpThread",
+     "What is new in a thread (scope subtree: its sub-threads too) that you may read, summarized and posted to your "
+     "Assistant DM; the newest 40 messages at most. Nothing new posts nothing", "CatchUpResult"),
 ]
 
 
@@ -685,6 +688,8 @@ SCHEMAS = {
     "ChatGoal": obj({"id": "s", "conversation_id": "s", "bot": "s", "objective": "s", "status": "s",
                      "note": "s", "set_by": "s", "set_at": "s", "updated_at": "s", "ended_at": "n"},
                     required=["id", "conversation_id", "bot", "objective", "status", "note", "set_by", "set_at", "updated_at", "ended_at"]),
+    "CatchUpResult": obj({"thread_id": "s", "scope": "s", "messages": "i", "left_out": "i", "posted": "o",
+                          "words": "s"}, required=["thread_id", "scope", "messages", "left_out"]),
     "ChatGoalResult": obj({"goal": {"anyOf": [ref("ChatGoal"), {"type": "null"}]}}, required=["goal"],
                           supported={"type": "boolean"}, commands=items({"type": "object"})),
     "Message": obj({"id": "s", "conversation_id": "s", "from_actor": "s", "to_actor": "s", "kind": "s", "body": "s",
@@ -2288,9 +2293,9 @@ STABLE.extend([
     ('/api/v2/rules/stats', 'get', 'Rules', 'getRuleCheckStats', 'Rule checks today: checks, unchecked, blocked, dollars left in the rules budget, and whether checks are on', None),
     ('/api/v2/rules/check', 'post', 'Rules', 'checkRuleDraft', 'A bot checks a draft as the write it will be; sending that exact draft then costs no second check', None),
     ('/api/v2/rule-holds', 'get', 'Rules', 'listRuleHolds', 'The held writes the caller may read, as summaries, a page at a time: a review task\'s holds (task), a conversation\'s held writes (thread), or every held write the caller may read', None),
-    ('/api/v2/rule-holds/{hold_id}', 'get', 'Rules', 'getRuleHold', 'One held output as its reader sees it: the author reads the writes they made, a person or a bot; the reviewer reads the rest', None),
+    ('/api/v2/rule-holds/{hold_id}', 'get', 'Rules', 'getRuleHold', 'One held output as its reader sees it: the author reads the writes they made, a person or a bot; the reviewer and the person a bot reports to read the rest', None),
     ('/api/v2/rule-holds/{hold_id}/keep', 'post', 'Rules', 'keepRuleHold', 'The reviewer keeps it blocked', None),
-    ('/api/v2/rule-holds/{hold_id}/withdraw', 'post', 'Rules', 'withdrawRuleHold', 'The author takes a held write back to edit and resend it; nothing is sent', None),
+    ('/api/v2/rule-holds/{hold_id}/withdraw', 'post', 'Rules', 'withdrawRuleHold', 'The author takes a held write back to edit and resend it, or the person a bot reports to withdraws its post; nothing is sent', None),
     ('/api/v2/rule-holds/{hold_id}/send', 'post', 'Rules', 'sendRuleHold', 'The reviewer sends it anyway, once, with the hold\'s nonce; for a person\'s write that is the rule\'s author, its editors or an admin', None),
     ('/api/v2/rule-holds/{hold_id}/appeal', 'post', 'Rules', 'appealRuleHold', 'The author bot asks the reviewer to look, with why', None),
 ])
