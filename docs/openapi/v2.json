@@ -10193,7 +10193,7 @@
     },
     "/api/v2/finance/lines/{account_id}": {
       "get": {
-        "summary": "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's projection (next_month; by vendor, team and teammate in next_by, named in next_labels), as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). The owner may pass view_as",
+        "summary": "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's projection (next_month; by vendor, team and teammate in next_by, named in next_labels), as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). Rows past top_n fold into one Other row keyed \" other\", and the group with none is keyed \" unattributed\". The owner may pass view_as",
         "operationId": "getFinanceLine",
         "parameters": [
           {
@@ -11186,7 +11186,7 @@
     },
     "/api/v2/finance/reports/{kind}": {
       "get": {
-        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row",
+        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
         "operationId": "getFinanceReport",
         "parameters": [
           {

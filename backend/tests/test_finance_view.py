@@ -37,7 +37,7 @@ def test_managers_see_only_their_teams_and_members_only_their_own(books):
         assert mine["total"] == sum(a for t, m, a in posted if m == "human:eve")
         everyone = FR.expenses(c, OWNER, "2026-10-01", "2026-10-31", "team", top_n=2, at=AT)
         assert everyone["total"] == sum(a for _, _, a in posted)
-        assert any(r["key"] == "unattributed" for r in FR.expenses(c, OWNER, "2026-10-01", "2026-10-31", "team",
+        assert any(r["key"] == FR.NONE for r in FR.expenses(c, OWNER, "2026-10-01", "2026-10-31", "team",
                                                                     top_n=10, at=AT)["rows"])
         assert everyone["rows"][-1]["label"].startswith("Other · ")
         assert FR.pnl(c, "human:cara", "2026-10-01", "2026-10-31", at=AT)["income"] == [0]
@@ -191,7 +191,7 @@ def test_own_lines_never_sit_beside_the_department_cell(books):
         assert dept["excluded"] and dept["total"] == 5_000 + run       # her own bonus is not added in
         mine = FR.expenses(c, "human:fay", "2026-09-01", "2026-09-30", "teammate", at=AT)
         assert {r["key"]: r["amount"] for r in mine["rows"]} == {"human:fay": PAY["human:fay"] + 50_000,
-                                                                 "unattributed": 5_000}
+                                                                 FR.NONE: 5_000}
 
 
 def test_managers_get_their_department_cell_only_when_they_cover_it(books):
@@ -335,7 +335,7 @@ def test_a_managers_report_with_no_team_shows_under_no_team(books):
         spend(c, "6100", 100, team="web", teammate="human:eve")
         for by in ("team", "department"):
             rows = {r["key"]: r for r in FR.expenses(c, "human:cara", by=by, at=AT)["rows"]}
-            assert rows["no_team"]["amount"] == 700 and "unattributed" not in rows
+            assert rows["no_team"]["amount"] == 700 and FR.NONE not in rows
         assert FR.expenses(c, "human:cara", by="teammate", at=AT)["total"] == 800
         line = FR.line_detail(c, "human:cara", account(c, "6100"), "2026-10-01", "2026-10-31", at=AT)
         assert {r["key"]: r["amount"] for r in line["by_team"]} == {"web": 100, "no_team": 700}

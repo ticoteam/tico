@@ -151,10 +151,12 @@ function finParseCents(text) {
   if (!/^\d+(\.\d{1,2})?$/.test(t)) return null;
   return Math.round(Number(t) * 100);
 }
-// bot:<slug>, human:<id>, a team id, "unattributed".
+// The group with no vendor, team or teammate (backend/finance/reads.py NONE): no real key starts with a space.
+const FIN_NONE = ' unattributed';
+// bot:<slug>, human:<id>, a team id, or FIN_NONE.
 function finWho(ref) {
   const s = String(ref || '');
-  if (!s || s === 'unattributed') return 'Unattributed';
+  if (!s || s === FIN_NONE) return 'Unattributed';
   if (s.startsWith('bot:')) return botDisplayName(s.slice(4));
   if (s.startsWith('human:')) return personDisplay(s.slice(6));
   return s;

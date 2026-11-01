@@ -282,7 +282,7 @@ def test_a_line_projects_next_month_for_each_vendor_team_and_teammate(books):
         by = FR.line_detail(c, OWNER, line, *OCT, at=AT)["next_by"]      # Software recurs: September's
         assert by["vendor"] == {"acme-tools": 1_000, "acme-cloud": 500}
         assert by["team"] == {"web": 1_000, "sales": 500}
-        assert by["teammate"] == {"human:eve": 1_000, "unattributed": 500}
+        assert by["teammate"] == {"human:eve": 1_000, FR.NONE: 500}
         assert FR.line_detail(c, "human:dan", line, *OCT, at=AT)["next_by"]["vendor"] == {"acme-cloud": 500}
 
 
@@ -317,7 +317,7 @@ def test_a_lines_breakdown_follows_a_saved_projection(books):
         got = FR.line_detail(c, OWNER, line, *OCT, at=AT)
         assert got["next_month"]["projection"] == 9_500                 # Engineering's saved 9,000 and Sales' 500
         assert got["next_by"]["team"] == {"eng": 9_000, "sales": 500}
-        assert got["next_by"]["teammate"] == {"human:ben": 9_000, "unattributed": 500}
+        assert got["next_by"]["teammate"] == {"human:ben": 9_000, FR.NONE: 500}
         assert got["next_by"]["vendor"] == {"acme-tools": 9_000, "acme-cloud": 500}
 
 
@@ -338,9 +338,9 @@ def test_a_saved_projection_with_no_weighing_history_lands_on_that_dimensions_ro
                                                     "amount": amount}).status == "committed"
         got = FR.line_detail(c, OWNER, line, *OCT, at=AT)
         assert got["next_month"]["projection"] == 9_400
-        assert got["next_by"]["vendor"] == {"acme-tools": 9_000, "unattributed": 400}
+        assert got["next_by"]["vendor"] == {"acme-tools": 9_000, FR.NONE: 400}
         assert got["next_by"]["team"] == {"eng": 9_000, "sales": 400}
-        assert got["next_by"]["teammate"] == {"human:ben": 9_000, "unattributed": 400}
+        assert got["next_by"]["teammate"] == {"human:ben": 9_000, FR.NONE: 400}
 
 
 def test_each_column_of_a_lines_breakdown_adds_up_to_its_projection(books):
@@ -424,7 +424,7 @@ def test_a_projection_with_no_spend_is_named_for_its_drill_down_row(books):
         got = FR.line_detail(c, OWNER, line, *OCT, at=AT)
         assert got["next_by"]["team"]["sales"] == 400 and "sales" not in {r["key"] for r in got["by_team"]}
         assert got["next_labels"]["team"]["sales"] == "Sales"
-        assert got["next_labels"]["teammate"]["unattributed"] == "Unattributed"
+        assert got["next_labels"]["teammate"][FR.NONE] == "Unattributed"
 
 
 def test_a_vendor_keyed_other_is_its_own_row_apart_from_the_folded_one(books):
@@ -440,3 +440,20 @@ def test_a_vendor_keyed_other_is_its_own_row_apart_from_the_folded_one(books):
         nxt = got["next_by"]["vendor"]
         assert nxt["other"] == 10_000 and sum(nxt.values()) == got["next_month"]["projection"] == 11_200
         assert FR.OTHER not in nxt                                         # the folded row's sum is the UI's to add
+
+
+def test_a_vendor_named_unattributed_is_its_own_row_apart_from_no_vendor(books):
+    with books.transaction() as c:
+        for day in ("2026-09-05", "2026-10-05"):
+            spend(c, "6100", 1_000, day=day, team="eng", vendor="unattributed")
+            spend(c, "6100", 300, day=day)                                  # no vendor, team or teammate
+        line = account(c, "6100")
+        got = FR.line_detail(c, OWNER, line, *OCT, at=AT)
+        rows = {r["key"]: r for r in got["by_vendor"]}
+        assert rows["unattributed"]["amount"] == 1_000 and rows[FR.NONE]["amount"] == 300
+        assert rows[FR.NONE]["label"] == "No vendor" and rows["unattributed"]["label"] != "No vendor"
+        assert got["next_by"]["vendor"] == {"unattributed": 1_000, FR.NONE: 300}
+        assert got["next_labels"]["vendor"][FR.NONE] == "No vendor"
+        assert got["next_by"]["team"] == {"eng": 1_000, FR.NONE: 300}
+        alone = FR.line_detail(c, OWNER, line, *OCT, at=AT, vendor="unattributed")
+        assert alone["total"] == 1_000                                     # the vendor, not the lines with none

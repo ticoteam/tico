@@ -39,8 +39,10 @@ from .store import raw_totals as SR
 from .store import tico as ST
 
 UNATTRIBUTED = "Unattributed"
-OTHER = " other"                  # the folded "Other · n" row's key: every real key is stripped (V.opt_text,
-                                  # L.name_key, SAP.vendor_key), so none starts with a space, not even a vendor named Other
+# Reserved row keys. Every real key is stripped (V.opt_text, L.name_key, SAP.vendor_key), so none starts with a space:
+# a vendor named Other or Unattributed is its own row, never one of these.
+OTHER = " other"                  # the folded "Other · n" row
+NONE = " unattributed"            # the group with no vendor, team or teammate (No vendor / Unattributed)
 NO_TEAM = "no_team"                # a teammate's spend with no team on it: the No team group, not Unattributed
 GROUPS = ("department", "team", "teammate", "bot", "person", "vendor", "account")
 MAX_TOP = 200
@@ -167,7 +169,7 @@ def _fold_pnl(out: Row, top_n: int) -> Row:
         for r in rest:
             for n, v in enumerate(cast(list[int], r["actual"] or [])):
                 actual[n] += v
-        shown.append({"key": "other", "label": f"Other · {len(rest)}", "type": type_, "account_id": None,
+        shown.append({"key": OTHER, "label": f"Other · {len(rest)}", "type": type_, "account_id": None,
                       "section": None, "private": False, "actual": actual, "total": sum(actual), "budget": None,
                       "projection": None, "count": len(rest)})
     return {**out, "rows": shown, "rows_total": len(rows)}
@@ -533,7 +535,7 @@ def _grouped(s: _Seen, a: date, z: date, by: str, account_id: str | None, team: 
             continue
         sums[key] = sums.get(key, 0) + cell.amount
     labels = _labels(s, sums, by)
-    rows: list[Row] = [{"key": k or "unattributed", "label": labels[k], "amount": v} for k, v in sums.items()]
+    rows: list[Row] = [{"key": k or NONE, "label": labels[k], "amount": v} for k, v in sums.items()]
     return {"by": by, "start": a.isoformat(), "end": z.isoformat(), "rows": _cap(rows, top_n),
             "total": sum(sums.values()), "excluded": sup.excluded, "hidden": _hidden_labels(s, sup.hidden),
             "view_version": s.view.version}
@@ -636,7 +638,7 @@ def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
 
 def _next_by(s: _Seen, ids: Sequence[str], f: _Filter, vendor: str | None) -> dict[str, dict[str, int]]:
     """Next month's projection for each vendor, team and teammate of a line (`by` -> key -> amount), split as the
-    drill-down's rows are (`_key`, "unattributed" for none). It shares out the same pieces as the line's projection
+    drill-down's rows are (`_key`, NONE for none). It shares out the same pieces as the line's projection
     (`_next_atoms`: saved projections, §4.4, and each line's own default method), so each column adds up to it: a
     piece goes over the vendor / team / teammate rows of the history it covers, weighted by each row's own default,
     equally when none has one, and to the piece's own team and teammate (Unattributed or No team) when it covers no
@@ -685,15 +687,15 @@ def _next_by(s: _Seen, ids: Sequence[str], f: _Filter, vendor: str | None) -> di
                 continue
             cell = VW.Cell(account_id=i, day="", team=team, teammate=mate, vendor=v, amount=0)
             for by in out:
-                key = _key(s, cell, by) or "unattributed"
+                key = _key(s, cell, by) or NONE
                 out[by][key] = out[by].get(key, 0) + amount
     return out
 
 
 def _next_labels(s: _Seen, keys: Iterable[str], by: str) -> dict[str, str]:
-    """Each next_by key's label, as the breakdown rows have them ("unattributed" is the group with none), so a row
+    """Each next_by key's label, as the breakdown rows have them (NONE is the group with none), so a row
     that only has a projection is named too."""
-    raw = {k: "" if k == "unattributed" else k for k in keys}
+    raw = {k: "" if k == NONE else k for k in keys}
     labels = _labels(s, set(raw.values()), by)
     return {k: labels[r] for k, r in raw.items()}
 
@@ -874,7 +876,7 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
                 continue
             sums[key] = sums.get(key, 0) + cell.amount
         labels = _labels(s, sums, by)
-        out["by_" + by] = _cap([{"key": k or "unattributed", "label": labels[k], "amount": v}
+        out["by_" + by] = _cap([{"key": k or NONE, "label": labels[k], "amount": v}
                                 for k, v in sums.items()], top_n)
     entries: list[Row] = []
     more = False
@@ -1217,7 +1219,7 @@ def _aging_report(c: sqlite3.Connection, viewer: str, kind: str, top_n: int, at:
     shown = ranked[:top_n]
     if len(ranked) > top_n:
         rest = ranked[top_n:]
-        shown.append({"key": "other", "label": f"Other · {len(rest)}",
+        shown.append({"key": OTHER, "label": f"Other · {len(rest)}",
                       **{b: sum(cast(int, x[b]) for x in rest) for b in AP.AGING},
                       "total": sum(cast(int, x["total"]) for x in rest)})
     return {"as_of": today.isoformat(), "buckets": list(AP.AGING), "rows": shown, "totals": totals,
@@ -1675,7 +1677,7 @@ def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str
             pass
         for row in rows:
             payee = str(row.get("label") or "")
-            if not payee or row.get("key") in ("", "unattributed"):
+            if not payee or row.get("key") in ("", NONE):
                 continue
             series.setdefault(payee, [0] * len(months))[index] += int(cast(int, row.get("amount") or 0))
     found += W.unusual_spend(series, months[-1][0])

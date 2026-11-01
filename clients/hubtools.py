@@ -6361,6 +6361,8 @@ def mail_read(api,args):
 # read fresh from the books. A result is cut to about 4k tokens, or up to about 16k when the call asks for a bigger
 # `limit` or `top_n`; rows that do not fit fold into one "Other · n" row, and search and inbox carry on by cursor.
 FINANCE_CHARS = 16000            # about 4k tokens
+FIN_OTHER = " other"             # an "Other · n" row's key, as backend/finance/reads.py OTHER: no real key starts
+                                 # with a space, so a vendor named Other stays its own row
 FINANCE_MAX_CHARS = 64000        # about 16k tokens
 FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close"]
 FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
@@ -6407,7 +6409,7 @@ def _fin_fit(result, key, budget):
 
 def _fin_other(rows, **more):
     """One "Other · n" row for `rows`: their count and the sum of each amount (column lists add up item by item)."""
-    out = {"key": "other", "label": f"Other · {len(rows)}", "count": len(rows)}
+    out = {"key": FIN_OTHER, "label": f"Other · {len(rows)}", "count": len(rows)}
     for row in rows:
         for k, v in (row.items() if isinstance(row, dict) else ()):
             if k in ("key", "label", "count") or k in _FIN_NOT_ADDED or k.endswith("_pct"):
@@ -6454,7 +6456,7 @@ def _fin_fold(result, budget):
         for step in path[:-1]:
             parent = parent[step]
         rows = parent[path[-1]]
-        tail = rows[-1] if isinstance(rows[-1], dict) and rows[-1].get("key") == "other" else None
+        tail = rows[-1] if isinstance(rows[-1], dict) and rows[-1].get("key") == FIN_OTHER else None
         body = rows[:-1] if tail else rows
         over = _fin_size(result) - budget
         keep, cut = len(body), 0
@@ -6490,7 +6492,7 @@ def _fin_shrink(value, text, items):
         kept = [_fin_shrink(x, text, items) for x in value[:items]]
         rest = value[items:]
         if all(isinstance(x, dict) for x in rest):
-            count = sum(int(x.get("count") or 1) if x.get("key") == "other" else 1 for x in rest)
+            count = sum(int(x.get("count") or 1) if x.get("key") == FIN_OTHER else 1 for x in rest)
             other = _fin_other([{k: v for k, v in x.items() if k not in ("key", "label", "count")} for x in rest])
             other.update(label=f"Other · {count}", count=count)
             return kept + [_fin_shrink(other, text, items)]
@@ -6534,7 +6536,7 @@ def _fin_paged(api, path, query, key, budget):
     if n >= asked:
         return _fin_guard(result, budget, key)
     smaller = api.get(path, **{**query, "limit": n})
-    smaller[key] = list(smaller.get(key) or []) + [{"key": "other", "label": f"Other · {asked - n}", "count": asked - n,
+    smaller[key] = list(smaller.get(key) or []) + [{"key": FIN_OTHER, "label": f"Other · {asked - n}", "count": asked - n,
                                                     "next": "page on with next_cursor"}]
     return _fin_guard(smaller, budget, key)
 
@@ -6570,7 +6572,7 @@ def finance_search(api, args):
         for row in rest:
             name = str(row.get("kind") or row.get("source") or "row")
             kinds[name] = kinds.get(name, 0) + 1
-        result["results"] = rows[:n] + [{"key": "other", "label": f"Other · {len(rest)}", "count": len(rest),
+        result["results"] = rows[:n] + [{"key": FIN_OTHER, "label": f"Other · {len(rest)}", "count": len(rest),
                                          "kinds": kinds, "next": "name a kind to page through it"}]
     return _fin_guard(result, budget, "results")
 
