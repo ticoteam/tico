@@ -2433,7 +2433,7 @@ SCHEMAS.update({
                           "parent_message_id": "n", "depth": "i", "hidden": "b",
                           "sub_thread": {"type": ["object", "null"], "description": "The sub-thread branching from this "
                                          "message: {id, count, last_seq, unread, more}"}},
-                         required=["id", "thread_id"]),
+                         required=["id", "seq", "thread_id"]),
     "ThreadCrumb": obj({"id": "s", "title": "s"}),
     "ThreadTimeline": obj({"thread": ref("ThreadView"), "breadcrumb": items(ref("ThreadCrumb")),
                            "messages": items({"type": "object"}), "next_cursor": "n"},
