@@ -6,10 +6,12 @@ import pytest
 from backend import hubdb as H
 from backend.finance import actions as FA
 from backend.finance import payments as FP
+from backend.finance import documents as DOC
 from backend.finance import reads as FR
 from backend.finance.context import load
 from backend.finance.core import qbo as Q
-from backend.finance.core.errors import FinanceError
+from backend.finance.core.errors import NOT_FOUND, FinanceError
+from backend.finance.store import ap as SAP
 from backend.finance.store import banking as SK
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, OWNER, FakeMercury, account, act, books, budget, connect, finance_template, store)
@@ -52,6 +54,20 @@ def _status(c, po) -> tuple[str, str]:
     return str(row[0]), str(row[1])
 
 
+def _holds(c, po) -> list[tuple[str, int]]:
+    """The live holds an order's lines hold, by line, as (hold id, amount)."""
+    return [(str(r[0]), int(r[1])) for r in c.execute(
+        "SELECT id, amount FROM fin_holds WHERE source='purchase_order' AND status='held' AND source_id LIKE ? "
+        "ORDER BY source_id", (f"{po}:%",))]
+
+
+def _expense(c, code: str) -> str:
+    made = act(c, OWNER, "account_create", {"code": code, "name": f"Expense {code}", "type": "expense",
+                                            "parent_id": account(c, "6000")})
+    assert made.status == "committed", made
+    return str(made.result["account_id"])
+
+
 def _state(c) -> tuple[int, int, int]:
     s = FA.budget_state(c, budget(c, "Software"), AT)
     return s.actual, s.held, s.remaining
@@ -75,7 +91,8 @@ def test_an_approved_order_holds_its_lines_and_a_partial_bill_takes_over_its_par
         assert _state(c) == (0, 70_000, 30_000)
         first, _ = _po_lines(c, po)
         assert _bill(c, vendor, [{"po_line_id": first, "amount": 30_000}]).status == "committed"
-        assert _status(c, po) == ("partial", "")
+        assert _status(c, po) == ("approved", "")                             # stored: the bill makes it partial
+        assert FR.order(c, OWNER, po)["status"] == "partial"
         assert _state(c) == (0, 70_000, 30_000)                               # the bill's 30,000 + the order's 40,000
         assert act(c, OWNER, "bill_approve", {"bill_id": _bill_id(c)}).status == "committed"
         assert _state(c) == (30_000, 40_000, 30_000)
@@ -285,7 +302,8 @@ def test_an_estimate_becomes_one_invoice_draft_once_and_a_declined_one_never_doe
         assert done.status == "committed", done
         invoice = str(done.result["invoice_id"])
         assert tuple(c.execute("SELECT status, invoice_id FROM fin_estimates WHERE id=?", (eid,)).fetchone()) == \
-            ("invoiced", invoice)
+            ("accepted", invoice)
+        assert FR.estimate(c, OWNER, eid)["status"] == "invoiced"
         assert act(c, OWNER, "estimate_convert", {"estimate_id": eid}).code == "conflict"     # once
         assert c.execute("SELECT COUNT(*) FROM fin_invoices").fetchone()[0] == 1
         assert [int(r[0]) for r in c.execute("SELECT amount FROM fin_invoice_lines")] == [90_000]
@@ -355,3 +373,111 @@ def test_a_qbo_invoice_made_from_an_estimate_links_to_it():
             "lines": [{"item": "Item:5", "amount": 1500, "description": "work"}]}
     assert Q.invoice_body({**body, "linked_estimate": "77"}, {})["LinkedTxn"] == [{"TxnId": "77", "TxnType": "Estimate"}]
     assert "LinkedTxn" not in Q.invoice_body(body, {})
+
+
+def test_a_bill_on_an_order_line_posts_to_the_order_lines_account_and_refuses_another(books):
+    with books.transaction() as c:
+        _software(c)
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 40_000)])
+        other = _expense(c, "6200")
+        refused = _bill(c, vendor, [{"po_line_id": _po_lines(c, po)[0], "amount": 1_000, "account_id": other}])
+        assert refused.code == "invalid" and "account" in str(refused.reason), refused
+        assert c.execute("SELECT COUNT(*) FROM fin_bills").fetchone()[0] == 0
+
+
+def test_an_order_whose_lines_pass_a_budget_together_is_refused_at_approval(books):
+    with books.transaction() as c:
+        _software(c, amount=50_000)
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 40_000), _line(c, 40_000)], approve=False)
+        assert act(c, OWNER, "po_send", {"po_id": po}).status == "committed"
+        refused = act(c, OWNER, "po_approve", {"po_id": po})
+        assert refused.status == "denied" and "Software" in str(refused.reason), refused
+        assert _status(c, po) == ("sent", "") and _state(c) == (0, 0, 50_000)
+
+
+def test_a_partly_billed_order_keeps_the_hold_on_what_is_left(books):
+    with books.transaction() as c:
+        _software(c)
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 40_000), _line(c, 40_000)])
+        before = _holds(c, po)
+        assert _bill(c, vendor, [{"po_line_id": _po_lines(c, po)[0], "amount": 10_000}]).status == "committed"
+        assert [h for h, _ in _holds(c, po)] == [h for h, _ in before]        # the same holds, shrunk
+        assert [a for _, a in _holds(c, po)] == [30_000, 40_000]
+
+
+def test_an_order_line_on_a_private_account_hides_the_order_from_a_teammate_who_sees_totals(books):
+    with books.transaction() as c:
+        payroll = _expense(c, "6200")
+        assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}).status == \
+            "committed"
+        vendor = _vendor(c)
+        po = _order(c, vendor, [{"account_id": payroll, "amount": 4_000}])
+        assert act(c, OWNER, "right_grant", {"teammate": EVE, "right": "finance.ap"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": EVE, "what": "payables"}).status == "committed"
+        assert FR.orders(c, EVE)["orders"] == []
+        with pytest.raises(FinanceError) as hidden:
+            FR.order(c, EVE, po)
+        assert hidden.value.code == NOT_FOUND
+
+
+def test_a_bill_past_a_hold_payment_budget_waits_even_when_a_stricter_budget_is_past_too(books):
+    with books.transaction() as c:
+        parent = act(c, OWNER, "budget_create", {"name": "Operations", "account_id": account(c, "6000"),
+                                                 "amount": 100_000, "at_limit": "hold_payment", "parent_id": None})
+        assert parent.status == "committed", parent
+        child = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"),
+                                                "amount": 100_000, "at_limit": "decline",
+                                                "parent_id": parent.result["budget_id"]})
+        assert child.status == "committed", child
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 80_000)])
+        bill = str(_bill(c, vendor, [{"po_line_id": _po_lines(c, po)[0], "amount": 80_000}]).result["bill_id"])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
+        for budget_id, name in ((child.result["budget_id"], "Software"), (parent.result["budget_id"], "Operations")):
+            made = act(c, OWNER, "budget_update", {"budget_id": budget_id, "amount": 50_000})
+            assert made.status == "committed", name
+        assert "Operations" in DOC.payment_waits(load(c, AT), SAP.get(c, "fin_bills", bill))
+
+
+def test_an_item_names_its_account_and_a_bill_line_cannot_post_elsewhere(books):
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        other = _expense(c, "6200")
+        item = str(act(c, OWNER, "item_create", {"name": "Consulting", "kind": "service",
+                                                 "expense_account_id": account(c, "6100")}).result["item_id"])
+        refused = _bill(c, vendor, [{"item_id": item, "account_id": other, "amount": 1_000}])
+        assert refused.code == "invalid" and "account" in str(refused.reason), refused
+        assert c.execute("SELECT COUNT(*) FROM fin_bills").fetchone()[0] == 0
+
+
+def test_the_owner_reads_orders_and_estimates_without_a_finance_grant(books):
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 40_000)])
+        assert [o["id"] for o in FR.orders(c, OWNER)["orders"]] == [po]
+        assert FR.order(c, OWNER, po)["lines"][0]["amount"] == 40_000
+
+
+def test_orders_page_by_cursor_without_skipping_or_repeating(books):
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        pos = [_order(c, vendor, [_line(c, 1_000 + n)]) for n in range(3)]
+        first = FR.orders(c, OWNER, limit=2)
+        assert len(first["orders"]) == 2 and first["next_cursor"]
+        second = FR.orders(c, OWNER, limit=2, cursor=first["next_cursor"])
+        ids = [o["id"] for o in first["orders"]] + [o["id"] for o in second["orders"]]
+        assert sorted(ids) == sorted(pos) and second["next_cursor"] is None
+
+
+def test_order_search_matches_the_memo_and_not_only_the_number(books):
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        lumber = str(act(c, OWNER, "po_create", {"vendor_id": vendor, "po_date": "2026-10-10",
+                                                 "memo": "Lumber for the deck", "lines": [_line(c, 5_000)]}
+                         ).result["po_id"])
+        act(c, OWNER, "po_create", {"vendor_id": vendor, "po_date": "2026-10-10", "memo": "Seats",
+                                    "lines": [_line(c, 6_000)]})
+        assert [r["id"] for r in FR.search(c, OWNER, kind="po", q="lumber")["results"]] == [lumber]

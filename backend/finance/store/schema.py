@@ -564,7 +564,7 @@ PURCHASING = """
 CREATE TABLE IF NOT EXISTS fin_purchase_orders (
   id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), vendor_id TEXT NOT NULL REFERENCES fin_contacts(id),
   number TEXT NOT NULL DEFAULT '', po_date TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','approved','partial','closed','void')),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','approved','closed','void')),
   closed_by TEXT NOT NULL DEFAULT '' CHECK (closed_by IN ('','bills','hand')),
   currency TEXT NOT NULL, total BIGINT NOT NULL DEFAULT 0, memo TEXT NOT NULL DEFAULT '',
   sent_at TEXT, approved_by TEXT, approved_at TEXT, closed_at TEXT, voided_at TEXT,
@@ -579,7 +579,7 @@ CREATE TABLE IF NOT EXISTS fin_po_lines (
 CREATE TABLE IF NOT EXISTS fin_estimates (
   id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), customer_id TEXT NOT NULL REFERENCES fin_contacts(id),
   number TEXT NOT NULL DEFAULT '', estimate_date TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','accepted','declined','invoiced')),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','accepted','declined')),
   currency TEXT NOT NULL, total BIGINT NOT NULL DEFAULT 0, memo TEXT NOT NULL DEFAULT '',
   invoice_id TEXT REFERENCES fin_invoices(id), sent_at TEXT, decided_at TEXT,
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
@@ -767,7 +767,7 @@ def purchasing(c: sqlite3.Connection) -> None:
 def catalog(c: sqlite3.Connection, at: str) -> None:
     """Cloud migration 76: the shared records (backend/records) and the place, class and item tags Finance's lines take.
     SQLite cannot widen a CHECK in place, so fin_dimensions and fin_line_tags are rebuilt keeping their rows, and each
-    project dimension moves to rec_projects under its value. A project tag holds the project's id, which is the legacy
+    project dimension moves to projects under its value. A project tag holds the project's id, which is the legacy
     value, so no line's tags change and a closed month keeps its lines as they were. Idempotent."""
     from ...records import store as RS
     RS.create(c)
@@ -791,12 +791,12 @@ def _widen(c: sqlite3.Connection, table: str, marker: str) -> None:
 
 
 def _move_projects(c: sqlite3.Connection, at: str) -> None:
-    """A project dimension becomes a rec_projects row under its value. A project tag value no record has yet becomes
+    """A project dimension becomes a projects row under its value. A project tag value no record has yet becomes
     one under its own text, so the tag still points at a record."""
-    c.execute("INSERT INTO rec_projects(id, name, status, active, created_at, created_by) "
-              "SELECT value, name, 'open', active, ?, ? FROM fin_dimensions WHERE kind='project' "
-              "AND value NOT IN (SELECT id FROM rec_projects)", (at, SYSTEM))
+    c.execute("INSERT INTO projects(id, name, status, archived_at, created_at, created_by_id) "
+              "SELECT value, name, 'open', CASE WHEN active THEN NULL ELSE ? END, ?, ? FROM fin_dimensions "
+              "WHERE kind='project' AND value NOT IN (SELECT id FROM projects)", (at, at, SYSTEM))
     c.execute("DELETE FROM fin_dimensions WHERE kind='project'")
-    c.execute("INSERT INTO rec_projects(id, name, status, active, created_at, created_by) "
-              "SELECT DISTINCT value, value, 'open', 1, ?, ? FROM fin_line_tags WHERE kind='project' "
-              "AND value NOT IN (SELECT id FROM rec_projects)", (at, SYSTEM))
+    c.execute("INSERT INTO projects(id, name, status, created_at, created_by_id) "
+              "SELECT DISTINCT value, value, 'open', ?, ? FROM fin_line_tags WHERE kind='project' "
+              "AND value NOT IN (SELECT id FROM projects)", (at, SYSTEM))

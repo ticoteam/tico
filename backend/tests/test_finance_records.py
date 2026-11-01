@@ -25,21 +25,21 @@ def _as_before_76(c, table: str, ddl: str) -> None:
 
 
 def _projects(c) -> dict[str, tuple[str, int]]:
-    return {str(r[0]): (str(r[1]), int(r[2])) for r in c.execute("SELECT id, name, active FROM rec_projects")}
+    return {str(r[0]): (str(r[1]), int(r[2])) for r in c.execute("SELECT id, name, archived_at IS NULL FROM projects")}
 
 
 def test_a_legacy_project_tag_keeps_its_value_and_the_project_dimension_becomes_a_record(books):
     with books.transaction() as c:
         for pid in ("site", "Bldg 7"):
-            c.execute("INSERT INTO rec_projects(id, name, status, active, created_at, created_by) "
-                      "VALUES(?,?,'open',1,?,?)", (pid, pid, AT, OWNER))
+            c.execute("INSERT INTO projects(id, name, status, archived_at, created_at, created_by_id) "
+                      "VALUES(?,?,'open',NULL,?,?)", (pid, pid, AT, OWNER))
         posted = act(c, OWNER, "journal", {"date": "2026-10-10", "memo": "Tagged", "lines": [
             {"account_id": account(c, "5100"), "amount": 1_000, "tags": {"project": "site"}},
             {"account_id": account(c, "5100"), "amount": 400, "tags": {"project": "Bldg 7"}},
             {"account_id": account(c, "1000"), "amount": -1_400}]})
         assert posted.status == "committed", posted.reason
         # Install state before migration 76: the project was a dimension and no record existed.
-        c.execute("DELETE FROM rec_projects")
+        c.execute("DELETE FROM projects")
         c.execute("INSERT INTO fin_dimensions(id, kind, value, name, active, created_at, created_by) "
                   "VALUES('dim-site','project','site','Site (dimension)',1,?,?)", (AT, OWNER))
         _as_before_76(c, "fin_line_tags", OLD_LINE_TAGS)
@@ -100,6 +100,6 @@ def test_a_price_change_asks_a_finance_admin_unless_the_owner_makes_it(books):
         item_id = str(act(c, OWNER, "item_create", {"name": "Desk", "kind": "service", "price": 1_000}).result["item_id"])
         assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
         assert act(c, "human:dan", "item_update", {"item_id": item_id, "price": 1_200}).status == "needs_approval"
-        assert c.execute("SELECT price FROM rec_items WHERE id=?", (item_id,)).fetchone()[0] == 1_000
+        assert c.execute("SELECT price FROM items WHERE id=?", (item_id,)).fetchone()[0] == 1_000
         assert act(c, OWNER, "item_update", {"item_id": item_id, "price": 1_200}).status == "committed"
-        assert c.execute("SELECT price FROM rec_items WHERE id=?", (item_id,)).fetchone()[0] == 1_200
+        assert c.execute("SELECT price FROM items WHERE id=?", (item_id,)).fetchone()[0] == 1_200

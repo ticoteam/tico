@@ -1795,7 +1795,7 @@ class Store:
                     c.execute("INSERT INTO cloud_migrations VALUES(75,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=76").fetchone():
                     # The shared records (backend/records: places, items, projects) and the place, class and item tags
-                    # Finance lines take. Project dimensions move to rec_projects keeping each tag's value (schema.catalog).
+                    # Finance lines take. Project dimensions move to projects keeping each tag's value (schema.catalog).
                     from .finance.store import schema as _finance_schema
                     _finance_schema.catalog(c, H.now())
                     c.execute("INSERT INTO cloud_migrations VALUES(76,?)", (H.now(),))

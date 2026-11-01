@@ -348,7 +348,12 @@ class QuickBooks:
 
     def send(self, op: str, body: Mapping[str, Any], key: str) -> Sent:
         """One write, idempotent by its RequestId. Only a refusal from QuickBooks itself is final."""
-        request_id = str(uuid.uuid5(NAMESPACE, key))
+        return self._send(op, body, key, key)
+
+    def _send(self, op: str, body: Mapping[str, Any], key: str, request_key: str) -> Sent:
+        """A write whose marker comes from `key` (what the books find it by) and whose RequestId comes from
+        `request_key`, so a retry under a new request keeps the same marker."""
+        request_id = str(uuid.uuid5(NAMESPACE, request_key))
         items: dict[str, dict[str, str]] = {}
         if op in ("invoice.create", "estimate.create"):
             found = self._item_accounts()
@@ -376,8 +381,8 @@ class QuickBooks:
                         revision=str(made.get("SyncToken") or ""))
         final = reply.status == 400 and "Fault" in reply.body      # a validation refusal: a retry says the same thing
         if final and op == "invoice.create" and body.get("linked_estimate"):
-            # The estimate link is best effort: a refusal sends the invoice again without it, under its own key.
-            return self.send(op, {k: v for k, v in body.items() if k != "linked_estimate"}, f"{key}:unlinked")
+            # The estimate link is best effort: a refusal sends the invoice again without it, under its own request.
+            return self._send(op, {k: v for k, v in body.items() if k != "linked_estimate"}, key, f"{key}:unlinked")
         return Sent(False, error=_fault(reply.body, reply.status), final=final)
 
 

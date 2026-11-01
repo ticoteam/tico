@@ -9,7 +9,7 @@ from .context import Ctx
 from .core.errors import NOT_FOUND, FinanceError, invalid
 from .store import catalog as SC
 
-RECORD_TABLES = {"place": "rec_places", "project": "rec_projects"}
+RECORD_TABLES = {"place": "places", "project": "projects"}
 
 
 def check_tags(ctx: Ctx, tags: Mapping[str, str]) -> None:
@@ -27,9 +27,9 @@ def check_tags(ctx: Ctx, tags: Mapping[str, str]) -> None:
 
 def live_item(ctx: Ctx, item_id: str) -> Any:
     """The item a line names. An inactive item is refused: it can no longer be bought or sold."""
-    row = RR.get(ctx.c, "rec_items", item_id)
+    row = RR.get(ctx.c, "items", item_id)
     if row is None:
         raise FinanceError(NOT_FOUND, "no such item")
-    if not row["active"]:
+    if row["archived_at"] is not None:
         raise invalid("that item is inactive")
     return row

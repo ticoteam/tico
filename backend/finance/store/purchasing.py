@@ -1,14 +1,21 @@
 """SQL for purchase orders and estimates (spec §4.4, §4.5): the orders and estimates, their lines, the sums a bill's
 lines bill against an order line, and the one-time link from an estimate to its invoice. Callers check rights, views
-and states; this module writes rows and reads sums."""
+and states; this module writes rows and reads sums. A stored status is what was done to a document. The status a
+reader sees can be derived: an approved order billed in part is partial, and an estimate with an invoice is invoiced."""
 import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .banking import like
 from .ledger import new_id
 
 TABLES = frozenset({"fin_purchase_orders", "fin_po_lines", "fin_estimates", "fin_estimate_lines"})
 LINES = {"po": ("fin_po_lines", "po_id"), "estimate": ("fin_estimate_lines", "estimate_id")}
+CONTACT = {"po": "vendor_id", "estimate": "customer_id"}
+HEAD = {"po": "fin_purchase_orders", "estimate": "fin_estimates"}
+DATED = {"po": "po_date", "estimate": "estimate_date"}
+_BILLED_ON = ("SELECT COALESCE(SUM(bl.amount), 0) FROM fin_bill_lines bl JOIN fin_bills b ON b.id=bl.bill_id "
+              "JOIN fin_po_lines l ON l.id=bl.po_line_id WHERE l.po_id={po} AND b.status!='void'")
 
 
 def insert(c: sqlite3.Connection, table: str, row: Mapping[str, object]) -> str:
@@ -76,6 +83,21 @@ def billed(c: sqlite3.Connection, po_line_id: str) -> int:
     return int(row[0])
 
 
+def billed_total(c: sqlite3.Connection, po_id: str) -> int:
+    """What the bills on an order's lines have billed so far: every bill but a void one."""
+    return int(c.execute(_BILLED_ON.format(po="?"), (po_id,)).fetchone()[0])
+
+
+def shown_po(status: str, billed_so_far: int, total: int) -> str:
+    """The status a reader sees of an order: an approved order billed in part is partial."""
+    return "partial" if status == "approved" and 0 < billed_so_far < total else status
+
+
+def shown_estimate(status: str, invoice_id: object) -> str:
+    """The status a reader sees of an estimate: one with an invoice is invoiced."""
+    return "invoiced" if invoice_id else status
+
+
 def bill_orders(c: sqlite3.Connection, bill_id: str) -> list[str]:
     """The orders a bill bills a line of, in id order."""
     return [str(r[0]) for r in c.execute(
@@ -84,27 +106,57 @@ def bill_orders(c: sqlite3.Connection, bill_id: str) -> list[str]:
 
 
 def claim_invoice(c: sqlite3.Connection, estimate_id: str, invoice_id: str, at: str) -> int:
-    """Link an accepted estimate to the invoice made from it. Only an estimate not yet invoiced takes the link."""
-    return c.execute("UPDATE fin_estimates SET status='invoiced', invoice_id=?, updated_at=? "
+    """Link an accepted estimate to the invoice made from it. Only an estimate not yet invoiced takes the link; its
+    stored status stays accepted, and it shows as invoiced."""
+    return c.execute("UPDATE fin_estimates SET invoice_id=?, updated_at=? "
                      "WHERE id=? AND status='accepted' AND invoice_id IS NULL", (invoice_id, at, estimate_id)).rowcount
 
 
-CONTACT = {"po": "vendor_id", "estimate": "customer_id"}
-HEAD = {"po": "fin_purchase_orders", "estimate": "fin_estimates"}
-DATED = {"po": "po_date", "estimate": "estimate_date"}
+def _billed_expr(kind: str) -> str:
+    return f"({_BILLED_ON.format(po='d.id')})" if kind == "po" else "0"
 
 
-def listing(c: sqlite3.Connection, kind: str, *, book_id: str, status: str, contact_id: str,
-            most: int) -> list[sqlite3.Row]:
-    """A book's orders or estimates, newest first, with the contact's name; a status or contact narrows them."""
+def _status_clause(kind: str, status: str) -> tuple[str, list[object]]:
+    """The SQL that keeps the rows showing `status` (the shown status, see shown_po and shown_estimate)."""
+    if kind == "po":
+        billed = _billed_expr(kind)
+        partial = f"d.status='approved' AND {billed} > 0 AND {billed} < d.total"
+        if status == "partial":
+            return partial, []
+        if status == "approved":
+            return f"d.status='approved' AND NOT ({partial})", []
+        return "d.status=?", [status]
+    if status == "invoiced":
+        return "d.invoice_id IS NOT NULL", []
+    return "d.status=? AND d.invoice_id IS NULL", [status]
+
+
+def listing(c: sqlite3.Connection, kind: str, *, book_id: str, status: str = "", contact_id: str = "", q: str = "",
+            before: tuple[str, str] | None = None, most: int = 200) -> list[sqlite3.Row]:
+    """A book's orders or estimates, newest first by date (then id), with the contact's name and what each order has
+    billed. A status (as shown), a contact, a search over number, memo and contact name, and a cursor (the date and id
+    of the last row before) narrow them."""
     table, contact, dated = HEAD[kind], CONTACT[kind], DATED[kind]
-    return c.execute(f"SELECT d.*, k.name AS contact_name FROM {table} d JOIN fin_contacts k ON k.id = d.{contact} "
-                     f"WHERE d.book_id=? AND (?='' OR d.status=?) AND (?='' OR d.{contact}=?) "
-                     f"ORDER BY d.{dated} DESC, d.created_at DESC LIMIT ?",
-                     (book_id, status, status, contact_id, contact_id, most)).fetchall()
+    sql = (f"SELECT d.*, k.name AS contact_name, {_billed_expr(kind)} AS billed FROM {table} d "
+           f"JOIN fin_contacts k ON k.id = d.{contact} WHERE d.book_id=?")
+    args: list[object] = [book_id]
+    if status:
+        clause, extra = _status_clause(kind, status)
+        sql += f" AND ({clause})"
+        args += extra
+    if contact_id:
+        sql += f" AND d.{contact}=?"
+        args.append(contact_id)
+    if q:
+        sql += " AND (d.number LIKE ? ESCAPE '\\' OR d.memo LIKE ? ESCAPE '\\' OR k.name LIKE ? ESCAPE '\\')"
+        args += [like(q)] * 3
+    if before:
+        sql += f" AND (d.{dated}<? OR (d.{dated}=? AND d.id<?))"
+        args += [before[0], before[0], before[1]]
+    return c.execute(sql + f" ORDER BY d.{dated} DESC, d.id DESC LIMIT ?", [*args, most]).fetchall()
 
 
 def head(c: sqlite3.Connection, kind: str, doc_id: str) -> sqlite3.Row | None:
-    """One order or estimate with its contact's name."""
-    return c.execute(f"SELECT d.*, k.name AS contact_name FROM {HEAD[kind]} d JOIN fin_contacts k "
-                     f"ON k.id = d.{CONTACT[kind]} WHERE d.id=?", (doc_id,)).fetchone()
+    """One order or estimate with its contact's name and what it has billed."""
+    return c.execute(f"SELECT d.*, k.name AS contact_name, {_billed_expr(kind)} AS billed FROM {HEAD[kind]} d "
+                     f"JOIN fin_contacts k ON k.id = d.{CONTACT[kind]} WHERE d.id=?", (doc_id,)).fetchone()

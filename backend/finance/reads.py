@@ -535,8 +535,8 @@ def _placed_names(c: sqlite3.Connection, by: str) -> dict[str, dict[str, str]]:
     """Each place, class or project's name by id, for the kinds a group names (history keeps names of inactive ones)."""
     names: dict[str, dict[str, str]] = {}
     for kind in by.split("_"):
-        names[kind] = RR.names(c, "rec_places") if kind == "place" else \
-            RR.names(c, "rec_projects") if kind == "project" else SC.class_names(c)
+        names[kind] = RR.names(c, "places") if kind == "place" else \
+            RR.names(c, "projects") if kind == "project" else SC.class_names(c)
     return names
 
 
@@ -1261,7 +1261,7 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 # ------------------------------------------------------------------------------------------------ search
 SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "place", "project", "po",
               "estimate")
-RECORD_KINDS = {"item": "rec_items", "place": "rec_places", "project": "rec_projects"}
+RECORD_KINDS = {"item": "items", "place": "places", "project": "projects"}
 SEARCH_EACH = 10            # results per kind when no kind is named
 
 
@@ -1292,7 +1292,7 @@ def _search_rules(ctx: Ctx, viewer: str, q: str, filters: Mapping[str, object], 
 
 def _record_row(kind: str, r: Any) -> Row:
     """A record as a search result: its name is the label, and its own type keeps its own field."""
-    row: Row = {"kind": kind, "id": str(r["id"]), "label": str(r["name"]), "active": bool(r["active"])}
+    row: Row = {"kind": kind, "id": str(r["id"]), "label": str(r["name"]), "archived_at": r["archived_at"]}
     if kind == "item":
         row["item_kind"] = str(r["kind"])
         row["sku"] = str(r["sku"])
@@ -1311,6 +1311,7 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
     first few of each kind it can show. Filters per kind: entry/feed: account_id, money_account_id, status (feed),
     start, end; bill/invoice: status, contact_id, start, end, aging; contact: kind, active; rule: kind (gate|posting);
     card: status, vendor (the cards saved on that vendor, so `vendor` answers "which of my cards works at X");
+    po/estimate: status, contact_id, and a search over number, memo and contact name;
     item/place/project: active (1 keeps only active records)."""
     if kind is not None and kind not in SEARCH_KINDS:
         raise invalid(f"kind is {'|'.join(SEARCH_KINDS)}")
@@ -1336,14 +1337,16 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                 nxt = cast(str | None, found["next"])
             elif k == "po":
                 listed = orders(c, viewer, status=_filter(f, "status"), vendor_id=_filter(f, "contact_id"),
-                                limit=most, at=at)
+                                q=text, cursor=cursor, limit=most, at=at)
                 results += [cast(Row, {**r, "label": f"{cast(Mapping[str, object], r['contact'])['name']} "
                                                      f"{r['number']}"}) for r in listed["orders"]]
+                nxt = cast(str | None, listed["next_cursor"])
             elif k == "estimate":
                 listed = estimates(c, viewer, status=_filter(f, "status"), customer_id=_filter(f, "contact_id"),
-                                   limit=most, at=at)
+                                   q=text, cursor=cursor, limit=most, at=at)
                 results += [cast(Row, {**r, "label": f"{cast(Mapping[str, object], r['contact'])['name']} "
                                                      f"{r['number']}"}) for r in listed["estimates"]]
+                nxt = cast(str | None, listed["next_cursor"])
             elif k in ("bill", "invoice"):
                 if not tab_ap.sees_side(ctx, view, k):
                     continue

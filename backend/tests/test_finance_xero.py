@@ -846,6 +846,37 @@ def test_a_categorized_bank_row_is_sent_as_a_bank_transaction_in_its_direction()
         X.bank_body({"date": "2026-10-05", "memo": "", "marker": "", "lines": lines(-1500, other=-1000)})
 
 
+def test_a_journal_or_bank_line_sends_the_place_it_was_for_as_a_tracking_option():
+    place = "TrackingOption:cat-loc/opt-austin"
+    journal = X.journal_body({"date": "2026-10-05", "memo": "", "marker": "[tico:x]", "lines": [
+        {"account": "Account:acct-1000", "amount": 1500, "description": "", "place": place, "classes": {}},
+        {"account": "Account:acct-6100", "amount": -1500, "description": "", "place": place,
+         "classes": {"class": "cat-team/opt-field"}}]})
+    assert journal["JournalLines"][0]["Tracking"] == [
+        {"TrackingCategoryID": "cat-loc", "TrackingOptionID": "opt-austin"}]
+    assert journal["JournalLines"][1]["Tracking"] == [
+        {"TrackingCategoryID": "cat-team", "TrackingOptionID": "opt-field"},
+        {"TrackingCategoryID": "cat-loc", "TrackingOptionID": "opt-austin"}]
+    bank = X.bank_body({"date": "2026-10-05", "memo": "", "marker": "[tico:x]", "lines": [
+        {"account": "Account:acct-1000", "amount": -1500, "role": L.MONEY_ROLE},
+        {"account": "Account:acct-6100", "amount": 1500, "role": "", "description": "tool", "place": place,
+         "party": "Contact:contact-1"}]})
+    assert bank["LineItems"][0]["Tracking"] == [{"TrackingCategoryID": "cat-loc", "TrackingOptionID": "opt-austin"}]
+
+
+def test_an_archived_tracking_option_comes_in_inactive_and_archiving_or_renaming_it_is_a_new_revision():
+    def category(status: str) -> dict[str, Any]:
+        return {"TrackingCategoryID": "cat-1", "Name": "Team", "Status": "ACTIVE",
+                "Options": [{"TrackingOptionID": "opt-1", "Name": "Field", "Status": status},
+                            {"TrackingOptionID": "opt-2", "Name": "Office", "Status": "ACTIVE"}]}
+
+    live = {r.ext.external_id: r for r in X.tracking_records(category("ACTIVE"), lambda key: "")}
+    archived = {r.ext.external_id: r for r in X.tracking_records(category("ARCHIVED"), lambda key: "")}
+    assert archived["cat-1/opt-1"].active is False and archived["cat-1/opt-2"].active is True
+    assert archived["cat-1/opt-1"].ext.revision != live["cat-1/opt-1"].ext.revision
+    assert archived["cat-1/opt-2"].ext.revision == live["cat-1/opt-2"].ext.revision
+
+
 def test_a_payment_keeps_the_kind_its_type_names_even_once_deleted():
     stamp_ = ms("2026-10-15T00:00:00Z")
     bill_gone = _recorded({"PaymentID": "p-b", "Status": "DELETED", "PaymentType": "ACCPAYPAYMENT",
@@ -1886,10 +1917,10 @@ def test_xero_items_and_tracking_options_come_in_and_a_line_takes_its_place_and_
                        location="cat-loc")
     assert _drain(books, client, cid) == []
     with books.read() as c:
-        item = c.execute("SELECT name, sku, price, income_account_id FROM rec_items").fetchone()
+        item = c.execute("SELECT name, sku, price, income_account_id FROM items").fetchone()
         assert item[:3] == ("Consulting", "CONSULT", 15000)
         assert item[3] == _local(c, "Account:acct-4000", "fin_accounts")
-        place = _local(c, "TrackingOption:cat-loc/opt-austin", "rec_places")
+        place = _local(c, "TrackingOption:cat-loc/opt-austin", "places")
         clazz = _local(c, "TrackingOption:cat-team/opt-field", "fin_dimensions")
         assert {(str(k), str(v)) for k, v in c.execute("SELECT kind, value FROM fin_line_tags")} == {
             ("place", place), ("class", clazz)}
@@ -1930,12 +1961,12 @@ def test_an_item_made_here_in_a_xero_book_is_written_to_xero_and_its_row_appears
         made = act(c, OWNER, "item_create", {"name": "Design", "sku": "DESIGN", "kind": "service", "price": 9_000,
                                              "income_account_id": _local(c, "Account:acct-4000", "fin_accounts")})
         assert made.status == "committed", made
-        assert c.execute("SELECT COUNT(*) FROM rec_items WHERE name='Design'").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM items WHERE name='Design'").fetchone()[0] == 0
     assert _drain(books, client, cid, now=LATER) == []
     assert [row["Code"] for row in xbooks.rows["Items"]] == ["CONSULT", "DESIGN"]
     with books.read() as c:
-        assert c.execute("SELECT price FROM rec_items WHERE id=?", (made.result["item_id"],)).fetchone()[0] == 9_000
-        assert c.execute("SELECT COUNT(*) FROM rec_items WHERE name='Design'").fetchone()[0] == 1
+        assert c.execute("SELECT price FROM items WHERE id=?", (made.result["item_id"],)).fetchone()[0] == 9_000
+        assert c.execute("SELECT COUNT(*) FROM items WHERE name='Design'").fetchone()[0] == 1
 
 
 def test_a_location_or_job_made_here_in_a_xero_book_is_refused_since_xero_keeps_them_elsewhere(books):

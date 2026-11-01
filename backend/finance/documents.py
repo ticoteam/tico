@@ -249,16 +249,19 @@ def _item_account(ctx: Ctx, kind: str, x: AP.DocLine) -> str | None:
 
 def resolve_lines(ctx: Ctx, who: str, kind: str, contact: Any,
                   lines: Sequence[AP.DocLine]) -> tuple[list[AP.DocLine], int]:
-    """Each line's account: the one given; for a bill line without one, the first posting rule that matches, else the
-    vendor's default line, else Other expenses (counted as asked, for a person to fix before entering it). Every line
-    is checked against the asker's view."""
+    """Each line's account: its item's account when it names an item (an account it names that differs is refused),
+    else the one given; for a bill line without one, the first posting rule that matches, else the vendor's default
+    line, else Other expenses (counted as asked, for a person to fix before entering it). Every line is checked against
+    the asker's view."""
     from .posting_rules import first_for
     out: list[AP.DocLine] = []
     asked = 0
     for x in lines:
         item_account = _item_account(ctx, kind, x)
+        if item_account and x.account_id and x.account_id != item_account:
+            raise invalid("a line's item posts to its own account: name that account or leave the account out")
         if x.account_id or item_account:
-            out.append(x if x.account_id else replace(x, account_id=item_account or ""))
+            out.append(replace(x, account_id=item_account or x.account_id))
             continue
         if kind != "bill":
             raise invalid("an invoice line names its income account")
@@ -890,9 +893,11 @@ def bill_payment(ctx: Ctx, who: str, obligation: str, rec: Any, amount: int, lin
 def payment_waits(ctx: Ctx, bill: Any) -> str:
     """Why a bill ordered by a purchase order is not paid now: its budget is past its amount at hold_payment, so its
     payment waits until the budget fits again. "" when the payment may go ahead. Every payment path asks this."""
-    _, bid = _bill_worst(ctx, bill)
-    if bid and ctx.budgets()[bid].at_limit == "hold_payment" and SP.bill_orders(ctx.c, str(bill["id"])):
-        return f"the {ctx.budgets()[bid].name} budget is past its amount: this bill's payment waits until it fits"
+    if not SP.bill_orders(ctx.c, str(bill["id"])):
+        return ""
+    for bid in _bill_pasts(ctx, bill):
+        if ctx.budgets()[bid].at_limit == "hold_payment":
+            return f"the {ctx.budgets()[bid].name} budget is past its amount: this bill's payment waits until it fits"
     return ""
 
 
@@ -916,10 +921,10 @@ def bill_budget(ctx: Ctx, bill_id: str) -> K.Gate:
     return _bill_budget_gate(ctx, bill) if bill is not None else K.ALLOW
 
 
-def _bill_worst(ctx: Ctx, bill: Any) -> tuple[int, str]:
-    """The strictest at-limit a bill's expense budgets are past (their level, budget id), or (-1, "") when none is."""
+def _bill_pasts(ctx: Ctx, bill: Any) -> list[str]:
+    """Every budget a bill's expense lines (and their parents) leave past its amount, at a limit other than warn."""
     at = dates.day(str(bill["bill_date"]))
-    worst: tuple[int, str] = (-1, "")
+    out: list[str] = []
     for x in doc_lines_of(ctx, "bill", str(bill["id"])):
         account = ctx.accounts.get(x.account_id)
         if account is None or account.type != "expense":
@@ -927,11 +932,21 @@ def _bill_worst(ctx: Ctx, bill: Any) -> tuple[int, str]:
         tags = scope_tags(x.tags)
         b = budgeting.leaf(ctx, account.id, tags.get("team", ""), tags.get("teammate", ""), str(bill["vendor_id"]))
         for bid in budgeting.chain_of(ctx, b.id) if b is not None else []:
-            budget = ctx.budgets()[bid]
+            if bid in out:
+                continue
             st = budgeting.state(ctx, bid, at)
-            level = B.STRICTNESS[budget.at_limit]
-            if st.remaining is not None and st.remaining < 0 and budget.at_limit != "warn" and level > worst[0]:
-                worst = (level, bid)
+            if st.remaining is not None and st.remaining < 0 and ctx.budgets()[bid].at_limit != "warn":
+                out.append(bid)
+    return out
+
+
+def _bill_worst(ctx: Ctx, bill: Any) -> tuple[int, str]:
+    """The strictest at-limit a bill's expense budgets are past (their level, budget id), or (-1, "") when none is."""
+    worst: tuple[int, str] = (-1, "")
+    for bid in _bill_pasts(ctx, bill):
+        level = B.STRICTNESS[ctx.budgets()[bid].at_limit]
+        if level > worst[0]:
+            worst = (level, bid)
     return worst
 
 

@@ -4,6 +4,7 @@ A row a page or a change read holds gives its records. A row the books do not ta
 currency the books cannot hold) gives a Refused, which waits and is read again. A row that is not needed gives none: a
 bank transfer's two legs, which the transfer itself carries once. The page still counts every row (Read.seen), so a
 backfill cursor moves past the rest. Amounts are integer minor units; Xero's decimals arrive as exact Decimal."""
+import hashlib
 import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
@@ -439,8 +440,10 @@ def _code(code: object, system: System) -> str:
 
 
 def tracking_records(j: Mapping[str, Any], system: System) -> list[Record]:
-    """A tracking category's active options: the location category's options are places, the other categories' are
-    classes. Each option is keyed by its category and its id, so a place and a class never share a key."""
+    """A tracking category's options: the location category's options are places, the other categories' are classes.
+    Each option is keyed by its category and its id, so a place and a class never share a key. An archived option is
+    kept as inactive, and its revision follows its name and status, so a rename or an archive is a change the books
+    take."""
     category = str(j.get("TrackingCategoryID") or "")
     if not category or _status(j) != "ACTIVE":
         return []
@@ -448,11 +451,14 @@ def tracking_records(j: Mapping[str, Any], system: System) -> list[Record]:
     out: list[Record] = []
     for raw in as_list(j.get("Options")):
         option = as_map(raw) or {}
-        if str(option.get("Status") or "ACTIVE") != "ACTIVE" or not option.get("TrackingOptionID"):
+        option_id = str(option.get("TrackingOptionID") or "")
+        if not option_id:
             continue
-        ext = M.Ext("TrackingOption", f"{category}/{option['TrackingOptionID']}", "1")
         name = str(option.get("Name") or "")
-        out.append(M.Place(ext, name) if as_place else M.Dimension(ext, name))
+        live = str(option.get("Status") or "ACTIVE") == "ACTIVE"
+        revision = hashlib.sha256(f"{name}|{'ACTIVE' if live else 'ARCHIVED'}".encode()).hexdigest()[:16]
+        ext = M.Ext("TrackingOption", f"{category}/{option_id}", revision)
+        out.append(M.Place(ext, name, active=live) if as_place else M.Dimension(ext, name, active=live))
     return out
 
 
@@ -534,7 +540,7 @@ def journal_body(body: Mapping[str, Any]) -> dict[str, Any]:
         row: dict[str, Any] = {"LineAmount": amount_text(int(line["amount"])),
                                "AccountID": _ref(line.get("account"), "Account"),
                                "Description": str(line.get("description") or "")[:4000]}
-        tracking = _tracking(as_map(line.get("classes")) or {})
+        tracking = _tracking({**(as_map(line.get("classes")) or {}), "place": _option(line.get("place"))})
         if tracking:
             row["Tracking"] = tracking
         lines.append(row)
@@ -563,7 +569,7 @@ def bank_body(body: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("a bank transaction's two lines do not mirror each other")
     row: dict[str, Any] = {"AccountID": _ref(item.get("account"), "Account"), "LineAmount": amount_text(abs(amount)),
                            "Description": str(item.get("description") or "")[:4000]}
-    tracking = _tracking(as_map(item.get("classes")) or {})
+    tracking = _tracking({**(as_map(item.get("classes")) or {}), "place": _option(item.get("place"))})
     if tracking:
         row["Tracking"] = tracking
     party = str(item.get("party") or "")

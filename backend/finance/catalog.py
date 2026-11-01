@@ -40,6 +40,13 @@ def _account(ctx: Ctx, value: str | None, types: tuple[str, ...], what: str) -> 
     return value
 
 
+def _archive_flag(ctx: Ctx, p: V.Payload) -> dict[str, object]:
+    """The archived_at a payload's active flag sets: NULL while the record is live, the change's time once archived."""
+    if "active" not in p:
+        return {}
+    return {"archived_at": None if V.flag(p, "active", True) else ctx.at}
+
+
 def _item_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
     out: dict[str, object] = {}
     if create or "name" in p:
@@ -59,8 +66,8 @@ def _item_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
                              ("asset_account_id", ("asset",), "asset")):
         if create or key in p:
             out[key] = _account(ctx, V.opt_text(p, key, 80), types, what)
-    if not create and "active" in p:
-        out["active"] = int(V.flag(p, "active", True))
+    if not create:
+        out.update(_archive_flag(ctx, p))
     return out
 
 
@@ -72,16 +79,16 @@ def _place_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
         out["kind"] = RC.choice(V.opt_text(p, "kind", 40) or "location", RC.PLACE_KINDS, "a place kind")
     if create or "parent_id" in p:
         parent = V.opt_text(p, "parent_id", 80) or ""
-        if parent and not RR.is_active(ctx.c, "rec_places", parent):
+        if parent and not RR.is_active(ctx.c, "places", parent):
             raise FinanceError(NOT_FOUND, "no such place to sit under")
         out["parent_id"] = parent or None
     if create or "address" in p:
         address = V.obj(p.get("address") or {}, "an address")
         if any(not isinstance(v, str) or len(v) > 200 for v in address.values()) or len(address) > 10:
             raise invalid("an address is up to 10 text fields of 200 characters")
-        out["address_json"] = json.dumps({str(k): v for k, v in address.items()}, sort_keys=True)
-    if not create and "active" in p:
-        out["active"] = int(V.flag(p, "active", True))
+        out["address"] = json.dumps({str(k): v for k, v in address.items()}, sort_keys=True)
+    if not create:
+        out.update(_archive_flag(ctx, p))
     return out
 
 
@@ -98,8 +105,8 @@ def _project_fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
             if row is None or str(row["book_id"]) != ctx.book.id or str(row["kind"]) not in ("customer", "both"):
                 raise FinanceError(NOT_FOUND, "no such customer")
         out["customer_id"] = customer or None
-    if not create and "active" in p:
-        out["active"] = int(V.flag(p, "active", True))
+    if not create:
+        out.update(_archive_flag(ctx, p))
     return out
 
 
@@ -113,7 +120,7 @@ def _create(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, f
     if _mirrored(ctx):
         oid = mirror.queue_record(ctx, who, aid, op, {"local_id": record_id, "day": ctx.today, **fields})
         return {key: record_id, "outbox_id": oid, "status": "queued"}
-    RS.insert(ctx.c, table, {**fields, "id": record_id, "created_at": ctx.at, "created_by": who})
+    RS.insert(ctx.c, table, {**fields, "id": record_id, "created_at": ctx.at, "created_by_id": who})
     return {key: record_id}
 
 
@@ -124,35 +131,39 @@ def _update(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, f
         columns = mirror.RECORD_COLUMNS[op.partition(".")[0]]
         body = {**{k: row[k] for k in columns}, **fields, "local_id": record_id, "day": ctx.today}
         return {key: record_id, "outbox_id": mirror.queue_record(ctx, who, aid, op, body), "status": "queued"}
-    RS.update(ctx.c, table, record_id, {**fields, "updated_at": ctx.at, "updated_by": who})
+    RS.update(ctx.c, table, record_id, {**fields, "updated_at": ctx.at, "updated_by_id": who})
     return {key: record_id}
 
 
 def item_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ITEM_FIELDS)
     f = _shape(lambda: _item_fields(ctx, p, create=True))
+    if _mirrored(ctx) and f["price"] is None:
+        raise invalid("an item the provider holds needs a price")
     item_id = SL.new_id()
 
     def apply(aid: str) -> Result:
-        return _create(ctx, who, aid, "item.create", "rec_items", item_id, f, "item_id")
+        return _create(ctx, who, aid, "item.create", "items", item_id, f, "item_id")
     return Plan(K.default_gate(ctx.org, who, "item_create"), f"Add item {f['name']}"[:200], apply)
 
 
 def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("item_id", *ITEM_FIELDS, "active"))
     item_id = V.text(p, "item_id", 80)
-    old = RR.get(ctx.c, "rec_items", item_id)
+    old = RR.get(ctx.c, "items", item_id)
     if old is None:
         raise FinanceError(NOT_FOUND, "no such item")
     f = _shape(lambda: _item_fields(ctx, p, create=False))
+    if _mirrored(ctx) and "price" in f and f["price"] is None and old["price"] is not None:
+        raise invalid("an item the provider holds keeps a price: set a new one")
     gate = K.default_gate(ctx.org, who, "item_update")
     if "price" in f and f["price"] != old["price"] and who != ctx.org.owner:
         gate = K.Gate("needs_approval", "finance_admin", "default:item-price")
     if _mirrored(ctx):
-        mirror.record_in_provider(ctx, "rec_items", item_id)
+        mirror.record_in_provider(ctx, "items", item_id)
 
     def apply(aid: str) -> Result:
-        return _update(ctx, who, aid, "item.update", "rec_items", item_id, f, old, "item_id")
+        return _update(ctx, who, aid, "item.update", "items", item_id, f, old, "item_id")
     return Plan(gate, f"Change item {old['name']}"[:200], apply)
 
 
@@ -164,14 +175,14 @@ def place_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     place_id = SL.new_id()
 
     def apply(aid: str) -> Result:
-        return _create(ctx, who, aid, "place.create", "rec_places", place_id, f, "place_id")
+        return _create(ctx, who, aid, "place.create", "places", place_id, f, "place_id")
     return Plan(K.default_gate(ctx.org, who, "place_create"), f"Add place {f['name']}"[:200], apply)
 
 
 def place_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("place_id", *PLACE_FIELDS, "active"))
     place_id = V.text(p, "place_id", 80)
-    old = RR.get(ctx.c, "rec_places", place_id)
+    old = RR.get(ctx.c, "places", place_id)
     if old is None:
         raise FinanceError(NOT_FOUND, "no such place")
     if p.get("parent_id") == place_id:
@@ -179,10 +190,10 @@ def place_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     f = _shape(lambda: _place_fields(ctx, p, create=False))
     if _mirrored(ctx):
         mirror.provider_takes_records(ctx, "a location")
-        mirror.record_in_provider(ctx, "rec_places", place_id)
+        mirror.record_in_provider(ctx, "places", place_id)
 
     def apply(aid: str) -> Result:
-        return _update(ctx, who, aid, "place.update", "rec_places", place_id, f, old, "place_id")
+        return _update(ctx, who, aid, "place.update", "places", place_id, f, old, "place_id")
     return Plan(K.default_gate(ctx.org, who, "place_update"), f"Change place {place_id}"[:200], apply)
 
 
@@ -196,20 +207,20 @@ def project_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     project_id = SL.new_id()
 
     def apply(aid: str) -> Result:
-        return _create(ctx, who, aid, "project.create", "rec_projects", project_id, f, "project_id")
+        return _create(ctx, who, aid, "project.create", "projects", project_id, f, "project_id")
     return Plan(K.default_gate(ctx.org, who, "project_create"), f"Add project {f['name']}"[:200], apply)
 
 
 def project_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("project_id", *PROJECT_FIELDS, "active"))
     project_id = V.text(p, "project_id", 80)
-    old = RR.get(ctx.c, "rec_projects", project_id)
+    old = RR.get(ctx.c, "projects", project_id)
     if old is None:
         raise FinanceError(NOT_FOUND, "no such project")
     f = _shape(lambda: _project_fields(ctx, p, create=False))
 
     def apply(aid: str) -> Result:
-        return _update(ctx, who, aid, "project.update", "rec_projects", project_id, f, old, "project_id")
+        return _update(ctx, who, aid, "project.update", "projects", project_id, f, old, "project_id")
     return Plan(K.default_gate(ctx.org, who, "project_update"), f"Change project {project_id}"[:200], apply)
 
 

@@ -18,7 +18,8 @@ from .store import banking as SK
 from .store import ledger as SL
 from .store import purchasing as SP
 
-OPEN_ORDER = ("approved", "partial")
+# A partly billed order stays approved (it shows as partial, see SP.shown_po): only an approved order takes bills.
+OPEN_ORDER = ("approved",)
 
 
 def _money(amount: int) -> str:
@@ -67,38 +68,38 @@ def _release(ctx: Ctx, po_id: str, lines: Sequence[Any]) -> None:
 
 
 def _settle(ctx: Ctx, who: str, po_id: str, force: bool = False) -> list[str]:
-    """Bring an order's holds and status up to date with its bills. While it is open each line holds what is still
-    unbilled; a closed, voided or draft order holds nothing. Billed in part makes it partial; billed in full closes it.
-    Returns why a hold was not placed (no budget covers the line, or the budget is at its limit)."""
+    """Bring an order's holds and status up to date with its bills. An approved order holds what is still unbilled on
+    each line. A hold already placed shrinks to what is left rather than being released and placed again, so an order
+    billed in part keeps its budget on the rest. A closed, voided or draft order holds nothing, and billed in full
+    closes
+    it. Returns why a hold was not placed (no budget covers the line, or the budget is past its limit)."""
     po = SP.get(ctx.c, "fin_purchase_orders", po_id)
     lines = SP.lines(ctx.c, "po", po_id)
     status, closed_by = str(po["status"]), str(po["closed_by"])
-    _release(ctx, po_id, lines)
     if status in ("draft", "sent", "void") or (status == "closed" and closed_by == "hand"):
+        _release(ctx, po_id, lines)
         return []
     owed = [(line, int(line["amount"]) - SP.billed(ctx.c, str(line["id"]))) for line in lines]
-    if all(left <= 0 for _, left in owed):
-        new, by = "closed", "bills"
-    elif any(left < int(line["amount"]) for line, left in owed):
-        new, by = "partial", ""
-    else:
-        new, by = "approved", ""
+    new, by = ("closed", "bills") if all(left <= 0 for _, left in owed) else ("approved", "")
     if (new, by) != (status, closed_by):
         SP.update(ctx.c, "fin_purchase_orders", po_id,
                   {"status": new, "closed_by": by, "closed_at": ctx.at if new == "closed" else None,
                    "updated_at": ctx.at})
     if new == "closed":
+        _release(ctx, po_id, lines)
         return []
     refused: list[str] = []
     for line, left in owed:
+        source_id = f"{po_id}:{int(line['line_no'])}"
         account = ctx.accounts.get(str(line["account_id"] or ""))
         if left <= 0 or account is None or account.type != "expense":
+            budgeting.release_for(ctx, "purchase_order", source_id)
             continue
         tags = cast(dict[str, str], SK.loads(line["tags_json"]))
         d = budgeting.place(ctx, budget_scope={"account_id": account.id, **DOC.scope_tags(tags),
                                                "vendor": str(po["vendor_id"])},
                             amount=left, currency=ctx.book.base_currency, source="purchase_order",
-                            source_id=f"{po_id}:{int(line['line_no'])}", expires_at=None, by=who, force=force)
+                            source_id=source_id, expires_at=None, by=who, force=force)
         if not d.allowed or d.hold_id is None:
             refused.append(d.reason or "no budget covers this spend")
     return refused
@@ -133,14 +134,19 @@ def link_bill_lines(ctx: Ctx, who: str, vendor_id: str,
             raise invalid("a bill bills only purchase orders from its own vendor")
         if str(row["status"]) not in OPEN_ORDER:
             raise FinanceError(CONFLICT, "that purchase order takes no more bills")
-        tags = dict(x.tags) or cast(dict[str, str], SK.loads(row["tags_json"]))
-        if not may_write(ctx, who, str(row["account_id"] or ""), tags):
+        account = str(row["account_id"] or "")
+        tags = cast(dict[str, str], SK.loads(row["tags_json"]))
+        if x.account_id and x.account_id != account:
+            raise invalid("a bill line on a purchase order line posts to that line's account")
+        if x.tags and dict(x.tags) != tags:
+            raise invalid("a bill line on a purchase order line takes that line's tags")
+        if not may_write(ctx, who, account, tags):
             raise denied("the purchase order's line is outside your view")
         room = int(row["amount"]) - SP.billed(ctx.c, x.po_line_id) - taken.get(x.po_line_id, 0)
         if x.amount > room:
             raise invalid(f"only {_money(max(room, 0))} is left to bill on that purchase order line")
         taken[x.po_line_id] = taken.get(x.po_line_id, 0) + x.amount
-        out.append(AP.DocLine(x.account_id or str(row["account_id"]), x.amount, x.description, tags, x.taxable,
+        out.append(AP.DocLine(account, x.amount, x.description, tags, x.taxable,
                               x.item_id or str(row["item_id"] or ""), x.po_line_id))
         po_id = str(row["po_id"])
         if po_id not in po_ids:
@@ -191,19 +197,28 @@ def po_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 def _budget_gate(ctx: Ctx, po: Any, lines: Sequence[Any]) -> K.Gate:
-    """What the budgets the order's expense lines meet ask of approving it, the check a card or a bill makes:
-    decline refuses the order, ask routes it to a finance admin, and warn or hold_payment goes ahead (approval holds
-    the spend; a hold_payment bill waits for its payment)."""
+    """What the budgets the order's expense lines meet ask of approving it, the check a card or a bill makes. The lines
+    are checked together: each budget in a line's chain is charged the order's spend under it, so lines that each fit
+    a budget are refused when their sum does not. Decline refuses the order, ask routes it to a finance admin, and warn
+    or hold_payment goes ahead (approval holds the spend; a hold_payment bill waits for its payment)."""
     budgets = ctx.budgets()
-    worst: tuple[int, str, str] = (-1, "", "")
+    spend: dict[tuple[str, str], int] = {}
     for line in lines:
         account = ctx.accounts.get(str(line["account_id"] or ""))
         if account is None or account.type != "expense":
             continue
         tags = cast(dict[str, str], SK.loads(line["tags_json"]))
-        d = budgeting.would_place(ctx, budget_scope={"account_id": account.id, **DOC.scope_tags(tags),
-                                                     "vendor": str(po["vendor_id"])}, amount=int(line["amount"]))
-        if d is None or d.action in ("ok", "warn"):
+        teammate = tags.get("teammate", "")
+        target = f"teammate:{teammate}" if teammate else ""
+        leaf = budgeting.leaf(ctx, account.id, tags.get("team", ""), teammate, str(po["vendor_id"]))
+        if leaf is None:
+            continue
+        for bid in budgeting.chain_of(ctx, leaf.id):
+            spend[(bid, target)] = spend.get((bid, target), 0) + int(line["amount"])
+    worst: tuple[int, str, str] = (-1, "", "")
+    for (bid, target), amount in spend.items():
+        d = budgeting.decide(ctx, bid, amount, target)
+        if d.action in ("ok", "warn"):
             continue
         if B.STRICTNESS[d.action] > worst[0]:
             worst = (B.STRICTNESS[d.action], d.action, d.limit_budget)
@@ -221,8 +236,10 @@ def po_approve(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     po = _row(ctx, "fin_purchase_orders", po_id, "purchase order")
     status = str(po["status"])
     if status in OPEN_ORDER or status == "closed":
+        shown = SP.shown_po(status, SP.billed_total(ctx.c, po_id), int(po["total"]))
+
         def already(aid: str) -> Result:
-            return {"po_id": po_id, "status": status}
+            return {"po_id": po_id, "status": shown}
         return Plan(K.ALLOW, f"Purchase order {po['number']} is approved already", already)
     if status not in ("draft", "sent"):
         raise FinanceError(CONFLICT, f"a {status} order cannot be approved")
@@ -261,7 +278,7 @@ def po_close(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     def apply(aid: str) -> Result:
         if SP.update(ctx.c, "fin_purchase_orders", po_id,
                      {"status": "closed", "closed_by": "hand", "closed_at": ctx.at, "updated_at": ctx.at},
-                     "status IN ('approved','partial')") != 1:
+                     "status='approved'") != 1:
             raise FinanceError(CONFLICT, "that order moved on")
         _settle(ctx, who, po_id)
         return {"po_id": po_id, "status": "closed"}
@@ -274,7 +291,7 @@ def po_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("po_id",))
     po_id = V.text(p, "po_id", 80)
     po = _row(ctx, "fin_purchase_orders", po_id, "purchase order")
-    status = str(po["status"])
+    status = SP.shown_po(str(po["status"]), SP.billed_total(ctx.c, po_id), int(po["total"]))
     if status == "partial":
         raise FinanceError(CONFLICT, "a partly billed order is closed, not voided")
     if status not in ("draft", "sent", "approved"):
@@ -364,7 +381,7 @@ def estimate_convert(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     eid = V.text(p, "estimate_id", 80)
     est = _row(ctx, "fin_estimates", eid, "estimate")
     status = str(est["status"])
-    if status == "invoiced":
+    if est["invoice_id"]:
         raise FinanceError(CONFLICT, "that estimate is invoiced already")
     if status == "declined":
         raise FinanceError(CONFLICT, "a declined estimate cannot be invoiced")

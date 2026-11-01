@@ -134,10 +134,10 @@ def test_a_connected_book_backfills_from_quickbooks_and_its_pnl_reads_by_locatio
     _mirror(books, cid)
     assert _drain(books, client, cid) == []
     with books.read() as c:
-        assert [str(r[0]) for r in c.execute("SELECT name FROM rec_places")] == ["Denver"]
-        assert [str(r[0]) for r in c.execute("SELECT name FROM rec_items")] == ["Widget"]
+        assert [str(r[0]) for r in c.execute("SELECT name FROM places")] == ["Denver"]
+        assert [str(r[0]) for r in c.execute("SELECT name FROM items")] == ["Widget"]
         assert [(str(r[0]), str(r[1])) for r in c.execute(
-            "SELECT p.name, k.name FROM rec_projects p JOIN fin_contacts k ON k.id=p.customer_id")] == \
+            "SELECT p.name, k.name FROM projects p JOIN fin_contacts k ON k.id=p.customer_id")] == \
             [("Job 12", "Acme Retail")]
         assert [str(r[0]) for r in c.execute("SELECT name FROM fin_dimensions WHERE kind='class'")] == ["Web"]
         by_place = FR.pnl_by(c, OWNER, "place", *WINDOW, basis="accrual", top_n=50, at=AT)
