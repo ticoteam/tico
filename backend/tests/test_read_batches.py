@@ -31,10 +31,10 @@ def seed(c, size):
         reply = H.task_comment(c, "human:ana", parent["id"], "Request " + key, wake=False,
                                extra_refs={"inputs": [input_["id"]], "answers": [input_["id"]]})
         aid = "run-" + key
-        c.execute("INSERT INTO jobs(id,message_id,bot,state,created,attempt_id) VALUES(?,?,'ops','done',?,?)",
+        c.execute("INSERT INTO jobs(id,message_id,bot,state,created,attempt_id) VALUES(?,?,'ops','completed',?,?)",
                   ("job-" + key, reply["id"], H.now(), aid))
         c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
-                  "VALUES(?,?,'ops','rn',0,?,'done',?,?)", (aid, "job-" + key, aid, H.now(), H.now()))
+                  "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + key, aid, H.now(), H.now()))
         c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, input_["id"]))
         H.event(c, "human:ana", privacy.INPUT_MOVED, aid,
                 {"message_id": moved["id"], "tasks": [source["id"]], "to_attempt": "missing-" + key})

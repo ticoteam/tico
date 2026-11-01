@@ -2037,7 +2037,7 @@ def obsolete_notices_sql():
             "AND coalesce(json_extract(m.refs_json,'$.caused_by'),'') NOT LIKE 'human:%') "
             "OR (m.body LIKE 'New task from %' AND m.to_actor=t.owner "
             "AND json_extract(m.refs_json,'$.filed_in') IS NOT NULL "
-            "AND (t.status IN ('waiting','blocked') OR t.snoozed_until>?) "
+            "AND (t.status='waiting' OR t.snoozed_until>?) "
             "AND NOT EXISTS (SELECT 1 FROM attempts fa WHERE fa.id=json_extract(m.refs_json,'$.filed_in') "
             "AND fa.state IN ('leased','running'))) "
             "OR ((json_extract(m.refs_json,'$.wake') IN ('status_check','stalled','step_status') "
@@ -2819,7 +2819,7 @@ class Execution:
                 cancelled = {job["id"] for job in jobs if (row["stop_requested"] and job["id"] == row["job_id"] and not benched)
                              or job["task_status"] in ("done", "closed", "declined")}
                 if row["job_id"] in cancelled:
-                    state = "cancelled"
+                    state = "canceled"
                 c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (H.now(), row["id"]))
                 from .performance import stamp_attempt
                 stamp_attempt(c, row["id"], row["runner_id"], "end")
@@ -2849,7 +2849,7 @@ class Execution:
                                       conversation_id=msg["conversation_id"], in_reply_to=msg["id"],
                                       refs={"turn_id": row["id"]})
                 for job in jobs:
-                    job_state = "cancelled" if job["id"] in cancelled else retry_state if state == "cancelled" else state
+                    job_state = "canceled" if job["id"] in cancelled else retry_state if state == "canceled" else state
                     c.execute("UPDATE jobs SET state=? WHERE id=?", (job_state, job["id"]))
                 H.turn_finish(c, H.KEEPER, row["id"], exit_code="failed" if state == "failed" else "interrupted",
                               summary=reason if state == "failed" else "Runner lease expired", usage_reason="no_result")
@@ -2858,7 +2858,7 @@ class Execution:
                                     (row["job_id"],)).fetchone()
                     if job:
                         self.stopped(c, row, job["conversation_id"], held=held_back)
-                elif state == "cancelled":
+                elif state == "canceled":
                     settle_status(c, row["bot"], "idle", "", claimed=row["created"])
                 elif row["state"] == "leased" and state == "queued":
                     settle_status(c, row["bot"], "idle", "Last run didn't start; it is back in the queue",
@@ -3302,7 +3302,7 @@ class Execution:
         for old in obsolete:
             if not prepared:
                 selected = None
-            c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (old['id'],))
+            c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (old['id'],))
             claim_holds.clear(c, old['id'], "Its run is no longer needed.")
             c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?", (H.now(),old['message_id']))
             from .repositories import metadata
@@ -3414,7 +3414,7 @@ class Execution:
         savepoint of its own (claim), so an error here rolls back only this job's writes."""
         msg = H.message(c, row["message_id"])
         if not privacy.message_readable(c, "bot:" + row["bot"], msg):
-            c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["id"],))
+            c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
             H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
             return {"attempt": None}
         # The bot's budget and back-off: an error in them passes the bot over, and holds no run.
@@ -3880,7 +3880,7 @@ class Execution:
         if body.outcome != "completed" or not self.current_owner(c, who, row) or row["stop_requested"]:
             return False
         job = c.execute("SELECT state FROM jobs WHERE id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
-        return bool(job and job["state"] in ("cancelled", "queued"))
+        return bool(job and job["state"] in ("canceled", "queued"))
 
     @staticmethod
     def no_usage_reason(body):
@@ -4064,7 +4064,7 @@ class Execution:
             # what the run did (`reconcile_job`); once it has been let go, a Stop still files its late answer.
             rows = c.execute("SELECT a.id,a.stop_requested,j.state AS job_state FROM attempts a JOIN jobs j "
                              "ON j.id=a.job_id AND j.attempt_id=a.id WHERE a.bot=? AND a.id=? AND a.state='expired' "
-                             "AND j.state IN ('uncertain','cancelled')", (bot, attempt_id)).fetchall()
+                             "AND j.state IN ('uncertain','canceled')", (bot, attempt_id)).fetchall()
             if rows and rows[0]["job_state"] == "uncertain" and c.execute(
                     "SELECT 1 FROM events WHERE action='job.held' AND target=?", (attempt_id,)).fetchone():
                 raise Problem("held", "This run is held for review: resume or dismiss it there", 409)
@@ -4381,7 +4381,7 @@ class Execution:
             if c.execute("SELECT 1 FROM messages WHERE id=? AND deleted_at IS NOT NULL", (mid,)).fetchone():
                 # Taken back before the runtime saw it: nothing is left to run, as H.task_comment_delete
                 # cancels a queued one.
-                c.execute("UPDATE jobs SET state='cancelled',attempt_id=NULL WHERE message_id=? AND attempt_id=?",
+                c.execute("UPDATE jobs SET state='canceled',attempt_id=NULL WHERE message_id=? AND attempt_id=?",
                           (mid, aid))
                 continue
             c.execute("UPDATE jobs SET state='queued',attempt_id=NULL WHERE message_id=? AND attempt_id=?", (mid, aid))
@@ -4571,7 +4571,7 @@ class Execution:
                 # stopped one would, rather than waiting uncertain for `auto_reconcile` to resume it. Inputs the runtime
                 # never received go back in the queue, as they do for a Stop the runner heard.
                 self.release_undelivered(c, aid, body.undelivered)
-                c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["job_id"],))
+                c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["job_id"],))
                 msg = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0],
                                 include_deleted=True)
                 self.stopped(c, row, msg["conversation_id"])
@@ -4859,7 +4859,7 @@ class Execution:
             requeue = False
         c.execute("UPDATE jobs SET state=? WHERE id=?",
                   ("completed" if body.outcome == "completed" else "uncertain" if held_back else "queued" if benched
-                   else "cancelled" if stopped or no_copy
+                   else "canceled" if stopped or no_copy
                    else "queued" if requeue else "uncertain", row["job_id"]))
         if tico_code == gateway.NOT_ISOLATED and not requeue:
             # Held as it is: never started, so `auto_reconcile` would resume it onto the same runner each sweep. It
@@ -4881,7 +4881,7 @@ class Execution:
                 # Taken back mid-turn: nothing is left to answer, defer or hold for review, so its job ends with
                 # the turn. A deleted comment's queued job is cancelled the same way (H.task_comment_delete).
                 c.execute("UPDATE jobs SET state=? WHERE message_id=?",
-                          ("completed" if body.outcome == "completed" else "cancelled", incoming["message_id"]))
+                          ("completed" if body.outcome == "completed" else "canceled", incoming["message_id"]))
                 continue
             answered = incoming["kind"] != "ask" or bool(H.answers_to(c, [incoming["message_id"]]))
             task_id = work_task_id(message, H.conversation(c, message["conversation_id"]))
@@ -4893,7 +4893,7 @@ class Execution:
                                     (task_id, actor, row["started"] or row["created"])).fetchone()
                 deferred = bool(task and task["status"] in H.ACTIVE_STATUSES and not outcome)
             state = ("queued" if deferred else "completed" if body.outcome == "completed" and answered else
-                     "uncertain" if held_back else "queued" if benched else "cancelled" if stopped
+                     "uncertain" if held_back else "queued" if benched else "canceled" if stopped
                      else "queued" if requeue else "uncertain")
             c.execute("UPDATE jobs SET state=?,attempt_id=CASE WHEN ? THEN NULL ELSE attempt_id END WHERE message_id=?",
                       (state, deferred, incoming["message_id"]))
@@ -5383,7 +5383,7 @@ class Execution:
         line people read when the note itself is written to the bot. A deferred choice stays held until its lane is idle.
         `cause` names what stopped the run in the event ('update': the update cuts UPDATE_RESUMES counts)."""
         job_id = row['id']
-        state = 'uncertain' if deferred else 'queued' if decision == 'resume' else 'cancelled'
+        state = 'uncertain' if deferred else 'queued' if decision == 'resume' else 'canceled'
         if not saved:
             # A deferred choice applied once its lane is idle keeps the time it was made: that is when it was decided.
             c.execute("INSERT INTO job_recovery VALUES(?,?,?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET "
@@ -5432,7 +5432,7 @@ class Execution:
                     newest[key] = row["id"]
         for job_id in held:
             with isolated(c, "hold_unrunnable", job_id):
-                c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (job_id,))
+                c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job_id,))
                 H.event(c, H.KEEPER, "job.suppress", job_id,
                         {"reason": "Bot has no machine; a newer notice about the same task stays queued"})
         # An archived bot never runs again: its queued jobs only sit there. The
@@ -5440,7 +5440,7 @@ class Execution:
         for row in c.execute("SELECT j.id FROM jobs j JOIN bots b ON b.slug=j.bot "
                              "WHERE j.state='queued' AND b.state='archived'").fetchall():
             with isolated(c, "hold_unrunnable", row["id"]):
-                c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["id"],))
+                c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
                 H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "Bot is archived"})
                 held.append(row["id"])
         # A check its model's usage limit held, whose task is done, closed or declined, would go on retrying after
@@ -5457,7 +5457,7 @@ class Execution:
                              "AND m.id=j.message_id AND m.from_actor NOT LIKE 'human:%' "
                              f"AND {H.MESSAGE_TASK_SQL}=t.id", H.ACTIVE_STATUSES).fetchall():
             with isolated(c, "hold_unrunnable", row["id"]):
-                c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["id"],))
+                c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
                 H.event(c, H.KEEPER, "job.suppress", row["id"],
                         {"reason": f"Check task is {row['status']}: its turn held by a usage limit is let go",
                          "task_id": row["task_id"]})
@@ -5481,7 +5481,7 @@ class Execution:
                 # job_refusal's own check, with its arguments.
                 if privacy.message_readable(c, "bot:" + row["bot"], H.message(c, row["message_id"])):
                     continue
-                c.execute("UPDATE jobs SET state='cancelled' WHERE id=? AND state='queued'", (row["id"],))
+                c.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (row["id"],))
                 H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
                 dropped.append(row["id"])
         return dropped

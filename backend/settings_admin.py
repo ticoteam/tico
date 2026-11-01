@@ -1102,7 +1102,7 @@ class SettingsAdmin:
                            "WHERE p.transition_id=? AND j.state IN ('leased','running','input')", (transition_id,)).fetchone()
         if active:
             raise Problem("busy", "A checkpoint is currently running; wait for it to finish", 409)
-        c.execute("UPDATE jobs SET state='cancelled' WHERE message_id IN "
+        c.execute("UPDATE jobs SET state='canceled' WHERE message_id IN "
                   "(SELECT message_id FROM bot_transition_checkpoints WHERE transition_id=?) AND state='queued'", (transition_id,))
         self._apply(c, who, transition, without_checkpoint=True)
         return self.get(c, who, transition_id)
@@ -1116,7 +1116,7 @@ class SettingsAdmin:
         if c.execute("SELECT 1 FROM bot_transition_checkpoints p JOIN jobs j ON j.message_id=p.message_id "
                      "WHERE p.transition_id=? AND j.state IN ('leased','running','input')", (transition_id,)).fetchone():
             raise Problem("busy", "A checkpoint is currently running; wait for it to finish", 409)
-        c.execute("UPDATE jobs SET state='cancelled' WHERE message_id IN "
+        c.execute("UPDATE jobs SET state='canceled' WHERE message_id IN "
                   "(SELECT message_id FROM bot_transition_checkpoints WHERE transition_id=?) AND state='queued'", (transition_id,))
         c.execute("UPDATE bot_transition_checkpoints SET state='cancelled' WHERE transition_id=? AND state='queued'",
                   (transition_id,))
@@ -1651,7 +1651,7 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
     c.execute("UPDATE bot_config SET config_json=?,revision=revision+1,definition_updated=?,"
               "definition_updated_by=? WHERE bot=?", (encode(declared), ts, actor, bot))
     c.execute("DELETE FROM assignments WHERE bot=?", (bot,))
-    c.execute("UPDATE jobs SET state='cancelled' WHERE bot=? AND state='queued'", (bot,))
+    c.execute("UPDATE jobs SET state='canceled' WHERE bot=? AND state='queued'", (bot,))
     for row in c.execute("SELECT id FROM schedules WHERE bot=? AND deleted_at IS NULL", (bot,)).fetchall():
         c.execute("INSERT INTO schedule_config(schedule_id,enabled) VALUES(?,0) "
                   "ON CONFLICT(schedule_id) DO UPDATE SET enabled=0", (row["id"],))

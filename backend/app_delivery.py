@@ -142,7 +142,7 @@ def turn_off(c, actor, bot, declared, reason):
     if found:
         c.execute("DELETE FROM assignments WHERE bot=? AND runner_id=?", (bot, found["computer"]))
     # A message no runner took goes to the sync instead (external_sync.take_inbox); one a runner took stays its.
-    c.execute("UPDATE jobs SET state='cancelled' WHERE bot=? AND state='queued'", (bot,))
+    c.execute("UPDATE jobs SET state='canceled' WHERE bot=? AND state='queued'", (bot,))
     H.event(c, actor, "bot.app_delivery_off", bot, {"runner": (found or {}).get("computer"), "reason": reason})
 
 

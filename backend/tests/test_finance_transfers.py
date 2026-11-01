@@ -88,7 +88,7 @@ def _queued_by_ben(store, src, dst, amount=10_000):
 
 def _assert_cancelled_unsent(store, fake):
     assert fake.sent("create_transfer") == []
-    assert _rows(store, "SELECT status FROM fin_transfers")[0][0] == "cancelled"
+    assert _rows(store, "SELECT status FROM fin_transfers")[0][0] == "canceled"
     assert _rows(store, "SELECT status FROM fin_outbox WHERE op='transfer_create'")[0][0] == "failed"
     assert _rows(store, "SELECT count(*) FROM tasks WHERE title LIKE 'Transfer of%was not sent'")[0][0] == 1
 
@@ -317,7 +317,7 @@ def test_a_transfer_cancelled_after_a_429_gives_back_the_limit_its_claim_reserve
         tid = str(c.execute("SELECT id FROM fin_transfers").fetchone()[0])
         assert act(c, OWNER, "payment_cancel", {"transfer_id": tid}).status == "committed"
     assert _reserved(books, rule_id) == (0, 0)
-    assert tuple(_rows(books, "SELECT status, counted_json FROM fin_transfers")[0]) == ("cancelled", "[]")
+    assert tuple(_rows(books, "SELECT status, counted_json FROM fin_transfers")[0]) == ("canceled", "[]")
 
 
 def test_a_transfer_a_later_rule_refuses_after_a_429_gives_back_the_limit_its_claim_reserved(books):
@@ -340,7 +340,7 @@ def test_a_transfer_a_later_rule_refuses_after_a_429_gives_back_the_limit_its_cl
     sync_once(books, fake, LATEST)
     assert len(fake.sent("create_transfer")) == 1
     assert _reserved(books, rule_id) == (0, 0)
-    assert tuple(_rows(books, "SELECT status, counted_json FROM fin_transfers")[0]) == ("cancelled", "[]")
+    assert tuple(_rows(books, "SELECT status, counted_json FROM fin_transfers")[0]) == ("canceled", "[]")
 
 
 def test_an_unknown_transfers_out_leg_past_five_thousand_transactions_is_found_by_a_later_poll(books):
@@ -471,7 +471,7 @@ def test_a_queued_transfer_is_cancelled_before_its_call_is_claimed_and_then_cann
     sync_once(books, fake)
     sync_once(books, fake, LATER)
     assert fake.sent("create_transfer") == []
-    assert _rows(books, "SELECT status FROM fin_transfers")[0][0] == "cancelled"
+    assert _rows(books, "SELECT status FROM fin_transfers")[0][0] == "canceled"
     assert _rows(books, "SELECT status FROM fin_outbox WHERE op='transfer_create'")[0][0] == "failed"
 
 
@@ -557,7 +557,7 @@ def test_a_limit_added_after_transfers_were_queued_is_reserved_at_send_once(book
     with books.read() as c:
         assert tuple(c.execute("SELECT sum(amount), sum(count) FROM fin_rule_counters WHERE rule_id=?",
                                (rule_id,)).fetchone()) == (10_000, 1)
-        assert sorted(r[0] for r in c.execute("SELECT status FROM fin_transfers")) == ["cancelled", "submitted"]
+        assert sorted(r[0] for r in c.execute("SELECT status FROM fin_transfers")) == ["canceled", "submitted"]
 
 
 def test_a_refused_transfer_gives_back_the_limit_it_reserved(books):
@@ -733,4 +733,4 @@ def test_the_transfers_read_lists_moves_between_accounts_the_viewer_sees_both_of
                                      "whose": "company", "account_ids": [src_ledger]})
         assert FR.transfers(c, "human:cara")["transfers"] == []
         act(c, "human:ben", "payment_cancel", {"transfer_id": tid})
-        assert FR.transfers(c, "human:ben")["transfers"][0]["status"] == "cancelled"
+        assert FR.transfers(c, "human:ben")["transfers"][0]["status"] == "canceled"

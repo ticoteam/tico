@@ -85,7 +85,7 @@ _EARLIER = (f"m.from_actor='{H.KEEPER}' AND om.conversation_id=m.conversation_id
 _DUPLICATE = " OR ".join(
     f"""EXISTS(SELECT 1 FROM messages m JOIN messages om ON {earlier}
    JOIN jobs o ON o.message_id=om.id AND o.bot=NEW.bot AND o.id<>NEW.id
-   AND (o.state<>'cancelled' OR o.wake_carrier IS NOT NULL)
+   AND (o.state<>'canceled' OR o.wake_carrier IS NOT NULL)
    LEFT JOIN jobs cj ON cj.id=o.wake_carrier LEFT JOIN attempts a ON a.id=coalesce(cj.attempt_id,o.attempt_id)
    WHERE m.id=NEW.message_id AND {_SAME_EVENT} AND (coalesce(cj.state,o.state) IN ('queued','leased','running','input')
    OR a.finished>=strftime('%Y-%m-%dT%H:%M:%fZ',m.created,'-{DUPLICATE_SECONDS} seconds')))""" for earlier in _EARLIER)
@@ -97,7 +97,7 @@ HOLD_TRIGGER = f"""CREATE TRIGGER wake_preset_hold AFTER INSERT ON jobs WHEN NEW
    WHERE id=NEW.id AND {_PRESET_SQL} AND EXISTS(SELECT 1 FROM messages m WHERE m.id=NEW.message_id
    AND m.from_actor='{H.KEEPER}' AND coalesce(json_extract(m.refs_json,'$.wake_immediate'),0)<>1
    AND ({_BATCH_SQL} OR {_SWEEP_SQL}));
- UPDATE jobs SET state='cancelled',held=0,wake_class='duplicate' WHERE id=NEW.id AND {_PRESET_SQL}
+ UPDATE jobs SET state='canceled',held=0,wake_class='duplicate' WHERE id=NEW.id AND {_PRESET_SQL}
    AND ({_DUPLICATE});
 END"""
 
@@ -238,7 +238,7 @@ def tick(c, at=None):
         if job["wake_class"] == "sweep":
             due = _sweep_slot(c, job, values_of["sweep_seconds"])
             if due is None:
-                c.execute("UPDATE jobs SET state='cancelled',held=0 WHERE id=?", (job["id"],))
+                c.execute("UPDATE jobs SET state='canceled',held=0 WHERE id=?", (job["id"],))
                 H.event(c, H.KEEPER, "job.wake_merged", job["id"], {"bot": job["bot"]})
                 continue
         else:
@@ -266,7 +266,7 @@ def _sweep_slot(c, job, gap):
     for row in c.execute("SELECT j.state,j.hold_until,m.refs_json,"
                          "(SELECT min(a.created) FROM attempts a WHERE a.job_id=j.id) AS started "
                          "FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "WHERE j.bot=? AND j.wake_class='sweep' AND j.id<>? AND j.state<>'cancelled' "
+                         "WHERE j.bot=? AND j.wake_class='sweep' AND j.id<>? AND j.state<>'canceled' "
                          "AND (j.state IN ('queued','leased','running','input') OR j.hold_until>? "
                          "OR EXISTS(SELECT 1 FROM attempts a WHERE a.job_id=j.id AND a.created>?))",
                          (job["bot"], job["id"], since, since)):
@@ -359,7 +359,7 @@ def _release(c, bot, jobs):
               (jobs[0]["wake_preset"], held_until, (sent or {}).get("id")))
     digest = c.execute("SELECT id FROM jobs WHERE message_id=?", ((sent or {}).get("id"),)).fetchone()
     for job in jobs:
-        c.execute("UPDATE jobs SET state='cancelled',held=0,wake_carrier=? WHERE id=?",
+        c.execute("UPDATE jobs SET state='canceled',held=0,wake_carrier=? WHERE id=?",
                   (digest[0] if digest else None, job["id"]))
     H.event(c, H.KEEPER, "job.wake_digest", bot, {"jobs": [j["id"] for j in jobs[:DIGEST_IDS]], "count": len(jobs)})
 
@@ -506,7 +506,7 @@ def measures(c, since, until=None, limit=20000):
                 seen[0], seen[1] = seen[0] + run["turns"] / len(shared), seen[1] + run["tokens"] / len(shared)
             if wait is not None and row["wake_class"] != "digest":
                 pickups[name]["held" if held else "immediate"].append(wait)
-        if not held and wait is not None and wait > MISSED_AFTER_SECONDS and row["state"] != "cancelled":
+        if not held and wait is not None and wait > MISSED_AFTER_SECONDS and row["state"] != "canceled":
             bucket["missed_actions"] += 1
     for name, bucket in out.items():
         accepted = [tid for tid in tickets[name] if (H.task(c, tid) or {}).get("status") in ("done", "closed")

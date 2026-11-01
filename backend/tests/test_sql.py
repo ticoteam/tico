@@ -291,7 +291,7 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
             clone('messages', mid, id='message-' + name, to_actor='human:ana', **patch)
             clone('jobs', original['job_id'], id='job-' + name, message_id='message-' + name)
             clone('attempts', original['id'], id='attempt-' + name, job_id='job-' + name,
-                  token_hash='fixture-' + name, state='done', lane='fixture-' + name)
+                  token_hash='fixture-' + name, state='completed', lane='fixture-' + name)
             clone('turns', original['id'], id='attempt-' + name, message_id='message-' + name, task_id=None)
 
     guarded = S.guarded
@@ -596,7 +596,7 @@ def test_bot_replies_whose_run_names_a_denied_task_stay_out_of_full_scans(api, w
         if not queued:
             clone('jobs', job, id=aid, message_id='message-asked-fixture')
         job = queued[0] if queued else aid
-        clone('attempts', world['attempt']['id'], id=aid, job_id=job, token_hash='fixture-reply', state='done',
+        clone('attempts', world['attempt']['id'], id=aid, job_id=job, token_hash='fixture-reply', state='completed',
               lane='fixture-reply')
         clone('turns', world['attempt']['id'], id=aid, message_id='message-asked-fixture', task_id=None)
         clone('messages', asked, id='message-reply-fixture', conversation_id=room, from_actor='bot:ops',

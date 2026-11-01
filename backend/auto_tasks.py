@@ -483,8 +483,8 @@ def _startable_task(c, row, slug, config, scope, runner, busy):
     if c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
                  "JOIN conversations cv ON cv.id=m.conversation_id "
                  "LEFT JOIN jobs carrier ON carrier.id=j.wake_carrier "
-                 f"WHERE j.bot=? AND {H.MESSAGE_TASK_SQL}=? AND (j.state NOT IN ('completed','cancelled') "
-                 f"AND ({H.unheld_sql()} OR j.hold_reason=?) OR carrier.state NOT IN ('completed','cancelled') "
+                 f"WHERE j.bot=? AND {H.MESSAGE_TASK_SQL}=? AND (j.state NOT IN ('completed','canceled') "
+                 f"AND ({H.unheld_sql()} OR j.hold_reason=?) OR carrier.state NOT IN ('completed','canceled') "
                  f"AND {H.unheld_sql('carrier')}) LIMIT 1",
                  (slug, row['id'], claim_holds.REASON)).fetchone():
         return None

@@ -59,17 +59,17 @@ def test_an_unreadable_job_is_cancelled_and_a_readable_one_is_still_claimed(api)
     store = api.app.state.store
     with store.transaction() as c:
         # Unreadable too, but no longer queued: the sweep leaves it as it is.
-        c.execute("UPDATE jobs SET state='done' WHERE id=?", (job_of(c, finished["id"])["id"],))
+        c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job_of(c, finished["id"])["id"],))
         unreadable, readable = job_of(c, secret["id"]), job_of(c, first["id"])
     assert refusal(api, machine, unreadable) == "unreadable"
     assert refusal(api, machine, readable) is None
     sweep(api)
     sweep(api)                                                    # a second pass finds nothing left to cancel
     with store.read() as c:
-        assert job_of(c, secret["id"])["state"] == "cancelled"
+        assert job_of(c, secret["id"])["state"] == "canceled"
         assert suppressed(c, unreadable["id"]) == [{"reason": "unreadable"}]
         done = job_of(c, finished["id"])
-        assert done["state"] == "done" and suppressed(c, done["id"]) == []
+        assert done["state"] == "completed" and suppressed(c, done["id"]) == []
         assert job_of(c, first["id"])["state"] == "queued" and suppressed(c, readable["id"]) == []
         # The message stays where it was: only the job is let go.
         assert H.message(c, unreadable["message_id"])
@@ -122,7 +122,7 @@ def test_work_held_for_another_reason_stays_queued(api, monkeypatch):
         for job in jobs.values():
             assert c.execute("SELECT state FROM jobs WHERE id=?", (job["id"],)).fetchone()[0] == "queued"
             assert suppressed(c, job["id"]) == []
-        assert job_of(c, secret["id"])["state"] == "cancelled"
+        assert job_of(c, secret["id"])["state"] == "canceled"
 
 
 def test_the_claim_that_finds_its_pick_unreadable_says_why_it_let_it_go(api, monkeypatch):
@@ -143,7 +143,7 @@ def test_the_claim_that_finds_its_pick_unreadable_says_why_it_let_it_go(api, mon
     assert claim(api, machine, "ops") is None
     assert picks == [None, job["id"]], "select in the read snapshot, then recheck that pick under the writer"
     with store.read() as c:
-        assert job_of(c, secret["id"])["state"] == "cancelled"
+        assert job_of(c, secret["id"])["state"] == "canceled"
         assert suppressed(c, job["id"]) == [{"reason": "unreadable"}]
 
 

@@ -392,7 +392,7 @@ def take_inbox(c, provider, person, slug):
     rows = c.execute("SELECT m.id,m.body,m.created FROM messages m WHERE m.conversation_id=? AND m.from_actor=? "
                      "AND m.to_actor=? AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND m.kind='say' "
                      "AND m.id NOT LIKE ? AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.message_id=m.id AND "
-                     "(? OR j.state NOT IN ('queued','cancelled') OR EXISTS (SELECT 1 FROM attempts a WHERE a.job_id=j.id))) "
+                     "(? OR j.state NOT IN ('queued','canceled') OR EXISTS (SELECT 1 FROM attempts a WHERE a.job_id=j.id))) "
                      "ORDER BY m.created LIMIT ?",
                      (room["id"], "human:" + person, "bot:" + slug, provider.key + "-%", delivering,
                       INBOX_LIMIT)).fetchall()
@@ -400,7 +400,7 @@ def take_inbox(c, provider, person, slug):
         now = H.now()
         c.executemany("UPDATE messages SET delivered_at=? WHERE id=? AND delivered_at IS NULL",
                       [(now, row["id"]) for row in rows])
-        c.executemany("UPDATE jobs SET state='cancelled' WHERE message_id=? AND state='queued'",
+        c.executemany("UPDATE jobs SET state='canceled' WHERE message_id=? AND state='queued'",
                       [(row["id"],) for row in rows])
     return [{"id": row["id"], "text": row["body"], "at": row["created"]} for row in rows]
 

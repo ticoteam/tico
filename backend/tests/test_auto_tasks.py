@@ -14,7 +14,7 @@ def deck(api, n=5):
                                 'step': typ['steps'][0]['id']}) for i in range(n)]
     # These old assignments have no pending notice: they previously needed a person's nudge.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
         for i, task in enumerate(tasks):
             c.execute('UPDATE tasks SET rank=? WHERE id=?', (n-i, task['id']))
     return tasks
@@ -115,7 +115,7 @@ def test_review_children_are_independent_and_uncapped_but_computer_capacity_stil
     children = [post(api, 'tasks', {'owner': 'ops', 'title': f'Review change {i}', 'body': 'Review the change.',
                  'relations': [{'kind': 'parent', 'task': parent['id']}]}) for i in range(11)]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
     set_cap(api, 1)
     attempts = [take(api, machine) for _ in range(10)]
     assert all(attempts), 'the optional task cap never holds review children'

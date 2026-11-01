@@ -67,9 +67,9 @@ class World:
 
     def run(self, c, message):
         jid, aid = self.id("job"), self.id("attempt")
-        c.execute("INSERT INTO jobs(id,message_id,bot,state,created) VALUES(?,?,'ops','done','t')", (jid, message))
+        c.execute("INSERT INTO jobs(id,message_id,bot,state,created) VALUES(?,?,'ops','completed','t')", (jid, message))
         c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
-                  "VALUES(?,?,'ops','r1',1,?,'done','t','t')", (aid, jid, aid))
+                  "VALUES(?,?,'ops','r1',1,?,'completed','t','t')", (aid, jid, aid))
         self.attempts.append(aid)
         return aid
 

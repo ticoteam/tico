@@ -165,7 +165,7 @@ def test_token_saver_gives_three_notices_in_its_window_one_wake(api):
     assert all(j["held"] and j["hold_until"] == H.shift(t0, minutes=30) for j in jobs(api, since=since))
     tick(api, H.shift(t0, minutes=31))
     rows = jobs(api, since=since)
-    assert [j["state"] for j in rows] == ["cancelled"] * 3 + ["queued"]
+    assert [j["state"] for j in rows] == ["canceled"] * 3 + ["queued"]
     assert rows[-1]["wake_class"] == "digest" and all(f"report {n}" in rows[-1]["body"] for n in range(3))
     # The next batch waits a whole window after this one went out.
     notice(api, tasks[0], "Finished: part 4", wake_batch="completion")
@@ -202,7 +202,7 @@ def test_an_enabled_sweep_runs_at_most_once_per_cap_from_its_actual_start(api, n
         return jobs(api, since=since)[-1]
     first = occurrence(0, t0)
     assert (first["state"], first["held"]) == ("queued", 0)              # the first run starts at once
-    assert occurrence(1, H.shift(t0, seconds=60))["state"] == "cancelled"  # it has not run yet: nothing to add
+    assert occurrence(1, H.shift(t0, seconds=60))["state"] == "canceled"  # it has not run yet: nothing to add
     # Its computer takes it just before the cap and finishes; the next run is spaced from that start.
     attempt = claim(api, machine)
     started = H.shift(t0, seconds=gap - 60)
@@ -288,7 +288,7 @@ def test_a_duplicate_is_one_event_through_its_turn_and_a_new_event_is_not(api):
         c.execute("UPDATE attempts SET created=? WHERE id=?", (H.shift(H.now(), minutes=-10), attempt["id"]))
     finish(api, machine, attempt)
     notice(api, task, body, subtask="s1")                                # just after it ended
-    assert states() == [("completed", None)] + [("cancelled", "duplicate")] * 3
+    assert states() == [("completed", None)] + [("canceled", "duplicate")] * 3
     notice(api, task, body, subtask="s2")                                # the same words, another dependency
     with api.app.state.store.transaction() as c:                         # the same event, long after the turn ended
         c.execute("UPDATE attempts SET finished=? WHERE id=?",
@@ -322,10 +322,10 @@ def test_a_batched_event_redelivered_after_its_batch_went_out_wakes_once_until_i
     start(api, machine, attempt)
     assert "running" in [j["state"] for j in jobs(api, since=since)]
     redeliver()                                                          # while it runs
-    assert [(j["state"], j["wake_class"]) for j in jobs(api, since=since)[released:]] == [("cancelled", "duplicate")] * 6
+    assert [(j["state"], j["wake_class"]) for j in jobs(api, since=since)[released:]] == [("canceled", "duplicate")] * 6
     finish(api, machine, attempt, started=True)
     redeliver()                                                          # just after it ended
-    assert [(j["state"], j["wake_class"]) for j in jobs(api, since=since)[released:]] == [("cancelled", "duplicate")] * 9
+    assert [(j["state"], j["wake_class"]) for j in jobs(api, since=since)[released:]] == [("canceled", "duplicate")] * 9
     with api.app.state.store.transaction() as c:                         # long after the turn ended: a new event
         c.execute("UPDATE attempts SET finished=? WHERE id=?",
                   (H.shift(H.now(), seconds=-W.DUPLICATE_SECONDS - 60), attempt["id"]))
@@ -344,7 +344,7 @@ def test_a_batch_bigger_than_the_room_page_goes_out_as_a_digest_that_names_it(ap
         at(api, jobs(api, since=since)[-1]["id"], H.shift(t0, seconds=n))
     tick(api, H.shift(t0, minutes=5))
     rows = jobs(api, since=since)
-    assert [j["state"] for j in rows] == ["cancelled"] * count + ["queued"]
+    assert [j["state"] for j in rows] == ["canceled"] * count + ["queued"]
     digest = rows[-1]["body"]
     assert f"{count} updates" in digest and f"and {count - 1} more" in digest and task["conversation_id"] in digest
     with api.app.state.store.read() as c:                                # nothing is marked read on the bot's behalf

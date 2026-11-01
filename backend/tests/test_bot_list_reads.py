@@ -155,7 +155,7 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
             c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
                       (H.new_id(), "human:ana", "bot:" + to, "note from " + bot, H.now()))
         c.execute("INSERT INTO bot_status(bot,state,focus,task_id,last_result,open_tasks,needs_human) "
-                  "VALUES('ops','working','the secret',?,'done',1,1)", (secret["id"],))
+                  "VALUES('ops','running','the secret',?,'done',1,1)", (secret["id"],))
         c.execute("INSERT INTO bot_status(bot,state,focus,open_tasks,needs_human) VALUES('finance','idle','',2,2)")
         cid = c.execute("SELECT conversation_id FROM messages WHERE to_actor='bot:ops' LIMIT 1").fetchone()[0]
         for kind, refs in (("ask", {"task": bens["id"], "questions": []}), ("notice", {"task": bens["id"]})):

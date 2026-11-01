@@ -204,7 +204,7 @@ def test_an_unknown_payment_is_never_sent_again_and_is_found_by_memo_recipient_a
     fake.requests["req-9"] = {**fake.requests["req-9"], "status": "rejected"}
     sync_once(books, fake, HOURS[6])
     with books.transaction() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
         assert _holds(c) == [(50_000, "released")]
         again = act(c, OWNER, "payment_create", body)                             # the bill may be paid again
         assert again.status == "committed"
@@ -433,8 +433,8 @@ def test_every_send_is_judged_again_with_its_counters_once_and_a_new_deny_cancel
     assert len(fake.sent("request_send_money")) == 1
     with books.read() as c:
         rows = dict(c.execute("SELECT amount, status || ':' || last_error FROM fin_payments WHERE amount<50000"))
-        assert rows[5_000].startswith("cancelled:No more Acme")                 # a rule added after it was queued
-        assert rows[4_000] == "cancelled:whoever asked for it no longer has the right to pay"
+        assert rows[5_000].startswith("canceled:No more Acme")                 # a rule added after it was queued
+        assert rows[4_000] == "canceled:whoever asked for it no longer has the right to pay"
         assert sorted(_holds(c)) == [(4_000, "released"), (5_000, "released"), (50_000, "held")]   # the sent one keeps its
 
 
@@ -597,7 +597,7 @@ def test_a_limit_added_after_payments_were_queued_is_reserved_at_send_once(books
                                (rule_id,)).fetchone()) == (10_000, 1)
         status = dict(c.execute("SELECT id, status || ':' || coalesce(last_error, '') FROM fin_payments"))
         assert sorted(status.values())[0].startswith("awaiting_bank_approval")
-        assert sorted(status.values())[1].startswith("cancelled:Monthly cap"), status
+        assert sorted(status.values())[1].startswith("canceled:Monthly cap"), status
 
 
 def test_a_limit_reserved_at_send_is_given_back_once_when_the_payment_fails_or_is_cancelled(books):
@@ -965,7 +965,7 @@ def test_turning_direct_send_off_before_a_queued_direct_payment_goes_sends_it_by
     assert len(fake.sent("request_send_money")) == 2
     with books.read() as c:
         mode, status = c.execute("SELECT mode, status FROM fin_payments WHERE id=?", (dpid,)).fetchone()
-    assert mode == "approval_queue" and status not in ("failed", "cancelled"), (mode, status)
+    assert mode == "approval_queue" and status not in ("failed", "canceled"), (mode, status)
 
 
 def test_a_rule_on_direct_payments_added_after_queueing_cancels_the_send(books):
@@ -983,7 +983,7 @@ def test_a_rule_on_direct_payments_added_after_queueing_cancels_the_send(books):
     sync_once(books, fake, HOURS[8])
     assert fake.sent("create_transaction") == []
     with books.read() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (dpid,)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (dpid,)).fetchone()[0] == "canceled"
 
 
 def test_a_direct_payment_the_bank_cancels_with_no_request_id_fails_and_its_hold_is_released(books):
@@ -1024,4 +1024,4 @@ def test_a_send_time_rule_on_who_asks_cancels_a_payment_someone_else_queued(book
     assert fake.sent("request_send_money") == []
     with books.read() as c:
         status = c.execute("SELECT status || ':' || coalesce(last_error, '') FROM fin_payments").fetchone()[0]
-        assert status.startswith("cancelled:Only the owner pays"), status
+        assert status.startswith("canceled:Only the owner pays"), status

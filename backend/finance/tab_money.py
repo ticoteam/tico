@@ -13,7 +13,7 @@ from .core.errors import denied
 from .store import banking as SK
 from .tab import Row, page_size, payment_seen, private_cut, sees_money_account
 
-PAYMENT_STATUSES = ("queued", "sending", "awaiting_bank_approval", "submitted", "settled", "returned", "failed", "cancelled",
+PAYMENT_STATUSES = ("queued", "sending", "awaiting_bank_approval", "submitted", "settled", "returned", "failed", "canceled",
                     "unknown")
 
 

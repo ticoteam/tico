@@ -1417,7 +1417,7 @@ SCHEMAS.update({"AuditPage": {"type": "object", "required": ["rows", "next"], "p
 DOC_CONTACT = {"type": ["object", "null"], "properties": {"id": {"type": ["string", "null"]},
                                                           "name": {"type": ["string", "null"]}}}
 DOC_PAYMENT = {"anyOf": [obj({"id": "n", "status": {"type": "string", "enum": [
-    "queued", "sending", "awaiting_bank_approval", "submitted", "settled", "returned", "failed", "cancelled",
+    "queued", "sending", "awaiting_bank_approval", "submitted", "settled", "returned", "failed", "canceled",
     "unknown", "denied", "expired", "withdrawn"]}, "amount": "i", "on": "s", "error": "n"}), {"type": "null"}],
     "description": "A bill's latest payment: its state, the day it was asked for and why it ended, if it did. No id "
                    "when the scheduled ask ended before a payment existed (denied, expired, withdrawn or failed)"}
@@ -1620,7 +1620,7 @@ SCHEMAS.update({
     "FinancePayments": obj({
         "payments": items(obj({
             "id": "s", "status": {"type": "string", "enum": ["queued", "sending", "awaiting_bank_approval", "submitted",
-                                                             "settled", "returned", "failed", "cancelled",
+                                                             "settled", "returned", "failed", "canceled",
                                                              "unknown"]},
             "amount": {"type": ["integer", "null"]}, "currency": "s", "method": "s", "memo": "s", "obligation": "n", "mode": "s",
             "recipient": {"type": ["object", "null"], "properties": {"id": {"type": "string"},
@@ -1636,7 +1636,7 @@ SCHEMAS.update({
     "FinanceTransfers": obj({
         "transfers": items(obj({
             "id": "s", "status": {"type": "string", "enum": ["queued", "submitted", "unknown", "failed", "posted",
-                                                             "cancelled"]},
+                                                             "canceled"]},
             "amount": "i", "currency": "s", "memo": "s",
             "from": obj({"id": "s", "name": "s", "last4": "n"}), "to": obj({"id": "s", "name": "s", "last4": "n"}),
             "created_by": "s", "created_at": "s", "settled_at": "n", "last_error": "n"},
@@ -2108,7 +2108,7 @@ STABLE.extend([
      'subject, state, attempts, last status, next attempt', 'WebhookSends'),
     ('/api/v2/webhooks/{hook_id}/sends/{send_id}', 'get', 'Webhooks', 'getWebhookSend', 'One send with its attempts', None),
     ('/api/v2/webhooks/{hook_id}/sends/{send_id}/retry', 'post', 'Webhooks', 'retryWebhookSend', 'Send a failed, '
-     'cancelled or delivered send again now', None),
+     'canceled or delivered send again now', None),
 ])
 SCHEMAS.update({
     'Webhook': obj({'id': 's', 'name': 's', 'url': 's', 'host': 's', 'events': items({'type': 'string'}), 'enabled': 'b',
@@ -2119,7 +2119,7 @@ SCHEMAS.update({
                     'headers': items({'type': 'object', 'description': 'name, secret, and value unless secret (then set: true)'}),
                     'disabled_at': 'n', 'disabled_reason': 'n'}),
     'WebhookSendRow': obj({'id': 's', 'webhook_id': 's', 'event_id': 's', 'type': 's', 'subject': 's', 'state': {
-        'enum': ['ready', 'sending', 'delivered', 'failed', 'cancelled', 'withheld']}, 'attempts': 'i',
+        'enum': ['ready', 'sending', 'delivered', 'failed', 'canceled', 'withheld']}, 'attempts': 'i',
         'last_status': {'type': ['integer', 'null']}, 'last_error': 's', 'next_attempt': 'n', 'created': 's',
         'delivered_at': 'n'}),
 })

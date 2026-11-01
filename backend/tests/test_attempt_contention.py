@@ -227,7 +227,7 @@ def test_claim_cleans_a_bounded_page_of_obsolete_notices(api):
                       (f'obsolete-{i}', f'room-{i}', H.KEEPER, H.now(), encode({'task': f'task-{i}'})))
     assert post(api, 'jobs/claim', {}, computer['token'])['attempt'] is None
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE state='cancelled'").fetchone()[0] == execution.CLAIM_MAINTENANCE
+        assert c.execute("SELECT count(*) FROM jobs WHERE state='canceled'").fetchone()[0] == execution.CLAIM_MAINTENANCE
         assert c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0] == 20 - execution.CLAIM_MAINTENANCE
 
 

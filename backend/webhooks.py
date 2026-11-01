@@ -929,7 +929,7 @@ def delete(c, who, hook_id):
     the cleanup removes them."""
     hook = _row(c, hook_id)
     may_manage(who, hook)
-    cancelled = c.execute("UPDATE webhook_sends SET state='cancelled', last_error='The endpoint was deleted', "
+    cancelled = c.execute("UPDATE webhook_sends SET state='canceled', last_error='The endpoint was deleted', "
                           "next_attempt=?, claimed_at=NULL WHERE webhook_id=? AND state IN ('ready','sending')",
                           (H.now(), hook_id)).rowcount
     c.execute("UPDATE webhooks SET deleted_at=?, enabled=0, secret='', secret_prev='', headers_json='[]', updated=? WHERE id=?",

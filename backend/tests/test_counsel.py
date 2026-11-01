@@ -1202,12 +1202,12 @@ def test_a_leftover_counsel_task_does_not_block_a_read_and_the_read_sees_only_it
     asked = post(api, "rules/ask", {"question": "Can I text customers on Sunday about the secret Globex launch?"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='declined' WHERE id=?", (asked["task_id"],))
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='tico-counsel'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot='tico-counsel'")
     file_id, version = store_file(api, CONTRACT)
     other_file, _ = store_file(api, "Globex launch plan: secret.", title="Globex Plan")
     read_document(api, other_file)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='tico-counsel'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot='tico-counsel'")
     read = read_document(api, file_id)
     r, attempt = counsel_run(api)
     with api.app.state.store.read() as c:

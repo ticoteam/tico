@@ -91,7 +91,7 @@ def test_the_callback_takes_only_the_same_person_s_open_state_once(app):
     assert row(app)["status"] == "signing_in" and row(app)["code"] is None
     assert back(app, state="forged", code="c-1") == google_connect.INBOX
     assert back(app, state=query["state"], code="c-1") == google_connect.INBOX
-    assert row(app)["status"] == "ready" and row(app)["state"] is None
+    assert row(app)["status"] == "ready" and row(app)["oauth_state"] is None
     assert back(app, state=query["state"], code="c-2") == google_connect.INBOX     # spent
     assert row(app)["code"] == "c-1"
 
@@ -137,7 +137,7 @@ def test_the_mail_computer_finishes_it_and_the_code_is_cleared(app):
     seen = get(app, "mail/google", "cara-test")
     assert seen["status"] == "connected" and seen["can"] == ["read"]
     stored = row(app)
-    assert stored["code"] is None and stored["verifier"] is None and stored["state"] is None
+    assert stored["code"] is None and stored["verifier"] is None and stored["oauth_state"] is None
     assert get(app, "runners/connectors", machine["token"])["connectors"] == []
 
 

@@ -191,7 +191,7 @@ def test_a_held_or_dismissed_run_lists_its_decision_beside_the_bots_queue(api):
     botops_decides(api, attempt["job_id"], attempt["id"], "dismiss", DEV_563_NOTE, H.now())
     [row] = stats(api)["queues"]["ops"]["decisions"]
     assert (row["job"], row["attempt"], row["current"], row["state"], row["decision"], row["by"], row["by_kind"],
-            row["note"]) == (attempt["job_id"], attempt["id"], True, "cancelled", "dismiss", "bot:botops", "botops",
+            row["note"]) == (attempt["job_id"], attempt["id"], True, "canceled", "dismiss", "bot:botops", "botops",
                              DEV_563_NOTE)
     assert row["label"].startswith("Cancelled: dismissed by BotOps at ") and row["label"].endswith("Z, " + DEV_563_NOTE)
 

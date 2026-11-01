@@ -333,8 +333,7 @@ CREATE TABLE IF NOT EXISTS fin_payments (
   obligation TEXT NOT NULL DEFAULT '', account_id TEXT NOT NULL REFERENCES fin_accounts(id),
   tags_json TEXT NOT NULL DEFAULT '{}',
   mode TEXT NOT NULL DEFAULT 'approval_queue' CHECK (mode IN ('approval_queue','direct')),
-  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','sending','awaiting_bank_approval','submitted',
-                                                          'settled','returned','failed','cancelled','unknown')),
+  status TEXT NOT NULL DEFAULT 'queued',     -- the list is backend/status_values.py
   purpose_json TEXT NOT NULL DEFAULT '{}', counted_json TEXT NOT NULL DEFAULT '[]', unknown_since TEXT, flagged_at TEXT,
   provider_request_id TEXT, provider_txn_id TEXT, hold_id TEXT REFERENCES fin_holds(id), attempts INTEGER NOT NULL DEFAULT 0,
   next_try_at TEXT, last_error TEXT, settled_at TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
@@ -374,7 +373,7 @@ CREATE TABLE IF NOT EXISTS fin_transfers (
   to_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
   amount BIGINT NOT NULL CHECK (amount > 0), currency TEXT NOT NULL, memo TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE,
-  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','submitted','unknown','failed','posted','cancelled')),
+  status TEXT NOT NULL DEFAULT 'queued',     -- the list is backend/status_values.py
   provider_txn_id TEXT, provider_credit_txn_id TEXT, last_error TEXT, from_feed_id TEXT, to_feed_id TEXT,
   settled_at TEXT, submitted_at TEXT, find_after TEXT,
   counted_json TEXT NOT NULL DEFAULT '[]',

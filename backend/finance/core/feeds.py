@@ -182,8 +182,8 @@ def last4(number: object) -> str:
     return digits[-4:]
 
 
-REQUEST_STATUS = {"pendingApproval": "awaiting_bank_approval", "approved": "submitted", "rejected": "cancelled",
-                  "cancelled": "cancelled"}
+REQUEST_STATUS = {"pendingApproval": "awaiting_bank_approval", "approved": "submitted", "rejected": "canceled",
+                  "cancelled": "canceled"}
 
 
 def request_status(value: object) -> str:

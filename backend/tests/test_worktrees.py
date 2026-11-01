@@ -1296,7 +1296,7 @@ def test_finished_pr_must_match_the_working_allocation(prepared, guard):
         detail['allocation_started'] = allocation
         detail['remote'] = {'at': H.now(), 'heads': ['a' * 40]}
         c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(detail), link['link_id']))
-        c.execute("UPDATE attempts SET state='done' WHERE id='a1'")
+        c.execute("UPDATE attempts SET state='completed' WHERE id='a1'")
         pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/7')
         # Late linking must not make a historical merge belong to the renewed allocation.
         c.execute("UPDATE task_links SET state='merged',created=?,pr_merged_at=?,repo=?,branch=?,detail_json=? WHERE id=?",

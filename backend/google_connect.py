@@ -43,10 +43,10 @@ from .store import H, P, Problem
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS google_connects(
- person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, state TEXT, verifier TEXT, code TEXT,
+ person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, oauth_state TEXT, verifier TEXT, code TEXT,
  kind TEXT, message TEXT, hint TEXT, can_json TEXT, runner_id TEXT, holder TEXT, started REAL, created TEXT NOT NULL,
  updated TEXT NOT NULL);
-CREATE UNIQUE INDEX IF NOT EXISTS google_connects_state ON google_connects(state) WHERE state IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS google_connects_oauth_state ON google_connects(oauth_state) WHERE oauth_state IS NOT NULL;
 CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen REAL NOT NULL);
 """
 # The SHA-256 of a grant's refresh token: the one being connected (`pending_hash`, from the exchange) and the one
@@ -55,6 +55,12 @@ COLUMNS = {"pending_hash": "TEXT", "grant_hash": "TEXT"}
 
 
 def ensure_schema(c):
+    # The OAuth nonce was `state`; it is `oauth_state`, so it is not read as the connect's lifecycle (`status`). A file
+    # with the old name gets it renamed before the index on it is built.
+    have = {r[1] for r in c.execute("PRAGMA table_info(google_connects)")}
+    if "state" in have and "oauth_state" not in have:
+        c.execute("DROP INDEX IF EXISTS google_connects_state")
+        c.execute("ALTER TABLE google_connects RENAME COLUMN state TO oauth_state")
     c.executescript(SCHEMA)
     have = {r[1] for r in c.execute("PRAGMA table_info(google_connects)")}
     for name, declaration in COLUMNS.items():
@@ -207,9 +213,9 @@ def expiring(c):
 def expire(c):
     """Sign-ins nobody finished, and claims a computer never answered, end as failures the person can read."""
     now = time.time()
-    c.execute("UPDATE google_connects SET status='failed',kind='expired',state=NULL,verifier=NULL,code=NULL,"
+    c.execute("UPDATE google_connects SET status='failed',kind='expired',oauth_state=NULL,verifier=NULL,code=NULL,"
               "updated=? WHERE status IN ('signing_in','ready') AND started<?", (H.now(), now - SIGN_IN_SECONDS))
-    c.execute("UPDATE google_connects SET status='failed',kind='unknown',state=NULL,verifier=NULL,code=NULL,"
+    c.execute("UPDATE google_connects SET status='failed',kind='unknown',oauth_state=NULL,verifier=NULL,code=NULL,"
               "updated=? WHERE status IN ('finishing','revoking') AND started<?", (H.now(), now - CLAIM_SECONDS))
 
 
@@ -299,10 +305,10 @@ def install(app, store, publisher, mutate):
                      "prompt": "consent", "login_hint": mailbox, "state": state, "code_challenge": challenge,
                      "code_challenge_method": "S256"}
             now = H.now()
-            c.execute("INSERT INTO google_connects(person_id,mailbox,status,state,verifier,code,kind,message,hint,"
+            c.execute("INSERT INTO google_connects(person_id,mailbox,status,oauth_state,verifier,code,kind,message,hint,"
                       "runner_id,started,created,updated) VALUES(?,?,'signing_in',?,?,NULL,NULL,NULL,NULL,NULL,?,?,?) "
                       "ON CONFLICT(person_id) DO UPDATE SET mailbox=excluded.mailbox,status='signing_in',"
-                      "state=excluded.state,verifier=excluded.verifier,code=NULL,kind=NULL,message=NULL,hint=NULL,"
+                      "oauth_state=excluded.oauth_state,verifier=excluded.verifier,code=NULL,kind=NULL,message=NULL,hint=NULL,"
                       "can_json=NULL,"
                       "runner_id=NULL,started=excluded.started,updated=excluded.updated",
                       (pid, mailbox, state, verifier, time.time(), now, now))
@@ -316,20 +322,20 @@ def install(app, store, publisher, mutate):
         who = request.state.identity
         with store.transaction() as c:
             expire(c)
-            row = c.execute("SELECT * FROM google_connects WHERE state=? AND status='signing_in'",
+            row = c.execute("SELECT * FROM google_connects WHERE oauth_state=? AND status='signing_in'",
                             (state,)).fetchone() if state else None
             if (not row or who.role not in ("owner", "human") or row["person_id"] != H.actor_id(who.actor)
-                    or not secrets.compare_digest(row["state"], state)):
+                    or not secrets.compare_digest(row["oauth_state"], state)):
                 return RedirectResponse(INBOX, status_code=302)
             now = H.now()
             if error or not code:
                 kind = CALLBACK_ERRORS.get(error, "declined" if error else "error")
-                c.execute("UPDATE google_connects SET status='failed',kind=?,state=NULL,verifier=NULL,code=NULL,"
+                c.execute("UPDATE google_connects SET status='failed',kind=?,oauth_state=NULL,verifier=NULL,code=NULL,"
                           "updated=? WHERE person_id=?", (kind, now, row["person_id"]))
                 H.event(c, who.actor, "mail.google.connect.failed", row["mailbox"], {"kind": kind})
                 return RedirectResponse(INBOX, status_code=302)
             # The state is spent; the code waits for the computer that keeps the grant.
-            c.execute("UPDATE google_connects SET status='ready',state=NULL,code=?,updated=? WHERE person_id=?",
+            c.execute("UPDATE google_connects SET status='ready',oauth_state=NULL,code=?,updated=? WHERE person_id=?",
                       (code[:2000], now, row["person_id"]))
         return RedirectResponse(INBOX, status_code=302)
 
@@ -342,7 +348,7 @@ def install(app, store, publisher, mutate):
             now = H.now()
             c.execute("INSERT INTO google_connects(person_id,mailbox,status,started,created,updated) "
                       "VALUES(?,?,'disconnecting',?,?,?) ON CONFLICT(person_id) DO UPDATE SET "
-                      "mailbox=excluded.mailbox,status='disconnecting',state=NULL,verifier=NULL,code=NULL,kind=NULL,"
+                      "mailbox=excluded.mailbox,status='disconnecting',oauth_state=NULL,verifier=NULL,code=NULL,kind=NULL,"
                       "message=NULL,hint=NULL,can_json=NULL,runner_id=NULL,started=excluded.started,updated=excluded.updated",
                       (pid, mailbox, time.time(), now, now))
             H.event(c, who.actor, "mail.google.disconnect", mailbox, {})
@@ -451,7 +457,7 @@ def install(app, store, publisher, mutate):
             # Likewise the grant the server will refresh: the new one once connected, none once revoked.
             grant_hash = {"connected": row["pending_hash"], "disconnected": None}.get(body.status, row["grant_hash"])
             c.execute("UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can_json=?,holder=?,grant_hash=?,"
-                      "pending_hash=NULL,state=NULL,verifier=NULL,code=NULL,updated=? WHERE person_id=?",
+                      "pending_hash=NULL,oauth_state=NULL,verifier=NULL,code=NULL,updated=? WHERE person_id=?",
                       (body.status, kind if failed else None, body.message if failed else None,
                        body.hint if failed else None,
                        json.dumps(sorted(set(body.can))) if body.status == "connected" else None, holder, grant_hash,

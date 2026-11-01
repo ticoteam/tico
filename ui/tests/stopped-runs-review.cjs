@@ -76,7 +76,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (reconcile) {
         const body = route.request().postDataJSON(); decisions.push({id: reconcile[1], ...body});
         if (refusal === true || refusal === reconcile[1]) return json({error: {code: 'uncertain', detail: 'This run changed. Refresh and review it again.'}}, 409);
-        const state = body.decision === 'resume' ? 'queued' : 'cancelled';
+        const state = body.decision === 'resume' ? 'queued' : 'canceled';
         return json({job_id: reconcile[1], state: deferred ? 'uncertain' : state, deferred});
       }
       const review = p.match(/^\/api\/v2\/bots\/([^/]+)\/execution-review$/);

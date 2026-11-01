@@ -202,7 +202,7 @@ def _refusals(c, ids, conversations, messages):
     # CROSS JOIN keeps jobs the outer loop: each job reads its message by primary key, where the plain JOIN
     # scanned every message to read its refs_json.
     waking = _column(c, "SELECT j.id FROM jobs j CROSS JOIN messages m ON m.id=j.message_id "
-                        "WHERE j.state NOT IN ('completed','cancelled','failed') "
+                        "WHERE j.state NOT IN ('completed','canceled','failed') "
                         "AND json_extract(m.refs_json,'$.task') IN ({})", ids)
     if waking:
         refusals["bot work queued about the task"] = len(waking)
@@ -237,7 +237,7 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
     if kept:
         # A bot not yet woken about the task would wake to a missing task.
         # Queued jobs only (jobs_queued), each checked against its own message by primary key.
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND EXISTS "
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND EXISTS "
                   "(SELECT 1 FROM messages m WHERE m.id=jobs.message_id AND (json_extract(m.refs_json,'$.task') IN ({}) "
                   "OR m.conversation_id IN (SELECT id FROM conversations WHERE task_id IN ({}))))"
                   .format(_marks(list(kept)), _marks(list(kept))), [*kept, *kept])

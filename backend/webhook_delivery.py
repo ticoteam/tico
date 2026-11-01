@@ -38,7 +38,7 @@ NOTIFY_HOURS = 24
 KEEP_DAYS = 30
 KEEP_ATTEMPTS = 200
 PREFIX = "whsec_"
-TERMINAL = ("delivered", "failed", "cancelled", "withheld")
+TERMINAL = ("delivered", "failed", "canceled", "withheld")
 
 
 def sealed_as(webhook_id, previous=False):
@@ -265,7 +265,7 @@ def record(store, send, timestamp, status, head, error, abort, ms):
             c.execute("UPDATE webhook_sends SET state='delivered', attempts=?, last_status=?, last_error='', "
                       "delivered_at=?, next_attempt=?, claimed_at=NULL WHERE id=?", (attempts, status, now, now, send["id"]))
         elif abort:
-            c.execute("UPDATE webhook_sends SET state='cancelled', attempts=?, last_status=?, last_error=?, "
+            c.execute("UPDATE webhook_sends SET state='canceled', attempts=?, last_status=?, last_error=?, "
                       "next_attempt=?, claimed_at=NULL WHERE id=?",
                       (attempts, status, "The receiver asked not to be sent this message again", now, send["id"]))
         else:

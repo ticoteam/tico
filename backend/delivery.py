@@ -166,7 +166,7 @@ def _drop_spent(conn, H, attempt_id, job, note):
         "AND j.state='queued' AND d.fired_job IS NOT ? AND NOT EXISTS(SELECT 1 FROM deferrals x "
         "WHERE x.fired_job=d.fired_job AND x.settled IS NULL)", (attempt_id, job)).fetchall()]
     for spent_job in spent:
-        if conn.execute("UPDATE jobs SET state='cancelled' WHERE id=? AND state='queued'", (spent_job,)).rowcount:
+        if conn.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (spent_job,)).rowcount:
             claim_holds.clear(conn, spent_job, note)
             H.event(conn, H.KEEPER, "delivery.deferred.spent", spent_job, {"attempt": attempt_id})
 

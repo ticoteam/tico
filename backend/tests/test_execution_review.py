@@ -419,7 +419,7 @@ def test_a_stopped_run_that_used_tools_is_held_until_reviewed(api):
     expire(api, again['id'])
     assert claim(api, machine) is None
     aged(api, again['id'])
-    assert [d['state'] for d in sweep(api)] == ['cancelled']
+    assert [d['state'] for d in sweep(api)] == ['canceled']
     with api.app.state.store.read() as c:
         task = c.execute("SELECT owner,body FROM tasks WHERE title=?", ("Find why ops's runs keep stopping",)).fetchone()
     assert task and task['owner'] == H.bot_actor(H.FLEET_MAINTAINER) and message['body'] not in task['body']
@@ -657,7 +657,7 @@ def test_a_request_cut_by_updates_resumes_three_times_then_ends_quietly(api):
             flag_cut(c, 'update', '0.4.17')
         lapse(api, machine, attempt)
         [decision] = sweep(api)
-        assert decision['state'] == ('queued' if n < UPDATE_RESUMES else 'cancelled')
+        assert decision['state'] == ('queued' if n < UPDATE_RESUMES else 'canceled')
     no_one_asked(api)
     with api.app.state.store.read() as c:
         note = c.execute("SELECT note FROM job_recovery WHERE job_id=?", (attempt['job_id'],)).fetchone()[0]
@@ -675,7 +675,7 @@ def test_a_run_held_before_this_release_for_an_update_settles_on_the_next_sweep(
         c.execute("UPDATE attempts SET finished=? WHERE id=?", (H.shift(H.now(), seconds=-hours * 3600 + 60), attempt['id']))
         H.event(c, H.KEEPER, 'job.held', attempt['id'], {'job_id': attempt['job_id'], 'tools': ['shell'],
                                                          'reason': 'Review required before repeating possible effects.'})
-    assert [d['state'] for d in sweep(api)] == ['cancelled' if stale else 'queued']
+    assert [d['state'] for d in sweep(api)] == ['canceled' if stale else 'queued']
     no_one_asked(api)
 
 
@@ -721,7 +721,7 @@ def test_tico_s_saved_choice_for_an_update_cut_is_judged_again_when_its_lane_fre
                 for rid, ts in c.execute(f"SELECT rowid,{col} FROM {table} WHERE {where}", args).fetchall():
                     c.execute(f"UPDATE {table} SET {col}=? WHERE rowid=?", (H.shift(ts, seconds=-25 * 3600), rid))
         c.execute("UPDATE attempts SET state='completed' WHERE id='live-one'")
-    assert [d['state'] for d in sweep(api)] == ['cancelled']
+    assert [d['state'] for d in sweep(api)] == ['canceled']
     with api.app.state.store.read() as c:
         note = c.execute("SELECT note FROM job_recovery WHERE job_id=?", (attempt['job_id'],)).fetchone()[0]
     assert note.startswith('Stopped by' if since == 'stop' else 'Dismissed quietly')
@@ -815,7 +815,7 @@ def test_a_read_only_run_that_stops_again_after_its_resume_is_dismissed_at_once(
     post(api, f"attempts/{again['id']}/complete", {'outcome': 'interrupted', 'last_seq': 1,
          'text': 'Runner restarted during execution'}, machine['token'])
     assert get(api, 'bots/ops/execution-review')['jobs'][0]['stopped'] == 'twice'
-    assert [d['state'] for d in sweep(api)] == ['cancelled']
+    assert [d['state'] for d in sweep(api)] == ['canceled']
 
 
 def test_a_held_run_names_its_task_and_owner_only_to_who_may_read_it(api):
@@ -860,7 +860,7 @@ def test_a_held_run_on_a_private_task_is_not_handed_to_botops(api):
         assert claim(api, machine) is None
         aged(api, run['id'])
         sweep(api)
-    assert job_state(api, attempt['job_id']) == 'cancelled'    # stopped twice
+    assert job_state(api, attempt['job_id']) == 'canceled'    # stopped twice
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE owner=?", (H.bot_actor(H.FLEET_MAINTAINER),)).fetchone()[0] == 0
 
@@ -1071,7 +1071,7 @@ def test_a_person_who_manages_the_bot_stops_its_turn_and_the_next_message_runs(a
     assert post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])['stop'] is True
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 0}, machine['token'])
     with api.app.state.store.read() as c:
-        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'cancelled'
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'canceled'
         assert H.status(c, 'ops')['state'] == 'idle'
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
     notice = get(api, f"conversations/{message['conversation_id']}/messages")[-1]
@@ -1202,7 +1202,7 @@ def finished_then_lapsed(api, machine=None, bot='ops', text='Please summarize th
         post(api, f'bots/{bot}/stop', {'attempt_id': attempt['id']})       # never carried by a renewal
     expire(api, attempt['id'])
     assert claim(api, machine) is None
-    assert job_state(api, attempt['job_id']) == ('cancelled' if stopped else 'uncertain')
+    assert job_state(api, attempt['job_id']) == ('canceled' if stopped else 'uncertain')
     return machine, message, attempt
 
 
@@ -1232,7 +1232,7 @@ def test_a_finished_turn_dismissed_because_its_task_closed_still_ends_completed_
     assert task['conversation_id'] == message['conversation_id']             # the task's own room, not the chat
     post(api, 'tasks/' + task['id'], {'version': attempt['task']['version'], 'close': True, 'quiet': True})
     aged(api, attempt['id'])
-    assert [d['state'] for d in sweep(api)] == ['cancelled']
+    assert [d['state'] for d in sweep(api)] == ['canceled']
     done = hand_in(api, machine, attempt)
     assert done['outcome'] == 'completed' and not done.get('filed')
     assert settled(api, attempt) == ('completed', 'completed')
@@ -1252,7 +1252,7 @@ def test_a_finished_turn_whose_job_a_person_dismissed_first_still_ends_completed
     aged(api, attempt['id'])
     post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
          'note': 'Looks stuck; nothing left to send here.', 'acknowledge_uncertain_effects': True})
-    assert job_state(api, attempt['job_id']) == 'cancelled'
+    assert job_state(api, attempt['job_id']) == 'canceled'
     done = hand_in(api, machine, attempt)
     assert not done.get('filed') and done['message']['body'] == 'Done: the summary is in the room.'
     assert settled(api, attempt) == ('completed', 'completed')
@@ -1323,7 +1323,7 @@ def test_a_finished_turn_never_settles_a_job_a_later_run_took_even_once_that_run
          'note': 'The second run stopped.', 'acknowledge_uncertain_effects': True})
     with api.app.state.store.read() as c:
         before = tuple(c.execute("SELECT state,attempt_id FROM jobs WHERE id=?", (first['job_id'],)).fetchone())
-    assert before == ('cancelled' if decision == 'dismiss' else 'queued', second['id'])
+    assert before == ('canceled' if decision == 'dismiss' else 'queued', second['id'])
     filed = hand_in(api, machine, first, text="The first run's old answer.")
     assert filed['filed'] is True
     with api.app.state.store.read() as c:
@@ -1349,7 +1349,7 @@ def test_a_stop_the_runner_never_heard_still_stands_over_the_answer_it_finished_
                  'note': 'Stopped; nothing left to send.', 'acknowledge_uncertain_effects': True})
         filed = hand_in(api, machine, attempt)
         assert filed['filed'] is True and filed['message'] is None
-        assert settled(api, attempt) == ('expired', 'cancelled')
+        assert settled(api, attempt) == ('expired', 'canceled')
         assert bot_replies(api, message, bot) == []
 
 
@@ -1374,7 +1374,7 @@ def test_a_stop_pressed_after_the_lease_lapsed_is_recorded_and_the_late_answer_i
     post(api, f"attempts/{attempt['id']}/inputs", {}, machine['token'], expected=409)
     filed = hand_in(api, machine, attempt)
     assert filed['filed'] is True and filed['message'] is None
-    assert settled(api, attempt) == ('expired', 'cancelled')
+    assert settled(api, attempt) == ('expired', 'canceled')
     assert bot_replies(api, message) == []
     assert stopped_notices(api, message, attempt) == (1, ['Stopped by Ana'])
     with api.app.state.store.read() as c:
@@ -1382,7 +1382,7 @@ def test_a_stop_pressed_after_the_lease_lapsed_is_recorded_and_the_late_answer_i
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
     # Never run again: not by the sweep past RESULT_GRACE, not by the next claim.
     aged(api, attempt['id'], grace=True)
-    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'cancelled'
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'canceled'
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
 
@@ -1407,7 +1407,7 @@ def test_a_stop_after_the_lease_lapsed_takes_the_turns_id_and_a_job_still_on_it(
          'note': 'Looks stuck; nothing left to send here.', 'acknowledge_uncertain_effects': True})
     post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})          # let go: its late answer is filed, not posted
     assert hand_in(api, machine, attempt)['filed'] is True and bot_replies(api, message) == []
-    assert settled(api, attempt) == ('expired', 'cancelled')
+    assert settled(api, attempt) == ('expired', 'canceled')
     tool_reporting(api)
     machine, message, first = finished_then_lapsed(api, machine, text='Another summary.')
     aged(api, first['id'], grace=True)
@@ -1464,7 +1464,7 @@ def test_a_stopped_run_whose_computer_never_reported_back_is_dismissed_not_resum
     machine, message, attempt = finished_then_lapsed(api)
     post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})
     aged(api, attempt['id'], grace=True)
-    assert [d['state'] for d in sweep(api)] == ['cancelled']
+    assert [d['state'] for d in sweep(api)] == ['canceled']
     with api.app.state.store.read() as c:
         note = c.execute("SELECT note FROM job_recovery WHERE job_id=?", (attempt['job_id'],)).fetchone()[0]
     assert note == 'Stopped by Ana; not resumed.'
@@ -1481,7 +1481,7 @@ def test_a_late_result_that_did_not_finish_after_a_dismissal_is_only_filed(api):
     post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
          'note': 'Looks stuck; nothing left to send here.', 'acknowledge_uncertain_effects': True})
     filed = hand_in(api, machine, attempt, text='Runner restarted during execution', outcome='interrupted')
-    assert filed['filed'] is True and settled(api, attempt) == ('expired', 'cancelled')
+    assert filed['filed'] is True and settled(api, attempt) == ('expired', 'canceled')
 
 
 def stopped_issue(api, token='ana-test'):
@@ -1723,7 +1723,7 @@ def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
     expire(api, again['id'])
     assert claim(api, machine) is None
     aged(api, again['id'])
-    assert [d['state'] for d in sweep(api)] == ['cancelled']
+    assert [d['state'] for d in sweep(api)] == ['canceled']
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (carried[0]['id'],)).fetchone()[0] == 'uncertain'
     post(api, f"tasks/{private_id}/comments", {'text': 'One more thing for you.'})     # waits behind it
@@ -1782,7 +1782,7 @@ def test_a_run_carried_on_a_stopped_run_the_keeper_settled_is_left_for_a_person(
     expire(api, again['id'])
     assert claim(api, machine) is None
     aged(api, again['id'])
-    assert [d['state'] for d in sweep(api)] == ['cancelled']           # the request it was for: stopped twice
+    assert [d['state'] for d in sweep(api)] == ['canceled']           # the request it was for: stopped twice
     with api.app.state.store.read() as c:
         carried = c.execute("SELECT state FROM jobs WHERE message_id=?", (follow['id'],)).fetchone()[0]
     assert carried == 'uncertain'                                       # the carried one: held, not safe to repeat
@@ -1811,17 +1811,17 @@ def test_a_stop_on_a_lapsed_turn_ends_only_its_request_not_a_message_folded_into
     if reported:
         filed = post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 1,
                      'text': 'Done.', 'undelivered': [follow['id']]}, machine['token'])
-        assert filed['filed'] is True and job_state(api, attempt['job_id']) == 'cancelled'
+        assert filed['filed'] is True and job_state(api, attempt['job_id']) == 'canceled'
         assert job_state(api, follow['id']) == 'queued'
         ready(api, machine, ['ops'])
         assert claim(api, machine)['job_id'] == follow['id']
     else:
         aged(api, attempt['id'], grace=True)
-        assert sorted(d['state'] for d in sweep(api)) == ['cancelled', 'queued']
-        assert job_state(api, attempt['job_id']) == 'cancelled' and job_state(api, follow['id']) == 'queued'
+        assert sorted(d['state'] for d in sweep(api)) == ['canceled', 'queued']
+        assert job_state(api, attempt['job_id']) == 'canceled' and job_state(api, follow['id']) == 'queued'
 
 
-@pytest.mark.parametrize('decision,expected', [('resume', 'queued'), ('dismiss', 'cancelled')])
+@pytest.mark.parametrize('decision,expected', [('resume', 'queued'), ('dismiss', 'canceled')])
 def test_review_choice_survives_a_busy_lane_and_applies_once_idle(api, decision, expected):
     """The operator's explicit choice is durable, fences late output and waits only for its own lane."""
     machine, message, attempt = interrupted(api)
@@ -2055,7 +2055,7 @@ def test_saved_dismiss_finishes_review_before_main_lane_frees_and_preserves_save
     monkeypatch.setattr(H, 'now', lambda: H.shift(saved_at, seconds=60))
     post(api, f"attempts/{other['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Finished.'}, machine['token'])
     Scheduler(api.app.state.store, api.app.state.execution).tick()
-    assert job_state(api, attempt['job_id']) == 'cancelled'
+    assert job_state(api, attempt['job_id']) == 'canceled'
     with api.app.state.store.read() as c:
         assert dict(c.execute("SELECT * FROM job_recovery WHERE job_id=?", (attempt['job_id'],)).fetchone()) == saved
 

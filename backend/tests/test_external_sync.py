@@ -356,7 +356,7 @@ def test_a_message_goes_to_the_computer_while_the_app_delivers_and_to_the_sync_o
     assert attempt["config"]["app_delivery"] == {"computer": computer["runner_id"], "app": "grok"}
     assert attempt["config"]["app_bot"] == {"id": GROK_ID, "name": "Tico Designer"}
     assert deliver(api, None).status_code == 200                       # off again: what no runner took goes to the sync
-    assert jobs(api) == {taken["id"]: "leased", waiting["id"]: "cancelled"}
+    assert jobs(api) == {taken["id"]: "leased", waiting["id"]: "canceled"}
     assert inbox(api) == ["Also for the app."] and inbox(api) == []
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM messages WHERE id=? AND delivered_at IS NULL", (before["id"],)).fetchone()

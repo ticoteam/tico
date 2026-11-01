@@ -138,7 +138,7 @@ def test_lost_notice_is_dismissed_when_its_referenced_task_closes(api):
                   (H.shift(H.now(), seconds=-STALL_MAX - 1), notice['id']))
         assert c.execute('SELECT state FROM jobs WHERE id=?', (notice['job_id'],)).fetchone()[0] == 'uncertain'
         result = api.app.state.execution.auto_reconcile(c)
-        assert [d['state'] for d in result] == ['cancelled']
+        assert [d['state'] for d in result] == ['canceled']
         assert H.task(c, task['id'])['status'] == 'closed'
         assert c.execute('SELECT count(*) FROM attempts WHERE job_id=?', (notice['job_id'],)).fetchone()[0] == 1
 

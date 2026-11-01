@@ -286,7 +286,7 @@ def test_deadlines_in_one_session_share_one_run_and_another_turn_cancels_it(api)
     assert attempt["message"]["id"] == trigger["id"]
     assert "Billing first." in attempt["deferred"] and "Then the docs." in attempt["deferred"]
     assert {r["how"] for r in rows(api, kind="comment")} == {"carried"}
-    assert job_of(api, first["id"])[1] == "cancelled"
+    assert job_of(api, first["id"])[1] == "canceled"
 
 
 # The statements the deferral hot paths run on every claim, scheduler pass and stalled-task check (backend/delivery.py).

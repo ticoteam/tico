@@ -2103,6 +2103,9 @@ class Store:
             roster_clock.ensure(c)
             from . import row_clock
             row_clock.ensure(c)
+            # The tables SCHEMA just created get the status and state constraints (backend/status_values.py).
+            from . import status_values as _status_values
+            _status_values.enforce(c)
             # What each message's and run's readability depends on (backend/read_deps.py); settled beside the server.
             from . import read_deps
             read_deps.ensure(c)

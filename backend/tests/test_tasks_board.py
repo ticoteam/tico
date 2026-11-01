@@ -310,7 +310,7 @@ def test_a_deleted_comment_leaves_the_task_and_never_reaches_the_bot(api):
     get(api, "messages/" + said["id"], expected=404)
     post(api, f"tasks/{task['id']}/comments/{said['id']}", {"text": "October"}, expected=404)
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (said["id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (said["id"],)).fetchone()[0] == "canceled"
         assert c.execute("SELECT expires FROM task_delegations WHERE message_id=?", (said["id"],)).fetchone()[0] <= H.now()
 
 

@@ -152,7 +152,7 @@ def test_parked_incident_keeps_silence_and_duplicate_controls(api, control):
         with as_cause('bot:cpo' if control == 'own_write' else 'bot:ops'):
             msg, job = sent_job(c, task, 'bot:cpo', 'Step moved: On Deck -> In Progress', refs)
         if control == 'duplicate':
-            assert job and job['state'] == 'cancelled' and job['wake_class'] == 'duplicate'
+            assert job and job['state'] == 'canceled' and job['wake_class'] == 'duplicate'
             assert c.execute("SELECT count(*) FROM jobs WHERE bot='cpo' AND state='queued'").fetchone()[0] == 1
         else:
             assert job is None and msg['refs']['quiet']

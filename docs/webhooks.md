@@ -354,13 +354,13 @@ app.post("/tico", express.raw({ type: "application/json" }), (req, res) => {
 
 A failed send is tried again after 5 seconds, 5 minutes, 30 minutes, 2 hours, 5 hours, 10 hours and 10 hours, each a little
 jittered. That is 8 tries over about 28 hours. After the last, the send is **failed**, the endpoint's Health shows it, and Needs
-you gets at most one task a day per endpoint. **Retry** (`hub webhook retry <id> <send>`) sends a failed, cancelled or delivered one again now.
+you gets at most one task a day per endpoint. **Retry** (`hub webhook retry <id> <send>`) sends a failed, canceled or delivered one again now.
 
 Each try waits up to 30 seconds, and the answer is not read past 1 KB. An endpoint sends 600 an hour by default
 (`--rate-per-hour`); sends over that wait, and none are dropped. Tico keeps events and finished sends for 30 days.
 
 The send log (`hub webhook sends <id>`, `--state failed` to narrow) shows each send's state: ready, sending, delivered, failed,
-cancelled or withheld.
+canceled or withheld.
 
 ### Only some events
 

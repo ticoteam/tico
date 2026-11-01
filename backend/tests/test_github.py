@@ -319,7 +319,7 @@ def test_grouped_wakes_retry_bad_rows_and_send_blocked_tasks(api, monkeypatch):
     with store.transaction() as c:
         for task in tasks:
             save_metadata(c, "github-task-wake:" + task["id"], {"due": H.shift(H.now(), seconds=-1), "items": ["Checks failed"]})
-        c.execute("UPDATE tasks SET status='blocked' WHERE id=?", (tasks[1]["id"],))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (tasks[1]["id"],))
         c.execute("UPDATE tasks SET status=? WHERE id=?", (finished_status, tasks[2]["id"]))
     wake = H._wake
     def broken(c, task, *args, **kwargs):

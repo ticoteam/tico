@@ -302,7 +302,7 @@ def retire_assignments(c):
             c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(config), bot))
         H.setup_finished(c, bot, archived=True)
         c.execute("DELETE FROM assignments WHERE bot=?", (bot,))
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot=? AND state='queued'", (bot,))
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot=? AND state='queued'", (bot,))
         source = H.bot(c, str(config.get("shared_from") or ""))
         if not source or source["state"] == "archived":
             continue

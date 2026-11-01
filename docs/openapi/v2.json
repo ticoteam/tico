@@ -10680,7 +10680,7 @@
                     "settled",
                     "returned",
                     "failed",
-                    "cancelled",
+                    "canceled",
                     "unknown"
                   ],
                   "type": "string"
@@ -31915,7 +31915,7 @@
     },
     "/api/v2/webhooks/{hook_id}/sends/{send_id}/retry": {
       "post": {
-        "summary": "Send a failed, cancelled or delivered send again now",
+        "summary": "Send a failed, canceled or delivered send again now",
         "operationId": "retryWebhookSend",
         "parameters": [
           {
@@ -40089,7 +40089,7 @@
                       "settled",
                       "returned",
                       "failed",
-                      "cancelled",
+                      "canceled",
                       "unknown",
                       "denied",
                       "expired",
@@ -40565,7 +40565,7 @@
                     "settled",
                     "returned",
                     "failed",
-                    "cancelled",
+                    "canceled",
                     "unknown"
                   ]
                 },
@@ -41582,7 +41582,7 @@
                     "unknown",
                     "failed",
                     "posted",
-                    "cancelled"
+                    "canceled"
                   ]
                 },
                 "amount": {
@@ -57515,7 +57515,7 @@
               "sending",
               "delivered",
               "failed",
-              "cancelled",
+              "canceled",
               "withheld"
             ]
           },

@@ -179,7 +179,7 @@ def test_an_abort_answer_cancels_and_a_server_error_does_not(api, net):
     post(api, f"webhooks/{made['id']}/send", {"type": "custom.a"})
     net.reply = lambda request: httpx.Response(410, headers={"webhook-delivery": "abort-message"})
     run(api, net)
-    assert sends(api)[0]["state"] == "cancelled"
+    assert sends(api)[0]["state"] == "canceled"
     post(api, f"webhooks/{made['id']}/send", {"type": "custom.b"})
     net.reply = lambda request: httpx.Response(503)
     run(api, net)
@@ -367,7 +367,7 @@ def test_people_manage_their_own_endpoints_and_the_owner_all(api, net):
     post(api, f"webhooks/{mine['id']}/example", {"type": "task.done"}, token="ben-test")
     assert {s["type"] for s in sends(api, mine["id"])} == {"custom.x", "task.done"}
     gone = post(api, f"webhooks/{mine['id']}/delete", {}, token="ben-test")
-    assert gone["cancelled"] == 2 and {s["state"] for s in sends(api, mine["id"])} == {"cancelled"}
+    assert gone["cancelled"] == 2 and {s["state"] for s in sends(api, mine["id"])} == {"canceled"}
     get(api, f"webhooks/{mine['id']}", token="ben-test", expected=404)
 
 

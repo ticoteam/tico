@@ -52,7 +52,7 @@ def test_a_failed_run_gives_them_back_and_a_finished_one_does_not(api):
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
     post(api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='uncertain'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
         c.execute("UPDATE run_backoff SET wait_until=NULL")        # the fast failure's wait is over
     post(api, "chat/ops", {"text": "Second"})
     second = claim(api, r)
@@ -120,7 +120,7 @@ def test_a_completed_run_settles_its_notes_and_a_failed_one_does_not(api):
     with api.app.state.store.read() as c:
         assert [x["id"] for x in H.notes_waiting(c, "ops")] == [n["id"]]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='uncertain'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
         c.execute("UPDATE run_backoff SET wait_until=NULL")
     post(api, "chat/ops", {"text": "Second"})
     second = claim(api, r)

@@ -178,7 +178,7 @@ def test_stop_on_waiter_is_final_even_after_capacity_returns(api):
     post(api, 'attempts/attempt-0/complete', {'outcome': 'interrupted', 'text': '', 'last_seq': 1}, computer['token'])
     assert claim(api, computer, 'ops') is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE attempt_id='attempt-0'").fetchone()[0] == 'cancelled'
+        assert c.execute("SELECT state FROM jobs WHERE attempt_id='attempt-0'").fetchone()[0] == 'canceled'
 
 
 def test_upgrade_preserves_legacy_waits_and_only_unstarted_places_expire(api, monkeypatch):
@@ -307,7 +307,7 @@ def test_finished_task_stops_a_new_pre_start_wait_before_capacity_returns(api):
     post(api, f'attempts/{aid}/complete', {'outcome': 'interrupted', 'text': '', 'last_seq': 0}, computer['token'])
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state,started FROM attempts WHERE id=?', (aid,)).fetchone()[:] == ('interrupted', None)
-        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'cancelled'
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'canceled'
         assert c.execute('SELECT status FROM tasks WHERE id=?', (task['id'],)).fetchone()[0] == 'done'
 
 

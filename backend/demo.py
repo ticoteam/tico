@@ -162,7 +162,7 @@ def tick(store):
                   "last_success=excluded.last_success,last_error=NULL", (now,))
         for job in c.execute("SELECT j.id,j.bot,m.from_actor,m.conversation_id,m.id AS message FROM jobs j "
                              "JOIN messages m ON m.id=j.message_id WHERE j.state='queued'").fetchall():
-            c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (job["id"],))
+            c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job["id"],))
             if H.is_human(job["from_actor"]):
                 try:
                     H.say(c, H.bot_actor(job["bot"]), job["from_actor"], BOT_REPLY,

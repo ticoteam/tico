@@ -43,7 +43,7 @@ def test_the_line_clears_when_the_run_that_did_not_start_is_no_longer_waiting(ap
     machine, _, lapsed = setup_attempt(api)
     lapse(api, lapsed)
     with api.app.state.store.transaction() as c:  # its work was done elsewhere first (an obsolete notice, Oct 22)
-        c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (lapsed["job_id"],))
+        c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (lapsed["job_id"],))
     line = status(api)
     assert line["state"] == "idle" and line["last_stop"] is None
 
@@ -125,7 +125,7 @@ def test_a_stop_before_the_start_and_a_completed_report_are_not_hand_backs(api):
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0, "text": ""},
          machine["token"])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "canceled"
     assert status(api)["state"] == "idle" and status(api)["last_stop"] is None
 
 

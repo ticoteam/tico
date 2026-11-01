@@ -125,7 +125,7 @@ def backdate(api, aid, count, *, seconds_ago):
         version = c.execute("SELECT version FROM automations WHERE id=?", (aid,)).fetchone()[0]
         for _ in range(count):
             c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started,status,state_json,chain_json) "
-                      "VALUES(?,?,?,?,?,'done','{}','[]')", ("run_" + H.new_id(), aid, version, "", started))
+                      "VALUES(?,?,?,?,?,'ok','{}','[]')", ("run_" + H.new_id(), aid, version, "", started))
 
 
 def webhook_auto(api):
@@ -149,7 +149,7 @@ def test_a_burst_straddling_the_ten_minute_boundary_is_not_sustained(api):
     backdate(api, aid, 65, seconds_ago=595)   # the flood window's edge: two minutes at most, never spread
     with api.app.state.store.transaction() as c:
         assert automations.on_webhook(c, "trg_1", "Deploys", "custom", "after", {}, "")
-    assert statuses(api, aid) == {"done": 130, "queued": 1}
+    assert statuses(api, aid) == {"ok": 130, "queued": 1}
     assert "hold" not in get(api, f"automations/{aid}")
 
 

@@ -262,7 +262,7 @@ def test_a_late_limited_result_keeps_usage_without_reopening_the_dismissed_job(a
         "acknowledge_uncertain_effects": True})
     result = post(api, f"attempts/{attempt['id']}/complete", {
         "outcome": "failed", "text": "Usage limit reached.", "last_seq": 3, "limited": True}, token=r["token"])
-    assert result["filed"] is True and settled(api, attempt) == ("expired", "cancelled")
+    assert result["filed"] is True and settled(api, attempt) == ("expired", "canceled")
     zero_usage(turn(api, attempt["id"]), "usage_limited")
 
 
@@ -278,7 +278,7 @@ def test_a_late_completed_result_keeps_measured_usage_without_reopening_the_dism
         "outcome": "completed", "text": "Done.", "last_seq": 3,
         "usage": {"input_tokens": 10, "cached_tokens": 20, "output_tokens": 5,
                   "model": "gpt-6-sol", "runtime": "codex", "billing": "api"}}, token=r["token"])
-    assert result["filed"] is True and settled(api, attempt) == ("expired", "cancelled")
+    assert result["filed"] is True and settled(api, attempt) == ("expired", "canceled")
     row = turn(api, attempt["id"])
     assert (row["input_tokens"], row["cached_tokens"], row["output_tokens"]) == (10, 20, 5)
     assert row["est_cost_usd"] == pytest.approx(price("gpt-6-sol", 10, 20, 5))

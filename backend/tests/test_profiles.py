@@ -480,7 +480,7 @@ def test_a_lead_runs_the_task_given_to_it_but_does_not_pull_its_other_open_tasks
         add_bot(c, "boss")
         put(c, "boss", P.LEAD)
         idle = H.task_create(c, "bot:ops", "Someday plan", "x", "bot:boss")
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
         given = H.task_create(c, "bot:ops", "Decide the export plan", "x", "bot:boss")
         assert last_to(c, "boss")["rule"] == "profile_lead_assignment"
     machine = runner(api)

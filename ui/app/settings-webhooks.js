@@ -11,7 +11,7 @@ const WH_TYPE_FROM = {github: 'X-GitHub-Event', stripe: '/type', standard: '/typ
 const WH_UNHEARD = [['log', 'Log it'], ['note', 'Tell the maker']];
 const WH_OUTCOMES = {accepted: ['ok', 'Accepted'], refused: ['fail', 'Refused'], rate_limited: ['fail', 'Over limit'], replayed: ['', 'Rerun']};
 const whRefused = r => r.outcome === 'refused' || r.outcome === 'rate_limited';
-const WH_SEND_STATES = {delivered: 'ok', failed: 'fail', ready: 'waiting', sending: 'waiting', cancelled: '', withheld: ''};
+const WH_SEND_STATES = {delivered: 'ok', failed: 'fail', ready: 'waiting', sending: 'waiting', canceled: '', withheld: ''};
 const WH_TABS = [['incoming', 'Incoming'], ['outgoing', 'Outgoing'], ['gateway', 'Through Tico Gateway', 'Gateway']];
 // The open tab and item, and the one set of secrets on screen: {id, url?, signing?, relay?} for an incoming webhook,
 // {id, secret} for an endpoint. The wake address's signing secret stays until the person dismisses it.
@@ -512,7 +512,7 @@ async function whHookDetail(el, run) {
         <span class="wh-outcome"><span class="pill ${WH_SEND_STATES[s.state] ?? ''}">${esc(s.state[0].toUpperCase() + s.state.slice(1))}</span>${s.subject ? ` <span class="muted">${esc(s.subject)}</span>` : ''}</span>
         <span class="tnum muted">${(s.attempts === 1 ? '1 try' : `${s.attempts} tries`)}</span>
         <span class="tnum muted" title="${esc(s.last_error || '')}">${s.last_status ? esc(s.last_status) : s.last_error ? 'Error' : ''}</span>
-        <span class="wh-call-ctl">${may && ['failed', 'cancelled'].includes(s.state) ? '<button class="ghost" type="button" data-wh-retry>Retry</button>' : ''}</span></div>`).join('')}</div>`
+        <span class="wh-call-ctl">${may && ['failed', 'canceled'].includes(s.state) ? '<button class="ghost" type="button" data-wh-retry>Retry</button>' : ''}</span></div>`).join('')}</div>`
       : '<div class="empty">Nothing sent yet.</div>'}`;
   const on = (sel, fn) => { const b = el.querySelector(sel); if (b) b.onclick = fn; };
   const act = async (fn, after) => { try { await fn(); after?.(); void renderSettingsWebhooks(); } catch (e) { toast(e.message, true); } };

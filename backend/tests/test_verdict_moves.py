@@ -386,10 +386,16 @@ def test_allocator_skips_inactive_pool_members_and_assigns_remaining_checks(api,
         checks = [H.task_create(c, "human:ana", f"Review 1: synthetic check {i}", "Check messages.", "human:ana",
                                 type=typ["id"], parent_id=parent["id"], private=False, lint=False)
                   for i, parent in enumerate(parents)]
+        # Rows an older release wrote, before these CHECKs: the allocator still skips them.
+        legacy = unavailable.get("state") == "" or unavailable.get("onboarding_state") == "needs_onboarding"
+        if legacy:
+            c.execute("PRAGMA ignore_check_constraints=ON")
         if "state" in unavailable:
             c.execute("UPDATE bots SET state=? WHERE slug='cmo'", (unavailable["state"],))
         if "onboarding_state" in unavailable:
             c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot='cmo'", (unavailable["onboarding_state"],))
+        if legacy:
+            c.execute("PRAGMA ignore_check_constraints=OFF")
         for key, value in unavailable.get("config", {}).items():
             c.execute("UPDATE bot_config SET config_json=json_set(config_json, ?, ?) WHERE bot='cmo'",
                       ("$." + key, value))
