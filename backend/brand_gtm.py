@@ -26,7 +26,7 @@ from .store import Problem
 
 KINDS = ("brand", "gtm")
 SECTIONS = {
-    "brand": ("positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples"),
+    "brand": ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples"),
     "gtm": ("motion", "buyer", "wishes", "playbooks"),
 }
 BODIES = {"brand": M.BrandBody, "gtm": M.GtmBody}
@@ -97,7 +97,8 @@ def summary_text(c, kind, current=None, hidden=None):
         return ""
     body, n = current["body"], current["n"]
     if kind == "brand":
-        parts = [f"Brand v{n}."]
+        name = str(body.get("name") or "").strip()
+        parts = [f"Brand v{n}: {name.rstrip('.')}." if name else f"Brand v{n}."]
         if body.get("positioning"):
             parts.append(str(body["positioning"]).rstrip(".") + ".")
         traits = _names(body.get("voice"), "trait", 4)

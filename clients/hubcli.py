@@ -1924,7 +1924,7 @@ def parser():
         s.add_argument("--json", action="store_true", help="print the API response as JSON")
         return s
 
-    brand_sections = ("positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
+    brand_sections = ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
     gtm_sections = ("motion", "buyer", "wishes", "playbooks")
     for kind, title, sections in (("brand", "the brand: voice, words, names, claims", brand_sections),
                                   ("gtm", "the go-to-market: motion, buyer, wishes, playbooks", gtm_sections)):
