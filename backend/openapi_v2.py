@@ -620,6 +620,9 @@ STABLE = [
      "business) or its daily time", "SystemRoutineUpdate"),
     ("/api/v2/system-routines/{key}/run", "post", "Health", "runSystemRoutine",
      "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running", None),
+    ("/api/v2/threads/{thread_id}/catch-up", "post", "Conversations", "catchUpThread",
+     "What is new in a thread (scope subtree: its sub-threads too) that you may read, summarized and posted to your "
+     "Assistant DM; the newest 40 messages at most. Nothing new posts nothing", "CatchUpResult"),
 ]
 
 
@@ -672,6 +675,8 @@ SCHEMAS = {
     "ChatGoal": obj({"id": "s", "conversation_id": "s", "bot": "s", "objective": "s", "status": "s",
                      "note": "s", "set_by": "s", "set_at": "s", "updated_at": "s", "ended_at": "n"},
                     required=["id", "conversation_id", "bot", "objective", "status", "note", "set_by", "set_at", "updated_at", "ended_at"]),
+    "CatchUpResult": obj({"thread_id": "s", "scope": "s", "messages": "i", "left_out": "i", "posted": "o",
+                          "words": "s"}, required=["thread_id", "scope", "messages", "left_out"]),
     "ChatGoalResult": obj({"goal": {"anyOf": [ref("ChatGoal"), {"type": "null"}]}}, required=["goal"],
                           supported={"type": "boolean"}, commands=items({"type": "object"})),
     "Message": obj({"id": "s", "conversation_id": "s", "from_actor": "s", "to_actor": "s", "kind": "s", "body": "s",

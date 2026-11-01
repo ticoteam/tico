@@ -224,6 +224,8 @@ def run(args, who=None):
         return via_tool(client,args)
     if args.cmd == "rules":
         return via_tool(client, _rules_args(args))
+    if args.cmd == "thread":
+        return via_tool(client, args)
     if args.cmd == "mail":
         return via_tool(client, args)
     if args.cmd == "finance":

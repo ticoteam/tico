@@ -267,6 +267,17 @@ def chat_goal(api, args):
                     key=_key(args))
 
 
+@tool("hub_thread_catchup", "Catch up on a thread: what is new in it (and its sub-threads, with scope subtree) that you "
+      "may read, summarized and posted to your Assistant DM. The newest 40 messages at most. Nothing new posts nothing.",
+      {"thread_id": _s("Thread id"),
+       "scope": {"type": "string", "enum": ["subtree", "thread"], "default": "subtree",
+                 "description": "subtree: the thread and its sub-threads; thread: this thread only"}},
+      required=("thread_id",), writes=True)
+def thread_catchup(api, args):
+    return api.post("threads/" + quote(args["thread_id"], safe="") + "/catch-up",
+                    {"scope": args.get("scope") or "subtree"}, key=_key(args))
+
+
 @tool("hub_chat_send", "Send a message or a headless slash command to a bot.",
       {"to": _s("The bot"), "text": _s("The message or command"),
        "conversation_id": _s("Continue this conversation"),

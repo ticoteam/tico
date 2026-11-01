@@ -1,0 +1,85 @@
+"""Follow-ups: an ask a bot put to a person, unanswered past the threshold, gets one nudge in its thread. The watcher
+is plain code: it never queues a model run, a quiet run writes nothing, and an answered ask is never nudged."""
+
+from datetime import datetime, timedelta, timezone
+
+from backend import hubdb as H
+from backend import scheduler, threads, thread_followups
+from backend.tests.test_api import api, setup_attempt  # noqa: F401
+
+
+def later(hours):
+    return H.shift(H.now(), hours=hours)
+
+
+def bot_thread(api, task_id=None):
+    with api.app.state.store.transaction() as c:
+        return threads.create(c, "bot:finance", title="Books", audience="members", members=["human:ana"],
+                              task_id=task_id)["id"]
+
+
+def ask(api, thread_id, text="Can you confirm the Q3 invoice?"):
+    with api.app.state.store.transaction() as c:
+        return threads.post(c, "bot:finance", thread_id, text, kind="ask", to_actor="human:ana")
+
+
+def sweep(api, at):
+    with api.app.state.store.transaction() as c:
+        return thread_followups.sweep(c, at)
+
+
+def counts(api):
+    with api.app.state.store.read() as c:
+        return tuple(c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                     for table in ("jobs", "messages", "thread_followups"))
+
+
+def test_an_unanswered_ask_is_nudged_once_in_its_thread(api):
+    setup_attempt(api, "finance")
+    tid = bot_thread(api)
+    message = ask(api, tid)
+    assert sweep(api, H.now()) == []                     # not yet: the threshold is a day
+    done = sweep(api, later(25))
+    assert [d["message"] for d in done] == [message["id"]]
+    with api.app.state.store.read() as c:
+        nudge = c.execute("SELECT body FROM messages WHERE conversation_id=? AND kind='notice' "
+                          "AND to_actor='human:ana'", (tid,)).fetchone()
+    assert nudge is not None and "Can you confirm" in nudge["body"]
+    assert sweep(api, later(48)) == []                   # one nudge, however often the watcher runs
+
+
+def test_a_quiet_run_writes_nothing_and_queues_no_model(api):
+    setup_attempt(api, "finance")
+    ask(api, bot_thread(api))
+    before = counts(api)
+    assert sweep(api, H.now()) == []
+    assert counts(api) == before
+
+
+def test_an_answered_ask_is_never_nudged(api):
+    setup_attempt(api, "finance")
+    tid = bot_thread(api)
+    ask(api, tid)
+    with api.app.state.store.transaction() as c:
+        threads.post(c, "human:ana", tid, "Yes, confirmed.")
+    assert sweep(api, later(25)) == []
+
+
+def test_a_task_thread_ask_is_left_to_its_card(api):
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Confirm the invoice", "Confirm it.", "human:ana")
+    tid = bot_thread(api, task_id=task["id"])
+    ask(api, tid)
+    assert sweep(api, later(25)) == []
+
+
+def test_the_scheduled_run_nudges_through_the_same_sweep(api):
+    setup_attempt(api, "finance")
+    tid = bot_thread(api)
+    message = ask(api, tid)
+    at = datetime.now(timezone.utc) + timedelta(hours=25)
+    scheduler.run_thread_followups(api.app.state.store, api.app.state.auth, at)
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT message_id FROM thread_followups").fetchall()
+    assert [r["message_id"] for r in rows] == [message["id"]]

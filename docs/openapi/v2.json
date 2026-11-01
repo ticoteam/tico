@@ -29146,6 +29146,77 @@
         ]
       }
     },
+    "/api/v2/threads/{thread_id}/catch-up": {
+      "post": {
+        "summary": "What is new in a thread (scope subtree: its sub-threads too) that you may read, summarized and posted to your Assistant DM; the newest 40 messages at most. Nothing new posts nothing",
+        "operationId": "catchUpThread",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatchUp"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatchUpResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Conversations"
+        ]
+      }
+    },
     "/api/v2/triggers": {
       "get": {
         "summary": "Every trigger with its address (no secret), settings and routines",
@@ -36165,6 +36236,49 @@
         "required": [
           "cards",
           "next"
+        ],
+        "additionalProperties": true
+      },
+      "CatchUp": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "maxLength": 10,
+            "title": "Scope",
+            "default": "subtree"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "CatchUp"
+      },
+      "CatchUpResult": {
+        "type": "object",
+        "properties": {
+          "thread_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "integer"
+          },
+          "left_out": {
+            "type": "integer"
+          },
+          "posted": {
+            "type": "object"
+          },
+          "words": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "left_out",
+          "messages",
+          "scope",
+          "thread_id"
         ],
         "additionalProperties": true
       },
@@ -47678,6 +47792,17 @@
               }
             ],
             "title": "Update Draft"
+          },
+          "notify_browser": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notify Browser"
           },
           "slack_muted_bots": {
             "anyOf": [

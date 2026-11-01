@@ -72,16 +72,22 @@ async function needsRecommend(button, ask, version) {
 // One line in Needs you for an item outside any task (an approval, a question, the Stale tickets card): who asks, what,
 // and its kind. A click opens its card (decide.js); nothing unfolds in the list. Its key is the card's. It keeps the
 // task rows' columns (task-list.js taskListRowHTML), with nothing to select and no status.
+// The thread items (backend/thread_attention.py): each names its kind, and opens its thread rather than a decide card.
+const THREAD_NEED_KINDS = {thread_ask: 'Question', thread_mention: 'Mention', thread_dm: 'Direct message',
+                           thread_held: 'Held', thread_capped: 'Paused'};
 function needRowHTML(it, ctx = {}) {
-  const key = decideItemKey(it), stale = it.kind === 'stale';
+  const key = decideItemKey(it), stale = it.kind === 'stale', thread = THREAD_NEED_KINDS[it.kind];
   const from = stale ? '' : taskRequester(it) || it.requester || '';
   const name = stale ? 'Tico' : actorLabel(from) || 'Tico';
   const title = stale ? it.title || 'Stale tickets' : approvalTitle(it) || it.first_line || it.title || v2Firstline(it.body) || V2_KIND[it.kind] || 'Item';
-  const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : 'Question';
+  const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : thread || 'Question';
   const face = stale ? personCircle('Tico', 18) : actorFace(from, 18);
+  const open = thread && it.conversation_id
+    ? `<a class="tl-open" href="#/thread/${encodeURIComponent(it.conversation_id)}" tabindex="-1"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></a>`
+    : `<button type="button" class="tl-open" data-open-task="n${esc(key)}" tabindex="-1" aria-haspopup="dialog"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></button>`;
   return tasksSigned(`<div class="tl-row tl-need" data-task-key="n${esc(key)}" data-need-card="${esc(key)}" role="listitem" aria-level="1" style="--depth:0">
     <span class="tl-check-pad${ctx.select ? ' tl-check-room' : ''}"></span><span class="tl-chev-pad"></span>
-    <button type="button" class="tl-open" data-open-task="n${esc(key)}" tabindex="-1" aria-haspopup="dialog"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></button>
+    ${open}
     <span class="tl-fill"></span>
     <span class="tl-chips"><span class="pill needs">${esc(kind)}</span>${stale && (it.rows || []).length ? `<span class="tl-folded tnum">${(it.rows || []).length}</span>` : ''}</span>
     ${ctx.by === 'status' ? '' : '<span class="tl-status-pad"></span>'}
@@ -90,7 +96,7 @@ function needRowHTML(it, ctx = {}) {
   </div>`);
 }
 // The items Needs you lists outside any task, without the ones just answered on a card (decide.js decideGone).
-const needsExtras = () => (S.v2?.needs || []).filter(it => ['approval', 'stale', 'ask'].includes(it.kind) && !decideGone(decideItemKey(it)));
+const needsExtras = () => (S.v2?.needs || []).filter(it => ['approval', 'stale', 'ask', ...Object.keys(THREAD_NEED_KINDS)].includes(it.kind) && !decideGone(decideItemKey(it)));
 // How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
 // decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`
 // so a page left open stays right.
@@ -431,3 +437,31 @@ document.addEventListener('click', ev => {
     if (rows.length) void staleDecide(sa, '/v2/stale-review/accept-all', {rows});
   }
 });
+
+// Browser notifications for new thread items, while the page is in the background, when the person turned them on
+// (their Notifications card, person-page.js). The ids already notified are kept per person in localStorage, so a reload
+// does not repeat them; the first read after a fresh start records what is listed without notifying.
+const NOTIFIED_KEY = () => 'tico.notified.' + (S.me?.actor || 'me');
+async function notifyNewThreadNeeds(items) {
+  if (S.notifyBrowser === undefined) {
+    const id = (S.me?.actor || '').replace(/^human:/, '');
+    try { S.notifyBrowser = !!id && (await v2Get('/v2/humans/' + encodeURIComponent(id)))?.notify_browser === true; }
+    catch { S.notifyBrowser = false; }
+  }
+  const thread = items.filter(it => THREAD_NEED_KINDS[it.kind]);
+  let seen = null;
+  try { seen = JSON.parse(localStorage.getItem(NOTIFIED_KEY()) || 'null'); } catch { seen = null; }
+  const first = !Array.isArray(seen);
+  const known = new Set(first ? [] : seen);
+  const fresh = thread.filter(it => !known.has(String(it.id)));
+  if (fresh.length) {
+    const ids = [...known, ...fresh.map(it => String(it.id))].slice(-200);
+    try { localStorage.setItem(NOTIFIED_KEY(), JSON.stringify(ids)); } catch { /* private window: notify without memory */ }
+  }
+  if (first || !fresh.length || !S.notifyBrowser || !document.hidden || !('Notification' in window)
+      || Notification.permission !== 'granted') return;
+  for (const it of fresh) {
+    try { new Notification(`${THREAD_NEED_KINDS[it.kind]} in Tico`, {body: it.title || '', tag: 'need-' + it.id}); }
+    catch { /* a browser that refuses a notification shows nothing; the list still has it */ }
+  }
+}

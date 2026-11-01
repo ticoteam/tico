@@ -2632,6 +2632,8 @@ def create_app(settings=None):
                     row = {**row, "notify_slack_bot_messages": body.notify_slack_bot_messages}
                 if body.update_draft is not None:
                     row = {**row, "update_draft": body.update_draft}
+                if body.notify_browser is not None:
+                    row = {**row, "notify_browser": body.notify_browser}
                 if body.slack_muted_bots is not None:
                     row = {**row, "slack_muted_bots": list(dict.fromkeys(body.slack_muted_bots))}
                 if body.reports_to is not None:
@@ -2651,6 +2653,7 @@ def create_app(settings=None):
                                                               "github": body.github is not None,
                                                               "notify_slack_bot_messages": body.notify_slack_bot_messages,
                                                               "update_draft": body.update_draft,
+                                                              "notify_browser": body.notify_browser,
                                                               "slack_muted_bots": body.slack_muted_bots,
                                                               "reports_to": body.reports_to, "left": bool(body.left)})
                 if caller is not who:

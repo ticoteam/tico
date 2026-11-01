@@ -96,6 +96,9 @@ function pagePerson(id, tab) {
         <input type="checkbox" role="switch" class="people-switch" id="person-notify-bots" ${p.notify_slack_bot_messages !== false ? 'checked' : ''}>
         <span>Bot messages in Slack</span></label>
       <div class="person-muted" id="person-muted" ${p.notify_slack_bot_messages === false ? 'hidden' : ''}></div>
+      <label class="person-notify" title="A browser notification for new threads that need you (a question, a mention, a DM, a held message), while Tico is in the background. Your browser asks permission the first time">
+        <input type="checkbox" role="switch" class="people-switch" id="person-notify-browser" ${p.notify_browser === true ? 'checked' : ''}>
+        <span>Browser notifications</span></label>
       <label class="person-notify" title="Each morning the Assistant drafts their update from what everyone may see: their shared tasks and goals, their decisions, comments and answers on those tasks, the meetings they were in that are not private, and their reports' updates. Never their private chats or approvals. It posts as theirs, labelled, and they can edit or replace it; once they post their own words that day, there is no draft">
         <input type="checkbox" role="switch" class="people-switch" id="person-update-draft" ${p.update_draft !== false ? 'checked' : ''}>
         <span>Assistant drafts my update</span></label>
@@ -133,6 +136,22 @@ function pagePerson(id, tab) {
   notifySwitch('#person-notify-slack', 'notify_slack_task_done');
   notifySwitch('#person-notify-bots', 'notify_slack_bot_messages');
   notifySwitch('#person-update-draft', 'update_draft');
+  const browser = $('#person-notify-browser');
+  if (browser) browser.onchange = async () => {
+    const value = browser.checked, status = $('#person-notify-status');
+    status.textContent = '';
+    if (value && !('Notification' in window)) { browser.checked = false; status.textContent = 'This browser has no notifications.'; return; }
+    if (value && Notification.permission !== 'granted' && (Notification.permission === 'denied' || await Notification.requestPermission() !== 'granted')) {
+      browser.checked = false; status.textContent = 'Your browser is not allowing notifications for Tico.'; return;
+    }
+    browser.disabled = true;
+    try {
+      const row = await post(`/v2/humans/${encodeURIComponent(p.id)}`, {notify_browser: value});
+      p.notify_browser = row.notify_browser === true; S.notifyBrowser = p.notify_browser; browser.checked = p.notify_browser;
+    } catch (e) {
+      browser.checked = !value; status.textContent = e.message || 'Could not save.';
+    } finally { browser.disabled = false; }
+  };
   const botsSwitch = $('#person-notify-bots');
   if (botsSwitch) botsSwitch.addEventListener('change', () => { $('#person-muted').hidden = !botsSwitch.checked; });
   // Muted bots: their messages stay in Tico while the other bots still reach Slack.
