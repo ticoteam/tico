@@ -279,14 +279,23 @@ def resume_link(store, who, link_id):
         return view(_link(c, link_id))
 
 
-def list_links(store, thread_id="", limit=50):
+def list_links(store, thread_id="", limit=50, cursor=""):
+    """Links still in force, newest first, a page at a time: `next_cursor` (the last row's `created_at|id`) reads on."""
+    limit = max(1, min(int(limit or 50), 100))
     with store.read() as c:
         sql, args = "SELECT * FROM slack_thread_links WHERE state<>'unlinked'", []
         if thread_id:
             sql += " AND thread_id=?"
             args.append(thread_id)
-        rows = c.execute(sql + " ORDER BY created_at DESC LIMIT ?", (*args, max(1, min(int(limit or 50), 100)))).fetchall()
-        return [view(dict(r)) for r in rows]
+        at, _, after = str(cursor or "").partition("|")
+        if at and after:
+            sql += " AND (created_at<? OR (created_at=? AND id<?))"
+            args.extend([at, at, after])
+        rows = [dict(r) for r in c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, limit + 1))]
+    more = len(rows) > limit
+    rows = rows[:limit]
+    return {"links": [view(r) for r in rows],
+            "next_cursor": f"{rows[-1]['created_at']}|{rows[-1]['id']}" if more else None}
 
 
 def _event_key(event):
@@ -1165,9 +1174,9 @@ def install(app, settings, store, auth):
         return who
 
     @app.get("/api/v2/slack/links")
-    def links(request: Request, thread: str = "", limit: int = 50):
+    def links(request: Request, thread: str = "", limit: int = 50, cursor: str = ""):
         admin(request)
-        return {"links": list_links(store, thread, limit)}
+        return list_links(store, thread, limit, cursor)
 
     @app.post("/api/v2/slack/links")
     def link_add(request: Request, body: LinkRequest):

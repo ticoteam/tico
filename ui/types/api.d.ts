@@ -3702,6 +3702,7 @@ export type SlackLink = {
 
 export type SlackLinkList = {
   links: Array<SlackLink>;
+  next_cursor: string | null;
 };
 
 export type SleepSet = {
@@ -7172,6 +7173,7 @@ export type ListServiceKeysResponse = unknown;
 
 /** GET /api/v2/slack/links */
 export type ListSlackLinksParams = {
+  cursor?: string;
   limit?: number;
   thread?: string;
 };

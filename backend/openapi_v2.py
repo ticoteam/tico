@@ -2326,8 +2326,8 @@ SCHEMAS['ComputerSubscriptionResult'] = obj({
 TAGS['Slack links'] = ("A thread's link to a Slack channel, both ways (docs/slack.md): asked for by an admin, checked by the "
                        "gateway, then active, suspended or refused. Admins only.")
 STABLE.extend([
-    ('/api/v2/slack/links', 'get', 'Slack links', 'listSlackLinks', 'The Slack links of a thread (`thread`), newest first, '
-     'up to `limit` (at most 100); unlinked ones are left out', 'SlackLinkList'),
+    ('/api/v2/slack/links', 'get', 'Slack links', 'listSlackLinks', 'The Slack links (of one thread with `thread`), newest first, '
+     'up to `limit` (at most 100) a page; `next_cursor` reads the next page; unlinked ones are left out', 'SlackLinkList'),
     ('/api/v2/slack/links', 'post', 'Slack links', 'requestSlackLink', 'Ask for a thread to be linked to a Slack channel '
      '(`#name` or its id): the gateway checks it and activates or refuses it later; `history` also brings in its earlier '
      'messages', 'SlackLink'),
@@ -2341,7 +2341,7 @@ SCHEMAS['SlackLink'] = obj({
     'audience': 's', 'state': {'enum': ['requested', 'active', 'suspended', 'refused', 'unlinked']}, 'reason': 's',
     'history': obj({'state': {'enum': ['off', 'pending', 'running', 'done', 'failed']}, 'count': 'i'}),
     'linked_by': 's', 'created_at': 's', 'updated_at': 's'})
-SCHEMAS['SlackLinkList'] = obj({'links': items(ref('SlackLink'))})
+SCHEMAS['SlackLinkList'] = obj({'links': items(ref('SlackLink')), 'next_cursor': 'n'})
 
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
