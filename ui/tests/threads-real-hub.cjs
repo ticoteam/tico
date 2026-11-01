@@ -50,7 +50,8 @@ async function restrictPerson(hub) {
 }
 
 (async () => {
-  const hub = await startHub({seeds: ['org']});
+  // 'toured': the first-visit tour is seen and the usage notice dismissed, so no dialog covers the page (as automations-due does).
+  const hub = await startHub({seeds: ['org', 'toured']});
   let browser;
   try {
     const plan = await api(hub, 'dana', 'POST', '/v2/threads', {title: 'Launch plan', audience: 'company', members: [], body: PLAN});
