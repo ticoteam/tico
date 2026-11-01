@@ -25,6 +25,7 @@ mod accounts;
 mod afterwatch;
 mod appdriver;
 mod backlog;
+mod browser_exit;
 mod capture;
 mod client;
 mod cloud_machine;
@@ -463,6 +464,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
     // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers, close-calls and connectors.
     let side = sidejobs::start(&service.config);
     screen::start(service.config.path.clone(), client.clone());
+    browser_exit::start(client.clone());
     service.run().await;
     screen::shutdown().await;
     if let Some((task, stop)) = side {

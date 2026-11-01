@@ -271,5 +271,5 @@ def test_reads_cut_private_amounts_unseen_accounts_and_nested_lists(books):  # n
         assert mine and line["attributable"][0] == mine[0]                                # their own tag first
         assert all(x.get("attributable") is None for x in FR.chart(c, OWNER)["accounts"])
         report = FR.report(c, OWNER, "pnl", start="2026-10-01", end="2026-10-31", top_n=1)
-        assert len([r for r in report["rows"] if r.get("key") != "other"]) == 1
+        assert len([r for r in report["rows"] if r.get("key") != FR.OTHER]) == 1
         assert report["rows_total"] > 1 and any(str(r.get("label", "")).startswith("Other · ") for r in report["rows"])

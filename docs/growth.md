@@ -1,8 +1,9 @@
 # Growth
 
-Growth is how the team finds customers and learns what works. It sits on the Strategy page as the **Growth** tab, beside
-Market. Tico keeps the bets, the channels, the ideas, the tests, the verdicts and the economics. The tools (CRM, ad
-accounts, email) stay where they are and Tico reads their numbers.
+Growth is how the team finds customers and learns what works. It is its own section in the sidebar, under Strategy
+(`#/growth`; tabs Overview, This week, Channels, Learning and Go-to-market). Tico keeps the bets, the channels, the
+ideas, the tests, the verdicts and the economics. The tools (CRM, ad accounts, email) stay where they are and Tico reads
+their numbers.
 
 The chain is: **bets → channels → ideas → tests → verdicts → learning**. A bet is a claim about the business. A channel is a
 way to reach customers. An idea is one test of one belief on one channel. A verdict says what the test showed, and the
@@ -40,7 +41,7 @@ Anyone may file an idea. Changing an idea needs an admin, its assignee or its cr
 
 ## Frameworks are views
 
-The same ideas, KPIs and bets can be read in five ways. The Growth tab keeps the choice for each company.
+The same ideas, KPIs and bets can be read in five ways. Growth keeps the choice for each company.
 
 - **North Star**: the one KPI the company is judged on, and the inputs under it. A KPI has a `parent_kpi_id` and a `growth_role`
   of `north_star`, `input` or `guardrail`. There is one North Star; setting a new one clears the old.
@@ -66,7 +67,7 @@ Brand-track ideas always carry a confidence (`low`, `medium` or `high`).
 Example: the prediction was 8 more price-request bookings a week, from a baseline of 14. The window averaged 19. That is
 5 of 8, or 62%: **Won**. The bet effect is `supports`.
 
-A verdict is evidence for the bet it serves. **Learning** on the Growth tab lists the verdicts, and each bet shows its
+A verdict is evidence for the bet it serves. **Learning** (`#/growth/learning`) lists the verdicts, and each bet shows its
 supports, weakens and none counts (`hub growth evidence`).
 
 ## Channel economics
@@ -123,9 +124,10 @@ The report links to the Finance report for the books. It does not copy them.
 
 ## Brand and GTM cards
 
-Two cards on the Strategy page feed Growth and every bot that writes outward.
+Two cards on the Strategy page feed Growth and every bot that writes outward. Brand opens at `#/strategy/brand`, GTM at
+`#/growth/gtm`.
 
-**Brand** is the brand book: the positioning line, voice traits (each with a do and a don't), tone by situation, the
+**Brand** is the brand book: the brand name (when it differs from the company's), the positioning line, voice traits (each with a do and a don't), tone by situation, the
 words to use and to avoid, naming rules, claims and proof, visual files (as links to Library Files) and examples.
 `hub brand check` runs the cheap checks on a draft: avoided words, naming, and `claims.never` phrases. It runs no model
 and does not detect claims missing from the allowed list, so a bot checks those against the claims list itself.

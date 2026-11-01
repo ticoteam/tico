@@ -3,6 +3,7 @@ With the filter On, the budget tightens as the person's plate fills; sent back o
 and the reply says why, naming the bot's manager. Rehearsal changes nothing and lists what On would have done. A
 person's own write is never gated, and any failure lets the item through as before."""
 
+import json
 import threading
 import time
 
@@ -11,6 +12,9 @@ import pytest
 from backend import ask_ingest as A
 from backend import call_slots as CS
 from backend import hubdb as H
+from backend.tests.test_api import unrelated_task_managers
+from backend.tests.test_task_guest import run_on
+from backend.tests.test_task_guest import task as private_task
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post   # noqa: F401
 
 
@@ -1001,3 +1005,129 @@ def test_exception_after_judging_keeps_call_link_and_fails_open(gate, monkeypatc
     [item], [call] = items(api), calls(api)
     assert (item["outcome"], item["reason"], item["call_id"]) == (A.FAILED_OPEN, "error", call["id"])
     assert len(model.calls) == 1
+
+
+# ---- every judged call ends in a row or a named reason (Dev 702) ------------------------------------------------------
+
+def reasons(api):
+    """{call id: reason} for the unrecorded events the gate named (ask_ingest.unrecorded)."""
+    with api.app.state.store.read() as c:
+        return {r["target"]: json.loads(r["detail_json"])["why"]
+                for r in H._rows(c.execute("SELECT target, detail_json FROM events WHERE action=?", (A.UNRECORDED,)))}
+
+
+def test_a_plain_bot_task_to_a_person_in_rehearsal_writes_one_row_and_one_judge_call(gate):
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {**A.DEFAULTS, "mode": "rehearsal"})
+    out = file(api, token)
+    assert out["task"]["owner"] == "human:ben"
+    [item], [call] = items(api), calls(api)
+    assert (item["call_id"], item["mode"], item["outcome"]) == (call["id"], A.REHEARSAL, A.THROUGH)
+    assert len(model.calls) == 1 and not reasons(api)
+
+
+def test_a_saved_key_retry_makes_no_new_judge_call(gate):
+    api, model, token = gate
+    key = "retry-the-same-create"
+    body = {"owner": "ben", "title": "Pick the launch date", "body": "Nov 3 or Nov 10?"}
+    first = api.post("/api/v2/tasks", json=body, headers={**headers(token), "Idempotency-Key": key})
+    assert first.status_code == 200, first.text
+    again = api.post("/api/v2/tasks", json=body, headers={**headers(token), "Idempotency-Key": key})
+    assert again.status_code == 200 and again.json()["task"]["id"] == first.json()["task"]["id"]
+    assert len(model.calls) == 1 and len(calls(api)) == 1 and len(items(api)) == 1
+
+
+def test_a_joined_blocker_write_ends_in_a_named_reason_never_a_silent_gap(gate):
+    api, model, token = gate
+    blocker = {"repo": "ticoteam/tico", "status": 403, "endpoint": "workflow_dispatch"}
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {**A.DEFAULTS, "mode": "off"})
+    first = api.post("/api/v2/tasks", json={"owner": "ben", "title": "Blocked first", "body": "b", "blocker": blocker},
+                     headers=headers(token))
+    assert first.status_code == 200, first.text
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {**A.DEFAULTS, "mode": "on"})
+    second = api.post("/api/v2/tasks", json={"owner": "ben", "title": "Blocked second", "body": "b", "blocker": blocker},
+                      headers=headers(token))
+    assert second.status_code == 200 and second.json().get("joined")
+    [call] = calls(api)
+    assert reasons(api) == {call["id"]: "joined"} and not items(api)
+
+
+def test_a_refused_create_writes_no_row_and_its_call_is_labelled_refused(gate):
+    api, model, token = gate
+    r = api.post("/api/v2/tasks", json={"owner": "ben", "title": "Goal gone", "body": "x", "goal_id": "no-such-goal"},
+                 headers=headers(token))
+    assert r.status_code == 404, r.text
+    [call] = calls(api)
+    assert len(model.calls) == 1 and not items(api) and reasons(api) == {call["id"]: "refused"}
+
+
+def test_a_privacy_refused_create_writes_no_row_and_its_call_is_labelled_refused(gate):
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+    private_task(api, "bot:cpo", "bot:cmo", "Zip triage")
+    attempt = run_on(api, "cmo")                # the run carries a private task: a company-visible create is refused
+    r = api.post("/api/v2/tasks", json={"owner": "ben", "title": "Pick the launch date", "body": "Nov 3 or Nov 10?",
+                                        "private": False}, headers=headers(attempt["token"]))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "privacy", r.text
+    [call] = calls(api)
+    assert len(model.calls) == 1 and not items(api) and reasons(api) == {call["id"]: "refused"}
+
+
+def test_the_readout_reconciles_every_call_to_a_row_or_a_named_reason(gate):
+    api, model, token = gate
+    plate(api, 15)
+    file(api, token)                                                      # sent back: a row
+    api.post("/api/v2/tasks", json={"owner": "ben", "title": "Goal gone", "body": "x", "goal_id": "no-such-goal"},
+             headers=headers(token))                                      # refused: a named reason
+    row = next(r for r in get(api, "judge/readout")["sets"] if r["set"] == A.QUESTION_SET)
+    assert row["reconcile"] == {"calls": 2, "landed": 1, "reasons": {"refused": 1}, "unexplained": 0, "no_call": 0}
+    assert "calls reconciled: 2 = 1 with an item row, refused 1; unexplained 0; rows with no call 0" \
+        in get(api, "judge/readout")["text"]
+
+
+def test_a_call_with_neither_a_row_nor_a_reason_is_shown_as_unexplained(gate):
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        H.event(c, H.KEEPER, "judge.call", "person-ask-ingest@1", {"label": "person-ask-ingest@1", "mode": "on"})
+    row = next(r for r in get(api, "judge/readout")["sets"] if r["set"] == A.QUESTION_SET)
+    assert row["reconcile"]["unexplained"] == 1 and row["reconcile"]["calls"] == 1
+
+
+def test_a_settings_failure_before_the_verdict_keeps_the_failed_open_record(gate, monkeypatch):
+    """The settings read is the first thing preflight does after the person is known: a failure there still writes
+    the failed_open row, and the create still succeeds (Dev 702 QA)."""
+    api, model, token = gate
+    real, seen = A.settings, []
+
+    def fails_once(c, person):
+        if not seen:
+            seen.append(person)
+            raise RuntimeError("settings unreadable")
+        return real(c, person)
+    monkeypatch.setattr(A, "settings", fails_once)
+    out = file(api, token)
+    assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    [item] = items(api)
+    assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, "error")
+    assert item["ref"] == out["task"]["id"] and item["call_id"] is None
+    assert not calls(api) and not model.calls
+
+
+def test_a_settings_read_that_always_fails_still_lands_a_failed_open_row(gate, monkeypatch):
+    """The settings read fails on every call, in preflight and again inside the write: the create still succeeds,
+    and its one row is a failed open with no judge call (Dev 702 QA retest)."""
+    api, model, token = gate
+
+    def always_fails(c, person):
+        raise RuntimeError("settings unreadable")
+    monkeypatch.setattr(A, "settings", always_fails)
+    out = file(api, token)
+    assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    [item] = items(api)
+    assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, "error")
+    assert item["ref"] == out["task"]["id"] and item["call_id"] is None
+    assert not calls(api) and not model.calls

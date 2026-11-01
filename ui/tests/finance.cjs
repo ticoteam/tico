@@ -43,12 +43,14 @@ const MATES = [
 function access(viewer, apGrant = false, apRights = []) {
   const base = {teams, private_lines: [{account_id: 'a-6200', name: 'Payroll', others_see: 'totals', full_detail: ['bot:bookkeeper']}],
     defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'}, view_version: 'v1'};
-  if (viewer === 'ana') return {...base, teammates: MATES, can_view_as: true, can_edit_defaults: true};
+  if (viewer === 'ana') return {...base, teammates: MATES.map(m => ({...m, may_grant: m.teammate !== 'human:ana'})), can_view_as: true, can_edit_defaults: true};
   const mine = ['human:cara', 'bot:eng-lead', 'bot:builder'];
   const payables = {id: 'g4', subject_kind: 'teammate', subject: 'human:cara', what: 'payables', whose: 'company', whose_team: null, account_ids: [],
     new_members: false, granted_by: 'human:ana', expires_at: null, status: 'active', live: true};
   return {...base, teams: teams.filter(t => ['eng', 'platform'].includes(t.id)), private_lines: [],
-    teammates: MATES.filter(m => mine.includes(m.teammate)).map(m => apGrant && m.teammate === 'human:cara' ? {...m, grants: [payables], rights: apRights} : m),
+    // may_grant is the server's check_grant verdict; eng-lead's is off here to show the page follows it.
+    teammates: MATES.filter(m => mine.includes(m.teammate)).map(m => ({...m, may_grant: m.teammate === 'bot:builder'}))
+      .map(m => apGrant && m.teammate === 'human:cara' ? {...m, grants: [payables], rights: apRights} : m),
     can_view_as: false, can_edit_defaults: false};
 }
 
@@ -119,8 +121,15 @@ function line(id, url) {
     entries: [{line_id: 'l1', entry_id: 'e1', date: '2026-10-28', account_id: id, amount: 21000, vendor, description: vendor + ' Team', memo: '', source: 'feed', tags: {}}], more: false};
   return {account: {id: l[0], code: l[1], name: l[2], type: l[3]}, vendor: null, total: l[5], excluded: 0, hidden: 0,
     paid_by: [{kind: 'card', name: 'Engineering', amount: 84000, count: 4}], next_month: {month: iso(nm).slice(0, 7), projection: 310000},
-    by_vendor: [{key: 'GitHub', label: 'GitHub', amount: 84000}, {key: 'Figma', label: 'Figma', amount: 42000}, {key: 'Notion', label: 'Notion', amount: 32000}, {key: 'unattributed', label: 'No vendor', amount: 5000}, {key: 'other', label: 'Other · 4', amount: 21000}],
-    by_team: [{key: 'eng', label: 'Engineering', amount: 120000}, {key: 'mkt', label: 'Marketing', amount: 50000}, {key: 'unattributed', label: 'Unattributed', amount: 9000}],
+    // Each column sums to next_month; Slack and Content have a projection but no spend (Slack falls in the capped Other);
+    // vendors named Other and Unattributed are ordinary keys, apart from the reserved ' other' and ' unattributed'.
+    next_by: {vendor: {GitHub: 120000, Figma: 60000, Notion: 50000, ' unattributed': 10000, Slack: 50000, unattributed: 10000, other: 10000},
+      team: {eng: 200000, mkt: 60000, content: 40000, ' unattributed': 10000},
+      teammate: {'bot:eng-lead': 150000, 'bot:writer': 60000, 'human:cara': 40000, ' unattributed': 60000}},
+    next_labels: {vendor: {GitHub: 'GitHub', Figma: 'Figma', Notion: 'Notion', ' unattributed': 'No vendor', Slack: 'Slack', unattributed: 'Unattributed', other: 'Other'},
+      team: {eng: 'Engineering', mkt: 'Marketing', content: 'Content', ' unattributed': 'Unattributed'}, teammate: {' unattributed': 'Unattributed'}},
+    by_vendor: [{key: 'GitHub', label: 'GitHub', amount: 84000}, {key: 'Figma', label: 'Figma', amount: 42000}, {key: 'Notion', label: 'Notion', amount: 32000}, {key: ' unattributed', label: 'No vendor', amount: 5000}, {key: 'unattributed', label: 'Unattributed', amount: 2000}, {key: 'other', label: 'Other', amount: 3000}, {key: ' other', label: 'Other · 4', amount: 21000}],
+    by_team: [{key: 'eng', label: 'Engineering', amount: 120000}, {key: 'mkt', label: 'Marketing', amount: 50000}, {key: ' unattributed', label: 'Unattributed', amount: 9000}],
     by_teammate: [{key: 'bot:eng-lead', label: 'Engineering Lead', amount: 64000}, {key: 'bot:writer', label: 'Writer', amount: 30000}, {key: 'human:cara', label: 'Cara Lee', amount: 22000}],
     entries: [{line_id: 'l1', entry_id: 'e1', date: '2026-10-28', account_id: id, amount: 21000, vendor: 'GitHub', description: 'GitHub Team', memo: '', source: 'feed', tags: {teammate: 'bot:eng-lead'}},
       {line_id: 'l2', entry_id: 'e2', date: '2026-10-12', account_id: id, amount: 42000, vendor: 'Figma', description: 'Figma seats', memo: '', source: 'feed', tags: {team: 'mkt'}}], more: false};
@@ -198,7 +207,10 @@ const BILLS = [
   doc('bill', 'bill-5', 'GH-77', {id: 'v-github', name: 'GitHub'}, 'open', 21000, '2026-10-20', {
     payment: {id: null, status: 'denied', amount: 21000, on: '2026-10-15', error: 'declined by human:ana'}}),
   // Scheduled for a later day, no payment yet: it can move to another day.
-  doc('bill', 'bill-6', 'NW-9', {id: 'v-northwind', name: 'Northwind Design'}, 'scheduled', 40000, '2026-12-20', {pay_on: '2099-12-18'})];
+  doc('bill', 'bill-6', 'NW-9', {id: 'v-northwind', name: 'Northwind Design'}, 'scheduled', 40000, '2026-12-20', {pay_on: '2099-12-18'}),
+  // Paid: listed under Recently paid with its line, team, day and who paid it.
+  doc('bill', 'bill-7', 'AWS-10', {id: 'v-aws', name: 'AWS'}, 'paid', 391208, '2026-10-27', {account: {id: 'a-5100', code: '5100', name: 'Hosting'},
+    split: false, team: 'eng', paid_on: '2026-10-27', paid_by: 'human:ana'})];
 const INVOICES = [
   doc('invoice', 'inv-1', '#1047', {id: 'c-bright', name: 'Brightline Studio'}, 'sent', 400000, '2026-11-14'),
   doc('invoice', 'inv-2', '#1033', {id: 'c-pine', name: 'Pine & Co'}, 'sent', 150000, '2026-09-20', {aging: '31_60', days_late: 41}),
@@ -218,8 +230,8 @@ const CONTACTS = [{id: 'v-figma', name: 'Figma', kind: 'vendor'}, {id: 'v-northw
   .map(c => ({...c, emails: [], default_account: null, is_1099: false, has_tax_id: false, tax_id_last4: null, recipient_id: null, active: true, owed: {}}));
 const listDocs = (rows, url) => {
   const status = url.searchParams.get('status') || '', q = (url.searchParams.get('q') || '').toLowerCase();
-  const open = ['draft', 'open', 'scheduled', 'sent', 'partial'];
-  return rows.filter(r => (!status || (status === 'unpaid' ? open.includes(r.status) : r.status === status))
+  const open = ['draft', 'open', 'scheduled', 'sent', 'partial'], late = url.searchParams.get('late') === 'true';
+  return rows.filter(r => (!status || (status === 'unpaid' ? open.includes(r.status) : r.status === status)) && (!late || (r.aging && r.aging !== 'current'))
     && (!q || (r.vendor || r.customer).name.toLowerCase().includes(q) || r.number.toLowerCase().includes(q)));
 };
 
@@ -431,7 +443,21 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('a[href$="/line/a-6100"]').click();
       await page.locator('[data-fin-key="GitHub"]').waitFor();
       assert.deepEqual(await page.locator('#fin-line thead th').allInnerTexts().then(t => t.slice(0, 2)), ['VENDOR', 'TEAM'].map(s => s), tag + ': vendor rows');
-      assert.equal(await page.locator('#fin-line tbody tr').count(), 5, tag + ': one row per vendor, No vendor and Other, no totals row');
+      assert.equal(await page.locator('#fin-line tbody tr').count(), 7, tag + ': one row per vendor, No vendor and Other, no totals row');
+      const projSum = async () => (await page.locator('#fin-line tbody td.fin-p').allInnerTexts()).reduce((n, t) => n + (Number(t.replace(/[^\d.-]/g, '')) || 0), 0);
+      assert.equal(await projSum(), 3100, tag + ': the projection column adds up to the line\'s (a projection-only vendor in the capped Other)');
+      assert.equal(await page.locator('[data-fin-key="other"] td.fin-p').innerText().then(t => Number(t.replace(/[^\d.-]/g, ''))), 100,
+        tag + ': a vendor named Other is an ordinary row with its own projection, not the folded one');
+      await page.locator('[data-fin-by]').selectOption('team');
+      await page.locator('[data-fin-key="content"]').waitFor();
+      assert.match(await page.locator('[data-fin-key="content"]').innerText(), /^Content\s/, tag + ': a team with only a projection gets its own row');
+      assert.equal(await projSum(), 3100, tag + ': by team too');
+      await page.locator('[data-fin-by]').selectOption('teammate');
+      await page.locator('[data-fin-key=" unattributed"]').waitFor();
+      assert.match(await page.locator('[data-fin-key=" unattributed"]').innerText(), /^Unattributed\s/, tag + ': Unattributed by name');
+      assert.equal(await projSum(), 3100, tag + ': by teammate too');
+      await page.locator('[data-fin-by]').selectOption('vendor');
+      await page.locator('[data-fin-key="GitHub"]').waitFor();
       assert.equal(await page.locator('input[data-fin-vb]').count(), 0, tag + ': this month\'s vendor budgets are read only');
       const next = cols[future].start.slice(0, 7);
       await page.locator('[data-fin-month]').fill(next);
@@ -442,7 +468,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(actions(writes).at(-1), {kind: 'budget_update', payload: {budget_id: 'b-github', amount: 95000, effective_from: next + '-01'}},
         tag + ': a vendor budget changes from the month shown');
       assert.equal(await page.locator('input[data-fin-vb="Figma"]').count(), 0, tag + ': a quarterly vendor budget is not edited as a month');
-      assert.equal(await page.locator('input[data-fin-vb="unattributed"], input[data-fin-vb="other"]').count(), 0, tag + ': No vendor and Other take no budget');
+      assert.equal(await page.locator('input[data-fin-vb=" unattributed"], input[data-fin-vb=" other"]').count(), 0, tag + ': No vendor and Other take no budget');
+      assert.equal(await page.locator('input[data-fin-vb="unattributed"], input[data-fin-vb="other"]').count(), 2, tag + ': vendors named Unattributed and Other do');
       assert.match(await page.locator('[data-fin-key="Figma"]').innerText(), /\b1,350 \/ qtr/, tag + ': it says its period');
       await page.locator('input[data-fin-vb="Notion"]').fill('400');
       await page.locator('input[data-fin-vb="Notion"]').press('Enter');
@@ -471,8 +498,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await go(page, '#/finance/pnl?view=expenses', '.fin-pl');
       await page.locator('.fin-tm').waitFor();
       await shot(page, 'pnl-expenses-desktop');
-      await page.locator('[data-fin-filter]').click();
-      await page.locator('[data-fin-pick="team:eng"]').check();
+      assert.equal(await page.locator('[data-fin-filter]').isVisible(), false, tag + ': on a desktop the picker is a column, not a popover');
+      await page.locator('#fin-tree-col [data-fin-pick="team:eng"]').check();
       await page.waitForFunction(() => /team=eng/.test(JSON.stringify(FIN.pnl?.data ? 1 : 0)) || document.querySelector('.fin-chip'));
       assert.match(await page.locator('#fin-filters .fin-chip').innerText(), /Engineering/, tag + ': the filter chip');
       await page.keyboard.press('Escape');
@@ -495,9 +522,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.ok(reads.some(r => r.startsWith('/api/v2/finance/lines/a-6100?') && r.includes('teams=eng')), tag + ': the rail reads the line filtered');
       assert.equal(await page.locator('td[data-fin-budget="a-6300"]').count(), 0, tag + ': no editor on a cell summing two team budgets');
       assert.equal(await page.locator('td[data-fin-budget="a-5100"]').count(), 0, tag + ': no editor where the team has no budget');
-      await page.locator('[data-fin-filter]').click();
-      await page.locator('[data-fin-pick="mate:bot:writer"]').check();
-      await page.locator('[data-fin-pick="none:"]').check();
+      await page.locator('#fin-tree-col [data-fin-pick="mate:bot:writer"]').check();
+      await page.locator('#fin-tree-col [data-fin-pick="none:"]').check();
       await page.keyboard.press('Escape');
       await page.locator('[data-fin-seg="who"] button[data-v="bots"]').click();
       await page.waitForFunction(() => FIN.pnl?.data?.filter?.who === 'bots');
@@ -575,6 +601,14 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       const cat = '#fin-rail [data-fin-cat]', save = cat + ' [data-fin-cat-save]';
       await page.locator(cat + ' select[name="account"] option[value="a-6100"]').waitFor({state: 'attached'});
       await shot(page, 'transactions-desktop');
+      // The row's own line picker: a dry run, then categorize to the new line.
+      const n0 = writes.length;
+      assert.equal(await page.locator('select[data-fin-tx-line="feed:f4"]').count(), 0, tag + ': a row split by tags on one line has no row picker');
+      await page.locator('select[data-fin-tx-line="feed:f1"]').selectOption('a-5100');
+      await settled(() => actions(writes.slice(n0)).length >= 2);
+      assert.deepEqual(actions(writes.slice(n0)).map(a => [a.kind, a.payload.feed_id, a.payload.account_id, !!a.dry_run]),
+        [['categorize', 'f1', 'a-5100', true], ['categorize', 'f1', 'a-5100', false]], tag + ': a line picked in the row categorizes it');
+      await page.waitForFunction(() => !FIN.tx.busy && document.querySelector('#fin-rail [data-fin-cat] select[name="account"]'));
       assert.equal(await page.locator('#fin-rail form').count(), 1, tag + ': one form on a posted row');
       assert.equal(await page.locator(cat + ' select[name="account"]').inputValue(), 'a-6100', tag + ': a posted row starts on its line');
       assert.equal(await page.locator(save).isDisabled(), true, tag + ': nothing changed, nothing to save');
@@ -602,7 +636,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.ok(!reads.some(r => r.startsWith('/api/v2/finance/feed/f1/')), tag + ': a posted row asks for no match');
       assert.equal(await page.locator('#fin-tx-match').innerHTML(), '', tag + ': no Match section on a posted row');
       // A new row: its expected payments, matched once the checked ones are one contact's and add up to the row.
-      await page.locator('[data-fin-tx="feed:f2"]').click();
+      await page.locator('[data-fin-tx="feed:f2"] td').first().click();
       await page.locator('#fin-rail .fin-match').first().waitFor();
       assert.deepEqual((await page.locator('#fin-rail .fin-match').allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim()),
         ['Figma FG-1 $60 Oct 26', 'Figma FG-2 $39 Oct 27', 'Northwind Design #118 $99 Oct 27'], tag + ': the expected payments');
@@ -621,7 +655,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(actions(writes).slice(-2), [{kind: 'feed_match', payload: {feed_id: 'f2', settlement_ids: ['s-a', 's-b']}, dry_run: true},
         {kind: 'feed_match', payload: {feed_id: 'f2', settlement_ids: ['s-a', 's-b']}}], tag + ': a dry run, then feed_match');
       // A row a rule split: Mixed where its lines differ; the same line changes only the field set.
-      await page.locator('[data-fin-tx="feed:f4"]').click();
+      await page.locator('[data-fin-tx="feed:f4"] td').first().click();
       assert.equal(await page.locator('#fin-rail select[name="team"]').inputValue(), '*', tag + ': a split row\'s differing team shows Mixed');
       await page.locator('#fin-rail input[name="project"]').fill('Launch');
       n = writes.length;
@@ -636,7 +670,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {lines: [{line_id: 'l5', tags: {teammate: 'bot:eng-lead'}}, {line_id: 'l6', tags: {}}], mode: 'replace'}},
         tag + ': on a mixed split, — clears the team on every line');
       // A new bank row: no line yet; Save waits for one.
-      await page.locator('[data-fin-tx="feed:f2"]').click();
+      await page.locator('[data-fin-tx="feed:f2"] td').first().click();
       assert.equal(await page.locator(cat + ' select[name="account"]').inputValue(), '', tag + ': a new row has no line');
       assert.equal(await page.locator(cat + ' select[name="teammate"]').count(), 0, tag + ': a new row has no tag fields');
       assert.equal(await page.locator(save).isDisabled(), true, tag + ': Save waits for a line');
@@ -690,26 +724,26 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       n = writes.length;
       await page.locator(save).click();
       await settled(() => writes.length > n);
-      await page.locator('[data-fin-tx="feed:f1"]').click();
+      await page.locator('[data-fin-tx="feed:f1"] td').first().click();
       await page.locator(cat + ' select[name="team"]').selectOption('mkt');
       release(); hub.hold = null;
       await settled(() => actions(writes.slice(n)).length >= 2);
       await page.waitForFunction(() => !FIN.tx.busy && FIN.tx.sel === 'feed:f1');
       assert.equal(await page.locator(cat + ' select[name="team"]').inputValue(), 'mkt', tag + ': row B keeps its picks when row A saves');
       // A transfer between our own accounts has no line to pick.
-      await page.locator('[data-fin-tx="feed:f7"]').click();
+      await page.locator('[data-fin-tx="feed:f7"] td').first().click();
       await page.locator('#fin-rail .fin-rail-title').waitFor();
       assert.equal(await page.locator('#fin-rail form').count(), 0, tag + ': no line picker on a transfer');
       // No chart read, no form.
       hub.noChart = true;
       await page.evaluate(() => { FIN.tx.chart = undefined; });
-      await page.locator('[data-fin-tx="feed:f2"]').click();
+      await page.locator('[data-fin-tx="feed:f2"] td').first().click();
       await page.waitForFunction(() => FIN.tx.chart === false && FIN.tx.sel === 'feed:f2');
       assert.equal(await page.locator(cat).isHidden(), true, tag + ': no form when the chart read fails');
       hub.noChart = false;
       await page.evaluate(() => { FIN.tx.chart = undefined; });
       // A reconciled row keeps its line, read only; its tags still change.
-      await page.locator('[data-fin-tx="feed:f5"]').click();
+      await page.locator('[data-fin-tx="feed:f5"] td').first().click();
       await page.locator('#fin-rail [data-fin-tag]').waitFor();
       assert.equal(await page.locator(cat).count(), 0, tag + ': no line picker on a reconciled row');
       assert.match(await page.locator('#fin-rail').innerText(), /Hosting\s+410\.00/, tag + ': its line, read only');
@@ -757,6 +791,14 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
       assert.deepEqual(actions(writes).at(-1), {kind: 'connection_disconnect', payload: {connection_id: 'c1'}}, tag + ': Disconnect sends connection_disconnect');
       await go(page, '#/finance/access', READY.access);
+      // The owner first, then teams in org chart order, those on no team, then the helpers; the rail opens on the owner.
+      assert.deepEqual(await page.locator('.fin-acc-t tbody tr').evaluateAll(rs => rs.map(r => r.dataset.finMate || '# ' + r.innerText.trim())),
+        ['human:ana', '# Engineering', 'human:cara', '# Platform', 'bot:eng-lead', 'bot:builder', '# Web', '# Marketing', 'bot:mkt-lead', '# Content', 'bot:writer', '# Helpers', 'bot:bookkeeper'],
+        tag + ': the Access order');
+      await page.waitForFunction(() => FIN_ACC.sel === 'human:ana' && document.querySelector('#fin-rail h2'));
+      assert.equal(await page.locator('#fin-rail [data-fin-grant]').count(), 0, tag + ': nobody grants to themselves');
+      assert.equal(await page.locator('tr[data-fin-mate="human:cara"] .fin-s.mgr').count(), 1, tag + ': a manager sees team expenses');
+      assert.equal(await page.locator('#fin-private .fin-chip').count(), 2, tag + ': payroll by person is private by default, beside the private lines');
       await page.locator('[data-fin-mate="bot:writer"]').click();
       await page.locator('#fin-rail [data-fin-grant]').waitFor();
       assert.equal(await page.locator('#fin-rail .fin-rail-title .muted').count(), 0, tag + ': no subtitle under the name');
@@ -782,15 +824,21 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
     // (one the rules send for approval names the approver first); the Balance sheet's "+ Add" posts a journal entry.
     {
       const tag = 'payables';
-      const {page, errors, writes} = await open(browser, {hash: '#/finance/payables'});
+      const {page, errors, writes, reads} = await open(browser, {hash: '#/finance/payables'});
       const today = await page.evaluate(() => finToday());
-      const heads = async () => (await page.locator('.fin-doc-t thead th').allInnerTexts()).map(t => t.toUpperCase());
+      const heads = async () => (await page.locator('.fin-doc-t').first().locator('thead th').allInnerTexts()).map(t => t.toUpperCase());
       await page.locator(READY.payables).waitFor();
-      assert.deepEqual(await heads(), ['VENDOR', 'BILL', 'DUE', 'AGING', 'AMOUNT', 'STATUS', 'PAYS'], tag + ': the bill columns');
-      assert.equal(await page.locator('.fin-doc-t tbody tr').count(), BILLS.length, tag + ': one row per bill, no totals row');
-      const statusOf = async id => (await page.locator(`tr[data-fin-doc="${id}"] td:nth-child(6)`).innerText()).replace(/\s+/g, ' ').trim();
-      assert.equal(await statusOf('bill-3'), 'Approve in Mercury', tag + ': a bill paying now shows its payment\'s state');
-      assert.equal(await statusOf('bill-4'), 'Open Pay cancelled', tag + ': a rejected payment shows beside Open');
+      assert.deepEqual(await heads(), ['VENDOR', 'BILL', 'DUE', 'AMOUNT', 'ACCOUNT', 'TEAM', 'STATUS', 'CAME IN'], tag + ': the bill columns');
+      const unpaid = BILLS.filter(r => r.status !== 'paid');
+      assert.equal(await page.locator('.fin-doc-t').first().locator('tbody tr').count(), unpaid.length, tag + ': one row per open bill, no totals row');
+      await page.locator('tr[data-fin-doc="bill-7"]').waitFor();
+      assert.deepEqual((await page.locator('tr[data-fin-doc="bill-7"] td').allInnerTexts()).map(t => t.trim()), ['AWS', 'Oct 27', '3,912.08', 'Hosting', 'Engineering', await page.evaluate(() => finWho('human:ana'))],
+        tag + ': Recently paid: vendor, day, amount, line, team, who');
+      assert.ok(reads.some(r => r.startsWith('/api/v2/finance/bills?') && r.includes('status=paid') && r.includes('order=paid_on') && r.includes('limit=5')),
+        tag + ': Recently paid asks for the last five paid, by payment date');
+      const statusOf = async id => (await page.locator(`tr[data-fin-doc="${id}"] td:nth-child(7)`).innerText()).replace(/\s+/g, ' ').trim();
+      assert.equal(await statusOf('bill-3'), 'Approve in Mercury pays Nov 11', tag + ': a bill paying now shows its payment\'s state and day');
+      assert.equal(await statusOf('bill-4'), 'Open Pay cancelled 1–30 late', tag + ': a rejected payment shows beside Open, with its aging');
       assert.equal(await statusOf('bill-5'), 'Open Pay denied', tag + ': a declined approval shows beside Open');
       assert.ok(!(await page.locator('#fin-body').innerText()).includes('5,130'), tag + ': the open total is not drawn');
       assert.match(await page.locator('[data-fin-email-set]').innerText(), /bills@acme\.example$/, tag + ': the owner\'s bills address control');
@@ -893,8 +941,13 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.waitForFunction(() => FIN.doc.sel === 'bill-2' && document.querySelector('tr.fin-on[data-fin-doc="bill-2"]'));
       // Receivables.
       await go(page, '#/finance/receivables', READY.receivables);
-      assert.deepEqual(await heads(), ['CUSTOMER', 'INVOICE', 'DUE', 'AGING', 'AMOUNT', 'STATUS'], tag + ': the invoice columns');
+      assert.deepEqual(await heads(), ['CUSTOMER', 'INVOICE', 'SENT', 'DUE', 'AMOUNT', 'STATUS'], tag + ': the invoice columns');
       assert.equal(await page.locator('.fin-doc-t tbody tr').count(), INVOICES.length, tag + ': one row per invoice, no totals row');
+      await page.locator('[data-fin-seg="status"] button[data-v="late"]').click();
+      await page.waitForFunction(() => document.querySelectorAll('.fin-doc-t tbody tr').length === 1);
+      assert.ok(reads.some(r => r.startsWith('/api/v2/finance/invoices?') && r.includes('status=unpaid') && r.includes('late=true')), tag + ': Late reads open invoices past due');
+      await page.locator('[data-fin-seg="status"] button[data-v="unpaid"]').click();
+      await page.waitForFunction(n => document.querySelectorAll('.fin-doc-t tbody tr').length === n, INVOICES.length);
       assert.equal(await page.locator('#fin-body button, #fin-body a').filter({hasText: /remind|chase/i}).count(), 0, tag + ': no reminders');
       await page.locator('tr[data-fin-doc="inv-2"]').click();
       await page.locator('#fin-rail [data-fin-do="paid"]').click();
@@ -915,7 +968,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       // The Balance sheet's "+ Add".
       await go(page, '#/finance/balance', READY.balance);
       await page.locator('[data-fin-add]').click();
-      assert.deepEqual(await page.locator('#fin-add [role=menuitem]').allInnerTexts(), ['Mercury', 'Stripe', 'Invoice', 'Bill', 'Loan', 'Asset', 'Journal entry', 'Import history'],
+      assert.deepEqual(await page.locator('#fin-add [role=menuitem]').allInnerTexts(), ['Bank account', 'Card account', 'Payments', 'Invoice', 'Bill', 'Loan or credit line', 'Asset', 'Journal entry', 'Import history'],
         tag + ': what the owner may add');
       await shot(page, 'balance-add-desktop');
       await page.locator('[data-fin-add-item="journal"]').click();
@@ -1104,11 +1157,14 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('[data-fin-card="card-1"]').click();
       assert.equal(await page.locator('#fin-rail [data-fin-freeze]').count(), 0, tag + ': no freeze without the right');
       await go(page, '#/finance/transactions', READY.transactions);
-      await page.locator('[data-fin-tx="feed:f2"]').click();
+      await page.locator('[data-fin-tx="feed:f2"] td').first().click();
       await page.locator('#fin-rail .fin-rail-title').waitFor();
       assert.equal(await page.locator('#fin-rail [data-fin-cat], #fin-rail [data-fin-tag]').count(), 0, tag + ': no line picker without finance.book');
       await go(page, '#/finance/access', READY.access);
       assert.equal(await page.locator('[data-fin-defaults], [data-fin-viewas]').count(), 0, tag + ': no defaults or View as');
+      await page.locator('[data-fin-mate="bot:eng-lead"]').click();
+      await page.waitForFunction(() => FIN_ACC.sel === 'bot:eng-lead' && document.querySelector('#fin-rail h2'));
+      assert.equal(await page.locator('#fin-rail [data-fin-grant]').count(), 0, tag + ': no Grant more where the server would refuse');
       await page.locator('[data-fin-mate="bot:builder"]').click();
       await page.locator('#fin-rail [data-fin-grant]').waitFor();
       await page.locator('#fin-rail select[name="what"]').selectOption('pnl_lines');

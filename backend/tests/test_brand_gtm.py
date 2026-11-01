@@ -50,6 +50,17 @@ def test_draft_merges_sections_publish_versions_and_stale_revision_is_409(api):
     post(api, "brand/publish", {"note": "Nothing"}, expected=409)
 
 
+def test_brand_name_differs_from_the_company_and_leads_the_summary(api):
+    draft(api, sections={"name": "x" * 61}, expected=422)
+    draft(api, sections={"name": "Acme Clean", "positioning": BRAND["positioning"]})
+    post(api, "brand/publish", {"note": "Named"})
+    assert get(api, "brand")["published"]["body"]["name"] == "Acme Clean"
+    assert get(api, "brand/summary")["text"].startswith("Brand v1: Acme Clean. Home cleaning")
+    draft(api, sections={"name": None})
+    post(api, "brand/publish", {"note": "Unnamed"})
+    assert get(api, "brand/summary")["text"].startswith("Brand v2. Home cleaning")
+
+
 def test_bots_propose_members_read_only_published_and_admins_confirm(api):
     ops = bot(api, "ops")
     draft(api, sections={"positioning": "Acme cleans homes"})
@@ -91,6 +102,41 @@ def test_publish_emits_the_event_and_gtm_summary_names_motion_and_channels(api):
         text = B.summary_text(c, "gtm")
     assert text.startswith("GTM v1.") and "Motion: local" in text and "Homeowners, $90/month" in text
     assert "Scaling: Google Search" in text
+
+
+def test_summary_keeps_north_star_and_channels_when_a_field_is_long(api):
+    who = ("First: self-managing Airbnb owners across the US with fewer than 3 units (Thomaz, Oct 9, 2026). "
+           "Next: short-term rental owners paying a manager 20-35%. Not now: operators with 21+ units, owners who want "
+           "a tool to run the whole business.")
+    draft(api, "gtm", {"motion": {"primary": "sales_led", "secondary": "partner"}, "buyer": {"who_buys": who}})
+    post(api, "gtm/publish", {"note": "First"})
+    kpi = post(api, "kpis", {"name": "Active customers"})["kpi"]
+    post(api, f"kpis/{kpi['id']}", {"growth_role": "north_star"})
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO growth_channels (id, slug, name, stage, created_at) VALUES "
+                  "('c2','partner-referrals','Partner referrals','testing','2026-10-01')")
+    gtm = get(api, "gtm/summary")["text"]
+    assert gtm.startswith("GTM v1. Motion: sales led (then partner). Buyer: First: self-managing Airbnb owners")
+    assert "North Star: Active customers." in gtm and "Testing: Partner referrals." in gtm
+    assert len(gtm) <= B.SUMMARY_MAX
+    avoid = ["cheap", "industry-leading same-day emergency repairs", "world-class certified deep-clean specialists",
+             "guaranteed lowest prices in the entire country", "revolutionary AI-powered home care platform",
+             "unbeatable once-in-a-lifetime bargain deals"]
+    draft(api, sections={"words": {"avoid": [{"word": w, "level": "block" if w == "cheap" else "warn"} for w in avoid]}})
+    post(api, "brand/publish", {"note": "Words"})
+    brand = get(api, "brand/summary")["text"]
+    assert len(brand) <= B.SUMMARY_MAX
+    listed = brand.split("Avoid: ")[1].rstrip(".").split(", ")
+    # The block word leads; the words that would overflow the part are dropped, not cut.
+    assert listed[0] == "cheap" and 1 < len(listed) < len(avoid)
+    assert all(item in avoid for item in listed)
+
+
+def test_clip_keeps_abbreviations_and_whole_words():
+    assert B._clip("U.S. homeowners with 1-3 units. Next: managers.", 90, first=True) == "U.S. homeowners with 1-3 units"
+    assert B._clip("Dr. Smith and other dentists", 90, first=True) == "Dr. Smith and other dentists"
+    assert B._clip("Owners (Oct 9). Not now: big operators", 90, first=True) == "Owners (Oct 9)"
+    assert B._clip("one two three four", 12) == "one two…"
 
 
 def test_check_finds_avoided_words_wrong_names_and_never_claims_at_word_boundaries():

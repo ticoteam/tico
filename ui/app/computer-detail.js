@@ -367,6 +367,73 @@ function machineTurnsNote(machine) {
   return machine.turn_limit != null && machine.turns_at_once > machine.turn_limit
     ? `This computer runs at most ${machine.turn_limit}` : '';
 }
+// Internet sharing (backend/browser_exit.py): only the person whose computer it is turns it on and picks the bots and
+// the daily cap; an admin sees a switch that only turns it off.
+const exitBytes = n => n >= 1e9 ? `${(n / 1e9).toFixed(n >= 1e10 ? 0 : 1)} GB` : n >= 1e6 ? `${Math.round(n / 1e6)} MB` : `${Math.round((n || 0) / 1e3)} KB`;
+function machineBrowserExitHTML(machine) {
+  const x = machine.browser_exit;
+  if (!x || machine.revoked_at || !(x.may_change || x.may_turn_off || x.sharing)) return '';
+  const id = esc(machine.id);
+  const toggle = `<label class="computer-detail-check"><input type="checkbox" role="switch" class="people-switch" data-browser-exit="${id}"${x.sharing ? ' checked' : ''}${x.may_change || (x.may_turn_off && x.sharing) ? '' : ' disabled'}> Share internet with bots</label>`;
+  if (!x.sharing) return toggle;
+  const names = new Map((S.emps || []).filter(e => !e.agent && (e.status === 'active' || x.bots.includes(e.name)))
+    .map(e => [e.name, e.display_name || botDisplayName(e.name)]));
+  for (const bot of x.bots) if (!names.has(bot)) names.set(bot, botDisplayName(bot));
+  const bots = x.may_change
+    ? `<fieldset class="computer-exit-bots" data-browser-exit-bots="${id}"><legend>Bots</legend>${[...names].sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([slug, name]) => `<label><input type="checkbox" value="${esc(slug)}"${x.bots.includes(slug) ? ' checked' : ''}> ${esc(name)}</label>`).join('')}</fieldset>`
+    : `<p>${x.bots.length ? esc(x.bots.map(b => names.get(b)).join(', ')) : 'No bots'}</p>`;
+  const cap = x.may_change
+    ? `<label class="computer-detail-check">Daily cap (GB) <input type="number" class="settings-inline-select" min="0.1" max="10000" step="0.1"
+      data-browser-exit-cap="${id}" value="${esc(String(x.daily_cap_bytes / 1e9))}" aria-label="Daily cap in GB for ${esc(machine.label)}"></label>`
+    : `<p>Daily cap ${esc(exitBytes(x.daily_cap_bytes))}</p>`;
+  const used = x.used_today_bytes == null ? '' : `<details class="computer-exit-usage" data-machine-details="browser-exit-usage" data-browser-exit-usage="${id}"><summary>Today ${esc(exitBytes(x.used_today_bytes))} of ${esc(exitBytes(x.daily_cap_bytes))}</summary><div data-browser-exit-usage-rows></div></details>`;
+  return toggle + bots + cap + used;
+}
+async function machineBrowserExitUsageLoad(details) {
+  const box = details.querySelector('[data-browser-exit-usage-rows]');
+  if (!box || details.dataset.loaded) return;
+  details.dataset.loaded = '1';
+  box.innerHTML = '<p class="muted">Loading</p>';
+  try {
+    const seen = await get(`/v2/computers/${encodeURIComponent(details.dataset.browserExitUsage)}/browser-exit/usage?days=7&limit=200`, {fresh: true});
+    box.innerHTML = seen.rows.length ? `<table class="computer-exit-table"><thead><tr><th>Day</th><th>Bot</th><th>Site</th><th class="num">Data</th></tr></thead><tbody>${seen.rows
+      .map(r => `<tr><td>${esc(r.day.slice(5))}</td><td>${esc(botDisplayName(r.bot))}</td><td>${esc(r.host)}</td><td class="num tnum">${esc(exitBytes(r.bytes))}</td></tr>`).join('')}</tbody></table>`
+      : '<p class="muted">Nothing yet</p>';
+  } catch (error) { delete details.dataset.loaded; box.innerHTML = `<p class="muted">${esc(error.message)}</p>`; }
+}
+// One save for the switch, the bots and the cap: what the pop-up shows now.
+async function machineBrowserExitSave(control) {
+  const id = control.dataset.browserExit || control.closest('[data-browser-exit-bots]')?.dataset.browserExitBots || control.dataset.browserExitCap;
+  const machine = (SETTINGS_DATA.machines || []).find(row => row.id === id);
+  if (!machine?.browser_exit) return;
+  const scope = control.closest('.computer-detail-section') || document;
+  const sharing = scope.querySelector(`[data-browser-exit="${CSS.escape(id)}"]`)?.checked ?? machine.browser_exit.sharing;
+  const body = {sharing};
+  if (machine.browser_exit.may_change) {
+    const picked = scope.querySelector(`[data-browser-exit-bots="${CSS.escape(id)}"]`);
+    if (picked) body.bots = [...picked.querySelectorAll('input:checked')].map(box => box.value);
+    const cap = scope.querySelector(`[data-browser-exit-cap="${CSS.escape(id)}"]`);
+    if (cap) {
+      const gb = Number(cap.value);
+      if (!cap.checkValidity() || !(gb >= 0.1 && gb <= 10000)) { settingsFieldError(cap, 'Enter 0.1 to 10000 GB.'); return; }
+      settingsFieldClear(cap);
+      body.daily_cap_bytes = Math.round(gb * 1e9);
+    }
+  }
+  control.disabled = true;
+  try {
+    await post(`/v2/computers/${encodeURIComponent(id)}/browser-exit`, body);
+    const cap = scope.querySelector(`[data-browser-exit-cap="${CSS.escape(id)}"]`);
+    if (cap) cap.defaultValue = cap.value;           // saved: no longer a draft that holds the pop-up's redraw back
+    if (control.dataset.browserExit) toast(sharing ? 'Sharing internet with bots' : 'Stopped sharing internet');
+    await loadSettings();
+  } catch (error) {
+    toast(error.message, true);
+    if (control.type === 'checkbox') control.checked = !control.checked;
+    control.disabled = false;
+  }
+}
 function machineSettingsHTML(machine) {
   const admin = settingsIsAdmin(), manage = !machine.revoked_at && machineCanSignIn(machine);
   const turns = machine.turns_at_once == null ? '' : String(machine.turns_at_once);
@@ -400,6 +467,7 @@ function computerDetailHTML(machine) {
       ${machine.turn_summary ? `<p class="computer-detail-note" data-turn-counts>${esc(machine.turn_summary)}</p><p class="muted">A turn has up to 3 minutes to start. Waiting turns leave room for other work.</p>` : ''}
       ${section('connections', 'Connections', empty + conns.map(conn => machineConnectionHTML(machine, conn, online, manage)).join('') + machineAddHTML(machine, online, manage))}
       ${section('screen', 'Screen', machineScreenSectionHTML(machine, online))}
+      ${machineBrowserExitHTML(machine) ? section('internet', 'Internet', machineBrowserExitHTML(machine)) : ''}
       ${section('bots', 'Bots on this computer', machineBotsHTML(machine))}
       ${section('versions', 'Versions and updates', machineVersionsHTML(machine, online))}
       ${section('settings', 'Settings', machineSettingsHTML(machine))}
@@ -418,6 +486,10 @@ function computerDetailOpen(id) {
       dialog.dataset.computer = '';
       if (document.activeElement === document.body || dialog.contains(document.activeElement)) dialog.restoreOpener?.();
     };
+    // Today's sites load when someone opens them (toggle doesn't bubble, so listen while it passes down).
+    dialog.addEventListener('toggle', event => {
+      if (event.target.matches?.('[data-browser-exit-usage]') && event.target.open) void machineBrowserExitUsageLoad(event.target);
+    }, true);
     el.appendChild(dialog);
   }
   // Presence refreshes can replace the opener while this modal is open.
@@ -455,6 +527,7 @@ function computerDetailPaint(force = false) {
   // A connection that is gone keeps no draft.
   for (const node of kept) next.querySelector(computerDetailKey(node))?.replaceWith(node);
   dialog.replaceChildren(...next.childNodes);
+  dialog.querySelectorAll('details[data-browser-exit-usage][open]').forEach(node => void machineBrowserExitUsageLoad(node));
   restoreFocus();
   if (!force) dialog.querySelector('.computer-detail-body').scrollTop = scroll;
 }

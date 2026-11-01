@@ -85,6 +85,10 @@ def via_tool(client, args, **more):
         fields["visuals"] = visuals_from_args(args)
     if args.fn in ("bot keep-tasks-going", "bot turns-at-once", "computer turns-at-once") and hasattr(args, "limit"):
         fields["limit"] = args.limit  # explicit null restores the default; omission only reads
+    if args.fn == "bot browser-exit" and hasattr(args, "computer"):
+        fields["computer"] = args.computer  # explicit null is the bot's own internet; omission only reads
+    if args.fn == "computer browser-exit" and "sharing" in fields:
+        fields["sharing"] = fields["sharing"] == "on"
     fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)

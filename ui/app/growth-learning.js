@@ -1,4 +1,4 @@
-/* ui/app/growth-learning.js — Growth › Learning (#/strategy/growth/learning, growth spec §4.5): per bet, its ideas as a
+/* ui/app/growth-learning.js — Growth › Learning (#/growth/learning, growth spec §4.5): per bet, its ideas as a
    tree (each follow-up under the idea it follows, coloured by verdict) and the bet's evidence tally from
    GET /api/v2/growth/evidence; Log is every verdict, newest first.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -13,7 +13,7 @@ async function glRead(state) {
   try {
     [ideas, ev, refs] = await Promise.all([get('/v2/growth/ideas', {fresh: true}).then(r => r.ideas || []),
       get('/v2/growth/evidence', {fresh: true}).then(r => r.bets || []).catch(() => []), grRefs()]);
-  } catch (e) { if (GR === state) $('#gr-body').innerHTML = grCrumbs(GR_ROUTE, 'Growth', 'Learning') + grFail(e); return; }
+  } catch (e) { if (GR === state) $('#gr-body').innerHTML = grFail(e); return; }
   if (GR !== state) return;
   state.data = {ideas, ev, ...refs};
   glDraw(state);
@@ -57,7 +57,7 @@ function glDraw(state) {
         ${mine.length ? `<ul class="gl-tree">${mine.map(i => glNode(i, kids, d)).join('')}</ul>` : ''}</section>`;
     }).join('');
   }
-  body.innerHTML = grCrumbs(GR_ROUTE, 'Growth', 'Learning', tools) + `<div class="gl-body">${html}</div>`;
+  body.innerHTML = grTools(tools) + `<div class="gl-body">${html}</div>`;
   body.querySelector('[data-gr-seg="gl"]').onclick = ev => {
     const b = ev.target.closest('button[data-v]'); if (!b || b.dataset.v === state.view) return;
     state.view = b.dataset.v;

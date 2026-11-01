@@ -308,6 +308,10 @@ function strategyDraftPropHtml(p) {
       // One field changed: its name goes with the bet's, since the block shows a name only for two or more.
       if (changed.length) rows.push(stratPropRow(`Change ${esc(stratPropBetName(b.id))}${changed.length === 1 ? ` <span class="muted">· ${esc(changed[0].label)}</span>` : ''}`, propNowProposedHtml(changed)));
     }
+    // Ideas the proposal links to this bet (backend/strategy.py apply_proposal); a link alone is a change too.
+    const ideas = (b.ideas || []).length;
+    if (ideas) rows.push(stratPropRow(`${b.id ? esc(stratPropBetName(b.id)) : `New ${esc(one.toLowerCase())}`} <span class="muted">· Ideas</span>`,
+      `Links ${ideas} idea${ideas === 1 ? '' : 's'}`));
   }
   const lens = pl.source === 'lens' ? p.lens_name : '', tripped = pl.source === 'bet_tripped';
   const from = lens ? ` from the <b>${esc(lens)}</b> lens` : pl.source === 'briefing' ? " from this week's market briefing"
