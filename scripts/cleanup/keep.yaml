@@ -157,3 +157,28 @@ sites:
   ui/tests/meetings.cjs:
     - "const meeting = (id, title, source, hours, extra = {}) => ({id, title, source, kind: 'meeting', status: 'done', started: ago(hours),"
     - "created: ago(hours), duration_ms: 1800000, participants: [{name: 'Ana', email: 'ana@acme.example'}, {name: 'Ben'}, {name: 'Cara'}],"
+# broad: {wave: {old: new}}: a per-table name that is a row's field wherever it is a key, not only in a function whose SQL
+# names its table. Not in a function touching another table that keeps the name, and not a request's or a tool's input.
+broad:
+  "2s":
+    due: due_at
+  "3":
+    owner: owner_id
+    requester: requester_id
+    from_actor: sender_id
+    to_actor: recipient_id
+    owner_actor: owner_id
+    operator: owner_id
+    closed_by: closed_by_id
+    status_by: status_by_id
+    snoozed_by: snoozed_by_id
+    checkpoint_by: checkpoint_by_id
+    answered_by: answered_by_id
+    archived_by: archived_by_id
+    last_read_by: last_read_by_id
+    why_by: why_by_id
+    recorded_by: recorded_by_id
+    uploaded_by: uploaded_by_id
+    replaced_by: replaced_by_id
+    dept: department
+    grp: group_id

@@ -38,18 +38,18 @@ SQL_UNSAFE = {"to", "when", "values", "order", "group", "limit", "end", "start",
 
 # M2 results that need a different name: (table, old) -> (new, why). CHECK marks a name the owner should confirm.
 OVERRIDES = {
-    ("mail_messages", "to_json"): ("to_addresses", "CHECK `to` is an SQLite keyword"),
-    ("fin_rules", "when_json"): ("condition", "CHECK `when` is an SQLite keyword"),
-    ("rules", "when_json"): ("condition", "CHECK `when` is an SQLite keyword"),
-    ("attempt_load_snapshots", "start_json"): ("at_start", "CHECK `start` reads as SQL"),
-    ("attempt_load_snapshots", "end_json"): ("at_end", "CHECK `end` is an SQLite keyword"),
-    ("org_rules", "with_json"): ("with_scope", "CHECK `with` is an SQLite keyword"),
+    ("mail_messages", "to_json"): ("to_addresses", "`to` is an SQLite keyword"),
+    ("fin_rules", "when_json"): ("condition", "`when` is an SQLite keyword"),
+    ("rules", "when_json"): ("condition", "`when` is an SQLite keyword"),
+    ("attempt_load_snapshots", "start_json"): ("at_start", "`start` reads as SQL"),
+    ("attempt_load_snapshots", "end_json"): ("at_end", "`end` is an SQLite keyword"),
+    ("org_rules", "with_json"): ("with_scope", "`with` is an SQLite keyword"),
 }
-# M2 results that are legal but worth a second look.
+# M2 results worth a note.
 M2_NOTES = {
-    ("automation_runs", "state_json"): "CHECK a JSON blob named `state` (status/state rule reserves state for lifecycle)",
-    ("task_trash", "rows_json"): "CHECK `rows` is a window-frame keyword (parses as a column)",
-    ("webhooks", "filter_json"): "CHECK `filter` is a window keyword (parses as a column)",
+    ("automation_runs", "state_json"): "wave 3 renames it saved_state (FOLLOW_UPS)",
+    ("task_trash", "rows_json"): "`rows` is a window-frame keyword (parses as a column)",
+    ("webhooks", "filter_json"): "`filter` is a window keyword (parses as a column)",
 }
 
 # M3, uniform: every table with the column renames it the same way. `scope` "global" means the codemod renames the
@@ -66,12 +66,12 @@ M3_UNIFORM = {
     "definition_updated": ("definition_updated_at", "global", ""),
     "next_due": ("next_due_at", "scoped", "also a computed field of automation and schedule views"),
     "due": ("due_at", "scoped", "tasks, deferrals, task_reminders; also a trigger type and finance documents' field"),
-    "first_due": ("first_due_at", "scoped", "CHECK rule_due_dates.first_due holds a date; also a due trigger's JSON key"),
+    "first_due": ("first_due_on", "scoped", "a date, not a time; a due trigger's JSON key stays `first_due`"),
     "last_used": ("last_used_at", "global", ""),
     "last_fired": ("last_fired_at", "global", ""),
     "last_checked": ("last_checked_at", "global", ""),
     "last_failed": ("last_failed_at", "global", ""),
-    "last_success": ("last_succeeded_at", "global", "CHECK"),
+    "last_success": ("last_succeeded_at", "global", ""),
     "last_sync": ("last_synced_at", "global", "REAL epoch seconds"),
     "last_routed": ("last_routed_at", "global", ""),
     "last_run": ("last_run_at", "scoped", "also an automation answer's last run object (automations.py, ui)"),
@@ -119,32 +119,32 @@ M3_PER_TABLE = {
         "goal_checkins", "support_access_log", "flight_requests", "flight_slow", "flight_process", "flight_sql",
         "flight_db", "flight_events", "runner_load_samples", "perf_points", "perf_usage")},
     ("kpi_readings", "ts"): ("measured_at", "the reading's time (cleanup-spec)"),
-    ("kpi_definitions", "ts"): ("created_at", "CHECK when this definition version was written"),
+    ("kpi_definitions", "ts"): ("created_at", "when this definition version was written"),
     **{(t, "at"): ("created_at", "row time") for t in (
         "audit_log", "automation_effects", "automation_holds", "automation_turn_answers", "automation_versions",
         "changes", "google_signin_refusals", "market_turn_sources", "strategy_events", "webhook_attempts")},
-    ("credential_uses", "at"): ("used_at", "CHECK newest use, not row creation"),
-    ("mail_reads", "at"): ("read_at", "CHECK"),
-    ("milestones", "at"): ("reached_at", "CHECK"),
-    ("redesign_migrated", "at"): ("migrated_at", "CHECK"),
-    ("redesign_migration_accepts", "at"): ("accepted_at", "CHECK"),
-    ("rule_due_status", "at"): ("satisfied_at", "CHECK"),
-    ("rule_task_runs", "at"): ("ran_at", "CHECK"),
-    ("task_rules", "at"): ("applied_at", "CHECK task_rules also has created/updated"),
-    ("bot_status", "since"): ("since_at", "CHECK current state's start; maybe changed_at"),
-    ("bot_status_history", "since"): ("started_at", "CHECK"),
-    ("bot_status_history", "until"): ("ended_at", "CHECK"),
-    ("automation_guard_holds", "since"): ("held_at", "CHECK"),
-    ("invariant_state", "since"): ("firing_since_at", "CHECK"),
-    ("feed_cursors", "since"): ("since_at", "CHECK"),
-    ("market_edges", "since"): ("valid_from", "CHECK edge validity, may be a date"),
-    ("market_edges", "until"): ("valid_until", "CHECK edge validity, may be a date"),
-    ("bot_memory_seen", "seen"): ("seen_at", "CHECK"),
-    ("bookkeeper_seen", "seen"): ("seen_at", "CHECK"),
-    ("task_manager_seen", "seen"): ("seen_at", "CHECK"),
-    ("google_mail_holders", "seen"): ("seen_at", "CHECK REAL epoch"),
-    ("perf_overloads", "last"): ("last_seen_at", "CHECK INTEGER epoch"),
-    ("feed_walks", "next"): ("next_walk_at", "CHECK"),
+    ("credential_uses", "at"): ("used_at", "newest use, not row creation"),
+    ("mail_reads", "at"): ("read_at", ""),
+    ("milestones", "at"): ("reached_at", ""),
+    ("redesign_migrated", "at"): ("migrated_at", ""),
+    ("redesign_migration_accepts", "at"): ("accepted_at", ""),
+    ("rule_due_status", "at"): ("satisfied_at", ""),
+    ("rule_task_runs", "at"): ("ran_at", ""),
+    ("task_rules", "at"): ("daily_at", "a daily rule's time of day (HH:MM), not a timestamp"),
+    ("bot_status", "since"): ("changed_at", "when the current state began"),
+    ("bot_status_history", "since"): ("started_at", ""),
+    ("bot_status_history", "until"): ("ended_at", ""),
+    ("automation_guard_holds", "since"): ("held_at", ""),
+    ("invariant_state", "since"): ("started_firing_at", ""),
+    ("feed_cursors", "since"): ("cursor_at", ""),
+    ("market_edges", "since"): ("valid_from_on", "a date (market._day keeps the first ten characters)"),
+    ("market_edges", "until"): ("valid_until_on", "a date (market._day keeps the first ten characters)"),
+    ("bot_memory_seen", "seen"): ("seen_at", ""),
+    ("bookkeeper_seen", "seen"): ("seen_at", ""),
+    ("task_manager_seen", "seen"): ("seen_at", ""),
+    ("google_mail_holders", "seen"): ("seen_at", "REAL epoch seconds"),
+    ("perf_overloads", "last"): ("last_seen_at", "INTEGER epoch seconds"),
+    ("feed_walks", "next"): ("next_walk_at", ""),
 }
 # Left as they are (not bare, or not times): *_since, *_until (snoozed_until, lease_until, blocked_since, ...),
 # dates (*_date, day, due_on), Slack message ids (slack_events.ts, thread_ts, reply_ts, slack_ts, last_ts), version
@@ -156,7 +156,9 @@ STABLE = ("tasks", "messages", "conversations", "bots", "humans", "principals", 
           "approvals", "cards", "docs", "task_types", "task_steps", "runners")
 ACTOR_NAMES = {"owner": "owner_id", "requester": "requester_id", "bot": "bot_id", "actor": "actor_id"}
 NOT_ACTOR_BY = {("tasks", "carried_by"): "the attempt id that carried the task, not an actor"}
-WAVE3_NOTES = {("pages", "replaced_by"): "CHECK holds the replacing page's file id, not an actor"}
+WAVE3_NOTES = {("pages", "replaced_by"): "holds the replacing page's file id, not an actor"}
+# Later renames of a column an applied wave already renamed: (table, name now) -> (new, wave, why).
+FOLLOW_UPS = {("automation_runs", "state"): ("saved_state", "3", "the run's saved engine state (JSON); `state` is kept for lifecycle")}
 WAVE3_SPECIAL = {
     ("messages", "from_actor"): "sender_id",
     ("messages", "to_actor"): "recipient_id",
@@ -259,6 +261,10 @@ def build(tables, virtual):
     for table, cols in sorted(tables.items()):
         if "dept" in cols:
             add("3", table, "dept", "department")
+    for (table, old), (new, wave, note) in FOLLOW_UPS.items():
+        columns[(table, old)] = new
+        notes[(table, old)] = note
+        waves[wave].append((table, old))
     return columns, notes, waves, collisions
 
 
@@ -371,10 +377,10 @@ def main():
     args = parser.parse_args()
     global APPLIED_WAVES
     if args.applied is not None:
-        APPLIED_WAVES = tuple(int(w) for w in args.applied.split(",") if w.strip())
+        APPLIED_WAVES = tuple(w.strip() for w in args.applied.split(",") if w.strip())
     elif YAML_OUT.exists():
         found = re.search(r"^applied_waves: \[(.*)\]$", YAML_OUT.read_text(), re.M)
-        APPLIED_WAVES = tuple(int(w) for w in found.group(1).split(",") if w.strip()) if found else ()
+        APPLIED_WAVES = tuple(w.strip() for w in found.group(1).split(",") if w.strip()) if found else ()
     if args.refresh_fixture:
         sys.path.insert(0, str(ROOT))
         refresh_fixture()

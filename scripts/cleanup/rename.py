@@ -80,6 +80,7 @@ class Wave:
         self.tables = set(schema)
         self.old_names = set(self.glob) | set(self.scoped)
         self.models = None                     # class name -> renamed fields (model_classes), filled by process
+        self.broad = {}                        # old -> new: a scoped name that is a row's field wherever it is a key
 
     def sql_new(self, old, touched):
         """The new name of an unqualified column token in SQL touching `touched` (None: leave it)."""
@@ -93,6 +94,13 @@ class Wave:
         if holders and len(news) == 1 and None not in news:
             return news.pop()
         return None
+
+    def sql_settled(self, old, touched):
+        """Every touched table is known and none of those holding `old` renames it: a kept name, nothing to decide."""
+        if not touched or PLACEHOLDER in touched or any(t not in self.tables for t in touched):
+            return False
+        per_table = self.scoped.get(old, {})
+        return not any(old in self.schema.get(t, ()) and t in per_table for t in touched)
 
     def table_new(self, table, old):
         if old in self.glob:
@@ -118,6 +126,9 @@ def load(wave):
         if w == wave:
             break
     keep = yaml.safe_load((HERE / "keep.yaml").read_text()) if (HERE / "keep.yaml").exists() else {}
+    for w, names in ((keep or {}).get("broad") or {}).items():
+        if str(w) in waves:
+            waves[str(w)].broad = names
     return data, waves, keep or {}
 
 
@@ -279,8 +290,37 @@ def strip_sql_literals(text):
     return re.sub(r"'(?:[^']|'')*'", lambda m: " " * len(m.group(0)), text)
 
 
+def sql_statements(text):
+    """(start, end) of each statement in a script: `;` outside literals and comments ends one, except inside a
+    CREATE TRIGGER's BEGIN ... END."""
+    clean = re.sub(r"--[^\n]*", lambda m: " " * len(m.group(0)), strip_sql_literals(text))
+    spans, start, i = [], 0, 0
+    while True:
+        at = clean.find(";", i)
+        if at < 0:
+            break
+        if re.match(r"\s*CREATE\s+(TEMP\s+)?TRIGGER\b", clean[start:at], re.I) and \
+                re.search(r"\bBEGIN\b", clean[start:at], re.I) and not re.search(r"\bEND\s*$", clean[start:at], re.I):
+            i = at + 1
+            continue
+        spans.append((start, at + 1))
+        start = i = at + 1
+    if clean[start:].strip():
+        spans.append((start, len(text)))
+    return spans
+
+
 def sql_edits(text, wave, tables=None, aliases=None):
     """[(start, end, new, old)] for column tokens in SQL `text` (single-quoted literals and -- comments skipped)."""
+    if tables is None and ";" in text and wave.scoped:
+        spans = sql_statements(text)
+        if len(spans) > 1:
+            edits, skipped = [], []
+            for a, b in spans:
+                found, missed = sql_edits(text[a:b], wave)
+                edits += [(a + s, a + e, new, old) for s, e, new, old in found]
+                skipped += [(a + at, word) for at, word in missed]
+            return edits, skipped
     if tables is None:
         tables, aliases = sql_tables(text)
     edits, skipped = [], []
@@ -316,16 +356,20 @@ def sql_edits(text, wave, tables=None, aliases=None):
                 elif prev == ".":
                     q = re.search(r"([A-Za-z_]\w*)\.$", text[:i])
                     table = aliases.get(q.group(1), q.group(1)) if q else None
+                    if q and q.group(1) in ("excluded", "NEW", "OLD", "new", "old"):
+                        own = re.search(r"\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)", text, re.I) \
+                            if q.group(1) == "excluded" else re.search(r"\bTRIGGER\b.*?\bON\s+(\w+)", text, re.I | re.S)
+                        table = own.group(1) if own else table
                     new = wave.table_new(table, word) if table in wave.tables or word in wave.glob else None
                     if new:
                         edits.append((i, m.end(), new, word))
-                    elif word in wave.scoped:
+                    elif word in wave.scoped and table not in wave.tables:
                         skipped.append((i, word))
                 else:
                     new = wave.sql_new(word, tables)
                     if new:
                         edits.append((i, m.end(), new, word))
-                    elif word in wave.scoped:
+                    elif word in wave.scoped and not wave.sql_settled(word, tables):
                         skipped.append((i, word))
             i = m.end()
             continue
@@ -619,6 +663,30 @@ class PyFile:
                 out[id(node)] = tables
         return out
 
+    def _sql_edits_here(self, text, line):
+        """sql_edits; a fragment naming no table (`" AND ts>=?"`) takes the tables and aliases of its function."""
+        if not self.wave.scoped or sql_tables(text)[0]:
+            return sql_edits(text, self.wave)
+        inner, best = None, None
+        for node in ast.walk(self.tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.lineno <= line <= node.end_lineno:
+                if best is None or node.lineno >= best:
+                    inner, best = node, node.lineno
+        if inner is None:
+            return sql_edits(text, self.wave)
+        tables, aliases = set(), {}
+        for sub in ast.walk(inner):
+            found = None
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                found = sub.value
+            elif isinstance(sub, ast.JoinedStr):
+                found = "".join(v.value if isinstance(v, ast.Constant) else PLACEHOLDER for v in sub.values)
+            if found and is_sql(found):
+                t, a = sql_tables(found)
+                tables |= t
+                aliases.update(a)
+        return sql_edits(text, self.wave, tables=tables, aliases=aliases)
+
     def _enclosing_tables(self, node):
         cur = node
         while cur is not None:
@@ -637,7 +705,41 @@ class PyFile:
         news = {per_table.get(t) for t in holders}
         if holders and len(news) == 1 and None not in news:
             return news.pop()
+        broad = self.wave.broad.get(old)
+        if broad and not holders and not self._input_key(node):
+            return broad
         return None
+
+    # A request's, a tool's or a command's input: `owner` and `bot` there take a name or an id, so they keep the role
+    # name (the row they end up in has owner_id).
+    INPUT_RECEIVERS = {"args", "arguments", "kwargs", "params", "body", "payload", "query", "request", "inputs",
+                       "input", "form", "req", "tool_args", "fields", "patch", "changes", "update", "updates"}
+    INPUT_KEYWORDS = {"json", "body", "data", "params"}
+
+    def _input_key(self, node):
+        """Whether a key literal reads a request's input or sits in a body sent to the API."""
+        parent = self.parents.get(node)
+        target = None
+        if isinstance(parent, ast.Subscript):
+            target = parent.value
+        elif isinstance(parent, ast.Call) and isinstance(parent.func, ast.Attribute):
+            target = parent.func.value
+        if target is not None and json_doc_name(ast.unparse(target)) in self.INPUT_RECEIVERS:
+            return True
+        here = node
+        for _ in range(6):
+            up = self.parents.get(here)
+            if up is None:
+                return False
+            if isinstance(up, ast.keyword) and up.arg in self.INPUT_KEYWORDS:
+                return True
+            if isinstance(up, ast.Assign) and any(isinstance(t, ast.Name) and t.id in self.INPUT_RECEIVERS
+                                                  for t in up.targets):
+                return True
+            if isinstance(up, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return False
+            here = up
+        return False
 
     EVENT_ARGS = {"event", "action", "kind"}
 
@@ -693,7 +795,7 @@ class PyFile:
                 self.site("event-name", group["start"], sorted(hits)[0])
                 continue
             if is_sql(text) or is_fragment(text, identifiers) or is_path(text, self.wave):
-                edits, skipped = sql_edits(text, self.wave)
+                edits, skipped = self._sql_edits_here(text, line)
                 for a, b, new, old in edits:
                     sa, sb = offsets[a], offsets[b - 1]
                     if sa is None or sb is None:
@@ -1252,6 +1354,11 @@ def js_file(rel, text, wave, report, keep):
             continue
         new = wave.glob.get(value)
         ln = text.count("\n", 0, start) + 1
+        if new is None and value in wave.broad:
+            new = wave.broad[value]
+            if not (prev and prev[3] in (".", "?.")) and not rel.startswith("ui/tests/"):
+                report.site("js-scoped", rel, ln, value, line(text, start))   # the app's object keys: often a request
+                continue
         if new is None:
             if prev and prev[3] in (".", "?.") or (nxt and nxt[3] == ":"):
                 report.site("js-scoped", rel, ln, value, line(text, start))
@@ -1549,6 +1656,10 @@ def main():
             changed = process(waves[w], keep, report, write=False, only=args.only)
             left = sum(report.renamed.values())
             gating = sum(len(report.sites.get(c, [])) for c in GATING)
+            if w not in ("1", "2"):     # a per-table wave: most of these are other tables' columns of the same name
+                print(f"wave {w}: {left} sites the codemod would rename, {gating} sites it cannot decide (not gating); "
+                      "scripts/cleanup/check_sql.py checks its SQL")
+                continue
             print(f"wave {w}: {left} sites still to rename in {len(changed)} files; {gating} unresolved sites")
             for rel in changed[:30]:
                 print("  ", rel)
