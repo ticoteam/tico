@@ -21458,7 +21458,7 @@
     },
     "/api/v2/rule-holds": {
       "get": {
-        "summary": "The holds on one review task, as its reviewer or the author bot reads them: summaries, a page at a time (next_cursor)",
+        "summary": "The holds on one review task, as its reviewer, the author bot or the person it is held for reads them: summaries, a page at a time (next_cursor)",
         "operationId": "listRuleHolds",
         "parameters": [
           {
@@ -21534,7 +21534,7 @@
     },
     "/api/v2/rule-holds/{hold_id}": {
       "get": {
-        "summary": "One held output: only the author bot and the reviewer read it",
+        "summary": "One held output: the author bot, its reviewer and the person it is held for read it",
         "operationId": "getRuleHold",
         "parameters": [
           {

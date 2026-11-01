@@ -16,7 +16,8 @@ code then applies the verdict inside the write (`apply`). Nothing here calls an 
   the bot is told the rule and whom to appeal to; Escalate also files one review task for the reviewer; Warn
   delivers it with a warning line on the recipient's copy. The 3rd block of one rule by one bot in a UTC day
   escalates for the rest of that day, with one review task.
-- Holds: the payload lives only in `org_rule_holds`, read by the author bot and the reviewer alone. Send anyway
+- Holds: the payload lives only in `org_rule_holds`, read by the author bot, the reviewer, and the person the bot
+  reports up to (`represented`). That person may withdraw the hold (keep it blocked) but never release it. Send anyway
   replays the normal write once, as the bot (`REPLAY`), with a one-shot nonce and no second Decide call.
 - Fails open: checks Off, no engine, the rules budget, the day's call cap, the deadline, an error or a malformed
   answer let the output through with a `rules.unchecked` event. Events never carry the text.
@@ -665,10 +666,25 @@ def _hold(c, hold_id):
     return dict(row)
 
 
+WITHDRAW_ROLES = ("reviewer", "represented")     # the readers who may keep a hold blocked
+
+
+def represented(c, author):
+    """The person a hold is held for: the author itself when it is a person (none is held today: a person's own write
+    is not checked), else the person its author bot reports up to, the one a default review goes to. Only that first
+    person reads the bot's holds, not the rest of its chain."""
+    if H.is_human(author):
+        return author if _present(c, author) else None
+    from .report_managers import person_above
+    above = person_above(c, H.actor_id(author))
+    return above if above and _present(c, above) else None
+
+
 def _reader(who, hold, c=None, auth=None):
-    """The author bot and the reviewer read a hold; nobody else (an admin included), except that a hold with no
-    reviewer, or one no longer on the team, is the owner's and Admins' to review (with `c` and `auth` given), so no hold
-    is ever left with nobody to release it."""
+    """The author bot and the reviewer read a hold, and so does the person it is held for (`represented`), who may
+    withdraw it but not release it. Nobody else (an admin included), except that a hold with no reviewer, or one no
+    longer on the team, is the owner's and Admins' to review (with `c` and `auth` given), so no hold is ever left with
+    nobody to release it."""
     actor = who.actor
     if who.role == "bot" and actor == hold["author"] and not who.via:
         return "author"
@@ -676,6 +692,8 @@ def _reader(who, hold, c=None, auth=None):
         return None
     if actor == hold["reviewer"]:
         return "reviewer"
+    if c is not None and actor == represented(c, hold["author"]):
+        return "represented"
     if c is not None and auth is not None and auth.bot_admin(who) and \
             not (hold["reviewer"] and _present(c, hold["reviewer"])):
         return "reviewer"
@@ -708,7 +726,8 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
            "to": [cut(n) for n in _names(c, destinations)],
            "reviewer": hold["reviewer"], "reviewer_name": cut(reviewer_name), "task_id": hold["task_id"],
            "created": hold["created"], "decided_at": hold["decided_at"], "decided_by": hold["decided_by"],
-           "can_send": role == "reviewer" and hold["state"] == "held" and hold["operation"] in REPLAY}
+           "can_send": role == "reviewer" and hold["state"] == "held" and hold["operation"] in REPLAY,
+           "can_withdraw": role in WITHDRAW_ROLES and hold["state"] == "held"}
     if summary:
         out["appealed"] = bool(hold["why"])
         out["rules_count"] = len(json.loads(hold["rule_ids_json"] or "[]"))
@@ -726,16 +745,31 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
 
 
 def _reader_sql(who, c=None, auth=None):
-    """`_reader` as SQL, so a page counts only the holds this caller may read. The owner and Admins (with `c` and
-    `auth`) also read holds whose reviewer is missing or gone: those rows come back with `fallback` True, for
-    `_reader` to settle row by row."""
+    """`_reader` as SQL, so a page counts only the holds this caller may read. A person with the roster (`c`) gets
+    every row back with `fallback` True, for `_reader` to settle row by row: the holds of the bots they report up to
+    and, with `auth`, the owner's and Admins' holds whose reviewer is missing or gone. Without `c`, only their own."""
     if who.role == "bot" and not who.via:
         return "author=?", (who.actor,), False
     if H.is_human(who.actor) and who.via not in ("botops", "assistant"):
-        if c is not None and auth is not None and auth.bot_admin(who):
+        if c is not None:
             return "1", (), True
         return "reviewer=?", (who.actor,), False
     return None, (), False
+
+
+def held_for(c, who, operations):
+    """The held writes of these operations that this person reads as their reviewer or as the person it is held for,
+    oldest first, each with its `role`. The owner's and Admins' fallback is not listed: a hold with no reviewer is for
+    their review page, not a person's list."""
+    marks = ",".join("?" * len(operations))
+    rows = c.execute(f"SELECT id, author, reviewer, created FROM org_rule_holds WHERE state='held' AND operation IN "
+                     f"({marks}) ORDER BY created, id", tuple(operations)).fetchall()
+    out = []
+    for row in rows:
+        role = _reader(who, dict(row), c)
+        if role in WITHDRAW_ROLES:
+            out.append({**dict(row), "role": role})
+    return out
 
 
 def holds_for_task(c, who, task_id, cursor=None, limit=HOLD_LIST_MAX, auth=None):
@@ -799,15 +833,17 @@ def _decide(c, who, hold, state):
 
 
 def keep(c, who, hold_id, auth=None):
+    """Keep a hold blocked: the reviewer's call, or the person it is held for withdrawing their own post."""
     hold = _hold(c, hold_id)
-    if _reader(who, hold, c, auth) != "reviewer":
+    role = _reader(who, hold, c, auth)
+    if role not in WITHDRAW_ROLES:
         raise Problem("not_found", "There is no hold " + hold_id, 404)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
     _decide(c, who, hold, "kept")
     _tell_bot(c, hold["author"], f"Your held {OPERATIONS.get(hold['operation'], hold['operation'])} stays blocked "
               f"(hold {hold_id}).")
-    return view_hold(c, who, _hold(c, hold_id), "reviewer")
+    return view_hold(c, who, _hold(c, hold_id), role)
 
 
 def bot_identity(hold):
@@ -1393,5 +1429,6 @@ def install(app, store, auth, mutate):
 
 
 __all__ = ["ACTIONS", "BUDGET", "OPERATIONS", "REPLAY", "answer", "apply", "author_of", "digest", "ensure",
-           "health_findings", "held_note", "holds", "install", "on", "preflight", "replayer", "reviewer_for", "stats",
+           "health_findings", "held_for", "held_note", "holds", "install", "on", "preflight", "replayer", "reviewer_for",
+           "stats",
            "warned_text", "watched"]

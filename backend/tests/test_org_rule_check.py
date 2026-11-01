@@ -395,6 +395,22 @@ def test_keep_blocked_and_only_the_reviewer_or_author_reads_a_hold(ruled):
     post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test", expected=409)
 
 
+def test_the_person_a_bot_reports_to_reads_and_withdraws_its_held_post_but_cannot_release_it(ruled):
+    api, _ = ruled
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
+    color_rule(api, reviewer="ana")
+    held = say(api, "Our favorite color is gold")["held"]
+    view = get(api, f"rule-holds/{held['id']}", token="ben-test")          # the person ops works for reads its post
+    assert view["can_withdraw"] and not view["can_send"] and "nonce" not in view and "gold" in view["text"]
+    post(api, f"rule-holds/{held['id']}/send", {"nonce": "not-the-nonce"}, token="ben-test", expected=404)
+    get(api, f"rule-holds/{held['id']}", token="cara-test", expected=404)   # a peer does not read it
+    assert "nonce" in get(api, f"rule-holds/{held['id']}", token="ana-test")  # the reviewer still releases it
+    kept = post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")
+    assert kept["state"] == "kept" and kept["decided_by"] == "human:ben"
+    assert bodies(api, "gold") == []
+
+
 def test_an_appeal_reaches_the_reviewer_even_when_a_rule_blocks_messaging_them(ruled):
     api, judge = ruled
     color_rule(api, reviewer="ben")
