@@ -21,6 +21,8 @@ import ipaddress
 import logging
 import os
 import re
+import shutil
+import signal
 import socket
 import sys
 import tempfile
@@ -294,16 +296,23 @@ def main(argv=None):
     prepare_relay()
     directory = Path(args.data_dir or tempfile.mkdtemp(prefix="tico-demo-"))
     directory.mkdir(parents=True, exist_ok=True)
-    print("Building the Acme demo ...", flush=True)
-    with network_blocked():
-        settings = build(directory, url=args.url, public=args.public_demo)
-        if args.port != DEFAULT_PORT and not args.public_demo and not args.url:
-            settings.public_url = settings.runner_url = f"http://127.0.0.1:{args.port}"
-        browser_url = args.url.rstrip("/") if args.url else f"http://localhost:{args.port}"
-        print(f"\nTico demo is ready: open {browser_url}\n"
-              "It is fictional sample data (acme.example); bots do not run and nothing leaves this computer.\n"
-              "Press Ctrl+C to stop; everything is discarded.\n", flush=True)
-        run(settings=settings, host=host, port=args.port, log_level="warning")
+    # SIGTERM (docker stop, a supervisor) ends the demo the way Ctrl+C does, so the folder below still goes.
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))
+    try:
+        print("Building the Acme demo ...", flush=True)
+        with network_blocked():
+            settings = build(directory, url=args.url, public=args.public_demo)
+            if args.port != DEFAULT_PORT and not args.public_demo and not args.url:
+                settings.public_url = settings.runner_url = f"http://127.0.0.1:{args.port}"
+            browser_url = args.url.rstrip("/") if args.url else f"http://localhost:{args.port}"
+            print(f"\nTico demo is ready: open {browser_url}\n"
+                  "It is fictional sample data (acme.example); bots do not run and nothing leaves this computer.\n"
+                  "Press Ctrl+C to stop; everything is discarded.\n", flush=True)
+            run(settings=settings, host=host, port=args.port, log_level="warning")
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        if not args.data_dir:          # a folder the person named with --data-dir is theirs to keep
+            shutil.rmtree(directory, ignore_errors=True)
 
 
 if __name__ == "__main__":

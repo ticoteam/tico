@@ -333,8 +333,11 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
         return say("blocked", f"the checkout is on branch {branch}; switch it to main to follow releases")
     dirty = [line for line in g("status", "--porcelain", "--untracked-files=no").stdout.splitlines() if line]
     if dirty:
-        return say("blocked", f"the checkout has {len(dirty)} changed file{'s' if len(dirty) != 1 else ''}; "
-                              "commit or stash them and the runner updates itself")
+        # "XY path" lines: the status letters and the space come off; a rename keeps its "old -> new" as it is.
+        named = ", ".join(line[3:] for line in dirty[:3])
+        more = f", and {len(dirty) - 3} more" if len(dirty) > 3 else ""
+        return say("blocked", f"the checkout has {len(dirty)} changed file{'s' if len(dirty) != 1 else ''} "
+                              f"({named}{more}); commit or stash them and the runner updates itself")
     fetched = g("fetch", "--quiet", "origin", f"refs/tags/{tag}:refs/tags/{tag}", timeout=120)
     if fetched.returncode:
         return say("failed", fetched.stderr if disk_space_error(fetched.stderr) else
