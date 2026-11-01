@@ -1,0 +1,197 @@
+"""Due dates on records (plan §1a, §7.2): a day a location, a piece of equipment or a vendor or customer must be worked, the
+teammate who works it, and one occurrence per day it falls due, each completed on its own.
+
+- Calendar repeats (once, weekly, monthly, quarterly, yearly) are counted from `starts_on` by backend/rule_due.py, so a
+  month-end date clamps the way a rule's does. Nothing stores them; an occurrence with no row is open.
+- Completion-anchored repeats (every_days, every_months) keep one `next_due_on` that moves when the occurrence is
+  completed, to the completion day plus the count. A late completion shifts the chain: a 90-day service done 20 days
+  late is next due 90 days after the day it was done.
+- The pure rules come first; the SQL for the two tables comes after. Nothing here reads the clock: callers pass the day.
+"""
+import sqlite3
+import uuid
+from collections.abc import Mapping
+from datetime import date, datetime, timedelta
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from .. import rule_due as _rule_due
+from . import store as RS
+
+D: Any = _rule_due
+
+CALENDAR = ("once", "weekly", "monthly", "quarterly", "yearly")
+COMPLETION = ("every_days", "every_months")
+REPEATS = (*CALENDAR, *COMPLETION)
+SUBJECT_TYPES = ("location", "equipment", "contact")
+MAX_LEAD = 366          # days a due date opens its task before it falls due
+MAX_EVERY = 3660        # the count of a completion-anchored repeat: ten years of days, or of months
+HISTORY = 50            # the occurrences a due date's detail lists, newest first
+
+
+def local_day(moment: datetime, zone: str) -> date:
+    """The calendar day `moment` falls on in `zone`: the day a completion or a pass is counted on."""
+    return moment.astimezone(ZoneInfo(zone)).date()
+
+
+def step_after(day: date, repeats: str, count: int) -> date:
+    """The day a completion-anchored chain falls due next: `count` days or months after the day it was completed. A
+    monthly step clamps to the month's end, as a rule's does."""
+    if repeats == "every_days":
+        return day + timedelta(days=count)
+    return D.occurrence(day, "monthly", count)
+
+
+def open_days(row: Mapping[str, object], through: date, completed: set[str]) -> list[date]:
+    """The occurrences of one due date that are open and fall due by `through`, oldest first. A completion-anchored
+    chain has at most one open occurrence, on `next_due_on`; a calendar one has every occurrence not yet completed."""
+    repeats = str(row["repeats"])
+    if repeats in COMPLETION:
+        due = date.fromisoformat(str(row["next_due_on"]))
+        return [due] if due <= through and due.isoformat() not in completed else []
+    first = date.fromisoformat(str(row["starts_on"]))
+    return [d for d in D.occurrences(first, repeats, through) if d <= through and d.isoformat() not in completed]
+
+
+def next_open(row: Mapping[str, object], completed: set[str]) -> date | None:
+    """The earliest open occurrence however far off, or None when a once date is complete."""
+    repeats = str(row["repeats"])
+    if repeats in COMPLETION:
+        due = date.fromisoformat(str(row["next_due_on"]))
+        return None if due.isoformat() in completed else due
+    first = date.fromisoformat(str(row["starts_on"]))
+    for n in range(D.MAX_OCCURRENCES):
+        day = D.occurrence(first, repeats, n)
+        if day is None:
+            return None
+        if day.isoformat() not in completed:
+            return day
+    return None
+
+
+def is_occurrence(row: Mapping[str, object], day: date) -> bool:
+    """Whether `day` is one of the due date's occurrences: the chain's `next_due_on`, or a calendar day."""
+    if str(row["repeats"]) in COMPLETION:
+        return day.isoformat() == str(row["next_due_on"])
+    return bool(D.is_occurrence(date.fromisoformat(str(row["starts_on"])), str(row["repeats"]), day))
+
+
+def status(row: Mapping[str, object], next_on: date | None, today: date) -> str:
+    """What a list shows: done (a once date that is complete), overdue, due (within its lead time), or upcoming."""
+    if row["archived_at"]:
+        return "archived"
+    if next_on is None:
+        return "done"
+    if next_on < today:
+        return "overdue"
+    return "due" if next_on <= today + timedelta(days=int(row["lead_days"])) else "upcoming"
+
+
+# ---------------------------------------------------------------------------------------------------------- the rows
+def new_id() -> str:
+    return str(uuid.uuid4())
+
+
+def get(c: sqlite3.Connection, due_date_id: str) -> Any:
+    return c.execute("SELECT * FROM due_dates WHERE id=?", (due_date_id,)).fetchone()
+
+
+def occurrence(c: sqlite3.Connection, due_date_id: str, due_on: str) -> Any:
+    return c.execute("SELECT * FROM due_date_occurrences WHERE due_date_id=? AND due_on=?",
+                     (due_date_id, due_on)).fetchone()
+
+
+def completed_days(c: sqlite3.Connection, due_date_id: str) -> set[str]:
+    return {str(r[0]) for r in c.execute(
+        "SELECT due_on FROM due_date_occurrences WHERE due_date_id=? AND completed_at IS NOT NULL", (due_date_id,))}
+
+
+def latest_completed(c: sqlite3.Connection, due_date_id: str) -> Any:
+    return c.execute("SELECT * FROM due_date_occurrences WHERE due_date_id=? AND completed_at IS NOT NULL "
+                     "ORDER BY due_on DESC LIMIT 1", (due_date_id,)).fetchone()
+
+
+def history(c: sqlite3.Connection, due_date_id: str) -> list[Any]:
+    return list(c.execute("SELECT * FROM due_date_occurrences WHERE due_date_id=? ORDER BY due_on DESC LIMIT ?",
+                          (due_date_id, HISTORY)))
+
+
+def insert(c: sqlite3.Connection, row: Mapping[str, object]) -> None:
+    cols = sorted(row)
+    c.execute(f"INSERT INTO due_dates({','.join(cols)}) VALUES({','.join('?' * len(cols))})", [row[k] for k in cols])
+
+
+def update(c: sqlite3.Connection, due_date_id: str, fields: Mapping[str, object]) -> None:
+    if not fields:
+        return
+    cols = sorted(fields)
+    c.execute(f"UPDATE due_dates SET {','.join(k + '=?' for k in cols)} WHERE id=?",
+              [*(fields[k] for k in cols), due_date_id])
+
+
+def complete_occurrence(c: sqlite3.Connection, due_date_id: str, due_on: str, who: str, at: str) -> bool:
+    """Mark one occurrence complete. True when this call did it; False when it already was. The row is created if the
+    pass never opened it, and the UPDATE only lands on an open row, so two completions record one."""
+    c.execute("INSERT OR IGNORE INTO due_date_occurrences(id, due_date_id, due_on, created_at) VALUES(?,?,?,?)",
+              (new_id(), due_date_id, due_on, at))
+    done = c.execute("UPDATE due_date_occurrences SET completed_at=?, completed_by_id=? "
+                     "WHERE due_date_id=? AND due_on=? AND completed_at IS NULL", (at, who, due_date_id, due_on))
+    return done.rowcount == 1
+
+
+def reopen_occurrence(c: sqlite3.Connection, due_date_id: str, due_on: str) -> bool:
+    """Take a completion back. True when the occurrence was complete and is open again."""
+    done = c.execute("UPDATE due_date_occurrences SET completed_at=NULL, completed_by_id=NULL "
+                     "WHERE due_date_id=? AND due_on=? AND completed_at IS NOT NULL", (due_date_id, due_on))
+    return done.rowcount == 1
+
+
+def open_occurrence(c: sqlite3.Connection, due_date_id: str, due_on: str, task_id: str, at: str) -> None:
+    """Record that a task carries an open occurrence, so the next pass does not open a second one for it."""
+    c.execute("INSERT OR IGNORE INTO due_date_occurrences(id, due_date_id, due_on, created_at) VALUES(?,?,?,?)",
+              (new_id(), due_date_id, due_on, at))
+    c.execute("UPDATE due_date_occurrences SET task_id=? WHERE due_date_id=? AND due_on=?",
+              (task_id, due_date_id, due_on))
+
+
+def live(c: sqlite3.Connection) -> list[Any]:
+    """Due dates that are not archived, oldest first: the ones the daily pass walks."""
+    return list(c.execute("SELECT * FROM due_dates WHERE archived_at IS NULL ORDER BY created_at, id"))
+
+
+def page(c: sqlite3.Connection, *, q: str, archived: str, after: tuple[str, str] | None, most: int,
+         contacts: bool) -> list[Any]:
+    """Due dates by name then id, past `after`. `archived` is hide, only or all. Contact subjects are left out unless
+    the viewer sees contacts."""
+    where: list[str] = []
+    args: list[object] = []
+    if archived == "hide":
+        where.append("archived_at IS NULL")
+    elif archived == "only":
+        where.append("archived_at IS NOT NULL")
+    if q:
+        where.append("instr(lower(name), ?) > 0")
+        args.append(q.lower())
+    if not contacts:
+        where.append("subject_type <> 'contact'")
+    if after is not None:
+        where.append("(name, id) > (?, ?)")
+        args.extend(after)
+    sql = "SELECT * FROM due_dates" + (f" WHERE {' AND '.join(where)}" if where else "") + " ORDER BY name, id LIMIT ?"
+    return list(c.execute(sql, [*args, most]))
+
+
+def subject(c: sqlite3.Connection, subject_type: str, subject_id: str) -> tuple[str, bool] | None:
+    """The name of the record a due date sits on, and whether that record is active; None when there is no such record.
+    Equipment is missing until its table exists (backend/records/equipment)."""
+    if subject_type == "location":
+        row = c.execute("SELECT name, archived_at FROM locations WHERE id=?",
+                        (RS.resolve(c, "locations", subject_id),)).fetchone()
+        return (str(row[0]), row[1] is None) if row else None
+    if subject_type == "equipment":
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='equipment'").fetchone() is None:
+            return None
+        row = c.execute("SELECT name, archived_at FROM equipment WHERE id=?", (subject_id,)).fetchone()
+        return (str(row[0]), row[1] is None) if row else None
+    row = c.execute("SELECT name, active FROM fin_contacts WHERE id=?", (subject_id,)).fetchone()
+    return (str(row[0]), bool(row[1])) if row else None

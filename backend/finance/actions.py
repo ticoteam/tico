@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 from . import banking, budgeting, cards, catalog, documents, gateway_sync, gating, handlers, jobs, mirror, payments
-from . import purchasing
+from . import due_dates, purchasing
 from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
@@ -49,7 +49,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
     "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
     **documents.PLANNERS, **mirror.PLANNERS, **tax.PLANNERS, **raw_totals.PLANNERS, **catalog.PLANNERS,
-    **purchasing.PLANNERS}
+    **purchasing.PLANNERS, **due_dates.PLANNERS}
 assert set(PLANNERS) == set(K.LIVE)
 
 STATUSES = ("committed", "needs_approval", "denied", "failed", "expired", "withdrawn")

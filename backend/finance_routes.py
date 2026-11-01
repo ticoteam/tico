@@ -17,6 +17,7 @@ from pydantic import Field
 from . import company_server, hook_relay
 from .finance import actions as finance
 from .finance import books_link
+from .finance import due_dates as finance_due_dates
 from .finance import reads as finance_reads
 from .models import ID, Contract
 from .store import Problem
@@ -314,6 +315,23 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.record(c, actor, kind="location", record_id=location_id))
 
+    @app.get("/api/v2/due-dates")
+    def finance_due_date_list(request: Request, q: str = Query("", max_length=100),
+                              archived: Literal["hide", "only", "all"] = "hide",
+                              cursor: str | None = Query(None, max_length=600),
+                              limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+        """Due dates by name: what they fall on (a location, equipment, or a vendor or customer), the repeat, the next
+        day it falls due and the teammate who works it. `q` searches names, and `archived` hides the archived ones (the
+        default), shows only them, or shows both. `next_cursor` pages."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_due_dates.listing(c, actor, q=q, archived=archived, cursor=cursor, limit=limit))
+
+    @app.get("/api/v2/due-dates/{due_date_id}")
+    def finance_due_date_one(request: Request, due_date_id: ID, view_as: str | None = None):
+        """One due date with its days, newest first: each day's completion and the task that carried it."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_due_dates.due_date(c, actor, due_date_id=due_date_id))
+
     @app.get("/api/v2/items")
     def finance_items(request: Request, q: str = Query("", max_length=100),
                       archived: Literal["hide", "only", "all"] = "hide",
@@ -462,7 +480,7 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/finance/search")
     def finance_search(request: Request,
                        kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location",
-                                     "project", "po", "estimate"] | None = None,
+                                     "project", "po", "estimate", "due_date"] | None = None,
                        q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
                        vendor: str | None = Query(None, max_length=120),
                        contact_id: str | None = Query(None, max_length=80),

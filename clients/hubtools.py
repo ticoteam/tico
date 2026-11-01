@@ -6438,7 +6438,7 @@ FINANCE_MAX_CHARS = 64000        # about 16k tokens
 FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close"]
 FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
                    "ar_overdue", "uncategorized_count", "unreconciled_days"]
-FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card"]
+FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card", "due_date"]
 FINANCE_INBOX = ["uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
                  "budget_near_limit", "sync_failed", "period_ready"]
 FIN_DAY = {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"}

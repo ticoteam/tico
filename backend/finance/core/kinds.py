@@ -27,8 +27,10 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
        # purchase orders and estimates (backend/finance/purchasing.py)
        "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
-       "estimate_accept", "estimate_decline", "estimate_convert")
-LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
+       "estimate_accept", "estimate_decline", "estimate_convert",
+       # due dates on records (backend/finance/due_dates.py)
+       "due_date_create", "due_date_update", "due_date_occurrence_complete", "due_date_occurrence_reopen")
+LIVE = ("journal","categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
         # phase 1: banks, cards, payments, reconciliation and gate rules
@@ -53,7 +55,9 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         "item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
         # purchase orders and estimates
         "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
-        "estimate_accept", "estimate_decline", "estimate_convert")
+        "estimate_accept", "estimate_decline", "estimate_convert",
+        # due dates on records
+        "due_date_create", "due_date_update", "due_date_occurrence_complete", "due_date_occurrence_reopen")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
@@ -75,7 +79,9 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "project_create": R.BOOK, "project_update": R.BOOK,
          "po_create": R.AP, "po_send": R.AP, "po_approve": R.AP, "po_close": R.AP, "po_void": R.AP,
          "estimate_create": R.AR, "estimate_send": R.AR, "estimate_accept": R.AR, "estimate_decline": R.AR,
-         "estimate_convert": R.AR}
+         "estimate_convert": R.AR,
+         "due_date_create": R.RECORDS, "due_date_update": R.RECORDS, "due_date_occurrence_complete": R.RECORDS,
+         "due_date_occurrence_reopen": R.RECORDS}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
               "connection_disconnect", "connection_map")
@@ -364,6 +370,21 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "estimate_accept": (("estimate_id", "str", "a sent estimate is accepted"),),
     "estimate_decline": (("estimate_id", "str", "a sent estimate is declined"),),
     "estimate_convert": (("estimate_id", "str", "an accepted estimate becomes one invoice draft, once"),),
+    "due_date_create": (("name", "str", ""),
+                        ("subject_type", "location|equipment|contact", "the record it falls on"),
+                        ("subject_id", "str", "a location, a piece of equipment, or a vendor or customer"),
+                        ("repeats", "once|weekly|monthly|quarterly|yearly|every_days|every_months", ""),
+                        ("every_count?", "int", "every_days and every_months only: days or months between completions"),
+                        ("starts_on", "day", "the first day it falls due; a completion chain starts here"),
+                        ("lead_days?", "int", "open its task this many days before it falls due, 0 to 366"),
+                        ("assignee_id", "str", "a bot or a person who works it")),
+    "due_date_update": (("due_date_id", "str", ""), ("name?", "str", ""), ("lead_days?", "int", ""),
+                        ("assignee_id?", "str", ""),
+                        ("repeats?", "once|weekly|monthly|quarterly|yearly|every_days|every_months", ""),
+                        ("every_count?", "int", ""), ("starts_on?", "day", ""),
+                        ("next_due_on?", "day", "every_days and every_months only"), ("active?", "bool", "")),
+    "due_date_occurrence_complete": (("due_date_id", "str", ""), ("due_on?", "day", "default: the next open day")),
+    "due_date_occurrence_reopen": (("due_date_id", "str", ""), ("due_on", "day", "a completed day")),
 }
 WORDS: dict[str, str] = {
     "journal": "Post a balanced entry, or reverse one.",
@@ -426,6 +447,10 @@ WORDS: dict[str, str] = {
     "estimate_accept": "Record that the customer accepted an estimate.",
     "estimate_decline": "Record that the customer declined an estimate.",
     "estimate_convert": "Make an accepted estimate one invoice draft (once).",
+    "due_date_create": "Add a due date: a day a location, equipment or a vendor or customer must be worked, by a teammate.",
+    "due_date_update": "Change a due date's name, repeat, lead time or teammate, or archive it.",
+    "due_date_occurrence_complete": "Mark one day of a due date done; the task that carried it stays as it is.",
+    "due_date_occurrence_reopen": "Take back a completed day of a due date.",
 }
 
 

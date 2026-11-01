@@ -7333,6 +7333,190 @@
         ]
       }
     },
+    "/api/v2/due-dates": {
+      "get": {
+        "summary": "Due dates by name: what each falls on, its repeat, the next day due and its teammate; q searches names, archived hides them (default), shows only them or both; with a cursor",
+        "operationId": "listDueDates",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "hide",
+                "only",
+                "all"
+              ],
+              "type": "string",
+              "default": "hide",
+              "title": "Archived"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DueDates"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/due-dates/{due_date_id}": {
+      "get": {
+        "summary": "One due date, archived or not, with its days newest first and the task that carried each",
+        "operationId": "getDueDate",
+        "parameters": [
+          {
+            "name": "due_date_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "title": "Due Date Id"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DueDateOne"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/estimates": {
       "get": {
         "summary": "Estimates the caller sees (receivables), newest first, by status, customer and a search over number, memo and customer name, with a cursor",
@@ -11690,7 +11874,8 @@
                     "location",
                     "project",
                     "po",
-                    "estimate"
+                    "estimate",
+                    "due_date"
                   ],
                   "type": "string"
                 },
@@ -38936,6 +39121,144 @@
           "owner"
         ],
         "title": "DueAdd"
+      },
+      "DueDate": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "subject_type": {
+            "type": "string"
+          },
+          "subject_id": {
+            "type": "string"
+          },
+          "subject_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repeats": {
+            "type": "string"
+          },
+          "every_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "starts_on": {
+            "type": "string"
+          },
+          "next_due_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lead_days": {
+            "type": "integer"
+          },
+          "assignee_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "archived_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DueDay"
+            }
+          }
+        },
+        "required": [
+          "assignee_id",
+          "id",
+          "lead_days",
+          "name",
+          "repeats",
+          "starts_on",
+          "status",
+          "subject_id",
+          "subject_type"
+        ],
+        "additionalProperties": true
+      },
+      "DueDateOne": {
+        "type": "object",
+        "properties": {
+          "due_date": {
+            "$ref": "#/components/schemas/DueDate"
+          }
+        },
+        "required": [
+          "due_date"
+        ],
+        "additionalProperties": true
+      },
+      "DueDates": {
+        "type": "object",
+        "properties": {
+          "due_dates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DueDate"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "due_dates",
+          "next_cursor"
+        ],
+        "additionalProperties": true
+      },
+      "DueDay": {
+        "type": "object",
+        "properties": {
+          "due_on": {
+            "type": "string"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completed_by_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "due_on"
+        ],
+        "additionalProperties": true
       },
       "DueEdit": {
         "properties": {
