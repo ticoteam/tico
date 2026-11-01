@@ -829,6 +829,13 @@ SCHEMAS = {
                    "visual_files": {"type": "string", "description": "Signed-in callers: the Tico file hosting origin "
                                     "pages and SVG show from when there is no visual address, else empty; grants no "
                                     "native IPC permission."},
+                   "business_type": {"type": ["string", "null"], "description": "The company's business type "
+                                     "(field_service, restaurant, retail, manufacturer, construction, "
+                                     "multi_location_services, software, other), or null until one is set."},
+                   "hidden_sections": {"type": ["array", "null"], "items": {"type": "string"},
+                                       "description": "Sidebar sections and Operations tabs the company hides; null "
+                                       "when nothing is stored (distinct from [], which shows everything). Display "
+                                       "only: data, rights and the API are unchanged."},
                    "s3_view_urls": {"type": "object", "additionalProperties": {"type": "string"},
                                     "description": "Signed-in callers: bucket -> https base an s3://bucket/key opens at "
                                                    "(base + '/' + key, each segment URL-encoded; TICO_S3_VIEW_URLS)"}},
