@@ -2,13 +2,9 @@
 # Temporary (threads/perf): sample the benchmark server's GIL holder with py-spy and print the top frames.
 set -u
 pip install -q py-spy >/dev/null 2>&1 || python3 -m pip install -q py-spy >/dev/null 2>&1
-BENCH_PROFILE=${BENCH_PROFILE:-} python3 scripts/benchmark_threads.py "$@" > /tmp/bench.json 2>/tmp/bench.err &
-bench=$!
-for i in $(seq 1 120); do pid=$(pgrep -f "benchmark_threads.py --serve" | head -1); [ -n "$pid" ] && break; sleep 0.5; done
-sleep 8
-sudo -n "$(command -v py-spy)" record --gil --nonblocking --rate 200 --duration 45 --format raw -o /tmp/stacks.txt --pid "$pid" >/dev/null 2>&1 \
-  || "$(command -v py-spy)" record --gil --nonblocking --rate 200 --duration 45 --format raw -o /tmp/stacks.txt --pid "$pid"
-wait $bench
+"$(command -v py-spy)" record --subprocesses --gil --nonblocking --rate 100 --format raw -o /tmp/stacks.txt -- \
+  python3 scripts/benchmark_threads.py "$@" > /tmp/bench.json 2>/tmp/bench.err
+tail -5 /tmp/bench.err
 python3 - <<'PY'
 import collections, json
 self_, incl, total = collections.Counter(), collections.Counter(), 0
@@ -16,6 +12,9 @@ for line in open("/tmp/stacks.txt"):
     stack, _, n = line.rstrip().rpartition(" ")
     n = int(n); total += n
     frames = stack.split(";")
+    if any(f.startswith(("stream ", "writer ", "slow_consumer ", "scenario ", "main (")) and "benchmark_threads" in f
+           for f in frames):
+        continue
     def name(f):
         f = f.split(" (")[0] + " " + f.split("/")[-1].rstrip(")") if "(" in f else f
         return f
