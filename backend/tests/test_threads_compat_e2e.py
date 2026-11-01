@@ -80,17 +80,23 @@ def test_a_person_opens_a_chat_with_a_bot_posts_in_it_and_reads_the_post_back(ap
     assert page["messages"][-1]["body"] == "Second line"
 
 
-def test_a_chat_another_person_may_not_read_answers_403_and_leaks_no_text(api):
+def test_a_chat_another_person_may_not_read_looks_missing_and_leaks_no_text(api):
     secret = "Ana's private plan for the Acme renewal"
     cid = post(api, "chat/ops", {"text": secret})["conversation_id"]
+    # A hidden chat looks missing (Auth.conversation answers 404 not_found, docs/dev/threads-contract.md): the same answer
+    # as a chat that does not exist, so no reader can tell them apart.
+    nowhere = "00000000-0000-4000-8000-000000000000"
     reads = [("GET", f"conversations/{cid}/messages"), ("GET", f"conversations/{cid}/snapshot"),
              ("GET", f"conversations/{cid}/outline")]
     for method, path in reads:
         r = api.request(method, "/api/v2/" + path, headers=headers("ben-test"))
-        assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden", (path, r.text[:200])
+        missing = api.request(method, "/api/v2/" + path.replace(cid, nowhere), headers=headers("ben-test"))
+        assert r.status_code == 404 and r.json()["error"]["code"] == "not_found", (path, r.text[:200])
+        assert r.status_code == missing.status_code and r.json()["error"] == missing.json()["error"], path
         assert secret not in r.text, path
     r = api.post(f"/api/v2/conversations/{cid}/messages", json={"text": "Injected"}, headers=headers("ben-test"))
-    assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden" and secret not in r.text
+    missing = api.post(f"/api/v2/conversations/{nowhere}/messages", json={"text": "Injected"}, headers=headers("ben-test"))
+    assert r.status_code == 404 and r.json()["error"] == missing.json()["error"] and secret not in r.text
     listed = api.get("/api/v2/conversations", headers=headers("ben-test")).json()["conversations"]
     assert cid not in {c["id"] for c in listed}
     with api.app.state.store.read() as c:
