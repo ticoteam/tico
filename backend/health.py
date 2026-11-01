@@ -197,12 +197,13 @@ def _computers(c, runners_online, settings, limits=None):
                                   if v.get("installed") or n in wanted or n in assigned.get(r["id"], ())
                                   or n in run_on.get(r["id"], ())]})
     from . import org_turns
-    from .start_places import summary, describe
+    from .start_places import summaries, describe
     # Below warning, Health's stuck and queue checks already say why a bot is not starting: the Turns line skips
     # claim_refusal per queued bot. At warning it names quota and readiness waits again.
     classify = org_turns.admission(c)['at_warning']
+    counts = summaries(c, [row["id"] for row in rows], settings, limits, classify=classify)     # one pass, not per computer
     for row in rows:
-        row["turn_counts"] = summary(c, row["id"], settings, limits, classify=classify)
+        row["turn_counts"] = counts[row["id"]]
         row["turn_summary"] = describe(row["turn_counts"])
     return rows
 
@@ -1894,18 +1895,20 @@ def view(c, who, settings, auth, github, config):
     else:
         checks.append(_check("computers", "Computers", "ok", f"{_plural(len(online), 'computer')} online."))
 
-    from .performance import load_status
+    from .performance import load_statuses, recent_overloads
+    loads = load_statuses(c, [computer["id"] for computer in computers])     # one read for every computer
     for computer in computers:
         if full or kind == "bot":
             checks.append(_check("turns:" + computer["id"], "Turns", "ok", computer["label"] + ": " + computer["turn_summary"],
                                  [_fix("Open Computers", "#/settings", "devices")] if full else []))
-        load = load_status(c, computer["id"])
+        load = loads[computer["id"]]
         if load["overloaded"]:
             checks.append(_check("runner_load:" + computer["id"], "Load", "warn",
                                  f"{computer['label']}: overloaded now (CPU or memory above 90% for five minutes).",
                                  [_fix("Open Computers", "#/settings", "devices")]))
 
     if full:
+        overloads = recent_overloads(c, [computer["id"] for computer in computers])
         for computer in computers:
             disk = computer.get("disk") or {}
             total, free = disk.get("total_bytes"), disk.get("free_bytes")
@@ -1916,8 +1919,8 @@ def view(c, who, settings, auth, github, config):
                                      "`docker image prune -a` to remove unused images. The update retries when space frees.",
                                      [_fix("Open Computers", "#/settings", "devices")]))
             # Diagnostics only: an overload is shown here and on the computer's Performance page; nothing acts on it.
-            from .performance import recent_overload, describe
-            overload = recent_overload(c, computer["id"])
+            from .performance import describe
+            overload = overloads[computer["id"]]
             if overload:
                 checks.append(_check("performance:" + computer["id"], "Load", "warn",
                                      f"{computer['label']}: {'overloaded now' if not overload['ended'] else 'was overloaded'}"
