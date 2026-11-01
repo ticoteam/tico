@@ -830,11 +830,28 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
     """Each stuck bot with a reason in plain words and one fix: sign in, move to a computer that can run it,
     or the settings page that can. Only administrators get fixes; a Bot administrator moves only to their own computers.
     A bot stuck in onboarding is the exception: whoever may manage it gets "Finish with defaults"."""
+    from . import readiness
     from .readiness import own_harness
     if not rows:
         return []
     computers = _movable(c, who, online_ids) if full else []
     configured = {r["slug"]: r["runtime"] or "" for r in c.execute("SELECT slug,runtime FROM bots")}
+    # Each offline computer's last check-in, read once for every bot waiting on one (not one read per bot).
+    offline = sorted({row["runner_id"] for row in rows if row["reason"] == "computer_offline"})
+    seen_at = {r["id"]: r["last_seen"] for r in c.execute(
+        f"SELECT id,last_seen FROM runners WHERE id IN ({','.join('?' * len(offline))})", offline)} if offline else {}
+    # Every quarantined bot's quarantine record, read together for its explanation (quarantine_display.explanation).
+    H.prime_quarantines(c, [row["bot"] for row in rows if row["reason"] == "quarantined"])
+    # Every stuck bot's configuration and operator, read together for its harness check and quarantine
+    # explanation (readiness._config and auth.operator read them per bot otherwise).
+    from .read_cache import prime
+    from .auth import OPERATOR_SQL
+    for part in H.chunks(sorted({row["bot"] for row in rows})):
+        marks = ",".join("?" * len(part))
+        found = {r["bot"]: r for r in c.execute(
+            f"SELECT bot,config_json,operator FROM bot_config WHERE bot IN ({marks})", part)}
+        prime(c, readiness.CONFIG_SQL, {(s,): found.get(s) for s in part})
+        prime(c, OPERATOR_SQL, {(s,): found.get(s) for s in part})
     out = []
     for row in rows:
         label, reason = row["computer"], row["reason"]
@@ -851,8 +868,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             text = "No computer"
             fix = _fix("Choose a computer", "#/settings", "bots")
         elif reason == "computer_offline":
-            seen = c.execute("SELECT last_seen FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
-            quiet = quiet_minutes(seen["last_seen"] if seen else None)
+            quiet = quiet_minutes(seen_at.get(row["runner_id"]))
             text = f"{label} has not checked in for {quiet} minutes" if quiet >= SILENT_MINUTES else f"{label} is offline"
             fix = _fix("Open Computers", "#/settings", "devices")
             if full and runtime:
