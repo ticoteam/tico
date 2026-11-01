@@ -163,9 +163,8 @@ words to use and to avoid, naming rules, claims and proof, visual files (as link
 and does not detect claims missing from the allowed list, so a bot checks those against the claims list itself.
 
 **GTM** is the go-to-market card: the motion (self-serve, sales-led, partner, marketplace, local, community or
-e-commerce), the buyer and deal size, the objections, the **sources** (which system holds each number), and the **wishes**.
-A wish is a plain sentence, such as "No cold SMS", with a level: `block`, `warn` or `setting`. Wishes become rules, and a
-blocking wish stops the work it names.
+e-commerce), the buyer and deal size, the objections, and the **sources** (which system holds each number). Standing
+instructions and spend limits are Rules (the Rules page): a blocking rule stops the work it names.
 
 Each card is versioned and published on its own. The owner edits the draft and publishes. A bot that wants a change
 proposes it (a `brand_draft` or `gtm_draft` proposal), and the owner confirms it. Anyone may read the published version
@@ -173,7 +172,7 @@ with the CLI or MCP.
 
 ```
 hub brand show [--section voice] | summary | check -      hub brand draft --section S --body JSON | publish --note N
-hub gtm show   [--section wishes] | summary | sources     hub gtm draft --section S --body JSON | publish --note N
+hub gtm show   [--section buyer] | summary | sources     hub gtm draft --section S --body JSON | publish --note N
 ```
 
 ## Commands

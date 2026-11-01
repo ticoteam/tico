@@ -2981,16 +2981,9 @@ class GtmBuyer(Contract):
     objections: list[S300] = Field(default_factory=list, max_length=30)
 
 
-class GtmWish(Contract):
-    text: S300
-    scope: S80 = ""
-    level: Literal["block", "warn", "setting"] = "warn"
-
-
 class GtmBody(Contract):
     motion: GtmMotion | None = None
     buyer: GtmBuyer | None = None
-    wishes: list[GtmWish] | None = Field(default=None, max_length=50)
     playbooks: list[S80] | None = Field(default=None, max_length=30)
 
 

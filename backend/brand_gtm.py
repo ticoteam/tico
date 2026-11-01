@@ -27,8 +27,11 @@ from .store import Problem
 KINDS = ("brand", "gtm")
 SECTIONS = {
     "brand": ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples"),
-    "gtm": ("motion", "buyer", "wishes", "playbooks"),
+    "gtm": ("motion", "buyer", "playbooks"),
 }
+# Sections that were removed: a row written before the removal still holds them, so reads drop them. Writes that
+# name one get the same 422 as any unknown section.
+RETIRED = {"gtm": ("wishes",)}
 BODIES = {"brand": M.BrandBody, "gtm": M.GtmBody}
 TITLES = {"brand": "brand", "gtm": "go-to-market"}
 SUMMARY_MAX = 300
@@ -55,12 +58,20 @@ def published(c, kind, n=None):
                  (n,) if n is not None else ())
     if not row:
         return None
-    return {"n": row["n"], "body": _loads(row["body_json"], {}) or {}, "note": row["note"],
+    return {"n": row["n"], "body": _body(kind, _loads(row["body_json"], {})), "note": row["note"],
             "published_by": row["published_by"], "published_at": row["published_at"]}
 
 
 def _draft_row(c, kind):
     return H._one(c, f"SELECT * FROM {kind}_drafts WHERE id=1")
+
+
+def _body(kind, value):
+    """A stored body as read: its sections, without the retired ones."""
+    body = dict(value) if isinstance(value, dict) else {}
+    for name in RETIRED.get(kind, ()):
+        body.pop(name, None)
+    return body
 
 
 def draft(c, kind, current=None):
@@ -69,6 +80,7 @@ def draft(c, kind, current=None):
     body = _loads(row["body_json"]) if row else None
     if not isinstance(body, dict):
         return None
+    body = _body(kind, body)
     base = (current or {}).get("body") or {}
     changed = [s for s in SECTIONS[kind] if body.get(s) != base.get(s)]
     return {"body": body, "revision": row["revision"], "updated_by": row["updated_by"], "updated_at": row["updated_at"],
@@ -226,6 +238,7 @@ def merge(c, kind, actor, sections, revision=None):
     body = _loads(row["body_json"]) if row else None
     if not isinstance(body, dict):
         body = dict((published(c, kind) or {}).get("body") or {})
+    body = _body(kind, body)
     for name, value in (sections or {}).items():
         if value is None:
             body.pop(name, None)
