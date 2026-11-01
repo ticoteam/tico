@@ -84,7 +84,7 @@ replicated() {  # digest: the database and the attachment are both in the copy
 import os, sys
 from backend import replication
 mirror = replication.mirror_from_env()
-assert mirror.newest(replication.DB_LEVELS), "no database segments yet"
+assert mirror.newest(replication.db_levels(replication.replica_generation(mirror))), "no database segments yet"
 assert any(k.endswith(sys.argv[1]) for k in mirror.keys("files/blobs")), "attachment not copied yet"
 PY
   [ "$(backup_field last_replicated_at)" != None ]

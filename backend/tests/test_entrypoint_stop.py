@@ -2,10 +2,12 @@
 exited is Litestream stopped, so its last sync covers every write. A server or Litestream that exits on its own ends
 the container, the other stopped in the same order."""
 import contextlib
+import json
 import os
 import shlex
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
@@ -38,12 +40,15 @@ if [ "$1 $2" = "-m backend.server" ]; then
   while :; do sleep 0.05; done
 fi
 if [ "$1 $2 $3" = "-m backend.replication loop" ]; then exec sleep 600; fi
+if [ "$1 $2 $3" = "-m backend.replication reset-stale-litestream" ] && [ -n "$STUB_RESET_EXIT" ]; then exit "$STUB_RESET_EXIT"; fi
 exec %s "$@"
 """
 
-# Litestream: restore finds no replica; replicate runs until SIGTERM, then takes a moment for its last sync.
+# Litestream: restore finds no replica; replicate logs the replica url its config names, then runs until SIGTERM, then takes
+# a moment for its last sync.
 LITESTREAM = """#!/bin/sh
 [ "$1" = replicate ] || exit 0
+echo "replica $(sed -n 's/^ *url: //p' "$3")" >> "$STUB_LOG"
 trap 'echo "litestream TERM" >> "$STUB_LOG"; sleep 0.3; echo "litestream synced" >> "$STUB_LOG"; exit 0' TERM
 echo "litestream up" >> "$STUB_LOG"
 [ -z "$STUB_LITESTREAM_EXIT" ] || { sleep 1; echo "litestream died" >> "$STUB_LOG"; exit 2; }
@@ -129,6 +134,14 @@ def test_a_litestream_that_dies_stops_the_server_and_fails(tmp_path):
     seen = lines(log)
     assert seen.index("litestream died") < seen.index("server TERM"), seen
     assert "Litestream exited; stopping the server" in out
+
+
+def test_a_generation_switch_that_broke_off_keeps_litestream_from_starting_on_its_config(tmp_path):
+    # reset-stale-litestream exits 3 only after environment.json may name a new generation: Litestream must not start.
+    p, log = start(tmp_path, STUB_RESET_EXIT="3", TICO_STOP_GRACE="0.2")
+    out = finish(p, tmp_path)
+    assert p.returncode != 0, out
+    assert "litestream up" not in lines(log), lines(log)
 
 
 def test_backups_off_stops_the_server_the_same_way(tmp_path):

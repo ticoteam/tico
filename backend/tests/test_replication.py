@@ -201,10 +201,12 @@ def entrypoint(tmp_path, *args, command="restore", env=None):
     with sqlite3.connect(source) as db:
         db.execute("CREATE TABLE IF NOT EXISTS t(x)")
         db.execute("INSERT INTO t VALUES(1)")
+    extra = env or {}
     env = {**os.environ, "PATH": f"{bin_dir}:{Path(__import__('sys').executable).parent}:{os.environ['PATH']}",
            "TICO_DATA_DIR": str(data), "TICO_BACKUP_DIR": str(backups), "PYTHONPATH": str(ROOT),
-           "STUB_LOG": str(tmp_path / "stub.log"), "STUB_DB": str(source), **(env or {})}
-    env.pop("TICO_BACKUP_URL", None)
+           "STUB_LOG": str(tmp_path / "stub.log"), "STUB_DB": str(source), **extra}
+    if "TICO_BACKUP_URL" not in extra:    # an inherited bucket setting must not reach the tests; one a test passes is its own
+        env.pop("TICO_BACKUP_URL", None)
     # An inherited BASH_ENV can restore the turn's PATH and run real litestream and uvicorn instead of the stubs.
     env.pop("BASH_ENV", None)
     return subprocess.run(["bash", str(ENTRYPOINT), command, *([] if command == "prepare" else args)], env=env, capture_output=True, text=True, timeout=60)
@@ -617,7 +619,21 @@ class Listing:
         return subprocess.CompletedProcess(args, self.returncode, self.stdout, "")
 
 
-def stale_litestream_state(tmp_path):
+def local_backup_config(tmp_path, db, monkeypatch):
+    """The Litestream config docker/entrypoint.sh writes for a local backup location, and the environment the reset reads it
+    with: an empty backup location at tmp_path/backups, and no bucket or rehearsal setting from the developer's shell."""
+    backup = tmp_path / "backups"
+    backup.mkdir(exist_ok=True)
+    config = tmp_path / "litestream.yml"
+    config.write_text("dbs:\n  - path: %s\n    replica:\n      url: %s\n      sync-interval: 1m\n" % (db, backup.as_uri()))
+    for name in ("TICO_BACKUP_URL", "TICO_REHEARSAL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TICO_BACKUP_MODE", "local-only")
+    monkeypatch.setenv("TICO_BACKUP_DIR", str(backup))
+    return config
+
+
+def stale_litestream_state(tmp_path, monkeypatch):
     """A database with the WAL and Litestream's local state beside it, as an earlier run leaves them."""
     data = tmp_path / "data"
     data.mkdir()
@@ -627,7 +643,7 @@ def stale_litestream_state(tmp_path):
     state = data / ".hub.sqlite-litestream"
     (state / "ltx" / "0").mkdir(parents=True)
     (state / "ltx" / "0" / "0000000000000003-0000000000000003.ltx").write_bytes(b"ltx")
-    return db, state
+    return db, state, local_backup_config(tmp_path, db, monkeypatch)
 
 
 def assert_database_untouched(db):
@@ -635,22 +651,22 @@ def assert_database_untouched(db):
 
 
 def test_an_empty_replica_clears_the_stale_state_and_nothing_else(tmp_path, monkeypatch, capsys):
-    db, state = stale_litestream_state(tmp_path)
+    db, state, config = stale_litestream_state(tmp_path, monkeypatch)
     listing = Listing("[]")
     monkeypatch.setattr(replication.subprocess, "run", listing)
-    assert replication.main(["reset-stale-litestream", "litestream.yml", str(db)]) == 0
+    assert replication.main(["reset-stale-litestream", str(config), str(db)]) == 0
     assert not state.exists()
     assert_database_untouched(db)
     assert capsys.readouterr().out.strip() == "tico: the backup location is empty; removed Litestream's stale local state (.hub.sqlite-litestream)"
     (args, kwargs), = listing.calls
-    assert args[:2] == ["litestream", "ltx"] and args[args.index("-config") + 1] == "litestream.yml" and args[-1] == str(db)
+    assert args[:2] == ["litestream", "ltx"] and args[args.index("-config") + 1] == str(config) and args[-1] == str(db)
     assert 0 < kwargs["timeout"] <= 120
 
 
 def test_a_replica_with_any_file_at_any_level_keeps_the_state(tmp_path, monkeypatch, capsys):
-    db, state = stale_litestream_state(tmp_path)
+    db, state, config = stale_litestream_state(tmp_path, monkeypatch)
     monkeypatch.setattr(replication.subprocess, "run", Listing('[{"level": 9, "min_txid": "0000000000000001", "max_txid": "0000000000000004"}]'))
-    assert replication.main(["reset-stale-litestream", "litestream.yml", str(db)]) == 0
+    assert replication.main(["reset-stale-litestream", str(config), str(db)]) == 0
     assert state.is_dir() and (state / "ltx" / "0").is_dir()
     assert_database_untouched(db)
     assert capsys.readouterr().out == ""
@@ -663,9 +679,9 @@ def test_a_replica_with_any_file_at_any_level_keeps_the_state(tmp_path, monkeypa
     Listing(stdout="not json"),
 ], ids=["timeout", "error", "missing-binary", "garbled"])
 def test_an_unreadable_replica_changes_nothing_and_says_the_check_was_skipped(tmp_path, monkeypatch, capsys, listing):
-    db, state = stale_litestream_state(tmp_path)
+    db, state, config = stale_litestream_state(tmp_path, monkeypatch)
     monkeypatch.setattr(replication.subprocess, "run", listing)
-    assert replication.main(["reset-stale-litestream", "litestream.yml", str(db)]) == 0
+    assert replication.main(["reset-stale-litestream", str(config), str(db)]) == 0
     assert state.is_dir()
     assert_database_untouched(db)
     assert capsys.readouterr().out.strip() == "tico: could not read the backup location; skipped the check for stale Litestream state"
@@ -674,7 +690,295 @@ def test_an_unreadable_replica_changes_nothing_and_says_the_check_was_skipped(tm
 def test_without_local_state_the_replica_is_not_even_asked(tmp_path, monkeypatch, capsys):
     db = tmp_path / "hub.sqlite"
     db.write_bytes(b"database")
+    config = local_backup_config(tmp_path, db, monkeypatch)
     listing = Listing()
     monkeypatch.setattr(replication.subprocess, "run", listing)
-    assert replication.main(["reset-stale-litestream", "litestream.yml", str(db)]) == 0
+    assert replication.main(["reset-stale-litestream", str(config), str(db)]) == 0
     assert listing.calls == [] and capsys.readouterr().out == "" and db.read_bytes() == b"database"
+
+
+# -- backup generations: a stuck copy is healed by starting a new folder ----------------------------------------------
+
+NOW = datetime(2026, 11, 1, 12, tzinfo=timezone.utc).timestamp()
+REPLICA_STAMP = "2026-11-01T11:00:00Z"    # the replica's newest copy: an hour before NOW
+GENERATION = "gen-20261101T120000Z"       # what a heal at NOW starts
+
+
+def listing_at(stamp):
+    return json.dumps([{"level": 0, "min_txid": "0000000000000001", "max_txid": "0000000000000001", "size": 1,
+                        "timestamp": stamp}])
+
+
+def replica_url(config):
+    return yaml.safe_load(config.read_text())["dbs"][0]["replica"]["url"]
+
+
+def backup_setup(tmp_path, copies=1, environment=None):
+    """A database with Litestream's local state beside it (`copies` L0 files, written at NOW), a file replica root with
+    the environment.json given, and the Litestream config that points at that root, as docker/entrypoint.sh writes it."""
+    data, backup = tmp_path / "data", tmp_path / "backups"
+    data.mkdir()
+    backup.mkdir()
+    db = data / "hub.sqlite"
+    db.write_bytes(b"database")
+    (data / "hub.sqlite-wal").write_bytes(b"wal")
+    level = data / ".hub.sqlite-litestream" / "ltx" / "0"
+    level.mkdir(parents=True)
+    for n in range(copies):
+        path = level / ("%016x-%016x.ltx" % (n + 1, n + 1))
+        path.write_bytes(b"ltx")
+        os.utime(path, (NOW, NOW))
+    if environment is not None:
+        (backup / replication.MARKER).write_text(environment)
+    config = tmp_path / "litestream.yml"
+    config.write_text("dbs:\n  - path: %s\n    replica:\n      url: %s\n      sync-interval: 1m\n" % (db, backup.as_uri()))
+    env = {"TICO_BACKUP_DIR": str(backup), "TICO_BACKUP_MODE": "local-only", "TICO_DB": str(db)}
+    return config, db, data / ".hub.sqlite-litestream", backup, env
+
+
+def test_an_empty_replica_with_a_stuck_state_is_reset_as_before_and_gets_no_generation(tmp_path, monkeypatch):
+    config, db, state, backup, env = backup_setup(tmp_path, copies=replication.LOCAL_STUCK_FILES + 1)
+    before = config.read_text()
+    monkeypatch.setattr(replication.subprocess, "run", Listing("[]"))
+    message = replication.reset_stale_litestream(str(config), str(db), env=env, now=NOW)
+    assert message == "tico: the backup location is empty; removed Litestream's stale local state (.hub.sqlite-litestream)"
+    assert not state.exists() and config.read_text() == before
+    assert list(backup.iterdir()) == []                  # no environment.json and no generation folder
+    assert_database_untouched(db)
+
+
+def test_a_populated_replica_with_a_stuck_state_moves_to_a_new_generation_and_keeps_its_marker(tmp_path, monkeypatch):
+    config, db, state, backup, env = backup_setup(tmp_path, copies=replication.LOCAL_STUCK_FILES + 1,
+                                                  environment='{"environment_id": "acme1"}')
+    monkeypatch.setattr(replication.subprocess, "run", Listing(listing_at(REPLICA_STAMP)))
+    message = replication.reset_stale_litestream(str(config), str(db), env=env, now=NOW)
+    root = "file://" + str(backup)
+    assert message == ("tico: the local Litestream state was stuck; started backup generation " + GENERATION + " at "
+                       + root + "/" + GENERATION + " (the copy at " + root + " is kept)")
+    assert not state.exists()
+    assert replica_url(config) == root + "/" + GENERATION
+    assert json.loads((backup / replication.MARKER).read_text()) == {"environment_id": "acme1", "generation": GENERATION}
+    assert (backup / GENERATION / ".tico-generation").is_file()
+    assert (db.parent / replication.GENERATION_CACHE).read_text() == GENERATION + "\n"
+    assert_database_untouched(db)
+
+
+def test_an_unreadable_replica_changes_nothing_even_when_a_heal_is_asked_for(tmp_path, monkeypatch):
+    config, db, state, backup, env = backup_setup(tmp_path, copies=replication.LOCAL_STUCK_FILES + 1)
+    flag = replication.heal_flag_path(db)
+    replication.write_heal_flag(flag, True, None)
+    before = config.read_text()
+    monkeypatch.setattr(replication.subprocess, "run", Listing(error=subprocess.TimeoutExpired("litestream", 60)))
+    message = replication.reset_stale_litestream(str(config), str(db), env=env, now=NOW)
+    assert message == "tico: could not read the backup location; skipped the check for stale Litestream state"
+    assert state.is_dir() and config.read_text() == before and list(backup.iterdir()) == []
+    assert replication.read_heal_flag(flag)["requested"] is True       # the request waits for a readable replica
+    assert_database_untouched(db)
+
+
+def test_a_marker_that_cannot_be_read_refuses_the_new_generation_and_changes_nothing(tmp_path, monkeypatch):
+    config, db, state, backup, env = backup_setup(tmp_path, copies=replication.LOCAL_STUCK_FILES + 1, environment="not json")
+    before = config.read_text()
+    monkeypatch.setattr(replication.subprocess, "run", Listing(listing_at(REPLICA_STAMP)))
+    message = replication.reset_stale_litestream(str(config), str(db), env=env, now=NOW)
+    assert message.startswith("tico: could not start a new backup generation") and "keeps the copy it has" in message
+    assert state.is_dir() and config.read_text() == before
+    assert [p.name for p in backup.iterdir()] == [replication.MARKER]
+    assert (backup / replication.MARKER).read_text() == "not json"
+    assert_database_untouched(db)
+
+
+def test_a_heal_request_rotates_once_and_the_next_request_waits_six_hours(tmp_path, monkeypatch):
+    config, db, state, backup, env = backup_setup(tmp_path)
+    flag = replication.heal_flag_path(db)
+    monkeypatch.setattr(replication.subprocess, "run", Listing(listing_at(REPLICA_STAMP)))
+
+    def request_and_reset(at):
+        replication.write_heal_flag(flag, True, replication.read_heal_flag(flag).get("last_heal_at"))
+        return replication.reset_stale_litestream(str(config), str(db), env=env, now=at)
+
+    assert "started backup generation " + GENERATION in request_and_reset(NOW)
+    assert replication.read_heal_flag(flag) == {"requested": False, "last_heal_at": "2026-11-01T12:00:00Z"}
+    assert replica_url(config) == "file://" + str(backup) + "/" + GENERATION
+    state.joinpath("ltx", "0").mkdir(parents=True)                      # the local state is back, still short
+    (state / "ltx" / "0" / "0000000000000001-0000000000000001.ltx").write_bytes(b"ltx")
+    assert "not starting another" in request_and_reset(NOW + 3600)     # an hour later: refused, and the request is cleared
+    assert replica_url(config) == "file://" + str(backup) + "/" + GENERATION
+    assert replication.read_heal_flag(flag) == {"requested": False, "last_heal_at": "2026-11-01T12:00:00Z"}
+    later = NOW + replication.HEAL_INTERVAL + 1
+    assert "gen-20261101T180001Z" in request_and_reset(later)           # six hours on, the next one may start
+    assert replica_url(config) == "file://" + str(backup) + "/gen-20261101T180001Z"
+    assert (backup / GENERATION / ".tico-generation").is_file()        # the older generation is kept
+
+
+def test_a_flag_file_that_is_only_present_asks_for_a_heal(tmp_path, monkeypatch):
+    config, db, state, backup, env = backup_setup(tmp_path)
+    flag = replication.heal_flag_path(db)
+    flag.write_text("")                                                 # made by hand: an empty file is still a request
+    monkeypatch.setattr(replication.subprocess, "run", Listing(listing_at(REPLICA_STAMP)))
+    message = replication.reset_stale_litestream(str(config), str(db), env=env, now=NOW)
+    assert "started backup generation " + GENERATION in message
+    assert replica_url(config) == "file://" + str(backup) + "/" + GENERATION
+    assert replication.read_heal_flag(flag) == {"requested": False, "last_heal_at": "2026-11-01T12:00:00Z"}
+
+
+def stalled_copy(tmp_path, monkeypatch):
+    """A stuck copy: more local copies than a healthy install keeps, and a replica that stopped an hour ago while the
+    database changed at NOW. Returns (check, stops, flag): check(minutes) runs one round of the runtime check."""
+    config, db, state, backup, env = backup_setup(tmp_path, copies=replication.LOCAL_STUCK_FILES + 1)
+    replica_copy = backup / "ltx" / "0" / "0000000000000001-0000000000000001.ltx"
+    replica_copy.parent.mkdir(parents=True)
+    replica_copy.write_bytes(b"ltx")
+    os.utime(replica_copy, (NOW - 3600, NOW - 3600))
+    os.utime(db, (NOW, NOW))
+    stops, watch = [], replication.StallWatch()
+    monkeypatch.setattr(replication, "stop_litestream", lambda env: stops.append(env))
+
+    def check(minutes):
+        return replication.stuck_replica_check(env, replication.LocalMirror(backup), watch, NOW + minutes * 60)
+    return check, stops, replication.heal_flag_path(db)
+
+
+def test_the_runtime_check_asks_for_a_heal_once_the_copy_has_stalled_while_the_database_changed(tmp_path, monkeypatch):
+    check, stops, flag = stalled_copy(tmp_path, monkeypatch)
+    assert check(0) is False and check(19) is False and stops == []    # not stalled for 20 minutes yet
+    assert check(21) is True and len(stops) == 1                       # Litestream is stopped once, so the container restarts
+    assert replication.read_heal_flag(flag)["requested"] is True
+
+
+def test_the_runtime_check_waits_six_hours_after_a_heal_before_asking_again(tmp_path, monkeypatch):
+    check, stops, flag = stalled_copy(tmp_path, monkeypatch)
+    replication.write_heal_flag(flag, False, "2026-11-01T12:00:00Z")   # a heal began at NOW
+    assert check(21) is False and stops == []
+    assert check(6 * 60 + 21) is True and len(stops) == 1
+
+
+def test_a_restore_and_a_seed_refuse_to_read_a_backup_whose_generation_cannot_be_read(tmp_path):
+    (tmp_path / "backups").mkdir()
+    (tmp_path / "backups" / replication.MARKER).write_text("not json")
+    restore = entrypoint(tmp_path, command="restore")
+    assert restore.returncode != 0 and "backup generation" in restore.stderr
+    seeded, data = prepare(tmp_path, STUB_DB=str(tmp_path / "source.sqlite"))
+    assert seeded.returncode != 0 and not (data / "hub.sqlite").exists()
+    log = (tmp_path / "stub.log").read_text() if (tmp_path / "stub.log").exists() else ""
+    assert "restore" not in log                                        # litestream restore never ran
+
+
+@pytest.mark.parametrize("generation, suffix", [(None, ""), (GENERATION, "/" + GENERATION)], ids=["root", "generation"])
+def test_a_restore_points_the_config_at_the_generation_environment_json_names(tmp_path, generation, suffix):
+    marker = {"environment_id": "acme1", **({"generation": generation} if generation else {})}
+    (tmp_path / "backups").mkdir()
+    (tmp_path / "backups" / replication.MARKER).write_text(json.dumps(marker))
+    with sqlite3.connect(tmp_path / "source.sqlite") as restored:    # the database a restore brings back, with its id table
+        restored.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT)")
+    config = tmp_path / "litestream.yml"
+    result, _ = prepare(tmp_path, STUB_DB=str(tmp_path / "source.sqlite"), TICO_LITESTREAM_CONFIG=str(config))
+    assert result.returncode == 0, result.stderr
+    assert replica_url(config) == (tmp_path / "backups").as_uri() + suffix
+    assert json.loads((tmp_path / "backups" / replication.MARKER).read_text()).get("generation") == generation  # kept by mark-environment
+
+
+# -- the generation cache: the start reads it, the reset job corrects it from environment.json ----------------------------
+
+def test_a_start_with_a_cached_generation_uses_it_even_when_the_bucket_is_unreachable(tmp_path):
+    """The start reads only the cache beside the database, so an unreachable bucket neither holds it up nor moves it to the
+    root."""
+    data = tmp_path / "data"
+    data.mkdir()
+    with sqlite3.connect(data / "hub.sqlite") as db:
+        db.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT)")
+    replication.write_generation_cache(data, GENERATION)
+    config = tmp_path / "litestream.yml"
+    result, _ = prepare(tmp_path, TICO_LITESTREAM_CONFIG=str(config), TICO_BACKUP_URL="s3://bucket/tico",
+                        TICO_BACKUP_ENDPOINT="http://127.0.0.1:9")
+    assert result.returncode == 0, result.stderr
+    assert replica_url(config) == "s3://bucket/tico/" + GENERATION
+
+
+def test_without_a_cache_an_unreachable_bucket_on_an_existing_database_uses_the_root_as_before(tmp_path, monkeypatch):
+    """A database from before the cache has no generation to lose: the cache and the database share the data volume."""
+    config, db, state, backup, env = backup_setup(tmp_path, copies=replication.LOCAL_STUCK_FILES + 1)
+
+    def unreachable(mirror):
+        raise OSError("the bucket is unreachable")
+    monkeypatch.setattr(replication, "replica_generation", unreachable)
+    monkeypatch.setattr(replication.subprocess, "run", Listing(error=subprocess.TimeoutExpired("litestream", 60)))
+    assert replication.sync_generation(str(config), str(db), env) == "root"
+    assert replica_url(config) == "file://" + str(backup)
+    assert not replication.cache_path(db.parent).exists()
+    assert replication.reset_stale_litestream(str(config), str(db), env=env, now=NOW) == (
+        "tico: could not read the backup location; skipped the check for stale Litestream state")
+    assert state.is_dir()
+    assert_database_untouched(db)
+
+
+def test_a_cache_naming_a_generation_holds_when_environment_json_cannot_be_read(tmp_path):
+    config, db, state, backup, env = backup_setup(tmp_path, environment="not json")
+    replication.write_generation_cache(db.parent, GENERATION)
+    assert replication.sync_generation(str(config), str(db), env) == "kept"
+    assert replica_url(config) == "file://" + str(backup) + "/" + GENERATION
+    assert replication.read_generation_cache(db.parent) == GENERATION
+
+
+def test_a_config_naming_another_location_is_left_alone_and_the_reset_refuses(tmp_path):
+    config, db, state, backup, env = backup_setup(tmp_path, copies=replication.LOCAL_STUCK_FILES + 1)
+    before = replica_url(config)
+    with pytest.raises(replication.GenerationUnknown):
+        replication.reset_stale_litestream(str(config), str(db), env={**env, "TICO_BACKUP_DIR": str(tmp_path / "elsewhere")}, now=NOW)
+    assert replica_url(config) == before and state.is_dir()
+    assert_database_untouched(db)
+
+
+def test_a_missing_database_with_no_cache_and_an_unreadable_environment_json_says_the_generation_is_unknown(tmp_path):
+    config, db, state, backup, env = backup_setup(tmp_path, environment="not json")
+    db.unlink()
+    before = replica_url(config)
+    with pytest.raises(replication.GenerationUnknown):
+        replication.sync_generation(str(config), str(db), env)
+    assert replica_url(config) == before
+
+
+def test_an_unreadable_generation_file_stops_the_start_before_the_config_is_written(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    with sqlite3.connect(data / "hub.sqlite") as db:
+        db.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT)")
+    (data / replication.GENERATION_CACHE).write_text("not a generation\n")
+    config = tmp_path / "litestream.yml"
+    result, _ = prepare(tmp_path, TICO_LITESTREAM_CONFIG=str(config))
+    assert result.returncode != 0 and "backup generation file" in result.stderr, result.stderr
+    assert not config.exists()
+
+
+def test_a_restore_over_a_database_whose_generation_cannot_be_read_stops_before_moving_it(tmp_path):
+    (tmp_path / "backups").mkdir()
+    (tmp_path / "backups" / replication.MARKER).write_text("not json")
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "hub.sqlite").write_bytes(b"database")
+    result = entrypoint(tmp_path, "--force")
+    assert result.returncode != 0 and "backup generation" in result.stderr, result.stderr
+    assert (data / "hub.sqlite").read_bytes() == b"database"
+    assert not list(data.glob("hub.sqlite.before-restore.*"))
+    log = tmp_path / "stub.log"
+    assert not log.exists() or "restore" not in log.read_text()          # litestream restore never ran
+
+
+def test_the_bucket_client_gives_up_within_seconds_so_a_start_or_a_seed_cannot_hang():
+    mirror = replication.mirror_from_env({"TICO_BACKUP_URL": "s3://bucket/tico", "TICO_BACKUP_ENDPOINT": "http://127.0.0.1:9"})
+    config = mirror.s3.meta.config
+    assert (config.connect_timeout, config.read_timeout, config.retries["total_max_attempts"]) == (3, 10, 2)
+
+
+def test_the_loop_reads_the_replica_position_from_the_generation_the_volume_names(tmp_path):
+    env = key_env(tmp_path)
+    db = Path(env["TICO_DB"])
+    level = replication.litestream_state_dir(db) / "ltx" / "0"
+    level.mkdir(parents=True)
+    (level / f"{2:016x}-{2:016x}.ltx").write_bytes(b"x")
+    add_copy("local", tmp_path / "backups", 0, 9, seconds_ago=60)    # the root: an older generation's history
+    add_copy("local", tmp_path / "backups", 0, 1, seconds_ago=30, replica="gen-20261101T000000Z")
+    replication.write_generation_cache(db.parent, "gen-20261101T000000Z")
+    replication.loop(env, sleep=lambda s: None, rounds=1)
+    saved = json.loads(Path(env["TICO_BACKUP_STATUS_FILE"]).read_text())
+    assert saved["replica_txid"] == f"{1:016x}" and saved["behind_since"]
