@@ -636,6 +636,16 @@
     starting = {message, kind};
     void open({fresh: true});
   };
+  // Ask's "Attach diagnostics" on a request Loop in Support filed: the pop-up opens on that request and Review and edit
+  // opens over it. Nothing is sent here; the diagnostics ride along only once the person uses them and presses Send.
+  window.supportAttach = async id => {
+    await open({ticket: id});
+    if (!isOpen() || selected !== id || !current()) return;
+    const d = draft();
+    d.open = true;
+    renderComposer();
+    void openEditor(d);
+  };
   document.addEventListener('click', async e => {
     const button = e.target.closest('[data-setup-help]');
     if (!button || button.disabled) return;
