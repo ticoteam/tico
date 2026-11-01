@@ -148,6 +148,10 @@ def links_for(type_, subject, data):
         app, api = f"#/task/{data['task_id']}", f"/api/v2/tasks/{data['task_id']}"
     elif group == "bot":
         app, api = f"#/bot/{subject}", f"/api/v2/bots/{subject}"
+    elif group == "thread":
+        api = f"/api/v2/threads/{subject}/timeline"
+    elif group == "message" and data.get("thread_id"):
+        api = f"/api/v2/threads/{data['thread_id']}/timeline"
     elif group in ("meeting", "strategy", "market", "health"):
         app = {"meeting": "#/meetings", "strategy": "#/strategy", "market": "#/market", "health": "#/health"}[group]
     out = {}
@@ -230,7 +234,24 @@ def view_for(c, actor, type_, subject, data, cache):
         return data
     if group in ("health", "inbound", "webhook"):
         return data if _admin(c, actor, cache) or not _state["auth"] else None
+    if group in ("thread", "message"):
+        return _thread_view(c, actor, type_, subject, data, cache)
     return data
+
+
+def _thread_view(c, actor, type_, subject, data, cache):
+    """A thread event is the endpoint owner's when the owner may read the thread (`threads.readable`, the check the
+    timeline makes). A held message is nothing the thread has been given yet, so only owners and admins hear of it."""
+    auth = _state["auth"]
+    if not auth:
+        return data
+    if type_ == "message.held":
+        return data if _admin(c, actor, cache) else None
+    who = _identity(c, actor, cache)
+    if not who:
+        return None
+    from . import threads
+    return data if threads.readable(c, threads.viewer(auth, who), subject) else None
 
 
 # ------------------------------------------------------------------------------------------------------------ publish
