@@ -1,0 +1,128 @@
+#!/bin/sh
+# Starts the real browser named in $1 through the bot's browser exit (runner-rs/src/browser_exit.rs). The runner
+# puts this directory first on PATH only for a bot with an exit, so the proxy flag is never left off by a bot that
+# starts Chrome by name. Without TICO_BROWSER_PROXY the browser does not start: a bot with an exit never browses
+# from this computer's own address.
+#
+# This keeps a bot from browsing directly by accident; it is not a boundary against a bot set on it (docs/computers.md).
+#
+# Chrome hands a launch to a Chrome already running on the same profile (user data directory), which keeps its own
+# proxy settings. So the browser always gets the bot's own profile (any other --user-data-dir is refused), and when a
+# Chrome is already running on it, the launch goes ahead only if that Chrome was started by this wrapper (its
+# --tico-browser-exit marker) through this same proxy and with nothing that takes it around the proxy. Chromium trims
+# each argument, reads a switch with one dash or two and stops at a bare `--`, so every spelling is checked, `--` is
+# refused, and the enforced switches come before the caller's.
+name="$1"
+shift
+bot="${HUB_BOT:-bot}"
+if [ -z "$TICO_BROWSER_PROXY" ]; then
+  echo "$name: this bot's browser exit is not set up on this computer" >&2
+  exit 1
+fi
+proxy_flag="--proxy-server=$TICO_BROWSER_PROXY"
+marker="--tico-browser-exit=$bot"
+if [ -z "$HOME" ]; then
+  echo "$name: no HOME for this bot's browser profile" >&2
+  exit 1
+fi
+profile="$HOME/.tico/browser-exit/$bot"
+
+# Reads one argument as Chromium would (trimmed). Sets `bad` to the argument when it would take the browser around the
+# proxy or onto another profile, and `marked`/`proxied` when it is the marker or exactly this proxy.
+read_switch() {
+  arg=$1
+  while :; do case "$arg" in [[:space:]]*) arg=${arg#?} ;; *) break ;; esac; done
+  while :; do case "$arg" in *[[:space:]]) arg=${arg%?} ;; *) break ;; esac; done
+  case "$arg" in
+    --) bad="$1"; return ;;
+    --*) body=${arg#--} ;;
+    -*) body=${arg#-} ;;
+    *) return ;;
+  esac
+  switch=$(printf '%s' "${body%%=*}" | tr '[:upper:]' '[:lower:]')
+  value=""
+  case "$body" in *=*) value=${body#*=} ;; esac
+  case "$switch" in
+    proxy-server) if [ "$value" = "$TICO_BROWSER_PROXY" ]; then proxied=1; else bad="$1"; fi ;;
+    proxy-bypass-list) [ "$value" = "<-loopback>" ] || bad="$1" ;;
+    no-proxy-server | proxy-pac-url | proxy-auto-detect | winhttp-proxy-resolver) bad="$1" ;;
+    tico-browser-exit) if [ "$value" = "$bot" ]; then marked=1; else bad="$1"; fi ;;
+    user-data-dir) [ "$value" = "$profile" ] || bad="$1" ;;
+  esac
+}
+
+bad="" marked="" proxied=""
+for arg in "$@"; do
+  read_switch "$arg"
+  [ -n "$marked" ] && bad="$arg"   # the marker is the wrapper's own
+  if [ -n "$bad" ]; then
+    echo "$name: $bad would take this bot's browser around its browser exit" >&2
+    exit 1
+  fi
+done
+# Debian's chromium wrapper adds $CHROMIUM_FLAGS to every launch.
+for arg in $CHROMIUM_FLAGS; do
+  read_switch "$arg"
+  if [ -n "$bad" ]; then
+    echo "$name: CHROMIUM_FLAGS has $bad, which would take this bot's browser around its browser exit" >&2
+    exit 1
+  fi
+done
+if ! mkdir -p "$profile"; then
+  echo "$name: can't make this bot's browser profile at $profile" >&2
+  exit 1
+fi
+
+# SingletonLock names the Chrome holding the profile as host-pid.
+lock="$profile/SingletonLock"
+if [ -L "$lock" ]; then
+  owner=$(readlink "$lock")
+  pid=${owner##*-}
+  host=${owner%-*}
+  alive=""
+  if [ "$host" = "$(uname -n)" ] && [ -n "$pid" ]; then
+    if [ -d "/proc/$pid" ] || kill -0 "$pid" 2>/dev/null || ps -p "$pid" >/dev/null 2>&1; then
+      alive=1
+    fi
+  fi
+  if [ -n "$alive" ]; then
+    # Its arguments, one per line: exact from /proc, else split on spaces by ps (a space in an argument only ever
+    # refuses more).
+    if [ -r "/proc/$pid/cmdline" ]; then
+      running=$(tr '\000' '\n' <"/proc/$pid/cmdline")
+    else
+      running=$(ps -ww -o command= -p "$pid" 2>/dev/null | tr ' ' '\n')
+    fi
+    bad="" marked="" proxied=""
+    old_ifs=$IFS
+    IFS='
+'
+    first=1
+    for arg in $running; do
+      [ -n "$first" ] && first="" && continue   # the program itself
+      read_switch "$arg"
+    done
+    IFS=$old_ifs
+    if [ -n "$bad" ] || [ -z "$marked" ] || [ -z "$proxied" ]; then
+      echo "$name: a browser not started through this bot's browser exit is open on $profile; close it first" >&2
+      exit 1
+    fi
+  fi
+fi
+
+# The real browser: the first on PATH that is not one of these shims (however this directory is spelled there).
+rest=""
+old_ifs=$IFS
+IFS=:
+for dir in $PATH; do
+  [ -e "$dir/launch-through-exit" ] && continue
+  rest="${rest:+$rest:}$dir"
+done
+IFS=$old_ifs
+real=$(PATH="$rest" command -v "$name")
+if [ -z "$real" ]; then
+  echo "$name: not installed" >&2
+  exit 127
+fi
+exec "$real" "$marker" "$proxy_flag" --force-webrtc-ip-handling-policy=disable_non_proxied_udp \
+  "--user-data-dir=$profile" "$@"

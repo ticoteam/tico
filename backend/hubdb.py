@@ -869,6 +869,27 @@ CREATE TABLE IF NOT EXISTS task_run_models (
   harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', set_by TEXT, set_at TEXT);
 """
 
+# Browser exits (backend/browser_exit.py): a computer's owner shares its internet with chosen bots under a daily byte
+# cap; a bot browses through one such computer; what went through, per day, bot and hostname, is kept 30 days.
+# `generation` fences the relay's grants read before a change: an exit's policy (bumped with each change and when the
+# computer is removed), a bot's selection (its exit, cleared to NULL rather than deleted so the number only grows, and
+# the computer it runs on, bumped in the same transaction as the assignment by browser_exit.TRIGGERS, which
+# store.initialize creates once the execution tables exist). The relay's usage batches are recorded once each: per relay
+# boot, the highest batch sequence recorded (`browser_exit_marks`).
+BROWSER_EXITS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS browser_exits (
+  runner_id TEXT PRIMARY KEY, sharing INTEGER NOT NULL DEFAULT 0, bots_json TEXT NOT NULL DEFAULT '[]',
+  daily_cap_bytes INTEGER NOT NULL DEFAULT 5000000000, generation INTEGER NOT NULL DEFAULT 1,
+  changed_by TEXT, changed_at TEXT);
+CREATE TABLE IF NOT EXISTS bot_browser_exits (
+  bot TEXT PRIMARY KEY, runner_id TEXT, generation INTEGER NOT NULL DEFAULT 1, set_by TEXT, set_at TEXT);
+CREATE TABLE IF NOT EXISTS browser_exit_usage (
+  runner_id TEXT NOT NULL, day TEXT NOT NULL, bot TEXT NOT NULL, host TEXT NOT NULL,
+  bytes INTEGER NOT NULL DEFAULT 0, tunnels INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(runner_id, day, bot, host));
+CREATE INDEX IF NOT EXISTS browser_exit_usage_day ON browser_exit_usage(day);
+CREATE TABLE IF NOT EXISTS browser_exit_marks (boot TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+"""
+
 
 # Growth (backend/growth.py) and the brand and go-to-market pages (backend/brand_gtm.py). Brand and GTM each keep
 # one draft row (id 1, with a revision so two editors never overwrite each other) and numbered published versions.
@@ -929,6 +950,41 @@ ALTER TABLE kpis ADD COLUMN loop_step INTEGER;
 """
 
 
+# Growth segments (backend/growth.py): who the company sells to, each a market `segment` entity with its growth
+# fields. Serving mirrors `company/self` `operates_in` the segment and next its `next: true` property
+# (backend/strategy_market.py keeps both in step). Channels and ideas name the segments they reach; a cohort may be one
+# segment's share of a channel's month, so the one-row rule takes the segment in. Segments the graph already marks Us
+# or Next start as serving or next.
+SEGMENTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS growth_segments (
+  id TEXT PRIMARY KEY, segment_id TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK(status IN ('serving','testing','next','dropped')),
+  motion TEXT CHECK(motion IS NULL OR motion IN ('self_serve','sales_led','partner','marketplace','local','community',
+                                                 'ecommerce')),
+  who_buys TEXT, deal_size TEXT, why TEXT NOT NULL DEFAULT '', owner_ref TEXT, sort INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT);
+CREATE TABLE IF NOT EXISTS growth_channel_segments (
+  channel_id TEXT NOT NULL, segment_row_id TEXT NOT NULL, PRIMARY KEY(channel_id, segment_row_id));
+CREATE INDEX IF NOT EXISTS growth_channel_segments_segment ON growth_channel_segments(segment_row_id);
+CREATE TABLE IF NOT EXISTS growth_idea_segments (
+  task_id TEXT NOT NULL, segment_row_id TEXT NOT NULL, PRIMARY KEY(task_id, segment_row_id));
+CREATE INDEX IF NOT EXISTS growth_idea_segments_segment ON growth_idea_segments(segment_row_id);
+ALTER TABLE growth_cohorts ADD COLUMN segment_id TEXT;
+DROP INDEX IF EXISTS growth_cohorts_month;
+CREATE UNIQUE INDEX IF NOT EXISTS growth_cohorts_month_segment
+  ON growth_cohorts(coalesce(channel_id, ''), month, coalesce(segment_id, ''));
+INSERT OR IGNORE INTO growth_segments (id, segment_id, status, created_at, updated_at)
+  SELECT lower(hex(randomblob(16))), e.id,
+    CASE WHEN EXISTS (SELECT 1 FROM market_edges m WHERE m.rel='operates_in' AND m.src='company/self' AND m.dst=e.id
+      AND (m.since IS NULL OR substr(m.since,1,10)<=date('now')) AND (m.until IS NULL OR substr(m.until,1,10)>=date('now')))
+    THEN 'serving' ELSE 'next' END,
+    strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
+  FROM market_entities e WHERE e.type='segment' AND e.status='active' AND (
+    EXISTS (SELECT 1 FROM market_edges m WHERE m.rel='operates_in' AND m.src='company/self' AND m.dst=e.id
+      AND (m.since IS NULL OR substr(m.since,1,10)<=date('now')) AND (m.until IS NULL OR substr(m.until,1,10)>=date('now')))
+    OR (json_valid(e.properties) AND json_extract(e.properties,'$.next')));
+"""
+
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
@@ -950,7 +1006,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA,
               LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA, LIVE_MEETING_TURN_RETRY_SCHEMA,
               POSTAL_MAIL_SCHEMA, POSTAL_MAIL_V2_SCHEMA, POSTAL_MAIL_V3_SCHEMA, TRIGGERS_CONSUMER_SCHEMA,
-              GROWTH_SCHEMA]
+              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA, SEGMENTS_SCHEMA]
 
 
 class Refused(Exception):

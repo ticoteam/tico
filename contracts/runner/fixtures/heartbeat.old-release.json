@@ -24,6 +24,8 @@
     "updated_by": "human:ana"
    }
   ],
+  "browser_exit": false,
+  "browser_exit_bots": [],
   "performance": true,
   "runtime_credential_source": true,
   "server_time": "2026-01-01T00:00:00.000000Z",
@@ -47,7 +49,8 @@
    "model_switch_type_v1",
    "model_remove_v1",
    "model_switch_to_key_v1",
-   "turns_at_once_v1"
+   "turns_at_once_v1",
+   "private_lanes_v1"
   ],
   "capacity": 4,
   "kind": "docker",

@@ -104,8 +104,9 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
 4. **Create my team.** The four built-in bots are created automatically. Each other role you picked waits as a Recruiting seat;
    recruiting one creates a bot in **Needs setup** until you talk to it. A switched-on Inbox Manager is the exception: it is made as a bot linked to its mailbox.
-5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to both Claude Code and Codex
-   (ChatGPT through Codex). **Tico Gateway only** needs no model sign-in. In **Settings > Computers**, wait for each
+5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to each model subscription you chose:
+   Claude Code and Codex (ChatGPT through Codex). One signed-in model is enough for the first result; Health lists the others
+   until you sign in. **Tico Gateway only** needs no model sign-in. In **Settings > Computers**, wait for each
    selected harness to be installed, then press **Sign in** beside it.
    Open the provider link and enter its device code, or paste the returned code into Tico when asked.
    Wait for the computer's model sign-in to show **ready**. Other harnesses use their own terminal sign-in; API credentials and

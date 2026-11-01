@@ -27,8 +27,8 @@ curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh 
 
 Docker Desktop must be open and running on a Mac. Tico runs at `http://127.0.0.1:8765`; open the sign-in link the
 installer prints. Then get one first result: **Content Marketer** drafts a short post about a made-up product, you review
-it, and you close the task. You need one model sign-in (a ChatGPT sign-in for Codex, a Claude sign-in for Claude Code, or an
-API key); no GitHub account or outside Tool. [Demo mode](docs/demo.md) does not run bots.
+it, and you close the task. Sign in to each model subscription you chose (a ChatGPT sign-in for Codex, a Claude sign-in for Claude Code), or use an
+API key. One signed-in model is enough for the first result; Health lists the others until you sign in. You need no GitHub account or outside Tool. [Demo mode](docs/demo.md) does not run bots.
 
 1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Marketer** (`content`) checked.
    Assistant, BotOps, Librarian and Strategy Bot are the four built-in bots.

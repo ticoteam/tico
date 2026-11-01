@@ -350,6 +350,8 @@ async function roles(browser) {
   assert.equal(await box.isChecked(), false);
   await box.check();
   await page.waitForFunction(() => document.querySelector('[data-member-bots=r1]')?.checked === true);
+  // The box is checked before its POST reaches the route handler: wait for the POST, as the saves above do.
+  for (let i = 0; i < 100 && !posts.length; i++) await page.waitForTimeout(50);
   assert.deepEqual(posts.shift(), ['member-bots', {accepts: true}]);
 
   // ---- Turns at once on that computer: empty is automatic, the runner's own count; a raised setting says the limit

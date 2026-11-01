@@ -136,15 +136,20 @@ def bets_touched(c, items):
 
 def post(c, who, week, title, body, items, source=None):
     """Write (or replace) the week's briefing, its market page, and emit `market.briefing`. The caller has checked the
-    writer. `source` is the automation run that posted it, if one did. Returns the briefing."""
+    writer. `items=None` keeps the week's stored items and bets. `source` is the automation run that posted it, if one
+    did. Returns the briefing."""
     if not WEEK.match(week):
         raise Problem("validation", "week is an ISO week like 2026-W44", 422)
-    items = [{"text": " ".join(i.text.split()), "kind": i.kind, "entity_ids": list(dict.fromkeys(i.entity_ids))}
-             for i in items]
-    if any(not i["text"] for i in items):
-        raise Problem("validation", "each item says what happened, in a sentence", 422)
-    bets = bets_touched(c, items)
     before = c.execute("SELECT * FROM market_briefings WHERE week=?", (week,)).fetchone()
+    if items is None:
+        items = MK.loads(before["items"], []) if before else []
+        bets = MK.loads(before["bets"], []) if before else []
+    else:
+        items = [{"text": " ".join(i.text.split()), "kind": i.kind, "entity_ids": list(dict.fromkeys(i.entity_ids))}
+                 for i in items]
+        if any(not i["text"] for i in items):
+            raise Problem("validation", "each item says what happened, in a sentence", 422)
+        bets = bets_touched(c, items)
     now = H.now()
     MK.write_page(c, who.actor, PAGE + week, title, body, CATEGORY, replace=True, record=False)
     if before:

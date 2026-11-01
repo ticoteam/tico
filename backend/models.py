@@ -1426,7 +1426,7 @@ class Heartbeat(Contract):
         "assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1",
         "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1",
         "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1", "source_continue_v1",
-        "turns_at_once_v1", "private_lanes_v1", "model_subscriptions_v1"]] = Field(
+        "turns_at_once_v1", "private_lanes_v1", "model_subscriptions_v1", "browser_exit_v1"]] = Field(
         default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
@@ -2603,6 +2603,24 @@ class PerformanceMode(Contract):
     mode: Literal["off", "on"]
 
 
+class BrowserExitPolicy(Contract):
+    """A computer's internet shared with bots (backend/browser_exit.py). Omitted bots or cap keep what is stored."""
+    sharing: bool
+    bots: list[Annotated[str, Field(min_length=1, max_length=128)]] | None = Field(default=None, max_length=500)
+    daily_cap_bytes: Annotated[int, Field(strict=True, ge=100_000_000, le=10_000_000_000_000)] | None = None
+
+
+class BotBrowserExit(Contract):
+    """The computer a bot's browser reaches the web through; null is its own."""
+    runner_id: Annotated[str, Field(min_length=1, max_length=128)] | None
+
+
+class BrowserExitTunnel(Contract):
+    bot: Annotated[str, Field(min_length=1, max_length=128)]
+    host: Annotated[str, Field(min_length=1, max_length=253)]
+    port: int
+
+
 class _Sampled(BaseModel):
     """A newer runner's extra fields are ignored, never refused: samples are diagnostics, not a contract."""
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
@@ -2929,6 +2947,7 @@ class BrandExample(Contract):
 
 
 class BrandBody(Contract):
+    name: Annotated[str, Field(max_length=60)] | None = None
     positioning: Annotated[str, Field(max_length=120)] | None = None
     voice: list[BrandVoice] | None = Field(default=None, max_length=12)
     tone: list[BrandTone] | None = Field(default=None, max_length=20)
@@ -2996,6 +3015,7 @@ class GrowthChannelCreate(Contract):
     guardrail_kpi_id: str | None = Field(default=None, max_length=200)
     guardrail_max: float | None = None
     sort: int = 0
+    segments: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=20)
 
 
 class GrowthChannelUpdate(Contract):
@@ -3009,6 +3029,7 @@ class GrowthChannelUpdate(Contract):
     guardrail_kpi_id: str | None = Field(default=None, max_length=200)
     guardrail_max: float | None = None
     sort: int | None = None
+    segments: list[Annotated[str, Field(max_length=200)]] | None = Field(default=None, max_length=20)
 
 
 class GrowthSourceCreate(Contract):
@@ -3040,6 +3061,7 @@ class GrowthIdeaCreate(Contract):
     bet_id: str | None = Field(default=None, max_length=200)
     kpi_id: str | None = Field(default=None, max_length=200)
     channels: list[Annotated[str, Field(max_length=40)]] = Field(default_factory=list, max_length=10)
+    segments: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=20)
     ice_i: IceScore | None = None
     ice_c: IceScore | None = None
     ice_e: IceScore | None = None
@@ -3058,6 +3080,7 @@ class GrowthIdeaUpdate(Contract):
     kpi_id: str | None = Field(default=None, max_length=200)
     judged_kpi_id: str | None = Field(default=None, max_length=200)
     channels: list[Annotated[str, Field(max_length=40)]] | None = Field(default=None, max_length=10)
+    segments: list[Annotated[str, Field(max_length=200)]] | None = Field(default=None, max_length=20)
     source_kind: IdeaSource | None = None
     source_ref: str | None = Field(default=None, max_length=500)
     test_from: str | None = Field(default=None, max_length=40)
@@ -3095,6 +3118,7 @@ class GrowthIdeaVerdict(Contract):
 
 class GrowthCohortSet(Contract):
     channel: str | None = Field(default=None, max_length=40)       # a channel slug; "unknown" or null is Unknown
+    segment_id: str | None = Field(default=None, max_length=200)   # a growth segment or its market segment; null: not split
     month: Annotated[str, Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")]
     spend: float | None = Field(default=None, ge=0)
     bot_cost: float | None = Field(default=None, ge=0)
@@ -3106,6 +3130,32 @@ class GrowthCohortSet(Contract):
     margin_pct: float | None = Field(default=None, ge=0, le=100)
     quality: Literal["actual", "estimate"] | None = None
     sources: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=300)]] | None = None
+
+
+SegmentStatus = Literal["serving", "testing", "next", "dropped"]
+
+
+class GrowthSegmentCreate(Contract):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    segment_id: str | None = Field(default=None, min_length=1, max_length=200)
+    status: SegmentStatus = "testing"
+    motion: Motion | None = None
+    who_buys: str = Field(default="", max_length=300)
+    deal_size: str = Field(default="", max_length=80)
+    why: str = Field(default="", max_length=1000)
+    owner_ref: str | None = Field(default=None, max_length=200)
+    sort: int = 0
+
+
+class GrowthSegmentUpdate(Contract):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    status: SegmentStatus | None = None
+    motion: Motion | None = None
+    who_buys: str | None = Field(default=None, max_length=300)
+    deal_size: str | None = Field(default=None, max_length=80)
+    why: str | None = Field(default=None, max_length=1000)
+    owner_ref: str | None = Field(default=None, max_length=200)
+    sort: int | None = None
 
 
 class GrowthSettingsUpdate(Contract):
