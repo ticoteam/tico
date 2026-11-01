@@ -221,9 +221,12 @@ def test_the_loop_guard_defers_bot_wakes_and_lets_them_go(world, monkeypatch):
         assert capped >= 1, "past the guard a bot-to-bot wake waits"
         assert c.execute("SELECT COUNT(*) FROM messages WHERE conversation_id=? AND body LIKE 'turn %'",
                          (tid,)).fetchone()[0] == 4, "the messages themselves are all written"
+        attention = threads.sidebar(c, owner)["attention"]
+        assert [t["capped"] for t in attention if t["id"] == root] == [capped], "the owner sees the held wakes"
         threads.resume_capped(c, root)
         assert c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND state='capped'",
                          (root,)).fetchone()[0] == 0
+        assert not [t for t in threads.sidebar(c, owner)["attention"] if t.get("capped")]
 
 
 # ----------------------------------------------------------------------------- C3: inbox readers read deliveries

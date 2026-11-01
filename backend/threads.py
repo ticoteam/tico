@@ -1247,6 +1247,16 @@ def capped(c, v):
     return out
 
 
+def _involved(c, v, root):
+    """The viewer owns the root, is a member or participant, or follows it: whose Needs attention its holds are."""
+    if root.get("owner_actor") == v.actor or v.actor in (root.get("participants") or []):
+        return True
+    if _is_member(c, v, root["id"]):
+        return True
+    return c.execute("SELECT 1 FROM thread_followers WHERE thread_id=? AND actor=? AND following=1",
+                     (root["id"], v.actor)).fetchone() is not None
+
+
 def resume_capped(c, root_id, *, limit=None):
     """Let capped wakes in this root go, oldest first: each starts its run through a carrier. A person posting in the
     root lets them all go; the scheduler (`reopen_windows`) lets go as many as the reopened window allows."""
@@ -2136,7 +2146,17 @@ def sidebar(c, v, *, cursor=None, limit=50):
         if budget < 0 or len(found) >= limit:
             break
         found.append(item)
-    attention = [t for t in found if t["me"]["unread"] and t["audience"] in ("personal", "participants")]
+    # Needs attention: threads with unread mentions, asks or DM messages (the `unread` counter), then every root the
+    # viewer is in whose bots' wakes the loop guard holds (`capped`, whichever page it is on): a person's post there
+    # lets them go.
+    attention = [t for t in found if t["me"]["unread"]]
+    listed = {t["id"] for t in attention}
+    for row in capped(c, v):
+        root = thread_row(c, row["root_id"])
+        if root is None or root["id"] in listed or not _involved(c, v, root):
+            continue
+        attention.append({**view(c, v, root), "capped": row["count"], "capped_since": row["oldest"]})
+        listed.add(root["id"])
     dms = [t for t in found if t["audience"] in ("personal", "participants")]
     threads = [t for t in found if t["audience"] not in ("personal", "participants")]
     tail = found[-1] if found else None
