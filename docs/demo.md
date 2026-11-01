@@ -36,14 +36,14 @@ import refuses shows up as a refused row. Its contacts, projects, purchase order
 `documents.json` in the same folder, made by the Finance actions a person would use:
 
 ```bash
-python3 -m backend.demo --company heating-air     # Acme Heating & Air: field service; 2 shops, customer sites, agreements, projects, POs, estimates
-python3 -m backend.demo --company kitchen         # Acme Kitchen: restaurant; 2 stores, menu items, health permits, food-vendor POs
-python3 -m backend.demo --company works           # Acme Works: manufacturer; plant and warehouse, raw materials, supplier POs
+python3 -m backend.demo --company heating-air     # Acme Heating & Air: field service; 2 shops, vans, customer sites and units, agreements, projects, POs, estimates
+python3 -m backend.demo --company kitchen         # Acme Kitchen: restaurant; 2 stores, menu items, coolers and dish machines, health permits, food-vendor POs
+python3 -m backend.demo --company works           # Acme Works: manufacturer; plant and warehouse, machines and a forklift, raw materials, supplier POs
 ```
 
 Each one starts on its own, with Finance set up, Ana as owner, and its business type set (Settings > General).
-A file whose record type this build does not have yet is named in the startup output and not loaded: equipment,
-and the due dates that sit on equipment (vans, machines, coolers), wait for it.
+Its equipment and the due dates on it load from the same files. A file whose record type this build does not have is
+named in the startup output and not loaded.
 
 ## It cannot be mistaken for a real install
 
