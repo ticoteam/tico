@@ -17,6 +17,7 @@ address on `allowed`, or at an allowed domain, joins the roster on its first ver
 import json
 import logging
 import re
+from collections.abc import Iterable
 
 import yaml
 
@@ -28,9 +29,9 @@ OWNER = "owner"
 ACCESS = "access"
 
 
-def emails(values):
+def emails(values: Iterable[object] | None) -> list[str]:
     """Lowercase, unique, in the order given; empties dropped."""
-    seen = []
+    seen: list[str] = []
     for value in values or []:
         item = str(value or "").strip().lower()
         if item and item not in seen:
