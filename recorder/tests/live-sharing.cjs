@@ -4,11 +4,11 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-(async () => {
-  const browser = await chromium.launch({headless: true});
+async function replay(browser) {
+  const context = await browser.newContext();
   try {
-    const page = await browser.newPage();
-    const root = path.resolve(__dirname, '../ui');
+    const page = await context.newPage();
+    const root = path.resolve(__dirname, '../../recorder/ui');
     await page.route('**/*', async route => {
       const url = new URL(route.request().url());
       assert.equal(url.origin, 'http://recorder.example');
@@ -43,5 +43,13 @@ const path = require('node:path');
     await page.locator('[data-act="set-team"]').click();
     await notice.filter({hasText: 'Only you and people you add in Tico can see this meeting'}).waitFor();
     console.log('PASS: synthetic Open in Tico click; Private → Team → Private without polling; escaped instance. 0 failures.');
-  } finally { await browser.close(); }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+  } finally { await context.close(); }
+}
+module.exports = {replay};
+if (require.main === module) {
+  (async () => {
+    const browser = await chromium.launch({headless: true});
+    try { await replay(browser); }
+    finally { await browser.close(); }
+  })().catch(error => { console.error(error); process.exitCode = 1; });
+}
