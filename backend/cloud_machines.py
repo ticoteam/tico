@@ -48,14 +48,17 @@ machine; a shared machine's facts are its member bots' together:
              stale wakes it too), a watcher due (its last run plus its interval), or it waits to move here; or the
              machine is Always on. On the shared machine any member's want wakes it, the newest work first. Failing
              those, a stopped machine whose computer reports an older release than this server's is wanted to update
-             (`update:<release>`, `runner_behind`: never for a blank, dev or unparsed release, nor pinned or blocked).
+             (`update:<release>`, `runner_behind`: never for a blank, dev or unparsed release, nor pinned or blocked),
+             once its `spread` (0..UPDATE_SPREAD_S, per runner and release) after this server first ran the release
+             has passed (`update_due`): a release on a shared host starts no storm of machines at once.
     wake     a stopped machine with a want is started (created on first use); the size set since applies here
     keep     a running machine gets a heartbeat every HEARTBEAT seconds; HQ's ttl stops it if they stop coming
     idle     with no turn out on it, and no attempt or watcher activity on it for the size's `idle_stop_s` since the
              later of its start, its last activity and its want (a job queued for it, a watcher due: work its runner
              has not taken yet), it is stopped, unless Always on: the shared one only once every member is idle. A
              watcher running often keeps it on by itself, and so does a runner still updating (`runner_updating`).
-             With no active bot left on it, it stops.
+             With no active bot left on it, it stops, once no turn is out and no update under way: every stop but out
+             of credit's waits for both.
     guard    a machine woken for one want that saw no activity is not woken again for that same want: a job its
              runner never takes would otherwise start (4 cents) and idle-stop it forever. New work wakes it. An update
              wake is held the same way, for its release, and flags nothing: no bot's work waits on it.
@@ -79,6 +82,7 @@ machine; a shared machine's facts are its member bots' together:
 
 `decide` is the whole policy as a pure function of the row, the facts and the clock, so the tests drive it directly.
 """
+import hashlib
 import json
 import logging
 import secrets
@@ -133,6 +137,7 @@ DEAD = ("deleted", "failed")     # HQ's word for a machine that is gone or never
 GOING = ("stopping", "stopped")  # HQ's word for a machine that is going down, or down: its runner takes no new turn
 UPDATE_WANT = "update:"          # a stopped machine's want to update, keyed "update:" and this server's release
 UPDATE_STALE = 15 * 60           # an update its runner reports with no progress this long has failed (runner-rs follow.rs)
+UPDATE_SPREAD_S = 600            # update wakes spread over this long after a release (`update_due`): no start storm
 # A claim refusal that only says the machine's last report is stale: a stopped machine is woken for it, and its
 # runner reports afresh (the guard keeps a refusal that stays from waking it again).
 STALE = ("readiness_unknown", "not_ready", "isolation_unknown", "lane_held", "maintaining")
@@ -559,7 +564,7 @@ def facts(c, settings, current, at):
             best = (rank, want)
     out["want"] = best[1] if best else None
     if out["active"] and runner_id and current["state"] == "stopped" and current["machine_id"] \
-            and runner_behind(c, runner_id):
+            and runner_behind(c, runner_id) and at >= update_due(c, runner_id, releases.version()):
         out["update"] = UPDATE_WANT + releases.version()
     out["updating"] = bool(runner_id) and runner_updating(c, runner_id, at)
     return out
@@ -580,6 +585,23 @@ def runner_behind(c, runner_id):
     if found["update_state"] == "blocked":
         return bool(target and target < want)
     return not (found["update_state"] in ("failed", "rolled_back") and target == want)
+
+
+def spread(runner_id, release):
+    """A machine's update wake's offset, 0..UPDATE_SPREAD_S seconds: the same for a computer and a release, whatever
+    restarts, and different across computers. Keyed by the runner (unique across companies), not the machine's key:
+    every company's shared machine is SHARED, and those would all wake together."""
+    return int.from_bytes(hashlib.sha256(f"{runner_id}:{release}".encode()).digest()[:8], "big") % UPDATE_SPREAD_S
+
+
+def update_due(c, runner_id, release):
+    """When computer `runner_id`'s machine may be woken to update to `release` (epoch seconds): its `spread` after this
+    server first ran that release (releases.history, written at startup, so a restart does not move it). A release
+    landing on a shared host updates many companies at once, and their stopped machines would all start together
+    against the one boat account's per-minute start limits. A release with no history (none recorded yet) waits for
+    nothing: there is no moment to spread from."""
+    since = next((epoch(r.get("since")) for r in reversed(releases.history(c)) if r.get("version") == release), None)
+    return since + spread(runner_id, release) if since else 0
 
 
 def covers(woke_for, key):
@@ -651,8 +673,12 @@ def decide(current, found, at, idle_s):
     booting = bool(current["enroll_by"] and current["machine_id"] and current["state"] not in DEAD)
     if not found["active"]:
         # Paused, drained, archived or moved (every member, on the shared one): stopped, but never under a turn still
-        # out (a drain lets it finish).
-        if on and found["turns"]:
+        # out (a drain lets it finish), nor mid-update (a cut-short update is a broken runner at the next start). Only
+        # out of credit and a person's delete stop it under one: HQ stops a frozen company's machines itself (and the
+        # fence, `reserve`, still sends no stop while an attempt is leased or running there).
+        if found["frozen"]:
+            return ("stop" if on else None), "out_of_credit"
+        if on and (found["turns"] or found["updating"]):
             return ("heartbeat" if at - (current["heartbeat_at"] or 0) >= HEARTBEAT else None), None
         return ("stop" if on else None), None
     if current["next_try"] and at < current["next_try"] and not found["retry_now"]:
@@ -1136,25 +1162,37 @@ def change_shared(c, auth, who, size=None, always_on=None):
     return shared_view(c)
 
 
-def removable(c, auth, who, bot):
-    """The row of a bot's own machine the bot no longer runs on, for deleting; Problem otherwise. Owner, admin or the
-    bot's manager; never while the bot is set to run there."""
-    if not (auth.bot_admin(who) or auth.bot_manager(c, who, bot)):
+def removable(c, auth, who, key):
+    """The row of machine `key`, for deleting; Problem otherwise. A bot's own: owner, admin or the bot's manager, and
+    never while the bot is set to run there. The shared one (SHARED): owners and admins, whoever runs there: it is
+    deleted to replace a broken one, and the next work of any member makes a fresh one."""
+    if key == SHARED:
+        if not auth.bot_admin(who):
+            raise Problem("forbidden", "Only owners and admins delete the shared cloud machine", 403)
+    elif not (auth.bot_admin(who) or auth.bot_manager(c, who, key)):
         raise Problem("forbidden", "You do not manage this bot's computer", 403)
-    current = row(c, bot)
-    if not current or not (current["machine_id"] or current["runner_id"]):
-        raise Problem("not_found", "This bot has no cloud machine of its own", 404)
-    if current["mode"] == "cloud" and current["placement"] == "own":
+    current = row(c, key)
+    if not current or not (present(current) or current["runner_id"]):
+        raise Problem("not_found", "There is no shared cloud machine" if key == SHARED
+                      else "This bot has no cloud machine of its own", 404)
+    if key != SHARED and current["mode"] == "cloud" and current["placement"] == "own":
         raise Problem("in_use", "Move the bot to another computer or the shared cloud machine first", 409)
     return current
 
 
-def remove(store, hq, who, auth, bot):
-    """Delete the bot's own machine at HQ (its disk; the month's cost stays billed) and the computer it was; the bot
-    keeps where it runs now. HQ first: a failure there leaves everything as it was, to try again."""
+def present(current):
+    """Whether the row names a machine HQ may still have: one deleted here keeps its id (HQ keeps it live until boat
+    confirms, and a create meanwhile answers with it: `act`), but there is nothing left to delete."""
+    return bool(current["machine_id"]) and current["state"] != "deleted"
+
+
+def remove(store, hq, who, auth, key):
+    """Delete machine `key` at HQ (its disk; the month's cost stays billed) and the computer it was: a bot's own once
+    the bot runs elsewhere (the bot keeps where it runs now), or the shared one (its members' next work makes a new
+    one). HQ first: a failure there leaves everything as it was, to try again."""
     with store.read() as c:
-        current = removable(c, auth, who, bot)
-    if current["machine_id"]:
+        current = removable(c, auth, who, key)
+    if present(current):
         if hq is None:
             raise Problem("gateway", "Connect Tico Gateway first", 409)
         try:
@@ -1164,15 +1202,18 @@ def remove(store, hq, who, auth, bot):
                 raise Problem("gateway", "Tico did not answer. Try again in a minute." if refused.status == 0
                               else f"Tico refused this ({refused.code}).", 502) from None
     with store.transaction() as c:
-        current = removable(c, auth, who, bot)
+        current = removable(c, auth, who, key)
         if current["runner_id"]:
             c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"]))
-        # The machine goes; the bot's choices stay, so it is not made again unless someone picks its own machine.
-        save(c, bot, machine_id=None, runner_id=None, state="none", machine_size=None, started_at=None,
+        # The machine goes; the choices stay (size, Always on, where the bot runs): a bot's own is not made again unless
+        # someone picks it, and the shared one is made again at a member's next work (or at once if Always on). Its id
+        # stays, as deleted, as never_enrolled leaves it: a create before boat confirms the delete gets this machine
+        # back from HQ (idempotent on key), which `act` takes for no new one and tries again later.
+        save(c, key, runner_id=None, state="deleted", machine_size=None, started_at=None,
              stopped_at=None, cost_month_usd=0, starts_month=0, last_error="", active_at=None, heartbeat_at=None,
              ttl_s=None, next_try=None, failures=0, problem="", problem_at=None, wake_key=None, woke_at=None,
              enroll_by=None, enroll_fails=0, stop_until=None, changed_by=who.actor)
-        H.event(c, who.actor, "cloud_machine.deleted", bot, {"machine": current["machine_id"]})
+        H.event(c, who.actor, "cloud_machine.deleted", key, {"machine": current["machine_id"]})
     return {"ok": True}
 
 
@@ -1243,6 +1284,18 @@ def install(app, settings, store, auth, execution, mutate):
                 raise Problem("not_cloud", "Cloud machines are for Tico Cloud companies", 409)
             return {"shared": change_shared(c, auth, who, body.size, body.always_on)}
         return mutate(request, body, run)
+
+    @app.delete("/api/v2/cloud-machines/shared")
+    def cloud_machine_shared_delete(request: Request):
+        """Delete the shared cloud machine (its disk) and the computer it was, to replace a broken one: a member's next
+        work makes a new one. Its size and Always on stay. Owners and admins only."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            if not offered(c, settings):
+                raise Problem("not_cloud", "Cloud machines are for Tico Cloud companies", 409)
+            hq = service.hq(c)
+        return remove(store, hq, who, auth, SHARED)
 
     @app.post("/api/v2/bots/{bot}/cloud-machine")
     def cloud_machine_set(bot: str, request: Request, body: Change):
