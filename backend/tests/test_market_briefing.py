@@ -1,10 +1,11 @@
-"""The weekly briefing: who posts, one row a week, which bets an item touches, and the event the CEO Bot waits on."""
+"""The weekly briefing: who posts, one row a week, which bets an item touches, and the event the Strategy Bot waits
+on."""
 
 import json
 
 import pytest
 
-from backend import routines
+from backend import automations
 from backend.store import H
 from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
 from backend.tests.test_market import _librarian, _seed
@@ -31,8 +32,14 @@ def seeded(api, tmp_path):
 
 @pytest.fixture
 def events(monkeypatch):
-    seen = []
-    monkeypatch.setattr(routines, "emit", lambda c, kind, subject, payload=None, **kw: (kind == "market.briefing" and seen.append((kind, subject, payload))) and [])
+    """The `market.briefing` events the automations hear (H.hook), with their payloads."""
+    seen, heard = [], automations.on_event
+
+    def listen(c, type_, subject, data, actor):
+        if type_ == "market.briefing":
+            seen.append((type_, subject, data() if callable(data) else data))
+        return heard(c, type_, subject, data, actor)
+    monkeypatch.setattr(automations, "on_event", listen)
     return seen
 
 
@@ -92,7 +99,7 @@ def test_a_draft_bet_is_not_touched_until_it_is_published(seeded, events):
 def test_the_event_goes_out_once_a_week_with_the_touched_bets(seeded, events):
     cited, _ = publish_bets(seeded)
     brief(seeded, items=[item("company/northwind")])
-    assert events == [("market.briefing", WEEK, {"week": WEEK, "bets": cited["id"]})]
+    assert events == [("market.briefing", WEEK, {"week": WEEK, "bets": [cited["id"]]})]
     brief(seeded, items=[item("company/northwind")], body="Edited.")      # same bets: no second event
     assert len(events) == 1
     brief(seeded, items=[item("company/northwind", "company/brightline")], body="Edited again.")
@@ -106,3 +113,46 @@ def test_a_replacement_that_touches_no_bet_sends_no_new_event(seeded, events):
     assert len(events) == 1
     with seeded.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM market_briefings").fetchone()[0] == 1
+
+
+def test_an_automation_post_without_items_keeps_the_weeks_items_and_bets(seeded, events):
+    """The daily run posts with `items=None`: its title and page replace the week's, the items the Librarian posted by
+    hand and the bets they touch stay, and no second event goes out for the same bets. A week with no row gets []."""
+    from types import SimpleNamespace
+
+    from backend import market_briefing as MB
+    cited, _ = publish_bets(seeded)
+    hand = brief(seeded, items=[item("company/northwind")])["briefing"]
+    assert hand["bets"] == [cited["id"]] and len(events) == 1
+    with seeded.app.state.store.transaction() as c:
+        MB.post(c, SimpleNamespace(actor="human:ana"), WEEK, "Daily", "Run text.", None,
+                source={"automation": "auto_t", "run": "r"})
+    kept = get(seeded, "market/briefings/" + WEEK)["briefing"]
+    assert (kept["title"], kept["body"]) == ("Daily", "Run text.")
+    assert (kept["items"], kept["bets"]) == (hand["items"], [cited["id"]])
+    assert kept["source"] == {"automation": "auto_t", "run": "r"} and len(events) == 1
+    with seeded.app.state.store.transaction() as c:
+        MB.post(c, SimpleNamespace(actor="human:ana"), "2026-W45", "Empty", "Body.", None)
+    empty = get(seeded, "market/briefings/2026-W45")["briefing"]
+    assert (empty["items"], empty["bets"]) == ([], [])
+
+
+def test_market_labels_a_briefing_by_how_often_it_is_posted(seeded):
+    """A briefing by hand is the week's; one an automation posts each day (the built-in, every morning) is the day's;
+    one posted by a once-a-week schedule is the week's again."""
+    from types import SimpleNamespace
+
+    from backend import market_briefing as MB
+    from backend.tests.test_automation_api import NOTE_STEP
+    assert brief(seeded)["briefing"]["cadence"] == "weekly"
+    made = {cron: post(seeded, "automations", {"name": "Briefing " + cron, "owner": "person:ana", "steps": [NOTE_STEP],
+                                               "trigger": {"type": "schedule", "cron": cron, "tz": "UTC"}})["id"]
+            for cron in ("0 7 * * *", "0 7 * * 1-5", "0 7 * * 1", "0 7 * * MON")}
+    want = {"0 7 * * *": "daily", "0 7 * * 1-5": "daily", "0 7 * * 1": "weekly", "0 7 * * MON": "weekly"}
+    for cron, aid in made.items():
+        with seeded.app.state.store.transaction() as c:
+            MB.post(c, SimpleNamespace(actor="human:ana"), WEEK, "Today", "Body.", [], source={"automation": aid, "run": "r"})
+        latest = get(seeded, "market/briefings/latest")["briefing"]
+        assert latest["cadence"] == want[cron], cron
+        assert get(seeded, "market/briefings")["briefings"][0]["cadence"] == want[cron]
+    assert brief(seeded)["briefing"]["cadence"] == "weekly"          # a post by hand clears the source

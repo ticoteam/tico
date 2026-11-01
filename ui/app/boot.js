@@ -22,7 +22,7 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => {
   const roster = Promise.all([get('/employees'), get('/me'), get('/humans').catch(() => ({people: []}))]);
   updPrefetch();
   // Health and sidebar counts enrich the page; a slow diagnostic must not hold up opening a chat or task.
-  const status = get('/status').catch(() => null).then(st => { S.status = st; S.statusPending = false; });
+  const status = get('/status').catch(() => null).then(st => { S.status = st; S.statusPending = false; cloudAccessFromStatus(); });
   const counts = v2Refresh();
   try {
     const [emps, me, people] = await roster;

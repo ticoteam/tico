@@ -192,6 +192,7 @@ impl GrokHost {
         let mut full = env.clone();
         full.extend(NO_OPERATOR_MCP.iter().map(|(k, v)| (k.to_string(), v.to_string())));
         command.args(&cmd[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).env_clear().envs(&full);
+        super::new_group(&mut command);
         let mut child = command.spawn().map_err(|e| failed(format!("could not start grok agent: {e}")))?;
         let _stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &full);
         let stdout = child.stdout.take().ok_or_else(|| failed("grok agent has no stdout"))?;

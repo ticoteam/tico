@@ -27,7 +27,7 @@ function profileFieldsHTML(e, choices) {
       <label class="profile-field"><span class="muted">Pulls</span><select class="settings-inline-select" data-profile-key="pulls"${off}>${PROFILE_PULLS.map(([v, l]) => opt(v, l, p.pulls)).join('')}</select></label>
       <label class="profile-field"><span class="muted">Takes</span><select class="settings-inline-select" data-profile-key="takes"${off}>${PROFILE_TAKES.map(([v, l]) => opt(v, l, p.takes)).join('')}</select></label>
       <label class="sysr-switch">${peopleSwitch('data-profile-key="sweeps"', !!p.sweeps, !manage, 'Sweeps')}<span>Sweeps</span></label>
-      <a href="#/settings/rules?bot=${encodeURIComponent(e.name)}" data-profile-rules>Wake rules</a></div>` : '';
+      <a href="${AUTOMATIONS}?q=${encodeURIComponent(botDisplayName(e.name))}" data-profile-rules>Automations</a></div>` : '';
   return `<select class="settings-inline-select" data-bot-profile="${esc(e.name)}" data-current="${esc(name)}" aria-label="Profile for ${esc(empName(e.name))}"${off}>
       ${list.map(c => opt(c.name, c.label, name)).join('')}</select>${lead}${custom}
     <p class="muted profile-words" data-profile-description>${esc(description)}</p>${p.summary ? `<p class="muted profile-words" data-profile-summary>${esc(p.summary)}</p>` : ''}`;

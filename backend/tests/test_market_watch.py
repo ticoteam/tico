@@ -5,7 +5,7 @@ import pytest
 from backend import market_watch as W
 from backend.store import H
 from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
-from backend.tests.test_company import with_ceo_bot
+from backend.tests.test_company import with_strategy_bot
 from backend.tests.test_market import _librarian, _seed
 from backend.tests.test_strategy import add_bet, publish, write
 
@@ -157,7 +157,7 @@ def test_the_same_page_twice_and_the_cap_on_active_watches_are_409(seeded):
 
 
 def test_a_page_change_trips_a_cited_bet_only_once_the_insight_is_applied(seeded, monkeypatch):
-    with_ceo_bot(seeded)
+    with_strategy_bot(seeded)
     write(seeded, summary="Acme runs rentals with bots.", sections={"not": "No enterprise deals."})
     add_bet(seeded, cites=["company/northwind"], wrong_if={"kind": "thesis", "market_id": "company/northwind"})
     publish(seeded)

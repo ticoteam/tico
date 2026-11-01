@@ -54,6 +54,16 @@ pub struct Rejection {
     pub reason: String,
 }
 
+/// Where a refusal is kept: the runtime, its profile ("" = the operator's own), the credentials it was refused under,
+/// and the bot whose own key it refused ("" when the refusal is the runtime's). See `SignIn::refusal_key`.
+type RefusalKey = (String, String, String, String);
+
+/// Whether `runtime` signs each bot in with that bot's own key grant (its manifest's `sign_in_status.check` is
+/// "bot-key", pi and the Gemini CLI). A provider's refusal of such a key is that bot's, not the runtime's.
+pub fn bot_keyed(runtime: &str) -> bool {
+    crate::harness_tools::caps(runtime, "").sign_in_status.check == "bot-key"
+}
+
 /// The keys that sign `runtime` in on this computer for every bot: its manifest's `auth.api_key_env` when the
 /// computer holds them (`api_keys = "computer"`). Keys each bot holds itself are never a computer's sign-in.
 pub fn headless_names(runtime: &str) -> Vec<String> {
@@ -82,7 +92,7 @@ pub struct SignIn {
     secrets: PathBuf,
     asked: Mutex<HashMap<String, Instant>>,
     key_tried: Mutex<HashMap<(String, u64), Instant>>,
-    rejected: Mutex<HashMap<(String, String, String), Rejection>>,
+    rejected: Mutex<HashMap<RefusalKey, Rejection>>,
     /// Set when a rejection is recorded or cleared: the loop sends a heartbeat at once.
     dirty: std::sync::atomic::AtomicBool,
     /// Held for every read-modify-write of SIGNED_OUT_FILE and the key files, so two runtimes signed out (or in)
@@ -182,9 +192,11 @@ impl SignIn {
         crate::profiles::sha256_hex(seen.join("\n").as_bytes())
     }
 
-    /// The live refusal of `runtime` on `profile` while its credentials are unchanged, or None.
-    pub fn rejection(&self, runtime: &str, profile: Option<&crate::profiles::Profile>) -> Option<Rejection> {
-        let key = (runtime.to_string(), profile.map(|p| p.name.clone()).unwrap_or_default(), self.credential_fingerprint(profile));
+    /// The live refusal of `runtime` on `profile` while its credentials are unchanged, or None. `bot` is the bot the
+    /// answer is for: a bot-keyed runtime's own key (no profile) is refused per bot (`refusal_key`), so a caller with
+    /// no bot in hand passes "" and gets only the runtime's refusal, which such a key never leaves.
+    pub fn rejection(&self, runtime: &str, profile: Option<&crate::profiles::Profile>, bot: &str) -> Option<Rejection> {
+        let key = self.refusal_key(runtime, profile, bot);
         let mut rows = self.rejected.lock().unwrap();
         if rows.get(&key).is_some_and(|r| r.mono.elapsed() >= REJECT_RECHECK) {
             rows.remove(&key);
@@ -193,9 +205,10 @@ impl SignIn {
     }
 
     /// Record that the provider refused `runtime`'s key or sign-in (service.py reject): the runtime stops taking
-    /// work here until a credential changes, a sign-in succeeds, or REJECT_RECHECK passes.
-    pub fn reject(&self, runtime: &str, text: &str, profile: Option<&crate::profiles::Profile>) {
-        let key = (runtime.to_string(), profile.map(|p| p.name.clone()).unwrap_or_default(), self.credential_fingerprint(profile));
+    /// work here until a credential changes, a sign-in succeeds, or REJECT_RECHECK passes. On a bot-keyed runtime with
+    /// no profile only `bot`, whose key it was, stops (`refusal_key`).
+    pub fn reject(&self, runtime: &str, text: &str, profile: Option<&crate::profiles::Profile>, bot: &str) {
+        let key = self.refusal_key(runtime, profile, bot);
         let at = crate::util::iso(&serde_json::json!(crate::util::epoch_s().floor()));
         let at = text_of(&at).chars().take(19).collect::<String>() + "Z";
         let mut rows = self.rejected.lock().unwrap();
@@ -206,7 +219,23 @@ impl SignIn {
         self.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// A sign-in succeeded: forget the refusals of `runtime` on `profile` ("" = the operator's own).
+    /// What a refusal is kept under. A bot-keyed runtime's key is each bot's own grant, so its refusal is that bot's,
+    /// and a change to the bot's granted names is a credential change that clears it (a changed value is only read
+    /// when a turn runs, so that one clears at REJECT_RECHECK). A subscription profile's login and a computer-level
+    /// runtime are shared by their bots, so their refusal is the runtime's and the bot is left out.
+    fn refusal_key(&self, runtime: &str, profile: Option<&crate::profiles::Profile>, bot: &str) -> RefusalKey {
+        let own = bot_keyed(runtime) && profile.is_none();
+        let mut credentials = self.credential_fingerprint(profile);
+        if own {
+            let names = crate::readiness_extra::held(bot).join("\n");
+            credentials = crate::profiles::sha256_hex(format!("{credentials}\n{names}").as_bytes());
+        }
+        let profile = profile.map(|p| p.name.clone()).unwrap_or_default();
+        (runtime.to_string(), profile, credentials, if own { bot.to_string() } else { String::new() })
+    }
+
+    /// A sign-in succeeded: forget the refusals of `runtime` on `profile` ("" = the operator's own), every bot's on a
+    /// bot-keyed runtime.
     pub fn clear_rejection(&self, runtime: &str, profile: &str) {
         self.rejected.lock().unwrap().retain(|k, _| !(k.0 == runtime && k.1 == profile));
         crate::profiles::forget_report();
@@ -552,7 +581,9 @@ impl SignIn {
         }
         let wait = match self.key_source(runtime) {
             Some((_, "terminal")) => return false,
-            Some(_) if self.rejection(runtime, None).is_none() => KEY_REFRESH,
+            // No bot in hand here (the company's key is per runtime). Unreachable for a bot-keyed runtime: it has no
+            // company key (`headless_names` is empty), so this returns above.
+            Some(_) if self.rejection(runtime, None, "").is_none() => KEY_REFRESH,
             _ => TEAM_KEY_RETRY,
         };
         {
@@ -1141,6 +1172,55 @@ mod tests {
         assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         std::fs::write(&path, "not json").unwrap();
         assert!(!sign.signed_out("claude"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_refused_bot_key_stops_only_that_bot_on_a_bot_keyed_runtime() {
+        // pi and the Gemini CLI sign each bot in with its own key grant: one bot's refused key says nothing about the
+        // others', and the runtime's own row (no bot) is not refused.
+        let dir = projects();
+        let sign = SignIn::new(&dir);
+        assert!(bot_keyed("pi") && bot_keyed("gemini") && !bot_keyed("claude") && !bot_keyed("codex"));
+        sign.reject("pi", "401 invalid OPENROUTER_API_KEY", None, "signin-alpha");
+        assert!(sign.rejection("pi", None, "signin-alpha").is_some());
+        assert!(sign.rejection("pi", None, "signin-beta").is_none());
+        assert!(sign.rejection("pi", None, "").is_none());
+        // A sign-in that succeeded on the runtime forgets every bot's refusal of it, as before.
+        sign.clear_rejection("pi", "");
+        assert!(sign.rejection("pi", None, "signin-alpha").is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_computer_level_refusal_still_stops_every_bot_on_its_runtime() {
+        let dir = projects();
+        let sign = SignIn::new(&dir);
+        sign.reject("claude", "authentication_error: invalid x-api-key", None, "signin-alpha");
+        assert!(sign.rejection("claude", None, "signin-alpha").is_some());
+        assert!(sign.rejection("claude", None, "signin-beta").is_some());
+        assert!(sign.rejection("claude", None, "").is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_bot_key_refusal_clears_when_that_bots_grants_change_or_after_the_recheck() {
+        let dir = projects();
+        let sign = SignIn::new(&dir);
+        crate::readiness_extra::set_held("signin-gamma", vec!["OPENROUTER_API_KEY".into()]);
+        sign.reject("pi", "401 invalid OPENROUTER_API_KEY", None, "signin-gamma");
+        assert!(sign.rejection("pi", None, "signin-gamma").is_some());
+        // A grant added for that bot is a credential change: the refusal no longer applies.
+        crate::readiness_extra::set_held("signin-gamma", vec!["OPENROUTER_API_KEY".into(), "GITHUB_TOKEN".into()]);
+        assert!(sign.rejection("pi", None, "signin-gamma").is_none());
+        // Refused again under those grants, it holds until REJECT_RECHECK has passed, and then one turn tries again.
+        sign.reject("pi", "401 invalid OPENROUTER_API_KEY", None, "signin-gamma");
+        assert!(sign.rejection("pi", None, "signin-gamma").is_some());
+        let refused_long_ago = Instant::now().checked_sub(REJECT_RECHECK).expect("the clock has run for REJECT_RECHECK");
+        for row in sign.rejected.lock().unwrap().values_mut() {
+            row.mono = refused_long_ago;
+        }
+        assert!(sign.rejection("pi", None, "signin-gamma").is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

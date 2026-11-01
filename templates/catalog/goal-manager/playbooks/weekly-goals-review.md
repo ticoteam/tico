@@ -1,9 +1,10 @@
 # Weekly goals review
 
 A short message to the team owner, and to the Chief of Staff if the team has one (`hub team show` shows the
-bots; use the one that owns the weekly brief). Under 200 words. It is the Monday note in the owner's chat, and only above Passive (`level` in `hub goal ceo-bot`):
-the server starts this routine when the owner raises the level and pauses it back at Passive. Leave the routine as it
-is; at Passive, a run of it ends with one line saying the note is off at Passive.
+bots; use the one that owns the weekly brief). Under 200 words. It is the Monday note to the owner, and
+only above Passive (`level` in `hub goal strategy-bot`): the server starts this routine when the level is above
+Passive and pauses it back at Passive. Leave the routine as it is; at Passive, a run of it ends with one line
+saying the note is off at Passive.
 
 Run `playbooks/goals-make-sense.md` first, so the proposals it files are in the list. Facts first, then
 interpretation, labelled:
@@ -18,10 +19,11 @@ interpretation, labelled:
    goal and KPI you would suggest; a bet in both is one line, and none is a line too. At level 2, one line on
    the recoveries waiting and what the approved ones changed. At level 3, one
    line per decision you made this week (from `state.md`: the goal, what you did, why), and that each has an Undo in
-   the CEO Bot log.
-7. The level-3 offer, at level 2 only when `level3_offer.due` in `hub goal ceo-bot` is true (10 recoveries approved in
-   a row with your pick unchanged, and none offered in the last 30 days): one sentence saying so, and that the owner
-   can raise the level in Settings > CEO Bot if they want. Then record it with `hub goal ceo-bot-level3-offer`, so it
+   the Strategy Bot log.
+7. The level-3 offer, at level 2 only when `level3_offer.due` in `hub goal strategy-bot` is true (10 recoveries approved
+   in a row with your pick unchanged, and none offered in the last 30 days): one sentence saying so, and that the owner
+   can raise the level in Settings > Strategy Bot if they want. Then record it with
+   `hub goal strategy-bot-level3-offer`, so it
    is offered once. Never raise the level yourself, never ask again before it is due, and never press.
    Also one line suggesting a lens (`hub lens list`; Scenarios, Pre-mortem or Blue Ocean) when no lens has run
    against the current published version in the last 90 days (`hub lens runs`). It is a suggestion in the note; never

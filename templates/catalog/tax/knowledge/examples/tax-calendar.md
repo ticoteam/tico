@@ -18,10 +18,10 @@ outside accountant); two inputs due to her 09-30 and not yet sent. One state at 
 | 10-31 | Payroll return, Q3 | Federal | Payroll provider | Provider files; confirm receipt | Upcoming |
 | 12-15 | Estimated income tax, Q4 | State A | Ruth | Q4 forecast | Upcoming |
 
-## Threshold watch (trailing twelve months to 2026-09-30, source: billing export 09-30)
-- State B: 91,200 of a 100,000 threshold (91 percent). Official page checked 2026-10-01. Ask the
+## Threshold watch (sales to 2026-09-30, window named per place, source: billing export 09-30)
+- State B: 91,200 of a 100,000 threshold, trailing twelve months (91 percent). Official page checked 2026-10-01. Ask the
   accountant whether to prepare a registration.
-- State C: 38,400 of 100,000 (38 percent). No action.
+- State C: 38,400 of 100,000, calendar 2026 to date (38 percent). No action.
 
 ## Contractors
 - 6 paid over the reporting amount this year; 1 form missing (Brightline Design, paid 7,500). Ask Sofia to collect.

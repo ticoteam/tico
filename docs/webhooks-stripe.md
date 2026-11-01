@@ -1,9 +1,9 @@
-# Recipe: Stripe events start a routine
+# Recipe: Stripe events start an automation
 
-You will have Tico start a routine, and so a task for a bot, when Stripe sends the events you choose, for example a failed
+You will have Tico start an automation, and so a task for a bot, when Stripe sends the events you choose, for example a failed
 invoice payment. The background is on [Webhooks](webhooks.md).
 
-You need: a Stripe account where you can add webhook endpoints, a bot for the routine (this page uses `billing`), and a server
+You need: a Stripe account where you can add webhook endpoints, a bot for the automation (this page uses `billing`), and a server
 Stripe can reach. If yours is a laptop or sits behind a firewall, use an
 [address through Tico Gateway](webhooks.md#through-tico-gateway) in step 1.
 
@@ -32,7 +32,7 @@ In the Stripe Dashboard: Developers → Webhooks → Add endpoint.
 
 - **Endpoint URL**: the address from step 1.
 - **Events to send**: pick only the events you want to act on, such as `invoice.payment_failed` and
-  `checkout.session.completed`. Tico's routine takes every call it gets, so this list is your filter.
+  `checkout.session.completed`. An automation with no filter takes every call it gets, so this list is your first filter.
 
 When you save, Stripe shows a **Signing secret** that starts `whsec_`. Reveal it and copy it.
 
@@ -46,19 +46,21 @@ Paste Stripe's secret as it is. Tico now checks the `Stripe-Signature` header on
 whose time is more than 5 minutes off, with 401. The type of each call is read from the body's `type`, for example
 `invoice.payment_failed`.
 
-## 4. Make the routine
+## 4. Make the automation
 
-A routine can be set to run when a webhook is called. In the bot's Routines card, or Settings → Rules → New routine, choose
-*Runs: On an event* and pick *Stripe*. Or:
+On the Automations page, **New automation**, pick the Webhook trigger *Stripe* and add a Bot turn step for `billing`. Or:
 
 ```
-hub routine set stripe-events --bot billing --title "Stripe event" --on webhook.stripe \
-  --text "Stripe sent an event. Read the type and the data. For a failed payment, find the customer and draft a note to them. Do nothing for anything else."
+hub automation create --file - <<'EOF'
+{"name": "Stripe event", "owner": "bot:billing", "enabled": true,
+ "trigger": {"type": "webhook", "id": "stripe"},
+ "steps": [{"id": "handle", "type": "bot_turn", "enabled": true, "bot": "billing",
+            "prompt": "Stripe sent the event {{webhook.type}}. Read its data: {{webhook.data}}. For a failed payment, find the customer and draft a note to them. Do nothing for anything else."}]}
+EOF
 ```
 
-Each call opens one task for `billing`: the routine's text, the webhook's name and the call's `type:`, then the body, fenced as
-data the bot did not write. A routine has no filter on type. If a type needs different handling, choose which events Stripe
-sends (step 2), or use a rule below.
+Each call opens one task for `billing` with the prompt; the type and the body come after it, fenced as data the bot did not
+write. To act on some types only, add `filters` to the trigger (below).
 
 ## 5. Try it
 
@@ -76,14 +78,17 @@ the same event again, even days later, nothing new starts.
 
 ## Act on one type without a task
 
-For a type that needs a quick nudge, not a task, use a rule on the same webhook. This wakes `billing` for a failed payment and
-for nothing else:
+For a type that needs a quick nudge, not a task, use an automation with a filter and a `wake_bot` action. This wakes `billing`
+for a failed payment and for nothing else:
 
 ```
-hub rule set --scope-kind team --event webhook.received \
-  --when '{"trigger":"stripe","type":"invoice.payment_failed"}' \
-  --then action \
-  --params '{"action":"wake_bot","bot":"billing","text":"Payment failed: {{data.data.object.customer_email}} ({{data.data.object.amount_due}})"}'
+hub automation create --file - <<'EOF'
+{"name": "Stripe payment failed", "owner": "bot:billing", "enabled": true,
+ "trigger": {"type": "webhook", "id": "stripe",
+             "filters": [{"field": "webhook.type", "op": "is", "value": "invoice.payment_failed"}]},
+ "steps": [{"id": "wake", "type": "action", "enabled": true, "do": "wake_bot",
+            "args": {"bot": "billing", "text": "Payment failed: {{webhook.data.data.object.customer_email}} ({{webhook.data.data.object.amount_due}})"}}]}
+EOF
 ```
 
-A routine and a rule on the same webhook both run. Use one or the other for a given type.
+Two automations on the same webhook both run. Use one or the other for a given type.

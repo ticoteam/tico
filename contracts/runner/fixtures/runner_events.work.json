@@ -1,0 +1,12 @@
+{
+ "answer": {
+  "bots": [
+   "ops"
+  ],
+  "kind": "work",
+  "seq": 6
+ },
+ "endpoint": "runner_events",
+ "request": null,
+ "status": 200
+}

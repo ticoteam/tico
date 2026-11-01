@@ -107,6 +107,7 @@ const {unrouted} = require('./support/routes.cjs');
     if (process.env.DEV595_SHOTS) await page.screenshot({path: path.join(process.env.DEV595_SHOTS, 'ticket-phone.png'), fullPage: true});
     // Manual quarantine on the ticket page, then its lift, use the same notice as cards.
     await page.goto('https://tico-ui.test/#/task/Manual%20quarantine');
+    await page.waitForFunction(() => S.route === '#/task/Manual%20quarantine');   // a page change draws a frame later (its fade)
     await modal.locator('.task-builder-notice').waitFor();
     assert.equal(await modal.locator('.task-builder-notice').innerText(), manual.quarantine.builder_notice);
     await page.evaluate(status => liveEmit('bots', {bot: status.bot, status}), active('builder-b'));

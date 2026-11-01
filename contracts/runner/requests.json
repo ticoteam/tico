@@ -1,0 +1,2918 @@
+{
+ "$defs": {
+  "AppDriverApp": {
+   "additionalProperties": false,
+   "description": "One desktop app the computer's app driver can operate for a synced bot (backend/app_delivery.py).",
+   "properties": {
+    "background_ok": {
+     "default": false,
+     "title": "Background Ok",
+     "type": "boolean"
+    },
+    "detail": {
+     "default": "",
+     "maxLength": 300,
+     "title": "Detail",
+     "type": "string"
+    },
+    "installed": {
+     "default": false,
+     "title": "Installed",
+     "type": "boolean"
+    },
+    "ready": {
+     "default": false,
+     "title": "Ready",
+     "type": "boolean"
+    },
+    "running": {
+     "default": false,
+     "title": "Running",
+     "type": "boolean"
+    },
+    "signed_in": {
+     "default": false,
+     "title": "Signed In",
+     "type": "boolean"
+    },
+    "state": {
+     "default": "error",
+     "enum": [
+      "ready",
+      "no_permission",
+      "not_installed",
+      "not_signed_in",
+      "needs_foreground",
+      "ui_changed",
+      "no_driver",
+      "error"
+     ],
+     "title": "State",
+     "type": "string"
+    },
+    "version": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Version",
+     "type": "string"
+    }
+   },
+   "title": "AppDriverApp",
+   "type": "object"
+  },
+  "AppDriverReadiness": {
+   "additionalProperties": false,
+   "description": "The computer's desktop-app driver: whether macOS trusts it, and each app's state by app id (`grok`).",
+   "properties": {
+    "apps": {
+     "patternProperties": {
+      "^[a-z0-9_-]{1,40}$": {
+       "$ref": "#/$defs/AppDriverApp"
+      }
+     },
+     "title": "Apps",
+     "type": "object"
+    },
+    "detail": {
+     "default": "",
+     "maxLength": 300,
+     "title": "Detail",
+     "type": "string"
+    },
+    "macos": {
+     "default": "",
+     "maxLength": 50,
+     "title": "Macos",
+     "type": "string"
+    },
+    "trusted": {
+     "default": false,
+     "title": "Trusted",
+     "type": "boolean"
+    }
+   },
+   "title": "AppDriverReadiness",
+   "type": "object"
+  },
+  "AuthRejected": {
+   "additionalProperties": false,
+   "properties": {
+    "reason": {
+     "default": "",
+     "maxLength": 300,
+     "title": "Reason",
+     "type": "string"
+    },
+    "runtime": {
+     "maxLength": 100,
+     "title": "Runtime",
+     "type": "string"
+    }
+   },
+   "required": [
+    "runtime"
+   ],
+   "title": "AuthRejected",
+   "type": "object"
+  },
+  "BotReadiness": {
+   "additionalProperties": false,
+   "properties": {
+    "commands": {
+     "items": {
+      "$ref": "#/$defs/SlashCommand"
+     },
+     "maxItems": 30,
+     "title": "Commands",
+     "type": "array"
+    },
+    "configuration_valid": {
+     "default": false,
+     "title": "Configuration Valid",
+     "type": "boolean"
+    },
+    "data_problem": {
+     "default": "",
+     "title": "Data Problem",
+     "type": "string"
+    },
+    "goals": {
+     "default": false,
+     "title": "Goals",
+     "type": "boolean"
+    },
+    "mail_request": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/MailRequest"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "model": {
+     "default": "",
+     "maxLength": 200,
+     "title": "Model",
+     "type": "string"
+    },
+    "problems": {
+     "items": {
+      "type": "string"
+     },
+     "maxItems": 20,
+     "title": "Problems",
+     "type": "array"
+    },
+    "profile": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Profile",
+     "type": "string"
+    },
+    "published": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Published"
+    },
+    "ready": {
+     "title": "Ready",
+     "type": "boolean"
+    },
+    "repository": {
+     "default": "",
+     "maxLength": 2000,
+     "title": "Repository",
+     "type": "string"
+    },
+    "repository_present": {
+     "default": false,
+     "title": "Repository Present",
+     "type": "boolean"
+    },
+    "repository_revision": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Repository Revision",
+     "type": "string"
+    },
+    "routine_preparation_error": {
+     "default": "",
+     "maxLength": 500,
+     "title": "Routine Preparation Error",
+     "type": "string"
+    },
+    "routine_revisions": {
+     "items": {
+      "type": "string"
+     },
+     "maxItems": 100,
+     "title": "Routine Revisions",
+     "type": "array"
+    },
+    "runtime": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Runtime",
+     "type": "string"
+    },
+    "schedule_error": {
+     "default": "",
+     "maxLength": 500,
+     "title": "Schedule Error",
+     "type": "string"
+    },
+    "schedules": {
+     "anyOf": [
+      {
+       "items": {},
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Schedules"
+    },
+    "sign_in": {
+     "default": "unknown",
+     "enum": [
+      "ready",
+      "missing",
+      "failed",
+      "unknown"
+     ],
+     "title": "Sign In",
+     "type": "string"
+    },
+    "tools": {
+     "items": {
+      "$ref": "#/$defs/ToolAccess"
+     },
+     "maxItems": 30,
+     "title": "Tools",
+     "type": "array"
+    },
+    "warnings": {
+     "items": {
+      "type": "string"
+     },
+     "maxItems": 20,
+     "title": "Warnings",
+     "type": "array"
+    }
+   },
+   "required": [
+    "ready"
+   ],
+   "title": "BotReadiness",
+   "type": "object"
+  },
+  "Checkout": {
+   "additionalProperties": false,
+   "properties": {
+    "ahead": {
+     "maximum": 100000,
+     "minimum": 0,
+     "title": "Ahead",
+     "type": "integer"
+    },
+    "behind": {
+     "maximum": 100000,
+     "minimum": 0,
+     "title": "Behind",
+     "type": "integer"
+    },
+    "blocked": {
+     "anyOf": [
+      {
+       "maxLength": 300,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Blocked"
+    },
+    "checked_at": {
+     "maxLength": 40,
+     "title": "Checked At",
+     "type": "string"
+    },
+    "head": {
+     "pattern": "^[0-9a-f]{40}$",
+     "title": "Head",
+     "type": "string"
+    },
+    "running": {
+     "pattern": "^[0-9a-f]{40}$",
+     "title": "Running",
+     "type": "string"
+    }
+   },
+   "required": [
+    "head",
+    "running",
+    "ahead",
+    "behind",
+    "checked_at"
+   ],
+   "title": "Checkout",
+   "type": "object"
+  },
+  "Claim": {
+   "additionalProperties": false,
+   "properties": {
+    "bot": {
+     "anyOf": [
+      {
+       "maxLength": 200,
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Bot"
+    },
+    "busy_bots": {
+     "anyOf": [
+      {
+       "items": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+       },
+       "maxItems": 32,
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Busy Bots"
+    },
+    "busy_lanes": {
+     "anyOf": [
+      {
+       "items": {
+        "maxLength": 256,
+        "minLength": 3,
+        "type": "string"
+       },
+       "maxItems": 256,
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Busy Lanes"
+    },
+    "next_run": {
+     "default": false,
+     "title": "Next Run",
+     "type": "boolean"
+    },
+    "start_places": {
+     "default": false,
+     "title": "Start Places",
+     "type": "boolean"
+    }
+   },
+   "title": "Claim",
+   "type": "object"
+  },
+  "Completion": {
+   "additionalProperties": false,
+   "properties": {
+    "auth_rejected": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/AuthRejected"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "continues": {
+     "default": false,
+     "title": "Continues",
+     "type": "boolean"
+    },
+    "fallback": {
+     "anyOf": [
+      {
+       "maxLength": 80,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Fallback"
+    },
+    "last_seq": {
+     "minimum": 0,
+     "title": "Last Seq",
+     "type": "integer"
+    },
+    "limit_resets_at": {
+     "anyOf": [
+      {
+       "maxLength": 40,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Limit Resets At"
+    },
+    "limited": {
+     "default": false,
+     "title": "Limited",
+     "type": "boolean"
+    },
+    "load_snapshot": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/LoadSnapshot"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "outcome": {
+     "enum": [
+      "completed",
+      "failed",
+      "interrupted"
+     ],
+     "title": "Outcome",
+     "type": "string"
+    },
+    "primary_held": {
+     "default": false,
+     "title": "Primary Held",
+     "type": "boolean"
+    },
+    "primary_limited": {
+     "default": false,
+     "title": "Primary Limited",
+     "type": "boolean"
+    },
+    "profile_used": {
+     "anyOf": [
+      {
+       "maxLength": 80,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Profile Used"
+    },
+    "pushes": {
+     "items": {
+      "$ref": "#/$defs/RunPush"
+     },
+     "maxItems": 50,
+     "title": "Pushes",
+     "type": "array"
+    },
+    "retryable": {
+     "default": false,
+     "title": "Retryable",
+     "type": "boolean"
+    },
+    "rotated": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/RunRotation"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "session": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/RunSession"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "source_continuation": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/SourceContinuation"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "subscription_unavailable": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/SubscriptionUnavailable"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "text": {
+     "default": "",
+     "maxLength": 200000,
+     "title": "Text",
+     "type": "string"
+    },
+    "tokens_in": {
+     "anyOf": [
+      {
+       "minimum": 0,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Tokens In"
+    },
+    "tokens_out": {
+     "anyOf": [
+      {
+       "minimum": 0,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Tokens Out"
+    },
+    "undelivered": {
+     "items": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+     },
+     "maxItems": 100,
+     "title": "Undelivered",
+     "type": "array"
+    },
+    "usage": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/RunUsage"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "yielded": {
+     "default": false,
+     "title": "Yielded",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "outcome",
+    "last_seq"
+   ],
+   "title": "Completion",
+   "type": "object"
+  },
+  "ContainerExecReadiness": {
+   "additionalProperties": false,
+   "description": "A throwaway container start on the computer (runner-rs/src/readiness_extra.rs).",
+   "properties": {
+    "checked_at": {
+     "maxLength": 50,
+     "title": "Checked At",
+     "type": "string"
+    },
+    "error": {
+     "default": "",
+     "maxLength": 300,
+     "title": "Error",
+     "type": "string"
+    },
+    "ok": {
+     "title": "Ok",
+     "type": "boolean"
+    },
+    "seconds": {
+     "maximum": 3600,
+     "minimum": 0,
+     "title": "Seconds",
+     "type": "number"
+    }
+   },
+   "required": [
+    "ok",
+    "seconds",
+    "checked_at"
+   ],
+   "title": "ContainerExecReadiness",
+   "type": "object"
+  },
+  "DiskReadiness": {
+   "additionalProperties": false,
+   "properties": {
+    "free_bytes": {
+     "minimum": 0,
+     "title": "Free Bytes",
+     "type": "integer"
+    },
+    "total_bytes": {
+     "minimum": 1,
+     "title": "Total Bytes",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "total_bytes",
+    "free_bytes"
+   ],
+   "title": "DiskReadiness",
+   "type": "object"
+  },
+  "Empty": {
+   "additionalProperties": false,
+   "properties": {},
+   "title": "Empty",
+   "type": "object"
+  },
+  "EngineReadiness": {
+   "additionalProperties": false,
+   "description": "Which runner engine the computer runs (runner/engine.py): the Rust runner and its build, or the Python one and why.",
+   "properties": {
+    "build": {
+     "default": "",
+     "maxLength": 64,
+     "title": "Build",
+     "type": "string"
+    },
+    "name": {
+     "enum": [
+      "rust",
+      "python"
+     ],
+     "title": "Name",
+     "type": "string"
+    },
+    "note": {
+     "default": "",
+     "maxLength": 300,
+     "title": "Note",
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "title": "EngineReadiness",
+   "type": "object"
+  },
+  "Event": {
+   "additionalProperties": false,
+   "properties": {
+    "kind": {
+     "enum": [
+      "delta",
+      "message",
+      "tokens",
+      "status",
+      "error",
+      "tool",
+      "diagnostic",
+      "goal"
+     ],
+     "title": "Kind",
+     "type": "string"
+    },
+    "payload": {
+     "additionalProperties": true,
+     "title": "Payload",
+     "type": "object"
+    },
+    "seq": {
+     "minimum": 1,
+     "title": "Seq",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "seq",
+    "kind",
+    "payload"
+   ],
+   "title": "Event",
+   "type": "object"
+  },
+  "EventBatch": {
+   "additionalProperties": false,
+   "properties": {
+    "events": {
+     "items": {
+      "$ref": "#/$defs/Event"
+     },
+     "maxItems": 100,
+     "minItems": 1,
+     "title": "Events",
+     "type": "array"
+    }
+   },
+   "required": [
+    "events"
+   ],
+   "title": "EventBatch",
+   "type": "object"
+  },
+  "HarnessReadiness": {
+   "additionalProperties": false,
+   "description": "One model CLI on the runner (runner/harnesses/*.toml): what is installed and whether it can\nbe kept current from Settings.",
+   "properties": {
+    "authenticated": {
+     "default": "unknown",
+     "enum": [
+      "ready",
+      "missing",
+      "failed",
+      "unknown"
+     ],
+     "title": "Authenticated",
+     "type": "string"
+    },
+    "commands": {
+     "items": {
+      "$ref": "#/$defs/SlashCommand"
+     },
+     "maxItems": 30,
+     "title": "Commands",
+     "type": "array"
+    },
+    "detail": {
+     "default": "",
+     "maxLength": 500,
+     "title": "Detail",
+     "type": "string"
+    },
+    "goals": {
+     "default": false,
+     "title": "Goals",
+     "type": "boolean"
+    },
+    "installed": {
+     "default": false,
+     "title": "Installed",
+     "type": "boolean"
+    },
+    "latest": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Latest",
+     "type": "string"
+    },
+    "managed": {
+     "default": false,
+     "title": "Managed",
+     "type": "boolean"
+    },
+    "name": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Name",
+     "type": "string"
+    },
+    "pin": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Pin",
+     "type": "string"
+    },
+    "pinned": {
+     "default": false,
+     "title": "Pinned",
+     "type": "boolean"
+    },
+    "runtime": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Runtime",
+     "type": "string"
+    },
+    "source": {
+     "default": "",
+     "enum": [
+      "tools",
+      "path",
+      ""
+     ],
+     "title": "Source",
+     "type": "string"
+    },
+    "state": {
+     "default": "idle",
+     "enum": [
+      "idle",
+      "installing",
+      "updating",
+      "queued",
+      "failed"
+     ],
+     "title": "State",
+     "type": "string"
+    },
+    "update_available": {
+     "default": false,
+     "title": "Update Available",
+     "type": "boolean"
+    },
+    "version": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Version",
+     "type": "string"
+    },
+    "wanted": {
+     "default": false,
+     "title": "Wanted",
+     "type": "boolean"
+    }
+   },
+   "title": "HarnessReadiness",
+   "type": "object"
+  },
+  "Heartbeat": {
+   "additionalProperties": false,
+   "properties": {
+    "agent_instructions": {
+     "additionalProperties": {
+      "type": "string"
+     },
+     "maxProperties": 100,
+     "title": "Agent Instructions",
+     "type": "object"
+    },
+    "capabilities": {
+     "items": {
+      "enum": [
+       "assignment_instances_v1",
+       "assignment_cleanup_v1",
+       "task_lanes_v1",
+       "task_lanes_v2",
+       "session_roots_v1",
+       "task_goals_v1",
+       "screen_v1",
+       "model_sign_out_v1",
+       "model_keys_v1",
+       "model_switch_type_v1",
+       "model_remove_v1",
+       "model_switch_to_key_v1",
+       "computer_logins_v1",
+       "capacity_continue_v1",
+       "source_continue_v1",
+       "turns_at_once_v1",
+       "private_lanes_v1",
+       "model_subscriptions_v1",
+       "browser_exit_v1"
+      ],
+      "type": "string"
+     },
+     "maxItems": 20,
+     "title": "Capabilities",
+     "type": "array"
+    },
+    "capacity": {
+     "default": 4,
+     "maximum": 256,
+     "minimum": 1,
+     "title": "Capacity",
+     "type": "integer"
+    },
+    "checkout": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/Checkout"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "commit": {
+     "anyOf": [
+      {
+       "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})?$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Commit"
+    },
+    "kind": {
+     "anyOf": [
+      {
+       "enum": [
+        "mac",
+        "linux",
+        "docker"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Kind"
+    },
+    "mail_agent_instructions": {
+     "additionalProperties": {
+      "type": "string"
+     },
+     "maxProperties": 20,
+     "title": "Mail Agent Instructions",
+     "type": "object"
+    },
+    "platform": {
+     "maxLength": 100,
+     "title": "Platform",
+     "type": "string"
+    },
+    "profiles": {
+     "anyOf": [
+      {
+       "items": {},
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Profiles"
+    },
+    "readiness": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/StructuredReadiness"
+      },
+      {
+       "additionalProperties": {
+        "type": "boolean"
+       },
+       "type": "object"
+      }
+     ],
+     "title": "Readiness"
+    },
+    "release": {
+     "anyOf": [
+      {
+       "maxLength": 100,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Release"
+    },
+    "repositories": {
+     "anyOf": [
+      {
+       "items": {
+        "$ref": "#/$defs/RepositoryStatus"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Repositories"
+    },
+    "restart": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/RunnerRestart"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "update": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/RunnerUpdate"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "version": {
+     "maxLength": 100,
+     "title": "Version",
+     "type": "string"
+    },
+    "worktrees": {
+     "anyOf": [
+      {
+       "items": {
+        "$ref": "#/$defs/WorktreeStatus"
+       },
+       "maxItems": 1000,
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Worktrees"
+    }
+   },
+   "required": [
+    "version",
+    "platform"
+   ],
+   "title": "Heartbeat",
+   "type": "object"
+  },
+  "LoadSnapshot": {
+   "additionalProperties": false,
+   "properties": {
+    "at": {
+     "minimum": 0,
+     "title": "At",
+     "type": "number"
+    },
+    "cpu_pct": {
+     "anyOf": [
+      {
+       "minimum": 0,
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Cpu Pct"
+    },
+    "mem_pct": {
+     "anyOf": [
+      {
+       "maximum": 100,
+       "minimum": 0,
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Mem Pct"
+    },
+    "running_turns": {
+     "maximum": 10000,
+     "minimum": 0,
+     "title": "Running Turns",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "at",
+    "running_turns"
+   ],
+   "title": "LoadSnapshot",
+   "type": "object"
+  },
+  "MailRequest": {
+   "additionalProperties": false,
+   "description": "What a bot's bot.yaml asks for its mail (runner-rs/src/declared_access.rs `mail_request`): a request only. The\nserver-held setting (backend/mail_settings.py) decides; Health says when the two differ.",
+   "properties": {
+    "forward_to": {
+     "items": {
+      "maxLength": 320,
+      "type": "string"
+     },
+     "maxItems": 20,
+     "title": "Forward To",
+     "type": "array"
+    },
+    "outbound_send": {
+     "default": false,
+     "title": "Outbound Send",
+     "type": "boolean"
+    }
+   },
+   "title": "MailRequest",
+   "type": "object"
+  },
+  "McpReport": {
+   "additionalProperties": false,
+   "description": "The `mcp:` block of a tool as the runner reports it: the address, the transport and headers that hold only\n`${VAR}` placeholders (runner-rs/src/declared_access.rs). `status` is the runner's own cheap check of the server; it is\n`unchecked` until that has run, or when the credential it needs is not on the computer.",
+   "properties": {
+    "headers": {
+     "additionalProperties": {
+      "maxLength": 500,
+      "type": "string"
+     },
+     "maxProperties": 10,
+     "propertyNames": {
+      "maxLength": 64
+     },
+     "title": "Headers",
+     "type": "object"
+    },
+    "status": {
+     "default": "unchecked",
+     "enum": [
+      "reachable",
+      "auth_failed",
+      "unreachable",
+      "unchecked"
+     ],
+     "title": "Status",
+     "type": "string"
+    },
+    "transport": {
+     "default": "http",
+     "enum": [
+      "http",
+      "sse"
+     ],
+     "title": "Transport",
+     "type": "string"
+    },
+    "url": {
+     "maxLength": 500,
+     "minLength": 1,
+     "title": "Url",
+     "type": "string"
+    }
+   },
+   "required": [
+    "url"
+   ],
+   "title": "McpReport",
+   "type": "object"
+  },
+  "ProfileReadiness": {
+   "additionalProperties": false,
+   "description": "One subscription profile on the runner: the provider login its bots share.",
+   "properties": {
+    "authenticated": {
+     "default": "unknown",
+     "enum": [
+      "ready",
+      "missing",
+      "failed",
+      "unknown"
+     ],
+     "title": "Authenticated",
+     "type": "string"
+    },
+    "commands": {
+     "items": {
+      "$ref": "#/$defs/SlashCommand"
+     },
+     "maxItems": 30,
+     "title": "Commands",
+     "type": "array"
+    },
+    "controls": {
+     "items": {
+      "enum": [
+       "interrupt",
+       "new-session"
+      ],
+      "type": "string"
+     },
+     "title": "Controls",
+     "type": "array"
+    },
+    "data_problem": {
+     "default": "",
+     "title": "Data Problem",
+     "type": "string"
+    },
+    "detail": {
+     "default": "",
+     "maxLength": 500,
+     "title": "Detail",
+     "type": "string"
+    },
+    "goals": {
+     "default": false,
+     "title": "Goals",
+     "type": "boolean"
+    },
+    "installed": {
+     "default": false,
+     "title": "Installed",
+     "type": "boolean"
+    },
+    "models": {
+     "items": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+     },
+     "maxItems": 50,
+     "title": "Models",
+     "type": "array"
+    },
+    "runtime": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Runtime",
+     "type": "string"
+    },
+    "shared_login": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Shared Login"
+    },
+    "version": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Version",
+     "type": "string"
+    }
+   },
+   "title": "ProfileReadiness",
+   "type": "object"
+  },
+  "RepositoryStatus": {
+   "additionalProperties": false,
+   "properties": {
+    "error": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Error"
+    },
+    "full_name": {
+     "title": "Full Name",
+     "type": "string"
+    },
+    "last_fetch": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Last Fetch"
+    },
+    "size_mb": {
+     "default": 0,
+     "minimum": 0,
+     "title": "Size Mb",
+     "type": "number"
+    },
+    "state": {
+     "enum": [
+      "cloned",
+      "cloning",
+      "failed",
+      "disk_low",
+      "removed"
+     ],
+     "title": "State",
+     "type": "string"
+    }
+   },
+   "required": [
+    "full_name",
+    "state"
+   ],
+   "title": "RepositoryStatus",
+   "type": "object"
+  },
+  "RunPush": {
+   "additionalProperties": false,
+   "properties": {
+    "count": {
+     "maximum": 1000,
+     "minimum": 1,
+     "title": "Count",
+     "type": "integer"
+    },
+    "path": {
+     "maxLength": 1000,
+     "minLength": 1,
+     "title": "Path",
+     "type": "string"
+    }
+   },
+   "required": [
+    "path",
+    "count"
+   ],
+   "title": "RunPush",
+   "type": "object"
+  },
+  "RunRotation": {
+   "additionalProperties": false,
+   "properties": {
+    "limit": {
+     "minimum": 0,
+     "title": "Limit",
+     "type": "integer"
+    },
+    "reason": {
+     "enum": [
+      "tokens",
+      "turns"
+     ],
+     "title": "Reason",
+     "type": "string"
+    },
+    "tokens": {
+     "minimum": 0,
+     "title": "Tokens",
+     "type": "integer"
+    },
+    "turns": {
+     "minimum": 0,
+     "title": "Turns",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "reason",
+    "tokens",
+    "turns",
+    "limit"
+   ],
+   "title": "RunRotation",
+   "type": "object"
+  },
+  "RunSession": {
+   "additionalProperties": false,
+   "description": "Whether the run continued its provider session or started a new one, and why (runner-rs/src/sessions.rs).\n`why` is one of backend/run_triggers.py SESSION_WHY for a runner of this release; a newer runner may send another,\nshort one, which is kept as it is.",
+   "properties": {
+    "detail": {
+     "anyOf": [
+      {
+       "maxLength": 500,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Detail"
+    },
+    "kind": {
+     "enum": [
+      "resumed",
+      "new"
+     ],
+     "title": "Kind",
+     "type": "string"
+    },
+    "why": {
+     "anyOf": [
+      {
+       "maxLength": 60,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Why"
+    }
+   },
+   "required": [
+    "kind"
+   ],
+   "title": "RunSession",
+   "type": "object"
+  },
+  "RunUsage": {
+   "additionalProperties": false,
+   "properties": {
+    "billing": {
+     "default": "api",
+     "enum": [
+      "api",
+      "subscription"
+     ],
+     "title": "Billing",
+     "type": "string"
+    },
+    "cached_tokens": {
+     "default": 0,
+     "maximum": 1000000000000,
+     "minimum": 0,
+     "title": "Cached Tokens",
+     "type": "integer"
+    },
+    "effort": {
+     "default": "",
+     "maxLength": 60,
+     "title": "Effort",
+     "type": "string"
+    },
+    "harness": {
+     "default": "",
+     "maxLength": 60,
+     "title": "Harness",
+     "type": "string"
+    },
+    "input_tokens": {
+     "default": 0,
+     "maximum": 1000000000000,
+     "minimum": 0,
+     "title": "Input Tokens",
+     "type": "integer"
+    },
+    "model": {
+     "default": "",
+     "maxLength": 120,
+     "title": "Model",
+     "type": "string"
+    },
+    "output_tokens": {
+     "default": 0,
+     "maximum": 1000000000000,
+     "minimum": 0,
+     "title": "Output Tokens",
+     "type": "integer"
+    },
+    "profile_used": {
+     "anyOf": [
+      {
+       "maxLength": 80,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Profile Used"
+    },
+    "requests": {
+     "anyOf": [
+      {
+       "items": {
+        "anyOf": [
+         {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+           {
+            "maximum": 1000000000,
+            "minimum": 0,
+            "type": "integer"
+           },
+           {
+            "maximum": 1000000000,
+            "minimum": 0,
+            "type": "integer"
+           },
+           {
+            "maximum": 1000000000,
+            "minimum": 0,
+            "type": "integer"
+           }
+          ],
+          "type": "array"
+         },
+         {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+           {
+            "maximum": 1000000000,
+            "minimum": 0,
+            "type": "integer"
+           },
+           {
+            "maximum": 1000000000,
+            "minimum": 0,
+            "type": "integer"
+           },
+           {
+            "maximum": 1000000000,
+            "minimum": 0,
+            "type": "integer"
+           },
+           {
+            "enum": [
+             0,
+             1
+            ],
+            "type": "integer"
+           }
+          ],
+          "type": "array"
+         }
+        ]
+       },
+       "maxItems": 2000,
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Requests"
+    },
+    "runtime": {
+     "default": "",
+     "maxLength": 60,
+     "title": "Runtime",
+     "type": "string"
+    },
+    "segments": {
+     "items": {
+      "$ref": "#/$defs/RunUsagePart"
+     },
+     "maxItems": 2,
+     "title": "Segments",
+     "type": "array"
+    }
+   },
+   "title": "RunUsage",
+   "type": "object"
+  },
+  "RunUsagePart": {
+   "additionalProperties": false,
+   "description": "What a run spent, as its runner counted it: uncached input, cached input and output tokens.\n`requests` is the same three per model request, sent when the runner saw every request, so a model whose\nlong prompts cost more (providers.LONG_PROMPT) is priced request by request. A fourth count, when the runner\nsends one, marks the bot's own requests (1) from its subagents' (0): the newest of its own is the session's\ncontext size (`turns.prompt_tokens`).",
+   "properties": {
+    "billing": {
+     "default": "api",
+     "enum": [
+      "api",
+      "subscription"
+     ],
+     "title": "Billing",
+     "type": "string"
+    },
+    "cached_tokens": {
+     "default": 0,
+     "maximum": 1000000000000,
+     "minimum": 0,
+     "title": "Cached Tokens",
+     "type": "integer"
+    },
+    "effort": {
+     "default": "",
+     "maxLength": 60,
+     "title": "Effort",
+     "type": "string"
+    },
+    "harness": {
+     "default": "",
+     "maxLength": 60,
+     "title": "Harness",
+     "type": "string"
+    },
+    "input_tokens": {
+     "default": 0,
+     "maximum": 1000000000000,
+     "minimum": 0,
+     "title": "Input Tokens",
+     "type": "integer"
+    },
+    "model": {
+     "default": "",
+     "maxLength": 120,
+     "title": "Model",
+     "type": "string"
+    },
+    "output_tokens": {
+     "default": 0,
+     "maximum": 1000000000000,
+     "minimum": 0,
+     "title": "Output Tokens",
+     "type": "integer"
+    },
+    "profile_used": {
+     "anyOf": [
+      {
+       "maxLength": 80,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Profile Used"
+    },
+    "requests": {
+     "anyOf": [
+      {
+       "items": {
+        "anyOf": [
+         {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+           {
+            "maximum": 1000000000,
+            "minimum": 0,
+            "type": "integer"
+           },
+           {
+            "maximum": 1000000000,
+            "minimum": 0,
+            "type": "integer"
+           },
+           {
+            "maximum": 1000000000,
+            "minimum": 0,
+            "type": "integer"
+           }
+          ],
+          "type": "array"
+         },
+         {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+           {
+            "maximum": 1000000000,
+            "minimum": 0,
+            "type": "integer"
+           },
+           {
+            "maximum": 1000000000,
+            "minimum": 0,
+            "type": "integer"
+           },
+           {
+            "maximum": 1000000000,
+            "minimum": 0,
+            "type": "integer"
+           },
+           {
+            "enum": [
+             0,
+             1
+            ],
+            "type": "integer"
+           }
+          ],
+          "type": "array"
+         }
+        ]
+       },
+       "maxItems": 2000,
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Requests"
+    },
+    "runtime": {
+     "default": "",
+     "maxLength": 60,
+     "title": "Runtime",
+     "type": "string"
+    }
+   },
+   "title": "RunUsagePart",
+   "type": "object"
+  },
+  "RunnerRestart": {
+   "additionalProperties": false,
+   "properties": {
+    "since": {
+     "maxLength": 40,
+     "title": "Since",
+     "type": "string"
+    }
+   },
+   "required": [
+    "since"
+   ],
+   "title": "RunnerRestart",
+   "type": "object"
+  },
+  "RunnerUpdate": {
+   "additionalProperties": false,
+   "properties": {
+    "error": {
+     "default": "",
+     "maxLength": 300,
+     "title": "Error",
+     "type": "string"
+    },
+    "handed_back": {
+     "anyOf": [
+      {
+       "maximum": 100000,
+       "minimum": 0,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Handed Back"
+    },
+    "running": {
+     "anyOf": [
+      {
+       "maximum": 256,
+       "minimum": 0,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Running"
+    },
+    "state": {
+     "enum": [
+      "idle",
+      "waiting",
+      "updating",
+      "failed",
+      "rolled_back",
+      "pinned",
+      "blocked"
+     ],
+     "title": "State",
+     "type": "string"
+    },
+    "target": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Target",
+     "type": "string"
+    }
+   },
+   "required": [
+    "state"
+   ],
+   "title": "RunnerUpdate",
+   "type": "object"
+  },
+  "RuntimeKey": {
+   "additionalProperties": false,
+   "properties": {
+    "name": {
+     "maxLength": 100,
+     "pattern": "^[A-Z_][A-Z0-9_]*$",
+     "title": "Name",
+     "type": "string"
+    },
+    "source": {
+     "enum": [
+      "computer",
+      "terminal",
+      "shared"
+     ],
+     "title": "Source",
+     "type": "string"
+    }
+   },
+   "required": [
+    "name",
+    "source"
+   ],
+   "title": "RuntimeKey",
+   "type": "object"
+  },
+  "RuntimeReadiness": {
+   "additionalProperties": false,
+   "properties": {
+    "account": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/SubscriptionAccount"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "authenticated": {
+     "default": "unknown",
+     "enum": [
+      "ready",
+      "missing",
+      "failed",
+      "unknown",
+      "rejected"
+     ],
+     "title": "Authenticated",
+     "type": "string"
+    },
+    "commands": {
+     "items": {
+      "$ref": "#/$defs/SlashCommand"
+     },
+     "maxItems": 30,
+     "title": "Commands",
+     "type": "array"
+    },
+    "controls": {
+     "items": {
+      "enum": [
+       "interrupt",
+       "new-session"
+      ],
+      "type": "string"
+     },
+     "title": "Controls",
+     "type": "array"
+    },
+    "credential_source": {
+     "default": "",
+     "enum": [
+      "",
+      "credentials",
+      "computer"
+     ],
+     "title": "Credential Source",
+     "type": "string"
+    },
+    "data_problem": {
+     "default": "",
+     "title": "Data Problem",
+     "type": "string"
+    },
+    "detail": {
+     "default": "",
+     "maxLength": 500,
+     "title": "Detail",
+     "type": "string"
+    },
+    "five_hour": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/SubscriptionWeekly"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "goals": {
+     "default": false,
+     "title": "Goals",
+     "type": "boolean"
+    },
+    "installed": {
+     "title": "Installed",
+     "type": "boolean"
+    },
+    "key": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/RuntimeKey"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "models": {
+     "items": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+     },
+     "maxItems": 50,
+     "title": "Models",
+     "type": "array"
+    },
+    "profiles": {
+     "additionalProperties": {
+      "$ref": "#/$defs/ProfileReadiness"
+     },
+     "maxProperties": 50,
+     "title": "Profiles",
+     "type": "object"
+    },
+    "rejected_at": {
+     "default": "",
+     "maxLength": 40,
+     "title": "Rejected At",
+     "type": "string"
+    },
+    "rejected_reason": {
+     "default": "",
+     "maxLength": 300,
+     "title": "Rejected Reason",
+     "type": "string"
+    },
+    "shared_login": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Shared Login"
+    },
+    "turn_user": {
+     "default": "",
+     "enum": [
+      "",
+      "own",
+      "bot"
+     ],
+     "title": "Turn User",
+     "type": "string"
+    },
+    "version": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Version",
+     "type": "string"
+    },
+    "weekly": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/SubscriptionWeekly"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "installed"
+   ],
+   "title": "RuntimeReadiness",
+   "type": "object"
+  },
+  "ScreenReadiness": {
+   "additionalProperties": false,
+   "description": "The computer's screen, when its owner turned it on there (backend/screen.py): its size, or why it cannot run.",
+   "properties": {
+    "available": {
+     "title": "Available",
+     "type": "boolean"
+    },
+    "height": {
+     "anyOf": [
+      {
+       "maximum": 10000,
+       "minimum": 1,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Height"
+    },
+    "reason": {
+     "default": "",
+     "maxLength": 200,
+     "title": "Reason",
+     "type": "string"
+    },
+    "width": {
+     "anyOf": [
+      {
+       "maximum": 10000,
+       "minimum": 1,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Width"
+    }
+   },
+   "required": [
+    "available"
+   ],
+   "title": "ScreenReadiness",
+   "type": "object"
+  },
+  "SlashCommand": {
+   "additionalProperties": false,
+   "properties": {
+    "args": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Args",
+     "type": "string"
+    },
+    "help": {
+     "default": "",
+     "maxLength": 300,
+     "title": "Help",
+     "type": "string"
+    },
+    "kind": {
+     "default": "harness",
+     "enum": [
+      "tico",
+      "harness"
+     ],
+     "title": "Kind",
+     "type": "string"
+    },
+    "name": {
+     "pattern": "^[a-z0-9][a-z0-9_:-]{0,63}$",
+     "title": "Name",
+     "type": "string"
+    },
+    "sub": {
+     "anyOf": [
+      {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Sub"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "title": "SlashCommand",
+   "type": "object"
+  },
+  "SourceContinuation": {
+   "additionalProperties": false,
+   "properties": {
+    "epoch": {
+     "anyOf": [
+      {
+       "maxItems": 2,
+       "minItems": 2,
+       "prefixItems": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ],
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Epoch"
+    },
+    "harness": {
+     "maxLength": 80,
+     "minLength": 1,
+     "title": "Harness",
+     "type": "string"
+    },
+    "model": {
+     "default": "",
+     "maxLength": 200,
+     "title": "Model",
+     "type": "string"
+    },
+    "profile": {
+     "default": "",
+     "maxLength": 80,
+     "title": "Profile",
+     "type": "string"
+    },
+    "reasoning_effort": {
+     "default": "",
+     "maxLength": 80,
+     "title": "Reasoning Effort",
+     "type": "string"
+    },
+    "runtime": {
+     "maxLength": 80,
+     "minLength": 1,
+     "title": "Runtime",
+     "type": "string"
+    },
+    "thread_id": {
+     "maxLength": 1000,
+     "minLength": 1,
+     "title": "Thread Id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "thread_id",
+    "runtime",
+    "harness"
+   ],
+   "title": "SourceContinuation",
+   "type": "object"
+  },
+  "StartPlace": {
+   "additionalProperties": false,
+   "properties": {
+    "waiting": {
+     "default": "",
+     "enum": [
+      "",
+      "shared login",
+      "pre-start requirements",
+      "Docker turn user"
+     ],
+     "title": "Waiting",
+     "type": "string"
+    }
+   },
+   "title": "StartPlace",
+   "type": "object"
+  },
+  "Started": {
+   "additionalProperties": false,
+   "properties": {
+    "load_snapshot": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/LoadSnapshot"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "thread_id": {
+     "maxLength": 200,
+     "minLength": 1,
+     "title": "Thread Id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "thread_id"
+   ],
+   "title": "Started",
+   "type": "object"
+  },
+  "StructuredReadiness": {
+   "additionalProperties": false,
+   "properties": {
+    "appdriver": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/AppDriverReadiness"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "bots": {
+     "additionalProperties": {
+      "$ref": "#/$defs/BotReadiness"
+     },
+     "title": "Bots",
+     "type": "object"
+    },
+    "browser_launch": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/ContainerExecReadiness"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "computer_profile": {
+     "anyOf": [
+      {
+       "maxLength": 80,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Computer Profile"
+    },
+    "container_exec": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/ContainerExecReadiness"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "disk": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/DiskReadiness"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "engine": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/EngineReadiness"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "github_auth": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/ContainerExecReadiness"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "harnesses": {
+     "additionalProperties": {
+      "$ref": "#/$defs/HarnessReadiness"
+     },
+     "maxProperties": 50,
+     "title": "Harnesses",
+     "type": "object"
+    },
+    "isolated": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Isolated"
+    },
+    "mail_key": {
+     "anyOf": [
+      {
+       "const": "exposed",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Mail Key"
+    },
+    "recent_errors": {
+     "items": {
+      "maxLength": 300,
+      "type": "string"
+     },
+     "maxItems": 50,
+     "title": "Recent Errors",
+     "type": "array"
+    },
+    "runtimes": {
+     "additionalProperties": {
+      "$ref": "#/$defs/RuntimeReadiness"
+     },
+     "title": "Runtimes",
+     "type": "object"
+    },
+    "schema_version": {
+     "const": 1,
+     "default": 1,
+     "title": "Schema Version",
+     "type": "integer"
+    },
+    "screen": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/ScreenReadiness"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "shared_env": {
+     "anyOf": [
+      {
+       "const": true,
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Shared Env"
+    },
+    "trust": {
+     "anyOf": [
+      {
+       "const": "cloud_machine",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Trust"
+    },
+    "worktree_waits": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Worktree Waits"
+    },
+    "worktrees": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Worktrees"
+    }
+   },
+   "title": "StructuredReadiness",
+   "type": "object"
+  },
+  "SubscriptionAccount": {
+   "additionalProperties": false,
+   "description": "The account a model CLI says it is signed in to (#610), read only from its documented status command\n(`claude auth status --json`, Codex app-server `account/read`). Never a credential: a value that reads like one\nfails validation, and the account is then left out.",
+   "properties": {
+    "checked_at": {
+     "anyOf": [
+      {
+       "maxLength": 50,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Checked At"
+    },
+    "email": {
+     "anyOf": [
+      {
+       "maxLength": 254,
+       "pattern": "^[A-Za-z0-9._%+'-]{1,64}@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,24}$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Email"
+    },
+    "kind": {
+     "anyOf": [
+      {
+       "enum": [
+        "subscription",
+        "api_key"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Kind"
+    },
+    "org": {
+     "anyOf": [
+      {
+       "maxLength": 100,
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Org"
+    },
+    "plan": {
+     "anyOf": [
+      {
+       "pattern": "^[A-Za-z0-9][A-Za-z0-9 _.+-]{0,39}$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Plan"
+    }
+   },
+   "title": "SubscriptionAccount",
+   "type": "object"
+  },
+  "SubscriptionUnavailable": {
+   "additionalProperties": false,
+   "properties": {
+    "problem": {
+     "maxLength": 500,
+     "minLength": 1,
+     "title": "Problem",
+     "type": "string"
+    },
+    "profile": {
+     "maxLength": 80,
+     "minLength": 1,
+     "title": "Profile",
+     "type": "string"
+    },
+    "runtime": {
+     "maxLength": 80,
+     "title": "Runtime",
+     "type": "string"
+    }
+   },
+   "required": [
+    "profile",
+    "runtime",
+    "problem"
+   ],
+   "title": "SubscriptionUnavailable",
+   "type": "object"
+  },
+  "SubscriptionWeekly": {
+   "additionalProperties": false,
+   "properties": {
+    "reported_at": {
+     "maxLength": 50,
+     "title": "Reported At",
+     "type": "string"
+    },
+    "resets_at": {
+     "anyOf": [
+      {
+       "maxLength": 50,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Resets At"
+    },
+    "status": {
+     "anyOf": [
+      {
+       "enum": [
+        "allowed",
+        "allowed_warning",
+        "rejected"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Status"
+    },
+    "used_percent": {
+     "anyOf": [
+      {
+       "maximum": 100,
+       "minimum": 0,
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Used Percent"
+    }
+   },
+   "required": [
+    "reported_at"
+   ],
+   "title": "SubscriptionWeekly",
+   "type": "object"
+  },
+  "ToolAccess": {
+   "additionalProperties": false,
+   "description": "One `access:` entry of a bot's employee.yaml as the runner reports it (runner-rs/src/declared_access.rs):\nnames and verbs, never a value. `credential` is whether the variable is on the runner's computer.",
+   "properties": {
+    "can": {
+     "items": {
+      "maxLength": 40,
+      "type": "string"
+     },
+     "maxItems": 20,
+     "title": "Can",
+     "type": "array"
+    },
+    "credential": {
+     "default": "not-declared",
+     "enum": [
+      "present",
+      "missing",
+      "hub-vault",
+      "not-declared"
+     ],
+     "title": "Credential",
+     "type": "string"
+    },
+    "env": {
+     "default": "",
+     "maxLength": 100,
+     "title": "Env",
+     "type": "string"
+    },
+    "held": {
+     "default": false,
+     "title": "Held",
+     "type": "boolean"
+    },
+    "identity": {
+     "default": "",
+     "maxLength": 300,
+     "title": "Identity",
+     "type": "string"
+    },
+    "mcp": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/McpReport"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "note": {
+     "default": "",
+     "maxLength": 500,
+     "title": "Note",
+     "type": "string"
+    },
+    "problem": {
+     "default": "",
+     "maxLength": 300,
+     "title": "Problem",
+     "type": "string"
+    },
+    "scope": {
+     "additionalProperties": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "items": {
+         "maxLength": 100,
+         "type": "string"
+        },
+        "type": "array"
+       }
+      ]
+     },
+     "maxProperties": 20,
+     "propertyNames": {
+      "maxLength": 40
+     },
+     "title": "Scope",
+     "type": "object"
+    },
+    "service": {
+     "maxLength": 100,
+     "minLength": 1,
+     "title": "Service",
+     "type": "string"
+    }
+   },
+   "required": [
+    "service"
+   ],
+   "title": "ToolAccess",
+   "type": "object"
+  },
+  "WorktreeStatus": {
+   "additionalProperties": false,
+   "properties": {
+    "ahead": {
+     "default": 0,
+     "minimum": 0,
+     "title": "Ahead",
+     "type": "integer"
+    },
+    "behind": {
+     "default": 0,
+     "minimum": 0,
+     "title": "Behind",
+     "type": "integer"
+    },
+    "branch": {
+     "anyOf": [
+      {
+       "maxLength": 200,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Branch"
+    },
+    "checkout_state": {
+     "anyOf": [
+      {
+       "enum": [
+        "queued",
+        "attached_pending",
+        "initializing",
+        "checkout_ready",
+        "setup_running",
+        "setup_failed",
+        "ready",
+        "legacy_present",
+        "unverified"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Checkout State"
+    },
+    "checkout_target": {
+     "anyOf": [
+      {
+       "maxLength": 300,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Checkout Target"
+    },
+    "dirty_files": {
+     "default": 0,
+     "minimum": 0,
+     "title": "Dirty Files",
+     "type": "integer"
+    },
+    "error": {
+     "anyOf": [
+      {
+       "maxLength": 300,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Error"
+    },
+    "expected_base": {
+     "anyOf": [
+      {
+       "pattern": "^[0-9a-f]{64}$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Expected Base"
+    },
+    "expected_head": {
+     "anyOf": [
+      {
+       "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Expected Head"
+    },
+    "last_activity": {
+     "anyOf": [
+      {
+       "minimum": 0,
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Last Activity"
+    },
+    "last_commit": {
+     "anyOf": [
+      {
+       "maxLength": 100,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Last Commit"
+    },
+    "link_id": {
+     "maxLength": 100,
+     "title": "Link Id",
+     "type": "string"
+    },
+    "record_updated": {
+     "anyOf": [
+      {
+       "maxLength": 40,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Record Updated"
+    },
+    "repo": {
+     "anyOf": [
+      {
+       "maxLength": 200,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Repo"
+    },
+    "size_mb": {
+     "default": 0,
+     "minimum": 0,
+     "title": "Size Mb",
+     "type": "number"
+    },
+    "state": {
+     "enum": [
+      "pending",
+      "present",
+      "missing",
+      "removed",
+      "unknown"
+     ],
+     "title": "State",
+     "type": "string"
+    }
+   },
+   "required": [
+    "link_id",
+    "state"
+   ],
+   "title": "WorktreeStatus",
+   "type": "object"
+  }
+ },
+ "title": "Tico runner wire contract: requests",
+ "x-note": "Generated from backend/models.py by scripts/check_wire_contract.py --write-requests."
+}

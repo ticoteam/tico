@@ -194,6 +194,20 @@ def test_a_bot_cooling_off_after_a_usage_limit(api):
     says(api, machine, "cooling_off")
 
 
+def test_operations_names_a_limited_bots_runtime_when_config_was_primed_slug_first(api):
+    """prime_claimables and the machines page prime bot_config rows whose first column is the slug, not the JSON;
+    the limit issue reads the configuration by name, so it does not parse the slug as JSON."""
+    machine = task_bot(api, lanes=True)
+    new_task(api, "first")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bot_status(bot,state,since,updated_at) VALUES('ops','limited',?,?) "
+                  "ON CONFLICT(bot) DO UPDATE SET state='limited',since=excluded.since", (H.now(), H.now()))
+    body = api.get("/api/v2/operations", headers=headers())
+    assert body.status_code == 200, body.text
+    [issue] = [i for i in body.json()["issues"] if i["kind"] == "bot" and i["bot"] == "ops"]
+    assert issue["detail"].startswith("fake; resumes")
+
+
 def readiness(api, machine, document):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (json.dumps(document), machine["runner_id"]))

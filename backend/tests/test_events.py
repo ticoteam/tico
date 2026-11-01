@@ -16,6 +16,7 @@ import uvicorn
 
 from backend import events as E
 from backend import hubdb as H
+from backend.auth import Identity
 from backend.store import Problem
 from backend.tests.test_api import api, headers, post, restrict, setup_attempt  # noqa: F401
 
@@ -195,6 +196,7 @@ def test_a_client_further_behind_than_the_log_keeps_is_told_to_reset(api, live):
 
 @pytest.mark.slow
 def test_a_stream_ends_with_expired_when_sign_in_lapses_and_ends_on_its_own(api, live, monkeypatch):
+    monkeypatch.setattr(E, "SIGN_IN_RECHECK_SECONDS", 0)     # every poll checks, so the lapse ends it before its data
     stream = live("ben-test")
     ready(stream)
     real = api.app.state.auth.authenticate
@@ -323,7 +325,95 @@ def test_the_log_is_installed_idempotently_and_follows_its_definitions(api, monk
     assert conn.execute("SELECT count(*) FROM sqlite_master WHERE type='trigger'").fetchone()[0] == 0
 
 
+def test_a_task_link_rewritten_with_the_same_values_logs_nothing_and_a_change_to_any_column_logs_once(api):
+    """The link triggers fire on a real change to any column (read from the table), never on a rewrite with the same values:
+    a worktree heartbeat rewrote closed tasks' links every few minutes, and each write rebuilt every open board."""
+    store = api.app.state.store
+    setup_attempt(api)
+    task = post(api, "tasks", {"owner": "ben", "title": "Review the links", "body": "Please."})
+    with store.transaction() as c:
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,computer_id,created) "
+                  "VALUES('wt1',?,'worktree','u','present','rc1',?)", (task["id"], H.now()))
+
+    def logged(sql):
+        with store.transaction() as c:
+            before = E.latest(c)
+            c.execute(sql)
+            return {(row["topic"], row["kind"]) for row in c.execute("SELECT * FROM changes WHERE seq>?", (before,))}
+    with store.read() as c:
+        columns = [row[1] for row in c.execute("PRAGMA table_info(task_links)")]
+    assert {"repo", "detail_json", "computer_id", "pr_merged_at"} <= set(columns)
+    for column in columns:
+        assert logged(f"UPDATE task_links SET {column}={column} WHERE id='wt1'") == set(), column
+    assert logged("UPDATE task_links SET state='unknown' WHERE id='wt1'") == {("tasks", "link"), ("runner", "worktrees")}
+    for column in columns:
+        if column in ("id", "task_id"):
+            continue
+        assert ("tasks", "link") in logged(f"UPDATE task_links SET {column}='x{column}' WHERE id='wt1'"), column
+    # A pull request link is no worktree: the task still hears of it, the computers do not.
+    with store.transaction() as c:
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,created) VALUES('pr1',?,'pr','https://github.com/acme/app/pull/9',?)",
+                  (task["id"], H.now()))
+    assert logged("UPDATE task_links SET title='Renamed' WHERE id='pr1'") == {("tasks", "link")}
+
+
 def test_a_ring_after_a_quiet_window_is_read_at_once_and_a_burst_still_once_a_window(monkeypatch):
     monkeypatch.setattr(E.time, "monotonic", lambda: 100.0)
     assert E.gathered(0.25, read_at=0.0) == E.LEAD_SECONDS          # quiet: read almost at once
     assert abs(E.gathered(0.25, read_at=99.9) - 0.15) < 1e-9        # just read: only the rest of the window
+
+
+class CountingAuth:
+    """Stands in for Auth.authenticate: counts calls and answers with `role`, which a test may change."""
+
+    def __init__(self, role="human"):
+        self.calls, self.role = 0, role
+
+    def authenticate(self, headers):
+        self.calls += 1
+        return Identity("human:ben", self.role)
+
+
+def test_a_streams_sign_in_is_checked_once_across_a_burst_of_polls_and_again_after_the_window():
+    now, auth = [100.0], CountingAuth()
+    check = E.SignIn(auth, {"authorization": "Bearer ben-test"}, Identity("human:ben", "human"), clock=lambda: now[0])
+    for _ in range(50):                    # polls and keepalives that come within the window
+        check()
+    assert auth.calls == 1
+    now[0] += E.SIGN_IN_RECHECK_SECONDS - 0.1
+    check()
+    assert auth.calls == 1
+    now[0] += 0.1
+    check()
+    assert auth.calls == 2
+
+
+def test_a_changed_role_or_a_refused_sign_in_ends_the_stream_and_is_never_remembered():
+    now, auth = [0.0], CountingAuth(role="owner")
+    check = E.SignIn(auth, {}, Identity("human:ben", "human"), clock=lambda: now[0])
+    with pytest.raises(Problem) as refused:
+        check()
+    assert refused.value.status == 401 and auth.calls == 1
+    # The refusal is not kept: the very next check asks again, and a sign-in that is back in place passes.
+    auth.role = "human"
+    check()
+    assert auth.calls == 2
+
+
+def test_a_read_with_tasks_and_bots_asks_for_the_viewers_bot_access_once(api, monkeypatch):
+    """Task visibility and the bot lines of one read share the viewer's bot access, rather than each asking for it."""
+    auth, store = api.app.state.auth, api.app.state.store
+    with store.read() as c:
+        cursor = E.latest(c)
+    post(api, "tasks", {"owner": "ben", "title": "Count the asks", "body": "Please."})
+    with store.transaction() as c:
+        c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
+    real, asked = auth.bot_accesses, []
+    monkeypatch.setattr(auth, "bot_accesses", lambda c, who, slugs=None: asked.append(slugs) or real(c, who, slugs))
+    who = Identity("human:ben", "human", "ben@acme.example")
+    with store.read() as c:
+        events, _, _, _ = E.read(c, auth, who, cursor, topics=("tasks", "bots"),
+                                 task_views=lambda rows, c, who, visible_sql="1": [], task_view=None)
+    assert [topic for _, topic, _ in events] == ["bots"]
+    assert len(asked) == 1
+

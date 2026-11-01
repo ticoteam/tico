@@ -1,4 +1,5 @@
-"""Deleting tasks offline removes them and their conversations, and refuses a task carrying work."""
+"""Deleting tasks removes them and their conversations; offline it refuses a task carrying work, and a person's
+delete keeps that work in place instead."""
 
 
 from backend.task_delete import delete_tasks
@@ -44,7 +45,7 @@ def test_a_person_deletes_a_task_they_asked_for_and_nobody_else_can(api):
 
     refused = post(api, f"tasks/{theirs['id']}/delete", {}, token="priya-test", expected=403)
     assert refused["error"]["code"] == "forbidden"
-    assert post(api, f"tasks/{parent['id']}/delete", {}, token="priya-test", expected=409)["error"]["code"] == "has_work"
+    assert post(api, f"tasks/{parent['id']}/delete", {}, token="priya-test") == {"deleted": parent["id"]}
     assert post(api, f"tasks/{mine['id']}/delete", {}, token="priya-test") == {"deleted": mine["id"]}
     get(api, "tasks/" + mine["id"], expected=404)
     # A mover may delete anyone's task; a bot never deletes, even its own.
@@ -165,14 +166,35 @@ def test_a_file_attached_when_the_task_was_made_is_locked_in_the_trash_and_count
     assert api.get(attachment["url"], headers=headers("ben-test")).status_code in (403, 404)
 
 
-def test_a_task_file_a_bot_made_refuses_the_delete(api):
+def test_a_task_file_a_bot_made_stays_when_a_person_deletes_the_task(api):
     # The bot's turn is on a chat, not this task: its file alone is the work.
     report = post(api, "tasks", {"owner": "priya", "title": "Draft the report", "body": "x", "private": False}, token="ben-test")
     made = api.post("/api/v2/files/uploads", json={"name": "draft.md", "text": "# Draft", "task": report["id"]},
                     headers=headers(bot_token(api)))
     assert made.status_code == 200, made.text
-    r = api.post(f"/api/v2/tasks/{report['id']}/delete", json={}, headers=headers("ben-test"))
-    assert r.status_code == 409 and r.json()["error"]["code"] == "has_work"
+    with api.app.state.store.read() as c:
+        assert delete_tasks(c, [report["id"]])["refused"], "the offline command still refuses it"
+    assert post(api, f"tasks/{report['id']}/delete", {}, token="ben-test") == {"deleted": report["id"]}
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM bot_files WHERE task_id=?", (report["id"],)).fetchone()[0] == 1
+
+
+def test_a_task_bots_worked_on_deletes_and_comes_back_whole(api):
+    store = api.app.state.store
+    task = post(api, "tasks", {"owner": "ops", "title": "Check the prices", "body": "x"})
+    post(api, f"tasks/{task['id']}/comments", {"text": "Look again tomorrow."})
+    with store.transaction() as c:
+        conversation = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (task["id"],)).fetchone()[0]
+        c.execute("INSERT INTO turns(id,bot,task_id,started) VALUES('turn-1','ops',?,?)", (task["id"], H.now()))
+    assert post(api, f"tasks/{task['id']}/delete", {}) == {"deleted": task["id"]}
+    get(api, "tasks/" + task["id"], expected=404)
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM turns WHERE task_id=?", (task["id"],)).fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM messages WHERE conversation_id=?", (conversation,)).fetchone()[0] >= 1
+        assert c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
+                         "WHERE m.conversation_id=? AND j.state='queued'", (conversation,)).fetchone()[0] == 0
+    post(api, f"tasks/{task['id']}/restore", {})
+    assert any(m["body"] == "Look again tomorrow." for m in get(api, "tasks/" + task["id"])["comments"])
 
 
 def test_a_bulk_delete_and_restore_keeps_links_inside_the_list(api):
@@ -299,3 +321,33 @@ def test_a_task_whose_type_was_deleted_while_it_was_in_the_trash_comes_back_on_g
         detail = c.execute("SELECT detail_json FROM events WHERE action='task.restored' AND target=?",
                            (ticket["id"],)).fetchone()[0]
     assert "type" in detail
+
+
+def test_a_delete_finds_its_runs_and_messages_by_index_not_by_scanning_them(api):
+    """A delete counts the runs about its messages and its conversation, and reads the jobs waiting on it.
+    Each of those lookups must use an index: a scan of turns, attempt_conversations, bot_file_activity or
+    messages grows with the whole database, not with the one task (the production delete took 8 to 10 s).
+    The aliases a and m are bot_file_activity and messages in task_delete."""
+    store = api.app.state.store
+    ticket = post(api, "tasks", {"owner": "ben", "title": "Fix the cart page", "body": "x"})
+    post(api, f"tasks/{ticket['id']}/comments", {"text": "Seen on mobile."})
+    big = {"turns", "attempt_conversations", "bot_file_activity", "messages", "a", "m"}
+    with store.transaction() as c:
+        conversation, message = c.execute("SELECT t.conversation_id, m.id FROM tasks t JOIN messages m "
+                                          "ON m.conversation_id=t.conversation_id WHERE t.id=? LIMIT 1",
+                                          (ticket["id"],)).fetchone()
+        # Work on the task, so the delete takes the keep_work path, which also updates the jobs about it.
+        c.execute("INSERT INTO turns(id,bot,started,finished,exit,message_id,task_id) VALUES(?,?,?,?,?,?,?)",
+                  ("turn-cart", "ops", H.now(), H.now(), "ok", message, ticket["id"]))
+        statements = []
+        c.set_trace_callback(statements.append)
+        report = delete_tasks(c, [ticket["id"]], apply=True, keep_work=True)
+        c.set_trace_callback(None)
+        assert report["applied"] is True and report["refused"]
+        scans = []
+        for sql in statements:
+            if sql.lstrip().upper().startswith(("SELECT", "UPDATE", "DELETE", "INSERT")):
+                for row in c.execute("EXPLAIN QUERY PLAN " + sql):
+                    if row[3].startswith("SCAN") and row[3].split()[-1] in big:
+                        scans.append(f"{row[3]}  <- {' '.join(sql.split())[:120]}")
+    assert scans == []

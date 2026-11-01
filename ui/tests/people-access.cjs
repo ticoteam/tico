@@ -214,8 +214,8 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     assert.deepEqual(await next(), ['limits', {member_bot_limit: 30}]);
 
     // The owner's rules are all on, and turning one off saves it (backend/team_rules.py).
-    assert.equal(await page.locator('[data-rule]').count(), 10);
-    assert.equal(await page.locator('[data-rule]:checked').count(), 10);
+    assert.equal(await page.locator('[data-rule]').count(), 11);
+    assert.equal(await page.locator('[data-rule]:checked').count(), 11);
     await page.locator('[data-rule=admin_sql]').uncheck();
     assert.deepEqual(await next(), ['rules', {admin_sql: false}]);
     await page.waitForFunction(() => document.querySelector('[data-rule=admin_sql]')?.checked === false);

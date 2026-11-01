@@ -13,13 +13,13 @@ const RECORDINGS = '#/recordings';    // legacy route
 const MEETINGS = '#/meetings';        // imported meeting transcripts: the list, Import, and each meeting
 const UPDATES = '#/updates';          // the bots' daily and weekly updates, a feed (backend/updates.py)
 const TASKS = '#/tasks';              // hub tasks and Issues in one page (List | Board)
-const DECIDE = '#/decide';            // what is on my plate, one card at a time (ui/app/decide.js)
+const DECIDE = '#/decide';            // retired: old links land on Needs you, or open the item's card (ui/app/router.js)
+const NEEDS_YOU = '#/tasks?view=foryou';   // everything waiting on me; a card at a time from Go through (ui/app/decide.js)
 const GOALS = '#/goals';              // the team chart with everyone's goals and a colour
 const ASSISTANT = '#/assistant';      // your private chat with the assistant (ui/app/assistant-page.js)
 const LEARNED = '#/assistant/learned';   // what your chat bot has learned (ui/app/learned.js)
 const BOARD = '#/board';              // the old links still work, each opening its view
 const ISSUES = '#/issues';
-const RECURRING = '#/recurring';      // the Tasks page, opened on the Routines view
 const SETTINGS = '#/settings';
 const HELP = '#/help';                // old Help links: Overview with the Support pop-up open (ui/support.js)
 const CREDENTIALS = '#/credentials';   // the owner's connections: what is connected and whether it works

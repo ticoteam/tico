@@ -10,7 +10,7 @@ from backend import lenses as L
 from backend import strategy as S
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_company import bot, with_ceo_bot
+from backend.tests.test_company import bot, with_strategy_bot
 from backend.tests.test_goal_asks import asks, sync
 from backend.tests.test_strategy import draft, publish, ready, write
 
@@ -84,12 +84,12 @@ def test_every_shipped_lens_loads_and_the_list_puts_strategy_first_and_hides_the
 def test_a_draft_run_is_invisible_to_everyone_but_the_owner_in_the_api_and_hub_sql(api, model):
     first, _ = two_bets(api)
     model["result"] = result(first["id"])
-    ceo = with_ceo_bot(api)
+    strategy_token = with_strategy_bot(api)
     published = start(api)
     mine = start(api, on="draft")
     assert mine["on_draft"] is True and published["on_draft"] is False
     assert {r["id"] for r in get(api, "lenses/runs")["runs"]} == {published["id"], mine["id"]}
-    for token in ("ben-test", "cara-test", ceo):
+    for token in ("ben-test", "cara-test", strategy_token):
         assert [r["id"] for r in get(api, "lenses/runs", token=token)["runs"]] == [published["id"]]
         get(api, f"lenses/runs/{mine['id']}", token=token, expected=404)
         assert get(api, f"lenses/runs/{published['id']}", token=token)["status"] == "done"
@@ -98,17 +98,18 @@ def test_a_draft_run_is_invisible_to_everyone_but_the_owner_in_the_api_and_hub_s
     assert set(sql("ana-test")) == {published["id"], mine["id"]} and sql("ben-test") == [published["id"]]
 
 
-def test_only_the_owner_the_ceo_bot_and_for_market_lenses_the_librarian_start_a_run(api, model):
+def test_only_the_owner_the_strategy_bot_and_for_market_lenses_the_librarian_start_a_run(api, model):
     first, _ = two_bets(api)
     model["result"] = result(first["id"])
-    ceo, lib, other = with_ceo_bot(api), librarian(api), bot(api, "ops")
+    strategy_token, lib, other = with_strategy_bot(api), librarian(api), bot(api, "ops")
     for token in ("ben-test", "cara-test", other):
         start(api, token=token, expected=403)
         start(api, "where-to-play", {"segments": ["Landlords"]}, token=token, expected=403)
     start(api, token=lib, expected=403)                                 # the Librarian runs market lenses only
     assert start(api, "where-to-play", {"segments": ["Landlords"]}, token=lib)["created_by"] == "bot:librarian"
-    assert start(api, token=ceo)["created_by"] == "bot:goal-manager"
-    start(api, on="draft", token=ceo, expected=403)                     # a draft run is the owner's own click
+    assert start(api, token=strategy_token)["created_by"] == "bot:goal-manager"
+    # a draft run is the owner's own click
+    start(api, on="draft", token=strategy_token, expected=403)
     start(api, "where-to-play", {}, on="draft", token=lib)             # market lenses ignore `on`
     assert get(api, "lenses/runs?lens=where-to-play")["runs"][0]["on_draft"] is False
     assert start(api, "nope", {}, expected=404)["error"]["code"] == "not_found"
@@ -177,8 +178,10 @@ def test_the_models_result_is_checked_part_by_part_and_what_fails_is_dropped(api
     assert len(out["sections"]) == L.SECTIONS_MAX and len(out["sections"][0]["body"]) <= L.BODY_MAX
     assert [f["text"] for f in out["findings"]] == ["Real bet.", "About the strategy as a whole."]
     assert len(out["assumptions"]) == L.ASSUMPTIONS_MAX and len(out["sharpen"]) == L.SHARPEN_MAX
-    assert [c["label"] for c in out["changes"]] == ["Add to what we won't do", "Source is the server's"]
-    assert out["changes"][1]["payload"] == good                                          # source and lens are never the model's
+    # Rules out and Wrong if are optional, so a bare active bet is a change like any other.
+    assert [c["label"] for c in out["changes"]] == ["Add to what we won't do", "Active with nothing behind it",
+                                                     "Source is the server's"]
+    assert out["changes"][2]["payload"] == good                                          # source and lens are never the model's
     model["result"] = {"summary": "", "sections": [], "chart": None, "findings": [], "changes": []}
     empty = start(api)
     assert empty["status"] == "failed" and empty["error"]["code"] == "empty"
@@ -189,15 +192,16 @@ def test_the_models_result_is_checked_part_by_part_and_what_fails_is_dropped(api
     assert start(api, "seven-powers", {})["result"]["chart"]["rows"][0]["bet_id"] is None
 
 
-def test_a_ceo_bot_run_files_exactly_one_strategy_draft_proposal_and_never_writes_the_draft(api, model):
+def test_a_strategy_bot_run_files_exactly_one_strategy_draft_proposal_and_never_writes_the_draft(api, model):
     first, second = two_bets(api)
-    ceo = with_ceo_bot(api, level=2)                                                 # above Passive, so the owner is asked
+    # above Passive, so the owner is asked
+    strategy_token = with_strategy_bot(api, level=2)
     before = draft(api)
     model["result"] = result(first["id"], changes=[
         {"label": "Retire Bet 2", "payload": {"bets": [{"id": second["id"], "status": "retired"}]}},
         {"label": "Sharper summary", "payload": {"summary": "Acme runs rentals with bots for small landlords."}},
         {"label": "Won't do", "payload": {"sections": {"not": "No per-seat pricing."}}}])
-    run = start(api, token=ceo)
+    run = start(api, token=strategy_token)
     assert run["status"] == "done" and run["proposal_id"]
     pending = [p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == "strategy_draft"]
     assert [p["id"] for p in pending] == [run["proposal_id"]] and pending[0]["proposed_by"] == "bot:goal-manager"
@@ -212,7 +216,7 @@ def test_a_ceo_bot_run_files_exactly_one_strategy_draft_proposal_and_never_write
     assert "because" not in ask["body"] and "Add to draft writes it to your draft" in ask["body"]
     # No change, no proposal; an owner's run never files one.
     model["result"] = result(first["id"])
-    assert start(api, token=ceo)["proposal_id"] is None
+    assert start(api, token=strategy_token)["proposal_id"] is None
     model["result"] = result(first["id"], changes=[{"label": "Sharper summary", "payload": {"summary": "Owner's run."}}])
     assert start(api)["proposal_id"] is None
     assert len([p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == "strategy_draft"]) == 1
@@ -220,10 +224,10 @@ def test_a_ceo_bot_run_files_exactly_one_strategy_draft_proposal_and_never_write
 
 def test_a_run_sent_as_a_proposal_cannot_also_be_added_to_the_draft(api, model):
     first, second = two_bets(api)
-    ceo = with_ceo_bot(api, level=2)
+    strategy_token = with_strategy_bot(api, level=2)
     model["result"] = result(first["id"], changes=[
         {"label": "Retire Bet 2", "payload": {"bets": [{"id": second["id"], "status": "retired"}]}}])
-    run = start(api, token=ceo)
+    run = start(api, token=strategy_token)
     assert run["proposal_id"]
     before = draft(api)
     out = post(api, f"lenses/runs/{run['id']}/apply", {"index": 0, "revision": before["revision"]}, expected=409)

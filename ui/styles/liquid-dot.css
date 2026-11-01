@@ -1,0 +1,59 @@
+/* ui/styles/liquid-dot.css — The Liquid Dot (ui/app/liquid-dot.js ldotHTML): Tico, the assistant, and nothing else.
+   The cascade runs in the order index.html links these files; keep rules in order.
+   Flat: one jade fill with a very slight tonal fall (--dot-hi to --dot-lo, tokens.css), no highlight and no glow, a
+   little less than round (a fixed blob radius), and a soft shadow under it. The same block ships on tico.dev.
+   Cheap by rule: every keyframe moves transform or opacity only (the compositor runs them, nothing lays out or paints
+   per frame); the shape never animates; each part is contained, so no motion reaches the page's layout. */
+.ldot{position:relative;display:inline-block;width:24px;aspect-ratio:1;flex:none;vertical-align:middle;pointer-events:none;contain:layout style}
+.ldot>i{position:absolute;display:block;font-style:normal;contain:layout paint style;transform:translate(0)}
+.ldot .shadow{left:16%;right:12%;bottom:-16%;height:18%;border-radius:50%;background:radial-gradient(ellipse at center,var(--dot-shadow) 0%,transparent 70%)}
+.ldot .body{inset:0;border-radius:43% 57% 55% 45%/38% 44% 56% 62%;background:linear-gradient(160deg,var(--dot-hi) 0%,var(--dot) 45%,var(--dot-lo) 100%)}
+/* Under 20px: no shadow, a flat fill, and idle motion only (ldotState idles any other state there too). */
+.ldot.sm .shadow{display:none}
+.ldot.sm .body{background:var(--dot)}
+
+/* Idle breathes, on the dot itself, without a break (a 2.5 s breath); every 6-14 s the scheduler (ldotIdle) swaps the body's variant
+   (sway, look, squish, hop, or none; the shadow stays put, so it never needs a layer of its own). Each variant loops with a long rest and never ends by itself, so a swap costs one
+   style change and no animation ever finishes on the main thread. */
+.ldot[data-state="idle"]{animation:ld-breathe 2.5s ease-in-out infinite}
+.ldot[data-idle="sway"] .body{animation:ld-sway 6s ease-in-out infinite}
+.ldot[data-idle="look"] .body{animation:ld-look 6s ease-in-out infinite}
+.ldot[data-idle="squish"] .body{animation:ld-squish 6s cubic-bezier(.3,0,.2,1) infinite}
+.ldot[data-idle="hop"] .body{animation:ld-idle-hop 6s cubic-bezier(.3,0,.2,1) infinite}
+/* States: listening leans in; thinking turns and wobbles; talking squashes and stretches (each a brisk loop); done hops
+   once, at a hop's pace. */
+.ldot:not(.sm)[data-state="listening"] .body{transform-origin:50% 100%;animation:ld-listen 1.07s ease-in-out infinite}
+.ldot:not(.sm)[data-state="thinking"] .body{animation:ld-think 1.6s ease-in-out infinite}
+.ldot:not(.sm)[data-state="talking"] .body{animation:ld-talk .73s cubic-bezier(.4,0,.2,1) infinite}
+.ldot:not(.sm)[data-state="talking"] .shadow{animation:ld-shadow-talk .73s cubic-bezier(.4,0,.2,1) infinite}
+.ldot:not(.sm)[data-state="done"] .body{animation:ld-hop .9s cubic-bezier(.3,0,.2,1) 1}
+.ldot:not(.sm)[data-state="done"] .shadow{animation:ld-shadow-hop .9s cubic-bezier(.3,0,.2,1) 1}
+/* Still (every dot but the one live dot on the screen), off screen or in a hidden tab: nothing runs. */
+.ldot[data-state="still"] .body,.ldot[data-state="still"] .shadow{animation:none}
+.ldot[data-paused],.ldot[data-paused] .body,.ldot[data-paused] .shadow{animation-play-state:paused}
+
+@keyframes ld-breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.03,1.015)}}
+/* Idle variants move in the first half second or so of a 6 s loop and rest after it (the dot keeps breathing); the hop
+   takes a second, its own pace. */
+@keyframes ld-sway{0%,20%,100%{transform:rotate(0)}6%{transform:rotate(6deg)}14%{transform:rotate(-6deg)}}
+@keyframes ld-look{0%,21.5%,100%{transform:translateX(0) rotate(0)}5.5%,9.75%{transform:translateX(6%) rotate(3deg)}13%,17.35%{transform:translateX(-6%) rotate(-3deg)}}
+@keyframes ld-squish{0%,6.65%,100%{transform:scale(1)}2.35%{transform:scale(1.08,.9)}4.65%{transform:scale(.97,1.04)}}
+@keyframes ld-idle-hop{0%,15%,100%{transform:translateY(0) scale(1)}2.3%{transform:translateY(5%) scale(1.12,.88)}6.8%{transform:translateY(-30%) scale(.94,1.07)}
+  11.3%{transform:translateY(0) scale(1.1,.9)}13.2%{transform:scale(.98,1.02)}}
+@keyframes ld-hop{0%,100%{transform:translateY(0) scale(1)}15%{transform:translateY(5%) scale(1.12,.88)}45%{transform:translateY(-30%) scale(.94,1.07)}
+  75%{transform:translateY(0) scale(1.1,.9)}88%{transform:scale(.98,1.02)}}
+@keyframes ld-shadow-hop{0%,100%{transform:scaleX(1);opacity:1}45%{transform:scaleX(.6);opacity:.45}75%{transform:scaleX(1.12);opacity:1}}
+@keyframes ld-listen{0%,100%{transform:rotate(4deg) scale(1)}30%{transform:rotate(8deg) scale(1.04,.97)}60%{transform:rotate(5deg) scale(.99,1.02)}}
+@keyframes ld-think{0%,100%{transform:rotate(0) scale(1)}25%{transform:rotate(7deg) scale(1.04,.96)}50%{transform:rotate(-3deg) scale(.98,1.02)}
+  75%{transform:rotate(4deg) scale(.97,1.03)}}
+@keyframes ld-talk{0%,100%{transform:translateY(0) scale(1,1)}28%{transform:translateY(4%) scale(1.08,.92)}52%{transform:translateY(-3%) scale(.95,1.05)}
+  74%{transform:translateY(0) scale(1.015,.985)}}
+@keyframes ld-shadow-talk{0%,100%{transform:scaleX(1)}28%{transform:scaleX(1.1)}52%{transform:scaleX(.9);opacity:.8}}
+/* Reduced motion: the dot holds still; whoever shows it says the state in a word (ldotWord). */
+@media (prefers-reduced-motion:reduce){.ldot,.ldot .body,.ldot .shadow{animation:none!important}}
+/* Moving (ldotFly): a copy flies on top of everything, by transform alone, while the dot it lands on waits unseen. The
+   copies stay in one fixed layer, made once, and show only while they fly: a flight adds nothing to the page. */
+.ldot-layer{position:fixed;inset:0;z-index:70;pointer-events:none;contain:size layout style}
+.ldot.ldot-ghost{position:absolute;margin:0;display:none}
+.ldot.ldot-ghost.ldot-fly{display:inline-block;will-change:transform}
+.ldot.ldot-away{opacity:0}

@@ -145,6 +145,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
 
     // 3. The same pick under Fallback and Task model; the harness list still offers the others.
     await page.evaluate(() => { location.hash = '#/settings'; });
+    await page.waitForFunction(() => S.route === '#/settings');   // a page change draws a frame later (its fade)
     await page.evaluate(() => { settingsShow('bots'); renderSettingsBots(); });
     await page.locator('[data-task-open=seller]').click();
     const task = page.locator('tr[data-task-row=seller] [data-bot-choice][data-kind=task]');
@@ -167,16 +168,15 @@ const shotsDir = process.env.TICO_SHOTS || '';
     assert.equal(await page.locator('[data-gateway-key-link]').getAttribute('href'), '#/settings/models');
     await shot('desktop-gateway.png');
 
-    // 5. Decisions: a company level next to the other model settings, saved with the rest.
-    await page.evaluate(() => { settingsShow('devices'); renderSettingsProviders(); });
+    // 5. Decisions: a company level in Settings > Models > Defaults, saved with the rest.
+    await page.evaluate(() => settingsShow('models'));
     const level = page.locator('#set-prov [data-provider-decide]');
     await level.waitFor();
     assert.equal(await level.inputValue(), 'low');
     assert.deepEqual(await level.locator('option').allInnerTexts(), ['Low', 'Medium', 'High']);
     await level.selectOption('high');
     await page.locator('#set-prov-save').click();
-    await page.waitForFunction(() => document.querySelector('#toast, .toast')?.textContent?.includes('Models saved') || true);
-    await page.waitForTimeout(200);
+    for (let i = 0; i < 100 && !saved; i++) await page.waitForTimeout(30);
     assert.equal(saved.decide_level, 'high');
     const options = await page.locator('[data-provider-model] option').allInnerTexts();
     assert.ok(options.length <= 6 && options.some(o => o.startsWith('General')), `the company default offers General only (${options.length} options)`);

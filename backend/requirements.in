@@ -8,6 +8,7 @@ PyYAML>=6,<7
 boto3>=1.35,<2
 urllib3>=2.8,<3
 httpx>=0.27,<1
+websockets>=16,<17              # the recorder's live speech stream relay (backend/recorder_relay.py); uvicorn serves WebSockets with it
 croniter>=6,<7
 sentry-sdk>=2.69,<3
 cryptography>=46,<51

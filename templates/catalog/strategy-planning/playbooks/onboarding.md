@@ -24,7 +24,7 @@ What you do (a quarterly plan and OKR draft, a grade of last quarter, a mid-quar
 Numbered, each with its one-line why. Offer a default so a human can answer "fine". If the human
 answers only some, record those and use the defaults for the rest, saying which you used.
 
-1. The Strategy page has nothing published yet: what is the team trying to achieve this year, in a sentence or two, and what is off the table? I plan against your answer, marked unconfirmed, until the strategy is published; your CEO Bot drafts that with you.
+1. The Strategy page has nothing published yet: what is the team trying to achieve this year, in a sentence or two, and what is off the table? I plan against your answer, marked unconfirmed, until the strategy is published; the team publishes it on the Strategy page in Tico, and this bot does not write it.
 2. When does your quarter start and end, and who receives the plan? (Default: calendar quarters, the owner receives it.) Sets the schedule of the drafts and who receives them. Share drafts only with the named recipients.
 3. Do you already use OKRs or another goal format? If so, paste last quarter's. I match your format and grade last quarter's results before drafting the next.
 4. How many objectives can the team really carry? (Default: three to five, about three key results each.) A plan longer than the team's capacity is a wish list. This sets the cap I hold the draft to.
@@ -40,13 +40,13 @@ Follow `playbooks/quarterly-plan.md` on the real record: the plan if the quarter
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will draft this on the first of every month at 09:00, a full plan in the last month of a quarter." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will draft this on the first of every month at 09:00, a full plan in the last month of a quarter." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

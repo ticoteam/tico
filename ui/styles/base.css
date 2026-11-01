@@ -34,20 +34,32 @@ html.no-support [data-setup-help]{display:none}
 #feedback-ask label{font-weight:600}
 .feedback-row{display:flex;align-items:center;gap:8px}
 .privacy-row{display:flex;align-items:center;gap:8px;font-size:var(--t-md)}.privacy-row input{width:auto;flex:none}
-html.demo{--demo-h:30px;padding-top:var(--demo-h)}
-html.demo #demo-banner{position:fixed;top:0;left:0;right:0;z-index:3000;height:var(--demo-h);display:flex;align-items:center;justify-content:center;gap:10px;padding:0 12px;background:var(--wait-bg);color:var(--wait-ink);border-bottom:1px solid var(--wait);font-size:var(--t-sm);line-height:1.2;white-space:nowrap;overflow:hidden}
+/* A strip over the top of every page (the demo's, a rehearsal's, Tico Cloud's Out of credit): the page below shortened to fit. */
+html.strip{--demo-h:30px;padding-top:var(--demo-h)}
+html.demo #demo-banner{position:fixed;top:0;left:0;right:0;z-index:3000;height:var(--demo-h);display:flex;align-items:center;justify-content:center;gap:10px;padding:0 12px;background:var(--wait-bg);color:var(--wait-ink);border-bottom:1px solid var(--wait);font-size:var(--t-sm);line-height:var(--lh-tight);white-space:nowrap;overflow:hidden}
 html.demo #demo-banner strong{color:var(--ink);font-weight:600}
 html.demo #demo-banner span{overflow:hidden;text-overflow:ellipsis}
-html.demo body{min-height:calc(100vh - var(--demo-h))}
-html.demo #side{top:var(--demo-h)}
-html.demo #main.chat-layout{height:calc(100dvh - var(--demo-h))}
-@media (min-width:761px){html.demo #main.chat-layout{height:100%}}
+html.strip body{min-height:calc(100vh - var(--demo-h))}
+html.strip #side{top:var(--demo-h)}
+html.strip #main.chat-layout{height:calc(100dvh - var(--demo-h))}
+@media (min-width:761px){html.strip #main.chat-layout{height:100%}}
 @media (max-width:760px){
   html.demo #demo-banner span{display:none}
-  html.demo #side{height:auto;bottom:0}
-  html.demo body:has(#main.chat-layout){height:calc(100dvh - var(--demo-h))}
-  html.demo #main.chat-layout{top:calc(var(--chat-viewport-top,0px) + var(--demo-h));height:calc(var(--chat-viewport-height,100dvh) - var(--demo-h))}
+  html.strip #side{height:auto;bottom:0}
+  html.strip body:has(#main.chat-layout){height:calc(100dvh - var(--demo-h))}
+  html.strip #main.chat-layout{top:calc(var(--chat-viewport-top,0px) + var(--demo-h));height:calc(var(--chat-viewport-height,100dvh) - var(--demo-h))}
 }
+/* Tico Cloud (ui/app/cloud-access.js): Out of credit, a strip like the demo's; Pay to continue, the whole page. */
+#cloud-banner,#cloud-lock{display:none}
+html.cloud-frozen:not(.demo) #cloud-banner{position:fixed;top:0;left:0;right:0;z-index:3000;height:var(--demo-h);display:flex;align-items:center;justify-content:center;gap:10px;padding:0 12px;background:var(--wait-bg);color:var(--wait-ink);border-bottom:1px solid var(--wait);font-size:var(--t-sm);line-height:var(--lh-tight);white-space:nowrap}
+#cloud-banner strong{color:var(--ink);font-weight:600}
+#cloud-banner a{color:var(--ink);font-weight:600}
+html.cloud-locked #cloud-lock{position:fixed;inset:0;z-index:3300;display:flex;align-items:center;justify-content:center;padding:16px;background:var(--bg)}
+html.cloud-locked body>:not(#cloud-lock):not(#signed-out):not(script){visibility:hidden}
+.cloud-lock-card{width:min(380px,100%);display:flex;flex-direction:column;gap:12px;padding:22px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
+.cloud-lock-card h1{margin:0;font-size:var(--t-lg,18px);font-weight:600}
+.cloud-lock-card p{margin:0;color:var(--muted);font-size:var(--t-sm)}
+.cloud-lock-card .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 /* one spacing scale, used everywhere instead of ad-hoc pixel values */
 :root{--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:22px;--s6:32px;--radius:9px;--mobile-nav-height:64px}
 /* corners: controls 6px, menus and popovers 10px, cards --radius. Controls get one height from 20px lines and padding
@@ -57,28 +69,40 @@ html.demo #main.chat-layout{height:calc(100dvh - var(--demo-h))}
 html,body{height:100%}
 /* The rails' widths; dragging an edge changes them (ui/app/rails.js, ui/styles/rails.css). */
 :root{--rail-left:236px;--rail-right:320px;--rail-chat:360px}
-body{margin:0;font:var(--t-md)/1.5 var(--sans);color:var(--ink);background:var(--bg);display:grid;grid-template-columns:var(--rail-left) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);min-height:100vh}
-a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
-button,input,select,textarea{font:inherit;color:inherit}
+body{margin:0;font:var(--t-md)/var(--lh) var(--sans);color:var(--ink);background:var(--bg);display:grid;grid-template-columns:var(--rail-left) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);min-height:100vh}
+a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}
+/* no specificity of its own, so forms.css's one line-height (20px: every field and button 32px tall) is not reset by it */
+:where(button,input,select,textarea){font:inherit;color:inherit}
 h1,h2,h3{margin:0;font-weight:600;text-wrap:balance}
-/* The type scale (tokens.css): 13px text, page titles 16px, card headings 13-14px, one 11px uppercase label; 600 for
-   names and labels, 400 for text. Set apart from the body's grid rule so the layout and the type change independently. */
+/* The type scale (tokens.css): 13px text, page titles 16px, card headings 13-14px, one 11px uppercase label. Three
+   weights: 400 text, 500 emphasis and controls, 600 names, titles and labels (bold text is 600 too). Set apart from
+   the body's grid rule so the layout and the type change independently. Inter's own kerning, ligatures and contextual
+   alternates stay on (its defaults). */
 body{font-size:var(--t-base);text-rendering:optimizeLegibility;font-optical-sizing:auto;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+b,strong{font-weight:600}
 /* light glyphs on a dark page bloom under subpixel-style smoothing; grayscale keeps them crisp */
 :root:not([data-theme="light"]) body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
 @media (prefers-color-scheme:light){:root[data-theme="system"] body{-webkit-font-smoothing:auto;-moz-osx-font-smoothing:auto}}
-/* SF tightens as it grows: titles get a touch of negative tracking */
-h1{font-size:var(--t-lg);line-height:1.3;letter-spacing:-.011em}
-h2{font-size:var(--t-md);color:var(--ink)}
-h3{font-size:var(--t-base)}
+/* Inter tightens as it grows: 16px and up --track-tight, 14px --track-snug, 13px and under none (tokens.css) */
+h1{font-size:var(--t-lg);line-height:var(--lh-tight);letter-spacing:var(--track-tight)}
+h2{font-size:var(--t-md);line-height:var(--lh-tight);letter-spacing:var(--track-snug);color:var(--ink)}
+h3{font-size:var(--t-base);line-height:var(--lh-tight);letter-spacing:var(--track-normal)}
 /* the one uppercase label, for markup that wants it without a rule of its own */
 .label{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
-/* figures line up: counts, ages, table cells, badges */
-table,time,.age,.cnt,.count,.pill,.nav-badge,.tnum,[class*="-count"],input[type=number]{font-variant-numeric:tabular-nums}
+/* Figures line up wherever one is read against another: counts, ages, durations, money, KPI values, table cells,
+   badges. */
+table,time,kbd,.age,.cnt,.count,.pill,.nav-badge,.tnum,[class*="-count"],input[type=number],
+.kpi-big,.kpi-val,.upd-kpi-val,.dash-big,.dash-stat,.flow-tile-n,.goal-metric,.settings-num,
+.mkt-total,.mkt-num,.mkt-n,.bt-val,.bt-spent,.bt-n,.bt-hot-n,.bd-money,.bt-cap,.billing-total,.gw-price,
+.use-cost,.use-total,.use-money,.use-limit,.run-cost,.machine-chip-pct,.au-pct,.au-n,
+.run-when,.rp-clock,.rp-when,.tl-age,.tmodal-age,.rail-age,.bcard-step-age,.chat-time,.side-rec-time,.sh-when,
+.docs-recent-when,.lens-past-when,.cat-when,.goal-fin-when,.code-num,
+.lrn-n,.lens-n,.lc-n,.upd-n,.meet-pending-n,.tl-bulk-n,.tl-mi-n,.strat-bet-n,.strat-sv-n,.rdo-n,.bl-n,
+.support-badge,.pr-badge,.tl-waiting,.tchip-blocked,.code-chip,[data-support-count]::after{font-variant-numeric:tabular-nums}
 .mono{font-family:var(--mono);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
 .muted{color:var(--muted)}
 /* Icon glyphs are ligatures ("dynamic_feed"): until the icon font is in, a glyph would read as that word. They hold
-   their box but stay invisible until ui/theme.js marks the page html.icons-ready (the font settled, or 3s). */
+   their box but stay invisible until ui/theme.js marks the page html.icons-ready (the font settled, or 10s). */
 html:not(.icons-ready) :is(.nav-icon,.mobile-nav-icon,.ob-ms,.agent-mark,.person-mail-link,.av-glyph,.int-key){visibility:hidden}
 /* Motion (tokens.css: --dur-fast, --dur, --ease). Surfaces that appear on top fade in; rows answer a
    hover with a quick tint. Only opacity and transform move, never layout. */
@@ -94,8 +118,15 @@ html:not(.icons-ready) :is(.nav-icon,.mobile-nav-icon,.ob-ms,.agent-mark,.person
 :where(.nav-link,.tree a.node,.inbox-list a,.tl-row,.mail-row,.meet-row,.kpi-line,.need-row,.req>summary,.settings-table tbody tr,
   .search-results li,.market-list a,.slash-row,.p-menu button,#docs-menu button,.mg-menu button,.people-menu button,.section-toggle,
   button.ghost,button.primary){transition:background-color var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+/* A page change cross-fades the window, opacity only (ui/app/router.js routeChanged). The whole window, not #main
+   alone: a named #main reports as a layout shift when the fade ends. The fade's layer takes no pointer; Chrome still
+   gives a press during the fade to the root element, so the router ends the fade and passes the press on. */
+::view-transition{pointer-events:none}
+::view-transition-group(root){animation:none}
+::view-transition-old(root),::view-transition-new(root){animation-duration:min(var(--dur),150ms);animation-timing-function:var(--ease)}
 /* Reduced motion: no entrances, no spinners' travel, no smooth scrolling. State still changes, instantly. */
 @media (prefers-reduced-motion:reduce){
+  ::view-transition-group(*),::view-transition-old(*),::view-transition-new(*){animation:none!important}
   *,*::before,*::after{animation-duration:1ms!important;animation-iteration-count:1!important;transition-duration:1ms!important;scroll-behavior:auto!important}
 }
 /* A hidden or minimized window: every animation holds where it is until the window shows again (ui/app/avatars.js). */

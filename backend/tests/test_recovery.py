@@ -85,6 +85,35 @@ def test_restart_gives_lapsed_leases_one_more_period_instead_of_expiring_them(ap
             assert c.execute("SELECT state FROM attempts WHERE id=?", (b["id"],)).fetchone()[0] == "expired"
 
 
+def test_a_run_the_last_process_held_is_flagged_at_start_and_resumes_if_it_lapses(api):
+    """A plain restart or crash writes no update event: the start flags the runs the last process held, and one whose
+    computer does not carry on resumes on the next sweep, a shell command and all, with nobody asked."""
+    from fastapi.testclient import TestClient
+    from backend.app import create_app
+    from backend.tests.test_api import claim, expire, ready
+    r, _, a = setup_attempt(api)
+    post(api, f"attempts/{a['id']}/started", {"thread_id": "cut-by-restart"}, r["token"])
+    post(api, f"attempts/{a['id']}/events", {"events": [
+        {"seq": 1, "kind": "status", "payload": {"state": "active", "tool_events": True}},
+        {"seq": 2, "kind": "tool", "payload": {"tool": "shell", "status": "started", "item_id": "sh1",
+                                               "summary": "ls notes"}}]}, r["token"])
+    with TestClient(create_app(api.app.state.store.settings)) as restarted:
+        store = restarted.app.state.store
+        with store.read() as c:
+            [flag] = c.execute("SELECT detail_json FROM events WHERE action='attempt.update_cut' AND target=?",
+                               (a["id"],)).fetchall()
+        assert json.loads(flag[0])["cause"] == "restart"
+        expire(restarted, a["id"])
+        assert claim(restarted, r) is None
+        with store.transaction() as c:
+            assert [d["state"] for d in restarted.app.state.execution.auto_reconcile(c)] == ["queued"]
+            assert not c.execute("SELECT 1 FROM tasks WHERE title LIKE 'Review %'").fetchone()
+        ready(restarted, r, ["ops"])
+        again = claim(restarted, r)
+        assert again["job_id"] == a["job_id"] and again["recovery"]["resume_session"] is True
+        assert "by a Tico restart" in again["message"]["body"]
+
+
 def test_every_cloud_migration_number_is_used_once_and_in_order():
     """Two branches picked the same migration number twice on 2026-09-24 (#493): the second block
     then never runs on a database that already recorded the number. With no CI, this is the check

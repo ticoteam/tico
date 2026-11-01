@@ -8,8 +8,8 @@ from backend import live_meetings as meetings
 from backend import task_privacy
 from backend.auth import Identity
 from backend.store import H, Problem, encode
-from backend.tests.test_api import assign, get, headers, post, ready, runner
-from backend.tests.test_live_meetings import api, attach, chunk, live  # noqa: F401
+from backend.tests.test_api import assign, get, headers, post, runner
+from backend.tests.test_live_meetings import api, attach, chunk, live, ready  # noqa: F401
 from backend.tests.test_botops_parity import act
 from backend.tests.test_member_bots import botops, turn as botops_turn  # noqa: F401
 from backend.tests.test_sql import query
@@ -328,6 +328,17 @@ def test_private_meeting_execution_cannot_publish_to_nonmembers_and_can_reply(li
     fid = made["file"]["id"]
     assert live.get(f"/api/v2/files/{fid}", headers=headers("ben-test")).content == b"Synthetic scoped file"
     get(live, f"files/{fid}", expected=404)
+
+
+def test_private_meeting_execution_is_told_why_a_shared_write_is_refused_and_still_reads(live, derived):
+    mid, attempt = derived
+    writes = {"docs": {"title": "Embargo", "body": "The press embargo lifts Nov 17."}, "pages": {},
+              "tasks": {"owner": "ops", "title": "Embargo"}, "messages": {"to": "finance", "text": "Embargo Nov 17"}}
+    for path, body in writes.items():
+        r = live.post("/api/v2/" + path, json=body, headers=headers(attempt["token"]))
+        assert r.status_code == 403 and r.json()["error"]["detail"] == task_privacy.PRIVATE_MEETING_REFUSAL, (path, r.text)
+    assert get(live, f"live-meetings/{mid}", token=attempt["token"])["id"] == mid
+    assert "files" in get(live, "bots/ops/files", token=attempt["token"])
 
 
 def test_team_meeting_execution_keeps_ordinary_publication(live):

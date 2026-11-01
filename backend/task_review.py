@@ -189,7 +189,49 @@ def edit_version(c, auth, who, task_id, fid, number, body):
     return version_review(c, fid, number, actor=privacy.actor(who))
 
 
-def answer_task(c, auth, who, task_id, body, wake):
+def answer_text(c, auth, who, asked, text, *, unknown=False, warn=""):
+    """Only a unique exact label for one question can stand in for a card pick. `warn` (an org rule's Warn,
+    backend/org_rule_check.py) goes on the message the asker reads, after the pick is resolved on `text` itself."""
+    from . import models as M
+    if asked["to_actor"] != who.actor or asked["from_actor"] == who.actor:
+        raise Problem("forbidden", "Only the question's recipient may answer it", 403)
+    privacy.require_message(c, who, asked)
+    task_id = H.message_task_id(asked, H.conversation(c, asked["conversation_id"]))
+    questions = asked["refs"]["questions"]
+    matches = [o["label"] for q in questions for o in q["options"] if o["label"] == text]
+    if task_id and not unknown and len(questions) == 1 and len(matches) == 1:
+        target = asked["refs"].get("target") or {"comment": asked["id"]}
+        return answer_task(c, auth, who, task_id, M.TaskAnswer(
+            target=target, answers={questions[0]["id"]: matches}), wake=True, warn=warn)
+    # The original words stay on the task; an unmatched note cannot settle its question.
+    note = H.answer(c, who.actor, asked["id"], warn + "\n\n" + text if warn else text, unknown=unknown,
+                    classify_text=text)
+    return {**note, "decision_open": True,
+            "feedback": "Note saved. Decision still open; choose one of the options."}
+
+
+def reply_answer(c, auth, who, asked, text, warn=""):
+    """A turn's reply to the question it was asked (a completion, Send anyway of a held one), as a message: on an
+    options question the pick is resolved on the reply's own text, as an answer typed in is (`answer_text`), and
+    `warn` goes on the message the asker reads. A pick the reply may not make there stays the plain answer; None when
+    that same pick was already recorded."""
+    if H.has_pick_options(asked):
+        c.execute("SAVEPOINT reply_answer")
+        try:
+            out = answer_text(c, auth, who, asked, text, warn=warn)
+        except Problem:
+            c.execute("ROLLBACK TO reply_answer")
+            c.execute("RELEASE reply_answer")
+        else:
+            c.execute("RELEASE reply_answer")
+            made = out.get("comment") or (out if out.get("id") else None)
+            return H.message(c, made["id"]) if made else None      # None: that very pick was already recorded
+    return H.answer(c, who.actor, asked["id"], warn + "\n\n" + text if warn else text, classify_text=text)
+
+
+def answer_task(c, auth, who, task_id, body, wake, warn=""):
+    """A structured answer. `warn` (an org rule's Warn) opens the answer comment its readers get; the answer itself
+    (its picks and Other text) is recorded as given."""
     mark = H.jobs_mark(c)
     comment_rights(c, auth, who, task_id)
     target = body.target.model_dump(exclude_none=True)
@@ -259,18 +301,58 @@ def answer_task(c, auth, who, task_id, body, wake):
             text += f" File: {subject}."
     if body.other:
         text += " " + body.other
+    if warn:
+        text = warn + "\n\n" + text
     value = {"target": target, "answers": body.answers, "other": body.other, "dismiss": body.dismiss,
              "by": who.actor, "at": H.now(), **({"not": {k: v for k, v in passed.items() if v}}
                                                  if any(passed.values()) else {})}
+    # Files under review (backend/file_reviews.py): the answer says what it judged of each exact version.
+    from . import file_reviews
+    review, spend = asked["refs"].get("review"), asked["refs"].get("spend")
+    labels = [] if body.dismiss else [label for picks in body.answers.values() for label in picks]
+    if review and not body.dismiss:
+        value["reviewed"] = file_reviews.verdicts(review, labels, body.other)
+        file_reviews.require_readable(c, auth, who, value["reviewed"])
+    # Repeated deliveries with a new transport key still record only one identical choice.
+    previous = H.review_answers(c, asked["id"], actor=privacy.actor(who))
+    for answer in previous:
+        if all(answer.get(k) == value.get(k) for k in ("target", "answers", "other", "dismiss", "by")):
+            return {"answer": answer, "comments": H.task_comments(c, task_id, actor=privacy.actor(who)),
+                    "woke": False}
+    if spend and spend["label"] in labels:
+        value["spend_approval"] = file_reviews.spend_approval(c, who, asked, task_id, spend, previous)
     picked = still_wanted.choice(asked, body, who.actor)
     if picked == still_wanted.CLOSE:
         wake = False                 # the close itself tells the bot; the answer need not start a run too
     msg = H.task_comment(c, who.actor, task_id, text, wake=wake,
                          extra_refs={"answer": value}, answer_to=asked["id"], answer_text=body.other or "")
+    if value.get("reviewed"):
+        file_reviews.record(c, who, task_id, asked["id"], msg["id"], value["reviewed"])
     still_wanted.act(c, who.actor, task_id, picked)
     return {"comment": {**msg, "answer": value}, "answer": value,
             "comments": H.task_comments(c, task_id, actor=privacy.actor(who)),
             **H.comment_delivery(c, msg, since=mark)}
+
+
+# The newest visual per task. `bot_files_task` (backend/files.py) finds a task's files without scanning every file.
+COVERS_SQL = (
+    "WITH visuals AS ("
+    "SELECT f.task_id,f.id,v.version,v.mime,v.created,v.rowid AS position,"
+    "coalesce(v.width,m.width) AS width,coalesce(v.height,m.height) AS height,"
+    "coalesce(v.thumb_blob_id,m.thumb_blob_id) AS thumb_blob_id,"
+    "coalesce(v.poster_blob_id,m.poster_blob_id) AS poster_blob_id "
+    "FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
+    "LEFT JOIN blob_media m ON m.blob_id=v.blob_id "
+    "WHERE f.task_id IN ({marks}) AND f.archived=0 AND f.locator='tico_blob' "
+    "UNION ALL SELECT a.task_id,b.id,1,b.content_type,b.created,b.rowid,"
+    "m.width,m.height,m.thumb_blob_id,m.poster_blob_id "
+    "FROM task_assets a JOIN blobs b ON b.id=a.blob_id LEFT JOIN blob_media m ON m.blob_id=b.id "
+    "WHERE a.task_id IN ({marks}) AND NOT EXISTS "
+    "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)), "
+    "ranked AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY task_id "
+    "ORDER BY created DESC,version DESC,position DESC) AS rank FROM visuals "
+    "WHERE mime LIKE 'image/%' OR (mime LIKE 'video/%' AND poster_blob_id IS NOT NULL)) "
+    "SELECT * FROM ranked WHERE rank=1")
 
 
 def task_covers(c, task_ids):
@@ -278,24 +360,7 @@ def task_covers(c, task_ids):
     if not task_ids:
         return {}
     marks = ",".join("?" * len(task_ids))
-    rows = c.execute(
-        "WITH visuals AS ("
-        "SELECT f.task_id,f.id,v.version,v.mime,v.created,v.rowid AS position,"
-        "coalesce(v.width,m.width) AS width,coalesce(v.height,m.height) AS height,"
-        "coalesce(v.thumb_blob_id,m.thumb_blob_id) AS thumb_blob_id,"
-        "coalesce(v.poster_blob_id,m.poster_blob_id) AS poster_blob_id "
-        "FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
-        "LEFT JOIN blob_media m ON m.blob_id=v.blob_id "
-        f"WHERE f.task_id IN ({marks}) AND f.archived=0 AND f.locator='tico_blob' "
-        "UNION ALL SELECT a.task_id,b.id,1,b.content_type,b.created,b.rowid,"
-        "m.width,m.height,m.thumb_blob_id,m.poster_blob_id "
-        "FROM task_assets a JOIN blobs b ON b.id=a.blob_id LEFT JOIN blob_media m ON m.blob_id=b.id "
-        f"WHERE a.task_id IN ({marks}) AND NOT EXISTS "
-        "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)), "
-        "ranked AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY task_id "
-        "ORDER BY created DESC,version DESC,position DESC) AS rank FROM visuals "
-        "WHERE mime LIKE 'image/%' OR (mime LIKE 'video/%' AND poster_blob_id IS NOT NULL)) "
-        "SELECT * FROM ranked WHERE rank=1", (*task_ids, *task_ids))
+    rows = c.execute(COVERS_SQL.format(marks=marks), (*task_ids, *task_ids))
     out = {}
     for row in rows:
         suffix = "/poster" if row["mime"].startswith("video/") else "/thumb" if row["thumb_blob_id"] else ""

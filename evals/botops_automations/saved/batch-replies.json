@@ -1,0 +1,54 @@
+{
+  "created": [
+    {
+      "name": "Mail triaged on arrival, drafts sent in batches",
+      "owner": "person:dana",
+      "enabled": false,
+      "trigger": {
+        "type": "message",
+        "inbox": "dana@acme.example"
+      },
+      "steps": [
+        {
+          "id": "triage",
+          "type": "decide",
+          "enabled": true,
+          "set": "mail-triage@1",
+          "level": "low",
+          "out": "d1"
+        },
+        {
+          "id": "sort",
+          "type": "filter",
+          "enabled": true,
+          "rules": [
+            {
+              "when": [
+                {
+                  "field": "d1.bucket",
+                  "op": "is",
+                  "value": "reply",
+                  "min": 0.7
+                }
+              ],
+              "then": [
+                {
+                  "do": "draft_reply",
+                  "args": {}
+                }
+              ],
+              "stop": true
+            }
+          ]
+        }
+      ],
+      "batch": {
+        "times": [
+          "08:00",
+          "13:00",
+          "17:00"
+        ]
+      }
+    }
+  ]
+}

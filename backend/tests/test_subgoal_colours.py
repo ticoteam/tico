@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend import ceo_bot, goals as G, hubdb as H, kpis as K
+from backend import strategy_bot, goals as G, hubdb as H, kpis as K
 from backend.tests.test_api import api, post  # noqa: F401
 
 NOW = datetime(2026, 10, 26, 12, tzinfo=timezone.utc)
@@ -94,7 +94,7 @@ def test_subgoal_with_no_data_stays_uncoloured_like_an_unlinked_goal(api, clock)
             assert status_events(c, goal) == []
 
 
-def test_person_colour_on_subgoal_stays_and_ceo_only_suggests(api, clock):
+def test_person_colour_on_subgoal_stays_and_strategy_only_suggests(api, clock):
     with api.app.state.store.transaction() as c:
         child = make_goal(c, make_goal(c)["id"])
         measure(c, child, 39)
@@ -121,7 +121,7 @@ def test_regular_checks_off_leaves_blank_auto_and_person_subgoals_untouched(api,
         G.set_status(c, ACTOR, children[2]["id"], "green", "A temporary exception.")
         for child in children:
             measure(c, child, 39)
-        ceo_bot.set_checks(c, ACTOR, False)
+        strategy_bot.set_checks(c, ACTOR, False)
         before = [G.goal(c, g["id"]) for g in children]
         history = [status_events(c, g) for g in children]
     result = post(api, "goals/refresh", {})

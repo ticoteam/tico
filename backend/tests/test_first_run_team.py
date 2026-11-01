@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 
 
-from backend import releases
+from backend import releases, routines
 from backend.tests.test_api import claim, headers, post, ready
 from backend.tests.test_onboarding import (ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, as_person, build_team,  # noqa: F401
                                            draft, environment, machine, signed_in)
@@ -20,6 +20,17 @@ def real_starters(api, *names):
     """The support and Chief of Staff templates as shipped: their card, playbooks and paused routine."""
     for name in names:
         shutil.copytree(CATALOG / name, Path(api.app.state.store.settings.catalog_dir) / name, dirs_exist_ok=True)
+
+
+def support_routine(api):
+    """The support bot's first routine as it runs now: its automation (backend/routines.py `row`)."""
+    with api.app.state.store.read() as c:
+        sid = c.execute("SELECT id FROM schedules WHERE bot='support'").fetchone()[0]
+        return routines.row(c, sid)
+
+
+def enabled(api):
+    return support_routine(api)["enabled"]
 
 
 def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_marks_it_complete(environment):
@@ -46,9 +57,8 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
     detail = api.get("/api/v2/bots/support", headers=who).json()
     assert (detail["template"], detail["template_version"], detail["state"]) == ("support", releases.version(), "active")
     assert api.get("/api/v2/tasks", params={"owner": "botops"}, headers=who).json()["tasks"] == []   # no BotOps task
+    assert support_routine(api)["automation"] and enabled(api) == 0
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT enabled FROM schedule_config sc JOIN schedules s ON s.id=sc.schedule_id "
-                         "WHERE s.bot='support'").fetchone()[0] == 0
         assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='support'").fetchone()[0])["materialize"] is True
 
     # Nothing wakes it but a person: a task notice waits, the person's own message is claimed.
@@ -56,9 +66,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
     api.post("/api/v2/tasks", json={"owner": "support", "title": "Look at the queue", "body": "x"}, headers=signed_in())
     assert claim(api, computer, "support") is None
     started = post(api, "chat/support", {"text": "Let's set you up."}, token="local-owner-secret-token-0123456789")
-    with api.app.state.store.read() as c:            # starting the setup switched its first routine on: nobody approves it separately
-        assert c.execute("SELECT enabled FROM schedule_config sc JOIN schedules s ON s.id=sc.schedule_id "
-                         "WHERE s.bot='support'").fetchone()[0] == 1
+    assert enabled(api) == 1          # starting the setup switched its first routine on: nobody approves it separately
     attempt = claim(api, computer, "support")
     assert attempt and attempt["bot"] == "support"
     assert attempt["onboarding"] == "needs_setup"           # the runner's prompt follows the template's flow
@@ -126,9 +134,7 @@ def test_finishing_setup_with_defaults_turns_the_first_routine_on_as_starting_it
     build_team(api)
 
     def enabled():
-        with api.app.state.store.read() as c:
-            return c.execute("SELECT enabled FROM schedule_config sc JOIN schedules s ON s.id=sc.schedule_id "
-                             "WHERE s.bot='support'").fetchone()[0]
+        return support_routine(api)["enabled"]
     assert enabled() == 0
     finished = api.post("/api/v2/bots/support/onboarded", json={}, headers=signed_in()).json()
     assert finished["onboarding_state"] == "onboarded" and finished["routine"] and enabled() == 1
@@ -145,16 +151,15 @@ def test_go_live_turns_the_first_routine_on_once_and_a_strangers_message_does_no
     build_team(api)
 
     def enabled():
-        with api.app.state.store.read() as c:
-            return c.execute("SELECT enabled FROM schedule_config sc JOIN schedules s ON s.id=sc.schedule_id "
-                             "WHERE s.bot='support'").fetchone()[0]
+        return support_routine(api)["enabled"]
     as_person(api, "quinn")                                          # a member who does not manage it
     assert api.post("/api/v2/chat/support", json={"text": "hello"}, headers=signed_in("quinn")).status_code == 200
     assert enabled() == 0
     live = api.post("/api/v2/bots/support/go-live", json={}, headers=signed_in())
     assert live.status_code == 200 and live.json()["routine_armed"] and enabled() == 1
-    with api.app.state.store.transaction() as c:                     # a person turns it off: going live again leaves it off
-        c.execute("UPDATE schedule_config SET enabled=0 WHERE schedule_id LIKE 'support:%'")
+    off = api.patch(f"/api/v2/automations/{support_routine(api)['automation']}", json={"enabled": False},
+                    headers=signed_in())                             # a person turns it off: going live again leaves it off
+    assert off.status_code == 200, off.text
     again = api.post("/api/v2/bots/support/go-live", json={}, headers=signed_in())
     assert again.status_code == 200 and enabled() == 0
 

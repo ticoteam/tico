@@ -14,6 +14,7 @@ use tokio::runtime::Handle;
 
 use crate::client::Client;
 use crate::execute::Flags;
+use crate::wire::{decode, RenewAnswer};
 
 /// The lease thread's runtime, started on first use and kept for the life of the process.
 pub(crate) fn handle() -> &'static Handle {
@@ -48,14 +49,15 @@ async fn renew_loop(client: Client, aid: String, flags: Arc<Flags>, every: Durat
             return;
         }
         let before = Instant::now();
-        match client.post(&format!("attempts/{aid}/renew"), &json!({}), None).await {
+        let renewed = client.post(&format!("attempts/{aid}/renew"), &json!({}), None).await;
+        match renewed.and_then(decode::<RenewAnswer>) {
             Ok(reply) => {
-                let lease = reply["lease_seconds"].as_f64().unwrap_or(60.0);
+                let lease = reply.lease_seconds.unwrap_or(60.0);
                 *flags.deadline.lock().unwrap() = before + Duration::from_secs_f64((lease - 10.0).max(0.0));
-                if reply["stop"] == true {
+                if reply.stop == Some(true) {
                     // A person pressed Stop, or the bot was quarantined (its `stop_reason`): the turn is interrupted
                     // and reported as interrupted, not lost.
-                    if let Some(why) = reply["stop_reason"].as_str().filter(|why| !why.is_empty()) {
+                    if let Some(why) = reply.stop_reason.filter(|why| !why.is_empty()) {
                         *flags.stop_reason.lock().unwrap() = Some(why.to_string());
                     }
                     flags.stopped.store(true, Ordering::SeqCst);

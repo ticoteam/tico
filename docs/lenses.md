@@ -38,7 +38,7 @@ If no model provider is set up, the run is `no_model` and your answers are saved
 A run that is cut off (a restart, or no answer in ten minutes) reads **failed** with "The run was cut off; run it
 again".
 
-Who may run one: the owner, the [CEO Bot](ceo-bot.md), and for a market lens the [Librarian](librarian.md). Nobody
+Who may run one: the owner, the [Strategy Bot](strategy-bot.md), and for a market lens the [Librarian](librarian.md). Nobody
 else, and no other bot. A run on the draft is the owner's alone.
 
 ## The result
@@ -62,9 +62,9 @@ the code `empty`.
   answers 409 `proposed`: decide it on its card.
 - **Sharpen** (owner only): files one research task for the Librarian for one item, once. Its findings go to the
   market page Open questions.
-- A run the **CEO Bot** starts files one `strategy_draft` proposal with the changes, marked as from the lens. It
+- A run the **Strategy Bot** starts files one `strategy_draft` proposal with the changes, marked as from the lens. It
   shows as a Decide card, "Confirm or reject a change to the strategy from the Blue Ocean lens". Confirming writes the
-  draft as you; publishing stays your click. The CEO Bot suggests a lens when a bet trips and in its weekly note, and
+  draft as you; publishing stays your click. The Strategy Bot suggests a lens when a bet trips and in its weekly note, and
   never runs one unasked.
 
 ## `hub` and the API
@@ -84,7 +84,7 @@ The answers file is `{"<step key>": answer}`: a list step is a list of short str
 | Route | Who | What it does |
 |---|---|---|
 | `GET /lenses?applies_to=` | any reader | the listed lenses, strategy first |
-| `POST /lenses/{id}/runs` | owner, CEO Bot, Librarian (market) | `{answers, on?: published|draft}`; answers `202` with the run; `422 invalid` for a bad answer, `422 no_published` with nothing published, `403` for anyone else |
+| `POST /lenses/{id}/runs` | owner, Strategy Bot, Librarian (market) | `{answers, on?: published|draft}`; answers `202` with the run; `422 invalid` for a bad answer, `422 no_published` with nothing published, `403` for anyone else |
 | `GET /lenses/runs`, `/lenses/runs/{id}` | any reader | runs the caller may see; a draft run is `404` to everyone but the owner |
 | `POST /lenses/runs/{id}/apply` | the owner only | `{index, revision}`; `409` if the draft moved, `409 applied` if added already |
 | `POST /lenses/runs/{id}/sharpen/{i}` | the owner only | files the research task once and returns its id |
@@ -93,4 +93,4 @@ Runs are rows in `lens_runs`, readable in [Hub SQL](hub-sql.md) by the same rule
 Answers are limited to 2,000 characters for words, twelve items of 200 characters for a list, and six columns by ten
 rows for scores. The whole model input is capped at 24,000 characters.
 
-Related: [Strategy](strategy.md), [Your CEO Bot](ceo-bot.md), [Librarian](librarian.md).
+Related: [Strategy](strategy.md), [Your Strategy Bot](strategy-bot.md), [Librarian](librarian.md).

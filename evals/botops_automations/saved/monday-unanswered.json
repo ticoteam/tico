@@ -1,0 +1,56 @@
+{
+  "created": [
+    {
+      "name": "Monday check for unanswered questions in last week's mail",
+      "owner": "person:dana",
+      "enabled": false,
+      "trigger": {
+        "type": "schedule",
+        "cron": "0 9 * * 1"
+      },
+      "steps": [
+        {
+          "id": "mail",
+          "type": "find",
+          "enabled": true,
+          "source": "mail",
+          "query": "questions nobody has answered",
+          "since": "last_run",
+          "limit": 20
+        },
+        {
+          "id": "triage",
+          "type": "decide",
+          "enabled": true,
+          "set": "mail-triage@1",
+          "level": "low",
+          "out": "d1"
+        },
+        {
+          "id": "sort",
+          "type": "filter",
+          "enabled": true,
+          "rules": [
+            {
+              "when": [
+                {
+                  "field": "d1.is_ask",
+                  "op": "is",
+                  "value": "yes",
+                  "min": 0.6
+                }
+              ],
+              "then": [
+                {
+                  "do": "draft_reply",
+                  "args": {}
+                }
+              ],
+              "stop": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

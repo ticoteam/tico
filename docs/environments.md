@@ -75,7 +75,9 @@ and `environment`, the environment id this registration belongs to. Without `cap
 `"auto"`) the runner sizes how many turns it runs at once to the machine: 5 per CPU core, as memory allows (3 per
 GB), at least 4 and at most 64. Turns mostly wait on their model provider, so this is well above the core count. A
 number is kept (up to 256), so set `"capacity": 80` to go higher. The `"capacity": 4` that setups before October 14,
-2026 wrote becomes `"auto"` once (`capacity_auto` marks it done); set 4 again to keep it. Mode 0600 is
+2026 wrote becomes `"auto"` once (`capacity_auto` marks it done); set 4 again to keep it. The owner's **Turns at once**
+for a computer (Settings > Computers) replaces this number for that computer, up to 256: the runner takes it from its
+heartbeat reply, and a runner that predates `turns_at_once_v1` runs at most the capacity it reports. Mode 0600 is
 enforced on every command. Profiles add three more keys:
 
 ```json

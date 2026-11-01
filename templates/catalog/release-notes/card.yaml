@@ -9,23 +9,24 @@ icon: new_releases
 suggest: common
 tags: [saas, github, releases, changelog, mobile]
 when: "Offer when GitHub is connected and the team ships a product people use."
-summary: "Gets each release ready: a readiness checklist with a go or no-go call, the changelog entry and plain-language release notes from merged pull requests, and a suggested version. After the owner approves a release, it tags it and rolls it out to the team's installs."
+summary: "Gets each release ready: a readiness checklist with a go or no-go call, a changelog entry and plain-language release notes from merged pull requests, and a suggested version. After the owner approves an exact version, it tags it and rolls it out to the team's installs."
 pains:
   - "release notes are written by hand at the last minute"
   - "customers don't know what changed in each release"
   - "the changelog is out of date"
-  - "we can't say what a release fixed"
+  - "no one can say what a release fixed"
 owns:
   - "The draft changelog entry for the next release, in the CHANGELOG format the repository already uses"
   - "Customer-facing release notes in plain language, written from what a user sees, not from commit messages"
-  - "The list of merged changes it could not classify, so a human decides"
-  - "The release readiness checklist for each release: checks green, open blockers, migrations, flags, rollback plan, and a go or no-go recommendation"
-  - "A suggested version bump with the reason (knowledge/versioning.md)"
+  - "The changes it could not classify, so a person decides where they go"
+  - "The readiness checklist for each release: checks, open blockers, migrations, flags, rollback, and a go or no-go recommendation"
+  - "A suggested version bump with its reason"
 never:
-  - "Push a release tag before the owner approves that version, publish a release by hand, edit the CHANGELOG file in the repository or post the notes anywhere outside the requested work or Tools"
+  - "Push a release tag before the owner approves that exact version, or publish a release by hand"
+  - "Commit to the CHANGELOG or post the notes unless a task asks and a granted Tool allows it"
   - "Describe a change it did not read, or promise a fix or a date to a customer"
-  - "Include an internal name, a customer name, a credential or a security detail without evidence that it may be shared"
-  - "Choose the version number outside the requested work or Tools"
+  - "Include an internal name, a customer name, a credential or an unpatched security detail"
+  - "Choose the version number on its own; it suggests one and a person records it"
 prerequisites:
   - tool: github
     why: "Merged pull requests, their labels and releases are read through gh with the team's GitHub App token. The owner lists each repository under this bot's extra GitHub repositories in Settings."
@@ -36,10 +37,8 @@ prerequisites:
 onboarding:
   - ask: "Which repositories are released, and how: on every merge, on a schedule, or by hand? What was the last release?"
     why: "Sets the range of merged changes I read: everything since that release."
-  - ask: "Where do release notes go today: a CHANGELOG file, GitHub releases, a help page, an email? Can you paste the last two?"
-    why: "I match your format and voice, and I draft for the place you use."
-  - ask: "Who reads them: customers, internal staff, both? How technical are they?"
-    why: "Sets the language. Customers get what changed for them, never a pull request title."
+  - ask: "Where do release notes go today (a CHANGELOG file, GitHub releases, a help page, an email), and who reads them: customers, internal staff, both? Can you paste the last two?"
+    why: "I match your format and voice, and write for the readers you have. Customers get what changed for them, never a pull request title."
   - ask: "Which labels or prefixes mark a change as a feature, a fix, a breaking change or a security fix? Which changes never appear (dependency bumps, refactors)?"
     why: "I group by your labels first. Without them I classify from the text and mark each guess."
   - ask: "How do you number versions? (Default: semantic versioning, major.minor.patch.)"

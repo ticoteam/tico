@@ -55,7 +55,8 @@ grouped, and how many entries were evicted or omitted. Computer heartbeat time d
 This is redacted technical evidence, not an anonymous ticket: the message and optional email/install ID may identify you.
 The allowlist and examples are in [PRIVACY.md](../PRIVACY.md#support-diagnostics).
 
-Replies appear in their conversation, raise a notice, and put the number of unread replies on the `?`. Opening a
+Replies appear in their conversation, raise a notice, and put the number of unread replies inside Ask, on **Tico support**
+under its **+**; Ask's button carries no count. Opening a
 conversation, or having it open in front of you when a reply lands, marks it read; there is no Mark read or Refresh button.
 Replies are checked when you open Help, when the app regains focus or comes back into view, and on the timer below. Background
 refresh preserves your draft, focus and scroll position. Deleting removes the request and all its attachments at HQ and its
@@ -69,9 +70,11 @@ local ticket record. Closed requests remain readable.
 
 ### Reach us from anywhere
 
-- **Talk to us** sits at the bottom of the sidebar and on the phone's tab bar. It opens Help with a new request, ready to
-  write. Empty Tasks, Updates and Runs lists, and the screen after Create, carry the line "Stuck or curious? A person at
-  Tico reads every message." with the same button.
+- **Tico support** opens from any link to `#/support` (a chat reply's "Loop in Tico support", `#/help`): Help with a
+  new request, ready to write; a `#/support/manage` link opens one asking for full management. **Loop in Support**,
+  the link at the top right of the Ask panel, shows an open request's messages in that chat as blue-gray bubbles and
+  writes your replies to it. It sends the chat's last 20
+  turns, keys cut out, to that request, or to a new request sent at once when none is open ([The Assistant](assistant.md)). Empty lists carry no support line of their own.
 - **Report this** appears on every error message (toast), on a failed run (a task's Runs section and Settings → History → Runs), on a red
   Health line and on a stuck bot. It opens a new request with what failed named in the message and attached as
   diagnostics in a `report` section: its kind (`toast`, `run`, `health`, `stuck`, `setup_check`), the words on screen,
@@ -211,7 +214,9 @@ the anonymous install rows only. The reference for HQ's routes is in [telemetry.
 
 Your Tico asks HQ about your tickets only when the app asks: when you open Help, when the app regains focus or comes back
 into view, and every 30 seconds while the support rail is open, or about every 5 minutes elsewhere while the app is open
-and you have a ticket that is not closed (at most once every 30 seconds for any one ticket). It has no timer of its own.
+and you have a ticket that is not closed. It has no timer of its own. Each time, it asks about a ticket at most once every
+30 seconds when it was written on in the last hour or is the one you have open, every 5 minutes when it is open or
+answered but quiet, and every 6 hours when it is closed, the most recent first.
 
 ## How the project team works tickets
 

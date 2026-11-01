@@ -196,21 +196,52 @@ def cost_usd(settings, model, usage):
     return round(((fresh + cached) * rate_in + out * rate_out) / 1_000_000, 6)
 
 
-def spent_this_month(c, at=None):
+# The month's total per (database file, month): (total, rowid of the newest judge.spend row counted, that row's id). A call
+# sums only the rows after that rowid. judge.spend rows are never deleted or changed, and a new row always gets a higher
+# rowid than every row kept, so the total stays exact. If the newest counted row is gone or renumbered (a VACUUM), the
+# month is summed again. The `+` keeps SQLite on the rowid range: without it the planner takes events_action_ts and
+# reads the whole month again.
+_SPEND, _SPEND_LOCK = {}, threading.Lock()
+MONTH_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0), max(rowid) FROM events "
+                   "WHERE ts>=? AND action=?")
+NEW_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0), max(rowid) FROM events "
+                 "WHERE rowid>? AND +ts>=? AND +action=?")
+# A budget is the settings field holding its monthly cap and the event action its spend rows are written as. Decide's
+# own is the default; org rule checks keep a separate one (backend/org_rule_check.py), so neither can spend the other's.
+DECIDE_BUDGET = ("decisions_monthly_usd", "judge.spend")
+
+
+def spent_this_month(c, at=None, budget=DECIDE_BUDGET):
     """USD the team's decision calls have cost since the 1st of this UTC month: the sum of the `judge.spend` rows
-    `metered` writes after every paid call, whoever made it. (`judge.call` rows repeat the cost for reading.)"""
-    month = (at or H.now())[:7]
-    total = c.execute("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0) FROM events "
-                      "WHERE ts>=? AND action='judge.spend'", (month + "-01T00:00:00",)).fetchone()[0]
-    return round(float(total or 0), 6)              # a float sum of cents can land a hair under the cap
+    `metered` writes after every paid call, whoever made it. (`judge.call` rows repeat the cost for reading.) Another
+    `budget` sums its own spend rows instead."""
+    month, action = (at or H.now())[:7], budget[1]
+    since, path = month + "-01T00:00:00", next((r[2] for r in c.execute("PRAGMA database_list") if r[1] == "main"), "")
+    with _SPEND_LOCK:
+        total, last, last_id = _SPEND.get((path, month, action), (0.0, 0, None))
+        if last:
+            held = c.execute("SELECT id FROM events WHERE rowid=?", (last,)).fetchone()
+            if held is None or held[0] != last_id:
+                total, last = 0.0, 0
+        if last:
+            added, newest = c.execute(NEW_SPEND_SQL, (last, since, action)).fetchone()
+            total += float(added or 0)
+        else:
+            added, newest = c.execute(MONTH_SPEND_SQL, (since, action)).fetchone()
+            total = float(added or 0)
+        if newest is not None:
+            last = newest
+            last_id = c.execute("SELECT id FROM events WHERE rowid=?", (last,)).fetchone()[0]
+        _SPEND[path, month, action] = (total, last, last_id)
+    return round(total, 6)                          # a float sum of cents can land a hair under the cap
 
 
-def over_spend_cap(c, settings, at=None):
+def over_spend_cap(c, settings, at=None, budget=DECIDE_BUDGET):
     """(spent, cap) when the month's decision spend has reached the cap, else None. A cap of 0 is no cap."""
-    cap = float(settings.decisions_monthly_usd or 0)
+    cap = float(getattr(settings, budget[0], 0) or 0)
     if cap <= 0:
         return None
-    spent = spent_this_month(c, at)
+    spent = spent_this_month(c, at, budget)
     if spent < cap:
         return None
     _skip("every caller", f"the month's decision spend ${spent:.2f} has reached the ${cap:.2f} cap")
@@ -219,7 +250,15 @@ def over_spend_cap(c, settings, at=None):
 
 # Calls in flight in this process, as USD reserved for them: a request or batch thread that checks the cap counts
 # what the others have started and not yet written down.
-_METER, _RESERVED = threading.Lock(), [0.0]
+_METER, _RESERVED = threading.Lock(), {0: 0.0}       # keyed 0 for Decide's own budget, else by budget
+
+
+def _held(budget):
+    return 0 if budget == DECIDE_BUDGET else budget
+
+
+def _in_flight(key):
+    return _RESERVED[key] if key == 0 else _RESERVED.get(key, 0.0)
 
 
 def reservation(settings, models, state, questions):
@@ -230,7 +269,7 @@ def reservation(settings, models, state, questions):
     return sum(cost_usd(settings, model, usage) for model in models or [""])
 
 
-def metered(store, models, state, questions, label, call):
+def metered(store, models, state, questions, label, call, budget=DECIDE_BUDGET):
     """One paid decision call under the team's monthly cap, for every caller (server and Slack gateway alike).
 
     Under one lock per process: read the month's spend from the audit, add the reservations of calls in flight here
@@ -241,35 +280,36 @@ def metered(store, models, state, questions, label, call):
     only if they fit too; so the cap can be passed by at most one process's calls in flight, each at most its
     reservation. That bound is for the two processes that ask today, the server and the Slack gateway: each further
     process with its own meter can add its own calls in flight on top. A call stays within its reservation because
-    every transport caps the answer at MAX_OUTPUT_TOKENS; a provider's own reported cost can still be higher."""
+    every transport caps the answer at MAX_OUTPUT_TOKENS; a provider's own reported cost can still be higher. Another
+    `budget` (cap field, spend action) meters against its own cap and writes its own spend rows."""
     settings = store.settings
-    cap = float(settings.decisions_monthly_usd or 0)
+    cap = float(getattr(settings, budget[0], 0) or 0)
     reserved = reservation(settings, models, state, questions) if cap > 0 else 0.0
     with _METER:
         if cap > 0:
             with store.read() as c:
-                spent = spent_this_month(c)
-            if spent + _RESERVED[0] + reserved > cap:
+                spent = spent_this_month(c, None, budget)
+            if spent + _in_flight(_held(budget)) + reserved > cap:
                 _skip("every caller", f"the month's decision spend ${spent:.2f} leaves no room under the ${cap:.2f} cap")
                 raise J.JudgeError("spend_cap", f"Decide has cost ${spent:.2f} this month; the team's cap is "
                                    f"${cap:.2f} until the 1st (UTC)", 429)
-        _RESERVED[0] += reserved
+        _RESERVED[_held(budget)] = _in_flight(_held(budget)) + reserved
     try:
         try:
             result = call()
         except J.JudgeError as exc:
             if getattr(exc, "paid", None):
-                exc.cost_usd = _spend(store, label, exc.paid, state, questions)
+                exc.cost_usd = _spend(store, label, exc.paid, state, questions, budget[1])
             raise
         result = dict(result)
         paid = result.pop("paid", None) or []
-        return {**result, "cost_usd": _spend(store, label, paid + [result], state, questions)}
+        return {**result, "cost_usd": _spend(store, label, paid + [result], state, questions, budget[1])}
     finally:
         with _METER:
-            _RESERVED[0] = max(0.0, _RESERVED[0] - reserved)
+            _RESERVED[_held(budget)] = max(0.0, _in_flight(_held(budget)) - reserved)
 
 
-def _spend(store, label, attempts, state, questions):
+def _spend(store, label, attempts, state, questions, action="judge.spend"):
     """One `judge.spend` row per paid attempt (the answer is the last; any before it were unusable), in one
     transaction. Returns their total USD. An attempt whose usage gives neither a cost nor any tokens is counted at its
     most (`reservation`), not as nothing, and says `usage: unknown`."""
@@ -280,7 +320,7 @@ def _spend(store, label, attempts, state, questions):
             known = _own_cost(attempt) or any(tokens(usage))
             cost = cost_usd(settings, model, usage) if known else reservation(settings, [model], state, questions)
             total += cost
-            H.event(c, H.KEEPER, "judge.spend", label or "", {
+            H.event(c, H.KEEPER, action, label or "", {
                 "label": label, "model": model, "cost_usd": cost,
                 **({} if "answers" in attempt else {"unusable": True}),
                 **({} if known else {"usage": "unknown"}),
@@ -307,10 +347,11 @@ def gateway(settings, store=None, vault=None):
     if store is None:
         return None
 
-    def engine(state, questions, label=None):
+    def engine(state, questions, label=None, level=None):
+        """`level` is a caller's own (an automation's Decide step); without one, the company's Decisions level."""
         from .credentials import Vault
         with store.read() as c:
-            level = providers.load(c, settings)["decide_level"]
+            level = level or providers.load(c, settings)["decide_level"]
             if settings.gateway_key:
                 secret, url, bot = settings.gateway_key, settings.gateway_url, None
             else:
@@ -359,14 +400,14 @@ def ordered(steps):
     if len(steps) < 2:
         return steps[0] if steps else None
 
-    def engine(state, questions, label=None):
+    def engine(state, questions, label=None, level=None):
         J.validate(state, questions, label)
         failed, first, paid = None, None, []
-        slow = any(J.normalize_level(step.level()) != "low" for step in steps if hasattr(step, "level"))
+        slow = any(J.normalize_level(level or step.level()) != "low" for step in steps if hasattr(step, "level"))
         with J.within(SLOW_CHAIN_SECONDS if slow else CHAIN_SECONDS):
             for i, step in enumerate(steps):
                 try:
-                    result = step(state, questions, label)
+                    result = ask(step, state, questions, label, level)
                 except J.JudgeError as exc:
                     paid += getattr(exc, "paid", None) or []
                     if i == len(steps) - 1:
@@ -383,10 +424,29 @@ def ordered(steps):
     return engine
 
 
-def step_models(steps, default=J.MODEL):
+def takes_level(engine):
+    """Whether a decision engine takes a caller's `level` (the Gateway's steps and the chains around them do; Jev, a
+    company's own model and older test fakes do not)."""
+    import inspect
+    try:
+        params = inspect.signature(engine).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "level" or p.kind is p.VAR_KEYWORD for p in params)
+
+
+def ask(engine, state, questions, label=None, level=None):
+    """One call to `engine`, at `level` when one is given and the engine takes it (CONTRACT §2 Decide level)."""
+    if level and takes_level(engine):
+        return engine(state, questions, label, level=level)
+    return engine(state, questions, label)
+
+
+def step_models(steps, default=J.MODEL, level=None):
     """The model each of `steps` asks as (`default` for one that does not say: a test's fake). A step whose model follows
     the company's Decisions level says it now (`current_model`), so the spend reservation prices the model that will run."""
-    return [(getattr(step, "current_model", None) or (lambda: ""))() or getattr(step, "model", "") or default
+    return [(J.decide_model(level) if level and hasattr(step, "current_model") else "")
+            or (getattr(step, "current_model", None) or (lambda: ""))() or getattr(step, "model", "") or default
             for step in steps]
 
 
@@ -396,14 +456,15 @@ def primary_engine(settings, store=None, vault=None):
     return ordered([gateway(settings, store, vault), jev(settings)])
 
 
-def server_engine(store, c, primary=None):
+def server_engine(store, c, primary=None, budget=DECIDE_BUDGET):
     """The decision model every server-side caller uses, or None for "carry on as if Decide were off": rehearsal, no
     model at all, or the month's spend at the cap. `primary` is the Gateway and the own TypeSafe key
     (`primary_engine(settings)`, or the test's fake); when they are slow, down or refused, the company's own model answers
     and the result says `fallback`. Each call goes through `metered`, so a batch that reuses one engine (listening,
-    learnings) stops at the cap call by call; each result carries `cost_usd`."""
+    learnings) stops at the cap call by call; each result carries `cost_usd`. Another `budget` meters against its own
+    cap instead of Decide's."""
     settings = store.settings
-    if settings.rehearsal or over_spend_cap(c, settings):
+    if settings.rehearsal or over_spend_cap(c, settings, None, budget):
         return None
     backup = fallback_engine(providers.load(c, settings))
     steps = live(primary, c, settings)
@@ -412,8 +473,10 @@ def server_engine(store, c, primary=None):
         return None
     asks_as = step_models(steps) + ([getattr(backup, "model", "")] if backup is not None else [])
 
-    def engine(state, questions, label=None):
-        return metered(store, asks_as, state, questions, label, lambda: chain(state, questions, label))
+    def engine(state, questions, label=None, level=None):
+        models = (step_models(steps, level=level) + asks_as[len(steps):]) if level else asks_as
+        return metered(store, models, state, questions, label, lambda: ask(chain, state, questions, label, level),
+                       budget)
     engine.model, engine.provider = asks_as[0], getattr(chain, "provider", "")
     return engine
 
@@ -474,10 +537,23 @@ class Ask(Contract):
     label: str | None = Field(default=None, max_length=J.MAX_LABEL)
 
 
-def used_today(c, actor, at=None, action="judge.call"):
+# The keeper's rule-check calls (backend/org_rule_check.py) have their own daily cap: they count only against it, and
+# every other keeper call (ask ingest, triage, postal) only against the decisions cap, so neither starves the other.
+RULES_TARGET = "rule-check@%"
+
+
+def used_today(c, actor, at=None, action="judge.call", target=None):
+    """Today's `action` rows by `actor`. `target`: only those whose target is LIKE it. The keeper's own judge calls
+    leave out the rule checks unless `target` asks for them."""
     day = (at or H.now())[:10]
-    return c.execute("SELECT count(*) FROM events WHERE actor=? AND action=? AND ts>=?",
-                     (actor, action, day + "T00:00:00")).fetchone()[0]
+    where, args = "", [actor, action, day + "T00:00:00"]
+    if target:
+        where, args = " AND target LIKE ?", [*args, target]
+    elif actor == H.KEEPER and action == "judge.call":
+        where, args = " AND target NOT LIKE ?", [*args, RULES_TARGET]
+    # The actor's own rows, counted in the index (events_task_origin), not every actor's today (events_action_ts).
+    return c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND ts>=?"
+                     + where, args).fetchone()[0]
 
 
 def install_judge(app, store, auth):

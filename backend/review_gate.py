@@ -102,8 +102,9 @@ def remember_heads(c, actor, child_id, parent, snapshots=None):
 
 def engineering(c, row):
     from .roadmap_flow import ENGINEERING
-    return bool(row and c.execute("SELECT 1 FROM task_types WHERE id=? AND (role=? OR name='Dev tickets')",
-                                  (row.get("type_id"), ENGINEERING)).fetchone())
+    from .read_cache import one
+    return bool(row and one(c, "SELECT 1 FROM task_types WHERE id=? AND (role=? OR name='Dev tickets')",
+                            (row.get("type_id"), ENGINEERING)))
 
 
 def links(c, row):

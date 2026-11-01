@@ -1,0 +1,90 @@
+{
+ "answer": {
+  "assignments": [
+   {
+    "bot": "ops",
+    "computer_label": "Test Mac",
+    "computer_logins_v1": true,
+    "config": {
+     "model": "hermes-profile",
+     "name": "ops",
+     "repo_access_mode": "own",
+     "runtime": "fake",
+     "status": "active"
+    },
+    "config_json": "{\"name\":\"ops\",\"runtime\":\"fake\",\"status\":\"active\",\"repo_access_mode\":\"own\"}",
+    "generation": 1,
+    "mail_agent": false,
+    "onboarding_state": null,
+    "operator": "ana",
+    "repository": "",
+    "runner_id": "00000000-0000-4000-8000-000000000001",
+    "state": "active",
+    "updated": "2026-01-01T00:00:00.000000Z",
+    "updated_by": "human:ana"
+   }
+  ],
+  "browser_exit": false,
+  "browser_exit_bots": [],
+  "performance": true,
+  "runtime_credential_source": true,
+  "server_time": "2026-01-01T00:00:00.000000Z",
+  "start_places": true,
+  "subscription_accounts": true,
+  "turns_at_once": null,
+  "worktree_actions": [],
+  "worktree_record_stamp": true
+ },
+ "endpoint": "heartbeat",
+ "request": {
+  "agent_instructions": {},
+  "capabilities": [
+   "task_lanes_v2",
+   "session_roots_v1",
+   "task_goals_v1",
+   "capacity_continue_v1",
+   "source_continue_v1",
+   "model_sign_out_v1",
+   "model_keys_v1",
+   "model_switch_type_v1",
+   "model_remove_v1",
+   "model_switch_to_key_v1",
+   "turns_at_once_v1",
+   "private_lanes_v1"
+  ],
+  "capacity": 4,
+  "kind": "docker",
+  "mail_agent_instructions": {},
+  "platform": "Linux-6.8-x86_64",
+  "profiles": [],
+  "readiness": {
+   "bots": {
+    "ops": {
+     "configuration_valid": true,
+     "published": true,
+     "ready": true,
+     "repository_present": true,
+     "runtime": "fake"
+    }
+   },
+   "runtimes": {
+    "fake": {
+     "authenticated": "ready",
+     "installed": true,
+     "version": "1.0.0"
+    }
+   },
+   "schema_version": 1,
+   "worktrees": true
+  },
+  "release": "0.5.0",
+  "update": {
+   "error": "",
+   "state": "idle",
+   "target": ""
+  },
+  "version": "0.5.0",
+  "worktrees": []
+ },
+ "status": 200
+}

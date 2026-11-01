@@ -1,12 +1,91 @@
 # The Assistant
 
 Every human has one private chat with the team's assistant (the `coo` bot; you may have renamed it): a personal
-bot that knows how Tico is laid out and does things in it on your behalf. **Assistant** in the main left rail opens it
-as a page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's chat, with a
+bot that knows how Tico is laid out and does things in it on your behalf. **Ask Tico** opens it from any page: on a
+computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) at its end; it (or ⌘J / Ctrl+J)
+opens a small panel straight above that row, over the sidebar, and nothing floats over the page. On a phone the Liquid Dot in the
+middle of the tab bar opens it as a sheet. The panel names the page it sees, and a message sent from it carries that
+page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
+gave the assistant); its header has the dot, the name, the page it sees and **Loop in Support**. The chat is also a
+page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's chat, with a
 few things to ask while it is empty. The **Assistant** tab, first on your own page (`#/person/<you>`), opens the same
-page, and so does **Ask the Assistant…** at the bottom of search (⌘K), with your words in the box. An Assistant's room
-takes text only, so the composer has no attach button (the owner's CEO Bot chat takes files: [CEO Bot](ceo-bot.md)). **BotOps** beside it in the rail opens BotOps' bot page. These built-ins stay out of the team chart and Goals tree; Settings > Bots still manages all four.
+page. Attach files or
+pictures there, or in the Ask panel, with the clip, a drop or a paste, like any bot chat. There is no BotOps, Strategy Bot, Librarian or Assistant row in
+the rail: you ask the Assistant, and it hands its helpers what needs them (below). BotOps' own chat is still at
+`#/bot/botops`. These built-ins stay out of the team chart and Goals tree; Settings > Bots still manages all four.
 It works on a phone too.
+
+In the thread the Assistant's turns are plain text; yours are dark bubbles on the right. The live dot stays in the
+header: opening flies it up from the row (or tab) to its place beside the name, quickly, closing flies it back down; while the
+panel is open a close mark holds the dot's place. Bots' questions
+and Confirm cards sit in the thread by when they were asked, among the messages, so nothing waits out of sight.
+
+**Loop in Support**, a link at the top right of the panel, brings Tico support into the chat. It rides on your support
+requests ([Support](support.md)): while one of your open requests is in the chat, its chip **Tico Support ×** sits at
+the top, a line in the thread says "You added Tico Support. They can now see chats.", support's messages flow in by
+time as blue-gray bubbles under a headset (yours on the right), a reply seen there is read, and the box writes to
+support instead of the Assistant; the link hides while support is in. Looping support in shares the chat, as the line says: the chat's last 20 turns
+(yours and the Assistant's, one line each, up to 4000 characters) go to the request at once, with keys and tokens cut
+out by the same rules support reports use (`backend/redaction.py`), and the thread doesn't draw that message again.
+With no open request, it sends a new request holding them, with no form; a request taken out earlier comes
+back and gets them instead. The chip's **×** takes it out: "Tico Support can no longer see chats."
+Nothing more from this chat goes to support; the request itself stays open in Support, only this chat stops showing it
+(remembered on this browser). Support itself (every request, diagnostics, a new request) opens from any link to
+`#/support`, such as the Assistant's "Loop in Tico support" reply.
+
+A **peek** is a few words beside the closed dot, just past the sidebar level with the Ask row (above the tab bar on a phone), Tico saying something waits on you:
+"Got a quick question for you", "3 questions are waiting on you", "Need your OK on something". Six words at most,
+never who asked. Tap it and the chat opens at that card; × dismisses it for good, for every item it spoke for. One at a time, none in the first
+few seconds after the page loads or while you are typing, each question at most once a day, and never a sound or a
+count on the dot.
+
+The dot is cheap by rule: it moves by transform and opacity only, so nothing lays out or paints per frame; one dot on
+the screen moves at a time and the rest hold still; it pauses off screen and in a background tab, where no timer is
+left running; and with reduced motion it holds still and says what it is doing in a word. `ui/tests/dot-perf.cjs`
+holds it to budgets in Chrome: 10 s idle with no layout, at most 4 style recalcs per idle swap and under 150 ms of work; with the
+CPU slowed 4x, opening, a reply and closing keep frame gaps at p95 20 ms and max 50 ms with no long task over 50 ms.
+Opening and closing change no `hidden` attribute anywhere and add nothing to the page, which the same test checks: on
+a real hub either restyles the whole page (30-50 ms before the flight could start). So the closed panel keeps its box
+but draws nothing (a class, not `hidden`), and the dot's flying copy is made once, in a layer of its own, and reused.
+
+What waits on you from elsewhere comes at the end of the chat as cards: a Confirm card BotOps (or another bot) left in
+its own chat, with its Confirm and Cancel, and up to three bots' questions to you from Needs you. A question with two to
+six picks is answered with a tap, any other with a line of words (a question with several picks at once links to its
+task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open question in your words (`hub
+question answer --on-behalf-of turn`, below). A Confirm card always needs your own tap.
+
+## Helpers through the Assistant
+
+Everyone, the owner included, has one chat: their Assistant. Three built-in helpers work behind it, and nobody chats
+with them directly:
+
+- **BotOps** creates, changes, debugs, tests, deploys and maintains bots.
+- **The [Strategy Bot](strategy-bot.md)** gives strategy advice and proposes goal changes (goal and KPI colours and reasons, the
+  vision).
+- **The [Librarian](librarian.md)** does research and sets up Market, Docs and the library.
+
+The Assistant files a helper a task with `--request-id turn`. The same citation check holds for each: a message you
+wrote in your own Assistant chat in the last 30 minutes, and the owner's rule "Assistant acts without asking" on.
+The task opens with your words quoted.
+For the Strategy Bot and the Librarian the event `assistant.asked_helper` records it (with `helper`, `for` and
+`cited`). Each helper runs its own turn with its own rights, and only BotOps borrows yours (below). So a strategy or goal
+change stays the owner's: the Strategy Bot proposes it on a Confirm card, and only the owner can confirm. A task for any other bot that cites your words is refused
+(`422 request_id`). A person's post to the Strategy Bot's chat (`POST /api/v2/chat/goal-manager`) lands in their
+Assistant chat instead.
+
+The owner used to chat with the Strategy Bot itself (`room_key: ceo`). That chat stays the owner's as read-only history:
+`GET /api/v2/assistant` lists it under `"earlier": {"room_id", "bot", "name"}`, and new messages go to the Assistant.
+On the first start after the update, Confirm cards still waiting there move to the owner's Assistant room, once
+(event `assistant.strategy_cards_moved`). A card runs only on its owner's own tap, so moving it is safe.
+
+### BotOps
+
+When you ask for something only BotOps can do (a new bot, a change to one, a credential), the Assistant files BotOps a
+task with `--request-id turn`, citing your own message. BotOps then acts with your rights, exactly as if you had asked
+it in its own chat, and the task opens with your words quoted. The citation holds only for a message you wrote in your
+own Assistant chat in the last 30 minutes, only for a task owned by BotOps, and only while that message is under a week
+old; otherwise BotOps works with its own rights and asks you on a card. The owner's rule "Assistant acts without
+asking" must be on; with it off the task is filed without your rights. The event `botops.asked_via_assistant` records it.
 
 Ask it to find a meeting, a doc, a file or a task; to tell you what needs you; to make a task; to hand work to the
 right bot; to ask BotOps for a new bot; or how something works. It answers briefly and links what it names (tasks,
@@ -15,14 +94,13 @@ meetings, docs, files, bots, humans), and the links open inside the app.
 ## Private to you
 
 The chat is a personal room (`scope: personal`, `room_key: assistant`) owned by you. Only you can read it or post in it.
-The company's owner has the [CEO Bot](ceo-bot.md#your-chat-with-it) in its place; everyone else, administrators
-included, has the Assistant.
+Everyone, the owner and administrators included, has the Assistant.
 The team owner and administrators cannot read anyone else's, and no other route reaches the assistant: the ordinary
-chat routes still refuse it (`403`). Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [CEO Bot](goals-and-kpis.md#the-ceo-bot) built in (all required in setup, active once a computer is enrolled),
+chat routes still refuse it (`403`). Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [Strategy Bot](goals-and-kpis.md#the-strategy-bot) built in (all required in setup, active once a computer is enrolled),
 and none can be archived or deleted by anyone: the owner included, through Settings, the API, `hub` or BotOps
 (`409 system_bot`); pausing and renaming stay allowed, and Settings > Bots shows them as **Built-in**. A team
 that set the assistant aside before it was built in keeps it archived on update, and the Assistant page says the Assistant is off
-instead of failing. The owner gets **Turn on Assistant** there and at the top of **Settings > Bots**: one click restores the
+instead of failing. The owner gets **Turn on** there and in **Settings > General**: one click restores the
 archived assistant (same bot, same history, renamed to the team's assistant name) or, if there is none, adds it from
 the template, puts it on the computer BotOps runs on and activates it, and every human's Assistant page starts working
 (`POST /api/v2/assistant/turn-on`). With no computer enrolled yet it is left planned and the button says so; enroll one
@@ -35,7 +113,7 @@ and as you (what you may see, nothing more), with no run and no model:
 
 | You ask | It answers from |
 |---|---|
-| A simple greeting (`hi`, `hello`, `hey`, or a time-of-day greeting) | A short greeting; no provider or runner turn |
+| A simple greeting (`hi`, `hello`, `hey`, or a time-of-day greeting) | A short greeting when it is the first thing said in the chat; no provider or runner turn (later, it goes to the model) |
 | What task types this workspace uses | The authenticated `GET /api/v2/task-types` response; if it cannot be read, it says so rather than showing an empty or guessed list |
 | What needs me | Needs you |
 | Search / find / look up *x* (add *tasks, docs, meetings, files, humans, bots* to narrow) | tasks, docs, meetings, bots' files, humans, bots |
@@ -84,7 +162,7 @@ Assistant chat (not written by a bot or the Assistant, not another chat), and no
 answers `403 on_behalf_of` and the assistant proposes instead. Your own rights are the ceiling: what you could not do
 yourself it cannot do for you. And it acts only as you: a task change, comment or link runs only on a task you are on
 (its owner, its requester or in one of its roles), never on another person's task, even when you ask (`403
-on_behalf_of`). The owner's own chat is the [CEO Bot](ceo-bot.md#your-chat-with-it), which acts as the owner. Only these routes count (`POST /api/v2/tasks/{id}`, `.../comments`, `.../links`,
+on_behalf_of`). The owner's Assistant acts as the owner, who may act on any task. Only these routes count (`POST /api/v2/tasks/{id}`, `.../comments`, `.../links`,
 `POST /api/v2/approvals/{id}` with `"decision": "declined"`, `POST /api/v2/messages/{id}/answer`), and only for an
 approval or question addressed to you: someone else's is a `403` whatever you said. A decline is undone by the bot asking
 again. Approving stays a card unless you let it decide approvals (below). Running a task now, a message to another
@@ -189,21 +267,21 @@ Tell it how you like things ranked and summarised ("launches matter more than hi
 saves that as one short line in your own words and says so in its reply. **What it has learned** at the top of your chat
 (`#/assistant/learned`) lists everything it saved about you, under **About you**; edit a line or delete it there (delete
 asks once more). Only you see this layer: not the owner, not administrators, not SQL, not another person's
-Assistant, and not a bot doing other work for you, BotOps included. The audit log names an entry by id, never by its words. It goes with you: if you become the owner, your
-[CEO Bot](ceo-bot.md#what-it-has-learned) uses the same layer, and back again.
+Assistant, and not a bot doing other work for you, BotOps included. The audit log names an entry by id, never by its words. It goes with you: it stays yours if you become the owner, and back again.
 
 Each turn in your chat is handed the layer as it is when the turn starts, so a line you delete is not used from the
 next reply on. It holds up to 100 lines of up to 280 characters; saving the same line twice keeps one. The Assistant
-only adds: editing and deleting are your own clicks. Nothing about the company is in it: only the owner's CEO Bot has
-that.
+only adds: editing and deleting are your own clicks. Nothing about the company is in it: the owner's Assistant also has the company layer, once the
+Strategy Bot is on ([Strategy Bot](strategy-bot.md#what-it-has-learned)).
 
 ## On the Updates page
 
 Updates has your chat beside the feed: the same conversation as the menu tab, so a question asked here shows there too.
-It is labelled with your bot (the Assistant, or the [CEO Bot](ceo-bot.md#on-the-updates-page) for the owner). On a
+It is labelled with your Assistant, the owner's too. On a
 desktop it is a right rail; drag its left edge to resize it, as with other right rails, and the button at the end of the
 page's header shows or hides it. Tico remembers that for you on every device. On a phone the same button opens the chat
-full screen; its close button or Back shuts it.
+full screen; its close button or Back shuts it. While the Assistant is off, whoever may turn it on sees one line with
+**Turn on** there; anyone else gets no chat and no button.
 
 A question asked here is handed the recent updates you can read: the last four days' dailies and the latest week in
 review, chosen by the same rules as your Updates page. Tico leaves out any update that links or names a task, chat or
@@ -235,8 +313,8 @@ own session, not a personal token.
 | `GET /api/v2/assistant/decisions` | `{"decisions": [{"id", "kind", "decision", "what", "decided_at", "decided_for", "consumed_at", "can_undo"}]}`, the last 30 days. |
 | `POST /api/v2/assistant/read-back` `{"approvals": [ids]}` | The Assistant only: posts its list in your chat, `{"message_id", "approves", "text"}`. `403 own_request` for one it asked for, `403 approve_support` for a report to the Tico team, `409` if one is already decided or `approve_too_long` if one of its fields can't be shown in full. |
 | `POST /api/v2/approvals/{id}/undo` | Puts a decision your Assistant made back to waiting for you, before it is spent. Not the Assistant. |
-| `GET /api/v2/assistant/learned` | `{"personal": [entry], "company": null}`; for the owner, once the CEO Bot is on, `"company": {"vision", "description", "priorities": [{"id", "title", "status"}], "entries": [entry]}`. An entry is `{"id", "layer", "text", "created", "updated", "taught_in_chat"}`. Not yet in the stable contract. |
-| `POST /api/v2/assistant/learned` `{"text", "layer"}` | Saves one line (`layer` is `personal`, the default, or `company`: the owner only, on their own or in their CEO Bot chat; `403` for anyone else and any Assistant). `{"entry"}`; the same line again returns the one already there; `409 too_many` past 100. What the bot's `hub assistant learn` calls. |
+| `GET /api/v2/assistant/learned` | `{"personal": [entry], "company": null}`; for the owner, once the Strategy Bot is on, `"company": {"vision", "description", "priorities": [{"id", "title", "status"}], "entries": [entry]}`. An entry is `{"id", "layer", "text", "created", "updated", "taught_in_chat"}`. Not yet in the stable contract. |
+| `POST /api/v2/assistant/learned` `{"text", "layer"}` | Saves one line (`layer` is `personal`, the default, or `company`: the owner only, on their own or in their own Assistant chat; `403` for anyone else and any other Assistant). `{"entry"}`; the same line again returns the one already there; `409 too_many` past 100. What the bot's `hub assistant learn` calls. |
 | `PATCH /api/v2/assistant/learned/{id}` `{"text"}`, `DELETE /api/v2/assistant/learned/{id}` | Your own click only (`403` for a bot's turn); someone else's entry is `404`. |
 
 Names come with ids (`from_name`, `owner_name`, and an `actors` map), as elsewhere in v2. A custom frontend (see
@@ -244,8 +322,8 @@ Names come with ids (`from_name`, `owner_name`, and an `actors` map), as elsewhe
 
 ## For the assistant bot
 
-Its instructions are `templates/catalog/assistant/AGENT.md` and `playbooks/assistant-chat.md`: how Tico is organised,
-how to route work to the right bot, to answer briefly with links, never to act beyond you, to do the task actions you
+Its instructions are `templates/catalog/assistant/AGENT.md` and its playbooks: `assistant-chat.md` (the chat run),
+`tico-map.md` (how Tico is organised), `acting-for-them.md` and `approvals-for-them.md`. The core rules: how to route work to the right bot, to answer briefly with links, never to act beyond you, to do the task actions you
 ask for (declines and answers included), to decide your approvals on your words when you let it (reading the list
 back once), otherwise to say in one sentence where to turn that on and propose approving, and anything else with a side effect, several
 at once on one card, and to report what it did and what is left. They live in the bot's repository; edit them there or through BotOps.

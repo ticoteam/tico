@@ -1,7 +1,10 @@
 // Goal suggestion cards say what yes does (ui/goals-kpis.js goalPropHtml, propDoHtml, propNowProposedHtml; spec "Clear
-// CEO Bot suggestion cards"): Add a KPI names the measure, says what it counts, its target or "No target yet" and a
+// Strategy Bot suggestion cards"): Add a KPI names the measure, says what it counts, its target or "No target yet" and
+// a
 // missing data source, and folds away the goal editor's target fields; each yes button says what it does, the no button
 // reads "No, leave it", a Flag has one "Got it", and new wording or a new definition reads Now and Proposed.
+// "No, leave it" rejects in one click, then the card reads "Left as it is. Tell it why? (optional)" with a
+// one-line box and Send: Send saves the reason (POST .../note), a refusal shows beside the box, leaving it does nothing.
 // Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -13,9 +16,9 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
 
 const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
-  bot('goal-manager', 'CEO Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'p:ana')];
+  bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'p:ana')];
 const GOAL = 'Double organic signups';
-const LONG = 'Signed-up accounts that finish setup, counted once per account, in the week the last setup step is done, '.repeat(4);
+const LONG = 'Signed-up accounts that finish setup, counted once per account, in the week the last setup step is done, '.repeat(8);   // long enough to wrap past four lines on Goals' full width (no rail beside it)
 const prop = (id, kind, payload, card, over) => ({id, kind, goal_id: 'g-cmo', kpi_id: null, payload, reason: 'No measure on this goal yet',
   proposed_by: 'bot:goal-manager', proposed_at: new Date().toISOString(), status: 'pending', card: {goal_title: GOAL, ...card}, ...over});
 const measure = (name, over) => ({name, definition: '', source_note: '', unit: '', direction: 'up', existing: false, ...over});
@@ -24,7 +27,7 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 1100}, serviceWorkers: 'block'});
-    const errors = [], posted = [];
+    const errors = [], posted = [], noted = [];
     page.on('pageerror', e => errors.push(e.message));
     const needs = [
       prop('p-new', 'goal_kpi', {kpi: {name: 'Weekly demos', definition: 'Demos held, per week'}},
@@ -67,7 +70,15 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
         posted.push({id: decide[1], body: req.postDataJSON()});
         const at = needs.findIndex(i => i.proposal.id === decide[1]);
         if (at >= 0) needs.splice(at, 1);
-        return json({proposal: {}});
+        // The server offers a reason to whoever turned it down, unless it is about a bot they may not read.
+        const no = req.postDataJSON().decision === 'reject';
+        return json({proposal: {id: decide[1], status: no ? 'rejected' : 'confirmed', decision_note: '', may_reason: no && decide[1] !== 'p-hidden'}});
+      }
+      const note = p.match(/^\/api\/v2\/proposals\/([^/]+)\/note$/);
+      if (note) {
+        noted.push({id: note[1], body: req.postDataJSON()});
+        if (note[1] === 'p-tgt') return route.fulfill({status: 422, contentType: 'application/json', body: JSON.stringify({error: {code: 'duplicate', detail: 'It already has a reason; a reason is added once'}})});
+        return json({proposal: {id: note[1], status: 'rejected', decision_note: req.postDataJSON().note, may_reason: false}});
       }
       return json(unrouted(p));
     });
@@ -116,8 +127,8 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
     await word.locator('[data-np-all]').click();
     assert.equal(await longCell.evaluate(el => el.scrollHeight > el.clientHeight + 1), false, 'Show all opens it');
     assert.match(await card('p-tgt').innerText(), /New target for Activation on Double organic signups\s+Now\s+→ 65% by Dec 31\s+Proposed\s+→ 60% by Dec 31, 2027/);
-    // A Flag says in one line what the CEO Bot noticed.
-    assert.match(await card('p-flag').innerText(), /CEO Bot noticed: Double organic signups looks like a duplicate of another goal: Same words as Grow signups/);
+    // A Flag says in one line what the Strategy Bot noticed.
+    assert.match(await card('p-flag').innerText(), /Strategy Bot noticed: Double organic signups looks like a duplicate of another goal: Same words as Grow signups/);
     if (screenshotDir) await page.locator('#goal-needs').screenshot({animations: 'disabled', path: path.join(screenshotDir, 'goals-suggestion-cards.png')});
 
     // Fields filled in: "Add measure" adds it with that target.
@@ -134,20 +145,58 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
     assert.deepEqual(await decided('p-reuse'), {decision: 'confirm'});
     await card('p-blank').locator('[data-prop-yes]').click();
     assert.deepEqual(await decided('p-blank'), {decision: 'confirm'});
-    // "Got it" settles the flag as confirmed; "No, leave it" rejects, with no reason asked.
+    // "Got it" settles the flag as confirmed, and asks no reason.
     await card('p-flag').locator('[data-prop-yes]').click();
     assert.deepEqual(await decided('p-flag'), {decision: 'confirm'});
+    // "No, leave it" rejects in one click, no reason asked first; then the card is one line, a box and Send.
     await card('p-def').locator('[data-decide=reject]').click();
     assert.deepEqual(await decided('p-def'), {decision: 'reject'});
+    const left = card('p-def').locator('[data-prop-left]');
+    await left.waitFor();
+    assert.match(await card('p-def').innerText(), /^Left as it is\. Tell it why\? \(optional\)/);
+    assert.equal(await left.locator('input[type=text][name=note]').count(), 1);
+    assert.deepEqual(await left.locator('button').allInnerTexts(), ['Send']);
+    assert.equal(await card('p-def').locator('[data-decide]').count(), 0, 'the yes and no buttons are gone');
+    if (screenshotDir) await card('p-def').screenshot({animations: 'disabled', path: path.join(screenshotDir, 'goals-suggestion-card-left.png')});
+    // An empty box sends nothing: the rejection stands with no note.
+    await left.locator('input[name=note]').fill('   ');
+    await left.locator('button[type=submit]').click();
+    await page.waitForTimeout(150);
+    assert.deepEqual(noted, []);
+    // A reason typed and sent is saved as the suggestion's note; the card then goes with the list drawn again.
+    await left.locator('input[name=note]').fill("no billing yet, don't track revenue");
+    await left.locator('input[name=note]').press('Enter');
+    for (let n = 0; n < 80 && !noted.length; n++) await page.waitForTimeout(50);
+    assert.deepEqual(noted, [{id: 'p-def', body: {note: "no billing yet, don't track revenue"}}]);
+    await card('p-def').waitFor({state: 'detached'});
+    // Left alone, the card stays as it is and nothing more is sent.
+    await card('p-word').locator('[data-decide=reject]').click();
+    assert.deepEqual(await decided('p-word'), {decision: 'reject'});
+    await card('p-word').locator('[data-prop-left]').waitFor();
+    await page.waitForTimeout(150);
+    assert.equal(noted.length, 1);
+    // A refusal from the server is shown to the person, beside the box they can still use.
+    await card('p-tgt').locator('[data-decide=reject]').click();
+    await card('p-tgt').locator('[data-prop-left] input[name=note]').fill('We set targets each quarter');
+    await card('p-tgt').locator('[data-prop-left] button[type=submit]').click();
+    const err = card('p-tgt').locator('.kpi-prop-left-err');
+    await err.waitFor();
+    assert.equal(await err.innerText(), 'It already has a reason; a reason is added once');
+    assert.equal(await card('p-tgt').locator('[data-prop-left] button[type=submit]').isDisabled(), false);
+    // About a bot's measure she may not read: rejected, and no box (the server says she may not add its reason).
+    await card('p-hidden').locator('[data-decide=reject]').click();
+    assert.deepEqual(await decided('p-hidden'), {decision: 'reject'});
+    await card('p-hidden').waitFor({state: 'detached'});
 
     // A goal's panel draws the same card; a proposed target shows, its fields folded under "Change the target".
-    await page.locator('#goal-tree .gt-row[data-owner="bot:cmo"]').first().click();
+    await page.locator('#goal-tree .gt-row[data-owner="bot:cmo"]:not(.gt-cont) .gt-name').click();
     const inPanel = page.locator('#goal-panel[open] [data-proposal="p-panel"]');
     await inPanel.waitFor();
     assert.match(await inPanel.innerText(), /Add the measure Signups to Double organic signups\s+New accounts\s+Target range 40\+/);
     assert.doesNotMatch(await inPanel.innerText(), /No data source|No target yet/);
     assert.equal(await inPanel.locator('details.kpi-prop-set summary').innerText(), 'Change the target');
     assert.deepEqual(await page.locator('#goal-panel[open] [data-proposal="p-rec"] .kpi-prop-do button').allInnerTexts(), ['Approve', 'Reject']);
+    assert.equal(await page.locator('#goal-panel[open] [data-proposal="p-rec"] [data-prop-reason]').count(), 0, 'a recovery keeps its own Reject');
     await inPanel.locator('[data-prop-yes]').click();
     assert.deepEqual(await decided('p-panel'), {decision: 'confirm'});
     assert.deepEqual(errors, []);

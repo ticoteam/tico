@@ -206,7 +206,7 @@ def jobs_for(api, bot):
         return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (bot,)).fetchone()[0]
 
 
-def test_a_comment_on_a_task_a_bot_filed_wakes_it_from_its_owner_or_when_addressed_to_it(api):
+def test_a_comment_on_a_task_a_bot_filed_wakes_it_only_when_addressed_to_it(api):
     token = bot_token(api, "ops")
     task = post(api, "tasks", {"owner": "ben", "title": "Fix the sign-in check", "body": "x"}, token=token)
     path = f"tasks/{task['id']}/comments"
@@ -217,13 +217,15 @@ def test_a_comment_on_a_task_a_bot_filed_wakes_it_from_its_owner_or_when_address
     assert any(m["body"] == "Testing it on staging for a day." for m in get(api, "tasks/" + task["id"])["comments"])
     assert post(api, path, {"text": "@ops which app is still open?"})["woke"] is True
     queued = jobs_for(api, "ops")
+    # The owner's reply with no @mention is deferred a day: it reaches the bot that asked on its next turn there.
     reply = post(api, path, {"text": "I don't know why this task is assigned to me."}, token="ben-test")
-    assert reply["woke"] is True and reply["comment"]["to_actor"] == "bot:ops"
-    assert jobs_for(api, "ops") == queued + 1, "the owner's reply gives the bot that asked a turn"
+    assert reply["woke"] is False and reply["comment"]["to_actor"] == "bot:ops"
+    assert reply["sent_as"]["delivery"] == "defer" and reply["sent_as"]["until"]
+    assert jobs_for(api, "ops") == queued
     mine = f"{path}/{reply['comment']['id']}"
     assert post(api, mine, {"text": "Why is this mine?"}, token="ben-test")["woke"] is False
     assert post(api, mine + "/delete", {}, token="ben-test")["woke"] is False
-    assert jobs_for(api, "ops") == queued + 1, "an edit or delete wakes nobody"
+    assert jobs_for(api, "ops") == queued, "an edit or delete wakes nobody"
 
 
 def test_a_person_mentioned_in_a_comment_gets_it_as_a_question_in_needs_you(api):
@@ -743,7 +745,7 @@ def test_a_steps_only_type_changes_status_only_by_a_step_move(api):
     # A working status still changes without a step: the bot's ask sets it waiting.
     assert post(api, path + '/ask', {'text': 'Which page?'}, token=ops)
     assert get(api, path)['task']['status'] == 'waiting'
-    assert get(api, path)['task']['step']['name'] == 'Blocked'
+    assert get(api, path)['task']['step']['name'] == 'On Deck'
     with api.app.state.store.read() as c:
         assert H.task(c, ticket['id'])['blocked_from_step'] == ticket['step_id']
     # A bot refused Done on more tickets than the quarantine limit is not quarantined: each names its ticket.

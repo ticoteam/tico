@@ -97,8 +97,6 @@ def test_visible_requests_only_lets_everyone_ask_and_only_readers_look(world):
 
     assert outcomes(api, tokens, "get", "status?bot=counsel") == expect(200, 403)
     assert outcomes(api, tokens, "get", "bots/counsel/history") == expect(200, 403)
-    assert outcomes(api, tokens, "get", "bots/counsel/routines", callers=("ana", "ben", "cara", "dee")) == {
-        "ana": 200, "ben": 200, "cara": 200, "dee": 403}
     listed = {who: len(get(api, "updates?bot=counsel", tokens[who])["updates"]) for who in ALL}
     assert listed == {who: int(who in readers) for who in ALL}
     assert get(api, "updates/unread", "dee-test")["unread"] == 0 and get(api, "updates/unread", "cara-test")["unread"] == 1

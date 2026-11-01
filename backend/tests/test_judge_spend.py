@@ -8,6 +8,7 @@ import pytest
 from backend import hubdb as H
 from backend import judge as B
 from backend.config import Settings
+from backend.store import Store
 from backend.tests.test_api import api, get, headers, post   # noqa: F401
 from backend.tests.test_judge import QUESTIONS, FakeJudge, events, fake
 from backend.tests.test_slack_gateway import gateway, hub   # noqa: F401
@@ -565,3 +566,44 @@ def test_a_live_meeting_passes_at_the_cap_and_its_audit_keeps_the_tokens_and_cos
     spend(api, 1.0)
     capped = LM._decision(api.app, {"source": {"kind": "chat"}}, bots, 0.5, "human:ana")
     assert capped["outcome"] == "pass" and capped["trace"]["reason"] == "monthly_decision_spend_cap"
+
+
+# ----------------------------------------------------------------------------- the running month total
+def test_the_month_total_is_a_running_sum_that_stays_exact_per_database_and_month(tmp_path):
+    def open_store(name):
+        s = Store(Settings(db_path=tmp_path / name))
+        s.initialize(seed_market=False)
+        return s
+
+    def record(s, usd, ts):
+        with s.transaction() as c:
+            H.event(c, "bot:ops", "judge.spend", "mail-triage@1", {"cost_usd": usd})
+            c.execute("UPDATE events SET ts=? WHERE id=(SELECT id FROM events WHERE action='judge.spend' "
+                      "ORDER BY rowid DESC LIMIT 1)", (ts,))
+
+    def full(s, month):
+        with s.read() as c:
+            return round(float(c.execute("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0) FROM events "
+                                         "WHERE ts>=? AND action='judge.spend'", (month + "-01T00:00:00",)).fetchone()[0]), 6)
+
+    def running(s, at):
+        with s.read() as c:
+            return B.spent_this_month(c, at)
+    oct_, nov = "2026-10-30T12:00:00.000000Z", "2026-11-02T08:00:00.000000Z"
+    a, b = open_store("a.sqlite"), open_store("b.sqlite")
+    record(a, 0.1, "2026-10-01T00:00:00.000000Z")
+    assert running(a, oct_) == full(a, "2026-10") == 0.1
+    record(a, 0.2, "2026-10-15T10:00:00.000000Z")
+    record(a, 9.0, "2026-09-30T23:59:59.000000Z")          # last month: not this month's
+    assert running(a, oct_) == full(a, "2026-10") == 0.3
+    record(b, 2.0, "2026-10-20T10:00:00.000000Z")
+    assert running(b, oct_) == full(b, "2026-10") == 2.0
+    record(a, 0.25, "2026-10-29T10:00:00.000000Z")
+    assert running(a, oct_) == full(a, "2026-10") == 0.55
+    with a.transaction() as c:                              # a deleted newest row is counted out, not kept
+        c.execute("DELETE FROM events WHERE id=(SELECT id FROM events WHERE action='judge.spend' ORDER BY rowid DESC LIMIT 1)")
+    assert running(a, oct_) == full(a, "2026-10") == 0.3
+    assert running(a, nov) == full(a, "2026-11") == 0.0     # a new month starts its own total
+    record(a, 0.4, "2026-11-02T09:00:00.000000Z")
+    assert running(a, nov) == full(a, "2026-11") == 0.4
+    assert running(b, oct_) == full(b, "2026-10") == 2.0    # the other database keeps its own
