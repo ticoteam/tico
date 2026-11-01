@@ -57,7 +57,9 @@ def _old_shape_database(path):
     from their own schema text with the reference moved back to bots(slug)."""
     old_first = H.SCHEMA.replace(NEW_BOTS_DDL, OLD_BOTS_DDL)
     assert old_first != H.SCHEMA
-    with unittest.mock.patch.object(H, "MIGRATIONS", [old_first, *H.MIGRATIONS[1:]]):
+    # v0.5 had no migration files: hubdb.migrate, which now runs them after its numbered steps, leaves them out here.
+    with unittest.mock.patch.object(H, "MIGRATIONS", [old_first, *H.MIGRATIONS[1:]]), \
+            unittest.mock.patch.object(migrations, "apply", lambda conn, directory=None: None):
         conn = H.connect(path)
     conn.execute("PRAGMA foreign_keys=OFF")
     for schema in (store.SCHEMA, bot_tools.SCHEMA, files.SCHEMA):

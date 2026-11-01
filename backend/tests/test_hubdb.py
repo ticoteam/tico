@@ -49,6 +49,12 @@ class HubCase(unittest.TestCase):
         self.addCleanup(self.conn.close)
         H.sync_registry(self.conn, EMPLOYEES, PEOPLE)
 
+    def before(self, version):
+        """The database as an install from before migration `version` left it: H.connect has applied every migration
+        file (hubdb.migrate), so the records from that one on are forgotten and migrations.apply runs them again."""
+        self.conn.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy%'", (version,))
+        self.conn.commit()
+
     def refused(self, rule, fn, *a, **kw):
         with self.assertRaises(H.Refused) as got:
             fn(*a, **kw)
@@ -1265,6 +1271,7 @@ class StrategyOldNamesDropped(HubCase):
 
     def install_as_v050_left_it(self):
         """The old-named twins and the triggers that mirrored writes to them, as the v0.5.0 schema had them."""
+        self.before("0006")
         for old, new in (("ceo_actions", "strategy_actions"), ("ceo_merges", "strategy_merges")):
             self.conn.execute(f"CREATE TABLE {old} AS SELECT * FROM {new} WHERE 0")
             self.conn.execute(f"INSERT INTO {old} SELECT * FROM {new}")
@@ -1343,11 +1350,12 @@ class MarketNotesMoved(HubCase):
     market_pages and drops both tables. The mirror's other rows were never shown anywhere, so they go too."""
 
     def install_as_before_it_moved(self):
+        self.before("0008")
         self.conn.execute("DROP TABLE IF EXISTS market_pages")
         self.conn.execute("CREATE TABLE documents(id TEXT PRIMARY KEY, visibility TEXT NOT NULL, collection TEXT NOT NULL, "
-                          "payload TEXT NOT NULL, digest TEXT NOT NULL, updated TEXT NOT NULL)")
+                          "payload_json TEXT NOT NULL, digest TEXT NOT NULL, updated TEXT NOT NULL)")
         self.conn.execute("CREATE TABLE document_versions(id TEXT NOT NULL, digest TEXT NOT NULL, "
-                          "payload TEXT NOT NULL, imported TEXT NOT NULL, PRIMARY KEY(id,digest))")
+                          "payload_json TEXT NOT NULL, imported TEXT NOT NULL, PRIMARY KEY(id,digest))")
         overview = {"id": "market/overview", "title": "Overview", "content": "The market is small.", "category": "Market",
                     "collection": "market", "search": "The market is small.", "format": "markdown",
                     "owner": MK.CURATOR, "fetched": "2026-10-01T00:00:00.000000Z", "seeded": True}
@@ -1392,6 +1400,7 @@ class TurnLegacyUsageDropped(HubCase):
     drops the three columns. A run with measured usage keeps its own numbers."""
 
     def install_as_before_measured_usage(self):
+        self.before("0009")
         for column, kind in (("tokens_in", "INTEGER"), ("tokens_out", "INTEGER"), ("cost", "REAL")):
             self.conn.execute(f"ALTER TABLE turns ADD COLUMN {column} {kind}")
         now = H.now()

@@ -22,6 +22,7 @@ files:
 names:
   clients/*.py: [body_json]       # hub_goal_save's exact method/path/body_json step, not a column
   clients/tests/*.py: [body_json]
+  backend/tests/test_hubdb.py: [payload_json]   # the documents table as it was before 0008 dropped it
 keys:
   runner/tests/test_worktree*.py: [detail_json]   # fake runners/me/worktrees rows (the wire); their hub SQL is renamed
   backend/finance/core/feeds.py: [created]   # a Stripe balance transaction's own `created` (epoch seconds)
