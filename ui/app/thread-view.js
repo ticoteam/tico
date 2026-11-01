@@ -84,6 +84,7 @@ async function thvLoad(view) {
     thvDraw(view, {stick: true});
     thvMarkRead(view);
     void callLoad(view);
+    void thvHoldsLoad(view);
   } catch (e) {
     if (view.gone) return;
     view.state = e?.status === 404 ? 'gone' : 'error';
@@ -92,6 +93,21 @@ async function thvLoad(view) {
     if (view.state === 'gone' && view.opts.hideGone) { (view.opts.hideGone === true ? view.host : view.opts.hideGone).hidden = true; return; }
     thvDraw(view);
   }
+}
+// The viewer's own held writes in this thread come back after a reload, still with Edit and Discard.
+async function thvHoldsLoad(view) {
+  if (!view.id) return;
+  try {
+    const r = await get('/v2/rule-holds?thread=' + encodeURIComponent(view.id) + '&limit=20', {fresh: true});
+    const mine = (r?.holds || []).filter(h => h.author === myActor() && h.state === 'held' && !view.pending.some(p => p.held?.id === h.id)).slice(0, 5);
+    for (const s of mine) {
+      const h = await get('/v2/rule-holds/' + encodeURIComponent(s.id), {fresh: true}).catch(() => null);
+      if (!h || view.gone || view.pending.some(p => p.held?.id === h.id)) continue;
+      view.pending.push({key: 'p' + (++THV_N), text: h.text || '', files: [], lib: [], parent: '', depth: 0, state: 'held',
+                         held: h, canSend: !!h.can_send, nonce: h.nonce || ''});
+    }
+    if (mine.length && !view.gone) thvDraw(view);
+  } catch {}           // a server without rule holds has nothing to bring back
 }
 const thvMaxSeq = list => list.reduce((n, m) => Math.max(n, Number(m.seq) || 0), 0);
 // The first page read again after a change the stream could not place; older pages already read stay above it.
@@ -611,6 +627,9 @@ async function thvClick(view, ev) {
   const pend = t.closest('[data-pending]');
   if (pend) {
     const p = view.pending.find(x => x.key === pend.dataset.pending); if (!p) return;
+    // Edit and Discard both take a held write back: nothing is sent, and the review it waited on closes.
+    if (p.held?.id && t.closest('[data-held-drop], [data-held-edit]'))
+      post('/v2/rule-holds/' + encodeURIComponent(p.held.id) + '/withdraw', {}).catch(() => {});
     if (t.closest('[data-held-drop]')) { view.pending = view.pending.filter(x => x !== p); thvDraw(view); return; }
     if (t.closest('[data-held-edit]')) {
       view.pending = view.pending.filter(x => x !== p);
@@ -618,7 +637,7 @@ async function thvClick(view, ev) {
       thvDraw(view);
       const box = p.parent ? view.el.querySelector('.th-reply-text') : view.composer?.el.querySelector('.p-text');
       if (box) { box.value = p.text; box.focus(); }
-      if (!p.parent && view.composer) { view.composer.files.push(...p.files); view.composer.lib.push(...p.lib); thvChips(view); }
+      if (!p.parent && view.composer) { view.composer.files.push(...(p.files || [])); view.composer.lib.push(...(p.lib || [])); thvChips(view); }
       return;
     }
     if (t.closest('[data-held-send]')) {
