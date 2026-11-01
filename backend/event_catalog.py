@@ -81,7 +81,7 @@ def _build():
     add("needs_you.answered", "A person answered something that needed them.", asked)
 
     # Threads (docs/threads.md). Payloads are thin: ids and facts, never a message's words. An endpoint hears a thread
-    # only if its owner can read the thread; message.held goes to owners and admins only. message.created is for outgoing
+    # only if its owner can read the thread, message.held included. message.created is for outgoing
     # webhooks alone: a routine or rule does not hear every message.
     thread = {"id": "t1", "title": "Refund policy", "audience": "members", "owner_actor": "human:ana", "root_id": "t1",
               "parent_id": None, "parent_message_id": None}

@@ -66,7 +66,8 @@ A channel can be linked to a Tico thread, and the two carry each other's message
   suspended and one Needs-you item asks an owner to look. Nothing moves until the link is checked again
   (`POST /api/v2/slack/links/{id}/resume`). A message that arrives while the link is suspended is kept, and posted in order
   when the link resumes.
-- Unlinking (`DELETE /api/v2/slack/links/{id}`) stops both ways at once, and anything not yet sent is not sent.
+- Unlinking (`DELETE /api/v2/slack/links/{id}`) stops both ways at once: the channel stops being one of the thread's
+  readers, and anything not yet sent is not sent.
 - Slack senders are looked up once an hour, not once a message. A repeated edit event (Slack retries) is one revision,
   and an edit to the same text is not a revision.
 - History is opt-in (`history: true`): the last 30 days, up to 5,000 messages, from members who map to roster people.

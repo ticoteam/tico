@@ -37,6 +37,7 @@ employee the decision model routes it to and the reply comes back in that thread
 at once: it is stored, and the channel's `readers` in the registry get what they have not seen,
 grouped by thread, on the gateway's hourly pass, the way an employee subscribed to the channel
 catches up on it. A bot that is not a reader still reads a channel with `history` during a turn.
+A channel can also be linked to a Tico thread, both ways ([Slack](../docs/slack.md#link-a-channel-to-a-thread)).
 
 ## How a bot uses it
 

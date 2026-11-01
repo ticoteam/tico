@@ -1,8 +1,8 @@
 # Threads
 
 Everything people and bots say to each other is in a **thread**. A thread has a title, members, and an
-**audience** that decides who may read it. Threads replace the old rooms and chats: the bot chat on a page is now
-the bot's Home or a DM, and a shared room is a thread for its members.
+**audience** that decides who may read it. Threads replace the old chats: the bot chat on a page is now the bot's
+Home or a DM, and a chat a bot shared with its people is a thread for its members.
 
 ## Terms
 
@@ -11,7 +11,7 @@ the bot's Home or a DM, and a shared room is a thread for its members.
   wait, so the next person who looks finds them.
 - **DM**: a private thread for exactly the people in it. Starting one with the same people reuses the open one.
 - **Sub-thread**: a side topic under one message. It has its own read state and sits under that message in the thread.
-- **Call**: a [Tico Meet](meetings.md) call started in a thread. Its transcript and action items go back into that thread.
+- **Call**: a [Tico Meet](meet.md) call started in a thread. Its transcript and action items go back into that thread.
 
 ## Who can read a thread
 
@@ -37,7 +37,13 @@ A thread's audience is one of these:
 - Sub-threads follow the audience of the thread they branch from.
 - Mentions and follows never give access. Naming someone outside the thread leaves a warning for the author, and
   nothing else happens until that person is added.
-- Search returns only messages the searcher may read, and a thread they may not read is not named.
+- Search returns only messages the searcher may read, and a thread they may not read is not named. A thread you may
+  not read answers 404, the same as one that does not exist.
+- Bots read like people in their seat: an internal bot reads every `company` thread and the `team` threads of its group
+  or any group above it. A `members`, `personal` or `participants` thread opens to a bot only as a member. An external
+  agent reads only the threads it is in ([Permissions](permissions.md#threads-and-their-audiences)).
+- A thread can also reach outside the company: a linked [Slack](slack.md) channel, or another company's install it is
+  shared with ([Federation](federation.md)). The thread's **Who can read** sheet shows both under Slack and Shared with.
 
 ## Sub-threads
 
@@ -55,7 +61,8 @@ Each reader follows a thread at one level:
 - **muted**: unread counts stay, nothing is sent.
 
 Only human messages, and anything addressed to you, count as unread. A bot's post in a thread you follow is activity:
-a dot, not a count. `hub thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
+a dot, not a count. **Needs attention** at the top of the list holds your threads with unread mentions, asks or DM
+messages, and any thread you are in where the loop guard paused the bots' wakes; posting there lets them go. `hub thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
 sub-thread under it.
 
 ## Bots in threads
@@ -67,7 +74,10 @@ sub-thread under it.
 - A bot acknowledges a request with a one-word `✅` in its thread.
 - A bot's open asks to people go in its Home.
 - A bot's messages into a thread, including a reply in a sub-thread and the first message of a new thread, pass the
-  org rules check the same way a message to a person does ([Rules](rules-plan.md)).
+  org rules check the same way a message to a person does ([Rules](rules-plan.md)). A held message writes nothing: a
+  held first message makes no thread, sub-thread or DM. Send anyway posts it then, and makes the thread with it. The
+  author can withdraw a held message (a person's comes back as Edit and resend), and so can the person a bot reports
+  to.
 
 ## Editing and deleting
 
@@ -100,7 +110,7 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 | `hub thread search "..."` | `hub_thread_search` | messages in threads you can read |
 | `hub thread members list\|add\|remove` | `hub_thread_members_list`, `_add`, `_remove` | who reads the thread; `add --owner` makes an owner |
 | `hub thread update <thread>` | `hub_thread_update` | `--title`, `--archive` or `--unarchive`, `--audience`, `--group` |
-| `hub thread link-slack <thread>` | `hub_thread_link_slack` | not available yet: see [Slack](slack.md) |
+| `hub thread link-slack <thread> [<channel>] [--history] [--off]` | `hub_thread_link_slack` | link a Slack channel (admins), list the thread's links, or take them away ([Slack](slack.md)) |
 
 The commands are `hub thread` in the CLI and `hub_thread_*` over MCP. The REST routes live under `/api/v2/threads`
 and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The thread routes a client calls are:
@@ -121,14 +131,15 @@ and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The t
 
 Three events describe threads: `thread.created`, `message.created` (to outgoing webhooks only; agents post a lot of
 messages, so no automation runs for each one), and `message.held` when the org rules hold a message before it reaches
-its thread. Each event carries ids and facts, never a message's words. A person hears of a thread event only if they
-could read the thread, and `message.held` goes to owners and admins ([Webhooks](webhooks.md)).
+its thread. Each event carries ids and facts, never a message's words. An endpoint hears of a thread event only if its
+owner could read the thread. `message.held` names the hold and the thread it was going to; a held first message has no
+thread yet and sends no event ([Webhooks](webhooks.md)).
 
 ## Older conversations
 
 `hub conversation show` and `/api/v2/conversations/*` keep working as aliases for one release. Older conversations
-map onto threads as follows: a bot's main chat becomes its Home, a personal chat becomes a DM, a shared room becomes a
-thread for its members, a task's discussion stays with the task, and a direct conversation becomes a thread among its
+map onto threads as follows: a bot's main chat becomes its Home, a personal chat becomes a DM, a bot's shared chat
+becomes a thread for its members, a task's discussion stays with the task, and a direct conversation becomes a thread among its
 participants.
 
 A thread with six or more prompts shows an **Outline** pill. It lists the prompts people sent, across every page, and

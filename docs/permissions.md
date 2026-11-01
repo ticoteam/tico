@@ -171,7 +171,15 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
   no owner bypass. **task**: whoever may read the task. **meeting**: the people who may see the meeting.
 - The starter of a thread, or an admin, can make it public to a group or to the company. Adding a person, bot or group
   needs **Write** on them. Removing someone needs the thread's owner or an admin.
-- Following a thread never gives access, and neither does a mention.
+- Following a thread never gives access, and neither does a mention. A thread someone may not read answers 404.
+- Bots read as a person in their seat. An internal bot reads every **company** thread and the **team** threads of its
+  group or any group above it. **members**, **personal** and **participants** threads open to a bot only as a member (or
+  a participant). An external agent (an agent token) gets no company or team reading: only the threads it is in.
+  Posting in a Home takes **Write** on its owner, for bots as for people.
+- A thread can reach outside the company through a linked Slack channel or a shared install. Taking that away (unlink,
+  unshare) removes the outside readers at once ([Slack](slack.md), [Federation](federation.md)).
+- A message the org rules hold writes nothing. The author may withdraw it, and so may the person a bot reports to; only
+  the reviewer sends it anyway ([Rules](rules-plan.md)).
 
 ## Dashboard, team pages and pins
 
@@ -563,7 +571,7 @@ nothing by itself.
 With a person's rights BotOps may give another bot repository access at once, but never take any away: setting a bot to
 own, dropping a chosen repository or turning write into read comes to that person as a Confirm card naming the grants that
 would stop. The same change made in Settings > Repositories (or `hub bot repos`) says which grants stopped applying.
-A message cited by id (`on_behalf_of`) must be the requester's own, in their own chat with BotOps rather than a room another human
+A message cited by id (`on_behalf_of`) must be the requester's own, in their own chat with BotOps rather than a thread another human
 spoke in, and it must be the same human whose message started the run. Someone who has left lends nothing.
 
 **BotOps' own runs manage every bot.** Only a run from BotOps' own schedule is its own: the daily update, and a timed routine
@@ -743,13 +751,12 @@ in `NOT_SETTINGS` with the reason it needs none.
 
 Someone who may write to a bot but not read it can talk to it, and only sees what is theirs: their
 own conversations with it and the tasks they requested, created or own. They do not see its status,
-run log, files, updates, routines, other humans' tasks or shared rooms, and the step-by-step "what it
+run log, files, updates, routines, other humans' tasks or threads they are not in, and the step-by-step "what it
 did" under its replies is hidden. The bot's page for them holds its name, role, who owns it, the
 humans it works for, a **Send a request** box, and their own threads and tasks. A bot they may only
 see shows the same About card and no request box.
 
-When a bot uses a shared room, the room belongs to the humans it works for who may read it. Anyone else
-who writes to it talks to it in a room of their own.
+A bot's Home is read by its Read audience. Someone who may only write to it talks to it in a DM of their own.
 
 ## Bots and humans are checked alike
 
@@ -812,8 +819,7 @@ An unchanged save answers `409 unchanged`.
 ## Moving off `hub-access.yaml`
 
 `private_owners` and `routing_permissions` in `registry/hub-access.yaml` no longer decide anything, and
-neither does a bot's "Can use" list (`owner_ids`), which now only says who a bot works for and who is in
-its shared room. The first start after upgrading resets every bot to **Open**. If either list was in the
+neither does a bot's "Can use" list (`owner_ids`), which now only says who a bot works for. The first start after upgrading resets every bot to **Open**. If either list was in the
 file, the server logs one warning and the owner finds a note on Settings > Health, "hub-access.yaml
 private/routing lists are no longer used; bots are now Open; set access in Settings > Bots". Set the
 access you meant there; saving any bot's access, or dismissing the note, clears it.

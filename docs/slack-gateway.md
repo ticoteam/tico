@@ -105,8 +105,9 @@ Stored answer for one routed message, as the message's `refs.routing` carries it
 ## Identity and what the bot sees
 
 The Tico message is written through `hubdb.say` as the verified human (`human:<id>`), never as
-Tico, into a `direct` conversation between that human and the bot, mapped to the Slack thread
-in `slack_threads`. The guardrails in `docs/how-it-works.md` apply unchanged: an active bot only,
+Tico, into a DM between that human and the bot, mapped to the Slack thread in `slack_threads`.
+Linking a channel to a Tico thread both ways is separate ([Slack](slack.md#link-a-channel-to-a-thread)).
+The guardrails in `docs/how-it-works.md` apply unchanged: an active bot only,
 except that a person's message, a new thread or a reply in one, to a paused or quarantined bot is kept and runs when the
 bot is back (the gateway tells the person in the thread that it waits and when the bot is back); the cap on bot-to-bot traffic, the unsolicited cap, the lint, the escape rule (a message that
 names a `secrets/` path is refused and recorded as such).
@@ -118,7 +119,7 @@ polls for, so the ask closes.
 The bot's run gets the text, and in the message's `refs.slack` the channel or DM name, the
 thread permalink, the sender's email, the last twelve exchanges of the thread and a note that
 its reply is posted back to Slack for it and that it must not post to Slack itself for that
-conversation. It gets no other channel and no private room history. A
+conversation. It gets no other channel and no other thread's history. A
 message routed to several bots opens or continues one conversation per bot, all mapped to the
 same thread; each reply lands in the thread under its own name.
 
