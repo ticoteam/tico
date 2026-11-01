@@ -109,8 +109,14 @@ def is_owner(who, runner):
     return bool(runner) and who.role in ("human", "owner") and who.actor == "human:" + runner["operator"]
 
 
+BOT_EXIT_SQL = "SELECT * FROM bot_browser_exits WHERE bot=?"
+
+
 def bot_exit(c, bot):
-    row = c.execute("SELECT runner_id FROM bot_browser_exits WHERE bot=?", (bot,)).fetchone()
+    """The computer `bot` browses through, or None. Read once per snapshot (read_cache): Health and the claim check
+    prime every bot's row together (events.prime_bot_rows)."""
+    from .read_cache import one
+    row = one(c, BOT_EXIT_SQL, (bot,))
     return row["runner_id"] if row else None
 
 

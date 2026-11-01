@@ -636,11 +636,11 @@ LIVE_SQL = ("SELECT id,created FROM attempts WHERE bot=? AND state IN ('leased',
 
 
 def prime_bot_rows(c, slugs):
-    """Each of these bots' own row in the five tables a claim check reads (status, bot, limit, back-off, budget),
+    """Each of these bots' own row in the six tables a claim check reads (status, bot, limit, back-off, budget, exit),
     one query per table (per 500 bots), so a loop over bots reads none of them again. Outside a snapshot nothing is
     kept."""
     from .read_cache import cache, prime
-    from . import run_backoff, turn_budgets, usage_limits
+    from . import browser_exit, run_backoff, turn_budgets, usage_limits
     if cache(c) is None:
         return
     for part in H.chunks(sorted({H.actor_id(s) for s in slugs if s})):
@@ -649,7 +649,8 @@ def prime_bot_rows(c, slugs):
                                          ("bots", "slug", "SELECT * FROM bots WHERE slug=?"),
                                          ("usage_limits", "bot", usage_limits.OWN_SQL),
                                          ("run_backoff", "bot", run_backoff.GET_SQL),
-                                         ("bot_budget", "bot", turn_budgets.GET_SQL)):
+                                         ("bot_budget", "bot", turn_budgets.GET_SQL),
+                                         ("bot_browser_exits", "bot", browser_exit.BOT_EXIT_SQL)):
             found = {row[column]: row for row in c.execute(f"SELECT * FROM {table} WHERE {column} IN ({marks})", part)}
             prime(c, statement, {(s,): found.get(s) for s in part})
 
