@@ -56,8 +56,6 @@
 .ask-people{display:flex;align-items:center;min-width:0;margin-right:auto}
 .ask-head:has(.ask-sup-chip){gap:4px}
 .ask-head:has(.ask-sup-chip) .ask-sees{display:none}
-/* Your requests and Loop in Support take the room the page's name and pill had: the pill steps aside, as it does for the chip. */
-.ask-head:has(.ask-requests.ask-on) .ask-sees{display:none}
 .ask-sup-chip{flex:none;display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 2px 0 3px;border-radius:999px;background:var(--sup);color:var(--sup-ink);
   font-size:var(--t-xs);font-weight:600;white-space:nowrap}
 .ask-supx{display:inline-grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:50%;background:transparent;color:inherit;cursor:pointer}
