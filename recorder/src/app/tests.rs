@@ -1014,11 +1014,11 @@ fn send_requires_review_of_paused_quotes_and_discard_keeps_the_local_recording()
     app.store
         .update_context(&id, |c| {
             c.paused_windows = vec![(5000, Some(10000))];
-            c.items.push(Item {
+            c.items = vec![Item {
                 quote: "Paused quote".into(),
                 at_ms: 6000,
                 ..Default::default()
-            });
+            }];
             Ok(())
         })
         .unwrap();
