@@ -226,10 +226,10 @@ def mark_delivery(c, messages):
                 " AND j.message_id IN (%s)" % ",".join("?" * len(chunk)), tuple(chunk)):
             if not row["live"]:
                 continue
-            if row["bot"] not in configs:
-                config = c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
-                configs[row["bot"]] = json.loads(config[0]) if config else {}
-            config = configs[row["bot"]]
+            if row["bot_id"] not in configs:
+                config = c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
+                configs[row["bot_id"]] = json.loads(config[0]) if config else {}
+            config = configs[row["bot_id"]]
             mode = ("redirect" if row["redirect"] else "steer" if row["way"] != "queue"
                     and steers(config, config.get("runtime")) else "next_turn")
             pending[row["message_id"]]["delivery"] = {"attempt_id": row["live"], "mode": mode}

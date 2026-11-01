@@ -94,7 +94,7 @@ def test_unrelated_work_and_free_turn_ignore_37_login_waiters(api):
         c.execute('UPDATE runners SET capacity=40 WHERE id=?', (rid,))
     post(api, 'chat/finance', {'text': 'Independent work on another login'})
     attempt = claim(api, computer, 'finance')
-    assert attempt is not None and attempt['bot'] == 'finance'
+    assert attempt is not None and attempt['bot_id'] == 'finance'
     with api.app.state.store.read() as c:
         from backend.views import free_turn
         assert free_turn(c, 'ops', {'machine': {'runner_id': rid, 'label': 'Test Mac'}}) == ''

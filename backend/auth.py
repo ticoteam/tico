@@ -469,7 +469,7 @@ class Auth:
                 else:
                     attempt = c.execute("SELECT * FROM attempts WHERE token_hash=?", (digest(token),)).fetchone()
                     if attempt:
-                        who = Identity("bot:" + attempt["bot"], "bot", runner_id=attempt["runner_id"],
+                        who = Identity("bot:" + attempt["bot_id"], "bot", runner_id=attempt["runner_id"],
                                        attempt_id=attempt["id"])
                         # The runner's lease calls and credential fetch stay the bot's; the
                         # assistant's tools otherwise act as the person it works for. Older
@@ -813,13 +813,13 @@ class Auth:
         parties = A.qlist(sorted(subjects(c, who.actor)))
         me = A.q(who.actor)
         # A private task's guest (hubdb.task_reach) reads it as its two parties do.
-        audience = (f"(owner IN {inherited_private} OR requester IN {inherited_private} "
+        audience = (f"(owner_id IN {inherited_private} OR requester_id IN {inherited_private} "
                     f"OR (coalesce(private,1)<>0 AND guest={me}) "
-                    f"OR (coalesce(private,1)=0 AND (owner IN {parties} OR requester IN {parties} OR ({clear}))))")
+                    f"OR (coalesce(private,1)=0 AND (owner_id IN {parties} OR requester_id IN {parties} OR ({clear}))))")
         if who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
-            audience += f" AND (coalesce(private,1)=0 OR owner IN {carried} OR requester IN {carried} OR guest={actor})"
+            audience += f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} OR guest={actor})"
         return audience
 
     def operator(self, c, who, bot):

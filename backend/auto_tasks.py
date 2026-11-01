@@ -14,7 +14,7 @@ STEP_SQL = 'SELECT name FROM task_steps WHERE id=?'
 WORKTREE_SQL = "SELECT 1 FROM worktree_waits WHERE task_id=? AND state IN ('waiting','reserved') LIMIT 1"
 APPROVAL_SQL = 'SELECT 1 FROM approvals WHERE task_id=? AND decision IS NULL LIMIT 1'      # H.wait_detail's too
 OTHER_CHILD_SQL = ("SELECT 1 FROM tasks WHERE id IN (" + H.TR.CHILD_IDS + ") "
-                   "AND status IN ('open','doing','waiting','review','ready') AND owner<>? LIMIT 1")
+                   "AND status IN ('open','doing','waiting','review','ready') AND owner_id<>? LIMIT 1")
 
 
 def put_back_held(c, row):

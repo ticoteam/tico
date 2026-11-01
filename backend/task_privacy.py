@@ -536,9 +536,9 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
                                (aid, who.runner_id, who.runner_id)).fetchone()
             if not hosted:
                 raise Problem("privacy", "This execution is no longer assigned to this computer", 403)
-            principal = "bot:" + hosted["bot"]
-        if isinstance(attempt, dict) and attempt.get("bot"):
-            principal = "bot:" + attempt["bot"]
+            principal = "bot:" + hosted["bot_id"]
+        if isinstance(attempt, dict) and attempt.get("bot_id"):
+            principal = "bot:" + attempt["bot_id"]
             if not attempt_readable(c, principal, attempt.get("id")):
                 raise Problem("privacy", "This execution is no longer available", 403)
     if (who.role == "runner" and principal == who.actor and isinstance(payload, dict)

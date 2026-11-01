@@ -1428,7 +1428,7 @@ def silent_waits(c, at=None):
         "coalesce((SELECT max(e.created_at) FROM task_events e WHERE e.task_id=t.id AND e.field='waiting_on' "
         "AND e.new=t.waiting_on), t.updated_at) AS since FROM tasks t "
         "WHERE t.waiting_on IS NOT NULL AND t.status='waiting') w WHERE w.since<? "
-        "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.recipient_id=w.waiting_on AND m.sender_id=w.owner "
+        "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.recipient_id=w.waiting_on AND m.sender_id=w.owner_id "
         "AND m.created_at>=w.since AND m.deleted_at IS NULL) "
         "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=w.conversation_id AND m.kind='ask' "
         f"AND m.recipient_id=w.waiting_on AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL}) "

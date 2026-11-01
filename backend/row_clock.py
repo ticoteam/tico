@@ -35,7 +35,7 @@ def ensure(c):
         ("row_clock_parties_insert", "AFTER INSERT ON tasks WHEN NEW.private IS NOT 0", bump % "parties"),
         ("row_clock_parties_delete", "AFTER DELETE ON tasks WHEN OLD.private IS NOT 0", bump % "parties"),
         ("row_clock_parties_update", "AFTER UPDATE OF requester_id,owner_id,guest,private ON tasks WHEN "
-         "(OLD.requester IS NOT NEW.requester OR OLD.owner IS NOT NEW.owner OR OLD.guest IS NOT NEW.guest "
+         "(OLD.requester_id IS NOT NEW.requester_id OR OLD.owner_id IS NOT NEW.owner_id OR OLD.guest IS NOT NEW.guest "
          "OR OLD.private IS NOT NEW.private) AND (OLD.private IS NOT 0 OR NEW.private IS NOT 0)", bump % "parties"),
         ("row_clock_access_insert", f"AFTER INSERT ON registry_metadata WHEN NEW.key {_IN_ACCESS}", bump % "access"),
         ("row_clock_access_delete", f"AFTER DELETE ON registry_metadata WHEN OLD.key {_IN_ACCESS}", bump % "access"),

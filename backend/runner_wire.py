@@ -3,17 +3,17 @@
 Runners already in the field read these bodies (contracts/runner, runner-rs serde, runner/), so a hub answers them
 with the old names: a message's stored `refs` text as `refs_json` beside the decoded `refs`, a conversation's
 `participants_json` beside `participants`, an assignment's `config_json` beside `config`, a task's text columns (`labels_json`, ...) as they were, and a worktree
-link's `detail_json`. Wave 2's time columns go back under their old names too (`created` beside a message's
-`created_at`, a task's `updated`, a worktree link's `updated`). Everything else the hub serves uses the new column
-names (backend/migrations/0013, 0014).
+link's `detail_json`. Renamed time and actor columns go back under their old names too (`created` beside a message's
+`created_at`, `from_actor` beside `sender_id`, a task's `owner`, a worktree link's `updated`). Everything else the hub
+serves uses the new column names (backend/migrations/0013, 0014, 0031).
 """
 from . import hubdb as H
 from .migrations.renames_data import COLUMNS
 
-# Wave 2's time columns of the tables a runner reads: {table: {new name: old name}}.
+# Renamed time and actor columns of the tables a runner reads: {table: {new name: old name}}.
 TIMES = {}
 for _table, _old, _new, _wave in COLUMNS:
-    if _wave == "2" and _table in ("assignments", "conversations", "messages", "task_links", "tasks"):
+    if _wave in ("2", "2s", "2b", "3") and _table in ("assignments", "conversations", "messages", "task_links", "tasks"):
         TIMES.setdefault(_table, {})[_new] = _old
 
 

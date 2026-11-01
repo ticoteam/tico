@@ -53,7 +53,7 @@ def ensure(c):
     add_column(c, "usage_limits", "per_30m_usd", "REAL")
     add_column(c, "usage_pools", "per_30m_usd", "REAL")
     # What became of each object (`outcome` converted | kept | failed, `why`), and when the owner was told of it.
-    for column in ("outcome", "why", "title", "at", "told"):
+    for column in ("outcome", "why", "title", "migrated_at", "told"):
         add_column(c, "redesign_migrated", column, "TEXT")
 
 

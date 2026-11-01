@@ -914,7 +914,7 @@ def task_wait(c, task_id, settings=None):
     job = c.execute(TASK_WAIT_SQL, (task_id,)).fetchone()
     if not job:
         return ""
-    label = queued_label(c, job["bot"], machine(c, job["bot"]), settings)[0]
+    label = queued_label(c, job["bot_id"], machine(c, job["bot_id"]), settings)[0]
     reason = label.removeprefix("Saved — ")
     return "Queued" if reason == "queued" else reason[:1].upper() + reason[1:]
 
@@ -1933,7 +1933,7 @@ def fleet_snapshot(c, auth, identity, task_view):
     for row in c.execute(
             "SELECT id,bot_id,state,started_at,lease_until,created_at FROM attempts "
             "WHERE state IN ('leased','running') AND lease_until>? ORDER BY created_at DESC", (now,)):
-        live_by_bot.setdefault(row["bot"], []).append(row)
+        live_by_bot.setdefault(row["bot_id"], []).append(row)
     # machine() / presence used to re-SELECT assignment+agent rows once per readable bot; Health already primes.
     shown = [row["id"] for row in bot_rows
              if row["id"] in allowed and access.get(row["id"], auth.FULL)["read"]]
@@ -2015,7 +2015,7 @@ def install_views(app, store, auth, mutate, task_view):
         success = turn.get("exit") == "completed"
         if made is None and c is not None:
             made = ran_on(c, [turn["id"]])[turn["id"]]
-        return {"id": turn["id"], "bot": turn["bot"], "employee": turn["bot"], "issue": None,
+        return {"id": turn["id"], "bot": turn["bot_id"], "employee": turn["bot_id"], "issue": None,
                 "state": turn.get("state"), "outcome": turn.get("exit"), "failure_reason": turn.get("failure_reason") or "",
                 **{k: turn.get(k) for k in ("end_reason", "ended_at", "last_event", "last_event_at", "stalled", "stalled_at")},
                 "finished_at": turn.get("finished_at") or turn.get("started_at"),

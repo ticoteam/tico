@@ -249,11 +249,11 @@ def install(app, store, auth):
             current = H._one(c, "SELECT bot,state,focus,task_id,changed_at FROM bot_status WHERE bot=?", (slug,))
             if len(rows) > LIMIT:
                 caps.append(rows[-1]["since"])
-            if current and first <= (current["since"] or "") < last:
+            if current and first <= (current["changed_at"] or "") < last:
                 rows.append(current)
             before = H._one(c, "SELECT bot,state,focus,task_id,started_at FROM bot_status_history WHERE bot=? AND started_at<? "
                                "ORDER BY started_at DESC LIMIT 1", (slug, first))
-            if current and (current["since"] or "") < first:
+            if current and (current["changed_at"] or "") < first:
                 before = current
             if before:
                 shown = privacy.status(c, who, before, **inputs[slug])

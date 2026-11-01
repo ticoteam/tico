@@ -216,8 +216,8 @@ function auActionFields(s) {
   const who = [...auPeople(), ...auBots()];
   const args = {
     create_task: () => auFld('Title', auIn('step.args.title', a.title))
-      + auFld('Assign to', auSel('step.args.owner', [['', 'Owner'], ...auWithCur(who, a.owner_id, auActorName(a.owner_id))], a.owner_id || '', 'data-blank')),
-    assign: () => auFld('Assign to', auSel('step.args.owner', auWithCur(who, a.owner_id, auActorName(a.owner_id)), a.owner_id || '')),
+      + auFld('Assign to', auSel('step.args.owner', [['', 'Owner'], ...auWithCur(who, a.owner, auActorName(a.owner_id))], a.owner_id || '', 'data-blank')),
+    assign: () => auFld('Assign to', auSel('step.args.owner', auWithCur(who, a.owner, auActorName(a.owner_id)), a.owner_id || '')),
     wake_bot: () => auFld('Bot', auSel('step.args.bot', auWithCur(auBots(), a.bot, auActorName(a.bot)), a.bot || '')),
     forward: () => auFld('To', auIn('step.args.to', a.to, 'name@acme.example')),
     label: () => auFld('Label', auIn('step.args.label', a.label)),

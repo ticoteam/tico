@@ -136,7 +136,7 @@ export type Automation = {
   kind?: string;
   last_run?: Record<string, unknown> | null;
   name?: string;
-  next_due?: string | null;
+  next_due_at?: string | null;
   next_run?: string | null;
   owner?: string;
   paused?: boolean;
@@ -186,7 +186,7 @@ export type AutomationHeld = {
   last_run?: Record<string, unknown> | null;
   moved?: number;
   name?: string;
-  next_due?: string | null;
+  next_due_at?: string | null;
   next_run?: string | null;
   owner?: string;
   paused?: boolean;
@@ -332,7 +332,7 @@ export type Bot = {
   onboarding_ready?: Record<string, unknown> | null;
   onboarding_state?: string;
   online?: boolean;
-  operator?: string | null;
+  owner_id?: string | null;
   owners: Array<unknown>;
   queued?: number;
   reports_to?: string | null;
@@ -374,7 +374,7 @@ export type BotBrowserExitView = {
 } | null;
   choices?: Array<{
   label: string;
-  operator: string;
+  owner_id: string;
   runner_id: string;
 }>;
   may_change?: boolean;
@@ -410,8 +410,8 @@ export type BotDetail = {
   onboarding_ready?: Record<string, unknown> | null;
   onboarding_state?: string;
   online?: boolean;
-  operator?: string | null;
   operator_name?: string;
+  owner_id?: string | null;
   owners: Array<unknown>;
   queued?: number;
   reports_to?: string | null;
@@ -808,11 +808,11 @@ export type CompanyHistory = {
   events: Array<{
   actor: string;
   actor_name: string;
+  created_at: string;
   field: "vision" | "description";
   id: string;
   new: string;
   old: string;
-  ts: string;
 }>;
 };
 
@@ -1898,7 +1898,7 @@ export type Goal = {
   rank: number | null;
   status: string | null;
   status_at: string | null;
-  status_by: string | null;
+  status_by_id?: string | null;
   status_by_name?: string;
   status_note: string;
   status_source: string | null;
@@ -1932,13 +1932,13 @@ export type GoalCheckinView = {
   author: string;
   author_name?: string;
   body: string;
+  created_at?: string;
   goal_id: string;
   id: string;
   kpi_id?: string | null;
   signal: "on_track" | "at_risk" | "off_track" | null;
   source_actor: string;
   source_actor_name?: string;
-  ts: string;
 };
 
 export type GoalCheckins = {
@@ -2073,7 +2073,7 @@ export type GoalResult = {
   rank: number | null;
   status: string | null;
   status_at: string | null;
-  status_by: string | null;
+  status_by_id?: string | null;
   status_by_name?: string;
   status_note: string;
   status_source: string | null;
@@ -2109,7 +2109,7 @@ export type GoalTree = {
   rank: number | null;
   status: string | null;
   status_at: string | null;
-  status_by: string | null;
+  status_by_id?: string | null;
   status_by_name?: string;
   status_note: string;
   status_source: string | null;
@@ -2465,7 +2465,7 @@ export type InternalDocVersions = {
 
 export type Kpi = {
   archived_at?: string | null;
-  archived_by?: string | null;
+  archived_by_id?: string | null;
   auto: boolean;
   cadence: "daily" | "weekly" | "monthly";
   created_at?: string | null;
@@ -2782,7 +2782,7 @@ export type MemoryTidyCard = {
   memory_commit: string;
   model: string;
   reason: string;
-  requester: string;
+  requester_id?: string;
   reviewer: string;
   status: "open" | "withdrawn" | "discarded" | "kept";
   title: string;
@@ -2816,20 +2816,20 @@ export type Message = {
   created_at: string;
   deleted_at?: string | null;
   edited_at?: string | null;
-  from_actor: string;
   from_name?: string;
   held?: string;
   id: string;
   in_reply_to: string | null;
   kind: string;
+  recipient_id?: string;
   refs: Record<string, unknown>;
   run?: {
   job_id?: string;
   run_id?: string;
   state?: "started_run" | "added_to_run";
 };
+  sender_id?: string;
   sent_as?: SentAs;
-  to_actor: string;
   to_name?: string;
   woke?: boolean;
 };
@@ -2997,7 +2997,7 @@ export type Page = {
   bot_name: string;
   cadence: "none" | "daily" | "weekly" | "monthly";
   file_id: string;
-  replaced_by: string | null;
+  replaced_by_id?: string | null;
   replaced_by_title?: string | null;
   src: string | null;
   stale_days: number | null;
@@ -4037,7 +4037,7 @@ export type Task = {
   width: number | null;
 } | null;
   created_at: string;
-  due: string | null;
+  due_at?: string | null;
   external_requesters?: number;
   guest?: string | null;
   holds: Array<TaskHold>;
@@ -4061,8 +4061,8 @@ export type Task = {
   status: string;
   title: string;
 }>>;
-  requester: string;
   requester_count?: number;
+  requester_id?: string;
   requester_name?: string;
   roles?: Record<string, Array<string>>;
   size?: number | null;

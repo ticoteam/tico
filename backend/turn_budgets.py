@@ -121,7 +121,7 @@ def enforce(c, settings, job, message, now=None):
     never refused."""
     if str(message.get("sender_id") or "").startswith("human:"):
         return False
-    bot = job["bot"]
+    bot = job["bot_id"]
     state = get(c, bot)
     if state.get("held_at"):
         return True

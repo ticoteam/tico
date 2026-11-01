@@ -29,7 +29,7 @@ def states(c, bots):
 def targets(c):
     # Include prior observations even after pause, unassignment, holding or cancellation, to clear them.
     return sorted({r[0] for r in c.execute("SELECT bot FROM assignments WHERE bot IN "
-                                         "(SELECT bot FROM jobs WHERE state='queued')")} |
+                                         "(SELECT bot_id FROM jobs WHERE state='queued')")} |
                   {r[0][len(KEY):] for r in c.execute("SELECT key FROM registry_metadata WHERE key LIKE ?", (KEY + '%',))})
 
 

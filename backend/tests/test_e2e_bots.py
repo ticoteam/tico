@@ -42,7 +42,7 @@ def test_a_message_is_a_job_the_runner_leases_and_its_reply_is_visible(api, fake
     assert answer["body"] == "Acme reply."
 
     job = job_for(api, sent["id"])
-    assert job["bot"] == "ops" and job["state"] == "completed" and job["attempt_id"]
+    assert job["bot_id"] == "ops" and job["state"] == "completed" and job["attempt_id"]
     attempt = next(a for a in fake_claude.attempts() if a["id"] == job["attempt_id"])
     assert attempt["state"] == "completed" and attempt["result"]["outcome"] == "completed"
     assert {f"started:{attempt['id']}", f"complete:{attempt['id']}"} <= fake_claude.keys()
@@ -57,10 +57,10 @@ def test_a_bot_hands_a_message_to_another_bot_that_needs_action_and_the_other_bo
                                                           "Please write the release note.",
                                      "needs_action": True}, token=ops["token"])
     job = job_for(api, handoff["id"])
-    assert job["bot"] == "cpo" and job["state"] == "queued"
+    assert job["bot_id"] == "cpo" and job["state"] == "queued"
 
     attempt = post(api, "jobs/claim", {"next_run": True, "bot": "cpo"}, token=r["token"])["attempt"]
-    assert attempt["bot"] == "cpo" and attempt["message"]["id"] == handoff["id"]
+    assert attempt["bot_id"] == "cpo" and attempt["message"]["id"] == handoff["id"]
     assert attempt["message"]["sender_id"] == "bot:ops"
 
 

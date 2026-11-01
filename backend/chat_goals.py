@@ -76,7 +76,7 @@ def report(c, attempt, payload):
     """Only the leased thread and the current goal revision may change the pinned state."""
     msg = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0])
     goal = current(c, msg["conversation_id"])
-    if not goal or goal["bot"] != attempt["bot"] or goal["status"] != "active":
+    if not goal or goal["bot"] != attempt["bot_id"] or goal["status"] != "active":
         return
     origin = msg.get("refs") or {}
     context = origin.get("goal_context") or {"id": origin.get("goal_id"), "updated_at": origin.get("goal_revision")}

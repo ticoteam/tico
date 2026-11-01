@@ -335,7 +335,7 @@ class Rule5Tasks(HubCase):
         H.task_close(self.conn, ANA, quiet["id"])
         H.task_close(self.conn, ANA, noted["id"], note="Do the other one instead.")
         refs = {row["id"]: [m["refs"] for m in H.messages(self.conn, row["conversation_id"])
-                            if m["to_actor"] == SEO and m["body"].startswith("Closed:")] for row in (quiet, noted)}
+                            if m["recipient_id"] == SEO and m["body"].startswith("Closed:")] for row in (quiet, noted)}
         self.assertTrue(refs[quiet["id"]][0].get("quiet"), "a close with nothing said is news, not work")
         self.assertFalse(refs[noted["id"]][0].get("quiet"), "a person's close note can change what the bot does next")
         notes = self.conn.execute("SELECT body FROM notes WHERE to_actor=?", (SEO,)).fetchall()

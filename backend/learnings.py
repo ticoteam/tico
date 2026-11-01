@@ -190,12 +190,12 @@ def collect(c, settings, now, team):
             continue
         refs = H._json(m["refs"], {}) or {}
         tid = H.message_task_id({"refs": refs if isinstance(refs, dict) else {}}, {"task_id": m["conv_task"]})
-        author = who.get(m["from_actor"], m["from_actor"])
+        author = who.get(m["sender_id"], m["sender_id"])
         if tid:
             if m["created_at"] <= since["task"] or tid in delivered:
                 continue
             task = H.task(c, tid)
-            items.append({"key": "task:m:" + m["id"], "source": "task", "author": m["from_actor"], "created_at": m["created_at"],
+            items.append({"key": "task:m:" + m["id"], "source": "task", "author": m["sender_id"], "created_at": m["created_at"],
                           "ref": {"message": m["id"], "task": tid},
                           "label": f"{(task or {}).get('title') or 'Task'} · {author}", "text": text,
                           "audience": task_parties(tid)})
@@ -204,7 +204,7 @@ def collect(c, settings, now, team):
             continue
         bots = _bots_in(H._json(m["participants"], []) or [], team)
         place = ("Chat with " + ", ".join(team[b]["name"] for b in sorted(bots))) if bots else (m["subject"] or "Chat")
-        items.append({"key": "chat:" + m["id"], "source": "chat", "author": m["from_actor"], "created_at": m["created_at"],
+        items.append({"key": "chat:" + m["id"], "source": "chat", "author": m["sender_id"], "created_at": m["created_at"],
                       "ref": {"message": m["id"], "conversation": m["conversation_id"],
                               **({"bot": next(iter(bots))} if len(bots) == 1 else {})},
                       "label": f"{place} · {author}", "text": text, "audience": bots or None})

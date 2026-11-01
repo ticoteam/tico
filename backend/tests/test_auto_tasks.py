@@ -132,7 +132,7 @@ def test_another_owners_task_notice_never_starts_their_task_or_uses_our_cap(api)
                               'bot:finance', lint=False)
         H._wake(c, other, 'bot:ops', 'Please advise about this assignment.', {'needs_action': True})
     attempt = take(api, machine)
-    assert attempt and attempt['bot'] == 'ops'
+    assert attempt and attempt['bot_id'] == 'ops'
     assert get(api, 'tasks/' + other['id'])['task']['status'] == 'open'
 
 

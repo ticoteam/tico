@@ -217,7 +217,7 @@ def test_a_report_on_retry_and_a_stacked_manager_keep_the_90_minute_wait(api, mo
 
     def job(slug, state):
         with store.transaction() as c:
-            c.execute("UPDATE jobs SET state=? WHERE message_id=(SELECT message_id FROM update_queue WHERE bot=?)",
+            c.execute("UPDATE jobs SET state=? WHERE message_id=(SELECT message_id FROM update_queue WHERE bot_id=?)",
                       (state, slug))
 
     first = tick()

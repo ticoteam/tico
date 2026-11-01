@@ -60,7 +60,7 @@ def unsettled_watched(c, inner):
     and capture keep it (backend/org_rule_check.py hides_run). A late result filed against an expired run included."""
     from .org_rule_check import UNSETTLED, watched_bots
     watched = watched_bots(c)
-    return (f"SELECT id FROM {inner('attempts')} WHERE bot IN {qlist(watched)} AND state IN {qlist(UNSETTLED)}"
+    return (f"SELECT id FROM {inner('attempts')} WHERE bot_id IN {qlist(watched)} AND state IN {qlist(UNSETTLED)}"
             if watched else "")
 
 
@@ -98,13 +98,13 @@ DERIVED = {
                sum(coalesce(outcome, '') = 'nothing_to_do') AS nothing_to_do,
                sum(outcome IS NULL) AS unknown,
                sum(coalesce(did_nothing, 0) = 1) AS did_nothing,
-               sum(rotated IS NOT NULL) AS rotated,
+               sum(rotated_at IS NOT NULL) AS rotated,
                round(100.0 * sum(coalesce(outcome, '') = 'acted') / count(*), 1) AS acted_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'no_change') / count(*), 1) AS no_change_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
                round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
         FROM (SELECT started_at, bot, trigger_kind, purpose, input_tokens, cached_tokens, output_tokens,
-                     outcome, did_nothing, rotated
+                     outcome, did_nothing, rotated_at
               FROM {turns} WHERE started_at IS NOT NULL
               UNION ALL
               SELECT coalesce(a.started_at, a.created_at), a.bot_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
@@ -143,7 +143,7 @@ GRANTED = {
         SELECT week, bot, tool, count(*) AS calls, sum(error) AS errors,
                round(100.0 * sum(error) / count(*), 1) AS error_pct,
                CAST(round(avg(ms)) AS INTEGER) AS avg_ms, max(ms) AS max_ms
-        FROM (SELECT date(ts, '-6 days', 'weekday 1') AS week,
+        FROM (SELECT date(created_at, '-6 days', 'weekday 1') AS week,
                      CASE WHEN actor LIKE 'bot:%' AND substr(actor, 5) IN (SELECT id FROM {bots})
                           THEN substr(actor, 5) END AS bot,
                      CASE WHEN target IN {tool_names} THEN target ELSE 'other' END AS tool,
@@ -261,7 +261,7 @@ def guarded(c, auth, who, inner, function, columns=None):
                     "(SELECT substr(value,5) FROM json_each(participants) WHERE value LIKE 'bot:%' LIMIT 1))")
         first_human = "(SELECT value FROM json_each(participants) WHERE value LIKE 'human:%' LIMIT 1)"
         participant = "1" if owner else f"EXISTS (SELECT 1 FROM json_each(participants) WHERE value={me})"
-        conversations = (f"CASE COALESCE(scope,'direct') WHEN 'personal' THEN COALESCE(owner_actor,{first_human})={me} "
+        conversations = (f"CASE COALESCE(scope,'direct') WHEN 'personal' THEN COALESCE(owner_id,{first_human})={me} "
                          f"WHEN 'shared' THEN {room_bot} IN {qlist(shared)} ELSE {participant} END "
                          # A task's own room is read by whoever may read the task (auth.conversation).
                          "OR (kind='task' AND task_id IS NOT NULL)")
@@ -274,7 +274,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         if deleted in message_columns:
             msg_gate += f" AND coalesce({deleted},0)=0"
     attempt_gate = function("attempt") + "(id)"
-    event_gate = function("event") + "(target,actor,ts,detail)"
+    event_gate = function("event") + "(target,actor,created_at,detail)"
     tag_gate = function("tag") + "(id,is_template)"
     content_gate = lambda cols: function("content") + "(" + ",".join(cols) + ")"
     blob_gate = function("blob") + "(id)"
@@ -307,12 +307,12 @@ def guarded(c, auth, who, inner, function, columns=None):
         meetings = "0"
     else:
         email = q(who.email.lower())
-        meetings = (f"lower(owner)={email} OR (json_extract(metadata,'$.kind')='meeting' AND ("
+        meetings = (f"lower(owner_id)={email} OR (json_extract(metadata,'$.kind')='meeting' AND ("
                     "coalesce(json_extract(metadata,'$.private'),0)=0 OR EXISTS (SELECT 1 FROM "
                     f"json_each(json_extract(metadata,'$.calendar.attendees')) WHERE lower(value)={email}) "
                     "OR EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.participants')) "
                     f"WHERE lower(json_extract(value,'$.email'))={email})))")
-    goals = f"owner NOT IN {qlist(['bot:' + slug for slug in hidden])}" if hidden else "id IS NOT NULL"
+    goals = f"owner_id NOT IN {qlist(['bot:' + slug for slug in hidden])}" if hidden else "id IS NOT NULL"
     kpis = goals            # a KPI is owned like a goal: a bot's own are read by whoever may read the bot
     admin = who.role == "owner" or auth.bot_admin(who)
     # What happened is for whoever it involved: their own actions and what they may read. The rest is the
@@ -410,7 +410,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         if admin and not bot else "0",
         "events": f"({events}) AND " + event_gate,
         "refusals": "(" + ("1" if owner else mine if bot else f"actor={me}") + ") AND " +
-                    function("event") + "('',actor,ts,detail)",
+                    function("event") + "('',actor,created_at,detail)",
         "meetings": f"({meetings}) AND id NOT IN (SELECT meeting_id FROM {inner('media_control')} WHERE deleted_at IS NOT NULL)",
         "meeting_versions": by_meeting, "meeting_deliveries": by_meeting, "media_assets": by_meeting, "media_control": by_meeting,
         "meeting_items": by_meeting, "meeting_brain": by_meeting, "meeting_comments": by_meeting,
@@ -418,7 +418,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         "market_pages": "1",
         "docs": "id IS NOT NULL", "doc_versions": "doc_id IN (SELECT id FROM docs)",
         "linked_docs": "id IS NOT NULL",
-        "bot_files": (file_gate + " AND " + (f"bot={q(H.actor_id(who.actor))} AND " if bot_id else "")
+        "bot_files": (file_gate + " AND " + (f"bot_id={q(H.actor_id(who.actor))} AND " if bot else "")
                       + f"(CASE WHEN scope LIKE 'task:%' THEN substr(scope,6) IN (SELECT id FROM tasks) "
                         "WHEN scope LIKE 'conversation:%' THEN substr(scope,14) IN (SELECT id FROM conversations) "
                         f"ELSE {bots_visible('bot')} END)"),
@@ -443,7 +443,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         rules[table] += " AND (task_id IS NULL OR " + by_task + ")"
         # Untagged free-form status can retain the previous private turn's content.
         rules[table] += (" AND NOT EXISTS (SELECT 1 FROM " + inner("tasks") +
-                         " t WHERE (t.owner_id='bot:'||bot_id OR t.requester_id='bot:'||bot_id) "
+                         " t WHERE (t.owner_id='bot:'||bot OR t.requester_id='bot:'||bot) "
                          "AND (t.private IS NULL OR t.private<>0) AND NOT " +
                          function("task") + "(t.id))")
     for table in ("docs", "doc_versions", "linked_docs", "market_pages"):

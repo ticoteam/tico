@@ -192,9 +192,9 @@ def reserve(c, attempt, settings=None):
     # The bot's own limit is checked before the computer's: a turn held by its bot waits for the bot's turns, not for
     # a place, so it is not "computer busy" and does not hold the computer's other starts. This turn is already one of
     # the bot's turns (bot_held counts it), so the grant checks the others.
-    bot_config = c.execute("SELECT config FROM bot_config WHERE bot=?", (attempt['bot'],)).fetchone()
+    bot_config = c.execute("SELECT config FROM bot_config WHERE bot=?", (attempt['bot_id'],)).fetchone()
     bot_cap = bot_limit(H._json(bot_config[0], {}) if bot_config else {})
-    if bot_cap is not None and bot_held(c, attempt['bot'], exclude=aid) >= bot_cap:
+    if bot_cap is not None and bot_held(c, attempt['bot_id'], exclude=aid) >= bot_cap:
         waiting(c, aid, BOT_WAIT)
         return {'reserved': False, 'waiting': BOT_WAIT}
     capacity = turn_limit(c.execute("SELECT * FROM runners WHERE id=?", (rid,)).fetchone())

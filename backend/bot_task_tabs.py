@@ -333,7 +333,7 @@ def tab_sql(tab, bot, viewer, visible_sql="1"):
         elif field == "asked_by":
             part = party_sql("requester", value, bot, viewer)
         elif field == "needs":
-            part = "((owner=? AND status IN ('open','doing','waiting')) OR (status='waiting' AND waiting_on=?))", [viewer, viewer]
+            part = "((owner_id=? AND status IN ('open','doing','waiting')) OR (status='waiting' AND waiting_on=?))", [viewer, viewer]
         elif field == "waiting_on":
             part = {"any": ("status='waiting'", []),
                     "person": ("status='waiting' AND waiting_on LIKE 'human:%'", []),

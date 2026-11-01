@@ -156,21 +156,21 @@ def export(c, who, auth, aid, full=True):
                                 "dropped_bytes": 0, "created_at": diagnostic['stderr_at']}
     diagnostics = run_diagnostics.metadata(c, aid)
     if not full:
-        return {"run": {"id": aid, "bot": attempt["bot"], "state": runs.state(attempt["state"])}, "provider": cap["provider"],
+        return {"run": {"id": aid, "bot": attempt["bot_id"], "state": runs.state(attempt["state"])}, "provider": cap["provider"],
                 "bytes": cap["bytes"], "stderr_bytes": len((stderr or "").encode()), "stream_captured": stream_captured,
                 **diagnostics, "truncated": bool(cap["truncated"]), "captured": cap["created_at"],
                 "fixture": f"hub run export {aid} --fixture"}
     # A deleted message's text is not served again; the stream may still hold it until the week is out.
     message = ({"kind": msg["kind"], "from": msg["sender_id"], "body": mask(msg["body"] or "")} if msg
                else {"deleted": True})
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (attempt["bot"],)).fetchone()
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (attempt["bot_id"],)).fetchone()
     declared = json.loads(config[0] or "{}") if config else {}
     events = [{"seq": e["seq"], "kind": e["kind"], "payload": json.loads(e["payload"])}
               for e in c.execute("SELECT seq,kind,payload FROM attempt_events WHERE attempt_id=? ORDER BY seq "
                                  "LIMIT ?", (aid, MAX_EVENTS + 1))]
     result = json.loads(attempt["result"]) if attempt["result"] else {}
     return {
-        "run": {"id": aid, "bot": attempt["bot"], "state": runs.state(attempt["state"]), "created_at": attempt["created_at"],
+        "run": {"id": aid, "bot": attempt["bot_id"], "state": runs.state(attempt["state"]), "created_at": attempt["created_at"],
                 "started_at": attempt["started_at"], "finished_at": attempt["finished_at"], **diagnostics},
         "provider": cap["provider"],
         "stream_captured": stream_captured,

@@ -776,7 +776,7 @@ def claimed_turn(api, machine, bot="ops"):
 def thread_of(attempt):
     """The provider thread the runner keys this turn on (runner/state.py and runner-rs session_key, clients/sessions.py)."""
     from clients import sessions
-    return sessions.session_key(attempt["config"], attempt["bot"], (attempt.get("task") or {}).get("id"),
+    return sessions.session_key(attempt["config"], attempt["bot_id"], (attempt.get("task") or {}).get("id"),
                                 (attempt.get("conversation") or {}).get("id"))
 
 

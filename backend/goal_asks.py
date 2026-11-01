@@ -89,7 +89,7 @@ def wanted(conn, owner_id, at=None, reads=None):
     live = G.goals(conn, live_only=True)
     for goal_id, rows in K.goal_views(conn, [g["id"] for g in live], at).items():
         goal = next(g for g in live if g["id"] == goal_id)
-        who = _acts_for(goal["owner"], owner_id)
+        who = _acts_for(goal["owner_id"], owner_id)
         for k in rows:
             if who and k["status"] == "red":
                 items.append({"kind": "kpi_red", "ref": k["id"], "owner": who, "goal_id": goal_id,
@@ -114,7 +114,7 @@ def wanted(conn, owner_id, at=None, reads=None):
             goal = G.goal(conn, p["goal_id"]) if suggests and p["goal_id"] else None
             if goal:
                 org = org or _org(conn)
-                who = _person(conn, goal["owner"], owner_id, org)
+                who = _person(conn, goal["owner_id"], owner_id, org)
                 if who:
                     recovering.add((goal["id"], who))
                     items.append({"kind": "recovery", "ref": p["id"], "owner": who, "proposal": p,
@@ -129,7 +129,7 @@ def wanted(conn, owner_id, at=None, reads=None):
                 continue            # a goal that serves a bet has its why: the bet
             if goal:
                 org = org or _org(conn)
-                who = _person(conn, goal["owner"], owner_id, org)
+                who = _person(conn, goal["owner_id"], owner_id, org)
                 if who and (strategy_proactive or ("why", who) in filed):
                     whys.setdefault(who, {})[goal["id"]] = {"goal_id": goal["id"], "goal_title": goal["title"],
                                                            "why": (p.get("payload") or {}).get("why") or ""}
@@ -139,7 +139,7 @@ def wanted(conn, owner_id, at=None, reads=None):
         if p["kind"] == "kpi_definition":
             decides = record and record["owner"]
         else:
-            decides = (goal and goal["owner"]) or (record and record["owner"])
+            decides = (goal and goal["owner_id"]) or (record and record["owner"])
         org = org or _org(conn)
         who = _person(conn, decides, owner_id, org)
         if who:

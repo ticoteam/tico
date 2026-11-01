@@ -5481,7 +5481,7 @@ def create_app(settings=None):
             readable = auth.bot_accesses(c, who)
             # A first-turn waiter may not have a bot_status row until /started. Include live candidates;
             # status_line keeps only an actual wait when no stored status exists.
-            statuses = [s for s in c.execute("SELECT bot FROM bot_status UNION SELECT bot FROM attempts "
+            statuses = [s for s in c.execute("SELECT bot FROM bot_status UNION SELECT bot_id FROM attempts "
                                              "WHERE state IN ('leased','running') ORDER BY bot")
                         if readable.get(s["bot"], auth.FULL)["read"]]
             inputs = privacy.status_inputs(c, [s["bot"] for s in statuses])

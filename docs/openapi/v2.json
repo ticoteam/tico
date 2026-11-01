@@ -33786,7 +33786,7 @@
               "null"
             ]
           },
-          "next_due": {
+          "next_due_at": {
             "type": [
               "string",
               "null"
@@ -33987,7 +33987,7 @@
               "null"
             ]
           },
-          "next_due": {
+          "next_due_at": {
             "type": [
               "string",
               "null"
@@ -34737,7 +34737,7 @@
               "null"
             ]
           },
-          "operator": {
+          "owner_id": {
             "type": [
               "string",
               "null"
@@ -34931,13 +34931,13 @@
                 "label": {
                   "type": "string"
                 },
-                "operator": {
+                "owner_id": {
                   "type": "string"
                 }
               },
               "required": [
                 "label",
-                "operator",
+                "owner_id",
                 "runner_id"
               ],
               "additionalProperties": true
@@ -35088,7 +35088,7 @@
           "reports_to_name": {
             "type": "string"
           },
-          "operator": {
+          "owner_id": {
             "type": [
               "string",
               "null"
@@ -36889,7 +36889,7 @@
                 "id": {
                   "type": "string"
                 },
-                "ts": {
+                "created_at": {
                   "type": "string"
                 },
                 "actor": {
@@ -36914,11 +36914,11 @@
               "required": [
                 "actor",
                 "actor_name",
+                "created_at",
                 "field",
                 "id",
                 "new",
-                "old",
-                "ts"
+                "old"
               ],
               "additionalProperties": true
             }
@@ -42012,7 +42012,7 @@
           "status_note": {
             "type": "string"
           },
-          "status_by": {
+          "status_by_id": {
             "type": [
               "string",
               "null"
@@ -42223,7 +42223,7 @@
               "null"
             ]
           },
-          "ts": {
+          "created_at": {
             "type": "string"
           },
           "author": {
@@ -42969,7 +42969,7 @@
               "status_note": {
                 "type": "string"
               },
-              "status_by": {
+              "status_by_id": {
                 "type": [
                   "string",
                   "null"
@@ -43181,7 +43181,7 @@
                 "status_note": {
                   "type": "string"
                 },
-                "status_by": {
+                "status_by_id": {
                   "type": [
                     "string",
                     "null"
@@ -45070,7 +45070,7 @@
               "null"
             ]
           },
-          "archived_by": {
+          "archived_by_id": {
             "type": [
               "string",
               "null"
@@ -46675,7 +46675,7 @@
           "reviewer": {
             "type": "string"
           },
-          "requester": {
+          "requester_id": {
             "type": "string"
           },
           "title": {
@@ -46821,10 +46821,10 @@
           "conversation_id": {
             "type": "string"
           },
-          "from_actor": {
+          "sender_id": {
             "type": "string"
           },
-          "to_actor": {
+          "recipient_id": {
             "type": "string"
           },
           "kind": {
@@ -47775,7 +47775,7 @@
             ],
             "description": "Days since the last version once past 1.5x the cadence; null while current or without a cadence"
           },
-          "replaced_by": {
+          "replaced_by_id": {
             "type": [
               "string",
               "null"
@@ -53239,7 +53239,7 @@
             "type": "string",
             "description": "Left out of a list asked for with brief=true, as is acceptance_criteria"
           },
-          "requester": {
+          "requester_id": {
             "type": "string"
           },
           "owner": {
@@ -53254,7 +53254,7 @@
           "updated_at": {
             "type": "string"
           },
-          "due": {
+          "due_at": {
             "type": [
               "string",
               "null"

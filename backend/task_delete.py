@@ -261,7 +261,7 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
         task = rows["tasks"][0]
         c.execute("INSERT INTO task_trash(task_id,number,title,requester,owner,status,private,deleted_at,"
                   "deleted_by,rows,guest) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                  (tid, task.get("number"), task["title"], task["requester"], task["owner"], task["status"],
+                  (tid, task.get("number"), task["title"], task["requester_id"], task["owner_id"], task["status"],
                    task.get("private", 1) if task.get("private") is not None else 1, now, actor,
                    json.dumps({"rows": rows, "pointers": pointers}, default=str), task.get("guest")))
         for table, column in MESSAGE_ROWS:

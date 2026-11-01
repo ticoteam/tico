@@ -117,7 +117,7 @@ def owner_unreachable(c, ctx):
             found += [row["id"] for row in c.execute(
                 f"SELECT m.id FROM messages m WHERE {open_ask} AND m.recipient_id=? ORDER BY m.created_at LIMIT ?",
                 (actor, LIMIT))]
-    for row in c.execute("SELECT a.id, COALESCE(a.decision_owner, m.recipient_id) AS owner FROM approvals a "
+    for row in c.execute("SELECT a.id, COALESCE(a.decision_owner, m.recipient_id) AS owner_id FROM approvals a "
                          "LEFT JOIN messages m ON m.id=a.message_id WHERE a.decision IS NULL ORDER BY a.created_at").fetchall():
         if row["owner_id"] and _unreachable(row["owner_id"], people, bots):
             found.append(row["id"])

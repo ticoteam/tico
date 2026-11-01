@@ -69,16 +69,16 @@ def hold(conn, msg, task_row=None):
     text = str(msg["body"] or "")
     if len(text) > H.NOTE_MAX - 400:
         text = text[:H.NOTE_MAX - 400] + "... (the rest is in the message)"
-    sender = H.actor_id(msg["from_actor"])
-    if H.is_bot(msg["from_actor"]):
+    sender = H.actor_id(msg["sender_id"])
+    if H.is_bot(msg["sender_id"]):
         sender = (H.bot(conn, sender) or {}).get("slug", sender)
     body = (f"Message from {sender} {where}, which could wait for this run "
             f"(message {msg['id']}). Act on it if it asks for something.\n\n{text}")
-    row = {"id": H.new_id(), "from_actor": msg["from_actor"], "to_actor": msg["to_actor"], "body": body,
+    row = {"id": H.new_id(), "from_actor": msg["sender_id"], "to_actor": msg["recipient_id"], "body": body,
            "created_at": msg["created_at"], "message_id": msg["id"]}
     conn.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES "
                  "(:id,:from_actor,:to_actor,:body,:created_at,:message_id)", row)
-    H.event(conn, msg["from_actor"], "message.can_wait", msg["id"], {"to": msg["to_actor"], "note": row["id"]})
+    H.event(conn, msg["sender_id"], "message.can_wait", msg["id"], {"to": msg["recipient_id"], "note": row["id"]})
     return row
 
 

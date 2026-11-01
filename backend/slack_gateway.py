@@ -1550,12 +1550,12 @@ class Gateway:
 
     def render_line(self, row, marker=""):
         text = str(row["text"] or "").strip()
-        if row["deleted"]:
+        if row["deleted_at"]:
             text = "(message removed)"
         elif len(text) > DIGEST_LINE_CHARS:
             text = text[:DIGEST_LINE_CHARS].rstrip() + " …"
         text = text.replace("\n", "\n    ")
-        tag = " (edited_at)" if row["edited"] and not row["deleted"] else ""
+        tag = " (edited)" if row["edited_at"] and not row["deleted_at"] else ""
         return f"- {slack_time(row['ts'])} {self.display_name(row, lookup=False)}{tag}{marker}: {text}"
 
     def unread_for(self, c, channel, reader, cursor):

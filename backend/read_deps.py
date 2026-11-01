@@ -62,7 +62,7 @@ def _changed(columns):
     return " OR ".join(f"OLD.{c} IS NOT NEW.{c}" for c in columns)
 
 
-MESSAGE = ("id", "conversation_id", "refs", "in_reply_to", "from_actor", "to_actor")
+MESSAGE = ("id", "conversation_id", "refs", "in_reply_to", "sender_id", "recipient_id")
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS read_index(key TEXT PRIMARY KEY) WITHOUT ROWID",
     "CREATE TABLE IF NOT EXISTS read_deps(dep TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY(dep, key)) WITHOUT ROWID",
@@ -98,7 +98,7 @@ SCHEMA = (
     "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_insert AFTER INSERT ON attempts BEGIN "
     "INSERT OR IGNORE INTO read_dirty VALUES('a:'||NEW.id); " + _touch("'a:'||NEW.id") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_update AFTER UPDATE OF id, bot_id, job_id, state ON attempts "
-    f"WHEN {_changed(('id', 'bot', 'job_id', 'state'))} BEGIN " + _touch("'a:'||OLD.id") + _touch("'a:'||NEW.id") + "END",
+    f"WHEN {_changed(('id', 'bot_id', 'job_id', 'state'))} BEGIN " + _touch("'a:'||OLD.id") + _touch("'a:'||NEW.id") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_delete AFTER DELETE ON attempts BEGIN " + _touch("'a:'||OLD.id") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_input_insert AFTER INSERT ON attempt_inputs BEGIN "
     + _touch("'a:'||NEW.attempt_id") + "END",

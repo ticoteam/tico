@@ -512,7 +512,7 @@ class _Context:
                 if not names & {str(w).lower() for w in wanted}:
                     return False
             elif key == "role":
-                mine = {"owner" if task.get("owner") == self.target else
+                mine = {"owner" if task.get("owner_id") == self.target else
                         "requester" if task.get("requester_id") == self.target else "other"}
                 # QA and the Release Manager are found, never configured per ticket (release_flow): a bot holds
                 # that role here when it is the one the ticket's QA or the team's release setting names.
@@ -1378,7 +1378,7 @@ def drop_step_noise(conn):
         if conn.execute("SELECT 1 FROM events WHERE action=? LIMIT 1", (STEP_NOISE_DROPPED,)).fetchone():
             return 0
         flow = _release_flow()
-        manager = flow.load(conn)["bot_id"] or flow.release_manager(conn)   # a paused one's jobs too
+        manager = flow.load(conn)["bot"] or flow.release_manager(conn)   # a paused one's jobs too
         dropped = conn.execute(
             "UPDATE jobs SET state='canceled',held=0 WHERE bot_id=? AND state='queued' AND held=1 AND message_id IN "
             "(SELECT id FROM messages WHERE json_extract(refs,'$.news')='step_entered' "

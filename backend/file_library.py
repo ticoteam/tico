@@ -240,7 +240,7 @@ def adopt_attachments(c, settings, limit=BACKFILL_BATCH):
         task = H.task(c, b["task_id"])
         if not task:
             continue
-        bot = next((H.actor_id(a) for a in (b["owner"], task["owner"], task["requester_id"]) if H.is_bot(a)
+        bot = next((H.actor_id(a) for a in (b["owner"], task["owner_id"], task["requester_id"]) if H.is_bot(a)
                     and H.bot(c, H.actor_id(a))), None) or default_bot(c, settings)
         if not H.bot(c, bot):
             continue
@@ -301,7 +301,7 @@ class Library:
             raise Problem("not_found", "Team not found", 404)
         actors = sorted(ctx.team_actors(gid))
         bots = [a[4:] for a in actors if a.startswith("bot:")]
-        return ("(f.bot IN (SELECT value FROM json_each(?)) OR f.task_id IN "
+        return ("(f.bot_id IN (SELECT value FROM json_each(?)) OR f.task_id IN "
                 "(SELECT id FROM tasks WHERE owner_id IN (SELECT value FROM json_each(?))))"), [json.dumps(bots),
                                                                                          json.dumps(actors)]
 

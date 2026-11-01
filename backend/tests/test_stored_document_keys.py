@@ -88,7 +88,7 @@ def test_a_recovery_saved_before_the_renames_still_beats_an_older_refusal(api, m
     monkeypatch.setattr("backend.review_gate.links", lambda *_: [{"repo": "acme/project"}])
     with api.app.state.store.transaction() as c:
         managers(c)
-        c.execute("INSERT INTO task_events(task_id,ts,actor,field) VALUES(?,?,?,?)",
+        c.execute("INSERT INTO task_events(task_id,created_at,actor,field) VALUES(?,?,?,?)",
                   (task["id"], H.now(), "bot:ops", move_retry.FIELD))
         plant(c, source_outages.PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32],
               {"source": source, "kind": "GitHub checks access", "active": False, "since": WHEN, "waiting": 0,

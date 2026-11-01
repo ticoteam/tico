@@ -68,7 +68,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
     started = post(api, "chat/support", {"text": "Let's set you up."}, token="local-owner-secret-token-0123456789")
     assert enabled(api) == 1          # starting the setup switched its first routine on: nobody approves it separately
     attempt = claim(api, computer, "support")
-    assert attempt and attempt["bot"] == "support"
+    assert attempt and attempt["bot_id"] == "support"
     assert attempt["onboarding"] == "needs_setup"           # the runner's prompt follows the template's flow
 
     # Start setup is a message in the person's own chat with the bot: the conversation the bot page's Chat tab lists.

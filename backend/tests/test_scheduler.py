@@ -216,17 +216,17 @@ def test_claim_query_matches_old_python_oracle_on_200_rows(api):
         readiness = readiness_document(c.execute('SELECT readiness FROM runners WHERE id=?', (r['runner_id'],)).fetchone()[0])
         # The old candidate's Python predicate, with readiness and onboarding gates.
         def old_claimable(job):
-            check = bot_readiness(readiness, job['bot'])
+            check = bot_readiness(readiness, job['bot_id'])
             if check.get('ready') is not True:
                 return False
             msg = H.message(c, job['message_id'])
             conv = H.conversation(c, msg['conversation_id'])
-            parked = c.execute('SELECT onboarding_state FROM bot_config WHERE bot=?', (job['bot'],)).fetchone()[0]
+            parked = c.execute('SELECT onboarding_state FROM bot_config WHERE bot=?', (job['bot_id'],)).fetchone()[0]
             if not msg['sender_id'].startswith('human:') and parked in PARKED:
                 return False
             task = H.message_task_id(msg, conv)
             if not (msg['sender_id'].startswith('human:') and conv['kind'] == 'chat' and task is None):
-                for held in c.execute("SELECT message_id FROM jobs WHERE bot_id=? AND state='uncertain'", (job['bot'],)):
+                for held in c.execute("SELECT message_id FROM jobs WHERE bot_id=? AND state='uncertain'", (job['bot_id'],)):
                     other = H.message(c, held[0])
                     other_conv = H.conversation(c, other['conversation_id'])
                     if (task and H.message_task_id(other, other_conv) == task) or (not task and conv['kind'] == 'chat' and other['conversation_id'] == msg['conversation_id']):

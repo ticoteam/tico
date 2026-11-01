@@ -87,7 +87,9 @@ def test_the_map_names_only_columns_the_old_schema_has():
         conn.executescript(fixture.read_text())
         for (t,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"):
             tables.setdefault(t, columns(conn, t))
-    missing = [(t, old) for t, old, _new, _wave in COLUMNS if old not in tables.get(t, ())]
+    # A later wave may rename what an earlier one named (automation_runs: state_json -> state -> saved_state).
+    named = {(t, n) for t, _old, n, _wave in COLUMNS}
+    missing = [(t, old) for t, old, _new, _wave in COLUMNS if old not in tables.get(t, ()) and (t, old) not in named]
     clashes = [(t, old, n) for t, old, n, _wave in COLUMNS if n in tables.get(t, ())]
     assert not missing and not clashes, (missing[:5], clashes[:5])
 
@@ -98,6 +100,7 @@ def test_every_column_has_its_new_name_and_the_rows_kept_their_values(upgraded):
         if old not in before["columns"].get(table, ()):
             continue
         have = columns(conn, table)
+        renamed = NEW.get((table, renamed), renamed)
         assert renamed in have and old not in have, (table, old, renamed)
     task = conn.execute("SELECT * FROM tasks WHERE id='task-1'").fetchone()
     assert json.loads(task[new("tasks", "labels_json")]) == ["launch"]
@@ -125,7 +128,7 @@ def test_indexes_triggers_and_views_survive_and_name_no_old_column(upgraded):
     gone = {old for _t, old, _n, _w in COLUMNS} - current
     left = []
     for name, sql in conn.execute("SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL"):
-        words = set(re.findall(r"\w+", re.sub(r"'(?:[^']|'')*'", "''", sql)))
+        words = set(re.findall(r"\w+", re.sub(r"'(?:[^']|'')*'", "''", re.sub(r"--[^\n]*", "", sql))))
         left += [(name, old) for old in gone & words]
     assert not left, left[:10]
     assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -136,12 +139,12 @@ def test_a_message_to_a_bot_still_queues_a_job(upgraded):
     _store, conn, _before = upgraded
     refs = new("messages", "refs_json")
     created = new("messages", "created")
-    conn.execute(f"INSERT INTO messages(id, conversation_id, from_actor, to_actor, kind, body, {refs}, {created}) "
+    conn.execute(f"INSERT INTO messages(id, conversation_id, sender_id, recipient_id, kind, body, {refs}, {created}) "
                  "VALUES('msg-2', 'conv-1', 'human:ana', 'bot:ops', 'chat', 'please ship', '{}', ?)", (NOW,))
     job = conn.execute("SELECT * FROM jobs WHERE message_id='msg-2'").fetchone()
-    assert job and job["bot"] == "ops" and job["state"] == "queued" and job[new("jobs", "created")] == NOW
+    assert job and job["bot_id"] == "ops" and job["state"] == "queued" and job[new("jobs", "created")] == NOW
     # A quiet message (read through the renamed refs column) queues nothing.
-    conn.execute(f"INSERT INTO messages(id, conversation_id, from_actor, to_actor, kind, body, {refs}, {created}) "
+    conn.execute(f"INSERT INTO messages(id, conversation_id, sender_id, recipient_id, kind, body, {refs}, {created}) "
                  "VALUES('msg-3', 'conv-1', 'human:ana', 'bot:ops', 'chat', 'fyi', '{\"quiet\":1}', ?)", (NOW,))
     assert not conn.execute("SELECT 1 FROM jobs WHERE message_id='msg-3'").fetchone()
     conn.rollback()

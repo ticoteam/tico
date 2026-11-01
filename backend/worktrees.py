@@ -305,7 +305,7 @@ def inventory(c, computer):
     if not supported(c):
         return []
     owner = "coalesce(json_extract(l.detail,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner_id END)"
-    return [dict(r) for r in c.execute(f"SELECT l.*,{owner_id} AS owner_id,t.status AS task_status,"
+    return [dict(r) for r in c.execute(f"SELECT l.*,{owner} AS owner_id,t.status AS task_status,"
             "coalesce(b.state,'active') AS bot_state FROM task_links l JOIN tasks t ON t.id=l.task_id "
             # 'bot:'||slug = owner exactly when owner starts with 'bot:' and slug = its rest. Written that way the
             # join seeks bots' slug key; the expression form scanned every bot for each worktree link kept.

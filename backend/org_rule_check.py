@@ -186,7 +186,7 @@ def hides_run(c, attempt):
             return True
     except (TypeError, ValueError):
         pass
-    return attempt["state"] in UNSETTLED and watched(c, attempt["bot"])
+    return attempt["state"] in UNSETTLED and watched(c, attempt["bot_id"])
 
 
 # ----------------------------------------------------------------------------- the check

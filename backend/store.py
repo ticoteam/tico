@@ -28,7 +28,7 @@ from .harnesses import EXTERNAL_HARNESSES
 # waits in its inbox until the agent reads it, so no job is queued for it. A synced bot delivered
 # through its platform's desktop app on a computer (backend/app_delivery.py) is the exception while
 # that computer is registered: the computer's runner takes the message as a job.
-EXTERNAL_BOT_SQL = ("EXISTS (SELECT 1 FROM bot_config WHERE bot=substr(NEW.to_actor,5) AND "
+EXTERNAL_BOT_SQL = ("EXISTS (SELECT 1 FROM bot_config WHERE bot=substr(NEW.recipient_id,5) AND "
                     "json_extract(config,'$.harness') IN ("
                     + ",".join("'" + h + "'" for h in EXTERNAL_HARNESSES) + ") AND NOT EXISTS ("
                     "SELECT 1 FROM runners r WHERE r.id=json_extract(config,'$.app_delivery.computer') "
@@ -40,7 +40,7 @@ QUEUE_TRIGGER = (
     "AND COALESCE(json_extract(NEW.refs,'$.quiet'), 0) = 0 "
     "AND NOT " + EXTERNAL_BOT_SQL + " BEGIN "
     "INSERT INTO jobs(id,message_id,bot_id,created_at) "
-    "VALUES(NEW.id,NEW.id,substr(NEW.to_actor,5),NEW.created_at); END")
+    "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cloud_migrations(version INTEGER PRIMARY KEY, applied TEXT NOT NULL);
@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS agent_pairings(
  token_key TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS agent_pairings_client ON agent_pairings(client_hash, created_at);
 CREATE TABLE IF NOT EXISTS runners(
- id TEXT PRIMARY KEY, label TEXT NOT NULL, operator TEXT NOT NULL REFERENCES humans(id),
+ id TEXT PRIMARY KEY, label TEXT NOT NULL, owner_id TEXT NOT NULL REFERENCES humans(id),
  token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen_at TEXT,
  revoked_at TEXT, platform TEXT, version TEXT, capacity INTEGER NOT NULL DEFAULT 4,
  readiness TEXT NOT NULL DEFAULT '{}', capabilities TEXT NOT NULL DEFAULT '[]',
@@ -150,7 +150,7 @@ CREATE TABLE IF NOT EXISTS runner_harness_choices(
  runner_id TEXT NOT NULL REFERENCES runners(id), harness TEXT NOT NULL, enabled INTEGER NOT NULL,
  updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, PRIMARY KEY(runner_id,harness));
 CREATE TABLE IF NOT EXISTS enrollments(
- code_hash TEXT PRIMARY KEY, operator TEXT NOT NULL REFERENCES humans(id),
+ code_hash TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES humans(id),
  expires_at TEXT NOT NULL, consumed_at TEXT, runner_id TEXT);
 CREATE TABLE IF NOT EXISTS hosting_enrollments(
  request_id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, label TEXT NOT NULL);
@@ -1490,7 +1490,7 @@ class Store:
                     # their author and any edit or deletion; readers keep a cursor per channel.
                     columns = {row[1] for row in c.execute("PRAGMA table_info(slack_events)")}
                     for name, declaration in (("author", "TEXT NOT NULL DEFAULT 'human'"), ("author_name", "TEXT"),
-                                              ("edited", "TEXT"), ("deleted", "TEXT"), ("updated_at", "TEXT")):
+                                              ("edited_at", "TEXT"), ("deleted_at", "TEXT"), ("updated_at", "TEXT")):
                         if name not in columns:
                             c.execute(f"ALTER TABLE slack_events ADD COLUMN {name} {declaration}")
                     c.execute("INSERT INTO cloud_migrations VALUES(22,?)", (H.now(),))
@@ -2331,7 +2331,7 @@ class Store:
                                            (aid, identity.runner_id, identity.runner_id)).fetchone()
                         if not hosted:
                             raise Problem("privacy", "This execution is no longer assigned to this computer", 403)
-                        replay_principal = Identity("bot:" + hosted["bot"], "bot", runner_id=identity.runner_id,
+                        replay_principal = Identity("bot:" + hosted["bot_id"], "bot", runner_id=identity.runner_id,
                                                     attempt_id=aid)
                         if not privacy.attempt_readable(c, replay_principal.actor, aid):
                             raise Problem("privacy", "This execution is no longer available", 403)

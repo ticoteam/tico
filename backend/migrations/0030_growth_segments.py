@@ -28,13 +28,18 @@ def up(conn):
     conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS growth_cohorts_month_segment
   ON growth_cohorts(coalesce(channel_id, ''), month, coalesce(segment_id, ''))""")
     if seed:
-        conn.execute("""INSERT OR IGNORE INTO growth_segments (id, segment_id, status, created_at, updated_at)
+        # An upgrading file still has since and until here (0031 renames them); a new one was made with the new names.
+        edges = {row[1] for row in conn.execute("PRAGMA table_info(market_edges)")}
+        since, until = ("since", "until") if "since" in edges else ("valid_from_on", "valid_until_on")
+        current = (f"(m.{since} IS NULL OR substr(m.{since},1,10)<=date('now')) "
+                   f"AND (m.{until} IS NULL OR substr(m.{until},1,10)>=date('now'))")
+        conn.execute(f"""INSERT OR IGNORE INTO growth_segments (id, segment_id, status, created_at, updated_at)
   SELECT lower(hex(randomblob(16))), e.id,
     CASE WHEN EXISTS (SELECT 1 FROM market_edges m WHERE m.rel='operates_in' AND m.src='company/self' AND m.dst=e.id
-      AND (m.since IS NULL OR substr(m.since,1,10)<=date('now')) AND (m.until IS NULL OR substr(m.until,1,10)>=date('now')))
+      AND {current})
     THEN 'serving' ELSE 'next' END,
     strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
   FROM market_entities e WHERE e.type='segment' AND e.status='active' AND (
     EXISTS (SELECT 1 FROM market_edges m WHERE m.rel='operates_in' AND m.src='company/self' AND m.dst=e.id
-      AND (m.since IS NULL OR substr(m.since,1,10)<=date('now')) AND (m.until IS NULL OR substr(m.until,1,10)>=date('now')))
+      AND {current})
     OR (json_valid(e.properties) AND json_extract(e.properties,'$.next')))""")

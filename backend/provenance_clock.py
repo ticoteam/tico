@@ -8,10 +8,10 @@ This is an invalidation clock, never a permission cache.
 # Sources used by task_privacy.attempt_tasks/message_tasks/references. Over-invalidation is
 # intentional: e.g. any new task may turn a formerly unresolved structured reference into a task.
 SOURCES = {
-    'attempts': ('id', 'bot', 'job_id', 'state'),
+    'attempts': ('id', 'bot_id', 'job_id', 'state'),
     'attempt_inputs': ('attempt_id', 'message_id'),
     'jobs': ('id', 'message_id'),
-    'messages': ('id', 'conversation_id', 'refs', 'in_reply_to', 'from_actor', 'to_actor'),
+    'messages': ('id', 'conversation_id', 'refs', 'in_reply_to', 'sender_id', 'recipient_id'),
     'conversations': ('id', 'task_id', 'room_key'),
     'live_meeting_turns': ('id', 'meeting_id', 'bot'),
     'tasks': ('id', 'carried_by'),

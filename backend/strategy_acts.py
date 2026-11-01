@@ -174,7 +174,7 @@ class Caller:
         return bool(row) and reads(self.c, self.visible)(row)
 
     def would_read(self, owner, requester, private=0, guest=None):
-        return bool(self.c.execute(f"SELECT 1 FROM (SELECT ? AS owner, ? AS requester, ? AS private, ? AS guest) "
+        return bool(self.c.execute(f"SELECT 1 FROM (SELECT ? AS owner_id, ? AS requester_id, ? AS private, ? AS guest) "
                                    f"WHERE ({self.visible})", (owner, requester, private, guest)).fetchone())
 
     def give(self, owner, task_id=None):

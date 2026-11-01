@@ -6668,7 +6668,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                     detail = json.loads(link.get('detail') or '{}')
                     detail.setdefault('owner', row['owner_id'])
                     conn.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), link['id']))
-        sets.append("owner=:owner")
+        sets.append("owner_id=:owner_id")
         args["owner_id"] = new_owner
         _task_event(conn, task_id, actor, "owner", row["owner_id"], new_owner, note or "")
         if new_owner != row["owner_id"]:
@@ -8831,7 +8831,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
     if old:
         conn.execute("INSERT INTO bot_status_history (id, bot, state, focus, task_id, started_at, ended_at, "
                      "reason, by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                     (new_id(), slug, old["state"], old["focus"], old["task_id"], old["since"],
+                     (new_id(), slug, old["state"], old["focus"], old["task_id"], old["changed_at"],
                       ts, reason, actor))
     live = state
     if state == "active":
@@ -8843,7 +8843,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
            "state": live if live is not None else (old or {}).get("state") or "idle",
            "focus": focus if focus is not None else (old or {}).get("focus") or "",
            "task_id": task_id if task_id is not None else (old or {}).get("task_id"),
-           "since": ts if (not old or live not in (None, old["state"])) else old["since"],
+           "since": ts if (not old or live not in (None, old["state"])) else old["changed_at"],
            "last_turn_at": (old or {}).get("last_turn_at"),
            "last_result": (old or {}).get("last_result"),
            "next_due_at": (old or {}).get("next_due_at"), "updated_at": ts}
@@ -9453,10 +9453,10 @@ def tasks(conn, owner=None, requester=None, status=None, limit=500, lane=None, l
     if visible and visible != "1":
         where.append("(" + visible + ")")
     if owner:
-        where.append("owner=?")
+        where.append("owner_id=?")
         args.append(owner)
     if requester:
-        where.append("requester=?")
+        where.append("requester_id=?")
         args.append(requester)
     if lane:
         where.append("lane=?")
@@ -9565,11 +9565,11 @@ def task_flow(conn, since, until=None, tz_minutes=0, visible="1", owner=None, re
     """
     where, args = ["(" + (visible or "1") + ")", "lane='company'"], []
     if owner:
-        where.append("owner=?"); args.append(owner)
+        where.append("owner_id=?"); args.append(owner)
     if requester:
-        where.append("requester=?"); args.append(requester)
+        where.append("requester_id=?"); args.append(requester)
     if owner_kind in ("bot", "human"):
-        where.append("owner LIKE ?"); args.append(owner_kind + ":%")
+        where.append("owner_id LIKE ?"); args.append(owner_kind + ":%")
     if type_id:
         where.append("type_id=?"); args.append(type_id)
     if label:
@@ -9588,8 +9588,8 @@ def task_flow(conn, since, until=None, tz_minutes=0, visible="1", owner=None, re
     stage = ("CASE WHEN e.field='step' THEN 'step:' || e.new WHEN e.old IS NULL THEN 'created' ELSE e.new END")
     days, people = {}, {}
     for day, owner_actor, name, n in conn.execute(
-            f"WITH {picked} SELECT date(e.created_at, ?) AS day, t.owner, {stage} AS stage, count(*) FROM task_events e "
-            f"JOIN picked t ON t.id=e.task_id WHERE {window} GROUP BY day, t.owner, stage",
+            f"WITH {picked} SELECT date(e.created_at, ?) AS day, t.owner_id, {stage} AS stage, count(*) FROM task_events e "
+            f"JOIN picked t ON t.id=e.task_id WHERE {window} GROUP BY day, t.owner_id, stage",
             (*args, f"{int(tz_minutes):+d} minutes", *window_args)):
         days.setdefault(day, {})
         days[day][name] = days[day].get(name, 0) + n

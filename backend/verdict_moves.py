@@ -179,7 +179,7 @@ def after_capture(c, check_id, head, attempt_id):
     latest = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1", (check_id,)).fetchone()
     if (not attempt or attempt["task_id"] != check_id or not attempt["finished_at"] or
             not latest or latest["id"] != attempt_id or check.get("status") != "done" or
-            H.actor_id(attempt["bot"]) != H.actor_id(check.get("owner_id"))):
+            H.actor_id(attempt["bot_id"]) != H.actor_id(check.get("owner_id"))):
         return None
     ticket = _ticket(c, H.task(c, TR.parent_of(c, check_id) or ""))
     step = ticket and F.check_step(c, check, ticket)

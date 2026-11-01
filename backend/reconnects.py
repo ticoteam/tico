@@ -393,14 +393,14 @@ def fold_into(c, task_row, body, refs):
     (H._wake). Returns (body, refs)."""
     if (refs or {}).get(WAKE_REF) or not _present(c) or not c.execute(
             f"SELECT 1 FROM task_reconnects WHERE task_id=? AND owner=? AND {OWED} LIMIT 1",
-            (task_row["id"], task_row.get("owner"))).fetchone():
+            (task_row["id"], task_row.get("owner_id"))).fetchone():
         return body, refs
     # Another hold still stands (a child, a question, another card): the wake its last clearing sends carries the news.
     from . import task_holds
     row = _H().task(c, task_row["id"])
     if not row or row["status"] == "waiting" and task_holds.holds(c, row):
         return body, refs
-    owed = _claim_owed(c, task_row["id"], task_row.get("owner"))
+    owed = _claim_owed(c, task_row["id"], task_row.get("owner_id"))
     if not owed:
         return body, refs
     return (f"{body}\n{' '.join(_said(c, w) for w in owed)}",

@@ -79,11 +79,11 @@ _SAME_EVENT = ("om.sender_id IS m.sender_id AND om.kind IS m.kind AND om.body=m.
 # A keeper notice repeats any earlier one in its room; a person's or a bot's message repeats only the room's message
 # just before it (nothing said in between). Two lookups rather than one OR, so each seeks: the keeper's walks only its
 # room's earlier messages, and the other reads that one previous message by rowid, found once per insert.
-_EARLIER = (f"m.from_actor='{H.KEEPER}' AND om.conversation_id=m.conversation_id AND om.rowid<m.rowid",
+_EARLIER = (f"m.sender_id='{H.KEEPER}' AND om.conversation_id=m.conversation_id AND om.rowid<m.rowid",
             "om.rowid=(SELECT max(x.rowid) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.rowid<m.rowid)")
 _DUPLICATE = " OR ".join(
     f"""EXISTS(SELECT 1 FROM messages m JOIN messages om ON {earlier}
-   JOIN jobs o ON o.message_id=om.id AND o.bot_id=NEW.bot AND o.id<>NEW.id
+   JOIN jobs o ON o.message_id=om.id AND o.bot_id=NEW.bot_id AND o.id<>NEW.id
    AND (o.state<>'canceled' OR o.wake_carrier IS NOT NULL)
    LEFT JOIN jobs cj ON cj.id=o.wake_carrier LEFT JOIN attempts a ON a.id=coalesce(cj.attempt_id,o.attempt_id)
    WHERE m.id=NEW.message_id AND {_SAME_EVENT} AND (coalesce(cj.state,o.state) IN ('queued','leased','running','input')

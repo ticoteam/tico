@@ -386,8 +386,8 @@ def hold(conn, msg, rule, rule_id=None):
         # Nothing to carry: the check only asked whether anything moved and nothing did, or a rule said to ignore it.
         from . import run_triggers
         return H.event(conn, H.KEEPER, SKIPPED, msg["id"], {
-            "bot": H.actor_id(msg["to_actor"]), "task": task_id, "rule": rule, "rule_id": rule_id or rule,
-            "trigger": run_triggers.of_message(msg)[0], "kind": msg["kind"], "from": msg["from_actor"],
+            "bot": H.actor_id(msg["recipient_id"]), "task": task_id, "rule": rule, "rule_id": rule_id or rule,
+            "trigger": run_triggers.of_message(msg)[0], "kind": msg["kind"], "from": msg["sender_id"],
             "cause": CAUSE.get() or None, "note": None})
     where = f"on task {task_row['title']} ({task_row['id']})" if task_row else "in a direct message"
     why = "a wake rule holds it" if rule in ROW_HOLDS else {
@@ -399,15 +399,15 @@ def hold(conn, msg, rule, rule_id=None):
     text = str(msg["body"] or "")
     if len(text) > H.NOTE_MAX - 400:
         text = text[:H.NOTE_MAX - 400] + "... (the rest is in the message)"
-    sender = "Tico" if msg["from_actor"] == H.KEEPER else H.actor_id(msg["from_actor"])
-    note = {"id": H.new_id(), "from_actor": msg["from_actor"], "to_actor": msg["to_actor"],
+    sender = "Tico" if msg["sender_id"] == H.KEEPER else H.actor_id(msg["sender_id"])
+    note = {"id": H.new_id(), "from_actor": msg["sender_id"], "to_actor": msg["recipient_id"],
             "body": f"From {sender} {where}, held for this run because {why} (message {msg['id']}).\n\n{text}",
             "created_at": msg["created_at"], "message_id": msg["id"]}
     conn.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES "
                  "(:id,:from_actor,:to_actor,:body,:created_at,:message_id)", note)
     from . import run_triggers
     trigger, _ = run_triggers.of_message(msg)
-    H.event(conn, H.KEEPER, SKIPPED, msg["id"], {"bot": H.actor_id(msg["to_actor"]), "task": task_id, "rule": rule,
-                                                  "rule_id": rule_id or rule, "trigger": trigger, "kind": msg["kind"], "from": msg["from_actor"],
+    H.event(conn, H.KEEPER, SKIPPED, msg["id"], {"bot": H.actor_id(msg["recipient_id"]), "task": task_id, "rule": rule,
+                                                  "rule_id": rule_id or rule, "trigger": trigger, "kind": msg["kind"], "from": msg["sender_id"],
                                                   "cause": CAUSE.get() or None, "note": note["id"]})
     return note

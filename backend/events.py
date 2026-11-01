@@ -117,14 +117,14 @@ def _fan(kind, ids, whole=None):
     many = f"(SELECT count(*) FROM (SELECT 1 FROM {counted} LIMIT {FAN_CAP + 1}))>{FAN_CAP}"
     if whole:
         many += f" AND EXISTS(SELECT 1 FROM {found})"
-    return (f"INSERT INTO changes(topic,kind,subject_id,at) SELECT 'tasks','{kind}',id,{_NOW} FROM {found} "
+    return (f"INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'tasks','{kind}',id,{_NOW} FROM {found} "
             f"WHERE NOT {many};"
             f"INSERT INTO changes(topic,kind,created_at) SELECT 'tasks','bulk',{_NOW} WHERE {many};")
 
 
 # Who could read a task before this write: its parties and privacy, kept on the row when they
 # change (and on a delete), so a delta read says `gone` only to someone who could have seen it.
-_WAS = "json_array(OLD.owner,OLD.requester,OLD.private,OLD.guest)"   # task_reads._could_read
+_WAS = "json_array(OLD.owner_id,OLD.requester_id,OLD.private,OLD.guest)"   # task_reads._could_read
 _MEDIA = ("width", "height", "thumb_blob_id", "poster_blob_id")
 _MEDIA_TASKS = ("SELECT task_id AS id FROM task_assets WHERE blob_id=NEW.blob_id UNION SELECT f.task_id "
                 "FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE v.blob_id=NEW.blob_id")
@@ -134,7 +134,7 @@ _ASK_TASK = ("(SELECT " + H.MESSAGE_TASK_SQL + " FROM messages m LEFT JOIN conve
 
 _RUN_CONVERSATION = ("(SELECT m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
                      "JOIN messages m ON m.id=j.message_id WHERE a.id={aid})")
-_PARTIES = ("owner", "requester", "waiting_on", "guest")
+_PARTIES = ("owner_id", "requester_id", "waiting_on", "guest")
 
 # (trigger name, event, table, WHEN or None, body). One list, so a new source is one more line. A table that does not exist is
 # skipped, and a trigger whose definition changed is replaced at the next start.
@@ -143,7 +143,7 @@ TRIGGERS = [
      _row("tasks", "insert", "NEW.id") + _needs("task", *("NEW." + p for p in _PARTIES))),
     ("changes_tasks_update", "UPDATE", "tasks", None,
      _row("tasks", "update", "NEW.id",
-          ref=f"CASE WHEN {_changed('owner', 'requester', 'private', 'guest')} THEN {_WAS} END")
+          ref=f"CASE WHEN {_changed('owner_id', 'requester_id', 'private', 'guest')} THEN {_WAS} END")
      + _needs("task", *("OLD." + p for p in _PARTIES), *("NEW." + p for p in _PARTIES))),
     ("changes_tasks_delete", "DELETE", "tasks", None,
      _row("tasks", "delete", "OLD.id", ref=_WAS) + _needs("task", *("OLD." + p for p in _PARTIES))),
@@ -186,7 +186,7 @@ TRIGGERS = [
     ("changes_task_asks_insert", "INSERT", "messages", "NEW.kind IN ('ask','answer')",
      _fan("ask", "SELECT " + _ASK_TASK.format(mid="NEW.id") + " AS id")),
     ("changes_task_asks_update", "UPDATE", "messages",
-     f"NEW.kind='ask' AND ({_changed('answered_by', 'deleted_at', 'kind', 'superseded_at')})",
+     f"NEW.kind='ask' AND ({_changed('answered_by_id', 'deleted_at', 'kind', 'superseded_at')})",
      _fan("ask", "SELECT " + _ASK_TASK.format(mid="NEW.id") + " AS id")),
     ("changes_task_types_update", "UPDATE", "task_types", None,
      _fan("type", "SELECT id FROM tasks WHERE type_id=NEW.id")),
@@ -201,12 +201,12 @@ TRIGGERS = [
      _fan("run", "SELECT id FROM tasks WHERE carried_by=NEW.id")),
     ("changes_messages_insert", "INSERT", "messages", None,
      _row("messages", "insert", "NEW.id", conversation="NEW.conversation_id")
-     + _needs("ask", "NEW.to_actor", "NEW.from_actor", where="NEW.kind IN ('ask','answer')")),
+     + _needs("ask", "NEW.recipient_id", "NEW.sender_id", where="NEW.kind IN ('ask','answer')")),
     # Delivery and read receipts move on every message a bot takes; they are not a change to show.
     ("changes_messages_update", "UPDATE", "messages",
-     _changed("body", "refs", "kind", "answered_by", "edited_at", "deleted_at", "conversation_id", "superseded_at"),
+     _changed("body", "refs", "kind", "answered_by_id", "edited_at", "deleted_at", "conversation_id", "superseded_at"),
      _row("messages", "update", "NEW.id", conversation="NEW.conversation_id")
-     + _needs("ask", "NEW.to_actor", where="NEW.kind='ask'")),
+     + _needs("ask", "NEW.recipient_id", where="NEW.kind='ask'")),
     ("changes_messages_delete", "DELETE", "messages", None,
      _row("messages", "delete", "OLD.id", conversation="OLD.conversation_id")),
     ("changes_chat_goals_insert", "INSERT", "chat_goals", None,
@@ -223,22 +223,22 @@ TRIGGERS = [
             bot="(SELECT bot_id FROM attempts WHERE id=NEW.attempt_id)",
             where="NEW.kind='status' AND json_type(NEW.payload,'$.waiting') IS NOT NULL")),
     ("changes_attempts_insert", "INSERT", "attempts", None,
-     _row("runs", "attempt", "NEW.id", conversation=_RUN_CONVERSATION.format(aid="NEW.id"), bot="NEW.bot")),
+     _row("runs", "attempt", "NEW.id", conversation=_RUN_CONVERSATION.format(aid="NEW.id"), bot="NEW.bot_id")),
     # A lease renewed is not a change; a run starting, finishing or failing is.
     ("changes_attempts_update", "UPDATE", "attempts", _changed("state"),
-     _row("runs", "attempt", "NEW.id", conversation=_RUN_CONVERSATION.format(aid="NEW.id"), bot="NEW.bot")
-     + _row("bots", "status", "NEW.bot", bot="NEW.bot",
+     _row("runs", "attempt", "NEW.id", conversation=_RUN_CONVERSATION.format(aid="NEW.id"), bot="NEW.bot_id")
+     + _row("bots", "status", "NEW.bot_id", bot="NEW.bot_id",
             where="EXISTS (SELECT 1 FROM attempt_events WHERE attempt_id=NEW.id AND kind='status' "
                   "AND json_type(payload,'$.waiting') IS NOT NULL)")),
     ("changes_jobs_insert", "INSERT", "jobs", None,
      _row("runs", "job", "NEW.attempt_id", ref="NEW.message_id",
-          conversation="(SELECT conversation_id FROM messages WHERE id=NEW.message_id)", bot="NEW.bot")),
+          conversation="(SELECT conversation_id FROM messages WHERE id=NEW.message_id)", bot="NEW.bot_id")),
     ("changes_jobs_update", "UPDATE", "jobs", _changed("state", "attempt_id"),
      _row("runs", "job", "NEW.attempt_id", ref="NEW.message_id",
-          conversation="(SELECT conversation_id FROM messages WHERE id=NEW.message_id)", bot="NEW.bot")),
+          conversation="(SELECT conversation_id FROM messages WHERE id=NEW.message_id)", bot="NEW.bot_id")),
     ("changes_bot_status_insert", "INSERT", "bot_status", None, _row("bots", "status", "NEW.bot", bot="NEW.bot")),
     ("changes_bot_status_update", "UPDATE", "bot_status",
-     _changed("state", "focus", "task_id", "since", "last_result", "next_due", "open_tasks", "needs_human"),
+     _changed("state", "focus", "task_id", "changed_at", "last_result", "next_due_at", "open_tasks", "needs_human"),
      _row("bots", "status", "NEW.bot", bot="NEW.bot")),
     ("changes_bots_update", "UPDATE", "bots", _changed("state"), _row("bots", "state", "NEW.id", bot="NEW.id")),
     ("changes_bot_control_insert", "INSERT", "bot_control", None, _row("bots", "control", "NEW.bot", bot="NEW.bot")),
@@ -292,12 +292,12 @@ def _bot_runner(kind, bot):
 
 RUNNER_TRIGGERS = [
     # Work for a bot this computer runs: a job queued or requeued (a lapsed lease), the bot resumed or undrained.
-    ("changes_runner_jobs_insert", "INSERT", "jobs", "NEW.state='queued'", _bot_runner("work", "NEW.bot")),
+    ("changes_runner_jobs_insert", "INSERT", "jobs", "NEW.state='queued'", _bot_runner("work", "NEW.bot_id")),
     ("changes_runner_jobs_update", "UPDATE", "jobs", "NEW.state='queued' AND OLD.state IS NOT 'queued'",
-     _bot_runner("work", "NEW.bot")),
+     _bot_runner("work", "NEW.bot_id")),
     # A wake preset's held job let go (backend/wake_presets.py tick).
     ("changes_runner_jobs_released", "UPDATE", "jobs", "NEW.state='queued' AND OLD.held=1 AND NEW.held=0",
-     _bot_runner("work", "NEW.bot")),
+     _bot_runner("work", "NEW.bot_id")),
     ("changes_runner_bots_update", "UPDATE", "bots", _changed("state"),
      _bot_runner("work", "NEW.id") + _bot_runner("assignments", "NEW.id")),
     ("changes_runner_bot_control_update", "UPDATE", "bot_control", None, _bot_runner("work", "NEW.bot")),
@@ -313,7 +313,7 @@ RUNNER_TRIGGERS = [
      + _tell("work", "SELECT NEW.runner_id AS rid", "NEW.bot")),
     ("changes_runner_assignments_delete", "DELETE", "assignments", None,
      _tell("assignments", "SELECT OLD.runner_id AS rid", "OLD.bot")),
-    ("changes_runner_bot_config_update", "UPDATE", "bot_config", _changed("config", "operator", "team", "onboarding_state"),
+    ("changes_runner_bot_config_update", "UPDATE", "bot_config", _changed("config", "owner_id", "team", "onboarding_state"),
      _bot_runner("assignments", "NEW.bot")),
     # A bot's selected connection changes its assignment and readiness even while its old login is signed out.
     ("changes_runner_subscription_insert", "INSERT", "subscription_assignments", "NEW.scope='bot'",
@@ -324,7 +324,7 @@ RUNNER_TRIGGERS = [
      _bot_runner("assignments", "OLD.target") + _bot_runner("work", "OLD.target")),
     # The names of the credentials its bots are granted, and the one-time move of secrets files.
     ("changes_runner_credential_grants_insert", "INSERT", "credential_grants", None, _tell("credentials", _ALL_RUNNERS)),
-    ("changes_runner_credential_grants_update", "UPDATE", "credential_grants", _changed("revoked", "subject"),
+    ("changes_runner_credential_grants_update", "UPDATE", "credential_grants", _changed("revoked_at", "subject"),
      _tell("credentials", _ALL_RUNNERS)),
     ("changes_runner_credential_grants_delete", "DELETE", "credential_grants", None, _tell("credentials", _ALL_RUNNERS)),
     ("changes_runner_credentials_insert", "INSERT", "credentials", None, _tell("credentials", _ALL_RUNNERS)),
@@ -902,7 +902,7 @@ def _runs(view, rows):
     outputs = {str(e["id"]): e for e in c.execute(
         "SELECT * FROM attempt_events WHERE id IN (" + ",".join("?" * len(refs)) + ")", refs)} if refs else {}
     for row in picked:
-        cid, bot, aid = row["conversation_id"], row["bot_id"], row["subject_id"]
+        cid, bot, aid = row["conversation_id"], row["bot"], row["subject_id"]
         if cid and not view.conversation(cid):
             continue
         # A run's output is its bot's activity (Read), as on the bot's page.

@@ -18,7 +18,7 @@ def test_one_task_per_piece_of_work_whatever_order_the_calls_come_in(api):
     first = inbound(api, secret, **work)
     assert set(first["task"]) == {"id"}
     task = get(api, "tasks/" + first["task"]["id"])["task"]
-    assert first["created"] and (task["owner"], task["requester"]) == ("human:ben", "keeper")
+    assert first["created"] and (task["owner_id"], task["requester_id"]) == ("human:ben", "keeper")
     assert task["body"] == "The report is ready.\n\n_Filed by Billing backend (service key)._"
     again = inbound(api, secret, **work)
     assert (again["task"]["id"], again["created"], again["changed"]) == (task["id"], False, False)

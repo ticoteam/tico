@@ -76,7 +76,7 @@ def record(c, who, task, repo, problem):
     returns the open wait it already has."""
     if problem.code != 'worktree_limit' or not repo or not _exists(c) or not _current_task(c, who, task):
         return None
-    if not computer_waits(c, H.actor_id(task['owner'])):
+    if not computer_waits(c, H.actor_id(task['owner_id'])):
         return None
     row = c.execute(f"SELECT * FROM worktree_waits WHERE task_id=? AND repo=? COLLATE NOCASE AND state IN {OPEN}",
                     (task['id'], repo)).fetchone()
@@ -85,7 +85,7 @@ def record(c, who, task, repo, problem):
     generation = c.execute("SELECT count(*) FROM worktree_waits WHERE task_id=? AND repo=? COLLATE NOCASE",
                            (task['id'], repo)).fetchone()[0] + 1
     now = H.now()
-    wait = {'id': uuid.uuid4().hex, 'task_id': task['id'], 'owner': task['owner'], 'repo': repo,
+    wait = {'id': uuid.uuid4().hex, 'task_id': task['id'], 'owner': task['owner_id'], 'repo': repo,
             'generation': generation, 'attempt_id': who.attempt_id, 'state': 'waiting', 'link_id': None,
             'reason': f'This bot has {problem.extra.get("limit", "its most")} worktrees', 'created_at': now,
             'updated_at': now, 'finished_at': None}

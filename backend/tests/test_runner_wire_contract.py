@@ -167,7 +167,7 @@ def turn(api, bot="ops"):
     exchange(api, "claim", computer["token"], CLAIM, "idle", key=str(uuid.uuid4()))
     post(api, "chat/" + bot, {"text": "Please summarize the current work."})
     attempt = exchange(api, "claim", computer["token"], CLAIM, "attempt", key=str(uuid.uuid4()))["attempt"]
-    assert attempt and attempt["bot"] == bot
+    assert attempt and attempt["bot_id"] == bot
     return computer, attempt
 
 

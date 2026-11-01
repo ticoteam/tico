@@ -272,7 +272,7 @@ def test_the_strategy_bots_other_work_stays_its_own_in_the_goals_session(api):
 
 def key(attempt):
     """The provider thread a runner continues for this turn (clients/sessions.py; runner-rs session_key mirrors it)."""
-    return sessions.session_key(attempt["config"], attempt["bot"], (attempt["task"] or {}).get("id"),
+    return sessions.session_key(attempt["config"], attempt["bot_id"], (attempt["task"] or {}).get("id"),
                                 attempt["conversation"]["id"])
 
 

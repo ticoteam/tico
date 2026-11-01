@@ -561,7 +561,7 @@ def turn_done(c, attempt, outcome, task_id, text):
     nothing. A failed,
     stopped or cancelled turn leaves the task to the normal retry and cleanup; a task Counsel set waiting or already
     finished is left as it is."""
-    if attempt["bot"] != SLUG or outcome != "completed" or not task_id:
+    if attempt["bot_id"] != SLUG or outcome != "completed" or not task_id:
         return
     read = attempt_read(c, attempt["id"])
     if not read or read["task_id"] != task_id:
