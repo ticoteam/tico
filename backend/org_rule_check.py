@@ -381,6 +381,8 @@ def check_as(store, primary, principal, sender, via, operation, output, recipien
             rules = [r for r in rules if (r["id"], r["version"]) not in skip]
             if not rules:
                 return None
+            if where is None and callable(place):
+                where = place(c, author, recipients)     # a held write keeps its place, whether or not a rule reads it
             output = output if isinstance(output, str) else json.dumps(output, sort_keys=True, default=str)
             level = store.settings.rule_check_level or "medium"
             qset = J.load_set(QUESTION_SET)

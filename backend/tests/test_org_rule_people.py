@@ -8,10 +8,11 @@ import pytest
 
 from backend import org_rule_check as K
 from backend import org_rules as R
+from backend import views
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_api import get, headers, post  # noqa: F401
-from backend.tests.test_org_rule_check import COLOR, bodies, color_rule, events, hold_row, ruled  # noqa: F401
+from backend.tests.test_org_rule_check import COLOR, bodies, chat, color_rule, events, hold_row, ruled  # noqa: F401
 from backend.tests.test_org_rules import api, as_bot, org, rule  # noqa: F401
 
 EVERYONE = {"everyone": True}
@@ -61,6 +62,19 @@ def test_a_persons_message_is_held_by_a_block_rule_and_its_author_reads_it_with_
     assert get(api, f"rule-holds/{hold['id']}", token="ben-test")["can_send"]
     add_fay(api)
     assert status(api, f"rule-holds/{hold['id']}", "fay-test") == 404
+
+
+def test_a_persons_chat_message_held_in_their_direct_chat_is_listed_by_that_thread(ruled):
+    api, _ = ruled
+    chat(api, "Hello there.", to="finance", token="cara-test")          # the direct chat exists before the rule does
+    block_everyone(api)
+    hold_id = chat(api, "Our favorite color is gold.", to="finance", token="cara-test")["held"]["id"]
+    with api.app.state.store.read() as c:
+        thread = views.direct_chat(c, "human:cara", "finance")["id"]
+    assert hold_row(api, hold_id)["payload_json"].count(thread) == 1     # the place names the chat
+    listed = get(api, f"rule-holds?thread={thread}", token="cara-test")
+    assert [h["id"] for h in listed["holds"]] == [hold_id]
+    assert get(api, "rule-holds?thread=some-other-chat", token="cara-test")["holds"] == []
 
 
 def test_send_anyway_is_for_the_rule_author_and_refused_to_the_author_and_to_others(ruled):

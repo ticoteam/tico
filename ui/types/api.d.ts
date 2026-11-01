@@ -3400,6 +3400,7 @@ export type RuleCreate = {
   reviewer?: string | null;
   source_id?: string | null;
   text: string;
+  where?: Array<string>;
   who?: RuleScope | null;
   with?: RuleScope | null;
 };
@@ -3416,6 +3417,7 @@ export type RuleEdit = {
   source_id?: string | null;
   text?: string | null;
   version: number;
+  where?: Array<string> | null;
   who?: RuleScope | null;
   with?: RuleScope | null;
 };
@@ -7022,7 +7024,8 @@ export type ListRuleDueResponse = unknown;
 export type ListRuleHoldsParams = {
   cursor?: string | null;
   limit?: number;
-  task: string;
+  task?: string | null;
+  thread?: string | null;
 };
 export type ListRuleHoldsBody = never;
 export type ListRuleHoldsResponse = unknown;
@@ -8598,3 +8601,11 @@ export type WaitInboundMessagesParams = {
 };
 export type WaitInboundMessagesBody = Wait;
 export type WaitInboundMessagesResponse = InboundMessages;
+
+/** POST /api/v2/rule-holds/{hold_id}/withdraw */
+export type WithdrawRuleHoldParams = {
+  "Idempotency-Key": string;
+  hold_id: string;
+};
+export type WithdrawRuleHoldBody = HoldEmpty;
+export type WithdrawRuleHoldResponse = unknown;

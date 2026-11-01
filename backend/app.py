@@ -2859,6 +2859,12 @@ def create_app(settings=None):
         """A message's place, as `where:` reads it: its conversation (none for a direct chat, which is a DM)."""
         return lambda c, author, recipients: org_rule_check.place_for(c, author, recipients, body.conversation_id or "")
 
+    def chat_place(who, bot):
+        """A person's chat with a bot is the direct chat it lands in: its conversation id is the thread `where:` names.
+        The chat route names no conversation, so the check finds the open chat (none yet: a DM with no thread)."""
+        return lambda c, author, recipients: org_rule_check.place_for(
+            c, author, recipients, (views.direct_chat(c, who.actor, bot) or {}).get("id") or "")
+
     def rule_check(who, operation, output, audience, obj="", context=None, place=None):
         """The check for one write by a person or a bot, or None (nothing to judge, a write the caller cannot make: the
         write itself refuses that). `place`: the write's place, or a function of (c, author, recipients) that reads
@@ -3017,11 +3023,12 @@ def create_app(settings=None):
             ask_ingest.withdraw_loose(c, who.actor, message["id"], ingest["person"])
         return {**message, **ask_ingest.reply(gate), **org_rule_check.answer(rule)}
 
-    def message_checks(who, body, retry=False):
+    def message_checks(who, body, retry=False, place=None):
         """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
-        does a saved retry, `retry`: `mutate` replays its answer without the write)."""
+        does a saved retry, `retry`: `mutate` replays its answer without the write). `place`: the message's place when
+        the route does not name a conversation (`rule_message_place`)."""
         rc = rule_check(who, "message", body.text, lambda c: rule_message_audience(c, who, body),
-                        place=rule_message_place(body))
+                        place=place or rule_message_place(body))
         return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
 
     @app.post("/api/v2/messages")
@@ -3076,7 +3083,7 @@ def create_app(settings=None):
                                attachments=body.attachments, delivery=body.delivery, defer_for=body.defer_for)
         # A bot's message here is a message like any other: the same checks and write as `/messages`, held or warned
         # the same way, and replayed by Send anyway as one.
-        rc, ingest = message_checks(who, sent, retry=saved_retry(request, who))
+        rc, ingest = message_checks(who, sent, retry=saved_retry(request, who), place=chat_place(who, bot))
 
         def work(c):
             cleared = topic_change.apply(c, settings, who, bot, topic)
