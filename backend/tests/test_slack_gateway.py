@@ -294,6 +294,34 @@ def routed_reply(gateway, hub, text="Done."):
     return reply["id"]
 
 
+class BothJudges:
+    """The org rule check's judge for its own `rule-check` calls, and the decision engine for the rest."""
+
+    def __init__(self, rules, engine):
+        self.rules, self.engine = rules, engine
+
+    def __call__(self, state, questions, label=None, level=None):
+        if str(label or "").startswith("rule-check"):
+            return self.rules(state, questions, label, level=level)
+        return self.engine(state, questions, label)
+
+
+def test_a_direct_message_the_org_rules_hold_reaches_no_bot_until_the_hold_is_sent(gateway, hub):
+    """An org rule the message breaks holds its copy before any bot has it: nothing is written to a bot's conversation,
+    and the hold waits for its author."""
+    from backend import org_rules as R
+    from backend.auth import Auth, Identity
+    from backend.tests.test_org_rule_check import COLOR, Judge
+    owner = Identity("human:ben", "owner", email="ben@acme.example")
+    with hub.transaction() as c:
+        R.add_rule(c, Auth(hub), owner, {"kind": "internal", "text": COLOR, "who": {"everyone": True},
+                                         "with": {}, "if_broken": "block"})
+    gateway._judge = BothJudges(Judge(hub), gateway.engine)
+    send(gateway, "The favorite color is teal", judge_answer=answers(legal=0.9), channel=DM, kind="message")
+    assert rows(hub, "SELECT id FROM messages WHERE from_actor='human:ana'") == []
+    assert len(rows(hub, "SELECT id FROM org_rule_holds")) == 1
+
+
 @pytest.mark.parametrize("held", ["paused", "quarantined"])
 def test_a_persons_new_thread_to_a_bot_held_since_the_roster_was_read_is_kept_and_said_so(gateway, hub, held):
     """Legal is paused or quarantined while the decision model reads the roster: the new thread's message is kept for

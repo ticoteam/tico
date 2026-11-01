@@ -13,6 +13,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import screening
+from backend import slack_channels as SC
 from backend import slack_gateway as G
 from backend import slack_threads as ST
 from backend import threads as TH
@@ -951,3 +952,69 @@ def test_an_older_edit_arriving_after_a_newer_one_is_stale_and_changes_nothing(w
     assert world.bridge.receive(older) == "stale"
     assert origin_message(world, ts(1))["body"] == "Kickoff at 12"
     assert origin_message(world, ts(1))["revision"] == 1
+
+
+# ----------------------------------------------------------------------------- audit 38: restricted messages use fresh members
+def test_a_member_who_joins_later_is_in_the_restricted_message_check_from_the_next_send(world, monkeypatch):
+    real = TH.message_readable
+    monkeypatch.setattr(TH, "message_readable",
+                        lambda c, v, m, **kw: v.actor == "human:ana" if m.get("restricted") else real(c, v, m, **kw))
+    activate_marketing(world, members=("U1",))
+    message_id = send_as_ana(world, "For Ana to read, not the channel")
+    with world.hub.transaction() as c:
+        c.execute("UPDATE messages SET restricted=1, legacy_audience='shared:legal' WHERE id=?", (message_id,))
+    world.slack.members[MARKETING] = ["U1", "U2", BOT_USER]          # Ben joins: a mapped member who cannot read it
+    assert [r["state"] for r in world.bridge.outbound()] == ["moot"]
+    assert world.slack.posts == []
+    assert [r["person_id"] for r in all_rows(world, "SELECT person_id FROM slack_link_members ORDER BY person_id")] \
+        == ["ana", "ben"]
+
+
+def test_a_restricted_message_waits_for_a_fresh_member_check_and_is_not_sent_on_a_stale_one(world):
+    link_id = activate_marketing(world)
+    message_id = send_as_ana(world, "Restricted, with the snapshot out of date")
+    with world.hub.transaction() as c:
+        c.execute("UPDATE messages SET restricted=1 WHERE id=?", (message_id,))
+    world.bridge._verified.clear()                                   # the snapshot is older than the check window
+    with world.hub.read() as c:
+        due = ST._due(c, MARKETING, 10)
+    assert due and world.bridge.send_one(link_row(world, link_id), due[0])["state"] == "waiting"
+    assert world.slack.posts == []
+    assert [r["state"] for r in world.bridge.outbound()] == ["delivered"]   # the next pass checks again, then sends
+    assert len(world.slack.posts) == 1
+
+
+# ----------------------------------------------------------------------------- audit 40: listed readers of a private channel
+def test_a_private_channels_listed_reader_joins_its_members_thread_and_gets_the_digest(world):
+    with world.hub.transaction() as c:
+        SC.add(c, world.hub.settings, OWNER, "#secret", readers=["legal"])
+    link_id = request(world, "#secret", thread=MEMBERS)
+    assert gate(world, link_id) == "active"
+    assert one(world, "SELECT actor FROM thread_members WHERE thread_id=? AND actor='bot:legal'", MEMBERS)
+    assert one(world, "SELECT notify FROM thread_followers WHERE thread_id=? AND actor='bot:legal'", MEMBERS)["notify"] \
+        == "digest"
+
+
+# ----------------------------------------------------------------------------- audit 23 (Slack): a terminal refusal surfaces once
+def test_a_terminal_slack_refusal_files_one_needs_you_item_until_it_is_resolved(world, monkeypatch):
+    link_id = activate_marketing(world)
+
+    def refuse(channel, thread_ts, text, delivery_id):
+        raise G.SlackError("chat.postMessage", "msg_too_long")
+
+    monkeypatch.setattr(world.slack, "post_thread_message", refuse)
+    send_as_ana(world, "first")
+    send_as_ana(world, "second")
+    world.bridge.outbound()
+    assert [r["state"] for r in all_rows(world, "SELECT state FROM message_deliveries WHERE recipient LIKE 'slack:%' "
+                                                "ORDER BY created_at")] == ["failed", "failed"]
+    items = all_rows(world, "SELECT id FROM tasks WHERE title LIKE 'A message to Slack%'")
+    assert len(items) == 1, "two refusals in one run file one item"
+    assert link_row(world, link_id)["state"] == "active", "a message refusal does not suspend the channel"
+    assert link_row(world, link_id)["failure_task_id"] == items[0]["id"]
+    with world.hub.transaction() as c:
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (items[0]["id"],))
+    send_as_ana(world, "third")
+    world.bridge.outbound()
+    assert len(all_rows(world, "SELECT id FROM tasks WHERE title LIKE 'A message to Slack%'")) == 2
+

@@ -103,6 +103,7 @@ OPERATIONS = {
     "reply": "a reply in a conversation", "automation": "an automation's write", "slack": "a Slack reply",
     "mail": "an email", "update": "an update", "task_question": "a question put to a person",
     "slack_message": "a Slack message", "federated_message": "a message from another Tico",
+    "slack_dm": "a Slack message to a bot",
     "threads": "a thread message", "threads_edit": "an edit to a thread message",
     "chat_upload": "a chat message with files", "assistant_message": "a message to the Assistant",
 }

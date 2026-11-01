@@ -58,9 +58,8 @@ speech is not built (see Not built).
 
 ## Spoken replies
 
-`speak_replies` is off by default. The connector can set it when starting a call (`--speak` in the CLI, `speak_replies`
-in REST and MCP), and the call shows it. Spoken replies are not sent yet: bots reply in text either way, and the flag
-is kept for when they do.
+`speak_replies` is off by default. Spoken replies are not built: the Gateway offers no text-to-speech yet, so a call that
+sets it (`--speak` in the CLI, `speak_replies` in REST and MCP) is refused with a 422, and bots reply in text.
 
 ## Who may do what
 
@@ -150,7 +149,7 @@ a built image.
 
 ## Not built
 
-- **Text to speech.** `speak_replies` is stored, but no speech is produced. Bots reply in text.
+- **Text to speech.** Blocked on the Gateway: it offers no voice service yet (docs/ai-gateway.md). `speak_replies` is refused until it does.
 - **Media through a tunnel.** The tunnel carries only the signal (see Signal path). A tunnel install carries calls only
   when its TURN and media ports are open to browsers on the host.
 - **Live LiveKit beyond one dev server.** The live test covers one speaker on one `--dev` server. Not run yet: browsers

@@ -370,13 +370,16 @@ def test_a_media_server_restart_ends_the_call_and_keeps_its_transcript(meet):
     assert any(text.startswith("Call transcript") and SYNTHETIC_SPEECH in text for text in thread_texts(meet, cid))
 
 
-def test_speech_is_sent_on_only_when_a_call_asks_for_spoken_replies(meet):
+def test_a_call_cannot_ask_for_spoken_replies_the_gateway_cannot_speak(meet):
+    """Text to speech is not offered by the Gateway yet, so the flag is refused, not kept and silently ignored."""
     cid = thread(meet)
     quiet = start_call(meet, cid)
     assert quiet["speak_replies"] is False
     post(meet, f"calls/{quiet['id']}/end", {}, token="ana-test")
-    spoken = post(meet, f"threads/{cid}/calls", {"title": "Acme call", "speak_replies": True}, token="ana-test")
-    assert spoken["speak_replies"] is True and get(meet, f"calls/{spoken['id']}")["speak_replies"] is True
+    refused = post(meet, f"threads/{cid}/calls", {"title": "Acme call", "speak_replies": True}, token="ana-test",
+                   expected=422)
+    assert "text-to-speech" in json.dumps(refused)
+    assert get(meet, f"calls/{quiet['id']}")["speak_replies"] is False
 
 
 def test_the_call_list_pages_and_stays_under_its_byte_cap(meet, monkeypatch):

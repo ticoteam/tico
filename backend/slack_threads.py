@@ -81,6 +81,7 @@ SCHEMA = [
   history_count INTEGER NOT NULL DEFAULT 0,
   linked_by TEXT NOT NULL,
   needs_task_id TEXT,
+  failure_task_id TEXT,
   checked_at TEXT,
   activated_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
@@ -131,9 +132,12 @@ SCHEMA = [
 
 
 def ensure(c):
-    """The bridge's tables, idempotent like the other modules' (`strategy.ensure`)."""
+    """The bridge's tables, idempotent like the other modules' (`strategy.ensure`). A column added after a table was first
+    made is added here, once."""
     for statement in SCHEMA:
         c.execute(statement)
+    if not any(r[1] == "failure_task_id" for r in c.execute("PRAGMA table_info(slack_thread_links)")):
+        c.execute("ALTER TABLE slack_thread_links ADD COLUMN failure_task_id TEXT")
 
 
 def outside_recipient(channel_id):
@@ -220,6 +224,26 @@ def _ts_key(value):
 def _newer_edit(row, edited):
     """Whether an edit's Slack ts is newer than the last edit accepted for its message: Slack's edit ts is the order."""
     return not edited or not row["edit_ts"] or _ts_key(edited) > _ts_key(row["edit_ts"])
+
+
+def failure_item(c, link_id, code):
+    """One Needs-you item for a link's terminal send failure, for the admin who linked it. It is reused while it is open,
+    so a run of failed messages on one channel files one item, and a new one is filed once the last is resolved."""
+    row = _link(c, link_id)
+    if not row:
+        return
+    task = H.task(c, row["failure_task_id"]) if row["failure_task_id"] else None
+    if task and task["status"] in H.ACTIVE_STATUSES:
+        return
+    name = (row["channel_name"] or row["channel_id"]).lstrip("#")
+    title = f"A message to Slack #{name} did not post"
+    body = (f"Slack refused it ({str(code)[:100]}), and Tico stopped trying that message. It is still in the thread. "
+            "Check the channel and the link in the thread's settings.")
+    try:
+        created = H.task_create(c, H.KEEPER, title, body, row["linked_by"], lint=False)
+        c.execute("UPDATE slack_thread_links SET failure_task_id=? WHERE id=?", (created["id"], link_id))
+    except H.Refused:
+        LOG.warning("Could not file the Needs-you item for a failed Slack send")
 
 
 def _members(c, link_id):
@@ -586,9 +610,14 @@ class Bridge:
                 listed, _by_name = SC.lookup(c, self.settings, info["id"], str(info.get("name") or ""))
                 for slug in (listed or {}).get("readers") or []:
                     try:
-                        core.follow(c, self.bot_viewer(slug), link["thread_id"], notify="digest")
+                        viewer = self.bot_viewer(slug)
+                        if private and not core.readable(c, viewer, link["thread_id"]):
+                            # A members thread opens to its members only: a listed reader joins it, as the bridge's
+                            # access, before its digest follow (the follow needs the thread to be readable).
+                            core.add_member(c, H.KEEPER, link["thread_id"], f"bot:{slug}")
+                        core.follow(c, viewer, link["thread_id"], notify="digest")
                     except Problem:
-                        continue                # a reader who cannot read the thread is not followed
+                        continue                # a reader that cannot be made a member is not followed
                 H.event(c, H.KEEPER, "slack.link.active", link["id"], {"channel": info["id"], "members": len(persons)})
             return "active"
         except Problem as exc:
@@ -621,24 +650,39 @@ class Bridge:
 
     def check(self, link):
         """Why a linked channel must be suspended, or None."""
+        return self._check(link)[0]
+
+    def _check(self, link):
+        """(reason, persons): why the channel must be suspended, or None, and the channel's current mapped members (person
+        id -> Slack user id), read from Slack now."""
         info = self.slack.conversations_info(link["channel_id"])
         if info.get("is_member") is False:
-            return "Tico is no longer in the channel"
+            return "Tico is no longer in the channel", {}
         if G.is_external(info):
-            return "the channel became Slack Connect (shared with another workspace)"
+            return "the channel became Slack Connect (shared with another workspace)", {}
         if bool(info.get("is_private")) != bool(link["channel_private"]):
-            return "the channel's privacy changed"
+            return "the channel's privacy changed", {}
         persons, problems = self.resolve_members(link["channel_id"])
         if problems:
-            return f"a channel member doesn't map to a roster person who can read the thread ({problems[0]})"
+            return f"a channel member doesn't map to a roster person who can read the thread ({problems[0]})", {}
         with self.store.read() as c:
             thread = _thread(c, link["thread_id"])
             if not thread or thread.get("audience") != link["audience"]:
-                return "the thread's audience changed"
+                return "the thread's audience changed", {}
             for pid in persons:
                 if not self.can_read(c, thread, pid):
-                    return "a linked member can no longer read the thread"
-        return None
+                    return "a linked member can no longer read the thread", {}
+        return None, persons
+
+    def _snapshot(self, link_id, persons):
+        """Replaces the stored members of a link with the ones a passing check just read from Slack. Restricted messages
+        are decided against this table (`blocked_for`), so it is kept to what Slack says now."""
+        now = H.now()
+        with self.store.transaction() as c:
+            c.execute("DELETE FROM slack_link_members WHERE link_id=?", (link_id,))
+            for pid, uid in persons.items():
+                c.execute("INSERT INTO slack_link_members (link_id,slack_user_id,person_id,created_at) VALUES (?,?,?,?)",
+                          (link_id, uid, pid, now))
 
     def check_links(self):
         """Every few minutes each active link is checked; a broken one is suspended. A Slack error skips the link."""
@@ -948,14 +992,20 @@ class Bridge:
 
     def verify_send(self, link):
         """The Slack side of a send check: the channel and its members, asked at most every SEND_CHECK_SECONDS per link.
-        Returns the reason to suspend, or None. A Slack error raises, and the caller pauses the channel."""
+        A passing check refreshes the stored member snapshot. Returns the reason to suspend, or None. A Slack error raises,
+        and the caller pauses the channel."""
         now = _epoch(self.clock())
         if self._verified.get(link["id"], 0.0) > now:
             return None
-        reason = self.check(link)
+        reason, persons = self._check(link)
         if not reason:
+            self._snapshot(link["id"], persons)
             self._verified[link["id"]] = now + SEND_CHECK_SECONDS
         return reason
+
+    def verified_now(self, link_id):
+        """Whether the link's member snapshot was checked against Slack within SEND_CHECK_SECONDS."""
+        return self._verified.get(link_id, 0.0) > _epoch(self.clock())
 
     def local_check(self, link_id):
         """The local half of a send check, against the store as it is now: the link is active, the thread keeps its
@@ -975,7 +1025,8 @@ class Bridge:
 
     def blocked_for(self, c, link, msg):
         """Why this message must not reach the channel, or None. A restricted message is checked per message with core's
-        predicate: every mapped member must read it. Nobody mapped means nobody can read it, so it is not sent."""
+        predicate: every mapped member of the verified snapshot must read it. Nobody mapped means nobody can read it, so it
+        is not sent."""
         if not msg.get("restricted"):
             return None
         members = _members(c, link["id"])
@@ -1010,6 +1061,8 @@ class Bridge:
             return {"do": "settle", "state": "moot", "error": "deleted before it was sent"}
         if msg.get("kind") not in MIRROR_KINDS:
             return {"do": "settle", "state": "moot", "error": "not mirrored"}
+        if msg.get("restricted") and not self.verified_now(link["id"]):
+            return {"do": "wait"}                    # fail closed: the member snapshot is stale, the next pass checks it
         blocked = self.blocked_for(c, link, msg)
         if blocked:
             if row and row["ts"]:
@@ -1114,7 +1167,8 @@ class Bridge:
                       (state, error and str(error)[:200], H.now(), row_id))
 
     def _slack_failed(self, link, d, row_id, exc):
-        """A Slack refusal. A rate limit pauses the channel and retries; a channel-level one also suspends the link."""
+        """A Slack refusal. A rate limit pauses the channel and retries; any other is terminal for the message, and it
+        surfaces in Needs you (`failure_item`); a channel-level one also suspends the link."""
         if getattr(exc, "code", "") == "ratelimited":
             wait = int(getattr(exc, "retry_after", None) or G.RATE_LIMIT_DEFAULT)
             self.backoff[link["channel_id"]] = H.shift(self.clock(), seconds=wait)
@@ -1127,6 +1181,7 @@ class Bridge:
                 c.execute("UPDATE slack_message_links SET state='failed', error=?, updated_at=? WHERE id=?",
                           (str(code)[:200], H.now(), row_id))
             self.core().settle_delivery(c, d["id"], "failed", error=str(code)[:200])
+            failure_item(c, link["id"], code)
             if code in CHANNEL_ERRORS:
                 self.suspend(c, link["id"], f"Slack refused the post ({code})")
         return {"delivery_id": d["id"], "state": "failed", "error": code}
@@ -1251,6 +1306,7 @@ class Bridge:
                     c.execute("UPDATE slack_message_links SET state='failed', error='absent after retry', updated_at=? "
                               "WHERE id=?", (H.now(), row["id"]))
                     self.core().settle_delivery(c, row["delivery_id"], "failed", error="absent after retry")
+                    failure_item(c, row["link_id"], "absent after retry")
                 else:
                     c.execute("UPDATE slack_message_links SET state='ready', updated_at=? WHERE id=?", (H.now(), row["id"]))
 
