@@ -9317,10 +9317,11 @@ UNREAD_INDEX = "CREATE INDEX IF NOT EXISTS messages_unread_to ON messages(to_act
 # mention, a DM), still waiting. The addressee's row follows the message's delivered_at/read_at. The terms repeat the
 # partial index message_deliveries_waiting word for word, or SQLite does not use it.
 WAITING_TERMS = "d.state IN ('pending','delivered','capped','held')"
-UNREAD_PAGE_SQL = ("SELECT m.rowid AS _seq, m.* FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
-                   "WHERE d.recipient=? AND " + WAITING_TERMS + " AND m.deleted_at IS NULL "
-                   "AND (m.expires_at IS NULL OR m.expires_at > ?) AND d.created_at<=? AND (d.created_at<? OR m.rowid<?) "
-                   "ORDER BY d.created_at DESC, m.rowid DESC LIMIT ?")
+# Paged on the delivery's own (created_at, rowid), which the waiting index holds in order: no sort.
+UNREAD_PAGE_SQL = ("SELECT d.rowid AS _seq, d.created_at AS _at, m.* FROM message_deliveries d "
+                   "JOIN messages m ON m.id=d.message_id WHERE d.recipient=? AND " + WAITING_TERMS + " "
+                   "AND m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at > ?) AND d.created_at<=? "
+                   "AND (d.created_at<? OR d.rowid<?) ORDER BY d.created_at DESC, d.rowid DESC LIMIT ?")
 
 
 def inbox_pages(conn, actor, at=None, size=100):
@@ -9334,9 +9335,9 @@ def inbox_pages(conn, actor, at=None, size=100):
         rows = _rows(conn.execute(UNREAD_PAGE_SQL, (actor, at, created, created, seq, size)))
         if not rows:
             return
-        created, seq = rows[-1]["created"], rows[-1]["_seq"]
+        created, seq = rows[-1]["_at"], rows[-1]["_seq"]
         for row in rows:
-            del row["_seq"]
+            del row["_seq"], row["_at"]
             row["refs"] = _json(row.get("refs_json"), {}) or {}
         yield rows
         if len(rows) < size:
