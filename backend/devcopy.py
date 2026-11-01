@@ -133,7 +133,7 @@ KEEP = frozenset((
     "kpis", "learning_cursors",
     # Threads: the search index (its triggers follow the messages kept), and the digest and follow-up ledgers, which
     # stop the copy emailing or nudging again what the source already did.
-    "message_search_keys", "thread_digests", "thread_followups", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
+    "thread_digests", "thread_followups", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
     "listen_items", "listen_judgments", "listen_runs", "live_meeting_chat", "live_meeting_chat_routes",
     "live_meeting_access", "live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_events", "live_meeting_humans",
     "live_meeting_turns", "live_meeting_windows", "live_meetings", "mail_agent_instructions", "mail_messages",
@@ -168,6 +168,7 @@ KEEP = frozenset((
     # outside destination that has not gone is made moot below, so the copy never sends it.
     "message_deliveries", "message_mentions", "message_reactions", "message_revisions", "sequences",
     "teammate_accesses", "thread_followers", "thread_members",
+    "message_search_keys",    # the search index's keys (thread_search.py); its FTS table is copied whole too, and search joins messages
 ))
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
