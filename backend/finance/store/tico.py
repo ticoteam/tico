@@ -61,6 +61,19 @@ def _actor(value: str, bots: set[str]) -> str:
     return "bot:" + text if text in bots else "human:" + text
 
 
+def _admins(c: sqlite3.Connection, people: Sequence[Mapping[str, Any]]) -> frozenset[str]:
+    """The company Admins as people (`human:<id>`): the emails on the access record's admin list, matched to the roster
+    and the humans table. Bots are never Admins."""
+    from ... import access as A
+    stored = _metadata(c, A.ACCESS)
+    stored = cast(dict[str, Any], stored) if isinstance(stored, dict) else {}
+    emails = A.emails(stored["admins"] if "admins" in stored else stored.get("bot_admins"))
+    by_email = {str(p.get("email") or "").strip().lower(): "human:" + str(p.get("id") or "") for p in people}
+    for row in c.execute("SELECT lower(email), id FROM humans WHERE email IS NOT NULL AND email<>''"):
+        by_email.setdefault(str(row[0]), "human:" + str(row[1]))
+    return frozenset(by_email[e] for e in emails if e in by_email)
+
+
 def org(c: sqlite3.Connection, owner: str) -> Org:
     """The org chart now: groups with their leads, who is in which group, and who reports to whom. Archived bots are
     off it."""
@@ -108,7 +121,7 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
         if config.get("reports_to"):
             reports[actor] = _actor(str(config["reports_to"]), slugs)
     return Org(owner=owner, teams=teams, team_of=team_of, reports_to=reports, humans=frozenset(humans),
-               bots=frozenset("bot:" + s for s in slugs))
+               bots=frozenset("bot:" + s for s in slugs), admins=_admins(c, roster.get("people") or []))
 
 
 def audit(c: sqlite3.Connection, actor: str, action: str, target: str, detail: Mapping[str, object]) -> None:

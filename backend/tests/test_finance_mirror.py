@@ -414,7 +414,7 @@ def test_a_bill_made_here_goes_to_the_provider_and_is_booked_once_the_provider_c
     assert _sent(fake, "bill.create") == {"party": "Vendor:9", "number": "B-77", "day": "2026-10-05",
                                           "due": "2026-11-05", "memo": "", "lines": [
                                               {"account": "Account:2", "amount": 1500, "description": "seats", "item":
-                                              "", "location": "",
+                                              "", "item_code": "", "location": "",
                    "class": "", "project": ""}]}
     with books.read() as c:
         bill = _local(c, "Bill:901", "fin_bills")

@@ -103,7 +103,7 @@ def test_a_line_tag_must_name_an_active_location_or_project(books):
 def test_a_price_change_asks_a_finance_admin_unless_the_owner_makes_it(books):
     with books.transaction() as c:
         item_id = str(act(c, OWNER, "item_create", {"name": "Desk", "kind": "service", "price": 1_000}).result["item_id"])
-        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.records"}).status == "committed"
         assert act(c, "human:dan", "item_update", {"item_id": item_id, "price": 1_200}).status == "needs_approval"
         assert c.execute("SELECT price FROM items WHERE id=?", (item_id,)).fetchone()[0] == 1_000
         assert act(c, OWNER, "item_update", {"item_id": item_id, "price": 1_200}).status == "committed"
@@ -132,7 +132,7 @@ def test_an_item_takes_a_raw_material_or_assembly_kind_and_refuses_an_unlisted_o
 def test_an_item_with_an_account_a_teammate_cannot_see_is_not_found_to_them_whatever_they_change(books):
     with books.transaction() as c:
         hidden = account(c, "4000")
-        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.records"}).status == "committed"
         item = str(act(c, OWNER, "item_create", {"name": "Desk", "kind": "service", "price": 1_000,
                                                  "income_account_id": hidden}).result["item_id"])
         changes = ({"price": 1_000}, {"price": 2_000}, {"name": "Desk"}, {"name": "Lamp"})
@@ -148,6 +148,7 @@ def test_an_item_with_an_account_a_teammate_cannot_see_is_not_found_to_them_what
 def test_an_item_sets_only_accounts_its_setter_can_see(books):
     with books.transaction() as c:
         hidden = account(c, "4000")
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.records"}).status == "committed"
         assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
         item = str(act(c, OWNER, "item_create", {"name": "Desk", "kind": "service", "price": 1_000}).result["item_id"])
         refused = act(c, "human:dan", "item_create", {"name": "Lamp", "kind": "service", "income_account_id": hidden})

@@ -120,6 +120,10 @@ class XeroBooks:
             return xero.Reply(200, {name: rows})
         if name == "Contacts" and query.get("includeArchived") != "true":
             rows = [r for r in rows if r.get("ContactStatus") != "ARCHIVED"]
+        if name == "TrackingCategories":       # archived categories and options are listed only when asked for
+            keep = query.get("includeArchived") == "true"
+            rows = [{**r, "Options": [o for o in r.get("Options") or [] if keep or o.get("Status") != "ARCHIVED"]}
+                    for r in rows if keep or r.get("Status") != "ARCHIVED"]
         if since:
             floor = (parsedate_to_datetime(since) - EPOCH) // timedelta(milliseconds=1)
             rows = [r for r in rows if _ms_of(r.get("UpdatedDateUTC")) > floor]
@@ -1924,6 +1928,53 @@ def test_xero_items_and_tracking_options_come_in_and_a_line_takes_its_location_a
         clazz = _local(c, "TrackingOption:cat-team/opt-field", "fin_dimensions")
         assert {(str(k), str(v)) for k, v in c.execute("SELECT kind, value FROM fin_line_tags")} == {
             ("location", location), ("class", clazz)}
+
+
+def test_a_bill_backfilled_on_an_archived_tracking_option_imports_with_its_tag(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    xbooks.rows["TrackingCategories"][1]["Options"][0]["Status"] = "ARCHIVED"      # Team/Field is archived by now
+    xbooks.rows["Contacts"][0]["IsSupplier"] = True
+    tracked = [{"Name": "Team", "Option": "Field"}]
+    xbooks.rows["Invoices"] = [{**_invoice("bill-1", kind="ACCPAY"),
+                                "LineItems": [{**_line("acct-6100", "100.00"), "Tracking": tracked}]}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_bills").fetchone()[0] == 1
+        clazz = _local(c, "TrackingOption:cat-team/opt-field", "fin_dimensions")
+        assert c.execute("SELECT active FROM fin_dimensions WHERE id=?", (clazz,)).fetchone()[0] == 0
+        assert {(str(k), str(v)) for k, v in c.execute("SELECT kind, value FROM fin_line_tags")} == {("class", clazz)}
+
+
+@pytest.mark.parametrize("echoed", [True, False], ids=["item_code_echoed", "item_code_not_echoed"])
+def test_a_bill_made_here_on_an_item_keeps_the_item_when_xero_edits_it(books, echoed):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    xbooks.rows["Contacts"][0]["IsSupplier"] = True
+    cid = _connection(books)
+    _mirror(books, cid)
+    client = _client(xbooks)
+    assert _drain(books, client, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "bill_create", {
+            "vendor_id": _local(c, "Contact:contact-1", "fin_contacts"), "number": "B-1", "bill_date": "2026-10-05",
+            "due_date": "2026-11-05",
+            "lines": [{"item_id": _local(c, "Item:item-1", "items"), "amount": 10_000, "description": "Consulting"}]})
+        assert made.status == "committed", made
+    assert _drain(books, client, cid, now=LATER) == []
+    (bill,) = [r for r in xbooks.rows["Invoices"] if r["Type"] == "ACCPAY"]
+    assert bill["LineItems"][0]["ItemCode"] == "CONSULT"            # the item goes to Xero by its code
+    if not echoed:
+        del bill["LineItems"][0]["ItemCode"]
+    bill["LineItems"][0]["LineAmount"] = "120.00"                   # the provider edits the bill
+    bill["UpdatedDateUTC"] = _later_than_now()
+    assert _drain(books, client, cid, now=LATER2) == []
+    with books.read() as c:
+        assert c.execute("SELECT total FROM fin_bills WHERE number='B-1'").fetchone()[0] == 12_000
+        assert c.execute("SELECT l.item_id FROM fin_bill_lines l JOIN fin_bills b ON b.id = l.bill_id "
+                         "WHERE b.number='B-1'").fetchone()[0] == _local(c, "Item:item-1", "items")
 
 
 def test_a_renamed_xero_location_option_is_taken_in_as_a_newer_revision_and_an_unchanged_one_keeps_its_revision(books):

@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS locations (
   id TEXT PRIMARY KEY, name TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'other' CHECK (kind IN ('store','office','warehouse','plant','customer_site','vehicle',
                                                        'other')),
-  parent_id TEXT REFERENCES locations(id), address TEXT NOT NULL DEFAULT '{}', archived_at TEXT,
+  parent_id TEXT REFERENCES locations(id), customer_id TEXT REFERENCES fin_contacts(id),
+  address TEXT NOT NULL DEFAULT '{}', archived_at TEXT,
   created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT);
 
 CREATE TABLE IF NOT EXISTS items (
@@ -19,9 +20,10 @@ CREATE TABLE IF NOT EXISTS items (
   kind TEXT NOT NULL CHECK (kind IN ('service','inventory','non_inventory','bundle','category',
     'raw_material','assembly')),
   unit TEXT NOT NULL DEFAULT '', price BIGINT, currency TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '', taxable INTEGER NOT NULL DEFAULT 0 CHECK (taxable IN (0,1)),
+  quantity_on_hand REAL, quantity_synced_at TEXT,
   income_account_id TEXT REFERENCES fin_accounts(id), expense_account_id TEXT REFERENCES fin_accounts(id),
   asset_account_id TEXT REFERENCES fin_accounts(id), archived_at TEXT,
-  description TEXT NOT NULL DEFAULT '', quantity_on_hand TEXT, quantity_synced_at TEXT,
   created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT);
 
 CREATE TABLE IF NOT EXISTS projects (
@@ -32,7 +34,35 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE TABLE IF NOT EXISTS record_aliases (
   table_name TEXT NOT NULL CHECK (table_name IN ('locations','items','projects')), alias_id TEXT NOT NULL,
   record_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (table_name, alias_id));
+
+CREATE TABLE IF NOT EXISTS due_dates (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL,
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('location','equipment','contact')), subject_id TEXT NOT NULL,
+  repeats TEXT NOT NULL CHECK (repeats IN ('once','weekly','monthly','quarterly','yearly','every_days','every_months')),
+  every_count INTEGER CHECK (every_count IS NULL OR every_count BETWEEN 1 AND 3660),
+  starts_on TEXT NOT NULL, counted_from_on TEXT NOT NULL, next_due_on TEXT,
+  lead_days INTEGER NOT NULL DEFAULT 0 CHECK (lead_days BETWEEN 0 AND 366), assignee_id TEXT NOT NULL,
+  archived_at TEXT, created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT,
+  CHECK ((repeats IN ('every_days','every_months')) = (every_count IS NOT NULL)));
+
+CREATE INDEX IF NOT EXISTS due_dates_subject ON due_dates(subject_type, subject_id);
+
+CREATE TABLE IF NOT EXISTS due_date_occurrences (
+  id TEXT PRIMARY KEY, due_date_id TEXT NOT NULL REFERENCES due_dates(id), due_on TEXT NOT NULL,
+  completed_at TEXT, completed_by_id TEXT, task_id TEXT, created_at TEXT NOT NULL,
+  UNIQUE (due_date_id, due_on), CHECK ((completed_at IS NULL) = (completed_by_id IS NULL)));
+
+CREATE INDEX IF NOT EXISTS due_date_occurrences_task ON due_date_occurrences(task_id) WHERE task_id IS NOT NULL;
 """
+
+
+# Columns added after a table first existed: an install that made the table before them gets each one once.
+ADDED_COLUMNS = (
+    ("locations", "customer_id", "TEXT REFERENCES fin_contacts(id)"),
+    ("items", "description", "TEXT NOT NULL DEFAULT ''"),
+    ("items", "taxable", "INTEGER NOT NULL DEFAULT 0 CHECK (taxable IN (0,1))"),
+    ("items", "quantity_on_hand", "REAL"),
+    ("items", "quantity_synced_at", "TEXT"))
 
 
 def create(c: sqlite3.Connection) -> None:
@@ -40,6 +70,13 @@ def create(c: sqlite3.Connection) -> None:
     for statement in TABLES.split(";"):
         if statement.strip():
             c.execute(statement)
+    have: dict[str, set[str]] = {}
+    for table, column, ddl in ADDED_COLUMNS:
+        if table not in have:
+            have[table] = {str(r[1]) for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in have[table]:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+            have[table].add(column)
 
 
 def insert(c: sqlite3.Connection, table: str, row: Mapping[str, object]) -> str:
