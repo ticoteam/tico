@@ -141,7 +141,8 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
 # when the owner's rule "Assistant acts without asking" is off.
 INSTRUCTION_TTL_S = 30 * 60
 _INSTRUCTED = [re.compile(p) for p in (r"/api/v2/tasks/[^/]+", r"/api/v2/tasks/[^/]+/(comments|links)",
-                                       r"/api/v2/messages/[^/]+/answer")]
+                                       r"/api/v2/messages/[^/]+/answer",
+                                       r"/api/v2/goal-proposals/turned-down")]    # the owner's "no" (goal_read_back.py)
 _DECIDING = re.compile(r"/api/v2/approvals/([^/]+)")
 DECIDES_KEY = "assistant.decides_approvals"
 
