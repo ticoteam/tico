@@ -169,6 +169,9 @@ def stage(c, vault, now, limit=100):
             T.settle(c, delivery, "delivered" if item else "moot")
             staged += 1
             continue
+        if row["origin_install"]:
+            T.settle(c, delivery, "moot")                 # it came from another install: the home has it already
+            continue
         if queued(c, "delivery", delivery_id=delivery):
             continue
         actor = E.qualify(row["actor"], me) if row["actor"] else ""
@@ -498,6 +501,9 @@ def on_membership(c, now, me, sender, thread, seq, payload):
     if thread is None:
         return "unknown_thread"
     if target == me and change == "removed":
+        if seq > thread["applied_through"] + 1:          # the items before the removal come first
+            request_catch_up(c, now, thread, thread["applied_through"])
+            return "gap"
         c.execute("UPDATE federation_threads SET removed_at_seq=?, applied_through=max(applied_through,?), "
                   "high_seq=max(high_seq,?), updated_at=? WHERE id=?", (seq, seq, seq, stamp(), thread["id"]))
         return "applied"
@@ -543,8 +549,12 @@ def envelope(c, vault, row, now):
 
 
 def sent(c, row):
+    """HQ took the row. A delivery is settled only while it is still the revision that was sent: an edit made during the
+    send leaves the delivery pending, and the next stage queues the new revision."""
     if row["kind"] == "delivery":
-        T.settle(c, row["delivery_id"], "delivered")
+        sent_revision = (E.parse_payload(bytes(row["payload"])) or {}).get("revision")
+        if T.delivery_revision(c, row["delivery_id"]) == sent_revision:
+            T.settle(c, row["delivery_id"], "delivered")
     c.execute("DELETE FROM federation_outbox WHERE id=?", (row["id"],))
 
 

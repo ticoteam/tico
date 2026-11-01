@@ -12,7 +12,7 @@ from . import federation_sync as S
 from . import hook_relay as HR
 from . import hubdb as H
 from .auth import validate_identity
-from .models import Contract, Empty
+from .models import Contract
 from .store import Problem
 
 LIST_LIMIT = 50          # threads and members a status read lists, newest first
@@ -66,9 +66,14 @@ def install(app, settings, store, auth):
 
     def view_of(c, row_id):
         row = F.peering_by_id(c, row_id)
-        if row is None or row["status"] == "revoked" and row["revoked_at"] is None:
+        if row is None:
             raise Problem("not_found", "No such peering", 404)
         return row
+
+    def shown(row):
+        if row is None:                       # HQ's answer named no peering this server can keep
+            raise Problem("gateway", "Tico HQ gave an answer this server cannot use. Try again.", 502)
+        return F.show(row)
 
     def threads_of(c):
         me = F.install(c)
@@ -116,12 +121,12 @@ def install(app, settings, store, auth):
             return status_of(c)
 
     @app.post("/api/v2/federation/keys")
-    def key_create(request: Request, body: Empty):
+    def key_create(request: Request):
         """Makes this install's federation key if it has none, and registers it with Tico HQ. Owner only."""
         return keys(request, rotate=False)
 
     @app.post("/api/v2/federation/keys/rotate")
-    def key_rotate(request: Request, body: Empty):
+    def key_rotate(request: Request):
         """A new key; the old one is retired. Every peering needs approving again, on both sides. Owner only."""
         return keys(request, rotate=True)
 
@@ -151,7 +156,7 @@ def install(app, settings, store, auth):
         return store.write(who, record)
 
     @app.post("/api/v2/federation/peerings/{peering_id}/approve")
-    def peering_approve(request: Request, peering_id: str, body: Empty):
+    def peering_approve(request: Request, peering_id: str):
         """Approves a peering, having reviewed the other install's key: this records that key as pinned, and envelopes from
         the other install must be signed with it from now on. Active once both installs approve. Owner only."""
         who = owner(request)
@@ -165,7 +170,7 @@ def install(app, settings, store, auth):
             fresh = R.record(c, view, pin=(found["key_id"], found["public_key"]))
             H.event(c, who.actor, "federation.peering_approved", peering_id, {"peer": row["peer_install"],
                                                                               "peer_key_id": found["key_id"]})
-            return F.show(fresh)
+            return shown(fresh)
         return store.write(who, record)
 
     @app.post("/api/v2/federation/peerings/{peering_id}/pause")
@@ -182,11 +187,11 @@ def install(app, settings, store, auth):
             fresh = R.record(c, view)
             H.event(c, who.actor, "federation.peering_paused" if body.paused else "federation.peering_resumed", peering_id,
                     {"peer": row["peer_install"]})
-            return F.show(fresh)
+            return shown(fresh)
         return store.write(who, record)
 
     @app.post("/api/v2/federation/peerings/{peering_id}/revoke")
-    def peering_revoke(request: Request, peering_id: str, body: Empty):
+    def peering_revoke(request: Request, peering_id: str):
         """Ends a peering. Nothing more crosses it; a new request starts over and needs both approvals again. Owner only."""
         who = owner(request)
         with store.read() as c:
@@ -197,7 +202,7 @@ def install(app, settings, store, auth):
         def record(c):
             fresh = R.record(c, view)
             H.event(c, who.actor, "federation.peering_revoked", peering_id, {"peer": row["peer_install"]})
-            return F.show(fresh)
+            return shown(fresh)
         return store.write(who, record)
 
     @app.post("/api/v2/federation/threads/{thread_id}/installs")

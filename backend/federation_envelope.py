@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
 
 VERSION = "tico-federation-v1"
+PUBLIC_KEY_BYTES = 32                   # a raw Ed25519 public key
 SKEW = 300                              # seconds an envelope's sent-at may differ from this install's clock
 MAX_BODY = 180 * 1024                   # a payload; an item travels as base64 in a wrapper that must fit HQ's 256 KB envelope
 INSTALL = re.compile(r"gi_[0-9a-f]{24}")
