@@ -524,3 +524,10 @@ def drop_unmatched(c: sqlite3.Connection, book_id: str, file_ids: Sequence[str])
 def doc_count(c: sqlite3.Connection, kind: str, book_id: str) -> int:
     table = DOCS[kind][0]
     return int(c.execute(f"SELECT COUNT(*) FROM {table} WHERE book_id=?", (book_id,)).fetchone()[0])
+
+
+def active_contacts(c: sqlite3.Connection, book_id: str, kinds: Sequence[str]) -> list[Any]:
+    """(id, name) of the active contacts of these kinds in the book, for an import's name lookups."""
+    marks = ",".join("?" * len(kinds))
+    return c.execute(f"SELECT id, name FROM fin_contacts WHERE book_id=? AND active=1 AND kind IN ({marks})",
+                     (book_id, *kinds)).fetchall()

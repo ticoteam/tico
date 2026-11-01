@@ -1,0 +1,6 @@
+name,kind,location,customer,make,model,serial,installed_on,warranty_ends_on
+Walk-in cooler - Downtown,owned,Acme Kitchen - Downtown,,Kolpak,P6-1012-SFG,KIT-0001,2022-04-18,2027-04-18
+Six-burner range - Downtown,owned,Acme Kitchen - Downtown,,Vulcan,36SC,KIT-0002,2021-09-01,
+Dish machine - Downtown,owned,Acme Kitchen - Downtown,,Hobart,LXeR2,KIT-0003,2023-02-14,2026-02-14
+Walk-in cooler - Harbor,owned,Acme Kitchen - Harbor,,Kolpak,P6-1012-SFG,KIT-0004,2023-06-01,2028-06-01
+Fryer pair - Harbor,owned,Acme Kitchen - Harbor,,Pitco,SG14,KIT-0005,2024-01-20,2027-01-20

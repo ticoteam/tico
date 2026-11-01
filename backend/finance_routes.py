@@ -19,8 +19,10 @@ from .finance import actions as finance
 from .finance import books_link
 from .finance import due_dates as finance_due_dates
 from .finance import equipment as equipment_planner
+from .finance import record_imports
 from .finance import reads as finance_reads
 from .models import ID, Contract
+from .records import csvimport
 from .store import Problem
 
 STATUS = {"not_found": 404, "denied": 403, "invalid": 422, "conflict": 409, "not_available": 409,
@@ -60,12 +62,28 @@ class FinanceBooksRequest(Contract):
     provider: Literal["quickbooks", "xero"]
 
 
+class RecordsImportRequest(Contract):
+    """A CSV file of shared records: the kind its rows are, the file's text, a location or a customer to give every row
+    that does not name one (`location_id`, `customer_id`), and the lines to import although they look like a record
+    already here."""
+    record_type: Literal["locations", "items", "equipment", "due_dates"]
+    csv: str = Field(min_length=1)
+    assign: dict[str, str] = Field(default_factory=dict)
+    include_lines: list[int] = Field(default_factory=list, max_length=2000)
+    report: Literal["json", "csv"] = "json"
+
+
 BOOKS_RETURN = "/api/v2/finance/books/return"    # HQ sends the browser here, with the flow id the connect added
 CLAIM = r"^[A-Za-z0-9._~-]{1,200}$"
 
 
 def problem(e):
     return Problem(e.code, e.message, STATUS.get(e.code, 400))
+
+
+def import_problem(e: csvimport.FileRefused) -> Problem:
+    """A whole file refused: too big is 413, anything else wrong with the file is 422."""
+    return Problem(e.code, e.message, 413 if e.code == "too_large" else 422)
 
 
 def books_problem(e: books_link.BrokerFailed) -> Problem:
@@ -769,3 +787,36 @@ def install(app, store, auth, mutate):
         if found is None:
             raise Problem("not_found", "No such Finance action", 404)
         return found
+
+    @app.post("/api/v2/imports/preview")
+    def records_import_preview(request: Request, body: RecordsImportRequest):
+        """Each row of a CSV file of records, checked and nothing written: what it would create, what is already here
+        (imported before, or the same address, SKU or serial as a record held), and each row's error. `report: csv`
+        adds the same lines as a CSV that is safe to open in a spreadsheet."""
+        who = viewer(request)
+        try:
+            with store.transaction() as c:
+                return record_imports.preview(c, who.actor, body.record_type, body.csv, body.assign,
+                                              report=body.report == "csv")
+        except finance.FinanceError as e:
+            raise problem(e) from None
+        except csvimport.FileRefused as e:
+            raise import_problem(e) from None
+
+    @app.post("/api/v2/imports/commit")
+    def records_import_commit(request: Request, body: RecordsImportRequest):
+        """Import a CSV file of records: each new row is one Finance action, as hand entry is, so rights and approvals
+        apply. A row already imported says `already_there` and creates nothing; a row with an error is reported and
+        the others still import, so the same file again finishes what failed. A possible duplicate is skipped unless
+        its line is in `include_lines`. The Idempotency-Key is the request's key."""
+        who = viewer(request)
+        include = frozenset(body.include_lines)
+
+        def work(c):
+            return record_imports.commit(c, who.actor, body.record_type, body.csv, body.assign, include)
+        try:
+            return mutate(request, body, work)
+        except finance.FinanceError as e:
+            raise problem(e) from None
+        except csvimport.FileRefused as e:
+            raise import_problem(e) from None

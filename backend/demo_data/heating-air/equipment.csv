@@ -1,0 +1,7 @@
+name,kind,location,customer,make,model,serial,installed_on,warranty_ends_on
+Van 1,owned,Acme Heating & Air - Main shop,,Ford,Transit 250,VAN-0001,2025-03-01,2028-03-01
+Van 2,owned,Acme Heating & Air - Main shop,,Ford,Transit 250,VAN-0002,2025-03-01,2028-03-01
+Van 3,owned,Acme Heating & Air - North shop,,Ford,Transit 250,VAN-0003,2025-06-15,2028-06-15
+Dental rooftop unit,customer,,Sample Dental Group,Carrier,50XC,CUST-1001,2024-05-10,2029-05-10
+Ridge boiler,customer,,Sample Apartments Ridge,Lochinvar,Knight 199,CUST-1002,2023-10-02,2026-10-02
+Church furnace,customer,,Sample Church Hall,Trane,S9V2,CUST-1003,2019-11-20,
