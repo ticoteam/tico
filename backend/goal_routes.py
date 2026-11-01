@@ -713,8 +713,6 @@ def install(app, store, auth, mutate, settings):
 
     def read_back_access(c, raw):
         """The owner's rights do not widen the Strategy Bot's read access in a read-back."""
-        from .auth import Identity
-        reader = Identity(G.AUTO_ACTOR, "bot")
         owners = []
 
         def goal(gid):
@@ -746,6 +744,12 @@ def install(app, store, auth, mutate, settings):
             goal(p.get("goal_id"))
             measure(p.get("kpi_id"))
             fields(p.get("payload"))
+        read_back_owners(c, owners)
+        return sorted(set(owners))
+
+    def read_back_owners(c, owners):
+        from .auth import Identity
+        reader = Identity(G.AUTO_ACTOR, "bot")
         for owner in set(owners):
             if H.is_bot(owner) and not auth.bot_access(c, reader, H.actor_id(owner))["read"]:
                 raise Problem("forbidden", "The Strategy Bot can't see that bot's goals.", 403)
@@ -753,6 +757,7 @@ def install(app, store, auth, mutate, settings):
     def read_back_access_stored(c, changes):
         """Recheck stored steps on read and save: access may have changed since the read-back."""
         for ch in changes:
+            read_back_owners(c, ch.get("read_owners") or [])
             for st in ch["steps"]:
                 raw = dict(st["body"])
                 path = st["path"]
@@ -771,7 +776,7 @@ def install(app, store, auth, mutate, settings):
             raise Problem("validation", f"Change {n} is not an object", 422)
         if why := GR.click_reason(raw):
             raise Problem("stays_a_click", why, 403)
-        read_back_access(c, raw)
+        read_owners = read_back_access(c, raw)
         kind = raw.get("kind")
         if kind not in GR.KINDS:
             raise Problem("validation", f"Change {n}: kind is one of {', '.join(GR.KINDS)}", 422)
@@ -902,7 +907,8 @@ def install(app, store, auth, mutate, settings):
             about = bold(row["title"]) if row else q((K.kpi(c, p["kpi_id"]) or {}).get("name") or "")
             text = (("Accept" if raw["decision"] == "confirm" else "Turn down") + f" the suggestion on {about}: "
                     + suggestion_words(c, p))
-        return {"n": n, "kind": kind, "text": text, "steps": steps, "watch": watch}
+        return {"n": n, "kind": kind, "text": text, "steps": steps, "watch": watch,
+                "read_owners": read_owners}
 
     def read_back_trial(c, who, changes):
         """Every change made as the owner's own click would make it, in order, then rolled back: what could not be

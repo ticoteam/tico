@@ -501,3 +501,20 @@ def test_read_back_cannot_be_read_or_saved_after_strategy_bot_read_access_is_rev
     assert denied["error"]["detail"] == "The Strategy Bot can't see that bot's goals."
     save(api, attempt, back["changes"][0]["steps"][0], expected=403)
     assert get(api, "goals/" + row["id"])["goal"]["title"] == "Publish the guide"
+
+
+
+def test_stored_read_back_keeps_access_checks_for_the_old_parent_it_named(api):
+    from backend.tests.test_api import restrict
+    strategy_bot(api)
+    parent = goal(api, "Financial parent", owner="finance")
+    child = goal(api, "Publish the guide", parent_id=parent["id"])
+    _, attempt = turn(api, "coo", "ana-test", "Unlink the parent")
+    back = read_back(api, attempt, {"kind": "goal_update", "goal_id": child["id"], "parent_id": ""})
+    assert "Financial parent" in back["text"]
+    # Someone moves the child; the old parent is now named only in the stored read-back.
+    post(api, "goals/" + child["id"], {"parent_id": ""})
+    with api.app.state.store.transaction() as c:
+        restrict(c, "finance", people=["ana"])
+    denied = get(api, "goals/read-back/" + back["message_id"], attempt["token"], expected=403)
+    assert denied["error"]["detail"] == "The Strategy Bot can't see that bot's goals."
