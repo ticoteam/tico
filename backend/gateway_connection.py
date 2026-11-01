@@ -170,7 +170,7 @@ def view(c, settings=None, *, manage=False):
     return {**out, "preview": record.get("preview", "") if where == "settings" else "",
             "env": ENV_KEY if where == "environment" else "",
             "revision": int(record.get("revision") or 0),
-            "updated_at": record.get("updated_at", ""), "updated_by": record.get("updated_by", ""),
+            "updated_at": record.get("updated", ""), "updated_by": record.get("updated_by", ""),
             "state": state, "working": state not in G.REFUSED,
             "message": fresh.get("message") or ("Not checked yet." if where else "No gateway key saved."),
             "used": fresh.get("used"), "spent_usd": fresh.get("spent_usd"), "cap_usd": fresh.get("cap_usd"),
@@ -255,7 +255,7 @@ def save(c, vault, who, body, now, settings=None):
         raise destinations.held("gateway", moved, [LABEL_KEY], before.get("revision"), G.LABEL)
     destinations.require_tap(who, moved)
     after = {**before, "url": new_url if new_url != G.DEFAULT_BASE else "", "revision": int(before.get("revision") or 0) + 1,
-             "updated_at": now, "updated_by": who.actor}
+             "updated": now, "updated_by": who.actor}
     if secret:
         secret = _clean_key(secret)
         if not vault.configured:
@@ -289,7 +289,7 @@ def clear(c, who, now, settings=None):
     before = _row(c)
     if not before.get("key"):
         return _public(before), _public(before)
-    after = {"url": before.get("url", ""), "revision": int(before.get("revision") or 0) + 1, "updated_at": now,
+    after = {"url": before.get("url", ""), "revision": int(before.get("revision") or 0) + 1, "updated": now,
              "updated_by": who.actor}
     for field in ("install", "install_secret", "via"):
         if before.get(field):
@@ -533,7 +533,7 @@ def company_ended(c):
         return False
     after = {k: v for k, v in record.items()
              if k not in ("key", "preview", "origin", "key_id", "rotate_after", "check", "auto")}
-    after.update(revision=int(record.get("revision") or 0) + 1, updated_at=H.now(), updated_by=SYSTEM)
+    after.update(revision=int(record.get("revision") or 0) + 1, updated=H.now(), updated_by=SYSTEM)
     _write(c, after)
     H.event(c, SYSTEM, "gateway.connection.company_ended", PROVIDER,
             {"install": record.get("install", ""), "revision": after["revision"]})
@@ -671,7 +671,7 @@ def _keep(store, vault, record, answer, now, install, secret, what, via=""):
                  "install": install, "install_secret": vault.cipher.seal(c, INSTALL_CONTEXT, secret),
                  "origin": AUTOMATIC, "key_id": str(answer.get("key_id") or ""),
                  "rotate_after": str(answer.get("rotate_after") or ""),
-                 "revision": int(record.get("revision") or 0) + 1, "updated_at": _stamp(now), "updated_by": SYSTEM,
+                 "revision": int(record.get("revision") or 0) + 1, "updated": _stamp(now), "updated_by": SYSTEM,
                  **({"via": via} if via else {})}
         _write(c, after)
         H.event(c, SYSTEM, f"gateway.connection.{what}", PROVIDER,

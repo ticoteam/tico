@@ -15,7 +15,7 @@ const shots = process.env.GRANOLA_SHOTS || '';
 if (shots) fs.mkdirSync(shots, {recursive: true});
 const now = Date.now();
 const ago = minutes => new Date(now - minutes * 6e4).toISOString();
-const meeting = (id, title, minutes) => ({id, title, source: 'granola', kind: 'meeting', status: 'done', started_at: ago(minutes), created_at: ago(minutes),
+const meeting = (id, title, minutes) => ({id, title, source: 'granola', kind: 'meeting', status: 'done', started: ago(minutes), created: ago(minutes),
   duration_ms: 1800000, participants: [{name: 'Ana', email: 'ana@acme.example'}, {name: 'Ben'}], outbox: {doc: [], task: [], feature: []}});
 // Shapes as the server sends them (OpenAPI GranolaStatus / GranolaSync); `syncing` is filled in by the fake below.
 const OFF = {mode: 'off', connected: false, plan_hint: null, last_sync: null, last_error: null, imported_count: 0, skipped: 0, needs_signin: false};

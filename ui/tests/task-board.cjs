@@ -84,7 +84,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
         const days = Array.from({length: 20}, (_, i) => ({day: day(i), created_at: 3 + (i % 5), doing: 2 + (i % 3), done: 1 + (i * 7 % 6), closed: i % 4}));
         const totals = {}; for (const d of days) for (const [k, v] of Object.entries(d)) if (k !== 'day') totals[k] = (totals[k] || 0) + v;
         return json({since: now, days, totals, steps: [], stages: {open: {n: 40, median_hours: 0.4, p90_hours: 9}, doing: {n: 38, median_hours: 2.5, p90_hours: 30},
-          done: {n: 20, median_hours: 52, p90_hours: 80}}, people: [{actor: 'bot:cmo', created_at: 30, done: 22, closed: 10}, {actor: 'human:reviewer', created_at: 8, done: 3}]});
+          done: {n: 20, median_hours: 52, p90_hours: 80}}, people: [{actor: 'bot:cmo', created: 30, done: 22, closed: 10}, {actor: 'human:reviewer', created: 8, done: 3}]});
       }
       if (p === '/api/v2/tasks/labels') return json({labels: ['newsletter', 'copy', 'bug', 'finance'], tags: [tags[0]]});
       if (p === '/api/v2/tags' && req.method() === 'GET') return json({tags});
@@ -248,6 +248,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.locator('#task-stats-dialog [data-days="365"]').click();
     await page.waitForFunction(() => !document.querySelector('#task-stats-dialog .flow-tile-d'), null, {timeout: 5000});   // a year has no previous period
     await page.locator('#task-stats-dialog [data-days="7"]').click();
+    assert.equal(await page.locator('#task-stats-dialog .flow-people tr[data-owner="cmo"] td').nth(1).textContent(), '30');
     await page.locator('#task-stats-dialog .flow-people tr[data-owner="cmo"]').click();
     await page.waitForFunction(() => document.querySelector('#task-stats-dialog select[data-flow="owner"]').value === 'cmo');
     assert.ok(flowAsked.some(q => q.owner === 'cmo' && q.days === '7'));

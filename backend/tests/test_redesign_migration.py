@@ -344,7 +344,7 @@ def test_the_upgrade_drops_the_cutover_record_and_accepts_tables_and_holds_still
     store = db(api)
     with store.transaction() as conn:
         conn.execute("CREATE TABLE redesign_migrations(id TEXT PRIMARY KEY, state TEXT NOT NULL, actor TEXT NOT NULL, "
-                     "created_at TEXT NOT NULL, expires_at TEXT NOT NULL, finished_at TEXT, restored_at TEXT, snapshot_json TEXT, "
+                     "created_at TEXT NOT NULL, expires_at TEXT NOT NULL, finished_at TEXT, restored_at TEXT, snapshot TEXT, "
                      "result TEXT)")
         conn.execute("INSERT INTO redesign_migrations(id, state, actor, created_at, expires_at) VALUES('mig_1','converted',"
                      "'human:ana',?,?)", (H.now(), H.now()))

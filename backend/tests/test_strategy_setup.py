@@ -160,7 +160,7 @@ def test_no_model_answers_at_once_and_only_the_owner_starts_or_reads_a_job(api, 
     monkeypatch.setattr(SS, "writer", lambda c, settings, store: None)
     monkeypatch.setattr(SS, "spawn", lambda work: pytest.fail("no job runs without a model"))
     job = post(api, "strategy/draft-from", {"url": "https://acme.example", "text": "Bots for landlords"})
-    assert job["state"] == "no_model" and job["finished_at"] and get(api, "strategy/draft-from/latest")["id"] == job["id"]
+    assert job["state"] == "no_model" and job["finished"] and get(api, "strategy/draft-from/latest")["id"] == job["id"]
     post(api, "strategy/draft-from", {}, expected=422)                               # neither a website nor words
     post(api, "strategy/draft-from", {"text": "x"}, token="ben-test", expected=403)
     get(api, "strategy/draft-from/" + job["id"], token="ben-test", expected=403)
@@ -242,7 +242,7 @@ def test_a_run_cut_off_or_left_with_nothing_to_read_stops_and_never_writes(envir
     # A run past STALE_S was already shown as failed: when it answers at last, it writes nothing.
     job = start()
     with store.transaction() as c:
-        SS._put(c, {**SS._find(c, job["id"]), "started_at": H.shift(H.now(), seconds=-SS.STALE_S - 1)})
+        SS._put(c, {**SS._find(c, job["id"]), "started": H.shift(H.now(), seconds=-SS.STALE_S - 1)})
         SS.finish(c, job["id"], FOUND)
     assert latest()["state"] == "failed" and latest()["written"] is None
     assert api.get("/api/v2/strategy", headers=signed_in()).json()["bets"] == []

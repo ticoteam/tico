@@ -138,7 +138,7 @@ def on(state="on", key=KEY, token=TOKEN, expires=60, **extra):
     return {"state": hq, "writes": writes, "reason": reason, "access": access, "address": ADDRESS,
             "bucket": "tico-files-us", "region": "us-east-1", "prefix": "c/acme/",
             "credentials": {"access_key_id": key, "secret_access_key": SECRET, "session_token": token,
-                            "expires_at": stamp(expires)},
+                            "expires": stamp(expires)},
             "signing": {"key_id": "k1", "secret": SIGNING}, "keep_until": stamp(30 * 24 * 60) if hq == "stopped" else None,
             **extra}
 

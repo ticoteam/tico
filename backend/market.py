@@ -598,7 +598,7 @@ def _plays_in(row):
 
 
 def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, tier=None, summary="",
-                  properties=None, last_verified=None, evidence_ids=None, force=False, insight_id=None,
+                  properties=None, last_verified_at=None, evidence_ids=None, force=False, insight_id=None,
                   entity_id=None):
     if actor != SEED_ACTOR:
         H._writer(conn, actor)
@@ -623,7 +623,7 @@ def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, t
     now = H.now()
     row = {"id": eid, "type": type, "name": name, "aliases": dumps(aliases), "external_ids": dumps(external_ids),
            "tier": tier or None, "summary": str(summary or ""), "properties": dumps(properties or {}),
-           "status": "active", "merged_into": None, "last_verified_at": last_verified, "created_at": now,
+           "status": "active", "merged_into": None, "last_verified_at": last_verified_at, "created_at": now,
            "created_by": actor, "updated_at": now}
     conn.execute("INSERT INTO market_entities (id, type, name, aliases, external_ids, tier, summary, properties, "
                  "status, merged_into, last_verified_at, created_at, created_by, updated_at) VALUES "
@@ -638,7 +638,7 @@ def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, t
 
 
 def update_entity(conn, actor, entity_id, *, name=None, aliases=None, external_ids=None, tier=None,
-                  summary=None, properties=None, last_verified=None, status=None, evidence_ids=None,
+                  summary=None, properties=None, last_verified_at=None, status=None, evidence_ids=None,
                   insight_id=None, clear_tier=False):
     if actor != SEED_ACTOR:
         H._writer(conn, actor)
@@ -660,8 +660,8 @@ def update_entity(conn, actor, entity_id, *, name=None, aliases=None, external_i
         changes["summary"] = str(summary)
     if properties is not None and dict(properties) != row["properties"]:
         changes["properties"] = dict(properties)
-    if last_verified is not None and str(last_verified) != (row["last_verified_at"] or ""):
-        changes["last_verified_at"] = _day(conn, last_verified, actor, "last_verified")
+    if last_verified_at is not None and str(last_verified_at) != (row["last_verified_at"] or ""):
+        changes["last_verified_at"] = _day(conn, last_verified_at, actor, "last_verified_at")
     if status is not None and status != row["status"]:
         if status not in ("active", "retired", "merged"):
             H.refuse(conn, actor, "kind", "status is active, retired or merged")
@@ -1830,7 +1830,7 @@ def install(app, store, auth, mutate):
             require_writer(who)
             row, _events = create_entity(c, who.actor, type=body.type, name=body.name, aliases=body.aliases,
                                          external_ids=body.external_ids, tier=body.tier, summary=body.summary,
-                                         properties=body.properties, last_verified=body.last_verified_at,
+                                         properties=body.properties, last_verified_at=body.last_verified_at,
                                          evidence_ids=body.evidence_ids, force=body.force, insight_id=body.insight_id,
                                          entity_id=body.id)
             return {"entity": row}
@@ -1855,7 +1855,7 @@ def install(app, store, auth, mutate):
                 return {"entity": retire_entity(c, who.actor, entity_id, body.insight_id)}
             row, _events = update_entity(c, who.actor, entity_id, name=body.name, aliases=body.aliases,
                                          external_ids=body.external_ids, tier=body.tier, summary=body.summary,
-                                         properties=body.properties, last_verified=body.last_verified_at,
+                                         properties=body.properties, last_verified_at=body.last_verified_at,
                                          status=body.status, evidence_ids=body.evidence_ids, insight_id=body.insight_id,
                                          clear_tier=body.clear_tier)
             return {"entity": row}

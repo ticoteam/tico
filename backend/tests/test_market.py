@@ -299,3 +299,20 @@ def test_the_daily_curate_pass_is_skipped_when_it_has_nothing_to_read(api):
     tick(datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc))
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:librarian'").fetchone()[0] == 2
+
+
+def test_applying_an_insight_makes_an_entity_and_sets_its_verified_date(api, tmp_path):
+    _seed(api, tmp_path)
+    evidence = {"source_kind": "page-change", "source_url": "https://acme.example/pricing", "quote": "Pro is $12",
+                "our_read": "A price rise."}
+    with api.app.state.store.transaction() as c:
+        for insight in ("i1", "i2"):
+            c.execute("INSERT INTO market_insights(id,reported_by,reported_at,kind) VALUES(?,'bot:ops',?,'pricing')",
+                      (insight, H.now()))
+    post(api, "market/insights/i1/apply", {"evidence": evidence, "entity": {
+        "id": "company/contoso", "type": "company", "name": "Contoso", "last_verified_at": "2026-10-01"}})
+    post(api, "market/insights/i2/apply", {"evidence": evidence, "entity_id": "company/contoso",
+                                           "last_verified_at": "2026-10-02"})
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/contoso'").fetchone()
+    assert row[0] == "2026-10-02"

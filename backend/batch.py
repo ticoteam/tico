@@ -177,7 +177,7 @@ def _name(c, actor):
 
 
 def _rank(row):
-    return needs_order(row["kind"], row.get("created_at"), row.get("rank") if row["kind"] == "task" else None,
+    return needs_order(row["kind"], row.get("created_at") or row.get("created"), row.get("rank") if row["kind"] == "task" else None,
                        row.get("from_person"), row.get("pressing"), bool(row.get("ask_missing")), row.get("due"))
 
 

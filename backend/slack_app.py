@@ -90,7 +90,7 @@ def load(store, settings, vault=None):
         except Exception:
             return None
     return {"bot_token": data["bot_token"], "app_token": data["app_token"], "team_id": row["team_id"],
-            "app_id": row["app_id"], "created": row["created_at"]}
+            "app_id": row["app_id"], "created_at": row["created_at"]}
 
 
 def stamp(store):

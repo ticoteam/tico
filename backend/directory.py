@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS directory_credentials(
 def _blank():
     return {"source": "", "filter": {"groups": [], "org_units": [], "domains": []},
             "interval_minutes": DEFAULT_INTERVAL, "mass_leave_limit": DEFAULT_LIMIT, "confirmed": False,
-            "revision": 0, "updated_at": "", "updated_by": "", "last": {}, "scim": {}}
+            "revision": 0, "updated": "", "updated_by": "", "last": {}, "scim": {}}
 
 
 def load(c):
@@ -321,7 +321,7 @@ class Directory:
                 "mass_leave_limit": cfg["mass_leave_limit"], "confirmed": cfg["confirmed"], "revision": cfg["revision"],
                 "last": cfg["last"],
                 "credentials": {s: {"configured": bool(self.hint(c, s)), "hint": self.hint(c, s)} for s in ("google", "entra")},
-                "scim": {"enabled": bool(scim.get("token_hash")), "created_at": scim.get("created_at", ""),
+                "scim": {"enabled": bool(scim.get("token_hash")), "created_at": scim.get("created", ""),
                          "url": self.settings.public_url + "/scim/v2"}}
 
     def configure(self, c, actor, body):
@@ -343,7 +343,7 @@ class Directory:
                "domains": [d.lstrip("@") for d in _lines(body.filter.domains, lower=True)]}
         after = {**cfg, "source": body.source, "filter": flt, "interval_minutes": body.interval_minutes,
                  "mass_leave_limit": body.mass_leave_limit, "revision": cfg["revision"] + 1,
-                 "updated_at": H.now(), "updated_by": actor,
+                 "updated": H.now(), "updated_by": actor,
                  # A different source or scope is a different first sync.
                  "confirmed": cfg["confirmed"] and cfg["source"] == body.source and cfg["filter"] == flt}
         save(c, after)
@@ -357,7 +357,7 @@ class Directory:
         from .store import digest
         token = "scim_" + secrets.token_urlsafe(32)
         cfg = load(c)
-        cfg["scim"] = {"token_hash": digest(token), "created_at": H.now()}
+        cfg["scim"] = {"token_hash": digest(token), "created": H.now()}
         save(c, cfg)
         H.event(c, actor, "directory.scim_token_created", "", {})
         return token

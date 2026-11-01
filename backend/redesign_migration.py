@@ -220,8 +220,11 @@ def _rule_step(n, row):
     for key, value in sorted(when.items()):
         if isinstance(value, (str, int, float, bool)) and F.FIELD.fullmatch(str(key)) and len(conds) < F.MAX_CONDS:
             conds.append({"field": "task." + str(key), "op": "is", "value": value})
-    rule = {k: row[k] for k in ("id", "scope_kind", "scope_id", "event", "position", "note", "created_by", "created_at",
-                                 "updated_at", "revision") if k in row.keys()}
+    rule = {k: row[k] for k in ("id", "scope_kind", "scope_id", "event", "position", "note", "created_by",
+                                 "revision") if k in row.keys()}
+    # Saved inside the automation's flow under these keys since the cutover; the columns are created_at and updated_at.
+    rule.update({saved: row[column] for saved, column in (("created", "created_at"), ("updated", "updated_at"))
+                 if column in row.keys()})
     rule["action_by"] = dict(row).get("action_by")
     rule["when"] = when
     do = OUTCOME_DO.get(row["then_outcome"], "wake_bot")
@@ -999,7 +1002,7 @@ def wake_rules_of(aid, flow):
                         "enabled": 0 if step.get("enabled") is False else 1,
                         "position": source.get("position") if source.get("position") is not None else n + 1,
                         "note": source.get("note") or "", "created_by": source.get("created_by") or "",
-                        "created_at": source.get("created_at") or "", "updated_at": source.get("updated_at") or "",
+                        "created_at": source.get("created") or "", "updated_at": source.get("updated") or "",
                         "revision": source.get("revision") or 1, "action_by": source.get("action_by")})
     return out
 

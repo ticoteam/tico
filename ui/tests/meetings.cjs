@@ -12,8 +12,8 @@ const {unrouted} = require('./support/routes.cjs');
 const {replay: recorderLiveSharing} = require('../../recorder/tests/live-sharing.cjs');
 
 const ago = hours => new Date(Date.now() - hours * 36e5).toISOString();
-const meeting = (id, title, source, hours, extra = {}) => ({id, title, source, kind: 'meeting', status: 'done', started_at: ago(hours),
-  created_at: ago(hours), duration_ms: 1800000, participants: [{name: 'Ana', email: 'ana@acme.example'}, {name: 'Ben'}, {name: 'Cara'}],
+const meeting = (id, title, source, hours, extra = {}) => ({id, title, source, kind: 'meeting', status: 'done', started: ago(hours),
+  created: ago(hours), duration_ms: 1800000, participants: [{name: 'Ana', email: 'ana@acme.example'}, {name: 'Ben'}, {name: 'Cara'}],
   outbox: {doc: [], task: [], feature: []}, ...extra});
 const MEETINGS = [
   meeting('m1', 'Weekly ops sync', 'zoom', 30, {outbox: {doc: [{text: 'Update pricing'}], feature: [],

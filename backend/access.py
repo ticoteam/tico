@@ -82,7 +82,7 @@ def load_owner(c, settings):
         return {"email": str(settings.owner_email or "").strip().lower(), "revision": 0,
                 "updated_at": "", "updated_by": "", "source": "environment"}
     return {"email": str(stored.get("email") or "").strip().lower(),
-            "revision": int(stored.get("revision") or 0), "updated_at": str(stored.get("updated_at") or ""),
+            "revision": int(stored.get("revision") or 0), "updated_at": str(stored.get("updated") or ""),
             "updated_by": str(stored.get("updated_by") or ""), "source": str(stored.get("source") or "")}
 
 
@@ -105,7 +105,7 @@ def load_access(c, settings):
             "admins": admins, "bot_admins": admins,
             "member_bot_limit": max(0, int(stored.get("member_bot_limit", MEMBER_BOT_LIMIT))),
             "revision": int(stored.get("revision") or 0),
-            "updated_at": str(stored.get("updated_at") or ""), "updated_by": str(stored.get("updated_by") or ""),
+            "updated_at": str(stored.get("updated") or ""), "updated_by": str(stored.get("updated_by") or ""),
             "source": str(stored.get("source") or source)}
 
 
@@ -115,11 +115,11 @@ def seed(c, settings, now):
     if not _load_json(c, OWNER) and settings.owner_email:
         c.execute("INSERT INTO registry_metadata VALUES(?,?)",
                   (OWNER, json.dumps({"email": settings.owner_email.strip().lower(), "revision": 1,
-                                      "updated_at": now, "updated_by": "environment", "source": "environment"},
+                                      "updated": now, "updated_by": "environment", "source": "environment"},
                                      sort_keys=True)))
     if not _load_json(c, ACCESS):
         c.execute("INSERT INTO registry_metadata VALUES(?,?)",
-                  (ACCESS, json.dumps({**_access_seed(settings), "revision": 1, "updated_at": now,
+                  (ACCESS, json.dumps({**_access_seed(settings), "revision": 1, "updated": now,
                                        "updated_by": "environment", "source": "environment"}, sort_keys=True)))
 
 
@@ -145,7 +145,7 @@ def retire_bot_lists(c, settings, now):
     _store(c, BOT_ACCESS, {"migrated": now, "retired": present})
     if present:
         logging.getLogger("tico.access").warning("%s (found: %s)", RETIRED_NOTICE, ", ".join(present))
-        _store(c, BOT_ACCESS_NOTICE, {"message": RETIRED_NOTICE, "lists": present, "created_at": now})
+        _store(c, BOT_ACCESS_NOTICE, {"message": RETIRED_NOTICE, "lists": present, "created": now})
     return present
 
 
@@ -178,7 +178,15 @@ def clear_bot_access_notice(c):
     c.execute("DELETE FROM registry_metadata WHERE key=?", (BOT_ACCESS_NOTICE,))
 
 
+def _history_entry(owner):
+    return {"email": owner["email"], "revision": owner["revision"], "updated": owner["updated_at"],
+            "updated_by": owner["updated_by"], "source": owner["source"]}
+
+
 def _store(c, key, record):
+    # These documents hold `updated`, as they always have; only what the code hands out calls it `updated_at`.
+    if "updated_at" in record:
+        record = {**{k: v for k, v in record.items() if k != "updated_at"}, "updated": record["updated_at"]}
     if key == ACCESS:
         # The Admins list is kept under both names so a rollback to the previous release still finds it.
         admins = emails(record["admins"] if "admins" in record else record.get("bot_admins"))
@@ -537,7 +545,7 @@ def transfer(c, actor, roster, owner, target_id, *, expected_revision, previous_
         raise Problem("conflict", "That person is already the owner", 409)
     previous = P.person_by_email(owner["email"], roster)
     stored = _load_json(c, OWNER) or {}
-    history = [*(stored.get("history") or []), {k: owner[k] for k in ("email", "revision", "updated_at", "updated_by", "source")}]
+    history = [*(stored.get("history") or []), _history_entry(owner)]
     after = {"email": target["email"], "revision": owner["revision"] + 1, "updated_at": now,
              "updated_by": actor, "source": "transfer", "previous": owner["email"], "history": history[-OWNER_HISTORY:],
              "retired": emails(stored.get("retired"))}
@@ -648,7 +656,7 @@ def change_owner_email(c, actor, roster, owner, new_email, *, expected_revision,
     _save_roster(c, {**roster, "people": [row if p["id"] == person["id"] else p for p in roster["people"]]})
     _sync_human(c, row)
     stored = _load_json(c, OWNER) or {}
-    history = [*(stored.get("history") or []), {k: owner[k] for k in ("email", "revision", "updated_at", "updated_by", "source")}]
+    history = [*(stored.get("history") or []), _history_entry(owner)]
     after = {"email": new, "revision": owner["revision"] + 1, "updated_at": now, "updated_by": actor,
              "source": "email_change", "previous": old, "history": history[-OWNER_HISTORY:],
              "retired": [e for e in emails([*(stored.get("retired") or []), old]) if e != new]}

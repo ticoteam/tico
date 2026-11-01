@@ -429,7 +429,7 @@ def _record(value):
     stored = stored if isinstance(stored, dict) else {}
     return {"enabled": [p for p in stored.get("enabled") or [] if p in PROVIDER_BY_ID],
             "runtime": str(stored.get("runtime") or ""), "model": str(stored.get("model") or ""),
-            "revision": int(stored.get("revision") or 0), "updated_at": str(stored.get("updated_at") or ""),
+            "revision": int(stored.get("revision") or 0), "updated_at": str(stored.get("updated") or ""),
             "updated_by": str(stored.get("updated_by") or ""), "source": str(stored.get("source") or ""),
             # On unless the owner turned it off: a bot out of quota runs on another provider (default_fallbacks).
             "auto_fallback": stored.get("auto_fallback") is not False,
@@ -520,7 +520,7 @@ def seed_from_env(c, settings, now):
     if not seed:
         return False
     c.execute("INSERT INTO registry_metadata VALUES(?,?)",
-              (KEY, json.dumps({**seed, "revision": 1, "updated_at": now, "updated_by": "environment",
+              (KEY, json.dumps({**seed, "revision": 1, "updated": now, "updated_by": "environment",
                                 "source": "environment"}, sort_keys=True)))
     return True
 
@@ -556,7 +556,9 @@ def save(c, actor, body, now, settings=None):
              "decide_level": before["decide_level"] if level is None else J.normalize_level(level),
              "meeting_model": before["meeting_model"] if body.get("meeting_model") is None else meeting}
     # The Gateway's provider is never stored: it follows the connection (`with_gateway`).
-    stored = {**after, "enabled": [name for name in enabled if name not in gateway], "meeting_model": meeting}
+    # The document holds `updated`, as it always has; only what the code hands out calls it `updated_at`.
+    stored = {**{k: v for k, v in after.items() if k != "updated_at"}, "updated": now,
+              "enabled": [name for name in enabled if name not in gateway], "meeting_model": meeting}
     c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(stored, sort_keys=True)))
     return before, after

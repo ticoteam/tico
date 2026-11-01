@@ -158,7 +158,7 @@ INTERRUPTED = {"code": "interrupted", "message": "The research was cut off; star
 
 
 def _stale(job):
-    return job["state"] == "running" and H.shift(job["started_at"], seconds=STALE_S) < H.now()
+    return job["state"] == "running" and H.shift(job["started"], seconds=STALE_S) < H.now()
 
 
 def view(job):
@@ -174,7 +174,7 @@ def stop_running(c, error=INTERRUPTED):
     runs them), and when the owner clears the website and the line in setup (nothing is left to draft from)."""
     for job in _jobs(c):
         if job["state"] == "running":
-            _put(c, {**job, "state": "failed", "step": None, "finished_at": H.now(), "error": error})
+            _put(c, {**job, "state": "failed", "step": None, "finished": H.now(), "error": error})
 
 
 def read(c, job_id):
@@ -198,8 +198,8 @@ def start(c, who, settings, store, url="", text=""):
     model = writer(c, settings, store) is not None
     job = {"id": H.new_id(), "state": "running" if model else "no_model",
            "step": ("reading" if url else "thinking") if model else None, "url": url, "text": text,
-           "actor": who.actor, "revision": S.draft(c)["revision"], "started_at": H.now(),
-           "finished_at": None if model else H.now(), "pages": [], "found": None, "written": None, "error": None}
+           "actor": who.actor, "revision": S.draft(c)["revision"], "started": H.now(),
+           "finished": None if model else H.now(), "pages": [], "found": None, "written": None, "error": None}
     _put(c, job)
     H.event(c, who.actor, "strategy.draft_from", job["id"], {"url": bool(url), "text": bool(text),
                                                             "state": job["state"]})
@@ -215,7 +215,7 @@ def _update(store, job_id, **changes):
 
 
 def _fail(store, job_id, code, message, **more):
-    _update(store, job_id, state="failed", step=None, finished_at=H.now(), error={"code": code, "message": message},
+    _update(store, job_id, state="failed", step=None, finished=H.now(), error={"code": code, "message": message},
             **more)
 
 
@@ -229,7 +229,7 @@ def run(store, job_id):
         _put(c, {**job, "claimed": True})
         write = writer(c, store.settings, store)
     if write is None:
-        _update(store, job_id, state="no_model", step=None, finished_at=H.now())
+        _update(store, job_id, state="no_model", step=None, finished=H.now())
         return None
     pages = []
     try:
@@ -339,12 +339,12 @@ def finish(c, job_id, found):
     if not job or job["state"] != "running":
         return None
     if _stale(job):          # the owner was already told it stopped and given the form
-        return _put(c, {**job, "state": "failed", "step": None, "finished_at": H.now(), "error": INTERRUPTED})
+        return _put(c, {**job, "state": "failed", "step": None, "finished": H.now(), "error": INTERRUPTED})
     row = S.draft(c)
     newest = _jobs(c)[0]["id"] == job_id
     if row["revision"] != job["revision"] or not newest:
         reason = "edited" if newest else "superseded"
-        return _put(c, {**job, "state": "gave_up", "step": None, "finished_at": H.now(), "found": found,
+        return _put(c, {**job, "state": "gave_up", "step": None, "finished": H.now(), "found": found,
                         "error": {"code": reason, "message": "The draft changed while this ran, so nothing was "
                                   "written; what it found is below" if newest else "A newer research job replaced "
                                   "this one"}})
@@ -372,7 +372,7 @@ def finish(c, job_id, found):
         if bet:
             made.append(bet["id"])
             known.add(item["statement"].lower())
-    return _put(c, {**job, "state": "done", "step": None, "finished_at": H.now(), "found": found,
+    return _put(c, {**job, "state": "done", "step": None, "finished": H.now(), "found": found,
                     "written": {"sections": sorted(sections), "fields": sorted(lines), "bets": made,
                                 "revision": S.draft(c)["revision"]}})
 

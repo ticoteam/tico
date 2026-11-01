@@ -399,7 +399,7 @@ def install_imports(app, store, auth, execution, mutate):
         started = body.started_at or meta.get("started") or H.now()
         duration_ms = (int(body.duration_seconds * 1000) if body.duration_seconds is not None
                        else TF.duration_ms(turns) if turns else meta.get("duration_ms") or 0)
-        meta.update(kind="meeting", status="done", started_at=started, ended=end_of(started, duration_ms, meta.get("ended")),
+        meta.update(kind="meeting", status="done", started=started, ended=end_of(started, duration_ms, meta.get("ended")),
                     duration_ms=duration_ms, source=body.source, source_type="meeting",
                     source_context=body.context, transcript_provider=body.source, import_hash=fingerprint,
                     recorded_by=who.email, uploaded_by=runner["id"] if runner else who.email,
@@ -508,7 +508,7 @@ def install_imports(app, store, auth, execution, mutate):
                 meta = new_note(c, owner, Note(text=body.title or "Close call"), [])
                 rid = meta["id"]
                 meta.update(kind="meeting", title=body.title or "Close call", note="", preview="",
-                            status="done", started_at=body.started, ended=body.ended,
+                            status="done", started=body.started, ended=body.ended,
                             duration_ms=body.duration_ms,
                             recorded_by=person["email"], uploaded_by=runner["id"], private=False,
                             review_state=initial_review(c, owner) if body.owner_email else "live",

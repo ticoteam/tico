@@ -6,6 +6,7 @@ views and an authorizer; these tests hold the two to the same answers.
 
 import json
 import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -119,6 +120,14 @@ def world(api):
     finance_task = post(api, "tasks", {"owner": "finance", "title": "Close the books", "body": "For finance."})
     return {"ana_room": ana_room, "steven_room": steven_room, "machine": machine, "attempt": attempt,
             "private": private, "coo_task": coo_task, "finance_task": finance_task}
+
+
+def test_the_sql_page_examples_all_run(api):
+    page = (Path(__file__).resolve().parents[2] / "ui/app/sql.js").read_text()
+    examples = re.findall(r"""^  \['[^']+', "(.+)"\],?$""", page, re.M)
+    assert len(examples) >= 6
+    for sql in examples:
+        query(api, sql)
 
 
 def test_only_one_read_statement_is_accepted(api, monkeypatch):

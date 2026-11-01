@@ -261,7 +261,7 @@ def parse(answer, now=None):
     token = str(given.get("session_token") or "")
     if not ACCESS_KEY.match(key) or not secret or len(secret) > 128 or not token or len(token) > 4096:
         raise ValueError("credentials")
-    expires = _when(given.get("expires_at"), "credentials")
+    expires = _when(given.get("expires"), "credentials")  # HQ's own field name
     if expires <= (now or datetime.now(timezone.utc)):
         raise ValueError("credentials")
     signing = answer.get("signing")

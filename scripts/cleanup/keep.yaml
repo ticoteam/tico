@@ -9,6 +9,7 @@ files:
   - backend/migrations/renames_data.py
   - backend/tests/test_schema_renames.py
   - backend/tests/test_task_delete.py   # trash snapshots saved before the renames, under the old names
+  - backend/tests/test_stored_document_keys.py  # documents as an existing install holds them
   - backend/tests/fixtures/*
   - backend/tests/fixtures/**
   - docs/history/*               # how the schema looked then
@@ -42,6 +43,7 @@ names:
   ui/app/meetings-granola.js: [last_sync]   # Granola's sync status: a stored document's field, not a column
   ui/tests/meetings-granola.cjs: [last_sync]
 keys:
+  backend/strategy_setup.py: [started, finished]   # the jobs saved in registry_metadata (strategy.draft_from)
   runner/tests/test_worktree*.py: [detail_json, created, updated]   # fake runners/me/worktrees rows (the wire); their hub SQL is renamed
   backend/company_billing.py: [created, expires]   # Tico HQ's billing answer: another system's fields
   backend/tests/test_company_billing.py: [created, expires]
@@ -94,3 +96,64 @@ sites:
   backend/tests/test_tasks_board.py: ['flow["days"][-1]["created"]', 'p["created"]) for p in']
   ui/model-login.js: ['c.updated === false']
   ui/tests/model-keys.cjs: ['may: true, updated:']
+
+  backend/access.py:
+    - "\"revision\": int(stored.get(\"revision\") or 0), \"updated_at\": str(stored.get(\"updated\") or \"\"),"
+    - "\"updated_at\": str(stored.get(\"updated\") or \"\"), \"updated_by\": str(stored.get(\"updated_by\") or \"\"),"
+    - "_store(c, BOT_ACCESS_NOTICE, {\"message\": RETIRED_NOTICE, \"lists\": present, \"created\": now})"
+    - "return {\"email\": owner[\"email\"], \"revision\": owner[\"revision\"], \"updated\": owner[\"updated_at\"],"
+    - "# These documents hold `updated`, as they always have; only what the code hands out calls it `updated_at`."
+    - "record = {**{k: v for k, v in record.items() if k != \"updated_at\"}, \"updated\": record[\"updated_at\"]}"
+  backend/batch.py:
+    - "return needs_order(row[\"kind\"], row.get(\"created_at\") or row.get(\"created\"), row.get(\"rank\") if row[\"kind\"] == \"task\" else None,"
+  backend/directory.py:
+    - "\"revision\": 0, \"updated\": \"\", \"updated_by\": \"\", \"last\": {}, \"scim\": {}}"
+    - "\"scim\": {\"enabled\": bool(scim.get(\"token_hash\")), \"created_at\": scim.get(\"created\", \"\"),"
+    - "\"updated\": H.now(), \"updated_by\": actor,"
+    - "cfg[\"scim\"] = {\"token_hash\": digest(token), \"created\": H.now()}"
+  backend/gateway_connection.py:
+    - "\"updated_at\": record.get(\"updated\", \"\"), \"updated_by\": record.get(\"updated_by\", \"\"),"
+    - "\"updated\": now, \"updated_by\": who.actor}"
+    - "after = {\"url\": before.get(\"url\", \"\"), \"revision\": int(before.get(\"revision\") or 0) + 1, \"updated\": now,"
+    - "after.update(revision=int(record.get(\"revision\") or 0) + 1, updated=H.now(), updated_by=SYSTEM)"
+    - "\"revision\": int(record.get(\"revision\") or 0) + 1, \"updated\": _stamp(now), \"updated_by\": SYSTEM,"
+  backend/imports.py:
+    - "meta.update(kind=\"meeting\", status=\"done\", started=started, ended=end_of(started, duration_ms, meta.get(\"ended\")),"
+    - "status=\"done\", started=body.started, ended=body.ended,"
+  backend/onboarding.py:
+    - "\"updated_at\": stored.get(\"updated\") or \"\", \"updated_by\": stored.get(\"updated_by\") or \"\"}"
+    - "# The document holds `updated`, as it always has; only what the code hands out calls it `updated_at`."
+    - "stored = {**{k: v for k, v in record.items() if k != \"updated_at\"}, \"updated\": record[\"updated_at\"]}"
+  backend/providers.py:
+    - "\"revision\": int(stored.get(\"revision\") or 0), \"updated_at\": str(stored.get(\"updated\") or \"\"),"
+    - "# The document holds `updated`, as it always has; only what the code hands out calls it `updated_at`."
+    - "stored = {**{k: v for k, v in after.items() if k != \"updated_at\"}, \"updated\": now,"
+  backend/redesign_migration.py:
+    - "\"created_at\": source.get(\"created\") or \"\", \"updated_at\": source.get(\"updated\") or \"\","
+  backend/source_outages.py:
+    - "'waiting': int(waiting), 'until': until, 'updated': now}"
+    - "if proof and not proof.get('active') and (detail.get('at') or '') <= proof.get('updated', ''):"
+  backend/tests/test_granola_responses.py:
+    - "assert row[\"notes\"] == SUMMARY and meeting[\"started\"].startswith(\"2026-02-04T19:30:00\")"
+  backend/tests/test_strategy_setup.py:
+    - "assert job[\"state\"] == \"no_model\" and job[\"finished\"] and get(api, \"strategy/draft-from/latest\")[\"id\"] == job[\"id\"]"
+    - "SS._put(c, {**SS._find(c, job[\"id\"]), \"started\": H.shift(H.now(), seconds=-SS.STALE_S - 1)})"
+  backend/tests/test_tico_storage.py:
+    - "\"expires\": stamp(expires)},"
+  backend/tico_storage.py:
+    - "expires = _when(given.get(\"expires\"), \"credentials\")  # HQ's own field name"
+  ui/app/meetings.js:
+    - "const t = Date.parse(r.started || r.created || ''); if (!Number.isFinite(t)) return Infinity;"
+    - "const when = meetWhen(r.started || r.created), working = meetWorking(r), proposed = meetProposed(r);"
+    - "const meta = [meetWhen(rec.started), rec.duration_ms ? mmss(rec.duration_ms) : '', owner, meetSourceLabel(rec.source)].filter(Boolean).map(esc).join(' · ');"
+  ui/app/task-stats.js:
+    - "<td>${esc(actorLabel(p.actor))}</td><td class=\"tnum\">${p.created || 0}</td>${cols.map(([k]) => `<td class=\"tnum\">${p[k] || 0}</td>`).join('')}</tr>`).join('');"
+  ui/tests/task-board.cjs:
+    - "people: [{actor: 'bot:cmo', created: 30, done: 22,"
+  ui/tests/meetings-granola.cjs:
+    - "const meeting = (id, title, minutes) => ({id, title, source: 'granola', kind: 'meeting', status: 'done', started: ago(minutes), created: ago(minutes),"
+  ui/tests/meetings-review.cjs:
+    - "kind: 'meeting', status: 'done', client: privateMeeting ? 'tico-recorder' : null, source: privateMeeting ? 'granola' : 'zoom', can_edit: true, started: '2026-10-01T14:00:00Z',"
+  ui/tests/meetings.cjs:
+    - "const meeting = (id, title, source, hours, extra = {}) => ({id, title, source, kind: 'meeting', status: 'done', started: ago(hours),"
+    - "created: ago(hours), duration_ms: 1800000, participants: [{name: 'Ana', email: 'ana@acme.example'}, {name: 'Ben'}, {name: 'Cara'}],"

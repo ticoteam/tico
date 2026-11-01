@@ -269,7 +269,7 @@ def load(c):
             "company_import": stored.get("company_import") or None,
             # {pick: seat id}: the roles setup laid out as Recruiting seats (`Onboarding.complete`).
             "seats": dict(stored.get("seats") or {}),
-            "updated_at": stored.get("updated_at") or "", "updated_by": stored.get("updated_by") or ""}
+            "updated_at": stored.get("updated") or "", "updated_by": stored.get("updated_by") or ""}
 
 
 def display_names(settings, record):
@@ -1161,8 +1161,10 @@ class Onboarding:
     @staticmethod
     def _store(c, record, actor):
         record = {**record, "updated_at": H.now(), "updated_by": actor}
+        # The document holds `updated`, as it always has; only what the code hands out calls it `updated_at`.
+        stored = {**{k: v for k, v in record.items() if k != "updated_at"}, "updated": record["updated_at"]}
         c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
-                  "value=excluded.value", (KEY, encode(record)))
+                  "value=excluded.value", (KEY, encode(stored)))
         return record
 
     def _plan(self, record, cards, names):

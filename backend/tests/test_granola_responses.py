@@ -106,7 +106,7 @@ def test_documented_free_and_paid_sync_with_broken_meeting(api, paid):
         row = c.execute("SELECT m.notes,m.metadata FROM meetings m JOIN recording_source_refs r ON r.meeting_id=m.id "
                         "WHERE r.source='granola' AND r.external_id='human:ana:0dba4400-...'").fetchone()
         meeting = json.loads(row["metadata"])
-        assert row["notes"] == SUMMARY and meeting["started_at"].startswith("2026-02-04T19:30:00")
+        assert row["notes"] == SUMMARY and meeting["started"].startswith("2026-02-04T19:30:00")
         assert [(p["name"], p["email"]) for p in meeting["participants"]] == [
             ("John Doe", "john@acme.com"), ("Jane Smith", "jane@acme.com")]
         assert bool(meeting.get("turns")) is paid

@@ -288,7 +288,7 @@ const meetStatus = r => r.delivery?.status === 'pending' ? 'sending'
   : r.sent ? 'sent' : 'unsent';
 // Age of a note in whole days, measured from local midnight so "Today" means the calendar day.
 function meetAgeDays(r) {
-  const t = Date.parse(r.started_at || r.created_at || ''); if (!Number.isFinite(t)) return Infinity;
+  const t = Date.parse(r.started || r.created || ''); if (!Number.isFinite(t)) return Infinity;
   const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   return Math.round((day(new Date()) - day(new Date(t))) / 864e5);
 }
@@ -496,7 +496,7 @@ function meetList(state) {
   const count = $('#notes-count');
   if (count) count.textContent = state.list.length ? (list.length === state.list.length ? `${list.length} total` : `${list.length} of ${state.list.length}`) : '';
   patchLiveHTML(el, list.length ? `<ul class="meet-list">${list.map(r => {
-      const when = meetWhen(r.started_at || r.created_at), working = meetWorking(r), proposed = meetProposed(r);
+      const when = meetWhen(r.started || r.created), working = meetWorking(r), proposed = meetProposed(r);
       const meta = [when ? `<span>${esc(when)}</span>` : '', r.duration_ms ? `<span>${esc(mmss(r.duration_ms))}</span>` : '', meetWhoHTML(r)].filter(Boolean).join('');
       const fail = /fail/.test(meetPill(r)) ? meetPill(r) : '';
       return `<li class="meet-row review-${state.review}" data-note-row="${esc(r.id)}" title="${esc(meetSourceLabel(r.source))}">${state.review === 'pending' ? `<input type="checkbox" data-review-check="${esc(r.id)}" aria-label="Select ${esc(noteTitle(r))}"${state.checked.has(r.id) ? ' checked' : ''}>` : ''}${meetLogo(r.source || 'tico', 30)}
@@ -540,7 +540,7 @@ function meetPaint(state, rec) {
       <div class="note-transcript">${(t.turns || []).map(turn => `<p><span class="muted mono">[${mmss(turn.start_ms)}]</span> ${turn.speaker ? `<strong>${esc(turn.speaker)}</strong> ` : ''}${esc(turn.text)}</p>`).join('')}</div></details>`).join('');
   const options = `<option value="auto">Auto — ${esc(assistantName())} routes it</option>` + activeEmps().map(e => `<option value="${esc(e.id)}">${esc(e.display_name)}</option>`).join('');
   const owner = rec.owner === 'owner' ? 'the owner' : (rec.owner || 'the sender');
-  const meta = [meetWhen(rec.started_at), rec.duration_ms ? mmss(rec.duration_ms) : '', owner, meetSourceLabel(rec.source)].filter(Boolean).map(esc).join(' · ');
+  const meta = [meetWhen(rec.started), rec.duration_ms ? mmss(rec.duration_ms) : '', owner, meetSourceLabel(rec.source)].filter(Boolean).map(esc).join(' · ');
   const leadLink = rec.source === 'close' && /^https:\/\//i.test(rec.source_context?.lead_url || '')
     ? ` <span class="sep">·</span> <a href="${esc(rec.source_context.lead_url)}" target="_blank" rel="noopener">Open in Close</a>` : '';
   // Only an https link is drawn as one; the server refuses anything else, and this keeps a bad row inert.
