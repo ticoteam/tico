@@ -68,7 +68,7 @@ EMPTY = (
     "credentials", "credential_keys", "credential_grants", "credential_uses", "credential_requests", "credential_imports",
     "directory_credentials", "company_storage", "tico_storage",
     # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
-    "model_subscriptions", "computer_subscriptions", "attempt_subscriptions",
+    "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "subscription_connects",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
