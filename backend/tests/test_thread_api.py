@@ -255,10 +255,20 @@ def test_a_block_holds_a_group_dm_first_message_and_writes_no_message(ruled):
     calls = len(judge.calls)
     got = api.post("/api/v2/threads/dm", json={"members": ["human:ben"], "body": GOLD}, headers=headers("cara-test"))
     assert got.status_code == 200, got.text
-    assert got.json()["held"]["outcome"] == "blocked"
+    assert got.json()["held"]["outcome"] == "blocked" and "id" not in got.json()
     assert len(judge.calls) == calls + 1 and not any(judge.locked[calls:])   # checked as cara, outside the write
-    assert not any("favorite color" in str(m.get("body")) for m in message_in(api, got.json()["id"], token="cara-test"))
+    assert api.get("/api/v2/threads", headers=headers("cara-test")).json()["dms"] == []     # no DM was made
     assert hold_row(api, got.json()["held"]["id"])["author"] == "human:cara"
+
+
+def test_a_block_holds_a_new_threads_first_message_and_makes_no_thread(ruled):
+    api, judge = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
+    got = api.post("/api/v2/threads", json={"title": "Held", "members": ["human:ben"], "body": GOLD},
+                   headers=headers("cara-test"))
+    assert got.status_code == 200, got.text
+    assert got.json()["held"]["outcome"] == "blocked" and "id" not in got.json()
+    assert api.get("/api/v2/threads", headers=headers("cara-test")).json()["threads"] == []
 
 
 def test_a_reaction_is_one_per_person_and_needs_read_on_the_message(api):

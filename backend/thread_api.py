@@ -246,15 +246,26 @@ def install(app, store, auth, mutate, rule_check):
 
         def work(c):
             v = threads.viewer(auth, who)
-            made = threads.create(c, v, title=body.title, audience=body.audience,
-                                  audience_group_id=body.audience_group_id, members=body.members,
-                                  parent_message_id=body.parent_message_id, task_id=body.task_id, kind=body.kind)
             if not body.body:
-                return made
-            posted = threads.post(c, v, made["id"], body.body, checked=rc)
-            if "id" not in posted:          # held: the thread is made, its first message is the hold
-                return {**made, **posted}
-            return {**made, "message": _thread_message(posted)}
+                return threads.create(c, v, title=body.title, audience=body.audience,
+                                      audience_group_id=body.audience_group_id, members=body.members,
+                                      parent_message_id=body.parent_message_id, task_id=body.task_id, kind=body.kind)
+            if body.parent_message_id:
+                # A sub-thread's first message: post makes the sub-thread only once the message goes through.
+                parent = H.message(c, body.parent_message_id)
+                if not parent:
+                    raise Problem("not_found", "Message not found", 404)
+                posted = threads.post(c, v, parent["conversation_id"], body.body,
+                                      parent_message_id=body.parent_message_id, checked=rc)
+            else:
+                # A new thread's first message: post makes the thread only once the message goes through, so a held
+                # first message leaves no thread behind.
+                posted = threads.post(c, v, None, body.body, checked=rc, start={
+                    "title": body.title, "audience": body.audience, "audience_group_id": body.audience_group_id,
+                    "members": body.members, "task_id": body.task_id, "kind": body.kind})
+            if "id" not in posted:          # held: no thread is made, its first message is the hold
+                return posted
+            return {**threads.get(c, v, posted["conversation_id"]), "message": _thread_message(posted)}
         return mutate(request, body, work)
 
     @app.patch("/api/v2/threads/{thread_id}")
@@ -348,13 +359,14 @@ def install(app, store, auth, mutate, rule_check):
             v = threads.viewer(auth, who)
             for member in body.members:
                 threads._require_write(c, v, member)
-            made = threads.dm(c, v, body.members, title=body.title)
             if not body.body:
-                return made
-            posted = threads.post(c, v, made["id"], body.body, checked=rc)
-            if "id" not in posted:          # held: the DM is made, its first message is the hold
-                return {**made, **posted}
-            return {**made, "message": _thread_message(posted)}
+                return threads.dm(c, v, body.members, title=body.title)
+            # The open DM with these people gets the message, or a new one is made with it: a held message makes none.
+            posted = threads.post(c, v, None, body.body, checked=rc,
+                                  start={"dm": body.members, "title": body.title})
+            if "id" not in posted:          # held: no DM is made, its first message is the hold
+                return posted
+            return {**threads.get(c, v, posted["conversation_id"]), "message": _thread_message(posted)}
         return mutate(request, body, work)
 
     @app.put("/api/v2/messages/{message_id}/reactions/{emoji}")
