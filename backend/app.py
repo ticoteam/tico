@@ -5483,9 +5483,10 @@ def create_app(settings=None):
 
     @app.post("/api/v2/seats/draft")
     def seat_draft(request: Request, body: M.SeatDraft):
-        """A job description for a job not posted yet, from its title: composed from the template catalog at once,
-        or with `redraft` rewritten once by the model when the server has a key (backend/recruiting.py). Stores
-        nothing."""
+        """A job description for a job not posted yet, from its title: composed from the template catalog at once, or
+        written by the model when no catalog card is the job, or with `redraft` rewritten once by the model. The model
+        is Gemini when the server has a key, else the Tico AI Gateway with the company's gateway key
+        (backend/recruiting.py). Stores nothing."""
         who = request.state.identity
         auth.domain(who)
         recruiting.may_draft(who)
@@ -5493,7 +5494,12 @@ def create_app(settings=None):
         if body.redraft and body.reports_to:
             with store.read() as c:
                 boss = recruiting.boss_name(auth, c, who, body.reports_to)
-        return recruiting.draft(onboarding, body.title, body.team, boss, body.redraft)
+
+        def gateway():
+            # Read only when the model is asked, inside its time bound: a catalog draft never waits on the vault.
+            with store.read() as c:
+                return gateway_connection.target(c, app.state.vault, settings)[:2]
+        return recruiting.draft(onboarding, body.title, body.team, boss, body.redraft, gateway=gateway)
 
     @app.get("/api/v2/seats/{seat_id}")
     def seat_show(request: Request, seat_id: str):
