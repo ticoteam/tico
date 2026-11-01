@@ -788,3 +788,25 @@ def test_a_branch_runs_its_originals_runtime_now_not_the_runtime_it_stored(api):
     hold_queued(api)
     give(api, m, "claude", plan_b)
     assert status(api)["state"] == "limited" and queued_holds(api) == [(1, "quota-reset")]
+
+
+def test_try_now_on_an_idle_branch_ends_the_hold_on_the_login_its_original_runs_on(api):
+    # The branch's stored config says Claude, but it follows its original, which runs Codex: Try now ends the hold on
+    # the Codex login the branch signs in with, not one on Claude.
+    from backend.execution import clear_limits
+    setup(api)
+    company(api)
+    on(api, "cpo", "codex", "gpt-6.1-sol")
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    m = machine(api, signed_in=True)
+    assign(api, m, "cpo")
+    with api.app.state.store.transaction() as c:      # made a branch of cpo once it is on this computer
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+                  (json.dumps({**config, "shared_from": "cpo"}),))
+        login_holds._save(c, {"runner_id": m["runner_id"], "profile": "", "runtime": "codex",
+                              "until": "2999-01-01T00:00:00.000000Z", "since": H.now(), "error": CLAUDE_LIMIT})
+    with api.app.state.store.transaction() as c:
+        assert clear_limits(c, api.app.state.store.settings, H.KEEPER, "ops") == 1
+    with api.app.state.store.read() as c:
+        assert login_holds.get(c, m["runner_id"], "", "codex")["until"] <= H.now()

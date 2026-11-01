@@ -1566,9 +1566,14 @@ def clear_limits(c, settings, actor, bot):
     """Try now: lift the usage-limit cooldown for the bot and for every bot limited on the same
     runtime on the same computer, since they share the subscription a person has just renewed.
     Returns how many bots it cleared."""
-    def runtime(slug):
+    from .shared_bots import follow
+
+    def config(slug):
         row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
-        return providers.bot_choice(c, settings, json.loads(row[0]) if row and row[0] else {})[0]
+        return follow(c, slug, json.loads(row[0]) if row and row[0] else {})
+
+    def runtime(slug):
+        return providers.bot_choice(c, settings, config(slug))[0]
     mine, place = runtime(bot), c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
     bots = [bot]
     if place and place["runner_id"] and mine:
@@ -1576,12 +1581,10 @@ def clear_limits(c, settings, actor, bot):
                                          "WHERE s.state='limited' AND a.runner_id=? AND s.bot<>? ORDER BY s.bot",
                                          (place["runner_id"], bot)) if runtime(r[0]) == mine]
     for slug in bots:
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if place and place["runner_id"]:
             # The plan behind the login was just renewed: its hold ends for every bot on it, but only one queued job
             # tries it until that turn's result (login_holds.try_now), so a plan still spent sees one turn, not a burst.
-            login_holds.try_now(c, *login_key(c, settings, place["runner_id"], slug,
-                                            json.loads(row[0]) if row and row[0] else {}))
+            login_holds.try_now(c, *login_key(c, settings, place["runner_id"], slug, config(slug)))
         if (H.status(c, slug) or {}).get("state") == "limited":
             H.status_set(c, actor, slug, state="idle", focus="", reason="Try now")
         c.execute("UPDATE jobs SET held=0,hold_until=NULL WHERE bot=? AND state='queued' "
