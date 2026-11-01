@@ -23,8 +23,12 @@ For each document:
    A task that says the document is longer than the bound holds only its first part: say so in your last line.
 2. List only the obligations that bind us (the company, its teammates or its bots) and that a bot or a person could
    break. Skip what binds only the other party, background, definitions and marketing.
-3. Keep at most 10. If there are more, leave them out, and say so in your last line: "read, nothing else for us" for
-   the rest. It is not a rule: write no suggestion for it.
+3. Write one suggestion for each obligation on your list, however many there are. Before you write anything, collect
+   every rule already written for this From: run `hub rules list --status any --source <From> --limit 100`, then, while
+   the answer has a `next_cursor`, run it again with `--cursor <next_cursor>`. Skip any obligation a rule on that list
+   already states for this document version (its cite names the same file and version). Suggested, active and retired
+   all count, so a rule a person accepted or skipped is not suggested again, and a resumed run writes no second copy.
+   If no obligation binds us, write none and say so in your last line: "read, nothing else for us".
 4. For each obligation write one sentence in plain words. Keep any date in the sentence ("...every year by Nov 15").
    Do not suggest a routine.
 5. Quote the exact words from the document that the sentence rests on, and name the section. Copy the quote character
@@ -37,8 +41,9 @@ Write each one with `hub rules add --kind external --from <From> --text "<senten
 --version <n> --section "<section>" --quote "<quote>"`. Use the file id and the version from the task's `Document:` line.
 Your add is a suggestion; a person adds it. If a write is refused because the quote is not in the document, count it
 and go on. You may cite only the document your task names, at the version it names. Finish with one line for the task:
-how many suggestions you wrote, how many quotes were dropped, the "read, nothing else for us" note if any, and whether
-the document was truncated or held. That line ends the read: when your turn ends, Tico marks the task done with it.
+how many suggestions you wrote, how many quotes were dropped, "read, nothing else for us" when no obligation binds us,
+and whether the document was truncated or held. That line ends the read: when your turn ends, Tico marks the task done
+with it.
 
 ## Questions
 A "can I...?" question names what someone wants to do. Find the active rules that apply with `hub rules list` and
