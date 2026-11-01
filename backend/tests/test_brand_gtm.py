@@ -66,6 +66,10 @@ def test_bots_propose_members_read_only_published_and_admins_confirm(api):
 
     post(api, "goal-proposals", {"kind": "gtm_draft", "payload": {"sections": {"motion": {"primary": "door"}}}},
          token=ops, expected=422)
+    # Filed under a goal, its unpublished words would show on that goal's page to members.
+    goal = post(api, "goals", {"title": "More bookings", "owner": "ana"})["goal"]
+    assert post(api, "goal-proposals", {"kind": "brand_draft", "goal_id": goal["id"], "payload": {
+        "sections": {"positioning": "Secret"}}}, token=ops, expected=422)["error"]["detail"].startswith("a brand or GTM")
     proposal = post(api, "goal-proposals", {"kind": "gtm_draft", "reason": "Referrals bring most bookings.", "payload": {
         "sections": {"motion": {"primary": "local", "secondary": "self_serve"}}}}, token=ops)["proposal"]
     # The proposal carries unpublished words: admins and the bot that made it read it; a member does not.
