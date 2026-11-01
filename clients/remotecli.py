@@ -457,8 +457,11 @@ def run(args, who=None):
     def tool(client, args):
         """The goal, KPI and proposal commands run the MCP tool of the same name, so both say the same thing."""
         from clients import hubtools
-        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
+        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "subsub", "fn", "json") and v is not None}
         fields["operation_id"] = key
+        if args.fn == "brand check":
+            file = fields.pop("file")
+            fields["text"] = sys.stdin.read() if file == "-" else Path(file).read_text()
         if args.fn == "kpi log":
             if fields.pop("estimate", False) and "quality" not in fields:
                 fields["quality"] = "estimate"
@@ -725,7 +728,7 @@ def run(args, who=None):
             if args.body_file:
                 args.body = Path(args.body_file).read_text()
         return tool(client, args)
-    if cmd in ("kpi", "proposal", "strategy"):
+    if cmd in ("kpi", "proposal", "strategy", "brand", "gtm", "growth"):
         return tool(client, args)
     if cmd == "lens":
         from clients import hubtools
@@ -1215,6 +1218,74 @@ def sql_csv(result):
 WORKTREE_WAIT_EXIT = 3
 
 
+def _plain(value, indent=""):
+    """Any JSON value as indented `key: value` lines, empty fields left out."""
+    if isinstance(value, dict):
+        lines = []
+        for k, v in value.items():
+            if v in (None, "", [], {}):
+                continue
+            if isinstance(v, (dict, list)):
+                lines += [f"{indent}{k}:", *_plain(v, indent + "  ")]
+            else:
+                lines.append(f"{indent}{k}: {v}")
+        return lines
+    if isinstance(value, list):
+        lines = []
+        for v in value:
+            if isinstance(v, (dict, list)):
+                inner = _plain(v, indent + "  ")
+                lines += [indent + "- " + inner[0].lstrip(), *inner[1:]] if inner else []
+            else:
+                lines.append(f"{indent}- {v}")
+        return lines
+    return [f"{indent}{value}"]
+
+
+def _table(rows, cols):
+    """Rows as aligned columns: cols are (header, key or function)."""
+    cells = [[h for h, _ in cols]] + [["" if (v := (f(r) if callable(f) else r.get(f))) is None else str(v)
+                                       for _, f in cols] for r in rows]
+    widths = [max(len(row[i]) for row in cells) for i in range(len(cols))]
+    return "\n".join("  ".join(c.ljust(w) for c, w in zip(row, widths, strict=True)).rstrip() for row in cells)
+
+
+def growth_text(fn, result):
+    """`hub brand|gtm|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines.
+    `--json` prints the API response instead."""
+    if not isinstance(result, dict):
+        return "\n".join(_plain(result))
+    if fn in ("brand summary", "gtm summary"):
+        return result.get("text") or "Nothing published yet."
+    if fn == "brand check":
+        hits = result.get("hits") or []
+        if not hits:
+            return f"No hits against brand v{result.get('n', 0)}." if result.get("n") else "No brand published yet."
+        return "\n".join(f"{h['level']}: {h['kind']} \"{h['match']}\" at {h['index']}" + (f" ({h['rule']})" if h.get("rule") else "")
+                         for h in hits)
+    if fn in ("growth channel list",):
+        return _table(result.get("channels") or [], [("slug", "slug"), ("name", "name"), ("stage", "stage"),
+                      ("track", "track"), ("owner", "owner_ref"), ("budget/mo", "budget_month")])
+    if fn in ("gtm sources", "growth source list"):
+        text = _table(result.get("sources") or [], [("id", "id"), ("truth for", "truth_for"), ("system", "system"),
+                      ("reach", lambda r: f"{r.get('reach_kind')}:{r.get('reach_ref') or ''}".rstrip(":")), ("may", "may")])
+        conflicts = result.get("conflicts") or []
+        return text + ("\n\nConflicts:\n" + "\n".join(_plain(conflicts)) if conflicts else "")
+    if fn == "growth idea list":
+        return _table(result.get("ideas") or [], [("id", "task_id"), ("status", "status"), ("ice", "ice"),
+                      ("title", "title"), ("assignee", "assignee")])
+    if fn == "growth economics":
+        rows = list(result.get("rows") or []) + ([result["total"]] if result.get("total") else [])
+        return f"Month: {result.get('month') or 'none yet'}\n" + _table(rows, [
+            ("channel", "name"), ("spend", "spend"), ("bot", "bot_cost"), ("new", "new_customers"), ("CAC", "cac"),
+            ("months", "expected_months"), ("LTV", "ltv"), ("LTV:CAC", "ltv_cac"), ("payback", "payback_months")])
+    if fn == "growth cohort list":
+        return _table(result.get("cohorts") or [], [("month", "month"), ("channel", lambda r: r.get("channel") or "unknown"),
+                      ("spend", "spend"), ("bot", "bot_cost"), ("new", "new_customers"), ("d30", "kept_d30"),
+                      ("d90", "kept_d90"), ("d180", "kept_d180"), ("quality", "quality")])
+    return "\n".join(_plain(result)) or "Nothing yet."
+
+
 def main(args, who=None):
     try:
         result = run(args, who)
@@ -1230,6 +1301,8 @@ def main(args, who=None):
             print(integration_text(result))
         elif args.fn == "tool query-search" and not args.json:
             print(query_text(result) if args.query_id else queries_text(result))
+        elif args.cmd in ("brand", "gtm", "growth") and not getattr(args, "json", False):
+            print(growth_text(args.fn, result))
         elif args.fn == "automation guide" and isinstance(result, dict) and "text" in result:
             print(result["text"])
         elif args.fn == "bot go-live" and isinstance(result, dict) and result.get("state") == "waiting_for_repository":

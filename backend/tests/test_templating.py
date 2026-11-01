@@ -42,5 +42,5 @@ def test_the_catalog_names_aliases_and_pass_throughs():
     assert C.matches("task.done", "task.done") and not C.matches("task.done", "task.done2")
     groups = {e["group"] for e in C.listing()}
     assert groups == {"task", "approval", "needs_you", "bot", "release", "meeting", "strategy", "market", "inbound",
-                      "health", "webhook", "tico", "finance", "custom", "org_rule", "rules"}
+                      "health", "webhook", "tico", "finance", "custom", "org_rule", "rules", "brand", "gtm", "growth"}
     assert all(e["example"] and e["description"] for e in C.listing()) and C.listing("task")[0]["name"] == "task.created"
