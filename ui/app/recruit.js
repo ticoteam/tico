@@ -272,7 +272,7 @@ async function pageSeat(id, template = '') {
   }
   if (load !== RECRUIT.load || !S.route.startsWith('#/seat/')) return;
   if (found.seat?.agent && typeof window.cloudAgentsSeat === 'function') { recruitAgentSeat(main, found.seat.id); return; }
-  if (!arrive) recruitCount(id, found.candidates.length);
+  if (!arrive) recruitCount(id, recruitAll(found).length);
   const pick = template && found.candidates.find(c => c.template === template);
   if (template && !pick) { location.replace(recruitAddress(id)); return; }
   if (pick) recruitApplicant(main, found, pick);
@@ -310,9 +310,27 @@ function recruitRow(c, seat) {
     <span class="rc-act"><a class="ghost small rc-view" href="${esc(href)}">View</a>${hire ? `<button class="primary small" type="button" data-recruit-hire="${esc(c.template)}">Hire</button>` : ''}</span></li>`;
 }
 
+// A cloud coding agent among a coding job's applicants (backend recruiting.candidates `agents`): Hire adds it in the
+// seat (ui/app/cloud-agents.js), with no applicant page of its own.
+function recruitAgentRow(a, seat) {
+  const hire = recruitCanHire(seat) && typeof window.cloudAgentHire === 'function';
+  return `<li class="rc-row rc-agent" data-recruit-agent="${esc(a.id)}">
+    <span class="rc-av rc-av-agent" style="--rc-s:34px" aria-hidden="true">${esc(avInitials(a.name))}</span>
+    <div class="rc-who"><div class="rc-name"><span>${esc(a.name)}</span><span class="rc-tag">Cloud agent · ${esc(a.maker)}</span></div>
+      <p class="rc-line">${esc(a.line)}</p></div>
+    <span class="rc-match ${esc(a.match)}">${RECRUIT_MATCH[a.match] || ''}</span>
+    <span class="rc-act">${hire ? `<button class="primary small" type="button" data-recruit-agent-hire="${esc(a.id)}">Hire</button>` : ''}</span></li>`;
+}
+// Every applicant in the All tab's order: the templates, with a coding job's cloud agents after the ones that are the job.
+function recruitAll(found) {
+  const list = found.candidates || [], agents = found.agents || [], at = Math.min(found.agents_at || 0, list.length);
+  return [...list.slice(0, at), ...agents, ...list.slice(at)];
+}
+const recruitItemRow = (item, seat) => item.source === 'cloud' ? recruitAgentRow(item, seat) : recruitRow(item, seat);
+
 function recruitApplicants(main, found, arrive) {
-  const seat = found.seat, list = found.candidates, cloud = typeof window.cloudAgentsTab === 'function';
-  const tabs = [['all', 'All', list.length], ['templates', 'Templates', list.length], ...(cloud ? [['cloud', 'Cloud agents', null]] : [])];
+  const seat = found.seat, list = found.candidates, all = recruitAll(found), cloud = typeof window.cloudAgentsTab === 'function';
+  const tabs = [['all', 'All', all.length], ['templates', 'Templates', list.length], ...(cloud ? [['cloud', 'Cloud agents', null]] : [])];
   main.innerHTML = `<div class="recruit-page rc-applicants">
     <header class="rc-head">
       ${seat.team ? `<a class="rc-back rc-phone" href="${TEAM_PAGE}${esc(encodeURIComponent(seat.team))}">← ${esc(recruitGroupName(seat.team))}</a>` : ''}
@@ -322,10 +340,10 @@ function recruitApplicants(main, found, arrive) {
         <button class="ghost small" type="button" data-recruit-close>Close job</button></div>` : ''}
     </header>
     <div class="rc-tabs" role="tablist" aria-label="Applicants">${tabs.map(([key, label, n], i) =>
-      `<button type="button" role="tab" id="rc-tab-${key}" aria-selected="${i === 0}" aria-controls="rc-panel" data-recruit-tab="${key}">${label}${n === null ? '' : ` <span class="rc-n" data-count="${arrive ? 0 : n}">${arrive ? 0 : n}</span>`}</button>`).join('')}</div>
+      `<button type="button" role="tab" id="rc-tab-${key}" aria-selected="${i === 0}" aria-controls="rc-panel" data-recruit-tab="${key}">${label}${n === null ? '' : ` <span class="rc-n" data-count="${arrive ? 0 : n}" data-of="${key}">${arrive ? 0 : n}</span>`}</button>`).join('')}</div>
     <div id="rc-panel" role="tabpanel" aria-labelledby="rc-tab-all">
-      <ul class="rc-list" aria-live="polite"${list.length ? '' : ' hidden'}>${arrive ? '' : list.map(c => recruitRow(c, seat)).join('')}</ul>
-      <p class="rc-empty muted"${list.length ? ' hidden' : ''}>No applicants yet. Widen the job description.</p>
+      <ul class="rc-list" aria-live="polite"${all.length ? '' : ' hidden'}>${arrive ? '' : all.map(c => recruitItemRow(c, seat)).join('')}</ul>
+      <p class="rc-empty muted"${all.length ? ' hidden' : ''}>No applicants yet. Widen the job description.</p>
       <div class="rc-cloud" hidden></div>
     </div>
     ${settingsCanCreateBots() ? '<p class="rc-foot"><button class="linkish" type="button" data-recruit-scratch>Build one from scratch</button></p>' : ''}
@@ -335,7 +353,10 @@ function recruitApplicants(main, found, arrive) {
     page.querySelectorAll('[data-recruit-tab]').forEach(t => t.setAttribute('aria-selected', String(t === tab)));
     page.querySelector('#rc-panel').setAttribute('aria-labelledby', tab.id);
     const cloudTab = tab.dataset.recruitTab === 'cloud', box = page.querySelector('.rc-cloud');
-    ul.hidden = cloudTab || !list.length; page.querySelector('.rc-empty').hidden = cloudTab || !!list.length; box.hidden = !cloudTab;
+    // Templates shows the templates alone; All has the cloud agents among them.
+    const templatesTab = tab.dataset.recruitTab === 'templates', shown = templatesTab ? list : all;
+    ul.querySelectorAll('.rc-agent').forEach(row => { row.hidden = templatesTab; });
+    ul.hidden = cloudTab || !shown.length; page.querySelector('.rc-empty').hidden = cloudTab || !!shown.length; box.hidden = !cloudTab;
     if (cloudTab && !box.childElementCount) window.cloudAgentsTab?.(box, seat);
   }; });
   page.onclick = event => {
@@ -344,22 +365,27 @@ function recruitApplicants(main, found, arrive) {
     if (event.target.closest('[data-recruit-scratch]')) { recruitScratch({title: seat.title, brief: seat.description}); return; }
     const hire = event.target.closest('[data-recruit-hire]');
     if (hire) { const c = list.find(x => x.template === hire.dataset.recruitHire); if (c) void recruitHire(found, c, hire.closest('.rc-row'), {}); return; }
+    const agentHire = event.target.closest('[data-recruit-agent-hire]');
+    if (agentHire) { const a = (found.agents || []).find(x => x.id === agentHire.dataset.recruitAgentHire); if (a) window.cloudAgentHire?.(a, seat.id); return; }
     // A phone's card is one tap target: anywhere off its buttons opens the applicant.
     const row = event.target.closest('.rc-row');
-    if (row && !event.target.closest('a,button')) location.hash = row.dataset.href;
+    if (row?.dataset.href && !event.target.closest('a,button')) location.hash = row.dataset.href;
   };
   if (arrive) recruitArrive(page, found);
 }
 // Applicants arrive one by one, best first, with the count ticking in the tab and the sidebar; the header dot works
 // until the last lands. A click anywhere (or reduced motion) puts them all there at once.
 function recruitArrive(page, found) {
-  const seat = found.seat, list = found.candidates, ul = page.querySelector('.rc-list');
+  const seat = found.seat, list = recruitAll(found), ul = page.querySelector('.rc-list');
   const dot = page.querySelector('.rc-hdot .ldot'), counts = page.querySelectorAll('.rc-n');
-  let shown = 0, timer = 0, over = false;
+  let shown = 0, templates = 0, timer = 0, over = false;
   const land = (c, animate) => {
-    ul.insertAdjacentHTML('beforeend', recruitRow(c, seat));
+    ul.insertAdjacentHTML('beforeend', recruitItemRow(c, seat));
+    // A cloud agent landing while Templates is open stays out of it, as the tab's own switch leaves it.
+    if (c.source === 'cloud') ul.lastElementChild.hidden = page.querySelector('[data-recruit-tab="templates"]')?.getAttribute('aria-selected') === 'true';
     shown++;
-    counts.forEach(n => countSet(n, String(shown)));
+    if (c.source !== 'cloud') templates++;
+    counts.forEach(n => countSet(n, String(n.dataset.of === 'templates' ? templates : shown)));
     recruitCount(seat.id, shown);
     if (animate && ul.lastElementChild.animate) ul.lastElementChild.animate(
       [{opacity: 0, transform: 'translateY(8px)'}, {opacity: 1, transform: 'none'}], {duration: 120, easing: 'cubic-bezier(.2,0,0,1)'});
@@ -397,7 +423,7 @@ function recruitApplicant(main, found, c) {
     c.onboarding?.length ? `<h3>Asks you on day one</h3><ul>${c.onboarding.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '',
     `<h3>Model</h3><p>${esc(c.model_name || '')}</p>`].join('');
   main.innerHTML = `<div class="recruit-page rc-applicant${hire ? ' can-hire' : ''}">
-    <a class="rc-back" href="${esc(recruitAddress(seat.id))}">← ${esc(seat.title)} · ${found.candidates.length}</a>
+    <a class="rc-back" href="${esc(recruitAddress(seat.id))}">← ${esc(seat.title)} · ${recruitAll(found).length}</a>
     <div class="rc-cols"><article class="rc-main">
       <header class="rc-who-big">${recruitAvatar(c, 48)}<div><h1>${esc(c.name)}</h1><p class="muted">Template · runs on your computer</p></div></header>
       ${c.tags?.length ? `<div class="rc-chips">${c.tags.slice(0, 6).map(t => `<span>${esc(t)}</span>`).join('')}</div>` : ''}

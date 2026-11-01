@@ -923,6 +923,22 @@ mod tests {
         assert_eq!(compact_at(&json!("120000")), 120000);
         assert_eq!(compact_at(&json!(0)), DEFAULT_COMPACT_AT);
     }
+
+    #[test]
+    fn a_bot_key_problem_is_its_own_grant_and_only_for_a_bot_that_needs_one() {
+        let grants: Map<String, Value> = json!({"has": ["OPENROUTER_API_KEY"]}).as_object().cloned().unwrap();
+        let pi = |model: &str| json!({"runtime": "pi", "harness": "pi", "model": model});
+        assert_eq!(bot_key_problem("pi", &pi("kimi-k3"), "has", &grants), None);
+        assert_eq!(bot_key_problem("pi", &pi("kimi-k3"), "none", &grants), Some("OpenRouter API key required".into()));
+        // A Tico model signs in with the company's gateway key, so it needs no grant of its own.
+        assert_eq!(bot_key_problem("pi", &pi("tico-mid-1.0"), "none", &grants), None);
+        let gemini = json!({"runtime": "gemini", "harness": "gemini", "model": "gemini-3.7-flash"});
+        assert_eq!(bot_key_problem("gemini", &gemini, "has", &grants), Some("Gemini API key required".into()));
+        // Antigravity runs on the Gemini runtime with its own sign-in, not a key here.
+        let antigravity = json!({"runtime": "gemini", "harness": "antigravity", "model": "gemini-3.7-flash"});
+        assert_eq!(bot_key_problem("gemini", &antigravity, "none", &grants), None);
+        assert_eq!(bot_key_problem("claude", &json!({"runtime": "claude"}), "none", &grants), None);
+    }
 }
 
 // Per-host answers behind a capability: generic code reads the manifest's capability and asks here, so the adapters
@@ -977,6 +993,17 @@ pub fn bot_key_sign_in(runtime: &str, assignments: &[Value]) -> (&'static str, S
         "pi" => pi::sign_in(assignments),
         _ => ("unknown", "This harness's key cannot be checked".into()),
     }
+}
+
+/// `sign_in_status.check = "bot-key"`: the problem one bot has with its own key on `runtime`, or None when it holds the
+/// key its runtime reads or needs none here. Only that bot's readiness depends on it, never another bot's grant.
+pub fn bot_key_problem(runtime: &str, config: &Value, bot: &str, grants: &Map<String, Value>) -> Option<String> {
+    let (key, label) = match runtime {
+        "gemini" => (gemini::uses_gemini_cli(config).then_some("GEMINI_API_KEY")?, "Gemini"),
+        "pi" => (pi::needs_grant(config).then_some("OPENROUTER_API_KEY")?, "OpenRouter"),
+        _ => return None,
+    };
+    (!gemini::has_grant_in(grants, bot, key)).then(|| format!("{label} API key required"))
 }
 
 /// Hand a host's default computer-login store to the account that runs its CLI. Profile homes have their own handoff.
