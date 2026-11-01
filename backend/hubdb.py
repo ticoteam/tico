@@ -1246,6 +1246,13 @@ def migrate(conn, adopt_legacy=False):
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version == 0 and not adopt_legacy:
         _refuse_foreign(conn)
+    if version < len(MIGRATIONS):
+        # A file from before the bridge (the legacy import; preflight refuses one otherwise) runs the numbered steps
+        # below on its old shape, and they name today's columns, so it takes the cleanup's column renames first. A file
+        # at the bridge gets them from their migration files (backend/migrations/0013_rails_renames_wave1.py), and a new
+        # file has no tables to rename.
+        from .migrations import renames
+        renames.apply_now(conn)
     from .flight import begin
     for i in range(version, len(MIGRATIONS)):
         done = begin(conn)
@@ -1266,6 +1273,11 @@ def migrate(conn, adopt_legacy=False):
             raise
         finally:
             done()
+    # The migration files (backend/migrations) run next, before every CREATE, ALTER and add_column below and in the
+    # module schema code: those name the current columns, so a rename must land first or they would add an empty
+    # column beside the old one.
+    from . import migrations
+    migrations.apply(conn)
     ensure_market_reads(conn)
     # Cloud added explicit room scopes after the original local schema. Keep old local
     # databases usable without relying on SQLite's unsupported ADD COLUMN IF NOT EXISTS.

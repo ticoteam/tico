@@ -1,4 +1,4 @@
-"""The cleanup's startup renames (backend/schema_renames.py) upgrade a database from before the cleanup in place.
+"""The cleanup's startup renames (backend/migrations/renames.py) upgrade a database from before the cleanup in place.
 
 The old database is backend/tests/fixtures/schema_pre_cleanup.sql, a dump of a fresh hub at the last release
 before the renames (schema 71), with a few rows written under the old column names. One boot renames every
@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from backend import schema_renames
+from backend.migrations import renames as schema_renames
 from backend.config import Settings
-from backend.schema_renames_data import COLUMNS
+from backend.migrations.renames_data import COLUMNS
 from backend.store import Store
 
 FIXTURE = Path(__file__).parent / "fixtures" / "schema_pre_cleanup.sql"
@@ -41,7 +41,7 @@ def restore(path):
     conn.close()
     conn = sqlite3.connect(path)        # the dump writes the FTS tables' schema rows; a new connection reads them
     conn.executescript(f"""
-        INSERT INTO bots(slug, display_name, state, created) VALUES('ops', 'Ops', 'active', '{NOW}');
+        INSERT INTO bots(id, slug, display_name, state, created) VALUES('ops', 'ops', 'Ops', 'active', '{NOW}');
         INSERT INTO humans(id, name, email, teams_json) VALUES('ana', 'Ana', 'ana@acme.example', '["ops"]');
         INSERT INTO runners(id, label, operator, token_hash, created, readiness_json)
         VALUES('runner-1', 'Acme Mac', 'ana', 'hash', '{NOW}', '{{"ok":true}}');
@@ -53,7 +53,7 @@ def restore(path):
                'conv-1', '{NOW}', '{NOW}', '["launch"]', '["it ships"]');
         INSERT INTO messages(id, conversation_id, from_actor, to_actor, kind, body, refs_json, created)
         VALUES('msg-1', 'conv-1', 'human:ana', 'human:ben', 'chat', 'hello', '{{"task":"task-1"}}', '{NOW}');
-        INSERT INTO jobs(id, message_id, bot, state, created) VALUES('job-1', 'msg-1', 'ops', 'done', '{NOW}');
+        INSERT INTO jobs(id, message_id, bot, state, created) VALUES('job-1', 'msg-1', 'ops', 'completed', '{NOW}');
         INSERT INTO attempts(id, job_id, bot, runner_id, generation, token_hash, state, lease_until, created,
                              started, finished, result_json)
         VALUES('att-1', 'job-1', 'ops', 'runner-1', 1, 'hash', 'completed', '{NOW}', '{NOW}', '{NOW}', '{NOW}',
@@ -151,6 +151,26 @@ def test_the_external_sections_search_index_still_matches_its_table(upgraded):
     assert [r[0] for r in hits] == [901]
     conn.execute("INSERT INTO external_sections_fts(external_sections_fts) VALUES('integrity-check')")
     conn.rollback()
+
+
+def test_an_upgraded_database_has_the_shape_of_a_new_one(upgraded, tmp_path):
+    """The migration files run on the old shape and the startup code makes the new one: both roads end at the same
+    tables, columns, indexes, triggers and views (SQLite's rewrite may quote a renamed name; that is all)."""
+    _store, conn, _before = upgraded
+    fresh = tmp_path / "fresh.sqlite"
+    Store(Settings(db_path=fresh)).initialize()
+
+    def shape(c):
+        tables = {t: columns(c, t) for (t,) in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        others = {(kind, name): re.sub(r"\s+", " ", sql).replace('"', "") for kind, name, sql in c.execute(
+            "SELECT type, name, sql FROM sqlite_master WHERE type!='table' AND sql IS NOT NULL")}
+        return tables, others
+
+    new_conn = sqlite3.connect(fresh)
+    try:
+        assert shape(conn) == shape(new_conn)
+    finally:
+        new_conn.close()
 
 
 def test_a_second_boot_changes_nothing(upgraded):

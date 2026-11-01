@@ -1,4 +1,4 @@
--- The schema and seed rows of a fresh database before the cleanup renames (backend/schema_renames.py).
+-- The schema and seed rows of a fresh database before the cleanup renames (backend/migrations/renames.py).
 -- backend/tests/test_schema_renames.py upgrades it; scripts/cleanup/gen_map.py reads the schema from it.
 BEGIN TRANSACTION;
 CREATE TABLE agent_pairings(

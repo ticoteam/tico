@@ -6,8 +6,9 @@ in order. Each one runs in its own transaction together with its `schema_migrati
 behind and the next start tries it again. An applied file is never edited: its checksum is recorded, and a start refuses
 a database whose recorded checksum no longer matches its file.
 
-`Store.initialize` calls `apply` right after hubdb's own steps and before the module schema code (the SCHEMA scripts,
-ensure_schema and add_column calls), so a rename or move lands before code that uses the new names. On a new file a
+`hubdb.migrate` (every hubdb.connect) calls `apply` right after hubdb's numbered steps and before its own startup schema
+code and the module schema code in `Store.initialize` (the SCHEMA scripts, ensure_schema and add_column calls), so a
+rename or move lands before code that uses the new names. On a new file a
 module's tables do not exist yet when the migrations run: a migration that touches one skips it when it is absent, and
 the module's CREATE then makes the new shape.
 

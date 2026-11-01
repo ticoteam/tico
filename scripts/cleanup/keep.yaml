@@ -5,8 +5,8 @@
 files:
   - connectors/mail/*            # the mail connector's own mail.db (connectors/mail/db.py), not hub tables
   - connectors/mail/**
-  - backend/schema_renames.py     # the rename machinery itself names the old columns
-  - backend/schema_renames_data.py
+  - backend/migrations/renames.py     # the rename machinery itself names the old columns
+  - backend/migrations/renames_data.py
   - backend/tests/test_schema_renames.py
   - backend/tests/fixtures/*
   - backend/tests/fixtures/**

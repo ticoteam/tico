@@ -1104,11 +1104,10 @@ class Store:
         from . import migrations as Migrations
         Migrations.preflight(self.settings.db_path, adopt_legacy=adopt_legacy)
         with H.connect(self.settings.db_path, adopt_legacy=adopt_legacy) as c:
-            # hubdb's own steps ran in connect. The pending migration files run next, before the module schema code
-            # below: a rename or move must land before startup code that already uses the new names creates or alters
+            # hubdb.connect ran hubdb's numbered steps, then the pending migration files, then its own startup schema
+            # code, so a rename or move lands before any code that already uses the new names creates or alters
             # anything. On a new file a module's tables do not exist yet; a migration skips them and the module's
-            # CREATE makes the new shape (backend/migrations).
-            Migrations.apply(c)
+            # CREATE below makes the new shape (backend/migrations).
             c.executescript(SCHEMA)
             from . import start_places as _start_places
             c.executescript(_start_places.SCHEMA)
