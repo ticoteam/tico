@@ -1,6 +1,6 @@
 /* ui/app/operations-due.js — Due dates on a location's or equipment's panel: list, add, mark done, reopen, completion history.
    Each occurrence completes and reopens on its own (actions due_date_occurrence_complete and _reopen).
-   Reads GET /api/v2/due-dates?subject_type=&subject_id=; writes go through finAct. Screens call them due dates.
+   Reads GET /api/v2/due-dates?subject_type=&subject_id= and each one's detail (GET /api/v2/due-dates/{id}, its history); writes go through finAct. Screens call them due dates.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -19,7 +19,8 @@ async function opsDueLoad(box) {
   let dues = [], failed = null;
   try {
     const read = await get('/v2/due-dates?' + opsQs({subject_type: box.subjectType, subject_id: box.subjectId, limit: 50}), {fresh: true});
-    dues = (read?.due_dates || []).filter(d => d.subject_id === box.subjectId);
+    // The list has no occurrences; a due date's detail has them, as `history`.
+    dues = await Promise.all((read?.due_dates || []).map(d => get(`/v2/due-dates/${encodeURIComponent(d.id)}`, {fresh: true}).then(x => x?.due_date || d).catch(() => d)));
   } catch (e) { if (!opsAbsent(e)) failed = e; }
   if (load !== box.load || !document.getElementById(box.hostId)) return;
   box.dues = dues;
@@ -47,9 +48,8 @@ function opsDueDraw(box, failed = null) {
   });
 }
 function opsDueRow(box, d, edit) {
-  const state = opsDueState(d.next_due_on);
-  const tag = state === 'overdue' ? '<span class="pill fail">Overdue</span>' : state === 'soon' ? '<span class="pill waiting">Due soon</span>' : '';
-  const done = (d.occurrences || []).filter(o => o.completed_at).sort((a, b) => String(b.completed_at).localeCompare(String(a.completed_at)));
+  const tag = d.status === 'overdue' ? '<span class="pill fail">Overdue</span>' : d.status === 'due' ? '<span class="pill waiting">Due soon</span>' : '';
+  const done = (d.history || []).filter(o => o.completed_at).sort((a, b) => String(b.completed_at).localeCompare(String(a.completed_at)));
   const next = edit && d.next_due_on ? `<button type="button" class="ghost ops-mini" data-due-done="${esc(d.id)}" data-on="${esc(d.next_due_on)}">Mark done</button>` : '';
   const hist = done.map(o => `<li><span>${esc(opsDay(o.due_on))}</span><span class="muted">${esc(opsDay(o.completed_at))}${o.completed_by_id ? ' · ' + esc(actorLabel(o.completed_by_id)) : ''}</span>
     ${edit ? `<button type="button" class="linkish" data-due-reopen="${esc(d.id)}" data-on="${esc(o.due_on)}">Reopen</button>` : ''}</li>`).join('');

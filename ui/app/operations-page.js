@@ -1,6 +1,6 @@
 /* ui/app/operations-page.js — The Operations section (#/operations): its head and tabs, each tab's table, search, filters,
    Show inactive, + Add and the record forms. A tab's address is #/operations/<tab>; ?id=<record> opens that record's panel
-   (operations-panels.js), so Back closes it and any page may link to one. Due dates are operations-due.js; Import CSV is
+   (operations-panels.js) and ?customer=<contact> a customer's, so Back closes it and any page may link to one. Due dates are operations-due.js; Import CSV is
    operations-import.js.
    Reads GET /api/v2/{locations,items,projects,equipment}; every write is POST /api/v2/finance/actions (finAct), so gates,
    approvals and audit stay one system. Money shows only when the API returns it, and what the viewer sees is the API's cut.
@@ -20,13 +20,14 @@ const OPS_EQUIPMENT_KINDS = [['owned', 'Owned'], ['customer', 'Customer']];
 const OPS_PROJECT_STATUSES = [['open', 'Open'], ['closed', 'Closed']];
 const OPS_SOURCE_ICONS = {quickbooks: 'account_balance', xero: 'account_balance', stripe: 'payments', square: 'store', shopify: 'shopping_cart', csv: 'description', tico: 'edit_note'};
 const OPS_SOURCE_NAMES = {quickbooks: 'QuickBooks', xero: 'Xero', stripe: 'Stripe', square: 'Square', shopify: 'Shopify', csv: 'CSV import', tico: 'Tico'};
-// How far ahead Due soon and Warranty ending look.
-const OPS_DUE_SOON_DAYS = 30, OPS_WARRANTY_DAYS = 90;
+// How far ahead Due soon looks on a row.
+const OPS_DUE_SOON_DAYS = 30;
 let OPS = null;           // the open page: {load, tab, sel, rows, next, money, refs, panelLoad}
 const OPS_FILTERS = {};   // each tab's search and filters, kept while the person moves between tabs
-let OPS_REFS = null;      // what the forms pick from and rows name: {contacts, locations}, read once a visit
+let OPS_REFS = null;      // what the forms pick from and rows name: {customers, locations, accounts}, read once a visit
 
 const opsHref = (tab, id = '') => `${OPS_ROUTE}/${tab}${id ? '?id=' + encodeURIComponent(id) : ''}`;
+const opsCustomerHref = (tab, id) => `${OPS_ROUTE}/${tab}?customer=${encodeURIComponent(id)}`;
 const opsQs = obj => new URLSearchParams(Object.entries(obj).filter(([, v]) => v != null && v !== '')).toString();
 const opsLabel = (pairs, value) => (pairs.find(([v]) => v === value) || [])[1] || value || '';
 const opsDayAdd = days => { const d = new Date(); d.setDate(d.getDate() + days); return finIso(d); };
@@ -39,14 +40,13 @@ const opsMoney = (r, c = r.price) => c == null ? '' : finUsd(c) + (r.currency &&
 const opsEditor = () => settingsIsAdmin() || !!finCapsOf(FIN_ACCESS, finMe())?.may('finance.records');
 // Part of the company's lines: figures are labeled, never called a total.
 const opsPartial = report => !!report?.excluded || !finCapsOf(FIN_ACCESS, finMe())?.company;
-const opsSourceKey = r => String(r.source || r.sources?.[0]?.system || 'tico').toLowerCase();
+const opsSourceKey = r => String(r.source || 'tico').toLowerCase();
 function opsSourceIcon(r) {
   const key = opsSourceKey(r), name = OPS_SOURCE_NAMES[key] || key;
   return `<span class="nav-icon ops-src" title="${esc(name)}" role="img" aria-label="${esc(name)}">${esc(OPS_SOURCE_ICONS[key] || 'description')}</span>`;
 }
-const opsContact = (id, refs = OPS_REFS) => (refs?.contacts || []).find(c => c.id === id);
-const opsCustomerName = r => r.customer_name || r.customer?.name || opsContact(r.customer_id)?.name || '';
-const opsLocationName = r => r.location_name || r.location?.name || (OPS_REFS?.locations || []).find(l => l.id === r.location_id)?.name || '';
+const opsCustomerName = r => r.customer_name || '';
+const opsLocationName = r => r.location_name || (OPS_REFS?.locations || []).find(l => l.id === r.location_id)?.name || '';
 
 // The tabs in this company's sidebar choice, keeping the one a link opened even when it is hidden. All hidden lists all:
 // the page opened by a bookmark still has its tabs.
@@ -63,15 +63,16 @@ function opsHead(tab) {
 // ----------------------------------------------------------------- the page
 function pageOperations() {
   const [path, query] = (S.route || '').split('?');
-  const tab = path.slice(OPS_ROUTE.length + 1).split('/')[0], id = new URLSearchParams(query || '').get('id') || '';
+  const tab = path.slice(OPS_ROUTE.length + 1).split('/')[0], ask = new URLSearchParams(query || '');
+  const id = ask.get('id') || '', customer = ask.get('customer') || '';
   if (!OPS_TABS.some(([t]) => t === tab)) { location.replace(opsHref(opsTabsShown()[0][0])); return; }
   const main = $('#main');
   main.classList.add('strategy-layout', 'operations-layout');
   // Same tab: a panel opened or closed, and the table stays as it is.
-  if (OPS?.tab === tab && $('#ops-body')) { OPS.sel = id; opsSelect(); return; }
+  if (OPS?.tab === tab && $('#ops-body')) { OPS.sel = id; OPS.customer = customer; opsSelect(); return; }
   document.querySelectorAll('dialog.fin-dlg').forEach(d => d.close());
-  const state = OPS = {load: 0, tab, sel: id, rows: [], next: null, money: null, moneyPartial: false, panelLoad: 0, loaded: false};
-  OPS_FILTERS[tab] ||= {q: '', inactive: false, customer: '', due: '', kind: '', status: ''};
+  const state = OPS = {load: 0, tab, sel: id, customer, rows: [], next: null, money: null, moneyPartial: false, panelLoad: 0, loaded: false};
+  OPS_FILTERS[tab] ||= {q: '', inactive: false, customer: '', location: '', due: '', kind: '', status: ''};
   main.innerHTML = opsHead(tab) + `<div id="ops-body" class="ops-body">${skelRows(6, {dot: false})}</div>`;
   void (async () => {
     await opsRefs();
@@ -83,23 +84,27 @@ function pageOperations() {
 function operationsStop() {
   if (OPS && !rdUnder(S.route || '', OPS_ROUTE)) { OPS = null; OPS_REFS = null; document.querySelectorAll('dialog.fin-dlg').forEach(d => d.close()); }
 }
-// Who may edit, the customers and the locations. Each may be refused or absent; the page draws without it.
+// Who may edit, the customers (every teammate reads their names), the locations, and the accounts for whoever holds the
+// books. Each may be refused or absent; the page draws without it.
 async function opsRefs(fresh = false) {
   if (OPS_REFS && !fresh) return OPS_REFS;
   const list = (promise, key) => promise.then(r => r?.[key] || []).catch(() => []);
-  const [, contacts, locations] = await Promise.all([finProbe(),
-    list(get('/v2/finance/contacts?' + opsQs({limit: 200}), {fresh: true}), 'contacts'),
+  const [, customers, locations] = await Promise.all([finProbe(),
+    list(get('/v2/customers?' + opsQs({limit: 200}), {fresh: true}), 'customers'),
     list(get('/v2/locations?' + opsQs({limit: 200}), {fresh: true}), 'locations')]);
-  return (OPS_REFS = {contacts, locations});
+  // Accounts are for whoever may set them; a teammate holding only the records right never sees the picker.
+  const accounts = finCapsOf(FIN_ACCESS, finMe())?.may('finance.book') ? await list(get('/v2/finance/chart', {fresh: true}), 'accounts') : [];
+  return (OPS_REFS = {customers, locations, accounts});
 }
 
 // ----------------------------------------------------------------- the columns
 const OPS_COLS = {
   locations: () => [['Name', r => opsNameCell(r)], ['Kind', r => esc(opsLabel(OPS_LOCATION_KINDS, r.kind))], ['Customer', r => esc(opsCustomerName(r))],
-    ['City, State', r => esc([r.address?.city, r.address?.state].filter(Boolean).join(', '))],
-    ['In books', r => r.books_pending ? 'Pending' : r.in_books == null ? '' : r.in_books ? 'Yes' : 'No'], ['Source', opsSourceIcon]],
-  items: () => [['Name', r => opsNameCell(r)], ['SKU', r => esc(r.sku || '')], ['Kind', r => esc(opsLabel(OPS_ITEM_KINDS, r.kind))],
-    ['Price', r => opsMoney(r), 'ops-n'], ['On hand', r => r.quantity_on_hand == null ? '' : esc(String(r.quantity_on_hand)), 'ops-n'], ['Source', opsSourceIcon]],
+    ['City, State', r => esc([r.address?.city, r.address?.state].filter(Boolean).join(', '))], ['Source', opsSourceIcon]],
+  // On hand shows once a row carries it.
+  items: state => [['Name', r => opsNameCell(r)], ['SKU', r => esc(r.sku || '')], ['Kind', r => esc(opsLabel(OPS_ITEM_KINDS, r.kind))],
+    ['Price', r => opsMoney(r), 'ops-n'],
+    ...(state.rows.some(r => r.quantity_on_hand != null) ? [['On hand', r => r.quantity_on_hand == null ? '' : esc(String(r.quantity_on_hand)), 'ops-n']] : []), ['Source', opsSourceIcon]],
   projects: state => {
     const money = state.money;
     const cell = field => r => { const m = money?.get(r.id); return m ? finUsd(m[field]) : ''; };
@@ -119,16 +124,13 @@ const opsDueState = day => !day ? '' : day < finToday() ? 'overdue' : day <= ops
 
 // ----------------------------------------------------------------- the bar and the table
 function opsFilterControls(state) {
-  const f = OPS_FILTERS[state.tab], names = new Map((OPS_REFS?.contacts || []).filter(c => c.kind !== 'vendor').map(c => [c.id, c.name]));
-  const customers = () => {
-    // A teammate who can't read contacts still filters by the customers the rows name.
-    for (const r of state.rows) if (r.customer_id && opsCustomerName(r)) names.set(r.customer_id, opsCustomerName(r));
-    return `<select data-ops-f="customer" aria-label="Customer">${grOpts([...names].sort((a, b) => String(a[1]).localeCompare(String(b[1]))), f.customer, 'All customers')}</select>`;
-  };
-  if (state.tab === 'locations') return customers();
-  if (state.tab === 'items') return `<select data-ops-f="kind" aria-label="Kind">${grOpts(OPS_ITEM_KINDS, f.kind, 'All kinds')}</select>`;
-  if (state.tab === 'projects') return `<select data-ops-f="status" aria-label="Status">${grOpts(OPS_PROJECT_STATUSES, f.status, 'All statuses')}</select>`;
-  return customers() + `<select data-ops-f="due" aria-label="Due">${grOpts([['soon', 'Due soon'], ['overdue', 'Overdue'], ['warranty', 'Warranty ending']], f.due, 'Any date')}</select>`;
+  const f = OPS_FILTERS[state.tab], pick = (key, label, pairs, all) => `<select data-ops-f="${key}" aria-label="${label}">${grOpts(pairs, f[key], all)}</select>`;
+  const customers = () => pick('customer', 'Customer', opsCustomers(), 'All customers');
+  if (state.tab === 'locations') return customers() + pick('kind', 'Kind', OPS_LOCATION_KINDS, 'All kinds');
+  if (state.tab === 'items') return pick('kind', 'Kind', OPS_ITEM_KINDS, 'All kinds');
+  if (state.tab === 'projects') return pick('status', 'Status', OPS_PROJECT_STATUSES, 'All statuses') + customers();
+  return customers() + pick('location', 'Location', opsLocations(), 'All locations')
+    + pick('due', 'Due', [['soon', 'Due soon'], ['overdue', 'Overdue'], ['warranty', 'Warranty ending']], 'Any date');
 }
 function opsShell(state) {
   const f = OPS_FILTERS[state.tab], edit = opsEditor(), one = {locations: 'locations', items: 'products and services', projects: 'projects', equipment: 'equipment'}[state.tab];
@@ -162,7 +164,9 @@ async function opsLoad(state, more = false) {
   const f = OPS_FILTERS[state.tab], load = ++state.load;
   const params = {q: f.q, archived: f.inactive ? 'all' : 'hide', limit: 50, cursor: more ? state.next : '', customer_id: f.customer, kind: f.kind, status: f.status};
   if (state.tab === 'equipment') {
-    if (f.due === 'warranty') params.warranty_ends_by = opsDayAdd(OPS_WARRANTY_DAYS);
+    params.location_id = f.location;
+    if (f.due === 'warranty') params.warranty = 'ending';
+    else params.due = f.due;
   }
   let page, money = state.money;
   try {
@@ -186,19 +190,12 @@ async function opsLoad(state, more = false) {
   opsTable(state);
   opsSelect();
 }
-// Filters run here as well as on the server, so a list is right whichever of them a route answers.
-function opsVisible(state) {
-  const f = OPS_FILTERS[state.tab];
-  return state.rows.filter(r => (!f.customer || r.customer_id === f.customer) && (!f.kind || r.kind === f.kind) && (!f.status || r.status === f.status)
-    && (!f.due || (f.due === 'warranty' ? !!r.warranty_ends_on && r.warranty_ends_on >= finToday() && r.warranty_ends_on <= opsDayAdd(OPS_WARRANTY_DAYS)
-      : f.due === 'overdue' ? opsDueState(r.next_due_on) === 'overdue' : opsDueState(r.next_due_on) === 'soon')));
-}
 function opsTable(state) {
   const host = $('#ops-table'); if (!host) return;
   const filters = $('#ops-filters');
   if (filters && !filters.contains(document.activeElement)) patchHTML(filters, opsFilterControls(state));
-  const rows = opsVisible(state), cols = OPS_COLS[state.tab](state);
-  const f = OPS_FILTERS[state.tab], narrowed = !!(f.q || f.customer || f.kind || f.status || f.due);
+  const rows = state.rows, cols = OPS_COLS[state.tab](state);
+  const f = OPS_FILTERS[state.tab], narrowed = !!(f.q || f.customer || f.location || f.kind || f.status || f.due);
   if (!rows.length) {
     const noun = {locations: 'locations', items: 'products or services', projects: 'projects', equipment: 'equipment'}[state.tab];
     host.innerHTML = `<p class="muted ops-note">No ${noun}${narrowed ? ' match' : ''}</p>`;
@@ -220,7 +217,7 @@ function opsTable(state) {
 // ----------------------------------------------------------------- the forms
 const opsField = (label, control, attrs = '') => `<label${attrs ? ' ' + attrs : ''}><span>${esc(label)}</span>${control}</label>`;
 const opsInput = (label, name, value = '', attrs = '') => opsField(label, `<input name="${name}" value="${esc(value ?? '')}"${attrs ? ' ' + attrs : ''}>`);
-const opsCustomers = () => (OPS_REFS?.contacts || []).filter(c => c.kind !== 'vendor').map(c => [c.id, c.name]);
+const opsCustomers = () => (OPS_REFS?.customers || []).map(c => [c.id, c.name]);
 const opsLocations = (but = '') => (OPS_REFS?.locations || []).filter(l => !l.archived_at && l.id !== but).map(l => [l.id, l.name]);
 // A pick list, holding on to the record's own value when the list no longer offers it (archived, or out of the viewer's list).
 function opsPick(label, name, pairs, value, blank = '—', ownName = '') {
@@ -234,12 +231,13 @@ const opsLocationFields = r => {
     ${opsPick('Kind', 'kind', OPS_LOCATION_KINDS, r?.kind || 'store', null)}
     ${opsPick('Parent', 'parent_id', opsLocations(r?.id), r?.parent_id, '—')}
     ${opsPick('Customer', 'customer_id', opsCustomers(), r?.customer_id, '—', r && opsCustomerName(r))}
-    ${opsInput('Street', 'street', a.street || a.line1)}
+    ${opsInput('Street', 'street', a.street)}
     ${opsInput('City', 'city', a.city)}${opsInput('State', 'state', a.state)}${opsInput('Postal code', 'postal_code', a.postal_code)}
     ${r ? '' : `<label class="ops-inline"><input type="checkbox" name="in_books" checked><span>In books</span></label>`}`;
 };
-const opsItemFields = (r, accounts) => {
-  const account = (label, name) => opsPick(label, name, accounts.map(a => [a.id, `${a.number || ''} ${a.name}`.trim()]), r?.[name], '—');
+const opsItemFields = r => {
+  const accounts = OPS_REFS?.accounts || [];
+  const account = (label, name) => opsPick(label, name, accounts.map(a => [a.id, `${a.code || ''} ${a.name}`.trim()]), r?.[name], '—');
   const price = r && r.price != null ? (r.price / 100).toFixed(2) : '';
   return `${opsInput('Name', 'name', r?.name, 'maxlength="200" required')}
     ${opsPick('Kind', 'kind', OPS_ITEM_KINDS, r?.kind || 'service', null)}
@@ -288,14 +286,9 @@ function opsPayload(tab, values, was) {
   if (!was) return Object.fromEntries(Object.entries(values).filter(([, x]) => !opsEmpty(x)));
   return {[one + '_id']: was.id, ...Object.fromEntries(Object.entries(values).filter(([k, x]) => !opsSame(x, was[k])))};
 }
-async function opsForm(tab, was) {
+function opsForm(tab, was) {
   const one = OPS_ONE[tab], title = (was ? 'Edit ' : 'New ') + {locations: 'location', items: 'product or service', projects: 'project', equipment: 'equipment'}[tab];
-  let accounts = [];
-  // Accounts are for whoever may set them; a teammate holding only the records right never sees the picker.
-  if (tab === 'items' && finCapsOf(FIN_ACCESS, finMe())?.may('finance.book')) {
-    accounts = await get('/v2/finance/chart', {fresh: true}).then(r => r?.accounts || []).catch(() => []);
-  }
-  const fields = {locations: opsLocationFields, items: r => opsItemFields(r, accounts), projects: opsProjectFields, equipment: opsEquipmentFields}[tab](was);
+  const fields = {locations: opsLocationFields, items: opsItemFields, projects: opsProjectFields, equipment: opsEquipmentFields}[tab](was);
   const dlg = finDialog(title, fields, was ? 'Save' : 'Add', async form => {
     const values = opsFormValues(tab, form);
     if (!values.name) throw new Error('A name');
