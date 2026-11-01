@@ -53,11 +53,11 @@ class Migration:
 
 
 def files(directory=None):
-    """The migration files in version order. A file that is named like one but does not match is an error, not skipped."""
+    """The migration files in version order. A name that starts with a digit must match NNNN_name.sql or .py: a file
+    named like one but not matching is an error, not skipped. Only digit-led names are listed, so this module does not
+    read every tracked file (a bare "*" listing makes the dependency map treat any change as its input)."""
     found = []
-    for path in Path(directory or DIRECTORY).glob("*"):
-        if path.suffix not in (".sql", ".py") or path.stem == "__init__":
-            continue
+    for path in Path(directory or DIRECTORY).glob("[0-9]*"):
         if not NAME.fullmatch(path.name):
             raise MigrationError(f"{path.name} is not a migration name: use NNNN_name.sql or NNNN_name.py")
         found.append(Migration(path))
