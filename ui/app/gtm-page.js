@@ -66,7 +66,7 @@ function pageGtm() {
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
   main.innerHTML = redesignStrategyHead('gtm') + `<div id="gr-body" class="gr-body">${GT.data ? '' : skelRows(6, {dot: false})}</div>`;
-  if (GT.data) gtmDraw();
+  if (GT.data) { gtmDraw(); GT.drawn = true; }
   void gtmRead(GT);
 }
 async function gtmRead(state) {
@@ -74,7 +74,11 @@ async function gtmRead(state) {
     const [data, ch, src, k] = await Promise.all([get('/v2/gtm', {fresh: true}), get('/v2/growth/channels', {fresh: true}),
       get('/v2/growth/sources', {fresh: true}), get('/v2/growth/kpis', {fresh: true}).catch(() => ({kpis: []}))]);
     if (GT !== state) return;
-    Object.assign(state, {data, ch: ch.channels || [], src: src.sources || [], conflicts: src.conflicts || [], kpis: k.kpis || []});
+    const next = {data, ch: ch.channels || [], src: src.sources || [], conflicts: src.conflicts || [], kpis: k.kpis || []};
+    // A page already drawn from the last read keeps what is being typed when nothing changed.
+    const same = state.drawn && JSON.stringify(next) === JSON.stringify({data: state.data, ch: state.ch, src: state.src, conflicts: state.conflicts, kpis: state.kpis});
+    Object.assign(state, next);
+    if (same) return;
   } catch (e) { if (GT === state) $('#gr-body').innerHTML = grFail(e); return; }
   gtmDraw();
 }

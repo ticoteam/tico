@@ -34,7 +34,7 @@ function growthIdeaDraw(slot) {
   const link = t => `<a href="${grTaskHref(t)}">${esc(titles.get(t) || t)}</a>`;
   const ice = may ? `<form class="gi-ice" data-gi-ice novalidate aria-label="ICE">${[['i', 'Impact', i.ice_i], ['c', 'Confidence', i.ice_c], ['e', 'Ease', i.ice_e]].map(([k, label, v]) =>
       `<label class="gi-icef"><span>${esc(label[0])}</span><input type="number" name="${k}" min="1" max="10" step="1" value="${esc(v ?? '')}" aria-label="${esc(label)}"></label>`).join('')}
-      <span class="gr-ice">${i.ice != null ? esc(grX(i.ice)) : ''}</span><button class="ghost small" type="submit">Score</button></form>`
+      ${i.ice != null ? `<span class="gr-ice">= ${esc(grX(i.ice))}</span>` : ''}<button class="ghost small" type="submit">Score</button></form>`
     : i.ice != null ? `<span class="gr-ice">ICE ${esc([i.ice_i, i.ice_c, i.ice_e].map(x => x ?? '—').join(' · '))}</span>` : '';
   const testing = i.status === 'testing', done = GR_RESULTS.includes(i.status);
   const test = i.test_to || i.change ? `<section class="gi-sec"><h4 class="gr-k">Test</h4><dl class="br-dl">${dl([['Window', [grDay(i.test_from), grDay(i.test_to)].filter(Boolean).join(' – ')],

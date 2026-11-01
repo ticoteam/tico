@@ -194,11 +194,11 @@ function pageBrand() {
   const load = ++GR_LOAD;
   document.querySelectorAll('dialog.gr-dlg').forEach(d => d.close());
   BR = {load, data: BR?.data || null, view: path === BRAND_ROUTE + '/edit' ? 'edit' : 'book',
-    sub: new URLSearchParams(query || '').get('s') || BR?.sub || 'positioning', props: [], hits: null, text: BR?.text || '', publishing: false};
+    sub: new URLSearchParams(query || '').get('s') || BR?.sub || 'positioning', props: BR?.props || [], hits: null, text: BR?.text || '', publishing: false};
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
   main.innerHTML = redesignStrategyHead('brand') + `<div id="gr-body" class="gr-body">${BR.data ? '' : skelRows(6, {dot: false})}</div>`;
-  if (BR.data) brandDraw();
+  if (BR.data) { brandDraw(); BR.drawn = true; }
   void brandRead(BR);
 }
 async function brandRead(state) {
@@ -206,7 +206,10 @@ async function brandRead(state) {
     const [data, props] = await Promise.all([get('/v2/brand', {fresh: true}),
       grAdmin() ? get('/v2/proposals', {fresh: true}).then(r => (r.proposals || []).filter(p => p.kind === 'brand_draft')).catch(() => []) : []]);
     if (BR !== state) return;
+    // A page already drawn from the last read keeps what is being typed when nothing changed.
+    const same = state.drawn && JSON.stringify([data, props]) === JSON.stringify([state.data, state.props]);
     state.data = data; state.props = props;
+    if (same) return;
   } catch (e) { if (BR === state) $('#gr-body').innerHTML = grFail(e); return; }
   if (state.view === 'edit' && !grDocMay(state.data)) { location.replace(BRAND_ROUTE); return; }
   brandDraw();
