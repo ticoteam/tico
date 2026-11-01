@@ -340,11 +340,11 @@ def _may_hire(auth, c, who, row):
 
 
 def top_card(auth, onboarding, c, who, row):
-    """The raw card of the template Recruit ranks first for the seat, or None when no template fits it. A cloud agent's
+    """The raw card of the template Recruit ranks first for the seat, or None when none fits it (no Strong or Good match). A cloud agent's
     add to a seat builds its bot from this card, since a bot's repository is built from a template."""
     ranked = candidates(auth, onboarding, c, who, row["id"])["candidates"]
     _, cards = _recruitable(onboarding)
-    template = ranked[0]["template"] if ranked else ""
+    template = ranked[0]["template"] if ranked and ranked[0]["match"] else ""   # a template that does not fit is not one
     return next((card["raw"] for card in cards if card["template"] == template), None)
 
 

@@ -594,3 +594,30 @@ def test_a_request_a_stopped_process_left_filing_is_released_when_the_store_star
         assert c.execute("SELECT COUNT(*) FROM seat_requests").fetchone()[0] == 0
     again = ask(api, "cloud-agents/devin/request", {"first_task": "Map the sign-in errors"}, headers=headers)
     assert again["id"] != seat["id"] and [s["id"] for s in seats(api)] == [again["id"]]
+
+
+def test_a_seat_with_no_team_under_a_bot_in_a_team_asks_that_teams_rule(environment, hq):
+    """A bot with no team of its own takes its manager's, so adding under a teamed bot is an add to that team."""
+    api = environment(catalog_dir=SHIPPED)
+    team = ask(api, "groups", {"name": "Engineering"})["id"]
+    quinn = as_person(api, "quinn")                  # a plain member who manages the bot below, but leads no team
+    lead_seat = ask(api, "seats", {"title": "Engineer", "team": team, "reports_to": "human:quinn"})
+    manager = ask(api, "cloud-agents/claude/add", {"seat_id": lead_seat["id"]})["bot"]
+    seat = ask(api, "seats", {"title": "Engineer", "reports_to": manager})
+    before = bot_count(api)
+    assert ask(api, "cloud-agents/codex/add", {"seat_id": seat["id"]}, headers=quinn,
+               expected=403)["error"]["code"] == "forbidden"
+    assert bot_count(api) == before
+    added = ask(api, "cloud-agents/codex/add", {"seat_id": seat["id"]})
+    with api.app.state.store.read() as c:
+        assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?",
+                                    (added["bot"],)).fetchone()[0])["team"] == team
+
+
+def test_a_seat_only_unmatched_templates_rank_for_refuses_the_add(environment, hq):
+    api = environment(catalog_dir=SHIPPED)
+    seat = ask(api, "seats", {"title": "Qzxv wplk"})
+    assert all(not c["match"] for c in ask(api, f"seats/{seat['id']}/recruit", {})["candidates"])
+    before = bot_count(api)
+    assert ask(api, "cloud-agents/claude/add", {"seat_id": seat["id"]}, expected=409)["error"]["code"] == "template"
+    assert bot_count(api) == before and [s["id"] for s in seats(api)] == [seat["id"]]

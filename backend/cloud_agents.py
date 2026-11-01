@@ -23,6 +23,7 @@ from pydantic import Field
 from . import groups as Groups
 from . import hubdb as H
 from . import lifecycle
+from . import people as P
 from . import task_privacy as privacy
 from .models import BotDefinitionCreate, Contract
 from .providers import MODEL_CATALOG
@@ -386,6 +387,15 @@ def cancel_request(request, store, auth, settings, who, seat_id):
         raise
 
 
+def _joins(c, row, placed):
+    """The team an added bot ends up in: the seat's, else the one its manager bot is in, which a bot with no team of its
+    own takes (people.team_of). Either way it is an add to that team, so the team's rule is asked of it."""
+    if row["team"]:
+        return row["team"]
+    parent = lifecycle.bot_parent(c, placed)
+    return (P.team_of(parent, Groups._configs(c), Groups._roster(c)) or "") if parent else ""
+
+
 def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
     """Add the agent as a Tico bot that fills the seat it names, on the harness the agent runs on, under the line the seat
     names. Its role is the template Recruit ranks first for the seat, and it lands exactly where that template's hire does:
@@ -405,8 +415,9 @@ def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
     row = lifecycle.seat(c, seat_id)
     lifecycle.refuse_if_requested(row)
     placed = lifecycle.placement(auth, c, who, row["reports_to"], seat_id)
-    if row["team"]:
-        Groups.may_add(c, auth, who, row["team"])   # the bot joins the seat's team: the rule every add to a team obeys
+    team = _joins(c, row, placed)
+    if team:
+        Groups.may_add(c, auth, who, team)          # the bot joins this team: the rule every add to a team obeys
     card = recruiting.top_card(auth, onboarding, c, who, row)
     if not card:
         raise Problem("template", "No Tico template fits this seat, so there is no repository to build the bot in. Hire "
@@ -424,8 +435,8 @@ def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
     setup_task = recruiting.onboard(c, who, onboarding, row, card, slug, name=name, description=description,
                                     instructions=instructions, rendered=rendered, answers=record["answers"],
                                     model=model["id"])
-    if row["team"]:
-        Groups._set_bot(c, slug, row["team"])       # the team's group is the bot's own, as a team build's hire sets it
+    if team:
+        Groups._set_bot(c, slug, team)              # the team's group is the bot's own, as a team build's hire sets it
     return {"bot": slug, "harness": agent["connect_id"], "model": model["id"], "seat": seat_id,
             "template": card["template"], "setup_task_id": setup_task}
 
