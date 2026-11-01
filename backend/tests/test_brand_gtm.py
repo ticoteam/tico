@@ -218,6 +218,17 @@ def test_the_hub_tools_reach_every_brand_gtm_and_growth_route(api):
     err, _ = ok("hub_growth_cohort_set", {"channel": "google-search", "month": "2026-10", "spend": 3400,
                                          "bot_cost": 260, "new_customers": 71, "source": ["spend=Google Ads"]})
     assert not err and ok("hub_growth_economics", {"month": "2026-10"})[1]["rows"][0]["cac"]
+    err, seg = ok("hub_growth_segment_create", {"name": "Property managers", "status": "serving", "motion": "sales_led"})
+    assert not err and seg["status"] == "serving" and seg["segment_id"] == "segment/property-managers"
+    assert ok("hub_growth_segment_update", {"id": seg["segment_id"], "deal_size": "$400/month"})[1]["deal_size"] \
+        == "$400/month"
+    assert ok("hub_growth_segment_list")[1]["segments"][0]["motion"] == "sales_led"
+    assert ok("hub_growth_channel_update", {"slug": "google-search", "segments": [seg["id"]]})[1]["segments"] == [seg["id"]]
+    assert not ok("hub_growth_cohort_set", {"channel": "google-search", "month": "2026-10", "segment_id": seg["id"],
+                                            "new_customers": 5})[0]
+    assert ok("hub_growth_economics", {"segment": seg["id"]})[1]["total"]["new_customers"] == 5
+    assert ok("hub_growth_cohort_list", {"segment": seg["id"]})[1]["cohorts"][0]["new_customers"] == 5
+    assert ok("hub_growth_idea_list", {"segment": seg["id"]})[1]["ideas"] == []
     assert not ok("hub_growth_settings", {"set": ["revenue_month=90", "margin_pct=40"]})[0]
     assert ok("hub_growth_settings")[1]["revenue_month"] == 90
     for name in ("hub_growth_week", "hub_growth_evidence", "hub_growth_working", "hub_growth_kpis",
