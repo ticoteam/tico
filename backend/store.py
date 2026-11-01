@@ -1227,6 +1227,9 @@ class Store:
             # Destinations saved in Settings > Listening (backend/listening.py).
             from . import listening as _listening
             _listening.ensure(c)
+            # Tico Meet calls and their people (backend/calls.py): a call belongs to a thread.
+            from . import calls as _calls
+            _calls.ensure(c)
             # Each credential's newest use per (actor, bot) (credentials.last_used): credentials.record_use keeps it.
             H.backfill_credential_uses(c)
             c.execute("BEGIN IMMEDIATE")

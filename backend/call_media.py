@@ -130,6 +130,13 @@ class LiveKitMedia:
         self.config = config
         self.recorders = {}
 
+    @property
+    def url(self):
+        return self.config.url
+
+    def running(self, call_id):
+        return call_id in self.recorders
+
     def _twirp(self, method, payload, room=""):
         return _post_json(f"{self.config.internal_url}/twirp/livekit.RoomService/{method}",
                           admin_token(self.config, room), payload)
