@@ -73,7 +73,9 @@ def ensure(c):
     for position, (key, name, status) in enumerate(IDEA_STEPS):
         sid = step_id(key)
         if sid in have:
-            c.execute("UPDATE task_steps SET position=? WHERE id=?", (position, sid))
+            # Only a step that moved is written: an UPDATE that matches nothing is no change, and a changed row bumps the
+            # roster clock (backend/roster_clock.py), which every start would otherwise do for every step.
+            c.execute("UPDATE task_steps SET position=? WHERE id=? AND position IS NOT ?", (position, sid, position))
         elif name.lower() not in names:
             c.execute("INSERT INTO task_steps (id, type_id, name, position, status) VALUES (?,?,?,?,?)",
                       (sid, IDEA_TYPE, name, position, status))
